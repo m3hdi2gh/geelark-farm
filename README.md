@@ -18,8 +18,9 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 1 of 8 — the signed API client works: `geelark ping` authenticates and
-lists the account's phones. Remaining commands report which phase implements
+Phase 2 of 8 — the device layer works. Phones can be listed, started, stopped
+and driven: read the real screen, tap by label, type text that survives shell
+quoting, take screenshots. Remaining commands report which phase implements
 them. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists
@@ -70,6 +71,19 @@ geelark rows                    # validate the sheet without spending anything
 geelark run --dry-run           # show the plan
 geelark run                     # process pending rows
 geelark reap                    # stop anything left running
+```
+
+Device diagnostics, for when a flow does something unexpected. Each resolves
+the phone from `--phone`, else the only running one, and starts it if needed:
+
+```bash
+geelark dump                    # every element on screen, with tap targets
+geelark dump --save f.xml       # ...and keep it as a test fixture
+geelark tap Install             # tap by label (matches text or content-desc)
+geelark type "secret"           # type into the focused field
+geelark shell "pm list packages -3"
+geelark screenshot
+geelark stop --all              # end all billing
 ```
 
 ## Cost

@@ -6,8 +6,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 |---|---|---|
 | 0 | Repo skeleton, config, CLI surface, ported API notes | **done** |
 | 1 | Signed API client: rate limiter, retries, `ApiError` | **done** |
-| 2 | Device layer: shell, screen capture/parse/tap, fixtures | next |
-| 3 | Phone lifecycle + ledger + reaper | |
+| 2 | Device layer: shell, screen capture/parse/tap, fixtures | **done** |
+| 3 | Phone creation + ledger + reaper | next |
 | 4 | Google login screen router | |
 | 5 | Play Store install flow | |
 | 6 | Google Sheets input and status write-back | |
@@ -49,13 +49,38 @@ makes phase 4 testable without a phone.
 **Done when** dump and tap work against a live phone and the parser tests pass
 on fixtures.
 
-## Phase 3 — phone lifecycle
+Delivered: `shell.run/read` plus the verification primitives
+(`device_accounts`, `package_installed`), `screen.capture/parse/find/tap`, and
+the CLI diagnostics `dump --save`, `tap`, `shell`, `type`, `screenshot`,
+`phones`, `stop`.
 
-Create bound to a proxy, boot with a wait, stop, delete, list. Ledger written
-at creation time. `geelark reap` stops anything running that the ledger does
-not account for.
+Phone status/start/stop moved here from phase 3, because every device command
+needs a running phone and the layer is unusable without them. Creation, the
+ledger and the reaper remain in phase 3.
 
-**Done when** no error path can leave a phone running.
+Two findings worth keeping:
+
+- **Text entry is solved.** `input text` has two independent hazards: the shell
+  interprets `$ ` \ " '` before `input` sees them (fixed by `shlex.quote`), and
+  `input text` itself splits on spaces and decodes `%s` as a space (fixed by
+  encoding spaces, and refusing a literal `%` outright). Verified on a device:
+  nine password-shaped strings covering every shell metacharacter typed
+  **exactly**, and both unrepresentable cases (`%`, non-ASCII) raise
+  `TypingError` rather than typing something subtly different. That distinction
+  matters because a mistyped password is indistinguishable from a wrong one and
+  costs an attempt against the account's reputation to discover.
+- **Editable fields are not all `EditText`.** The Settings search box is an
+  `AutoCompleteTextView`; matching only `EditText` would have made a login code
+  field invisible to the router. `EDITABLE_CLASSES` matches substrings now, and
+  `tests/test_screen.py` pins the behaviour to a captured hierarchy.
+
+## Phase 3 — phone creation, ledger, reaper
+
+Create bound to a proxy, delete, and a ledger written at creation time so a
+crash between "phone created" and "row updated" is recoverable.
+`geelark reap` stops anything running that the ledger does not account for.
+
+**Done when** no error path can leave a phone running unaccounted for.
 
 ## Phase 4 — Google login screen router
 
