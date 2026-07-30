@@ -54,8 +54,15 @@ Google refused the sign-in with "You didn't provide enough info for Google to be
 sure this account is really yours", suggesting a device or network it already
 knows.
 
-Nothing in this tool can resolve it — the account has no history Google trusts.
-What can:
+**Check the archived screens before concluding anything about the account.** This
+exact message was produced twice by the router's own wrong turn: it pressed "Try
+another way" on a page that was already offering the authenticator, and Google
+took that to mean no other factor existed. The fix was two lines of ordering, not
+a better account. Look at the `2fa_*` XML in the run's artifact directory — if an
+authenticator row was on screen and something else was tapped, that is the bug.
+
+If the authenticator genuinely was not offered, then it is the account, and
+nothing in this tool can resolve it. What can:
 
 - **Give the account more to verify with.** The message is literal: a recovery
   email and phone number on the account give Google an alternative to a device

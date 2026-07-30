@@ -18,10 +18,10 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 3 of 8 — phones can be created behind a proxy, driven, and accounted for.
-Everything below the spreadsheet works: create, boot, read the screen, tap by
-label, type reliably, verify against the device, stop, delete, and reap
-anything left running. Next is the Google login screen router. See
+Phase 4 of 8 — **Google sign-in works unattended.** A real account signs in
+through six screens (email, password, authenticator choice, TOTP code, consent)
+with the result confirmed against `dumpsys account`, on a phone created for that
+row's proxy. Next is the Play Store install. See
 [docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists
@@ -83,6 +83,13 @@ geelark phones --ledger                         # what exists, and who owns it
 geelark start / geelark stop --all
 geelark delete --phone ID
 geelark reap --dry-run                          # what would be stopped, and why
+```
+
+Sign one account in (creates a phone on that row's proxy, then stops it):
+
+```bash
+geelark login --row 1
+geelark login --row 1 --phone ID --keep   # reuse a phone, leave it running
 ```
 
 Device diagnostics, for when a flow does something unexpected. Each resolves

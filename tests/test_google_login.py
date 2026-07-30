@@ -84,3 +84,43 @@ def test_an_ordinary_consent_page_is_not_fatal():
     ctx = login.Context(client=None, phone_id="P", account=ACCOUNT)
     ctx.blob = screen.normalize("Don’t turn on backup").casefold()
     assert login._fatal_reason(ctx) is None
+
+
+# ------------------------------------------------------- 2FA option ranking
+def test_the_authenticator_is_taken_when_it_is_on_screen():
+    """The costliest bug so far. Google shows the authenticator row and "Try
+    another way" on the SAME page. Two live runs pressed "Try another way",
+    which Google read as "I have nothing else" and refused the sign-in with
+    "You didn't provide enough info". The authenticator must always win."""
+    ctx = context_from("google-2fa-method-list.xml")
+
+    assert login.authenticator_offered(ctx)
+    assert matched_screen(ctx).name == "2fa_authenticator_offered"
+
+
+def test_try_another_way_is_a_last_resort_not_a_first_move():
+    ctx = context_from("google-2fa-method-list.xml")
+    # The page does offer it - the router simply must not choose it here.
+    assert ctx.has("try another way")
+    assert matched_screen(ctx).name != "2fa_push_to_other_device"
+
+
+def test_try_another_way_still_applies_when_no_authenticator_is_offered():
+    ctx = login.Context(client=None, phone_id="P", account=ACCOUNT)
+    ctx.blob = ("2-step verification check your pixel tap yes "
+                "try another way").casefold()
+    ctx.elements = []
+    assert not login.authenticator_offered(ctx)
+    assert matched_screen(ctx).name == "2fa_push_to_other_device"
+
+
+def test_the_code_field_is_found_although_it_has_no_label():
+    """Google's verification-code box carries no text and no content-desc, so it
+    is findable only by class. This is the field the whole 2FA path depends on."""
+    ctx = context_from("google-2fa-code-entry.xml")
+    assert matched_screen(ctx).name == "2fa_code_entry"
+
+    field = screen.find_input(ctx.elements)
+    assert field is not None
+    assert field.label == ""          # nothing to match on but the class
+    assert field.focused

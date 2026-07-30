@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 
 from .api import Client
 from .config import Settings
@@ -161,10 +162,14 @@ def wait_until_running(client: Client, phone_id: str, *,
     raise PhoneError(f"phone {phone_id} did not start within {timeout:.0f}s")
 
 
-def ensure_running(client: Client, phone_id: str, *,
-                   settle: float = 30) -> str | None:
+def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
+                   on_url: Callable[[str], None] | None = None) -> str | None:
     """Start the phone if needed. Returns the live-view URL when it started
     it, None when it was already up.
+
+    `on_url` fires the moment the URL is known, before the boot wait. Without
+    it the link only surfaces a minute and a half later, by which time whatever
+    you wanted to watch has already happened.
 
     Shell commands fail in confusing ways on a stopped phone, so every device
     command goes through here.
@@ -179,6 +184,8 @@ def ensure_running(client: Client, phone_id: str, *,
     url = start(client, phone_id)
     if url:
         log.info("watch it live: %s", url)
+        if on_url:
+            on_url(url)
     wait_until_running(client, phone_id, settle=settle)
     return url
 

@@ -8,8 +8,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | 1 | Signed API client: rate limiter, retries, `ApiError` | **done** |
 | 2 | Device layer: shell, screen capture/parse/tap, fixtures | **done** |
 | 3 | Phone creation + ledger + reaper | **done** |
-| 4 | Google login screen router | next |
-| 5 | Play Store install flow | |
+| 4 | Google login screen router | **done** |
+| 5 | Play Store install flow | next |
 | 6 | Google Sheets input and status write-back | |
 | 7 | Orchestrator: per-row pipeline, budgets, summary | |
 | 8 | Hardening, runbook, release | |
@@ -116,6 +116,34 @@ registry entry, and a row in `google-login-screens.md`.
 
 **Done when** several consecutive accounts sign in, and every failure carries a
 named reason instead of a timeout.
+
+Delivered: `accounts.Account` (validated offline before a phone is created for
+it), and `flows/google_login.py` - an ordered screen registry plus a loop that
+reads, matches, acts and repeats. `geelark login --row N` creates a phone on the
+row's proxy, signs in, and stops it.
+
+A real account signed in on the third run, unattended, through six screens:
+leftover setup page, email, password, authenticator choice, TOTP code, consent.
+Confirmed by `dumpsys account`, not by anything the screen said.
+
+Three findings, in order of what they cost:
+
+1. **The authenticator must outrank "Try another way".** Google shows both on
+   one page. Pressing the latter while the former is visible gets the sign-in
+   refused outright with "You didn't provide enough info" - a message that reads
+   exactly like an account-provenance problem, and was diagnosed as one for two
+   runs. It was self-inflicted; reordering two registry entries fixed it.
+2. **Typographic punctuation broke every selector containing an apostrophe.**
+   Google writes "Couldn't" with U+2019, so ASCII selectors silently never
+   matched and a named failure was reported as `unknown_screen`.
+   `screen.normalize` folds punctuation at parse time.
+3. **Archiving one screenshot is not enough.** The end-state capture supported
+   the wrong diagnosis; the full chain of screens exposed the real cause
+   immediately. Every screen is now archived on first visit.
+
+Also worth knowing: the live-view URL from `/phone/start` expires within
+seconds, so it has to be handed over the moment it is issued - hence the
+`on_url` callback in `ensure_running`.
 
 ## Phase 5 — Play install
 

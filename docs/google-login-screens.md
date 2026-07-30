@@ -14,10 +14,30 @@ elements wins. Order therefore encodes priority:
 
 1. **fatal** — checked first, so a dead end is never mistaken for a page to
    dismiss.
-2. **specific pages** — 2FA push, method list, code entry, password, email,
-   account picker.
-3. **dismissable** — the catch-all for consent and marketing pages, last so it
+2. **`2fa_code_entry`** — once a code box exists the choice is made; re-choosing
+   would navigate away from it.
+3. **`2fa_authenticator_offered`** — whenever the authenticator row is visible.
+   This must outrank "try another way"; see the entry below for what it costs
+   when it does not.
+4. **remaining specific pages** — push-to-other-device, method list, password,
+   email, account picker.
+5. **dismissable** — the catch-all for consent and marketing pages, last so it
    never swallows a page with real work to do.
+
+## The full successful path, observed 2026-07-30
+
+```
+dismissable            -> SKIP            (a leftover setup page after boot)
+email_entry            -> address, NEXT
+password_entry         -> password, NEXT
+2fa_authenticator_offered -> "Get a verification code from the Google
+                              Authenticator app"
+2fa_code_entry         -> TOTP code, NEXT
+dismissable            -> I agree
+success                -> dumpsys account shows the address
+```
+
+Six screens, no human. Fixtures for the 2FA pair are in `tests/fixtures/`.
 
 Three outcome kinds:
 
@@ -83,28 +103,63 @@ offers "TRY AGAIN", which is why `fatal` is checked before `dismissable` — a
 router that treated this as a page to dismiss would loop until its budget ran
 out and learn nothing.
 
+### 2fa_authenticator_offered — take it whenever it is visible
+- **Recognised by**: a row matching "Get a verification code from the Google
+  Authenticator app". Most specific phrasing first: "Google Authenticator" alone
+  is an inner span whose centre can miss the tappable row.
+- **Action**: tap it.
+- **Ranked above `2fa_push_to_other_device`, and that ordering is the most
+  expensive lesson in this project so far.** Google puts the entire method list
+  and "Try another way" on one page:
+
+  ```
+  Choose how you want to sign in:
+    Tap Yes on your phone or tablet   -> "Device can't be reached right now"
+    Get a verification code from the Google Authenticator app
+    Use your passkey
+    Get a one-time security code
+  Try another way
+  ```
+
+  Two live runs pressed "Try another way" while the authenticator row was right
+  there, because the push predicate matched first on the words "Tap Yes" and
+  "2-Step Verification". Google read that as *I have no other way* and refused
+  the sign-in outright: "You didn't provide enough info for Google to be sure
+  this account is really yours."
+
+  That refusal looks exactly like an account-provenance problem and was
+  diagnosed as one. It was not. The third run, with nothing changed but this
+  ordering, signed in. The wall was self-inflicted — which is the argument for
+  archiving every screen a run visits, since the single end-state screenshot
+  supported the wrong conclusion and the full chain did not.
+
+  Pinned by `test_the_authenticator_is_taken_when_it_is_on_screen`.
+  Fixture: `google-2fa-method-list.xml`.
+
 ### 2fa_push_to_other_device
-- **Recognised by**: "try another way", with "check your \<device>" / "tap yes" /
-  "2-step verification".
-- **Action**: tap "Try another way".
-- **Observed 2026-07-29** in the prototype. Google pushes a prompt to a device
-  the account already trusts instead of asking for a code — and the trusted
-  device is usually a cloud phone from an earlier run, so this gets *more*
-  likely as the project is used. GeeLark's RPA cannot reach this button, which
-  is the single clearest reason the flow is hand-written.
+- **Recognised by**: "try another way" with "check your \<device>" / "tap yes",
+  **and no authenticator row present**.
+- **Action**: tap "Try another way", to make Google widen the list.
+- A genuine last resort. Google pushes the second factor to a device the account
+  already trusts — usually a cloud phone from an earlier run, so this grows more
+  likely as the project is used. Reaching this button at all is what GeeLark's
+  own RPA cannot do, and the original reason this flow is hand-written.
 
 ### 2fa_method_list
-- **Recognised by**: "choose how you want to sign in" / "other ways to verify".
-- **Action**: choose the authenticator option.
-- **Fatal if absent** (`no_authenticator_option`): every other factor needs a
-  human or a phone number.
+- **Recognised by**: "choose how you want to sign in" / "other ways to verify",
+  with no authenticator row.
+- **Fatal** (`no_authenticator_option`): every remaining factor needs a human or
+  a phone number.
 
 ### 2fa_code_entry
 - **Recognised by**: "authenticator" / "verification code" / "2-step", plus an
-  input field present.
-- **Action**: generate a TOTP code with at least 8 seconds of life left, type
-  it, submit. The life check matters — a code that expires between typing and
-  submitting reads to Google as a wrong code.
+  input field present. Ranked above the method list: a visible code box means
+  the choice has already been made, and re-choosing would navigate away from it.
+- **Action**: generate a TOTP code with at least 8 seconds of life left, type it,
+  submit. The life check matters — a code that expires between typing and
+  submitting reads to Google as a wrong code, and counts against the account.
+- The field carries no text and no content-desc, so it is found by class alone.
+  Fixture: `google-2fa-code-entry.xml`.
 
 ### password_entry
 - **Recognised by**: an input field with `password="true"`.

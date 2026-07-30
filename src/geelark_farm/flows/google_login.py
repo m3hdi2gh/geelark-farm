@@ -252,27 +252,47 @@ def act_totp(ctx: Context) -> Outcome | None:
     return None
 
 
-def act_try_another_way(ctx: Context) -> Outcome | None:
-    """Google pushed a prompt to a device the account already trusts - often a
-    phone from an earlier run - instead of asking for a code. Switch to the
-    authenticator, which is the only factor available unattended."""
-    log.info("2FA went to another device; switching to the authenticator")
-    if ctx.tap("Try another way"):
-        time.sleep(4)
-    return None
+# The authenticator row, most specific phrasing first. The full sentence is the
+# tappable list item; "Google Authenticator" alone is an inner span whose centre
+# may miss the row.
+AUTHENTICATOR_LABELS = (
+    "Get a verification code from the Google Authenticator app",
+    "verification code from the Google Authenticator",
+    "Google Authenticator",
+)
+
+
+def authenticator_offered(ctx: Context) -> bool:
+    return screen.find_first(ctx.elements, AUTHENTICATOR_LABELS) is not None
 
 
 def act_choose_authenticator(ctx: Context) -> Outcome | None:
-    """The list of second factors. Anything but the authenticator needs a human
-    or a phone number, so if it is absent this is a dead end."""
-    for label in ("Google Authenticator", "Authenticator", "verification code from"):
+    """Take the authenticator option, which is the only second factor this tool
+    can satisfy on its own."""
+    for label in AUTHENTICATOR_LABELS:
         if ctx.tap(label):
+            log.info("chose the authenticator option")
             time.sleep(5)
             return None
     path = ctx.save("no-authenticator-option")
     return Outcome("fatal", "no_authenticator_option",
                    "the account's 2FA choices do not include an authenticator app",
                    artifacts=[path] if path else [])
+
+
+def act_try_another_way(ctx: Context) -> Outcome | None:
+    """Only reached when the authenticator is NOT among the visible options.
+
+    "Try another way" asks Google to widen the list, and it is a last resort:
+    if the authenticator is already on screen and this is pressed instead,
+    Google reads it as "I have nothing else" and refuses the sign-in outright
+    with "You didn't provide enough info" (measured 2026-07-30, twice). Hence
+    the guard, and hence this screen ranking below the method list.
+    """
+    log.info("no authenticator option visible; asking for another way")
+    if ctx.tap("Try another way"):
+        time.sleep(4)
+    return None
 
 
 def act_dismiss(ctx: Context) -> Outcome | None:
@@ -289,21 +309,32 @@ def act_dismiss(ctx: Context) -> Outcome | None:
 SCREENS: list[Screen] = [
     Screen("fatal", lambda c: _fatal_reason(c) is not None, act_fatal, max_visits=1),
 
-    Screen("2fa_push_to_other_device",
-           lambda c: c.has("try another way") and (
-               c.has("check your", "tap yes", "2-step verification")),
-           act_try_another_way),
-
-    Screen("2fa_method_list",
-           lambda c: c.has("choose how you want to sign in",
-                           "try another way to sign in", "other ways to verify"),
-           act_choose_authenticator),
-
+    # Code entry outranks the method list: once a code box is on screen the
+    # choice has already been made, and re-choosing would leave it.
     Screen("2fa_code_entry",
            lambda c: (c.has("authenticator", "verification code", "2-step",
                             "enter code")
                       and screen.find_input(c.elements) is not None),
            act_totp),
+
+    # The authenticator, whenever it is visible. This must outrank "try another
+    # way": Google presents both on the same page, and pressing the latter while
+    # the former is available gets the sign-in refused outright.
+    Screen("2fa_authenticator_offered", authenticator_offered,
+           act_choose_authenticator),
+
+    # Only when no authenticator row is present.
+    Screen("2fa_push_to_other_device",
+           lambda c: (c.has("try another way")
+                      and c.has("check your", "tap yes", "2-step verification")
+                      and not authenticator_offered(c)),
+           act_try_another_way),
+
+    Screen("2fa_method_list",
+           lambda c: (c.has("choose how you want to sign in",
+                            "other ways to verify")
+                      and not authenticator_offered(c)),
+           act_choose_authenticator, max_visits=1),
 
     Screen("password_entry",
            lambda c: screen.find_input(c.elements, password=True) is not None,
