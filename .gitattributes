@@ -1,0 +1,7 @@
+# Normalise line endings so the repo is identical regardless of the machine
+# it was committed from (development happens on Windows).
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.xml text eol=lf

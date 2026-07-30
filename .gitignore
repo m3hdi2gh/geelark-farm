@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------- secrets
+# NEVER commit these. The .env holds Google passwords, TOTP secrets, proxy
+# credentials and GeeLark API keys; the service-account JSON grants write
+# access to the input spreadsheet.
+.env
+.env.*
+!.env.example
+*service-account*.json
+*credentials*.json
+secrets/*
+!secrets/README.md
+
+# ------------------------------------------------------------ run artefacts
+# Local run state (which phone belongs to which account) and per-run debug
+# output: screen dumps, screenshots, logs. Useful locally, noise in git.
+state/
+artifacts/
+logs/
+*.log
+
+# ----------------------------------------------------------------- python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ------------------------------------------------------------------- tools
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
