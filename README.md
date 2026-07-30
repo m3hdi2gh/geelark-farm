@@ -18,9 +18,9 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 0 of 8 — skeleton, configuration and documentation. The CLI surface is in
-place; commands report which phase implements them. See
-[docs/roadmap.md](docs/roadmap.md).
+Phase 1 of 8 — the signed API client works: `geelark ping` authenticates and
+lists the account's phones. Remaining commands report which phase implements
+them. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists
 

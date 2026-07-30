@@ -17,14 +17,15 @@ Unimplemented commands fail loudly with the phase that will deliver them, so
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 
 from . import __version__
+from .api import ApiError, TransportError, build_client
 from .config import ConfigError, Settings
 
 # Command -> the roadmap phase that implements it. Phase 0 ships the skeleton.
 PENDING = {
-    "ping": 1,
     "dump": 2,
     "tap": 2,
     "shell": 2,
@@ -119,6 +120,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+PHONE_STATUS = {0: "running", 1: "starting", 2: "stopped", 3: "expired"}
+
+
+def cmd_ping(settings: Settings) -> int:
+    """Prove the credentials sign correctly, and show what they can see.
+
+    Listing phones is the cheapest call that exercises the whole path -
+    signing, rate limiter, envelope unwrapping - without starting anything.
+    """
+    client = build_client(settings)
+    data = client.data("/v1/phone/list", {"page": 1, "pageSize": 100})
+    items = data.get("items") or []
+    print(f"authenticated as appId {settings.app_id[:6]}...  "
+          f"{data.get('total', len(items))} phone(s) visible")
+
+    running = 0
+    for item in items:
+        status = item.get("status")
+        if status == 0:
+            running += 1
+        equipment = item.get("equipmentInfo") or {}
+        print(f"  {item.get('id')}  serial {item.get('serialNo', '?'):>5}  "
+              f"{PHONE_STATUS.get(status, status):8}  "
+              f"{equipment.get('deviceBrand', '?')} "
+              f"{equipment.get('osVersion', '?')}")
+
+    if running:
+        # Running phones bill per minute, so this is the one thing worth
+        # flagging loudly on an otherwise informational command.
+        print(f"\n{running} phone(s) RUNNING and billing. "
+              f"'geelark stop --all' ends that (phase 3).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -127,21 +162,39 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
+    # Load settings for every command, so credential problems surface before
+    # anything else - including for commands that are not implemented yet.
+    try:
+        settings = Settings.load()
+    except ConfigError as exc:
+        print(f"config: {exc}", file=sys.stderr)
+        return 2
+
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level, logging.INFO),
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
     phase = PENDING.get(args.command)
     if phase:
-        # Settings are still loaded, so credential problems surface now rather
-        # than after the command is implemented.
-        try:
-            Settings.load()
-        except ConfigError as exc:
-            print(f"config: {exc}", file=sys.stderr)
-            return 2
         print(f"'{args.command}' is not implemented yet - it lands in phase {phase}.")
         print("See docs/roadmap.md for what each phase delivers.")
         return 1
 
-    parser.error(f"unknown command {args.command!r}")
-    return 2
+    handlers = {"ping": cmd_ping}
+    handler = handlers.get(args.command)
+    if not handler:
+        parser.error(f"unknown command {args.command!r}")
+        return 2
+
+    try:
+        return handler(settings)
+    except ApiError as exc:
+        print(f"api: {exc}", file=sys.stderr)
+        return 1
+    except TransportError as exc:
+        print(f"network: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

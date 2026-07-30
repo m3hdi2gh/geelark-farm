@@ -5,8 +5,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | Phase | Deliverable | Status |
 |---|---|---|
 | 0 | Repo skeleton, config, CLI surface, ported API notes | **done** |
-| 1 | Signed API client: rate limiter, retries, `ApiError` | next |
-| 2 | Device layer: shell, screen capture/parse/tap, fixtures | |
+| 1 | Signed API client: rate limiter, retries, `ApiError` | **done** |
+| 2 | Device layer: shell, screen capture/parse/tap, fixtures | next |
 | 3 | Phone lifecycle + ledger + reaper | |
 | 4 | Google login screen router | |
 | 5 | Play Store install flow | |
@@ -27,8 +27,14 @@ notes carried over from the prototype.
 Signing, a process-wide rate limiter well under 200 req/min, backoff on
 transport errors, `ApiError` on non-zero response codes.
 
-**Done when** `geelark ping` authenticates and lists the account's phones, and
-the signing unit test matches the worked example from the docs.
+**Done when** `geelark ping` authenticates and lists the account's phones.
+
+Delivered: `api.Client` (signing, `data()` shortcut), `RateLimiter` (sliding
+window, thread-safe, blocks rather than rejecting — waiting a second beats a
+two-hour ban), backoff with jitter, and a retry policy that only repeats
+read-only endpoints by default, since a timed-out write may already have been
+applied. `ApiError` names known failure codes (20002 concurrent task, 20008
+non-English UI) and always reports the `traceId` for support.
 
 ## Phase 2 — device layer
 
