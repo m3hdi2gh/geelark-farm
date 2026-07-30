@@ -102,15 +102,13 @@ class TypingError(Exception):
     """The text cannot be typed reliably on this device."""
 
 
-def type_text(client: Client, phone_id: str, text: str) -> None:
-    """Type `text` into the focused field, exactly as given.
+def check_typeable(text: str) -> None:
+    """Raise TypingError if `text` cannot be typed exactly as given.
 
-    Raises TypingError rather than typing something subtly different - a
-    password that types wrong looks identical to a wrong password, and costs a
-    login attempt against an account's reputation to discover.
+    Separate from type_text so a password can be validated offline, before a
+    phone is created for it - a row that cannot be typed should fail in
+    validation, not halfway through a login.
     """
-    if not text:
-        return
     if not _TYPEABLE.match(text):
         bad = sorted({c for c in text if not _TYPEABLE.match(c)})
         raise TypingError(
@@ -124,6 +122,18 @@ def type_text(client: Client, phone_id: str, text: str) -> None:
             "`input text` cannot type a literal '%' (it decodes %s as space). "
             "Use a password without '%', or add an IME-based typing backend."
         )
+
+
+def type_text(client: Client, phone_id: str, text: str) -> None:
+    """Type `text` into the focused field, exactly as given.
+
+    Raises TypingError rather than typing something subtly different - a
+    password that types wrong looks identical to a wrong password, and costs a
+    login attempt against an account's reputation to discover.
+    """
+    if not text:
+        return
+    check_typeable(text)
     payload = text.replace(" ", "%s")
     run(client, phone_id, f"input text {shlex.quote(payload)}")
 

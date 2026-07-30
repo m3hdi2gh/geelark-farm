@@ -101,10 +101,17 @@ def parse(raw: str) -> Proxy:
 def check(client: Client, proxy: Proxy) -> dict:
     """Ask GeeLark to test the proxy and report the outbound address.
 
-    Called before creating a phone, so a dead proxy costs nothing. A `country`
-    of None means geolocation databases do not recognise the address - a
-    datacenter or freshly allocated IP, which is what draws CAPTCHAs and
-    phone-verification demands from Google later.
+    Called before creating a phone, so a dead proxy costs nothing.
+
+    What this does and does not tell you: `detectStatus` is trustworthy - the
+    proxy either carried the request or it did not. The `country` field is NOT.
+    It comes back empty for addresses that public databases resolve perfectly
+    well (measured 2026-07-30 across four proxies: all four returned no country
+    from GeeLark, all four geolocated to real US ISPs with hosting=false), so
+    an empty country is a gap in GeeLark's lookup, not a verdict on the IP.
+
+    IP reputation - the thing that actually predicts Google challenges - is not
+    answerable here. See docs/runbook.md for how to check it.
     """
     result = client.data("/v1/proxy/check", {
         "proxyQueryChannel": "IP2Location",
@@ -116,10 +123,9 @@ def check(client: Client, proxy: Proxy) -> dict:
     }) or {}
     if not result.get("detectStatus"):
         raise ProxyError(f"{proxy} is unusable: {result.get('message')}")
-    if not result.get("country"):
-        log.warning(
-            "%s resolves to %s but no country - geolocation databases do not "
-            "know this IP, which correlates with Google challenges",
-            proxy, result.get("outboundIP"),
-        )
+    outbound = result.get("outboundIP")
+    if outbound and outbound != proxy.host:
+        # A gateway with a different exit address: a backconnect/residential
+        # pool. Worth logging, because the exit IP is the one Google judges.
+        log.info("%s exits from %s", proxy, outbound)
     return result

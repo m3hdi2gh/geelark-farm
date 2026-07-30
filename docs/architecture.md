@@ -108,3 +108,10 @@ is recoverable and `reap` can find orphans.
 A dirty proxy IP. Google responds to low-reputation addresses with CAPTCHAs and
 phone-number demands, which no amount of UI automation resolves. The flow will
 name the failure accurately; the fix is a better IP.
+
+Nor can it tell you in advance whether an IP is dirty. GeeLark's `/proxy/check`
+confirms only that the proxy carries traffic — its `country` field is empty even
+for addresses that resolve fine elsewhere, so it is not a reputation signal.
+Assessing an IP means asking a geolocation or reputation service directly, which
+is a manual step documented in the runbook rather than something the pipeline
+decides.

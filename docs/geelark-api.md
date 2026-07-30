@@ -126,6 +126,24 @@ base32 TOTP secret works.**
 The secret must be normalised first: Google displays it lowercase in groups of
 four, base32 needs uppercase with no spaces and no padding.
 
+## `/proxy/check` reports less than it appears to
+
+`detectStatus` is trustworthy: the proxy either carried the request or it did
+not, and a failure here should stop a row before a phone is created.
+
+**`country` is not trustworthy.** Measured 2026-07-30 across four proxies from
+two vendors: GeeLark returned no country for all four, while a public
+geolocation service resolved every one of them to a real US ISP with
+`hosting: false`. An empty `country` is a gap in GeeLark's lookup, not evidence
+of a datacenter or freshly allocated address.
+
+This correction matters because the prototype's notes drew the opposite
+conclusion and treated an empty country as a warning sign of a dirty IP. It is
+not a signal at all.
+
+`outboundIP` is worth reading: when it differs from the host you dialled, the
+proxy is a backconnect gateway and the exit address is what Google judges.
+
 ## Cost discipline
 
 Billing is **per minute while a phone is running**, so:

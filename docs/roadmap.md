@@ -99,9 +99,12 @@ wrote the reason into the ledger → `delete` removed it from both the account a
 the ledger. That run also confirmed `/v1/phone/delete`, the one endpoint here
 that had never been exercised.
 
-Note the proxy check warns when `country` is missing, as it is for the current
-proxy: geolocation databases do not recognise the IP, which is the leading
-predictor of the Google challenges phase 4 has to survive.
+One correction came out of this phase. `/proxy/check` returning an empty
+`country` was inherited from the prototype's notes as a warning sign of a dirty
+IP. It is not: four proxies from two vendors all returned no country from
+GeeLark while resolving to real US ISPs with `hosting: false` in a public
+database. `proxy.check` no longer treats it as a signal, and reports the exit
+address instead — with a backconnect gateway that is the address Google judges.
 
 ## Phase 4 — Google login screen router
 

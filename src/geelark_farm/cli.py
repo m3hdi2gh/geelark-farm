@@ -281,11 +281,16 @@ def cmd_proxy(settings: Settings, args) -> int:
     parsed = proxy.parse(args.url)
     print(f"{parsed}")
     result = proxy.check(client, parsed)
-    print(f"  outbound IP : {result.get('outboundIP')}")
-    print(f"  country     : {result.get('country') or 'UNKNOWN'}")
-    if not result.get("country"):
-        print("  warning: geolocation databases do not recognise this IP, "
-              "which correlates with Google challenges later")
+    outbound = result.get("outboundIP")
+    print("  works       : yes")
+    print(f"  outbound IP : {outbound}")
+    if outbound and outbound != parsed.host:
+        print(f"                (a gateway - Google judges the exit IP, "
+              f"not {parsed.host})")
+    # GeeLark's country lookup returns empty for addresses that resolve fine
+    # elsewhere, so it is reported as-is and never treated as a verdict.
+    print(f"  country     : {result.get('country') or 'not reported by GeeLark'}")
+    print("  reputation  : not checkable here - see docs/runbook.md")
     return 0
 
 

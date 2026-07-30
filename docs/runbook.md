@@ -63,10 +63,23 @@ Two RPA tasks on one phone. Concurrency is across phones only.
 lower `API_REQUESTS_PER_MINUTE`.
 
 ### CAPTCHA, or a demand for a phone number
-Usually the proxy IP's reputation, not the automation. Check the outbound IP on
-Scamalytics and spur.us. `/proxy/check` returning `country: None` means
-geolocation databases do not recognise the address — a warning sign of a
-freshly allocated or datacenter IP.
+Usually the proxy IP's reputation, not the automation.
+
+Check the **outbound** IP, not the host you dialled — with a backconnect proxy
+they differ, and Google judges the exit address. `geelark proxy <url>` prints
+both.
+
+Do not read anything into GeeLark's `country` field; it comes back empty for
+addresses that resolve fine elsewhere (see `geelark-api.md`). To actually assess
+an IP:
+
+```bash
+curl "http://ip-api.com/json/<outbound-ip>?fields=country,isp,proxy,hosting,mobile"
+```
+
+`hosting: true` means a datacenter address, which is the strongest predictor of
+challenges. Scamalytics and spur.us give a fuller reputation picture. A
+residential or mobile ISP with `hosting: false` is what you want.
 
 ### Selectors stop matching
 Confirm the phone's UI is English: `mobileLanguage` must be `default`, or every
