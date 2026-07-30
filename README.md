@@ -18,11 +18,11 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 4 of 8 — **Google sign-in works unattended.** A real account signs in
-through six screens (email, password, authenticator choice, TOTP code, consent)
-with the result confirmed against `dumpsys account`, on a phone created for that
-row's proxy. Next is the Play Store install. See
-[docs/roadmap.md](docs/roadmap.md).
+Phase 5 of 8 — **the whole device pipeline works.** Given an account, the tool
+creates a phone on its proxy, signs into Google through six screens, installs the
+target app from the Play Store, verifies both against the device, and stops the
+phone. What remains is reading the accounts from a spreadsheet and running them
+as a batch. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists
 
@@ -85,11 +85,13 @@ geelark delete --phone ID
 geelark reap --dry-run                          # what would be stopped, and why
 ```
 
-Sign one account in (creates a phone on that row's proxy, then stops it):
+One account, end to end. Each step creates or reuses a phone and stops it
+afterwards; `--watch` prints a live-view link and waits so you can follow along:
 
 ```bash
-geelark login --row 1
-geelark login --row 1 --phone ID --keep   # reuse a phone, leave it running
+geelark login --row 1 --keep --watch    # create a phone, sign in, leave it up
+geelark install --watch                 # install the target app on it
+geelark stop --all
 ```
 
 Device diagnostics, for when a flow does something unexpected. Each resolves

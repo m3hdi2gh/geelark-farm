@@ -25,14 +25,13 @@ from . import __version__, accounts, phones, proxy, screen, shell
 from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
 from .config import ConfigError, Settings
-from .flows import google_login
+from .flows import google_login, play_install
 from .ledger import Ledger
 from .proxy import ProxyError
 from .shell import TypingError
 
 # Command -> the roadmap phase that implements it.
 PENDING = {
-    "install": 5,
     "rows": 6,
     "run": 7,
 }
@@ -147,12 +146,21 @@ def build_parser() -> argparse.ArgumentParser:
                          help="existing phone; omit to create one on the row's proxy")
     p_login.add_argument("--keep", action="store_true",
                          help="leave the phone running afterwards")
+    p_login.add_argument("--watch", action="store_true",
+                         help="print the live-view link and wait for Enter before "
+                              "driving, so you can open it in time")
 
     p_install = sub.add_parser(
-        "install", help="install the target package on one phone (phase 5)"
+        "install", help="install the target package from the Play Store"
     )
     p_install.add_argument("--phone", metavar="ID")
-    p_install.add_argument("--package", metavar="PKG")
+    p_install.add_argument("--package", metavar="PKG",
+                           help="default: TARGET_PACKAGE from .env")
+    p_install.add_argument("--keep", action="store_true",
+                           help="leave the phone running afterwards")
+    p_install.add_argument("--watch", action="store_true",
+                           help="print a fresh live-view link and wait for Enter "
+                                "before driving")
 
     return parser
 
@@ -196,9 +204,32 @@ def with_device(client: Client, requested: str | None) -> str:
     return phone_id
 
 
+def refuse_if_busy(settings: Settings, phone_id: str) -> None:
+    """Stop a second flow from driving a phone another run is already driving.
+
+    Not a nicety: `uiautomator dump` cannot run twice at once, so two flows on
+    one phone corrupt each other's screen reads - and the victim is usually the
+    long-running login, which then fails for a reason that has nothing to do
+    with Google. The ledger already tracks who holds a phone; this is what that
+    claim is for.
+    """
+    entry = Ledger.load(settings.state_dir).get(phone_id)
+    if entry and entry.is_claimed and not entry.is_stale:
+        raise SystemExit(
+            f"phone {phone_id} is in use by another run "
+            f"({entry.label or 'unknown'}).\n"
+            f"Wait for it to finish - driving the same phone twice corrupts "
+            f"both reads.\n"
+            f"If that run is dead, 'geelark reap' will release it."
+        )
+
+
 def cmd_phones(settings: Settings, args) -> int:
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
+    # Phones also get deleted from the GeeLark panel directly; drop their
+    # entries so the ledger describes what actually exists.
+    phones.prune_ledger(client, ledger)
     items = phones.listing(client)
     print(f"{len(items)} phone(s)")
     running = 0
@@ -454,6 +485,57 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
+def cmd_install(settings: Settings, args) -> int:
+    """Install the target package, on a phone that must already be signed in.
+
+    Checked up front rather than discovered halfway through: without an account
+    the Play Store shows a sign-in wall instead of the package page, and the
+    failure would otherwise read as "no Install button".
+    """
+    client = build_client(settings)
+    package = args.package or settings.target_package
+    phone_id = resolve_phone(client, args.phone)
+    refuse_if_busy(settings, phone_id)
+    phones.ensure_running(client, phone_id)
+
+    accounts_on_device = shell.device_accounts(client, phone_id)
+    if not accounts_on_device:
+        print(f"phone {phone_id} has no Google account - the Play Store cannot "
+              f"install. Run 'geelark login --row N --phone {phone_id}' first.",
+              file=sys.stderr)
+        return 1
+    print(f"signed in as {accounts_on_device[0]}")
+
+    if args.watch:
+        # Minted here rather than at boot: the live-view token expires within
+        # seconds, so it is only useful immediately before the flow acts.
+        url = phones.start(client, phone_id)
+        if url:
+            print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
+        input("Open it, then press Enter here to start the install... ")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    artifact_dir = settings.artifact_dir / f"{stamp}-install"
+    try:
+        outcome = play_install.install(
+            client, phone_id, package,
+            budget_seconds=settings.install_budget_seconds,
+            artifact_dir=artifact_dir,
+        )
+        print(f"\noutcome: {outcome}")
+        for path in outcome.artifacts:
+            print(f"  saved: {path}")
+        installed = shell.third_party_packages(client, phone_id)
+        print(f"  third-party packages on device: {installed}")
+        return 0 if outcome.ok else 1
+    finally:
+        if not args.keep:
+            phones.stop(client, phone_id)
+            print(f"  stopped {phone_id} - billing ended")
+        else:
+            print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
+
+
 def cmd_ping(settings: Settings, args) -> int:
     """Prove the credentials sign correctly, and show what they can see.
 
@@ -527,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         "type": cmd_type,
         "screenshot": cmd_screenshot,
         "login": cmd_login,
+        "install": cmd_install,
     }
     handler = handlers.get(args.command)
     if not handler:

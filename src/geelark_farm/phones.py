@@ -190,6 +190,21 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
     return url
 
 
+def prune_ledger(client: Client, ledger: Ledger) -> list[str]:
+    """Forget phones that no longer exist upstream.
+
+    Phones get deleted from the GeeLark panel directly, and without this the
+    ledger grows forever with entries for devices that are gone - which makes
+    `phones --ledger` misleading and hides the entries that still matter.
+    """
+    live = {p.get("id") for p in listing(client)}
+    gone = [phone_id for phone_id in ledger.entries if phone_id not in live]
+    for phone_id in gone:
+        ledger.forget(phone_id)
+        log.info("ledger: forgot %s (no longer on the account)", phone_id)
+    return gone
+
+
 def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
     """Which running phones should be stopped, and why.
 

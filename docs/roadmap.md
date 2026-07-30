@@ -9,8 +9,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | 2 | Device layer: shell, screen capture/parse/tap, fixtures | **done** |
 | 3 | Phone creation + ledger + reaper | **done** |
 | 4 | Google login screen router | **done** |
-| 5 | Play Store install flow | next |
-| 6 | Google Sheets input and status write-back | |
+| 5 | Play Store install flow | **done** |
+| 6 | Google Sheets input and status write-back | next |
 | 7 | Orchestrator: per-row pipeline, budgets, summary | |
 | 8 | Hardening, runbook, release | |
 
@@ -150,6 +150,33 @@ seconds, so it has to be handed over the moment it is issued - hence the
 Port the known-good sequence from the prototype and capture its fixtures.
 
 **Done when** an install is verified by `pm list packages` on a fresh phone.
+
+Delivered: `flows/play_install.py` and `geelark install [--watch]`. Verified on a
+freshly created, freshly signed-in phone: deep link to the package page, tap
+Install, clear the Play Protect prompt mid-download, and confirm with
+`pm list packages`.
+
+Three things this run settled:
+
+- **The Install label moves between attributes.** Here it was a `content-desc`
+  on a non-clickable `View`; in the prototype's run it was `text`. Matching both,
+  and not requiring `clickable`, is what makes the tap reliable — and matching
+  only one is exactly how GeeLark's task fails. Pinned by
+  `test_install_is_found_even_though_it_is_not_clickable`.
+- **The "Complete account setup" chain is account-specific, not universal.** It
+  never appeared for these accounts; the only interstitial was Play Protect's
+  "Turn on scanning", cleared with Dismiss. The chain handling stays, since the
+  prototype hit it, but it is not on the normal path.
+- **`install` refuses a phone another run holds.** The ledger already tracked
+  claims; nothing consulted them. Running `install` during a login would have
+  had two flows calling `uiautomator dump` on one device, which cannot run twice
+  and corrupts both reads — the victim being the long login, failing for a reason
+  unrelated to Google. It now exits with an explanation instead, and a claim
+  older than two hours is ignored so a dead process cannot lock a phone forever.
+
+Also added: `phones.prune_ledger`, because phones get deleted from the GeeLark
+panel directly and the ledger otherwise accumulates entries for devices that no
+longer exist.
 
 ## Phase 6 — Sheets
 
