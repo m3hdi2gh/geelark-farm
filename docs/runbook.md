@@ -49,6 +49,27 @@ The account check matched `com.google` rather than a real `name=...@...` entry.
 `com.google` is present in `dumpsys account` even with zero accounts. See the
 verification trap in `geelark-api.md`.
 
+### `fatal:verification_blocked`
+Google refused the sign-in with "You didn't provide enough info for Google to be
+sure this account is really yours", suggesting a device or network it already
+knows.
+
+Nothing in this tool can resolve it — the account has no history Google trusts.
+What can:
+
+- **Give the account more to verify with.** The message is literal: a recovery
+  email and phone number on the account give Google an alternative to a device
+  it does not recognise.
+- **Warm the account up on the same exit IP first.** Sign in manually through a
+  browser on that proxy, or on the cloud phone itself, so the address and device
+  are not both new at the moment automation runs.
+- **Prefer accounts created on the infrastructure that will use them.** An
+  account whose entire history is on a seller's device and IP is the hardest
+  case there is.
+
+Retrying immediately makes it worse: repeated refusals from a new device raise
+the account's risk score.
+
 ### Login stalls on 2-Step Verification
 Google pushed a prompt to a device the account already trusts — often a cloud
 phone from an earlier run. The router handles it by switching to the

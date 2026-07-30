@@ -28,6 +28,25 @@ DUMP_PATH = "/sdcard/window_dump.xml"
 # AutoCompleteTextView, not an EditText.
 EDITABLE_CLASSES = ("EditText", "AutoComplete", "SearchView")
 
+# Google's UI uses typographic punctuation, so "Couldn't sign you in" on screen
+# contains U+2019, not an ASCII apostrophe - and a matcher written with ' does
+# not match it. That silently turned a named failure into "unknown screen"
+# (measured 2026-07-30). Non-breaking spaces appear too, in strings like
+# "Google Play Pass". Normalising at parse time means every matcher
+# downstream can be written in plain ASCII.
+PUNCTUATION = str.maketrans({
+    "‘": "'", "’": "'",        # single quotes
+    "“": '"', "”": '"',        # double quotes
+    "–": "-", "—": "-",        # en/em dash
+    "…": "...",                     # ellipsis
+    " ": " ", " ": " ",        # non-breaking spaces
+})
+
+
+def normalize(text: str) -> str:
+    """Fold typographic punctuation to ASCII so selectors can be plain text."""
+    return (text or "").translate(PUNCTUATION)
+
 
 @dataclass(frozen=True)
 class Element:
@@ -107,8 +126,8 @@ def parse(xml: str) -> list[Element]:
 
     elements: list[Element] = []
     for node in root.iter("node"):
-        text = (node.get("text") or "").strip()
-        desc = (node.get("content-desc") or "").strip()
+        text = normalize(node.get("text") or "").strip()
+        desc = normalize(node.get("content-desc") or "").strip()
         cls = (node.get("class") or "").rsplit(".", 1)[-1]
         keep = text or desc or any(c in cls for c in EDITABLE_CLASSES)
         if not keep:

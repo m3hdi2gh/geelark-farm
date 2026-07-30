@@ -19,21 +19,26 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 
-from . import __version__, phones, proxy, screen, shell
+from . import __version__, accounts, phones, proxy, screen, shell
+from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
 from .config import ConfigError, Settings
+from .flows import google_login
 from .ledger import Ledger
 from .proxy import ProxyError
 from .shell import TypingError
 
 # Command -> the roadmap phase that implements it.
 PENDING = {
-    "login": 4,
     "install": 5,
     "rows": 6,
     "run": 7,
 }
+
+# Stand-in for the spreadsheet until phase 6. Same columns.
+DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -135,12 +140,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_proxy.add_argument("url", metavar="URL")
 
     # -------------------------------------------------- single-step flows
-    p_login = sub.add_parser(
-        "login", help="sign one account in on one phone (phase 4)"
-    )
-    p_login.add_argument("--phone", metavar="ID")
-    p_login.add_argument("--row", type=int, metavar="N",
-                         help="take the credentials from this sheet row")
+    p_login = sub.add_parser("login", help="sign one account in on one phone")
+    p_login.add_argument("--row", type=int, required=True, metavar="N",
+                         help="which account row to use (1-based)")
+    p_login.add_argument("--phone", metavar="ID",
+                         help="existing phone; omit to create one on the row's proxy")
+    p_login.add_argument("--keep", action="store_true",
+                         help="leave the phone running afterwards")
 
     p_install = sub.add_parser(
         "install", help="install the target package on one phone (phase 5)"
@@ -382,6 +388,72 @@ def cmd_screenshot(settings: Settings, args) -> int:
     return 0
 
 
+def pick_account(settings: Settings, row: int):
+    path = settings.state_dir.parent / DEV_ACCOUNTS
+    loaded = accounts.load_dev_accounts(path)
+    if not 1 <= row <= len(loaded):
+        raise SystemExit(f"--row {row} is out of range (1..{len(loaded)})")
+    return loaded[row - 1]
+
+
+def cmd_login(settings: Settings, args) -> int:
+    """Sign one account in, on a phone created for its proxy unless one is given.
+
+    A phone is stopped afterwards unless --keep, and released in the ledger
+    either way, so an interrupted experiment cannot leave one billing.
+    """
+    client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir)
+    account = pick_account(settings, args.row)
+    print(f"account: {account.label}")
+
+    created = False
+    if args.phone:
+        phone_id = args.phone
+    else:
+        parsed = proxy.parse(account.proxy)
+        result = proxy.check(client, parsed)
+        print(f"proxy: {parsed} -> {result.get('outboundIP')}")
+        entry = phones.create(client, settings, parsed, ledger=ledger,
+                              label=account.label)
+        phone_id = entry.phone_id
+        created = True
+        print(f"created phone {phone_id} (serial {entry.serial})")
+
+    ledger.claim(phone_id, label=account.label)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    artifact_dir = settings.artifact_dir / f"{stamp}-login-row{args.row}"
+
+    try:
+        url = phones.ensure_running(client, phone_id)
+        if url:
+            print(f"watch it live:\n  {url}")
+        outcome = google_login.sign_in(
+            client, phone_id, account,
+            budget_seconds=settings.login_budget_seconds,
+            artifact_dir=artifact_dir,
+        )
+        print(f"\noutcome: {outcome}")
+        for path in outcome.artifacts:
+            print(f"  saved: {path}")
+        link = phones.screenshot(client, phone_id)
+        if link:
+            print(f"  screen: {link}")
+        print(f"  accounts on device: "
+              f"{shell.device_accounts(client, phone_id) or 'NONE'}")
+        if created and not outcome.ok:
+            print(f"  phone kept for inspection: {phone_id} "
+                  f"('geelark delete --phone {phone_id}' when done)")
+        return 0 if outcome.ok else 1
+    finally:
+        ledger.release(phone_id, note="login attempt finished")
+        if not args.keep:
+            phones.stop(client, phone_id)
+            print(f"  stopped {phone_id} - billing ended")
+        else:
+            print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
+
+
 def cmd_ping(settings: Settings, args) -> int:
     """Prove the credentials sign correctly, and show what they can see.
 
@@ -454,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         "shell": cmd_shell,
         "type": cmd_type,
         "screenshot": cmd_screenshot,
+        "login": cmd_login,
     }
     handler = handlers.get(args.command)
     if not handler:
@@ -462,6 +535,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return handler(settings, args)
+    except AccountError as exc:
+        print(f"account: {exc}", file=sys.stderr)
+        return 1
     except ProxyError as exc:
         print(f"proxy: {exc}", file=sys.stderr)
         return 1
