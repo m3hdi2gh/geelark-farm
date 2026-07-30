@@ -18,10 +18,11 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 2 of 8 — the device layer works. Phones can be listed, started, stopped
-and driven: read the real screen, tap by label, type text that survives shell
-quoting, take screenshots. Remaining commands report which phase implements
-them. See [docs/roadmap.md](docs/roadmap.md).
+Phase 3 of 8 — phones can be created behind a proxy, driven, and accounted for.
+Everything below the spreadsheet works: create, boot, read the screen, tap by
+label, type reliably, verify against the device, stop, delete, and reap
+anything left running. Next is the Google login screen router. See
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists
 
@@ -71,6 +72,17 @@ geelark rows                    # validate the sheet without spending anything
 geelark run --dry-run           # show the plan
 geelark run                     # process pending rows
 geelark reap                    # stop anything left running
+```
+
+Phone management:
+
+```bash
+geelark proxy "socks5://user:pass@host:port"    # test a proxy, spend nothing
+geelark create --proxy "..." --label "row 4"    # create bound to that proxy
+geelark phones --ledger                         # what exists, and who owns it
+geelark start / geelark stop --all
+geelark delete --phone ID
+geelark reap --dry-run                          # what would be stopped, and why
 ```
 
 Device diagnostics, for when a flow does something unexpected. Each resolves

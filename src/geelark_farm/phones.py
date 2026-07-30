@@ -1,19 +1,22 @@
-"""Phone lifecycle.
+"""Phone lifecycle: create, start, stop, delete, and the reaper.
 
-Phase 2 delivers the read-and-run half - status, start, stop, screenshot -
-because every device command needs a running phone. Creation, the ledger and
-the reaper are phase 3.
-
-Billing is per running minute, so `start` is the one call in this project that
-begins spending. Anything that starts a phone owns stopping it.
+Billing is per running minute, so `start` is the call that begins spending and
+anything that starts a phone owns stopping it. `create` is the call that makes
+a phone exist at all, and it records the phone in the ledger before returning -
+the window between "created" and "recorded" is exactly how the prototype
+produced orphans.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 
 from .api import Client
+from .config import Settings
+from .ledger import Entry, Ledger
+from .proxy import Proxy
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +44,65 @@ def newest(client: Client) -> dict | None:
     if not alive:
         return None
     return max(alive, key=lambda p: p.get("createTime") or 0)
+
+
+def create(client: Client, settings: Settings, proxy: Proxy, *,
+           ledger: Ledger, name: str | None = None, label: str = "") -> Entry:
+    """Create one phone bound to `proxy`, and record it in the ledger.
+
+    The proxy is set at creation so the device never touches the network
+    unproxied. Constraints that are not obvious (see docs/geelark-api.md):
+    region 'us' only offers Android 15, netType applies only on Android
+    12/13/15, and mobileLanguage MUST be 'default' - a non-English UI makes
+    every English text selector fail.
+
+    /phone/addNew answers per item under 'details', not 'successDetails'.
+    """
+    data = client.data("/v1/phone/addNew", {
+        "mobileType": settings.android,
+        "chargeMode": 0,
+        "region": settings.region,
+        "data": [{
+            "profileName": name or f"{settings.phone_name_prefix}-{int(time.time())}",
+            "proxyInformation": proxy.url,
+            "proxyQueryChannel": 2,
+            "mobileLanguage": "default",
+            "netType": 1,
+            "profileGroup": "automation",
+        }],
+    }) or {}
+
+    created = [d for d in (data.get("details") or [])
+               if d.get("code") == 0 and d.get("id")]
+    if not created:
+        raise PhoneError("creation failed:\n" + json.dumps(data, indent=2))
+
+    row = created[0]
+    phone_id = row["id"]
+    # Record before anything else can fail. A phone that exists but is not in
+    # the ledger is invisible to reap and bills silently.
+    entry = ledger.record(phone_id, serial=row.get("envSerialNo"), label=label,
+                          proxy=f"{proxy.host}:{proxy.port}")
+
+    info = row.get("equipmentInfo") or {}
+    log.info("created %s (serial %s): %s %s / %s, %s / %s",
+             phone_id, row.get("envSerialNo"), info.get("deviceBrand"),
+             info.get("deviceModel"), info.get("osVersion"),
+             info.get("countryName"), info.get("timeZone"))
+    if info.get("netType") == 0:
+        log.info("netType came back 0 (Wi-Fi) despite requesting mobile data")
+    return entry
+
+
+def delete(client: Client, phone_ids: list[str], *,
+           ledger: Ledger | None = None) -> None:
+    """Delete phones permanently. Stop them first - deleting a running phone
+    is not a documented way to end billing."""
+    client.post("/v1/phone/delete", {"ids": phone_ids})
+    for phone_id in phone_ids:
+        if ledger:
+            ledger.forget(phone_id)
+        log.info("deleted %s", phone_id)
 
 
 def status(client: Client, phone_id: str) -> int | None:
@@ -119,6 +181,52 @@ def ensure_running(client: Client, phone_id: str, *,
         log.info("watch it live: %s", url)
     wait_until_running(client, phone_id, settle=settle)
     return url
+
+
+def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
+    """Which running phones should be stopped, and why.
+
+    A phone that is running is spending money, so the question is only ever
+    "does something legitimately need this right now?". Three cases say no:
+
+    - not in the ledger at all: nothing created it through this tool, or the
+      ledger was lost. Either way nothing here is accountable for it.
+    - released: a run finished with it and it should already be off.
+    - stale claim: a run claimed it hours ago and never came back, so the
+      process that owned it is gone.
+
+    A fresh claim is left alone - that is a run in progress.
+    """
+    verdicts = []
+    for item in listing(client):
+        if item.get("status") not in (RUNNING, STARTING):
+            continue
+        phone_id = item.get("id")
+        entry = ledger.get(phone_id)
+        if entry is None:
+            verdicts.append((phone_id, "not in the ledger"))
+        elif entry.released_at is not None:
+            verdicts.append((phone_id, "already released by its run"))
+        elif entry.is_stale:
+            hours = (time.time() - entry.claimed_at) / 3600
+            verdicts.append((phone_id, f"claimed {hours:.1f}h ago, owner gone"))
+        elif not entry.is_claimed:
+            verdicts.append((phone_id, "created but never claimed"))
+    return verdicts
+
+
+def reap(client: Client, ledger: Ledger, *, dry_run: bool = False) -> int:
+    """Stop every phone nothing is accountable for. The backstop for when a
+    run dies before its own cleanup."""
+    verdicts = reapable(client, ledger)
+    for phone_id, reason in verdicts:
+        if dry_run:
+            log.info("would stop %s (%s)", phone_id, reason)
+            continue
+        stop(client, phone_id)
+        ledger.release(phone_id, note=f"reaped: {reason}")
+        log.info("stopped %s (%s)", phone_id, reason)
+    return len(verdicts)
 
 
 def screenshot(client: Client, phone_id: str, *, timeout: float = 60) -> str | None:

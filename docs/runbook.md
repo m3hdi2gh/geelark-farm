@@ -6,9 +6,10 @@ first time something surprises you, while the diagnosis is still fresh.
 ## First moves
 
 ```bash
-geelark phones          # what exists, and what is running (i.e. billing)
-geelark reap            # stop anything running that the ledger cannot explain
-geelark dump --phone ID # what is actually on that phone's screen right now
+geelark phones --ledger   # what exists, what is billing, and who owns it
+geelark reap --dry-run    # what would be stopped, and why
+geelark reap              # stop anything the ledger cannot account for
+geelark dump --phone ID   # what is actually on that phone's screen right now
 ```
 
 `/phone/start` returns a live-view URL; opening it shows the real screen and
@@ -22,6 +23,19 @@ when an RPA task is involved.
 **A phone left running keeps billing per minute.** If a run is interrupted in a
 way that skips its cleanup, `geelark reap` is the fix. Check after any crash,
 any Ctrl+C, and any power loss.
+
+`reap` decides from the ledger, so understand what it will and will not touch:
+
+| Ledger state | reap |
+|---|---|
+| absent | stops it — nothing here is accountable for it |
+| released by its run | stops it — it should already be off |
+| claimed over 2h ago | stops it — the owning process is gone |
+| claimed recently | leaves it — a run is using it |
+
+If the ledger is lost or corrupt, every phone looks like an orphan, so `reap`
+would stop a run in progress. It logs an error in that case; check
+`geelark phones --ledger` before reaping.
 
 ## Known failure modes
 

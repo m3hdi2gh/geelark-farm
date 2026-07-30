@@ -20,14 +20,15 @@ import argparse
 import logging
 import sys
 
-from . import __version__, phones, screen, shell
+from . import __version__, phones, proxy, screen, shell
 from .api import ApiError, Client, TransportError, build_client
 from .config import ConfigError, Settings
+from .ledger import Ledger
+from .proxy import ProxyError
 from .shell import TypingError
 
 # Command -> the roadmap phase that implements it.
 PENDING = {
-    "reap": 3,
     "login": 4,
     "install": 5,
     "rows": 6,
@@ -93,15 +94,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_shot.add_argument("--phone", metavar="ID")
 
     # --------------------------------------------------------- lifecycle
-    sub.add_parser("phones", help="list phones on the account")
+    p_phones = sub.add_parser("phones", help="list phones on the account")
+    p_phones.add_argument("--ledger", action="store_true",
+                          help="also show what the local ledger knows")
+
+    p_create = sub.add_parser(
+        "create", help="create a phone bound to a proxy (this costs money)"
+    )
+    p_create.add_argument("--proxy", required=True, metavar="URL",
+                          help="socks5://user:pass@host:port, or host:port:user:pass")
+    p_create.add_argument("--name", metavar="NAME")
+    p_create.add_argument("--label", metavar="TEXT", default="",
+                          help="what this phone is for, recorded in the ledger")
+    p_create.add_argument("--start", action="store_true",
+                          help="boot it too (starts billing)")
+
+    p_delete = sub.add_parser("delete", help="delete a phone permanently")
+    p_delete.add_argument("--phone", required=True, metavar="ID")
+    p_delete.add_argument("--yes", action="store_true",
+                          help="skip the confirmation prompt")
+
+    p_start = sub.add_parser("start", help="boot a phone (starts billing)")
+    p_start.add_argument("--phone", metavar="ID")
+    p_start.add_argument("--wait", action="store_true",
+                         help="block until it is running and settled")
 
     p_stop = sub.add_parser("stop", help="stop a phone, ending its billing")
     p_stop.add_argument("--phone", metavar="ID")
     p_stop.add_argument("--all", action="store_true", help="stop every running phone")
 
-    sub.add_parser(
-        "reap", help="stop phones that are running but unaccounted for (phase 3)"
+    p_reap = sub.add_parser(
+        "reap", help="stop running phones that nothing is accountable for"
     )
+    p_reap.add_argument("--dry-run", action="store_true",
+                        help="report what would be stopped, change nothing")
+
+    p_proxy = sub.add_parser(
+        "proxy", help="check a proxy without creating anything"
+    )
+    p_proxy.add_argument("url", metavar="URL")
 
     # -------------------------------------------------- single-step flows
     p_login = sub.add_parser(
@@ -161,6 +192,7 @@ def with_device(client: Client, requested: str | None) -> str:
 
 def cmd_phones(settings: Settings, args) -> int:
     client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir)
     items = phones.listing(client)
     print(f"{len(items)} phone(s)")
     running = 0
@@ -168,12 +200,104 @@ def cmd_phones(settings: Settings, args) -> int:
         state = item.get("status")
         running += state == phones.RUNNING
         equipment = item.get("equipmentInfo") or {}
-        print(f"  {item.get('id')}  serial {item.get('serialNo', '?'):>5}  "
-              f"{PHONE_STATUS.get(state, state):8}  "
-              f"{equipment.get('deviceBrand', '?')} "
-              f"{equipment.get('osVersion', '?')}")
+        line = (f"  {item.get('id')}  serial {item.get('serialNo', '?'):>5}  "
+                f"{PHONE_STATUS.get(state, state):8}  "
+                f"{equipment.get('deviceBrand', '?')} "
+                f"{equipment.get('osVersion', '?')}")
+        if args.ledger:
+            entry = ledger.get(item.get("id"))
+            if entry is None:
+                line += "   [not in ledger]"
+            elif entry.is_claimed:
+                line += f"   [claimed: {entry.label or '-'}]"
+            else:
+                line += f"   [{entry.label or 'recorded'}]"
+        print(line)
     if running:
         print(f"\n{running} RUNNING and billing - 'geelark stop --all' ends that.")
+    return 0
+
+
+def cmd_create(settings: Settings, args) -> int:
+    client = build_client(settings)
+    parsed = proxy.parse(args.proxy)
+    print(f"checking {parsed} before creating anything")
+    result = proxy.check(client, parsed)
+    print(f"  outbound {result.get('outboundIP')} / "
+          f"{result.get('country') or 'unknown country'}")
+
+    ledger = Ledger.load(settings.state_dir)
+    entry = phones.create(client, settings, parsed, ledger=ledger,
+                          name=args.name, label=args.label)
+    print(f"created {entry.phone_id} (serial {entry.serial}), recorded in the ledger")
+
+    if args.start:
+        url = phones.start(client, entry.phone_id)
+        ledger.claim(entry.phone_id, label=args.label)
+        phones.wait_until_running(client, entry.phone_id)
+        print(f"running - watch it live:\n  {url}")
+        print("remember: 'geelark stop' ends billing")
+    return 0
+
+
+def cmd_delete(settings: Settings, args) -> int:
+    client = build_client(settings)
+    state = phones.status(client, args.phone)
+    if state in (phones.RUNNING, phones.STARTING):
+        print(f"phone {args.phone} is {PHONE_STATUS.get(state)} - "
+              f"stop it first ('geelark stop --phone {args.phone}')",
+              file=sys.stderr)
+        return 1
+    if not args.yes:
+        answer = input(f"permanently delete {args.phone}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("cancelled")
+            return 1
+    ledger = Ledger.load(settings.state_dir)
+    phones.delete(client, [args.phone], ledger=ledger)
+    print(f"deleted {args.phone}")
+    return 0
+
+
+def cmd_reap(settings: Settings, args) -> int:
+    client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir)
+    verdicts = phones.reapable(client, ledger)
+    if not verdicts:
+        print("nothing to reap - no phone is running unaccounted for")
+        return 0
+    for phone_id, reason in verdicts:
+        print(f"  {phone_id}: {reason}")
+    if args.dry_run:
+        print(f"\n{len(verdicts)} phone(s) would be stopped (--dry-run)")
+        return 0
+    phones.reap(client, ledger)
+    print(f"\nstopped {len(verdicts)} phone(s) - billing ended")
+    return 0
+
+
+def cmd_proxy(settings: Settings, args) -> int:
+    client = build_client(settings)
+    parsed = proxy.parse(args.url)
+    print(f"{parsed}")
+    result = proxy.check(client, parsed)
+    print(f"  outbound IP : {result.get('outboundIP')}")
+    print(f"  country     : {result.get('country') or 'UNKNOWN'}")
+    if not result.get("country"):
+        print("  warning: geolocation databases do not recognise this IP, "
+              "which correlates with Google challenges later")
+    return 0
+
+
+def cmd_start(settings: Settings, args) -> int:
+    client = build_client(settings)
+    phone_id = resolve_phone(client, args.phone)
+    url = phones.start(client, phone_id)
+    if args.wait:
+        phones.wait_until_running(client, phone_id)
+    print(f"starting {phone_id} - billing has begun; 'geelark stop' ends it")
+    if url:
+        print(f"watch it live:\n  {url}")
     return 0
 
 
@@ -314,7 +438,12 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "ping": cmd_ping,
         "phones": cmd_phones,
+        "create": cmd_create,
+        "delete": cmd_delete,
+        "start": cmd_start,
         "stop": cmd_stop,
+        "reap": cmd_reap,
+        "proxy": cmd_proxy,
         "dump": cmd_dump,
         "tap": cmd_tap,
         "shell": cmd_shell,
@@ -328,6 +457,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return handler(settings, args)
+    except ProxyError as exc:
+        print(f"proxy: {exc}", file=sys.stderr)
+        return 1
     except phones.PhoneError as exc:
         print(f"phone: {exc}", file=sys.stderr)
         return 1

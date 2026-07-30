@@ -7,8 +7,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | 0 | Repo skeleton, config, CLI surface, ported API notes | **done** |
 | 1 | Signed API client: rate limiter, retries, `ApiError` | **done** |
 | 2 | Device layer: shell, screen capture/parse/tap, fixtures | **done** |
-| 3 | Phone creation + ledger + reaper | next |
-| 4 | Google login screen router | |
+| 3 | Phone creation + ledger + reaper | **done** |
+| 4 | Google login screen router | next |
 | 5 | Play Store install flow | |
 | 6 | Google Sheets input and status write-back | |
 | 7 | Orchestrator: per-row pipeline, budgets, summary | |
@@ -81,6 +81,27 @@ crash between "phone created" and "row updated" is recoverable.
 `geelark reap` stops anything running that the ledger does not account for.
 
 **Done when** no error path can leave a phone running unaccounted for.
+
+Delivered: `proxy.parse/check`, `ledger.Ledger`, `phones.create/delete/reap`,
+and the CLI commands `create`, `delete`, `start`, `reap --dry-run`, `proxy`,
+plus `phones --ledger`.
+
+The reaper answers one question — *does anything legitimately need this running
+phone right now?* — and stops it in the three cases where the answer is no:
+it is absent from the ledger, it was already released by its run, or its claim
+is older than two hours, which means the process that owned it is gone. A fresh
+claim is left alone. `--dry-run` reports without acting.
+
+Verified end to end on a real phone, then deleted: create recorded serial 435 in
+the ledger with the proxy endpoint (never its password) → `start` began billing
+→ `reap --dry-run` reported "created but never claimed" → `reap` stopped it and
+wrote the reason into the ledger → `delete` removed it from both the account and
+the ledger. That run also confirmed `/v1/phone/delete`, the one endpoint here
+that had never been exercised.
+
+Note the proxy check warns when `country` is missing, as it is for the current
+proxy: geolocation databases do not recognise the IP, which is the leading
+predictor of the Google challenges phase 4 has to survive.
 
 ## Phase 4 — Google login screen router
 
