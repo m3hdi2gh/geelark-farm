@@ -85,6 +85,7 @@ geelark ping                    # check credentials, list phones
 geelark rows                    # validate the sheet without spending anything
 geelark run --dry-run           # show the plan
 geelark run                     # process pending rows
+geelark run --workers 3         # ...three at a time
 geelark reap                    # stop anything left running
 ```
 
@@ -126,6 +127,9 @@ geelark stop --all              # end all billing
 **Phones bill per running minute.** Every budget in `.env` is therefore a spend
 cap, every code path that starts a phone stops it, and `geelark reap` is the
 backstop when something goes wrong. Check it after any interrupted run.
+
+Running rows in parallel shortens the wall clock, not the bill: three phones for
+five minutes costs the same as three phones one after another.
 
 ## Caveats
 

@@ -241,9 +241,9 @@ Rules the implementation enforces:
   second phone on the same proxy.
 - If stopping a phone itself fails, that is logged at ERROR with a pointer to
   `geelark reap` - the only path where money can still leak.
-- `MAX_CONCURRENT_PHONES > 1` warns that the run is sequential rather than
-  silently ignoring the setting. Concurrency is deliberate future work: the rate
-  limiter is already process-wide, but gspread is not documented thread-safe.
+- Rows run in parallel up to `MAX_CONCURRENT_PHONES` (or `--workers N`), across
+  phones only - one RPA task per phone is a hard API limit, and two flows on one
+  device corrupt each other's screen reads. See the concurrency note in phase 8.
 
 ## Phase 8 — hardening
 

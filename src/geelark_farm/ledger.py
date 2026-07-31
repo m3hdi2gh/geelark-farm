@@ -60,11 +60,38 @@ class Entry:
 
 @dataclass
 class Ledger:
-    """The phones file. Load, mutate, save - each save is atomic."""
+    """The phones file. Load, mutate, save - each save is atomic.
+
+    Every mutation holds the lock across read-modify-write, not just across the
+    file write. With workers running in parallel, two threads recording phones
+    at the same moment would otherwise interleave and one entry would be lost -
+    and a phone missing from the ledger is a phone `reap` cannot account for,
+    left billing with nothing tracking it.
+
+    Re-entrant because the mutators call save(), which takes the lock too.
+    """
 
     path: Path
     entries: dict[str, Entry] = field(default_factory=dict)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+
+    @staticmethod
+    def _read(path: Path, attempts: int = 10) -> str:
+        """Read the file, retrying the Windows replace window.
+
+        While `os.replace` swaps the file in, Windows denies other handles - so
+        a reader that happens to open at that instant gets PermissionError even
+        though nothing is wrong. Retrying is the whole fix; the file is either
+        the old one or the new one, never half of either.
+        """
+        for attempt in range(attempts):
+            try:
+                return path.read_text(encoding="utf-8")
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+        return ""
 
     @classmethod
     def load(cls, state_dir: str | Path) -> Ledger:
@@ -73,7 +100,7 @@ class Ledger:
         if not path.exists():
             return ledger
         try:
-            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
+            raw = json.loads(cls._read(path) or "{}")
         except json.JSONDecodeError:
             # A corrupt ledger must not stop a run, but it must be loud: it
             # means reap can no longer tell orphans from claimed phones.
@@ -98,45 +125,70 @@ class Ledger:
                     for phone_id, entry in self.entries.items()
                 }
             }
-            temp = self.path.with_suffix(".json.tmp")
+            temp = self.path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            os.replace(temp, self.path)
+            self._replace(temp)
+
+    def _replace(self, temp: Path, attempts: int = 10) -> None:
+        """os.replace, retried.
+
+        On Windows the replace fails with PermissionError while any other
+        handle has the destination open - and something reading the ledger at
+        the moment a parallel run writes it is exactly that. Caught by a
+        concurrency test rather than in production, where the symptom would have
+        been a phone silently missing from the ledger.
+        """
+        for attempt in range(attempts):
+            try:
+                os.replace(temp, self.path)
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    temp.unlink(missing_ok=True)
+                    log.error("could not write the ledger at %s; a phone may "
+                              "not be recorded. Run 'geelark phones'.", self.path)
+                    return
+                time.sleep(0.02 * (attempt + 1))
 
     # ------------------------------------------------------------ mutations
     def record(self, phone_id: str, *, serial=None, label: str = "",
                proxy: str = "", note: str = "") -> Entry:
         """Register a phone that now exists. Call this before anything else."""
-        entry = Entry(phone_id=phone_id, created_at=_now(), serial=serial,
-                      label=label, proxy=proxy, note=note)
-        self.entries[phone_id] = entry
-        self.save()
-        return entry
+        with self._lock:
+            entry = Entry(phone_id=phone_id, created_at=_now(), serial=serial,
+                          label=label, proxy=proxy, note=note)
+            self.entries[phone_id] = entry
+            self.save()
+            return entry
 
     def claim(self, phone_id: str, label: str = "") -> Entry:
         """Mark that a run is working with this phone right now."""
-        entry = self.entries.get(phone_id) or self.record(phone_id, label=label)
-        entry.claimed_at = _now()
-        entry.released_at = None
-        if label:
-            entry.label = label
-        self.save()
-        return entry
+        with self._lock:
+            entry = self.entries.get(phone_id) or self.record(phone_id, label=label)
+            entry.claimed_at = _now()
+            entry.released_at = None
+            if label:
+                entry.label = label
+            self.save()
+            return entry
 
     def release(self, phone_id: str, note: str = "") -> None:
         """Mark the run finished with this phone. After this it should be
         stopped, and reap will stop it if it is not."""
-        entry = self.entries.get(phone_id)
-        if not entry:
-            return
-        entry.released_at = _now()
-        if note:
-            entry.note = note
-        self.save()
+        with self._lock:
+            entry = self.entries.get(phone_id)
+            if not entry:
+                return
+            entry.released_at = _now()
+            if note:
+                entry.note = note
+            self.save()
 
     def forget(self, phone_id: str) -> None:
         """Drop a phone that no longer exists (deleted upstream)."""
-        if self.entries.pop(phone_id, None) is not None:
-            self.save()
+        with self._lock:
+            if self.entries.pop(phone_id, None) is not None:
+                self.save()
 
     # --------------------------------------------------------------- queries
     def get(self, phone_id: str) -> Entry | None:

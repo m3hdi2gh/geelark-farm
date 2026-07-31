@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="process only this sheet row")
     p_run.add_argument("--retry-failed", action="store_true",
                        help="also retry rows marked failed:*")
+    p_run.add_argument("--workers", type=int, metavar="N",
+                       help="how many rows to run at once "
+                            "(default: MAX_CONCURRENT_PHONES)")
     p_run.add_argument("--watch", action="store_true",
                        help="for each row, print a live-view link and wait for "
                             "Enter before driving")
@@ -521,6 +524,7 @@ def cmd_run(settings: Settings, args) -> int:
         client, settings,
         limit=args.limit, only_row=args.row,
         retry_failed=args.retry_failed, dry_run=args.dry_run,
+        workers=args.workers,
         on_ready=announce if args.watch else None,
     )
     if args.dry_run:

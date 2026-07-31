@@ -18,16 +18,36 @@ Rules that shape the code:
   and the run moves on - that is what makes a sheet of fifty rows usable.
 - **Every outcome is written to the sheet before the next row starts**, so an
   interrupted run resumes correctly rather than repeating work.
-- **One RPA task per phone**, so any future concurrency is across phones. The
-  run is sequential today; the API rate limit is already a process-wide budget
-  in `api.py`, which is where concurrency would draw from.
+- **Concurrency is across phones, never within one.** One RPA task per phone is
+  a hard API constraint, and two flows on one device corrupt each other's screen
+  reads. Rows run in parallel up to `MAX_CONCURRENT_PHONES`; each owns exactly
+  one phone for its whole life.
+
+## What parallelism required
+
+Three shared things had to be made safe before workers could run at once, and
+each failure mode costs money rather than raising:
+
+- the **rate limiter** in `api.py` is a process-wide budget, already
+  thread-safe, and blocks rather than rejecting - so more workers means more
+  waiting, never a two-hour ban;
+- the **ledger** holds its lock across read-modify-write, because a lost entry
+  is a phone `reap` cannot account for;
+- the **sheet** serialises every gspread call, since gspread is not documented
+  thread-safe and several rows finish at once.
+
+Ctrl+C is the other hazard: a worker thread does not receive it, so its `finally`
+never runs and its phone would keep billing. `run` therefore tracks every phone
+it has started and stops them all on the way out.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +60,31 @@ from .ledger import Ledger
 from .sheets import Row, Sheet
 
 log = logging.getLogger(__name__)
+
+# Which row the current thread is working on, so interleaved output from
+# parallel workers can still be read. Without it, several rows logging
+# "entering the password" at once is indistinguishable noise.
+_context = threading.local()
+
+
+class RowContextFilter(logging.Filter):
+    """Stamp every log record with the row its thread is processing."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.row = getattr(_context, "row", "-")
+        return True
+
+
+def install_row_logging() -> None:
+    """Add the row marker to the root handler's format, once."""
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if any(isinstance(f, RowContextFilter) for f in handler.filters):
+            continue
+        handler.addFilter(RowContextFilter())
+        handler.setFormatter(
+            logging.Formatter("%(levelname)s [row %(row)s] %(name)s: %(message)s")
+        )
 
 
 @dataclass
@@ -72,7 +117,8 @@ def _existing_phone(client: Client, phone_id: str) -> bool:
 
 def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 ledger: Ledger,
-                on_ready: Callable[[str], None] | None = None) -> Result:
+                on_ready: Callable[[str], None] | None = None,
+                on_phone: Callable[[str], None] | None = None) -> Result:
     """Take one row from pending to a stopped, ready phone.
 
     Returns a Result rather than raising: the caller is a batch, and one bad
@@ -108,6 +154,10 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         phone_id = entry.phone_id
         result.serial = str(entry.serial or "")
 
+    if on_phone:
+        # Register before booting, so an interrupt during boot still knows
+        # about this phone.
+        on_phone(phone_id)
     ledger.claim(phone_id, label=account.label)
     sheet.claim(row, phone_id=phone_id)
 
@@ -166,7 +216,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
 
 def run(client: Client, settings: Settings, *, limit: int | None = None,
         only_row: int | None = None, retry_failed: bool = False,
-        dry_run: bool = False,
+        dry_run: bool = False, workers: int | None = None,
         on_ready: Callable[[str], None] | None = None) -> list[Result]:
     """Process the sheet's pending rows and return one Result each."""
     from .sheets import selectable
@@ -193,29 +243,94 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
         print("\nNothing was created and nothing was written (--dry-run).")
         return []
 
-    if settings.max_concurrent_phones > 1:
-        log.warning("MAX_CONCURRENT_PHONES=%d, but this run is sequential; "
-                    "concurrency is not implemented yet",
-                    settings.max_concurrent_phones)
-
     ledger = Ledger.load(settings.state_dir)
     phones.prune_ledger(client, ledger)
+    install_row_logging()
 
-    results: list[Result] = []
-    for index, row in enumerate(chosen, start=1):
+    if not chosen:
+        return []
+
+    count = max(1, workers or settings.max_concurrent_phones)
+    if on_ready and count > 1:
+        # --watch stops for a keypress; several phones cannot share one prompt.
+        log.info("--watch runs one row at a time")
+        count = 1
+    count = min(count, len(chosen))
+
+    # Phones this run has started, so an interrupt can stop every one of them.
+    # A worker thread never receives Ctrl+C, so its own finally will not fire.
+    started: set[str] = set()
+    started_lock = threading.Lock()
+
+    def note_phone(phone_id: str) -> None:
+        with started_lock:
+            started.add(phone_id)
+
+    def work(index: int, row: Row) -> Result:
+        _context.row = row.number
         print(f"\n=== row {row.number} ({index}/{len(chosen)}): {row.email} ===",
               flush=True)
-        try:
-            result = process_row(client, settings, sheet, row, ledger,
-                                 on_ready=on_ready)
-        except KeyboardInterrupt:
-            # process_row's finally has already stopped this row's phone.
-            print("\ninterrupted - stopping here", flush=True)
-            break
-        results.append(result)
+        result = process_row(client, settings, sheet, row, ledger,
+                             on_ready=on_ready, on_phone=note_phone)
         mark = "OK" if result.ok else "FAIL"
-        print(f"  {mark}: {result.reason} ({result.seconds:.0f}s)", flush=True)
+        print(f"  row {row.number} {mark}: {result.reason} "
+              f"({result.seconds:.0f}s)", flush=True)
+        return result
+
+    if count == 1:
+        results: list[Result] = []
+        try:
+            for index, row in enumerate(chosen, start=1):
+                results.append(work(index, row))
+        except KeyboardInterrupt:
+            print("\ninterrupted - stopping here", flush=True)
+            _stop_all(client, started, ledger)
+        return results
+
+    log.info("%d rows, %d at a time", len(chosen), count)
+    futures = {}
+    try:
+        with ThreadPoolExecutor(max_workers=count,
+                                thread_name_prefix="row") as pool:
+            futures = {pool.submit(work, i, r): r
+                       for i, r in enumerate(chosen, start=1)}
+            wait(futures, return_when=FIRST_EXCEPTION)
+    except KeyboardInterrupt:
+        print("\ninterrupted - stopping every phone this run started", flush=True)
+        for future in futures:
+            future.cancel()
+        _stop_all(client, started, ledger)
+
+    results = []
+    for future, row in futures.items():
+        if future.cancelled():
+            continue
+        try:
+            results.append(future.result())
+        except Exception as exc:                                  # noqa: BLE001
+            log.error("row %d raised: %s", row.number, exc)
+            results.append(Result(row=row.number, email=row.email, ok=False,
+                                  reason="error", detail=str(exc)))
+    results.sort(key=lambda r: r.row)
     return results
+
+
+def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:
+    """Last-resort cleanup: stop every phone this run started.
+
+    Only reached when the normal per-row `finally` cannot run - an interrupt in
+    the main thread while workers hold phones. Failures are reported, never
+    swallowed: this is the last thing between a crash and a phone billing all
+    night.
+    """
+    for phone_id in sorted(phone_ids):
+        try:
+            phones.stop(client, phone_id)
+            ledger.release(phone_id, note="stopped by interrupt cleanup")
+            print(f"  stopped {phone_id}", flush=True)
+        except Exception as exc:                                  # noqa: BLE001
+            log.error("COULD NOT STOP %s (%s) - run 'geelark reap' now",
+                      phone_id, exc)
 
 
 def summarise(results: list[Result], *, artifact_dir: Path | None = None) -> str:

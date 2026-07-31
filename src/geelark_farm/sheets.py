@@ -16,6 +16,7 @@ are required; the rest are written back and created as needed.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,12 +77,20 @@ class Row:
 
 
 class Sheet:
-    """A worksheet, read once and written back a row at a time."""
+    """A worksheet, read once and written back a row at a time.
+
+    Every call through gspread is serialised by a lock. gspread is not
+    documented as thread-safe, and with workers running in parallel several
+    rows finish at once; a torn write here would corrupt the record of which
+    phone belongs to which account. The calls are brief next to a five-minute
+    row, so serialising them costs nothing worth measuring.
+    """
 
     def __init__(self, worksheet, headers: list[str]):
         self._ws = worksheet
         self.headers = headers
         self._index = {name: i for i, name in enumerate(headers)}
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------- opening
     @classmethod
@@ -146,7 +155,8 @@ class Sheet:
         Validation happens here rather than at use, because a row that cannot
         work should be rejected before a phone is created for it.
         """
-        raw = self._ws.get_all_values()
+        with self._lock:
+            raw = self._ws.get_all_values()
         rows: list[Row] = []
         for offset, line in enumerate(raw[1:], start=1):
             values = {
@@ -208,7 +218,8 @@ class Sheet:
             })
             row.values[name] = value
         if payload:
-            self._ws.batch_update(payload)
+            with self._lock:
+                self._ws.batch_update(payload)
 
     def claim(self, row: Row, phone_id: str = "") -> None:
         self.update(row, status=RUNNING, phone_id=phone_id, note="")
