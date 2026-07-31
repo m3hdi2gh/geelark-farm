@@ -109,6 +109,26 @@ curl "http://ip-api.com/json/<outbound-ip>?fields=country,isp,proxy,hosting,mobi
 challenges. Scamalytics and spur.us give a fuller reputation picture. A
 residential or mobile ISP with `hosting: false` is what you want.
 
+### "still installing..." repeats until the budget runs out
+The Install tap did not land on the Install button. Look at the run's
+`*-play-package-page.xml`: if there is no Install element on it, something was
+covering the page - Play's Terms of Service on a brand-new account, most likely.
+
+Two defects produced exactly this in one run (2026-07-31), and both are fixed:
+`Accept` was missing from the install flow's interstitial list, and `screen.find`
+matched the word "install" inside the dialog's body text, so it tapped a
+paragraph and reported success. Partial matches are now required to be
+label-shaped - the query as a whole word, in a string not much longer than the
+query - so a paragraph can never win over a button.
+
+If it recurs, the archived XML names the screen that needs a new entry.
+
+### A password containing '%'
+Handled. `input text` turns `%s` into a space, so a password containing that
+exact pair is typed in two calls, ending one after the `%` so it stays literal.
+Every other `%` needs nothing. Only non-ASCII characters are still refused, and
+those need an IME such as ADBKeyboard.
+
 ### Selectors stop matching
 Confirm the phone's UI is English: `mobileLanguage` must be `default`, or every
 English text selector fails (`20008`).

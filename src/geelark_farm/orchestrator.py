@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,7 +71,8 @@ def _existing_phone(client: Client, phone_id: str) -> bool:
 
 
 def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
-                ledger: Ledger) -> Result:
+                ledger: Ledger,
+                on_ready: Callable[[str], None] | None = None) -> Result:
     """Take one row from pending to a stopped, ready phone.
 
     Returns a Result rather than raising: the caller is a batch, and one bad
@@ -114,6 +116,10 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
 
     try:
         phones.ensure_running(client, phone_id)
+        if on_ready:
+            # The caller may want to watch: fired after boot, before the
+            # first screen is touched, so nothing is missed.
+            on_ready(phone_id)
 
         login = google_login.sign_in(
             client, phone_id, account,
@@ -160,7 +166,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
 
 def run(client: Client, settings: Settings, *, limit: int | None = None,
         only_row: int | None = None, retry_failed: bool = False,
-        dry_run: bool = False) -> list[Result]:
+        dry_run: bool = False,
+        on_ready: Callable[[str], None] | None = None) -> list[Result]:
     """Process the sheet's pending rows and return one Result each."""
     from .sheets import selectable
 
@@ -199,7 +206,8 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
         print(f"\n=== row {row.number} ({index}/{len(chosen)}): {row.email} ===",
               flush=True)
         try:
-            result = process_row(client, settings, sheet, row, ledger)
+            result = process_row(client, settings, sheet, row, ledger,
+                                 on_ready=on_ready)
         except KeyboardInterrupt:
             # process_row's finally has already stopped this row's phone.
             print("\ninterrupted - stopping here", flush=True)

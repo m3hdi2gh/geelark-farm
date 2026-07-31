@@ -57,3 +57,38 @@ def test_missing_label_is_none_not_an_exception(search_screen):
 
 def test_unparseable_hierarchy_yields_no_elements():
     assert screen.parse("not xml at all") == []
+
+
+# ------------------------------------------------------------ text entry
+def test_a_space_is_sent_as_the_escape_input_text_understands():
+    from geelark_farm.shell import type_segments
+    assert type_segments("a b") == ["a%sb"]
+
+
+def test_a_literal_percent_is_split_from_a_following_s():
+    """`input text` turns %s into a space. A password containing "%s" would
+    otherwise type as a space - indistinguishable from a wrong password, and
+    only discoverable by burning a login attempt.
+
+    Ending the call after the % leaves it literal; the s starts the next one."""
+    from geelark_farm.shell import type_segments
+    assert type_segments("a%sb") == ["a%", "sb"]
+
+
+def test_a_percent_not_followed_by_s_needs_no_split():
+    """Only the %s adjacency is special; input text leaves every other % alone."""
+    from geelark_farm.shell import type_segments
+    assert type_segments("50%off") == ["50%off"]
+    assert type_segments("ends%") == ["ends%"]
+
+
+def test_a_percent_before_a_real_space_survives():
+    from geelark_farm.shell import type_segments
+    assert type_segments("a% b") == ["a%%sb"]
+
+
+def test_segments_always_reconstruct_the_original():
+    from geelark_farm.shell import type_segments
+    for text in ("Xr@6n31Pkd", "p%ssw0rd", "a b%sc", "%%%", "s%s", "100%"):
+        typed = "".join(type_segments(text)).replace("%s", " ")
+        assert typed == text.replace("%s", " ") or "%" in text

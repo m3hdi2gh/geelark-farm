@@ -47,9 +47,20 @@ PLAY_PACKAGE = "com.android.vending"
 
 # Interstitials, in the order Play tends to present them. Tapping the wrong one
 # first is harmless - the loop simply sees the next screen on its next pass.
+#
+# "Accept" is Play's Terms of Service, which only a brand-new account meets: the
+# first three accounts tested had already accepted it elsewhere, so its absence
+# from this list went unnoticed until an account that had never opened the Play
+# Store hit it (2026-07-31). Note that the same dialog offers "Decline", which
+# must never be tapped - so the list is an allowlist, never a "press any button".
 INTERSTITIAL_LABELS = (
-    "Continue", "Skip", "Not now", "No thanks", "Got it", "Dismiss",
+    "Accept", "I agree", "Agree",
+    "Continue", "Skip", "Not now", "No thanks", "Got it", "Dismiss", "OK",
 )
+
+# How many dialogs may stand between the deep link and the Install button before
+# something is clearly wrong.
+MAX_PRE_INSTALL_DIALOGS = 4
 
 # Text that means the Play Store is not usable for this account yet, rather
 # than a page to click through.
@@ -123,30 +134,47 @@ def install(client: Client, phone_id: str, package: str, *,
 
     open_package_page(client, phone_id, package)
 
-    xml = screen.capture(client, phone_id)
-    elements = screen.parse(xml) if xml else []
-    archive("play-package-page", xml or "")
-    blob = screen.texts(elements)
+    # Clear whatever stands between the deep link and the Install button. A
+    # brand-new account meets Play's Terms of Service here; an established one
+    # meets nothing. So this loops on what is actually on screen rather than
+    # assuming a fixed number of dialogs.
+    elements: list[screen.Element] = []
+    for attempt in range(MAX_PRE_INSTALL_DIALOGS):
+        xml = screen.capture(client, phone_id)
+        elements = screen.parse(xml) if xml else []
+        if attempt == 0:
+            archive("play-package-page", xml or "")
 
-    reason = _fatal_reason(blob)
-    if reason:
-        return Outcome("fatal", reason,
-                       "the Play Store cannot install for this account yet",
-                       artifacts=saved)
+        reason = _fatal_reason(screen.texts(elements))
+        if reason:
+            archive(reason, xml or "")
+            return Outcome("fatal", reason,
+                           "the Play Store cannot install for this account yet",
+                           artifacts=saved)
 
-    # An interstitial can also be sitting on top before Install is reachable.
-    tapped = screen.tap_first_present(client, phone_id, elements,
-                                      ("Complete account setup",) + INTERSTITIAL_LABELS)
-    if tapped:
+        if screen.find(elements, "Install"):
+            break
+
+        tapped = screen.tap_first_present(
+            client, phone_id, elements,
+            ("Complete account setup",) + INTERSTITIAL_LABELS)
+        if not tapped:
+            break
         log.info("cleared %r before looking for Install", tapped)
-        time.sleep(4)
-        elements = screen.read_screen(client, phone_id)
+        archive(f"pre-install-{tapped.replace(' ', '-')}", xml or "")
+        time.sleep(5)
 
-    if not screen.tap_label(client, phone_id, elements, "Install"):
+    button = screen.find(elements, "Install")
+    if not button:
         labels = [e.label for e in elements if e.label][:12]
         return Outcome("fatal", "no_install_button",
                        f"on screen: {labels}", artifacts=saved)
-    log.info("tapped Install; waiting for the package to appear")
+    if not screen.tap_element(client, phone_id, button):
+        return Outcome("fatal", "no_install_button",
+                       "the Install element has no usable bounds",
+                       artifacts=saved)
+    log.info("tapped Install (%r); waiting for the package to appear",
+             button.label)
 
     deadline = time.time() + budget_seconds
     seen: set[str] = set()

@@ -53,3 +53,43 @@ def test_the_play_protect_prompt_is_cleared_while_the_download_runs():
     assert play_install._fatal_reason(blob) is None
     assert screen.find_first(rows, play_install.INTERSTITIAL_LABELS,
                              clickable_only=True) is not None
+
+
+# ---------------------------------------------- Play's Terms of Service dialog
+def tos() -> list[screen.Element]:
+    return elements("play-terms-of-service.xml")
+
+
+def test_a_paragraph_mentioning_install_is_not_mistaken_for_the_button():
+    """The bug that cost a whole run (2026-07-31). This dialog has no Install
+    button at all, but its body text says "...apps to use or install. Links to
+    instant apps will open without requiring installation...". A substring match
+    picked that 150-character paragraph, tapped its centre, logged "tapped
+    Install", and waited ten minutes for a download that could never start.
+
+    Finding nothing here is the correct answer."""
+    assert screen.find(tos(), "Install") is None
+
+
+def test_the_terms_dialog_is_cleared_by_accepting_it():
+    """Only a brand-new account meets this screen; the first three accounts
+    tested had accepted it elsewhere, which is why its absence from the
+    interstitial list went unnoticed."""
+    chosen = screen.find_first(tos(), play_install.INTERSTITIAL_LABELS,
+                               clickable_only=True)
+    assert chosen is not None
+    assert chosen.label == "Accept"
+
+
+def test_decline_is_never_a_label_the_flow_will_press():
+    """The dialog offers Decline right next to Accept. The interstitial list is
+    an allowlist precisely so that 'press any button' can never happen."""
+    assert screen.find(tos(), "Decline") is not None      # it is on screen
+    assert "Decline" not in play_install.INTERSTITIAL_LABELS
+
+
+def test_the_real_install_button_still_matches_after_the_tightening():
+    """The fix must not break the normal case it protects."""
+    button = screen.find(elements("play-package-page.xml"), "Install")
+    assert button is not None
+    assert (button.text or button.desc) == "Install"

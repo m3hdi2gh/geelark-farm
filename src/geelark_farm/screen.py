@@ -161,19 +161,63 @@ def save_fixture(xml: str, path: str | Path) -> Path:
 
 
 # ---------------------------------------------------------------- matching
+# How much longer than the query a partial match may be. A control's label is
+# the word plus perhaps a qualifier ("Install (30 MB)"); a paragraph that merely
+# contains the word is prose, and tapping its centre is never what was meant.
+#
+# Measured 2026-07-31: searching for "Install" on Play's Terms of Service dialog
+# matched "Google Play gives you access to millions of apps to use or install.
+# Links to instant apps will open without requiring installation..." - 150
+# characters of body text. The flow tapped the middle of that paragraph,
+# reported "tapped Install", and then waited ten minutes for a download that was
+# never going to start.
+MAX_PARTIAL_EXTRA = 30
+
+
+def _partial_matcher(wanted: str):
+    """A predicate for 'this label contains the query as a word'.
+
+    Word boundaries alone are not enough - "use or install." matches "install"
+    legitimately - so the length cap above does the rest of the work.
+    """
+    if wanted and wanted[0].isalnum() and wanted[-1].isalnum():
+        pattern = re.compile(rf"\b{re.escape(wanted)}\b")
+        return lambda value: pattern.search(value) is not None
+    return lambda value: wanted in value
+
+
 def find(elements: list[Element], label: str, *,
          clickable_only: bool = False) -> Element | None:
     """Find an element by label, matching text OR content-desc.
 
-    Exact matches win over substring ones, and clickable candidates win within
-    each tier - but a non-clickable match is still returned, because tapping
-    the centre of the Play Store's non-clickable Install TextView works.
+    Three rules, each of which exists because breaking it caused a real failure:
+
+    - **text OR content-desc**, because the same label moves between the two:
+      Play's Install button is a `text` TextView on one rendering and a
+      `content-desc` View on another. Matching one alone is how GeeLark's own
+      flow fails.
+    - **A non-clickable match still counts**, because that Install label reports
+      `clickable=false` and tapping its centre works anyway.
+    - **A partial match must be label-shaped**: the query as a whole word, in a
+      string not much longer than the query itself. Otherwise a paragraph
+      mentioning the word wins over the button.
+
+    Exact matches beat partial ones, and among partial matches the shortest wins,
+    so "Install" is preferred to "Install (30 MB)".
     """
     wanted = label.casefold()
-    exact = [e for e in elements
-             if e.text.casefold() == wanted or e.desc.casefold() == wanted]
-    partial = [e for e in elements
-               if wanted in e.text.casefold() or wanted in e.desc.casefold()]
+    matches_partially = _partial_matcher(wanted)
+    limit = len(wanted) + MAX_PARTIAL_EXTRA
+
+    exact: list[Element] = []
+    partial: list[Element] = []
+    for element in elements:
+        values = [v for v in (element.text.casefold(), element.desc.casefold()) if v]
+        if any(v == wanted for v in values):
+            exact.append(element)
+        elif any(matches_partially(v) and len(v) <= limit for v in values):
+            partial.append(element)
+    partial.sort(key=lambda e: len(e.label))
 
     for pool in (exact, partial):
         usable = [e for e in pool if e.enabled]

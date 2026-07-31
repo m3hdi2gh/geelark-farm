@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="process only this sheet row")
     p_run.add_argument("--retry-failed", action="store_true",
                        help="also retry rows marked failed:*")
+    p_run.add_argument("--watch", action="store_true",
+                       help="for each row, print a live-view link and wait for "
+                            "Enter before driving")
 
     # ------------------------------------------------------------- input
     p_rows = sub.add_parser("rows", help="list and validate the sheet rows")
@@ -506,10 +509,19 @@ def cmd_run(settings: Settings, args) -> int:
     """Process the sheet. The one command the whole project exists for."""
     client = build_client(settings)
     settings.ensure_dirs()
+    def announce(phone_id: str) -> None:
+        # Minted here, not at boot: the live-view token expires within seconds,
+        # so it is only usable immediately before the flow acts.
+        url = phones.start(client, phone_id)
+        if url:
+            print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
+        input("Open it, then press Enter to start this row... ")
+
     results = run_batch(
         client, settings,
         limit=args.limit, only_row=args.row,
         retry_failed=args.retry_failed, dry_run=args.dry_run,
+        on_ready=announce if args.watch else None,
     )
     if args.dry_run:
         return 0

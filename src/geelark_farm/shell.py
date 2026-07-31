@@ -115,13 +115,36 @@ def check_typeable(text: str) -> None:
             f"cannot type non-ASCII characters {bad} with `input text`; "
             f"an IME such as ADBKeyboard would be required"
         )
-    if "%" in text:
-        # `input text` decodes %s as a space and has no escape for a literal
-        # percent, so any % would be ambiguous. Refuse instead of guessing.
-        raise TypingError(
-            "`input text` cannot type a literal '%' (it decodes %s as space). "
-            "Use a password without '%', or add an IME-based typing backend."
-        )
+
+
+def type_segments(text: str) -> list[str]:
+    """Split `text` into payloads that `input text` will type verbatim.
+
+    Two facts about `input text` drive this (AOSP `Input.java`):
+
+    - it turns the two-character sequence `%s` into a space, and deletes the
+      `%`;
+    - a `%` followed by anything else - including the end of the argument - is
+      left alone.
+
+    So a space is sent as `%s`, and a literal `%` is safe unless an `s` happens
+    to follow it. That one case is handled by ending the call right after the
+    `%` and starting the next one with the `s`, which types both literally.
+
+    This replaces a blanket refusal of `%`, which had blocked an otherwise
+    perfectly good account whose password contained one.
+    """
+    segments: list[str] = []
+    current = ""
+    for char in text:
+        piece = "%s" if char == " " else char
+        if current.endswith("%") and piece.startswith("s"):
+            segments.append(current)
+            current = ""
+        current += piece
+    if current:
+        segments.append(current)
+    return segments
 
 
 def type_text(client: Client, phone_id: str, text: str) -> None:
@@ -134,8 +157,8 @@ def type_text(client: Client, phone_id: str, text: str) -> None:
     if not text:
         return
     check_typeable(text)
-    payload = text.replace(" ", "%s")
-    run(client, phone_id, f"input text {shlex.quote(payload)}")
+    for payload in type_segments(text):
+        run(client, phone_id, f"input text {shlex.quote(payload)}")
 
 
 def clear_field(client: Client, phone_id: str, max_chars: int = 64) -> None:
