@@ -27,14 +27,14 @@ from .api import ApiError, Client, TransportError, build_client
 from .config import ConfigError, Settings
 from .flows import google_login, play_install
 from .ledger import Ledger
+from .orchestrator import run as run_batch
+from .orchestrator import summarise
 from .proxy import ProxyError
 from .sheets import Sheet, SheetError
 from .shell import TypingError
 
-# Command -> the roadmap phase that implements it.
-PENDING = {
-    "run": 7,
-}
+# Every command is implemented; the mapping is kept for the next unfinished one.
+PENDING: dict[str, int] = {}
 
 # Stand-in for the spreadsheet until phase 6. Same columns.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---------------------------------------------------------- pipeline
     p_run = sub.add_parser(
-        "run", help="process every pending row in the sheet (phase 7)"
+        "run", help="process every pending row in the sheet"
     )
     p_run.add_argument("--dry-run", action="store_true",
                        help="show what would be processed, spend nothing")
@@ -67,12 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="also retry rows marked failed:*")
 
     # ------------------------------------------------------------- input
-    p_rows = sub.add_parser("rows", help="list and validate the sheet rows (phase 6)")
+    p_rows = sub.add_parser("rows", help="list and validate the sheet rows")
     p_rows.add_argument("--status", metavar="FILTER",
                         help="only rows whose status matches, e.g. pending")
 
     # ------------------------------------------------------ diagnostics
-    sub.add_parser("ping", help="verify API credentials and list phones (phase 1)")
+    sub.add_parser("ping", help="verify API credentials and list phones")
 
     p_dump = sub.add_parser("dump", help="print every element on screen")
     p_dump.add_argument("--phone", metavar="ID",
@@ -502,6 +502,21 @@ def cmd_login(settings: Settings, args) -> int:
 ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
 
 
+def cmd_run(settings: Settings, args) -> int:
+    """Process the sheet. The one command the whole project exists for."""
+    client = build_client(settings)
+    settings.ensure_dirs()
+    results = run_batch(
+        client, settings,
+        limit=args.limit, only_row=args.row,
+        retry_failed=args.retry_failed, dry_run=args.dry_run,
+    )
+    if args.dry_run:
+        return 0
+    print(summarise(results, artifact_dir=settings.artifact_dir))
+    return 0 if results and all(r.ok for r in results) else 1
+
+
 def cmd_rows(settings: Settings, args) -> int:
     """Read and validate the sheet. Spends nothing - no phone is created, no
     proxy is dialled, and nothing is written back."""
@@ -663,6 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         "login": cmd_login,
         "install": cmd_install,
         "rows": cmd_rows,
+        "run": cmd_run,
     }
     handler = handlers.get(args.command)
     if not handler:

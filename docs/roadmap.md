@@ -11,8 +11,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | 4 | Google login screen router | **done** |
 | 5 | Play Store install flow | **done** |
 | 6 | Google Sheets input and status write-back | **done** |
-| 7 | Orchestrator: per-row pipeline, budgets, summary | next |
-| 8 | Hardening, runbook, release | |
+| 7 | Orchestrator: per-row pipeline, budgets, summary | **done** |
+| 8 | Hardening, runbook, release | next |
 
 ## Phase 0 — skeleton and documentation
 
@@ -216,6 +216,33 @@ summary table. Sequential first; `MAX_CONCURRENT_PHONES` raises it later.
 
 **Done when** a three-row sheet yields three ready phones unattended, and
 re-running is a no-op.
+
+Both halves verified. Row 1 ran alone first (302s), then the remaining two as a
+batch: row 2 in 330s, row 3 in 286s, 2/2 ready, every phone stopped. The sheet
+then showed all three rows `done` with their phone ids, and `run --dry-run`
+reported "0 row(s) would be processed" - the whole point, and the property that
+makes this safe to run as a habit rather than an operation.
+
+About five minutes per account, unattended, from nothing to a stopped phone
+signed in with the app installed.
+
+Rules the implementation enforces:
+
+- The proxy is checked before a phone is created, so a dead row costs nothing.
+- The phone is stopped in a `finally`, unconditionally - including on Ctrl+C.
+  The single-account commands can leave one running for inspection; a batch
+  cannot. Failed rows keep their phone (stopped) so it can still be examined.
+- A failing row never stops the batch; its reason goes to the sheet and the run
+  continues. That is what makes a sheet of fifty rows usable.
+- Each outcome is written before the next row starts, so an interrupted run
+  resumes instead of repeating.
+- A row that already has a live `phone_id` reuses it rather than paying for a
+  second phone on the same proxy.
+- If stopping a phone itself fails, that is logged at ERROR with a pointer to
+  `geelark reap` - the only path where money can still leak.
+- `MAX_CONCURRENT_PHONES > 1` warns that the run is sequential rather than
+  silently ignoring the setting. Concurrency is deliberate future work: the rate
+  limiter is already process-wide, but gspread is not documented thread-safe.
 
 ## Phase 8 — hardening
 

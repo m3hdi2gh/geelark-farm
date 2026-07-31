@@ -18,11 +18,25 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 6 of 8 — **the spreadsheet is connected.** Accounts are read and validated
-from the sheet, and results are written back to it; a completed row is never
-processed twice. The device pipeline (create → sign in → install → verify → stop)
-already works for one account at a time. What remains is running the pending rows
-as a batch. See [docs/roadmap.md](docs/roadmap.md).
+**Working end to end.** A three-row sheet produced three ready phones
+unattended, about five minutes each, and re-running processed nothing. Phase 7 of
+8; what remains is hardening and documentation. See
+[docs/roadmap.md](docs/roadmap.md).
+
+```
+$ geelark run
+=== row 2 (1/2): IanGray804231@gmail.com ===
+  OK: ready (330s)
+=== row 3 (2/2): BlakeScott295178@gmail.com ===
+  OK: ready (286s)
+
+SUMMARY
+ ready   row 2   IanGray804231@gmail.com      ready    330s
+          phone 630705473133216054 (serial 443)
+ ready   row 3   BlakeScott295178@gmail.com   ready    286s
+          phone 630706030472331396 (serial 444)
+ 2/2 phones ready. All phones are stopped; nothing is billing.
+```
 
 ## Why this exists
 
