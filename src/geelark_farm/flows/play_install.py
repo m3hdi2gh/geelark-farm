@@ -22,13 +22,27 @@ This drives the UI instead, addressing the app by package id.
 
       "Complete account setup" -> Continue
       -> "Add a payment option" -> Skip
-      -> Play Pass promo        -> Not now
+      -> Play Protect scanning  -> Dismiss
       -> the download finally starts
 
   The chain is account-level, so once it has been cleared for an account,
   later phones on that same account install in about thirty seconds.
 - success is `pm list packages <pkg>` returning the package. Nothing else
   counts, and nothing on screen is evidence.
+
+## Two things a brand-new account taught this flow (2026-07-31)
+
+**The Terms of Service dialog can need more than one tap.** Two runs tapped
+Accept, waited five seconds, re-read the screen and found the identical
+hierarchy still there - same dialog, same coordinates - and only the second tap
+took. That is why clearing pre-install dialogs is a loop that re-reads each
+pass, not a single attempt: with one attempt this flow would have reported
+`no_install_button` on a screen whose Accept button it had just pressed.
+
+**The setup chain is normal for a fresh account, not exotic.** The first
+accounts tested skipped it entirely because they had been used elsewhere
+already; accounts that have genuinely never opened the Play Store walk the whole
+chain. Its absence means the account has history, not that a step was missed.
 """
 
 from __future__ import annotations

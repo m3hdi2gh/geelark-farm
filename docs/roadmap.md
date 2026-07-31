@@ -163,10 +163,11 @@ Three things this run settled:
   and not requiring `clickable`, is what makes the tap reliable — and matching
   only one is exactly how GeeLark's task fails. Pinned by
   `test_install_is_found_even_though_it_is_not_clickable`.
-- **The "Complete account setup" chain is account-specific, not universal.** It
-  never appeared for these accounts; the only interstitial was Play Protect's
-  "Turn on scanning", cleared with Dismiss. The chain handling stays, since the
-  prototype hit it, but it is not on the normal path.
+- **The "Complete account setup" chain is account-specific.** It did not appear
+  for the first accounts tested, which had been used elsewhere before. Accounts
+  that have genuinely never opened the Play Store walk the whole chain
+  (Continue -> Skip -> Dismiss), as two runs on 2026-07-31 confirmed. Its
+  absence means the account has history, not that a step was skipped.
 - **`install` refuses a phone another run holds.** The ledger already tracked
   claims; nothing consulted them. Running `install` during a login would have
   had two flows calling `uiautomator dump` on one device, which cannot run twice
