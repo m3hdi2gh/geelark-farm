@@ -18,10 +18,10 @@ Re-running is safe: rows already marked `done` are skipped.
 
 ## Status
 
-Phase 5 of 8 — **the whole device pipeline works.** Given an account, the tool
-creates a phone on its proxy, signs into Google through six screens, installs the
-target app from the Play Store, verifies both against the device, and stops the
-phone. What remains is reading the accounts from a spreadsheet and running them
+Phase 6 of 8 — **the spreadsheet is connected.** Accounts are read and validated
+from the sheet, and results are written back to it; a completed row is never
+processed twice. The device pipeline (create → sign in → install → verify → stop)
+already works for one account at a time. What remains is running the pending rows
 as a batch. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Why this exists

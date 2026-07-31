@@ -1,19 +1,248 @@
-"""The spreadsheet: input rows in, status out.  [phase 6]
+"""The spreadsheet: input rows in, status out.
 
-Responsibility:
-- read the account rows (proxy, email, password, totp_secret) via a service
-  account, so no interactive OAuth is needed for an unattended run
-- validate every row BEFORE anything is spent: parseable proxy, well-formed
-  base32 secret, no duplicate address
-- write results back: status, phone_id, serial, note, updated_at
-
-The sheet is also the state store. `status` is the resume mechanism:
+The sheet is both the work queue and the state store. `status` is what makes a
+re-run safe:
 
     pending          not attempted
-    running          claimed by a run (stale ones are recoverable)
-    done             phone ready - skipped on re-runs
+    running          claimed by a run in progress
+    done             phone ready - skipped on every later run
     failed:<reason>  named failure, e.g. failed:captcha_shown
 
-Re-running the tool must therefore be safe and idempotent: rows marked done
-are never touched again.
+Columns are located by header name rather than position, so the sheet can be
+reordered or annotated without breaking anything. Only the four input columns
+are required; the rest are written back and created as needed.
 """
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from .accounts import Account, AccountError, normalize_totp_secret
+from .config import Settings
+
+log = logging.getLogger(__name__)
+
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+INPUT_COLUMNS = ("proxy", "email", "password", "totp_secret")
+OUTPUT_COLUMNS = ("status", "phone_id", "serial", "note", "updated_at")
+
+PENDING, RUNNING, DONE = "pending", "running", "done"
+
+
+class SheetError(Exception):
+    """The spreadsheet cannot be read or written."""
+
+
+@dataclass
+class Row:
+    """One spreadsheet row: its credentials, its state, and where it lives."""
+
+    number: int                    # 1-based position among the data rows
+    sheet_row: int                 # the actual row number in the sheet
+    values: dict[str, str]
+    account: Account | None = None
+    error: str | None = None       # why the row is unusable, if it is
+    _extras: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def status(self) -> str:
+        return (self.values.get("status") or "").strip().lower()
+
+    @property
+    def email(self) -> str:
+        return (self.values.get("email") or "").strip()
+
+    @property
+    def phone_id(self) -> str:
+        return (self.values.get("phone_id") or "").strip()
+
+    @property
+    def is_done(self) -> bool:
+        return self.status == DONE
+
+    @property
+    def is_failed(self) -> bool:
+        return self.status.startswith("failed")
+
+    @property
+    def is_pending(self) -> bool:
+        # A blank status counts as pending: a freshly pasted row should be
+        # picked up without anyone having to type the word.
+        return self.status in ("", PENDING)
+
+
+class Sheet:
+    """A worksheet, read once and written back a row at a time."""
+
+    def __init__(self, worksheet, headers: list[str]):
+        self._ws = worksheet
+        self.headers = headers
+        self._index = {name: i for i, name in enumerate(headers)}
+
+    # ------------------------------------------------------------- opening
+    @classmethod
+    def open(cls, settings: Settings) -> Sheet:
+        settings.require_sheets()
+        try:
+            import gspread
+            from google.oauth2.service_account import Credentials
+        except ImportError as exc:                                # pragma: no cover
+            raise SheetError(f"missing dependency: {exc}") from exc
+
+        credentials = Credentials.from_service_account_file(
+            str(settings.service_account_json), scopes=SCOPES
+        )
+        client = gspread.authorize(credentials)
+
+        try:
+            spreadsheet = client.open_by_key(settings.sheet_id)
+            worksheet = spreadsheet.worksheet(settings.sheet_tab)
+        except Exception as exc:                                  # gspread errors vary
+            raise SheetError(cls._explain(exc, settings)) from exc
+
+        headers = [h.strip() for h in worksheet.row_values(1)]
+        missing = [c for c in INPUT_COLUMNS if c not in headers]
+        if missing:
+            raise SheetError(
+                f"the sheet is missing required column(s): {', '.join(missing)}\n"
+                f"row 1 must contain: {', '.join(INPUT_COLUMNS + OUTPUT_COLUMNS)}\n"
+                f"found: {headers}"
+            )
+        return cls(worksheet, headers)
+
+    @staticmethod
+    def _explain(exc: Exception, settings: Settings) -> str:
+        """Turn Google's API errors into the action that fixes them."""
+        text = str(exc)
+        email = "the service account"
+        try:
+            import json
+            email = json.loads(
+                settings.service_account_json.read_text(encoding="utf-8")
+            ).get("client_email", email)
+        except Exception:                                          # noqa: BLE001
+            pass
+
+        if "PERMISSION_DENIED" in text or "403" in text:
+            return (f"the service account cannot open this sheet.\n"
+                    f"Share it with {email} as an Editor.")
+        if "not found" in text.lower() or "404" in text:
+            return (f"no sheet with id {settings.sheet_id!r}, or no tab named "
+                    f"{settings.sheet_tab!r}.\n"
+                    f"The tab name is the label at the bottom of the page.")
+        if "API has not been used" in text or "SERVICE_DISABLED" in text:
+            return ("the Google Sheets API is not enabled for this project.\n"
+                    "Enable it in the Cloud console under APIs & Services.")
+        return f"could not open the sheet: {exc}"
+
+    # ------------------------------------------------------------- reading
+    def read(self) -> list[Row]:
+        """Every data row, with its credentials validated.
+
+        Validation happens here rather than at use, because a row that cannot
+        work should be rejected before a phone is created for it.
+        """
+        raw = self._ws.get_all_values()
+        rows: list[Row] = []
+        for offset, line in enumerate(raw[1:], start=1):
+            values = {
+                name: (line[i].strip() if i < len(line) else "")
+                for name, i in self._index.items()
+            }
+            if not any(values.get(c) for c in INPUT_COLUMNS):
+                continue                       # a blank spacer row, not a gap
+            row = Row(number=len(rows) + 1, sheet_row=offset + 1, values=values)
+            try:
+                account = Account(
+                    email=values["email"],
+                    password=values["password"],
+                    totp_secret=normalize_totp_secret(values["totp_secret"]),
+                    proxy=values["proxy"],
+                    row=row.number,
+                )
+                account.validate()
+                row.account = account
+            except (AccountError, KeyError) as exc:
+                row.error = str(exc)
+            rows.append(row)
+
+        self._flag_duplicates(rows)
+        return rows
+
+    @staticmethod
+    def _flag_duplicates(rows: list[Row]) -> None:
+        """Two rows for one address would sign the same account into two
+        phones and race each other's 2FA."""
+        seen: dict[str, int] = {}
+        for row in rows:
+            key = row.email.lower()
+            if not key:
+                continue
+            if key in seen:
+                row.error = (row.error or
+                             f"duplicate of row {seen[key]} ({row.email})")
+            else:
+                seen[key] = row.number
+
+    # ------------------------------------------------------------- writing
+    def update(self, row: Row, **fields: str) -> None:
+        """Write back the output columns for one row, in a single API call.
+
+        Unknown or absent columns are skipped rather than failing: someone who
+        deletes the `note` column should lose notes, not the whole run.
+        """
+        fields.setdefault("updated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
+        payload = []
+        for name, value in fields.items():
+            index = self._index.get(name)
+            if index is None:
+                log.debug("no %r column in the sheet; skipping", name)
+                continue
+            payload.append({
+                "range": f"{_a1_column(index + 1)}{row.sheet_row}",
+                "values": [[value]],
+            })
+            row.values[name] = value
+        if payload:
+            self._ws.batch_update(payload)
+
+    def claim(self, row: Row, phone_id: str = "") -> None:
+        self.update(row, status=RUNNING, phone_id=phone_id, note="")
+
+    def succeed(self, row: Row, phone_id: str, serial: str = "",
+                note: str = "") -> None:
+        self.update(row, status=DONE, phone_id=phone_id, serial=str(serial),
+                    note=note)
+
+    def fail(self, row: Row, reason: str, note: str = "",
+             phone_id: str = "") -> None:
+        self.update(row, status=f"failed:{reason}", note=note,
+                    **({"phone_id": phone_id} if phone_id else {}))
+
+
+def _a1_column(number: int) -> str:
+    """1 -> A, 27 -> AA. Sheets ranges are letters, dictionaries are not."""
+    letters = ""
+    while number > 0:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def selectable(rows: list[Row], *, retry_failed: bool = False) -> list[Row]:
+    """Rows a run should process: pending, valid, and not already done.
+
+    `running` rows are left alone - another run may hold them - unless they are
+    also being retried explicitly.
+    """
+    chosen = []
+    for row in rows:
+        if row.error or not row.account:
+            continue
+        if row.is_pending or (retry_failed and row.is_failed):
+            chosen.append(row)
+    return chosen

@@ -28,11 +28,11 @@ from .config import ConfigError, Settings
 from .flows import google_login, play_install
 from .ledger import Ledger
 from .proxy import ProxyError
+from .sheets import Sheet, SheetError
 from .shell import TypingError
 
 # Command -> the roadmap phase that implements it.
 PENDING = {
-    "rows": 6,
     "run": 7,
 }
 
@@ -420,6 +420,20 @@ def cmd_screenshot(settings: Settings, args) -> int:
 
 
 def pick_account(settings: Settings, row: int):
+    """One account by row number, from the sheet when one is configured.
+
+    Falls back to the gitignored TSV so the tool still works before the sheet
+    is set up - the columns are identical, so nothing else changes.
+    """
+    if settings.sheet_id:
+        rows = Sheet.open(settings).read()
+        match = next((r for r in rows if r.number == row), None)
+        if not match:
+            raise SystemExit(f"--row {row} is out of range (1..{len(rows)})")
+        if match.error:
+            raise SystemExit(f"row {row} is unusable: {match.error}")
+        return match.account
+
     path = settings.state_dir.parent / DEV_ACCOUNTS
     loaded = accounts.load_dev_accounts(path)
     if not 1 <= row <= len(loaded):
@@ -483,6 +497,44 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  stopped {phone_id} - billing ended")
         else:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
+
+
+ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
+
+
+def cmd_rows(settings: Settings, args) -> int:
+    """Read and validate the sheet. Spends nothing - no phone is created, no
+    proxy is dialled, and nothing is written back."""
+    sheet = Sheet.open(settings)
+    rows = sheet.read()
+    if not rows:
+        print("no data rows in the sheet")
+        return 0
+
+    shown = 0
+    problems = 0
+    for row in rows:
+        if args.status and not row.status.startswith(args.status.lower()):
+            continue
+        shown += 1
+        mark = ROW_MARKS.get(row.status, "FAIL" if row.is_failed else "    ")
+        if row.error:
+            mark = "BAD "
+            problems += 1
+        line = (f" {mark} row {row.number:<3} {row.email or '(no email)':<34} "
+                f"{row.status or 'pending':<24}")
+        if row.phone_id:
+            line += f" phone {row.phone_id}"
+        print(line)
+        if row.error:
+            print(f"        -> {row.error}")
+
+    print(f"\n{shown} row(s) shown, {len(rows)} total")
+    ready = len([r for r in rows if r.is_pending and not r.error])
+    print(f"{ready} ready to process, {problems} unusable")
+    if problems:
+        print("Unusable rows are skipped by 'geelark run' - fix them in the sheet.")
+    return 0
 
 
 def cmd_install(settings: Settings, args) -> int:
@@ -610,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
         "screenshot": cmd_screenshot,
         "login": cmd_login,
         "install": cmd_install,
+        "rows": cmd_rows,
     }
     handler = handlers.get(args.command)
     if not handler:
@@ -621,6 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     except AccountError as exc:
         print(f"account: {exc}", file=sys.stderr)
         return 1
+    except SheetError as exc:
+        print(f"sheet: {exc}", file=sys.stderr)
+        return 2
     except ProxyError as exc:
         print(f"proxy: {exc}", file=sys.stderr)
         return 1

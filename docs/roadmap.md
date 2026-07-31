@@ -10,8 +10,8 @@ Each phase ends in something runnable. "Done when" is the acceptance test.
 | 3 | Phone creation + ledger + reaper | **done** |
 | 4 | Google login screen router | **done** |
 | 5 | Play Store install flow | **done** |
-| 6 | Google Sheets input and status write-back | next |
-| 7 | Orchestrator: per-row pipeline, budgets, summary | |
+| 6 | Google Sheets input and status write-back | **done** |
+| 7 | Orchestrator: per-row pipeline, budgets, summary | next |
 | 8 | Hardening, runbook, release | |
 
 ## Phase 0 — skeleton and documentation
@@ -184,6 +184,30 @@ Service-account access, row validation before any spend, status write-back,
 `--dry-run` that reports the plan for free.
 
 **Done when** status round-trips and a second run does nothing.
+
+Delivered: `sheets.Sheet` (service-account access, read, validate, write back)
+and `geelark rows [--status]`. `login --row N` now sources its credentials from
+the sheet, falling back to the gitignored TSV when no sheet is configured.
+
+Verified against the live sheet: three rows read and validated, then a full
+write-back cycle - `claim` set status=running with the phone id, `succeed` set
+done with the serial and a timestamp, a fresh read confirmed all of it, and
+`selectable` then returned only rows 2 and 3. That last part is the whole point:
+a completed row is never processed again, so re-running the tool is safe.
+
+Design decisions worth keeping:
+
+- **Columns are found by header name, not position.** The sheet is a human
+  document; someone will reorder or annotate it. Only the four input columns are
+  required, and a missing output column is skipped rather than fatal.
+- **A blank status means pending.** Pasting rows in should be enough; nobody
+  should have to type the word for the tool to notice them.
+- **Duplicate addresses are flagged, not run.** Two rows for one account would
+  sign it into two phones simultaneously and race each other's 2FA, and the
+  account would take the blame for a failure the sheet caused.
+- **Google's API errors are translated into the action that fixes them** -
+  a 403 becomes "share it with <service account> as an Editor" rather than a
+  stack trace, since every one of these failures has exactly one remedy.
 
 ## Phase 7 — Orchestrator
 
