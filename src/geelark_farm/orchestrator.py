@@ -156,24 +156,34 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         sheet.fail(row, "proxy_unusable", note=str(exc)[:200])
         return finish(False, "proxy_unusable", str(exc))
 
-    # Reuse the phone a previous attempt created for this row: it is already
-    # bound to the right proxy, and creating another one pays twice.
-    if _existing_phone(client, row.phone_id):
-        phone_id = row.phone_id
-        log.info("row %d: reusing phone %s", row.number, phone_id)
-        # Creation is where the serial normally comes from, so a reused phone
-        # would otherwise leave the column blank. Cheapest source first.
-        entry = ledger.get(phone_id)
-        result.serial = str(
-            row.values.get("serial")
-            or (entry.serial if entry and entry.serial else "")
-            or phones.serial_of(client, phone_id)
-        )
-    else:
-        entry = phones.create(client, settings, parsed, ledger=ledger,
-                              label=account.label)
-        phone_id = entry.phone_id
-        result.serial = str(entry.serial or "")
+    # Getting a phone is inside its own handler, because it is the one step
+    # that can fail before there is anything to clean up - and a failure here
+    # used to escape process_row entirely, leaving the row with no recorded
+    # reason at all. A full GeeLark plan ([44002]) did exactly that: the row sat
+    # at "pending" as though nothing had been tried.
+    try:
+        # Reuse the phone a previous attempt created for this row: it is
+        # already bound to the right proxy, and creating another one pays twice.
+        if _existing_phone(client, row.phone_id):
+            phone_id = row.phone_id
+            log.info("row %d: reusing phone %s", row.number, phone_id)
+            # Creation is where the serial normally comes from, so a reused
+            # phone would otherwise leave the column blank. Cheapest first.
+            entry = ledger.get(phone_id)
+            result.serial = str(
+                row.values.get("serial")
+                or (entry.serial if entry and entry.serial else "")
+                or phones.serial_of(client, phone_id)
+            )
+        else:
+            entry = phones.create(client, settings, parsed, ledger=ledger,
+                                  label=account.label)
+            phone_id = entry.phone_id
+            result.serial = str(entry.serial or "")
+    except Exception as exc:                                      # noqa: BLE001
+        log.error("row %d: could not get a phone: %s", row.number, exc)
+        sheet.fail(row, "no_phone", note=str(exc)[:200])
+        return finish(False, "no_phone", str(exc))
 
     if on_phone:
         # Register before booting, so an interrupt during boot still knows

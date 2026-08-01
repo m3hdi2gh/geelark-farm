@@ -221,3 +221,50 @@ def test_the_reassuring_line_is_still_printed_when_it_is_true():
                              reason="ready")])
     assert "All phones are stopped; nothing is billing." in text
     assert "COULD NOT BE STOPPED" not in text
+
+
+def test_a_row_that_cannot_get_a_phone_still_records_why(tmp_path, make_settings):
+    """Phone acquisition used to sit outside every handler that writes to the
+    sheet, so its failure escaped process_row and the row kept whatever status
+    it had. A full GeeLark plan did exactly that on 2026-08-01: row 20 stayed
+    "pending", as though it had never been attempted.
+    """
+    from geelark_farm import orchestrator
+    from geelark_farm.accounts import Account
+    from geelark_farm.api import ApiError
+    from geelark_farm.sheets import Row
+
+    recorded: list[tuple[str, str]] = []
+
+    class FakeSheet:
+        def claim(self, row, **kw): pass
+        def succeed(self, row, **kw): pass
+        def fail(self, row, reason, note="", **kw):
+            recorded.append((reason, note))
+
+    row = Row(number=20, sheet_row=21,
+              values={"email": "x@example.com", "proxy": "1.2.3.4:1080"},
+              account=Account(email="x@example.com", password="p",
+                              totp_secret="JBSWY3DPEHPK3PXP",
+                              proxy="1.2.3.4:1080", row=20))
+
+    def boom(*a, **k):
+        raise ApiError(44002, "Maximum number of package environments reached",
+                       path="/v1/phone/addNew", trace_id="T")
+
+    original_create = orchestrator.phones.create
+    original_check = orchestrator.proxy.check
+    orchestrator.phones.create = boom
+    orchestrator.proxy.check = lambda *a, **k: {}
+    try:
+        result = orchestrator.process_row(
+            object(), make_settings(state_dir=tmp_path, artifact_dir=tmp_path),
+            FakeSheet(), row, Ledger.load(tmp_path))
+    finally:
+        orchestrator.phones.create = original_create
+        orchestrator.proxy.check = original_check
+
+    assert not result.ok
+    assert result.reason == "no_phone"
+    assert recorded and recorded[0][0] == "no_phone"
+    assert "44002" in recorded[0][1]
