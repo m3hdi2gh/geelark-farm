@@ -135,3 +135,62 @@ def test_the_step_budgets_cannot_outlast_the_account_budget():
         remaining -= granted
         assert granted >= 0
     assert remaining == 0, "the account budget is fully consumed, never exceeded"
+
+
+# ------------------------------------------------- interrupt cleanup
+def test_interrupt_cleanup_stops_every_phone_the_run_started(tmp_path):
+    """A worker thread never receives Ctrl+C, so its own `finally` does not run
+    and its phone would bill until someone noticed. `run` tracks what it started
+    so it can stop them itself - the last thing between an interrupt and a phone
+    left on all night.
+    """
+    from geelark_farm import orchestrator
+
+    stopped: list[str] = []
+
+    class FakeClient:
+        pass
+
+    ledger = Ledger.load(tmp_path)
+    for phone in ("P1", "P2", "P3"):
+        ledger.record(phone)
+        ledger.claim(phone)
+
+    def fake_stop(client, phone_id):
+        stopped.append(phone_id)
+
+    original = orchestrator.phones.stop
+    orchestrator.phones.stop = fake_stop
+    try:
+        orchestrator._stop_all(FakeClient(), {"P1", "P2", "P3"}, ledger)
+    finally:
+        orchestrator.phones.stop = original
+
+    assert sorted(stopped) == ["P1", "P2", "P3"]
+    assert ledger.claimed() == [], "and each is released, so reap agrees"
+
+
+def test_one_phone_that_will_not_stop_does_not_strand_the_others(tmp_path):
+    """The loop must keep going. Giving up on the first failure would leave the
+    remaining phones running, which is the exact outcome this exists to prevent.
+    """
+    from geelark_farm import orchestrator
+
+    stopped: list[str] = []
+    ledger = Ledger.load(tmp_path)
+    for phone in ("P1", "P2", "P3"):
+        ledger.record(phone)
+
+    def fake_stop(client, phone_id):
+        if phone_id == "P2":
+            raise RuntimeError("the API is down")
+        stopped.append(phone_id)
+
+    original = orchestrator.phones.stop
+    orchestrator.phones.stop = fake_stop
+    try:
+        orchestrator._stop_all(object(), {"P1", "P2", "P3"}, ledger)
+    finally:
+        orchestrator.phones.stop = original
+
+    assert sorted(stopped) == ["P1", "P3"]
