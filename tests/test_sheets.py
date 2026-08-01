@@ -79,3 +79,17 @@ def test_column_letters_survive_past_z():
     assert _a1_column(26) == "Z"
     assert _a1_column(27) == "AA"
     assert _a1_column(52) == "AZ"
+
+
+def test_a_row_stuck_on_running_can_be_reclaimed():
+    """If the run holding a row dies without writing an outcome, the row stays
+    on "running" - neither done nor retryable, so no later run would ever pick
+    it up, and the phone it names would be lost with it.
+
+    That happened for real (2026-08-01) when a ConnectionResetError escaped the
+    error handling. --retry-failed reclaims such rows.
+    """
+    rows = [make_row(1, status="running"), make_row(2, status="done")]
+
+    assert [r.number for r in selectable(rows)] == []
+    assert [r.number for r in selectable(rows, retry_failed=True)] == [1]

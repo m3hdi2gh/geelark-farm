@@ -76,3 +76,33 @@ def test_the_saved_file_is_never_torn(tmp_path):
     watcher.join(timeout=5)
 
     assert not failures
+
+
+# ------------------------------------------------------ shared HTTP session
+def test_each_thread_gets_its_own_requests_session():
+    """A requests.Session is not thread-safe; its connection pool is shared
+    mutable state. Three rows sharing one produced
+
+        ConnectionResetError(10054, 'An existing connection was forcibly closed')
+
+    mid-run, which killed a row after its phone had already been created.
+    """
+    from geelark_farm.api import Client, RateLimiter
+    from tests.test_api import _settings
+
+    client = Client(_settings(), limiter=RateLimiter(10))
+    sessions = []
+    # A barrier keeps all four threads alive at once. Without it the pool
+    # reuses one thread for every task and the test passes for the wrong
+    # reason - which it did on the first attempt.
+    barrier = threading.Barrier(4, timeout=5)
+
+    def grab() -> None:
+        barrier.wait()
+        sessions.append(client.session)
+        assert client.session is client.session   # reused within the thread
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: grab(), range(4)))
+
+    assert len({id(s) for s in sessions}) == 4, "one session per thread"

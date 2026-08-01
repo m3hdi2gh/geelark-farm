@@ -123,13 +123,32 @@ class RateLimiter:
 
 
 class Client:
-    """A signed, rate-limited session against one GeeLark account."""
+    """A signed, rate-limited client for one GeeLark account.
+
+    Each thread gets its own `requests.Session`. A Session is not thread-safe -
+    its connection pool is shared mutable state - and running three rows at once
+    against one Session produced
+    `ConnectionResetError(10054, 'An existing connection was forcibly closed')`
+    mid-run (measured 2026-08-01). Sessions are kept per thread rather than
+    dropped entirely so connection reuse still works within a row.
+    """
 
     def __init__(self, settings: Settings, *, limiter: RateLimiter | None = None,
                  session: requests.Session | None = None):
         self.settings = settings
         self.limiter = limiter or RateLimiter(settings.api_requests_per_minute)
-        self.session = session or requests.Session()
+        self._shared_session = session      # tests may inject one
+        self._local = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        if self._shared_session is not None:
+            return self._shared_session
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._local.session = session
+        return session
 
     # ------------------------------------------------------------- signing
     def auth_headers(self, *, trace_id: str | None = None,
@@ -200,8 +219,19 @@ class Client:
                 self._backoff(attempt, path, last_error)
                 continue
 
-            response.raise_for_status()
-            body = response.json()
+            # Everything from here on is still requests' territory, so it is
+            # wrapped too: a raw RequestException escaping this method would
+            # bypass every caller's error handling, and in a batch that means a
+            # row dying without its reason ever reaching the sheet.
+            try:
+                response.raise_for_status()
+                body = response.json()
+            except requests.RequestException as exc:
+                raise TransportError(f"{path}: {exc}") from exc
+            except ValueError as exc:
+                raise TransportError(
+                    f"{path}: response was not JSON ({response.text[:200]!r})"
+                ) from exc
             code = body.get("code")
             if code != 0 and strict:
                 raise ApiError(code, body.get("msg", ""), path=path,

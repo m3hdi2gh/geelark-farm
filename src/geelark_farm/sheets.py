@@ -247,13 +247,21 @@ def _a1_column(number: int) -> str:
 def selectable(rows: list[Row], *, retry_failed: bool = False) -> list[Row]:
     """Rows a run should process: pending, valid, and not already done.
 
-    `running` rows are left alone - another run may hold them - unless they are
-    also being retried explicitly.
+    `running` rows are normally left alone, since another run may be holding
+    them. `retry_failed` picks them up too, because a row can only be stuck
+    there if the run that claimed it died without writing an outcome - and
+    without this it is neither done nor retryable, so it is simply lost, along
+    with the phone it names.
+
+    Use it when no other run is in progress; `geelark phones --ledger` shows
+    whether one is.
     """
     chosen = []
     for row in rows:
         if row.error or not row.account:
             continue
-        if row.is_pending or (retry_failed and row.is_failed):
+        if row.is_pending:
+            chosen.append(row)
+        elif retry_failed and (row.is_failed or row.status == RUNNING):
             chosen.append(row)
     return chosen

@@ -136,6 +136,26 @@ deep link was not enough - the sequential runs had simply been lucky.
 If it recurs, the page took longer than `PRE_INSTALL_SECONDS` to render; check
 whether that proxy's exit is unusually slow.
 
+### A row stuck on `running`
+Its run died without writing an outcome, so the row is neither done nor
+retryable and no later run will select it - the work is lost, and so is the
+phone it names.
+
+```bash
+geelark phones --ledger    # confirm no run is actually holding it
+geelark run --retry-failed # reclaims running rows as well as failed ones
+```
+
+Since 2026-08-01 the orchestrator catches every exception per row, so this
+should only be reachable after a hard crash or power loss. It happened once
+because a raw `requests` exception escaped the handler; both that and the
+reclaim path are fixed.
+
+### `ConnectionResetError(10054)` during a parallel run
+A `requests.Session` shared across threads. Fixed - each thread now gets its
+own. If something similar appears, check that no new code holds a `Session`,
+`gspread` client, or other connection-pooled object across workers.
+
 ### A password containing '%'
 Handled. `input text` turns `%s` into a space, so a password containing that
 exact pair is typed in two calls, ending one after the `%` so it stays literal.

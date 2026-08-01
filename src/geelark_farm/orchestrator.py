@@ -53,7 +53,7 @@ from pathlib import Path
 
 from . import phones, proxy, shell
 from .accounts import Account
-from .api import ApiError, Client, TransportError
+from .api import ApiError, Client
 from .config import Settings
 from .flows import google_login, play_install
 from .ledger import Ledger
@@ -198,7 +198,12 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         sheet.succeed(row, phone_id=phone_id, serial=result.serial, note=note[:200])
         return finish(True, "ready", note, serial=result.serial)
 
-    except (ApiError, TransportError, phones.PhoneError) as exc:
+    except Exception as exc:                                      # noqa: BLE001
+        # Deliberately broad. Whatever went wrong, this row's reason must reach
+        # the sheet: an exception escaping here leaves the row stuck on
+        # "running", which no later run will select - the work is neither done
+        # nor retryable, and the phone it names is invisible.
+        log.exception("row %d failed with an unhandled error", row.number)
         sheet.fail(row, "error", note=str(exc)[:200], phone_id=phone_id)
         return finish(False, "error", str(exc))
     finally:
