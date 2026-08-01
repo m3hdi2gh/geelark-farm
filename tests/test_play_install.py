@@ -93,3 +93,31 @@ def test_the_real_install_button_still_matches_after_the_tightening():
     button = screen.find(elements("play-package-page.xml"), "Install")
     assert button is not None
     assert (button.text or button.desc) == "Install"
+
+
+# ------------------------------------------------- a page that has not rendered
+def test_a_still_loading_page_is_waited_for_not_given_up_on():
+    """Captured 2026-08-01 from a parallel run. Six seconds after the deep link
+    the Play Store had drawn nothing but a spinner, so there was no Install
+    button and no dialog to clear - and the flow treated that as a dead end,
+    failing a row whose page was about to appear.
+
+    "Nothing on screen" and "nothing I recognise" are different answers."""
+    xml = (FIXTURES / "play-page-still-loading.xml").read_text(encoding="utf-8")
+    rows = screen.parse(xml)
+
+    assert rows == []                     # not one labelled element
+    assert "ProgressBar" in xml
+    assert play_install.still_loading(rows, xml)
+
+
+def test_a_rendered_page_is_never_mistaken_for_a_loading_one():
+    xml = (FIXTURES / "play-package-page.xml").read_text(encoding="utf-8")
+    assert not play_install.still_loading(screen.parse(xml), xml)
+
+
+def test_a_dialog_is_not_mistaken_for_a_loading_page():
+    """The Terms dialog has content, so it must be cleared rather than waited
+    out - otherwise the flow would sit there until its budget expired."""
+    xml = (FIXTURES / "play-terms-of-service.xml").read_text(encoding="utf-8")
+    assert not play_install.still_loading(screen.parse(xml), xml)

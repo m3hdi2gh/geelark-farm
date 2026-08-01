@@ -123,6 +123,19 @@ query - so a paragraph can never win over a button.
 
 If it recurs, the archived XML names the screen that needs a new entry.
 
+### `fatal:no_install_button` with nothing on the archived screen
+The Play Store had not finished drawing the page. The archived
+`*-play-package-page.xml` will parse to zero labelled elements, usually with a
+`ProgressBar` in the middle of it.
+
+Fixed 2026-08-01: the flow now distinguishes "nothing on screen" from "nothing I
+recognise", waiting for the former and only failing on the latter. It surfaced
+under `--workers 3`, where everything is slower and the six-second wait after the
+deep link was not enough - the sequential runs had simply been lucky.
+
+If it recurs, the page took longer than `PRE_INSTALL_SECONDS` to render; check
+whether that proxy's exit is unusually slow.
+
 ### A password containing '%'
 Handled. `input text` turns `%s` into a space, so a password containing that
 exact pair is typed in two calls, ending one after the `%` so it stays literal.

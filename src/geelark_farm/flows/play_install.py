@@ -76,6 +76,11 @@ INTERSTITIAL_LABELS = (
 # something is clearly wrong.
 MAX_PRE_INSTALL_DIALOGS = 4
 
+# How long to keep waiting for the package page to render and its dialogs to be
+# cleared. Generous, because it is bounded by finding the button rather than by
+# elapsed time in the normal case.
+PRE_INSTALL_SECONDS = 120
+
 # Text that means the Play Store is not usable for this account yet, rather
 # than a page to click through.
 FATAL_TEXTS = {
@@ -126,6 +131,24 @@ def _fatal_reason(blob: str) -> str | None:
     return None
 
 
+def still_loading(elements: list[screen.Element], xml: str) -> bool:
+    """Whether the Play Store has not finished drawing the page yet.
+
+    A rendered package page always has text on it, so no labelled elements at
+    all means nothing has arrived - usually with a spinner sitting in the
+    middle. Distinguishing this from "a page I do not recognise" matters: the
+    first should be waited for, the second is a genuine dead end.
+
+    Measured 2026-08-01: with three rows running at once everything is slower,
+    and one row reached this check six seconds after the deep link with a bare
+    ProgressBar on screen. Treating that as "no Install button" failed a row
+    whose page was about to appear.
+    """
+    if elements:
+        return False
+    return "ProgressBar" in xml or not xml.strip()
+
+
 def install(client: Client, phone_id: str, package: str, *,
             budget_seconds: float = 600,
             artifact_dir: Path | None = None) -> Outcome:
@@ -153,15 +176,19 @@ def install(client: Client, phone_id: str, package: str, *,
     # meets nothing. So this loops on what is actually on screen rather than
     # assuming a fixed number of dialogs.
     elements: list[screen.Element] = []
-    for attempt in range(MAX_PRE_INSTALL_DIALOGS):
-        xml = screen.capture(client, phone_id)
-        elements = screen.parse(xml) if xml else []
-        if attempt == 0:
-            archive("play-package-page", xml or "")
+    deadline = time.time() + PRE_INSTALL_SECONDS
+    dialogs = 0
+    first = True
+    while time.time() < deadline:
+        xml = screen.capture(client, phone_id) or ""
+        elements = screen.parse(xml)
+        if first:
+            archive("play-package-page", xml)
+            first = False
 
         reason = _fatal_reason(screen.texts(elements))
         if reason:
-            archive(reason, xml or "")
+            archive(reason, xml)
             return Outcome("fatal", reason,
                            "the Play Store cannot install for this account yet",
                            artifacts=saved)
@@ -169,13 +196,21 @@ def install(client: Client, phone_id: str, package: str, *,
         if screen.find(elements, "Install"):
             break
 
+        if still_loading(elements, xml):
+            log.info("the package page is still loading")
+            time.sleep(4)
+            continue
+
+        if dialogs >= MAX_PRE_INSTALL_DIALOGS:
+            break
         tapped = screen.tap_first_present(
             client, phone_id, elements,
             ("Complete account setup",) + INTERSTITIAL_LABELS)
         if not tapped:
-            break
+            break            # real content, but nothing this flow recognises
+        dialogs += 1
         log.info("cleared %r before looking for Install", tapped)
-        archive(f"pre-install-{tapped.replace(' ', '-')}", xml or "")
+        archive(f"pre-install-{tapped.replace(' ', '-')}", xml)
         time.sleep(5)
 
     button = screen.find(elements, "Install")
