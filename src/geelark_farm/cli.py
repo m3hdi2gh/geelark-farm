@@ -310,7 +310,7 @@ def cmd_reap(settings: Settings, args) -> int:
     if args.dry_run:
         print(f"\n{len(verdicts)} phone(s) would be stopped (--dry-run)")
         return 0
-    phones.reap(client, ledger)
+    phones.reap(client, ledger, verdicts=verdicts)
     print(f"\nstopped {len(verdicts)} phone(s) - billing ended")
     return 0
 
@@ -347,6 +347,7 @@ def cmd_start(settings: Settings, args) -> int:
 
 def cmd_stop(settings: Settings, args) -> int:
     client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir)
     if args.all:
         targets = [p["id"] for p in phones.listing(client)
                    if p.get("status") in (phones.RUNNING, phones.STARTING)]
@@ -357,6 +358,10 @@ def cmd_stop(settings: Settings, args) -> int:
         targets = [resolve_phone(client, args.phone)]
     for phone_id in targets:
         phones.stop(client, phone_id)
+        # Release the claim too. Stopping a phone by hand is a deliberate "I am
+        # done with this", and leaving the claim set would make every later
+        # command refuse the phone as busy until the claim went stale hours on.
+        ledger.release(phone_id, note="stopped by hand")
         print(f"stopped {phone_id} - billing ended")
     return 0
 
@@ -457,6 +462,9 @@ def cmd_login(settings: Settings, args) -> int:
     created = False
     if args.phone:
         phone_id = args.phone
+        # Same collision as `install`: two flows on one phone corrupt each
+        # other's screen reads, and a login is the longer, costlier victim.
+        refuse_if_busy(settings, phone_id)
     else:
         parsed = proxy.parse(account.proxy)
         result = proxy.check(client, parsed)
@@ -501,13 +509,11 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
-ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
-
-
 def cmd_run(settings: Settings, args) -> int:
     """Process the sheet. The one command the whole project exists for."""
     client = build_client(settings)
     settings.ensure_dirs()
+
     def announce(phone_id: str) -> None:
         # Minted here, not at boot: the live-view token expires within seconds,
         # so it is only usable immediately before the flow acts.
@@ -526,7 +532,13 @@ def cmd_run(settings: Settings, args) -> int:
     if args.dry_run:
         return 0
     print(summarise(results, artifact_dir=settings.artifact_dir))
-    return 0 if results and all(r.ok for r in results) else 1
+    # An empty result is success: there was nothing pending, which is the normal
+    # state of a finished sheet. Exiting non-zero for it would make `geelark run`
+    # unusable from cron or CI, where a no-op has to look like a no-op.
+    return 0 if all(r.ok for r in results) else 1
+
+
+ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
 
 
 def cmd_rows(settings: Settings, args) -> int:

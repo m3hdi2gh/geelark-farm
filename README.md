@@ -19,9 +19,9 @@ a habit rather than an operation.
 
 ```
 $ geelark run --workers 3
-=== row 1 (1/3): DesmondCarlisle590341@gmail.com ===
-=== row 2 (2/3): NormanThatcher351780@gmail.com ===
-=== row 3 (3/3): BruceColeridge807413@gmail.com ===
+=== row 1 (1/3): first@example.com ===
+=== row 2 (2/3): second@example.com ===
+=== row 3 (3/3): third@example.com ===
   row 2 OK: ready (330s)
   row 3 OK: ready (340s)
   row 1 OK: ready (302s)
@@ -186,6 +186,12 @@ Anything that touches a real device is verified by running the tool and reading
 what came back, never by a test asserting that it should have worked. When a
 screen surprises a flow, its hierarchy is archived under `artifacts/`; the fix
 is to add a fixture from that capture and a selector that matches it.
+
+**Anonymise a capture before committing it.** Archived screens come from real
+runs and carry the account's address in plain text. `artifacts/` is gitignored,
+but `tests/fixtures/` is not — replace addresses with `something@example.com` on
+the way in. The fixture's value is the structure of the screen, never whose
+account it was.
 
 ## Caveats
 

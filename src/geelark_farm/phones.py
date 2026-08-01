@@ -255,10 +255,18 @@ def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
     return verdicts
 
 
-def reap(client: Client, ledger: Ledger, *, dry_run: bool = False) -> int:
+def reap(client: Client, ledger: Ledger, *, dry_run: bool = False,
+         verdicts: list[tuple[str, str]] | None = None) -> int:
     """Stop every phone nothing is accountable for. The backstop for when a
-    run dies before its own cleanup."""
-    verdicts = reapable(client, ledger)
+    run dies before its own cleanup.
+
+    A caller that has already shown the user what will be stopped passes those
+    verdicts back in, so the list acted on is the list that was displayed - a
+    second lookup could disagree with the first, and the user would have
+    approved something other than what happened.
+    """
+    if verdicts is None:
+        verdicts = reapable(client, ledger)
     for phone_id, reason in verdicts:
         if dry_run:
             log.info("would stop %s (%s)", phone_id, reason)

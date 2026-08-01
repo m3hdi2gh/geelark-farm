@@ -176,3 +176,9 @@ The sheet holds Google passwords and TOTP secrets, and `.env` holds the API
 key. Neither belongs in git — `.gitignore` covers both, and the service-account
 JSON as well. Rotate anything that has been pasted into a chat, a ticket, or a
 screenshot.
+
+Archived screens under `artifacts/` contain the account's email address in plain
+text. That directory is gitignored, but `tests/fixtures/` is not: anonymise a
+capture before promoting it to a fixture. Passwords and TOTP codes do not appear
+— Android marks those fields `password="true"` and does not expose their
+contents — but the address does.

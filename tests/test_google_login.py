@@ -17,7 +17,7 @@ from geelark_farm.flows import google_login as login
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-ACCOUNT = Account(email="rapidhunter953126@gmail.com", password="x",
+ACCOUNT = Account(email="testaccount001@example.com", password="x",
                   totp_secret="JBSWY3DPEHPK3PXP")
 
 
