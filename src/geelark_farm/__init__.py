@@ -11,7 +11,8 @@ Layering (dependencies point downward only):
     screen / shell          see the device, act on the device
     api / config            signed transport, settings
 
-See docs/architecture.md for the reasoning behind that split.
+The README explains why that split exists; docs/ holds the vendor API
+notes and the runbook.
 """
 
 __version__ = "0.1.0"

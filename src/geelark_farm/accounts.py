@@ -1,8 +1,8 @@
 """One account's credentials, validated before anything is spent on it.
 
-Phase 6 fills these from the spreadsheet. Until then a gitignored TSV under
-secrets/ stands in, with the same columns the sheet will have, so swapping the
-source is the only change.
+Normally filled from the spreadsheet. A gitignored TSV under secrets/ can stand
+in when no sheet is configured, with the same columns, so the source is the only
+thing that differs.
 """
 
 from __future__ import annotations
@@ -95,8 +95,8 @@ def load_dev_accounts(path: str | Path) -> list[Account]:
     file = Path(path)
     if not file.exists():
         raise AccountError(
-            f"{file} not found. Until phase 6 reads the sheet, put the accounts "
-            f"there with columns: proxy, email, password, totp_secret"
+            f"{file} not found. Set GOOGLE_SHEET_ID to read the sheet, or put "
+            f"the accounts there with columns: proxy, email, password, totp_secret"
         )
     lines = file.read_text(encoding="utf-8").splitlines()
     return [parse_row(row, number=i)

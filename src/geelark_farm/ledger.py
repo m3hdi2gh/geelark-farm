@@ -10,7 +10,7 @@ So the ledger is written the instant a phone exists, before anything else can
 fail, and `reap` uses it to decide what is safe to stop.
 
 Not a database: a single JSON file, written atomically, guarded by a lock for
-the concurrency planned in phase 7.
+rows running in parallel.
 """
 
 from __future__ import annotations

@@ -10,8 +10,7 @@ Commands are grouped by what they are for:
   device diagnostics     dump, tap, shell, screenshot
   phone management       phones, stop, reap
 
-Unimplemented commands fail loudly with the phase that will deliver them, so
-`geelark --help` doubles as an honest progress report.
+Every command is implemented; `geelark --help` is the full surface.
 """
 
 from __future__ import annotations
@@ -33,10 +32,7 @@ from .proxy import ProxyError
 from .sheets import Sheet, SheetError
 from .shell import TypingError
 
-# Every command is implemented; the mapping is kept for the next unfinished one.
-PENDING: dict[str, int] = {}
-
-# Stand-in for the spreadsheet until phase 6. Same columns.
+# Local fallback when no sheet is configured. Same columns as the sheet.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
 
 
@@ -646,7 +642,7 @@ def cmd_ping(settings: Settings, args) -> int:
         # Running phones bill per minute, so this is the one thing worth
         # flagging loudly on an otherwise informational command.
         print(f"\n{running} phone(s) RUNNING and billing. "
-              f"'geelark stop --all' ends that (phase 3).")
+              f"'geelark stop --all' ends that.")
     return 0
 
 
@@ -670,12 +666,6 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(levelname)s %(name)s: %(message)s",
     )
-
-    phase = PENDING.get(args.command)
-    if phase:
-        print(f"'{args.command}' is not implemented yet - it lands in phase {phase}.")
-        print("See docs/roadmap.md for what each phase delivers.")
-        return 1
 
     handlers = {
         "ping": cmd_ping,

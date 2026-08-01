@@ -439,8 +439,8 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
 
         log.info("screen: %s (visit %d)", matched.name, visits)
         if visits == 1:
-            # Archive each page the first time it is seen, so a run builds the
-            # catalogue in docs/google-login-screens.md as a side effect.
+            # Archive each page the first time it is seen, so every run leaves a
+            # record of the path it took without anyone having to ask for one.
             ctx.save(matched.name)
         outcome = matched.act(ctx)
         if outcome:
