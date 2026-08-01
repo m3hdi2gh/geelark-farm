@@ -148,6 +148,14 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
     if _existing_phone(client, row.phone_id):
         phone_id = row.phone_id
         log.info("row %d: reusing phone %s", row.number, phone_id)
+        # Creation is where the serial normally comes from, so a reused phone
+        # would otherwise leave the column blank. Cheapest source first.
+        entry = ledger.get(phone_id)
+        result.serial = str(
+            row.values.get("serial")
+            or (entry.serial if entry and entry.serial else "")
+            or phones.serial_of(client, phone_id)
+        )
     else:
         entry = phones.create(client, settings, parsed, ledger=ledger,
                               label=account.label)

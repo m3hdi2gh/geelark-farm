@@ -39,6 +39,19 @@ def listing(client: Client, page_size: int = 100) -> list[dict]:
     return data.get("items") or []
 
 
+def serial_of(client: Client, phone_id: str) -> str:
+    """The human-facing serial for a phone that already exists.
+
+    Creation returns it, but a run that reuses a phone never sees it - and the
+    serial is how a phone is identified in the GeeLark panel, so a row without
+    one is harder to act on than it needs to be.
+    """
+    for item in listing(client):
+        if item.get("id") == phone_id:
+            return str(item.get("serialNo") or "")
+    return ""
+
+
 def newest(client: Client) -> dict | None:
     """The most recently created phone that has not expired."""
     alive = [p for p in listing(client) if p.get("status") != EXPIRED]

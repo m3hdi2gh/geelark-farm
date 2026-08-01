@@ -226,8 +226,13 @@ class Sheet:
 
     def succeed(self, row: Row, phone_id: str, serial: str = "",
                 note: str = "") -> None:
-        self.update(row, status=DONE, phone_id=phone_id, serial=str(serial),
-                    note=note)
+        fields = {"status": DONE, "phone_id": phone_id, "note": note}
+        # Never blank a serial that is already there. A retry that could not
+        # determine it must leave the previous value alone rather than erase
+        # it - writing an empty string is a loss, not an update.
+        if serial:
+            fields["serial"] = str(serial)
+        self.update(row, **fields)
 
     def fail(self, row: Row, reason: str, note: str = "",
              phone_id: str = "") -> None:

@@ -93,3 +93,23 @@ def test_a_row_stuck_on_running_can_be_reclaimed():
 
     assert [r.number for r in selectable(rows)] == []
     assert [r.number for r in selectable(rows, retry_failed=True)] == [1]
+
+
+def test_a_retry_never_erases_a_serial_it_could_not_determine():
+    """succeed() used to write serial="" unconditionally, so a retry on a row
+    that already had one would blank it. An empty write is a loss, not an
+    update."""
+    written: list[dict] = []
+
+    class FakeSheet(Sheet):
+        def __init__(self):
+            pass
+        def update(self, row, **fields):
+            written.append(fields)
+
+    row = make_row(1)
+    FakeSheet().succeed(row, phone_id="P1", serial="", note="n")
+    assert "serial" not in written[0]
+
+    FakeSheet().succeed(row, phone_id="P1", serial="454", note="n")
+    assert written[1]["serial"] == "454"
