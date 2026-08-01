@@ -14,7 +14,6 @@ from geelark_farm import cli
 from geelark_farm import ledger as ledger_mod
 from geelark_farm.ledger import Ledger
 from geelark_farm.orchestrator import Result
-from tests.conftest import make_settings
 
 
 def result(row: int, ok: bool) -> Result:
@@ -40,7 +39,7 @@ class Args:
     ([result(1, True), result(2, False)], 1),
     ([result(1, False)], 1),
 ])
-def test_run_exit_code(results, expected, tmp_path, monkeypatch, capsys):
+def test_run_exit_code(results, expected, tmp_path, monkeypatch, capsys, make_settings):
     """An empty result is success. A finished sheet is the normal state, and
     exiting non-zero for it makes `geelark run` unusable from cron or CI, where
     a no-op has to look like a no-op."""
@@ -52,7 +51,7 @@ def test_run_exit_code(results, expected, tmp_path, monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_a_dry_run_always_succeeds(tmp_path, monkeypatch, capsys):
+def test_a_dry_run_always_succeeds(tmp_path, monkeypatch, capsys, make_settings):
     """It changes nothing, so it cannot fail at anything."""
     settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
     monkeypatch.setattr(cli, "build_client", lambda s: object())
@@ -70,7 +69,7 @@ def claimed_ledger(tmp_path, *, label: str = "row 4 / someone@example.com"):
     return ledger
 
 
-def test_a_phone_another_run_holds_is_refused(tmp_path):
+def test_a_phone_another_run_holds_is_refused(tmp_path, make_settings):
     """Two flows on one phone corrupt each other's screen reads, because
     `uiautomator dump` cannot run twice at once. The claim already existed;
     until this pass only `install` consulted it."""
@@ -81,14 +80,14 @@ def test_a_phone_another_run_holds_is_refused(tmp_path):
         cli.refuse_if_busy(settings, "P1")
 
 
-def test_a_released_phone_is_not_refused(tmp_path):
+def test_a_released_phone_is_not_refused(tmp_path, make_settings):
     ledger = claimed_ledger(tmp_path)
     ledger.release("P1")
 
     cli.refuse_if_busy(make_settings(state_dir=tmp_path), "P1")   # no raise
 
 
-def test_a_stale_claim_does_not_lock_a_phone_forever(tmp_path):
+def test_a_stale_claim_does_not_lock_a_phone_forever(tmp_path, make_settings):
     """A dead process must not hold a phone hostage."""
     ledger = claimed_ledger(tmp_path)
     ledger.get("P1").claimed_at = time.time() - ledger_mod.STALE_CLAIM_SECONDS - 1
@@ -97,6 +96,6 @@ def test_a_stale_claim_does_not_lock_a_phone_forever(tmp_path):
     cli.refuse_if_busy(make_settings(state_dir=tmp_path), "P1")   # no raise
 
 
-def test_an_unknown_phone_is_not_refused(tmp_path):
+def test_an_unknown_phone_is_not_refused(tmp_path, make_settings):
     """Nothing recorded means nothing is holding it."""
     cli.refuse_if_busy(make_settings(state_dir=tmp_path), "NEVER-SEEN")

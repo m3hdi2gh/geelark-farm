@@ -79,7 +79,7 @@ def test_the_saved_file_is_never_torn(tmp_path):
 
 
 # ------------------------------------------------------ shared HTTP session
-def test_each_thread_gets_its_own_requests_session():
+def test_each_thread_gets_its_own_requests_session(make_settings):
     """A requests.Session is not thread-safe; its connection pool is shared
     mutable state. Three rows sharing one produced
 
@@ -88,7 +88,6 @@ def test_each_thread_gets_its_own_requests_session():
     mid-run, which killed a row after its phone had already been created.
     """
     from geelark_farm.api import Client, RateLimiter
-    from tests.conftest import make_settings
 
     client = Client(make_settings(), limiter=RateLimiter(10))
     sessions = []
@@ -109,7 +108,7 @@ def test_each_thread_gets_its_own_requests_session():
 
 
 # ---------------------------------------------------------- spend ceilings
-def test_the_step_budgets_cannot_outlast_the_account_budget():
+def test_the_step_budgets_cannot_outlast_the_account_budget(make_settings):
     """ACCOUNT_BUDGET_SECONDS is documented as a spend cap, so it has to be one.
 
     The step budgets add up past it - boot, then login, then install - so each
@@ -117,8 +116,6 @@ def test_the_step_budgets_cannot_outlast_the_account_budget():
     this, a slow row could hold a phone for 35 minutes under a setting that
     claimed 30.
     """
-    from tests.conftest import make_settings
-
     s = make_settings(account_budget_seconds=1800, login_budget_seconds=900,
                       install_budget_seconds=600)
     boot_worst_case = 600

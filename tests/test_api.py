@@ -10,10 +10,9 @@ from __future__ import annotations
 import pytest
 
 from geelark_farm.api import RETRY_SAFE_PATHS, Client, RateLimiter
-from tests.conftest import make_settings
 
 
-def test_signature_is_uppercase_sha256_of_the_documented_concatenation():
+def test_signature_is_uppercase_sha256_of_the_documented_concatenation(make_settings):
     client = Client(make_settings(), limiter=RateLimiter(10))
     headers = client.auth_headers(trace_id="TRACE1", ts="1700000000000")
 
@@ -29,7 +28,7 @@ def test_signature_is_uppercase_sha256_of_the_documented_concatenation():
     assert len(headers["sign"]) == 64
 
 
-def test_signature_changes_every_call():
+def test_signature_changes_every_call(make_settings):
     """A replayed signature would be indistinguishable from a stuck clock."""
     client = Client(make_settings(), limiter=RateLimiter(10))
     assert client.auth_headers()["sign"] != client.auth_headers()["sign"]

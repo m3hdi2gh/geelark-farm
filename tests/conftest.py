@@ -3,17 +3,24 @@
 Everything here is offline: no network, no phone, no .env. The suite must run on
 a machine that has never seen a GeeLark credential, which is what makes it
 useful in CI.
+
+These are fixtures rather than importable helpers on purpose. A test module that
+does `from tests.conftest import ...` needs `tests` to be an importable package,
+which it is on a developer machine and is not on a clean CI runner - the first
+CI run failed on exactly that. pytest injects fixtures by name and never needs
+the import at all.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import pytest
 
 from geelark_farm.config import Settings
 
 
-def make_settings(**overrides) -> Settings:
-    """A fully populated Settings that touches nothing real."""
+def _settings(**overrides) -> Settings:
     base = dict(
         app_id="APPID", api_key="APIKEY", sheet_id="", sheet_tab="accounts",
         service_account_json="/nowhere", region="sgp", android="Android 15",
@@ -28,5 +35,15 @@ def make_settings(**overrides) -> Settings:
 
 
 @pytest.fixture
+def make_settings() -> Callable[..., Settings]:
+    """Build a fully populated Settings that touches nothing real.
+
+    A factory rather than a value, because most tests need to override a field
+    - usually state_dir, to point it at tmp_path.
+    """
+    return _settings
+
+
+@pytest.fixture
 def settings() -> Settings:
-    return make_settings()
+    return _settings()
