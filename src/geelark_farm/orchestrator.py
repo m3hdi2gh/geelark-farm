@@ -99,6 +99,9 @@ class Result:
     serial: str = ""
     seconds: float = 0.0
     detail: str = ""
+    # True when this row's phone could not be confirmed stopped. The summary
+    # must never claim nothing is billing while this is set.
+    still_running: bool = False
 
     @property
     def status_text(self) -> str:
@@ -246,6 +249,10 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 phones.stop(client, phone_id)
                 log.info("row %d: stopped %s", row.number, phone_id)
             except Exception as exc:                              # noqa: BLE001
+                # Recorded on the result, not only logged. The summary asserts
+                # that nothing is billing, and it may only say so if that is
+                # true - a log line hundreds of lines up is not a substitute.
+                result.still_running = True
                 log.error("row %d: COULD NOT STOP %s (%s) - run 'geelark reap'",
                           row.number, phone_id, exc)
             ledger.release(phone_id, note=result.reason)
@@ -385,9 +392,21 @@ def summarise(results: list[Result], *, artifact_dir: Path | None = None) -> str
                          + (f" (serial {r.serial})" if r.serial else ""))
 
     ready = sum(1 for r in results if r.ok)
+    unstopped = [r for r in results if r.still_running]
     lines.append("-" * 72)
-    lines.append(f" {ready}/{len(results)} phones ready. "
-                 f"All phones are stopped; nothing is billing.")
+    lines.append(f" {ready}/{len(results)} phones ready.")
+    if unstopped:
+        # The one line anyone reads. It has to be alarming when it should be:
+        # a network blip during cleanup once left a phone billing while the
+        # summary said everything was stopped.
+        lines.append("")
+        lines.append(f" *** {len(unstopped)} PHONE(S) COULD NOT BE STOPPED - "
+                     f"THESE ARE STILL BILLING ***")
+        for r in unstopped:
+            lines.append(f"     row {r.row}: {r.phone_id}")
+        lines.append(" Run 'geelark reap' now.")
+    else:
+        lines.append(" All phones are stopped; nothing is billing.")
     if ready < len(results):
         lines.append(" Failed rows keep their phones for inspection - the sheet "
                      "records why.")

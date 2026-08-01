@@ -191,3 +191,33 @@ def test_one_phone_that_will_not_stop_does_not_strand_the_others(tmp_path):
         orchestrator.phones.stop = original
 
     assert sorted(stopped) == ["P1", "P3"]
+
+
+# --------------------------------------------- the summary's billing claim
+def test_the_summary_never_claims_nothing_is_billing_when_something_is():
+    """The line everyone reads. On 2026-08-01 a DNS blip during cleanup left a
+    phone running, the failure was logged hundreds of lines up, and the summary
+    still ended with "All phones are stopped; nothing is billing." The phone
+    billed until someone noticed by hand.
+    """
+    from geelark_farm.orchestrator import Result, summarise
+
+    stuck = Result(row=18, email="a@example.com", ok=False, reason="error",
+                   phone_id="PHONE18", still_running=True)
+    text = summarise([Result(row=1, email="b@example.com", ok=True,
+                             reason="ready"), stuck])
+
+    assert "nothing is billing" not in text
+    assert "COULD NOT BE STOPPED" in text
+    assert "STILL BILLING" in text
+    assert "PHONE18" in text
+    assert "geelark reap" in text
+
+
+def test_the_reassuring_line_is_still_printed_when_it_is_true():
+    from geelark_farm.orchestrator import Result, summarise
+
+    text = summarise([Result(row=1, email="b@example.com", ok=True,
+                             reason="ready")])
+    assert "All phones are stopped; nothing is billing." in text
+    assert "COULD NOT BE STOPPED" not in text

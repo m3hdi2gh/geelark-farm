@@ -41,6 +41,10 @@ KNOWN_CODES = {
            "(only one RPA task per phone at a time)",
     20008: "an element was not found, commonly because the phone's UI is not "
            "in English (mobileLanguage must be 'default')",
+    40003: "signature rejected - check GEELARK_APP_ID and GEELARK_API_KEY",
+    44002: "the GeeLark plan is full: no slots left for another phone. "
+           "Delete phones you have finished with, or raise the plan. Rows "
+           "already done are unaffected; re-run to pick up the rest.",
 }
 
 # Endpoints that only read. A timed-out write may have been applied server

@@ -156,6 +156,39 @@ A `requests.Session` shared across threads. Fixed - each thread now gets its
 own. If something similar appears, check that no new code holds a `Session`,
 `gspread` client, or other connection-pooled object across workers.
 
+### The summary says a phone could not be stopped
+Believe it, and act on it now:
+
+```bash
+geelark reap
+```
+
+It happens when the network drops during cleanup - the run knows it failed to
+stop the phone but cannot do anything more about it. Seen 2026-08-01, when DNS
+went away mid-batch.
+
+Until that run, the summary ended with "All phones are stopped; nothing is
+billing" unconditionally, and the failure was only an ERROR line hundreds of
+lines above. The phone billed until someone noticed by hand. The summary now
+refuses to make that claim unless it is true.
+
+### `[44002] Maximum number of package environments reached`
+The GeeLark plan has no slots left for another phone. Rows already completed are
+unaffected - delete phones you have finished with, or raise the plan, then:
+
+```bash
+geelark run --retry-failed
+```
+
+### The network drops mid-batch
+Rows in flight fail with `ConnectionResetError` or `Failed to resolve
+openapi.geelark.com`; the rest of the batch carries on. Read-only calls retry
+automatically, which is why some rows survive a blip and only the unlucky ones
+do not.
+
+Afterwards: `geelark reap` first, then `geelark run --retry-failed`, which
+reuses the phones those rows already created rather than paying again.
+
 ### A password containing '%'
 Handled. `input text` turns `%s` into a space, so a password containing that
 exact pair is typed in two calls, ending one after the `%` so it stays literal.
