@@ -133,6 +133,7 @@ geelark stop --all
 Phone management:
 
 ```bash
+geelark plan                                   # slots, free slots, parallel limit
 geelark proxy "socks5://user:pass@host:port"   # test a proxy, spend nothing
 geelark phones --ledger                        # what exists, and who owns it
 geelark create --proxy "..." --label "row 4"

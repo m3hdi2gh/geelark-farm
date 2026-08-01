@@ -173,12 +173,26 @@ lines above. The phone billed until someone noticed by hand. The summary now
 refuses to make that claim unless it is true.
 
 ### `[44002] Maximum number of package environments reached`
-The GeeLark plan has no slots left for another phone. Rows already completed are
-unaffected - delete phones you have finished with, or raise the plan, then:
+No profile slots left. Ask the plan itself rather than guessing:
+
+```bash
+geelark plan
+```
+
+It reports the total, how many are free, and how many are cloud phones. **The
+pool is shared with browser profiles**, which is not obvious and cost an
+investigation on 2026-08-01: 20 slots, 19 phones, and a single browser profile
+holding the twentieth. Browser profiles cannot be listed through the cloud API -
+they live behind the local agent - so look in the GeeLark desktop app.
+
+Free a slot, or raise the plan, then:
 
 ```bash
 geelark run --retry-failed
 ```
+
+`geelark plan` also reports the parallel limit, which is what the account may run
+concurrently without extra charge.
 
 ### The network drops mid-batch
 Rows in flight fail with `ConnectionResetError` or `Failed to resolve

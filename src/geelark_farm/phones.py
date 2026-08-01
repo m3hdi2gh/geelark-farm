@@ -39,6 +39,18 @@ def listing(client: Client, page_size: int = 100) -> list[dict]:
     return data.get("items") or []
 
 
+def plan(client: Client) -> dict:
+    """The subscription's limits and what is left of them.
+
+    The only way to see why a creation was refused with [44002]. Note that
+    `profiles` is a pool shared with browser profiles - the same error code is
+    documented for both - so cloud phones alone need not add up to the total.
+
+    GeeLark rate-limits this endpoint to one request per minute.
+    """
+    return client.data("/v1/pay/plan/info") or {}
+
+
 def serial_of(client: Client, phone_id: str) -> str:
     """The human-facing serial for a phone that already exists.
 

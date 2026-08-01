@@ -135,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_reap.add_argument("--dry-run", action="store_true",
                         help="report what would be stopped, change nothing")
 
+    sub.add_parser("plan", help="subscription limits and free slots")
+
     p_proxy = sub.add_parser(
         "proxy", help="check a proxy without creating anything"
     )
@@ -312,6 +314,36 @@ def cmd_reap(settings: Settings, args) -> int:
         return 0
     phones.reap(client, ledger, verdicts=verdicts)
     print(f"\nstopped {len(verdicts)} phone(s) - billing ended")
+    return 0
+
+
+def cmd_plan(settings: Settings, args) -> int:
+    """What the subscription allows, and how much of it is left."""
+    client = build_client(settings)
+    info = phones.plan(client)
+    used_by_phones = len(phones.listing(client))
+    total = info.get("profiles") or 0
+    free = info.get("availableProfiles") or 0
+
+    expires = time.strftime("%Y-%m-%d",
+                            time.localtime(info.get("expirationTime", 0)))
+    print(f"plan            : {'Pro' if info.get('plan') == 1 else 'Base'}"
+          f"  (${info.get('monthlyFee')}/month, expires {expires})")
+    print(f"profile slots   : {total} total, {free} free")
+    print(f"  cloud phones  : {used_by_phones}")
+    other = total - free - used_by_phones
+    if other > 0:
+        # The pool is shared with browser profiles, which this API cannot list -
+        # they live behind the local agent. Naming the gap saves the search.
+        print(f"  something else: {other}  (browser profiles share this pool; "
+              f"check the GeeLark app)")
+    parallels = info.get("parallels")
+    note = ("" if parallels else
+            "  - concurrent phones beyond this may cost extra; check billing "
+            "before raising --workers")
+    print(f"parallel limit  : {parallels}{note}")
+    if free == 0:
+        print("\nNo free slots: creating another phone will fail with [44002].")
     return 0
 
 
@@ -687,6 +719,7 @@ def main(argv: list[str] | None = None) -> int:
         "start": cmd_start,
         "stop": cmd_stop,
         "reap": cmd_reap,
+        "plan": cmd_plan,
         "proxy": cmd_proxy,
         "dump": cmd_dump,
         "tap": cmd_tap,
