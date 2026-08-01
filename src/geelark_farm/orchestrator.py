@@ -130,6 +130,16 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
     result = Result(row=row.number, email=account.email, ok=False,
                     reason="not_started")
 
+    # The outer bound on how long this row may hold a phone, and therefore on
+    # what it can cost. Each step gets whichever is smaller: its own budget, or
+    # what is left of this one. Without that the step budgets simply add up -
+    # boot, login and install together exceed ACCOUNT_BUDGET_SECONDS, so the
+    # setting described as a spend cap capped nothing.
+    deadline = started + settings.account_budget_seconds
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
     def finish(ok: bool, reason: str, detail: str = "", serial: str = "") -> Result:
         result.ok, result.reason, result.detail = ok, reason, detail
         result.phone_id, result.serial = phone_id, serial
@@ -173,15 +183,22 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
     artifact_dir = settings.artifact_dir / f"{stamp}-row{row.number}"
 
     try:
-        phones.ensure_running(client, phone_id)
+        phones.ensure_running(client, phone_id, timeout=remaining())
         if on_ready:
             # The caller may want to watch: fired after boot, before the
             # first screen is touched, so nothing is missed.
             on_ready(phone_id)
 
+        if remaining() <= 0:
+            sheet.fail(row, "account_budget_exhausted",
+                       note="the phone took too long to boot", phone_id=phone_id)
+            return finish(False, "account_budget_exhausted",
+                          f"no time left after boot "
+                          f"({settings.account_budget_seconds}s budget)")
+
         login = google_login.sign_in(
             client, phone_id, account,
-            budget_seconds=settings.login_budget_seconds,
+            budget_seconds=min(settings.login_budget_seconds, remaining()),
             artifact_dir=artifact_dir,
         )
         if not login.ok:
@@ -189,9 +206,16 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                        phone_id=phone_id)
             return finish(False, login.reason, login.detail)
 
+        if remaining() <= 0:
+            sheet.fail(row, "account_budget_exhausted",
+                       note="signed in, but no time left to install",
+                       phone_id=phone_id)
+            return finish(False, "account_budget_exhausted",
+                          "signed in, but the account budget ran out first")
+
         installed = play_install.install(
             client, phone_id, settings.target_package,
-            budget_seconds=settings.install_budget_seconds,
+            budget_seconds=min(settings.install_budget_seconds, remaining()),
             artifact_dir=artifact_dir,
         )
         if not installed.ok:

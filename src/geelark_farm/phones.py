@@ -176,6 +176,7 @@ def wait_until_running(client: Client, phone_id: str, *,
 
 
 def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
+                   timeout: float = 600,
                    on_url: Callable[[str], None] | None = None) -> str | None:
     """Start the phone if needed. Returns the live-view URL when it started
     it, None when it was already up.
@@ -183,6 +184,10 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
     `on_url` fires the moment the URL is known, before the boot wait. Without
     it the link only surfaces a minute and a half later, by which time whatever
     you wanted to watch has already happened.
+
+    `timeout` lets a caller with its own deadline - a batch row, for instance -
+    cap the boot wait rather than letting it spend ten minutes of a budget that
+    has to cover the whole row.
 
     Shell commands fail in confusing ways on a stopped phone, so every device
     command goes through here.
@@ -199,7 +204,7 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
         log.info("watch it live: %s", url)
         if on_url:
             on_url(url)
-    wait_until_running(client, phone_id, settle=settle)
+    wait_until_running(client, phone_id, settle=settle, timeout=timeout)
     return url
 
 

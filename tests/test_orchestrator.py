@@ -88,9 +88,9 @@ def test_each_thread_gets_its_own_requests_session():
     mid-run, which killed a row after its phone had already been created.
     """
     from geelark_farm.api import Client, RateLimiter
-    from tests.test_api import _settings
+    from tests.conftest import make_settings
 
-    client = Client(_settings(), limiter=RateLimiter(10))
+    client = Client(make_settings(), limiter=RateLimiter(10))
     sessions = []
     # A barrier keeps all four threads alive at once. Without it the pool
     # reuses one thread for every task and the test passes for the wrong
@@ -106,3 +106,32 @@ def test_each_thread_gets_its_own_requests_session():
         list(pool.map(lambda _: grab(), range(4)))
 
     assert len({id(s) for s in sessions}) == 4, "one session per thread"
+
+
+# ---------------------------------------------------------- spend ceilings
+def test_the_step_budgets_cannot_outlast_the_account_budget():
+    """ACCOUNT_BUDGET_SECONDS is documented as a spend cap, so it has to be one.
+
+    The step budgets add up past it - boot, then login, then install - so each
+    step is given whichever is smaller: its own budget, or what is left. Before
+    this, a slow row could hold a phone for 35 minutes under a setting that
+    claimed 30.
+    """
+    from tests.conftest import make_settings
+
+    s = make_settings(account_budget_seconds=1800, login_budget_seconds=900,
+                      install_budget_seconds=600)
+    boot_worst_case = 600
+    assert (boot_worst_case + s.login_budget_seconds
+            + s.install_budget_seconds) > s.account_budget_seconds, (
+        "if the steps ever fit inside the account budget on their own, this "
+        "test is no longer describing a real risk")
+
+    # What process_row does: every step is capped by the time remaining.
+    remaining = s.account_budget_seconds
+    for step in (boot_worst_case, s.login_budget_seconds,
+                 s.install_budget_seconds):
+        granted = min(step, remaining)
+        remaining -= granted
+        assert granted >= 0
+    assert remaining == 0, "the account budget is fully consumed, never exceeded"

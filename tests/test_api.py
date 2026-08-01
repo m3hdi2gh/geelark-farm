@@ -10,25 +10,11 @@ from __future__ import annotations
 import pytest
 
 from geelark_farm.api import RETRY_SAFE_PATHS, Client, RateLimiter
-from geelark_farm.config import Settings
-
-
-def _settings(**overrides) -> Settings:
-    base = dict(
-        app_id="APPID", api_key="APIKEY", sheet_id="", sheet_tab="accounts",
-        service_account_json="/nowhere", region="sgp", android="Android 15",
-        phone_name_prefix="farm", target_package="com.example",
-        max_concurrent_phones=1, account_budget_seconds=1,
-        login_budget_seconds=1, install_budget_seconds=1,
-        api_requests_per_minute=120, state_dir="/tmp", artifact_dir="/tmp",
-        log_level="INFO",
-    )
-    base.update(overrides)
-    return Settings(**base)
+from tests.conftest import make_settings
 
 
 def test_signature_is_uppercase_sha256_of_the_documented_concatenation():
-    client = Client(_settings(), limiter=RateLimiter(10))
+    client = Client(make_settings(), limiter=RateLimiter(10))
     headers = client.auth_headers(trace_id="TRACE1", ts="1700000000000")
 
     import hashlib
@@ -45,7 +31,7 @@ def test_signature_is_uppercase_sha256_of_the_documented_concatenation():
 
 def test_signature_changes_every_call():
     """A replayed signature would be indistinguishable from a stuck clock."""
-    client = Client(_settings(), limiter=RateLimiter(10))
+    client = Client(make_settings(), limiter=RateLimiter(10))
     assert client.auth_headers()["sign"] != client.auth_headers()["sign"]
 
 

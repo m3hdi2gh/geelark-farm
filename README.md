@@ -62,9 +62,10 @@ Supporting a screen Google has just started showing means adding one entry to
 that registry. Anything unrecognised is archived as XML under `artifacts/` and
 reported as `unknown_screen` — a task, not a mystery.
 
-**A running phone costs money every minute.** Every budget in `.env` is a spend
-cap, every path that starts a phone stops it in a `finally`, and `geelark reap`
-is the backstop for when that cannot run.
+**A running phone costs money every minute.** `ACCOUNT_BUDGET_SECONDS` bounds
+what one row can spend and every step is capped by what is left of it; every
+path that starts a phone stops it in a `finally`; and `geelark reap` is the
+backstop for when that cannot run.
 
 ## Layout
 
@@ -174,6 +175,17 @@ geelark reap --dry-run
 
 Running rows in parallel shortens the wall clock, not the bill: three phones for
 five minutes costs the same as three phones one after another.
+
+## Contributing
+
+`ruff check .` and `pytest` run on every push. The whole suite is offline - no
+credentials, no spreadsheet, no phone - so it can never spend money, and
+`geelark --help` is checked to work on a machine with no `.env` at all.
+
+Anything that touches a real device is verified by running the tool and reading
+what came back, never by a test asserting that it should have worked. When a
+screen surprises a flow, its hierarchy is archived under `artifacts/`; the fix
+is to add a fixture from that capture and a selector that matches it.
 
 ## Caveats
 
