@@ -42,6 +42,8 @@ KNOWN_CODES = {
     20008: "an element was not found, commonly because the phone's UI is not "
            "in English (mobileLanguage must be 'default')",
     40003: "signature rejected - check GEELARK_APP_ID and GEELARK_API_KEY",
+    40007: "too many requests to this endpoint - some, like /pay/plan/info, "
+           "allow only one a minute, separate from the 200/min account limit",
     44002: "the GeeLark plan is full: no slots left for another phone. "
            "Delete phones you have finished with, or raise the plan. Rows "
            "already done are unaffected; re-run to pick up the rest.",

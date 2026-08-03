@@ -135,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_reap.add_argument("--dry-run", action="store_true",
                         help="report what would be stopped, change nothing")
 
+    sub.add_parser("ui", help="interactive console - every feature, one screen")
+
     sub.add_parser("plan", help="subscription limits and free slots")
 
     p_proxy = sub.add_parser(
@@ -315,6 +317,16 @@ def cmd_reap(settings: Settings, args) -> int:
     phones.reap(client, ledger, verdicts=verdicts)
     print(f"\nstopped {len(verdicts)} phone(s) - billing ended")
     return 0
+
+
+def cmd_ui(settings: Settings, args) -> int:
+    """The interactive console.
+
+    Imported here rather than at module load so the plain commands never pay
+    for rich, and a broken terminal cannot stop `geelark run` from working.
+    """
+    from .ui import run_console
+    return run_console(settings)
 
 
 def cmd_plan(settings: Settings, args) -> int:
@@ -719,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
         "start": cmd_start,
         "stop": cmd_stop,
         "reap": cmd_reap,
+        "ui": cmd_ui,
         "plan": cmd_plan,
         "proxy": cmd_proxy,
         "dump": cmd_dump,

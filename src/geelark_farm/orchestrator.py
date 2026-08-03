@@ -50,6 +50,7 @@ from collections.abc import Callable
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from . import phones, proxy, shell
 from .accounts import Account
@@ -268,10 +269,23 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
             ledger.release(phone_id, note=result.reason)
 
 
+class Reporter(Protocol):
+    """Where a run announces its progress.
+
+    The plain CLI prints lines as they happen; the interactive console draws a
+    live table instead. Neither knows about the other - `run` just tells whoever
+    is listening when a row starts and finishes.
+    """
+
+    def start(self, index: int, row: Row) -> None: ...
+    def finish(self, result: Result) -> None: ...
+
+
 def run(client: Client, settings: Settings, *, limit: int | None = None,
         only_row: int | None = None, retry_failed: bool = False,
         dry_run: bool = False, workers: int | None = None,
-        on_ready: Callable[[str], None] | None = None) -> list[Result]:
+        on_ready: Callable[[str], None] | None = None,
+        reporter: Reporter | None = None) -> list[Result]:
     """Process the sheet's pending rows and return one Result each."""
     from .sheets import selectable
 
@@ -322,13 +336,19 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
 
     def work(index: int, row: Row) -> Result:
         _context.row = row.number
-        print(f"\n=== row {row.number} ({index}/{len(chosen)}): {row.email} ===",
-              flush=True)
+        if reporter:
+            reporter.start(index, row)
+        else:
+            print(f"\n=== row {row.number} ({index}/{len(chosen)}): "
+                  f"{row.email} ===", flush=True)
         result = process_row(client, settings, sheet, row, ledger,
                              on_ready=on_ready, on_phone=note_phone)
-        mark = "OK" if result.ok else "FAIL"
-        print(f"  row {row.number} {mark}: {result.reason} "
-              f"({result.seconds:.0f}s)", flush=True)
+        if reporter:
+            reporter.finish(result)
+        else:
+            mark = "OK" if result.ok else "FAIL"
+            print(f"  row {row.number} {mark}: {result.reason} "
+                  f"({result.seconds:.0f}s)", flush=True)
         return result
 
     if count == 1:

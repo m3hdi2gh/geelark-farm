@@ -113,6 +113,15 @@ A blank status counts as pending, so pasting rows in is enough.
 ## Use
 
 ```bash
+geelark ui                      # interactive console - everything, one screen
+```
+
+It opens on a dashboard - sheet, phones, free slots - and a menu. A batch drawn
+there is one line per row, updated live, instead of four workers' logs
+interleaved. Everything below is the same set of actions without prompts, which
+is what cron and CI need:
+
+```bash
 geelark rows                    # validate every row, spend nothing
 geelark run --dry-run           # show the plan
 geelark run                     # process the pending rows
