@@ -268,3 +268,102 @@ def test_a_row_that_cannot_get_a_phone_still_records_why(tmp_path, make_settings
     assert result.reason == "no_phone"
     assert recorded and recorded[0][0] == "no_phone"
     assert "44002" in recorded[0][1]
+
+
+# ------------------------------------------------------ discarding a phone
+def _row_ending_in(reason: str, tmp_path, make_settings, stop_fails=False):
+    """Drive process_row to a login failure with `reason` and report what
+    happened to the phone."""
+    from geelark_farm import orchestrator
+    from geelark_farm.accounts import Account
+    from geelark_farm.ledger import Entry
+    from geelark_farm.sheets import Row
+
+    events: list[tuple] = []
+
+    class FakeSheet:
+        def claim(self, row, **kw): pass
+        def succeed(self, row, **kw): pass
+        def fail(self, row, reason, note="", **kw):
+            events.append(("fail", reason))
+        def update(self, row, **fields):
+            events.append(("update", fields))
+
+    class FakeLogin:
+        ok = False
+        detail = ""
+        def __init__(self, reason): self.reason = reason
+
+    row = Row(number=1, sheet_row=2,
+              values={"email": "x@example.com", "proxy": "1.2.3.4:1080"},
+              account=Account(email="x@example.com", password="p",
+                              totp_secret="JBSWY3DPEHPK3PXP",
+                              proxy="1.2.3.4:1080", row=1))
+
+    saved = {name: getattr(orchestrator.phones, name)
+             for name in ("create", "ensure_running", "stop", "delete")}
+    original_check = orchestrator.proxy.check
+    original_sign_in = orchestrator.google_login.sign_in
+
+    def stop(*a, **k):
+        events.append(("stop",))
+        if stop_fails:
+            raise RuntimeError("stop failed")
+
+    orchestrator.proxy.check = lambda *a, **k: {}
+    orchestrator.phones.create = lambda *a, **k: Entry(
+        phone_id="PHONE1", created_at=0.0, serial="500")
+    orchestrator.phones.ensure_running = lambda *a, **k: None
+    orchestrator.phones.stop = stop
+    orchestrator.phones.delete = lambda c, ids, **k: events.append(("delete", ids))
+    orchestrator.google_login.sign_in = lambda *a, **k: FakeLogin(reason)
+    try:
+        result = orchestrator.process_row(
+            object(), make_settings(state_dir=tmp_path, artifact_dir=tmp_path),
+            FakeSheet(), row, Ledger.load(tmp_path))
+    finally:
+        for name, fn in saved.items():
+            setattr(orchestrator.phones, name, fn)
+        orchestrator.proxy.check = original_check
+        orchestrator.google_login.sign_in = original_sign_in
+    return result, events
+
+
+def test_a_captcha_deletes_the_phone_and_frees_its_slot(tmp_path, make_settings):
+    """A CAPTCHA is Google judging the proxy's exit IP, and the proxy is fixed
+    when the phone is created - so no retry on this phone can pass. Keeping it
+    only holds a plan slot, and a full plan is what stops the *next* row from
+    getting a phone at all (2026-08-01, row 20)."""
+    result, events = _row_ending_in("captcha_shown", tmp_path, make_settings)
+
+    assert result.reason == "captcha_shown"
+    assert result.discarded
+    assert ("delete", ["PHONE1"]) in events
+    # Stopped first: deleting a running phone is not a documented way to end
+    # billing.
+    assert events.index(("stop",)) < events.index(("delete", ["PHONE1"]))
+    # The sheet must stop naming a phone that no longer exists.
+    assert ("update", {"phone_id": "", "serial": ""}) in events
+
+
+def test_an_ordinary_failure_keeps_its_phone(tmp_path, make_settings):
+    """The counterweight. A wrong password is corrected in the sheet and
+    retried on the same device; deleting it would throw away a working phone
+    and its slot for nothing."""
+    result, events = _row_ending_in("wrong_password", tmp_path, make_settings)
+
+    assert result.reason == "wrong_password"
+    assert not result.discarded
+    assert not any(e[0] == "delete" for e in events)
+
+
+def test_a_phone_that_could_not_be_stopped_is_never_deleted(tmp_path,
+                                                            make_settings):
+    """Deleting a running phone is not a documented way to end billing, so a
+    stop failure must leave the phone for reap rather than delete it blind."""
+    result, events = _row_ending_in("captcha_shown", tmp_path, make_settings,
+                                    stop_fails=True)
+
+    assert result.still_running
+    assert not result.discarded
+    assert not any(e[0] == "delete" for e in events)

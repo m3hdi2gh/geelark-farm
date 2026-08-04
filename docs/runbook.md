@@ -109,6 +109,18 @@ curl "http://ip-api.com/json/<outbound-ip>?fields=country,isp,proxy,hosting,mobi
 challenges. Scamalytics and spur.us give a fuller reputation picture. A
 residential or mobile ISP with `hosting: false` is what you want.
 
+**The fix is a different proxy, and only that.** `captcha_shown` is the one
+failure whose phone the run deletes instead of keeping: the proxy is bound to a
+phone when it is created and cannot be changed afterwards, so a retry on that
+phone meets the same exit address and the same challenge. Measured on
+2026-08-04 — a row's exit answered three consecutive checks with the same IP,
+so these addresses are sticky rather than rotating. The row is left with its
+reason and no phone; put a new proxy in the sheet and re-run it.
+
+Do not conclude anything about the account from a CAPTCHA raised at the email
+step: Google had not yet seen the password, so it is a judgement on the network
+and the device, not on the credentials.
+
 ### "still installing..." repeats until the budget runs out
 The Install tap did not land on the Install button. Look at the run's
 `*-play-package-page.xml`: if there is no Install element on it, something was

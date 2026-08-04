@@ -175,6 +175,12 @@ Each failed row keeps its phone (stopped) and its archived screens, and the
 sheet records the reason. `geelark run --retry-failed` reuses that phone rather
 than paying for another.
 
+The exception is `captcha_shown`, where the phone is deleted and its plan slot
+freed. A CAPTCHA is Google's verdict on the proxy's exit address; the proxy is
+fixed when the phone is created, so nothing that reuses the phone can pass.
+That row needs a different proxy, which means a different phone anyway — and a
+kept one would only hold a slot the next row needs.
+
 ## Cost
 
 **Phones bill per running minute.** Check after any interrupted run:

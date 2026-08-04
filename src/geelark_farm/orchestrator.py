@@ -13,7 +13,9 @@ Rules that shape the code:
   nothing.
 - **A phone is stopped in a finally block, always.** The single-account commands
   can afford to leave one running for inspection; an unattended batch cannot.
-  Failed phones are stopped but not deleted, so they can still be examined.
+  A failed phone is stopped and kept, so it can be examined and reused by a
+  retry - unless the reason makes it unreusable, in which case it is deleted
+  (see UNREUSABLE).
 - **A failing row never stops the batch.** Its reason is written to the sheet
   and the run moves on - that is what makes a sheet of fifty rows usable.
 - **Every outcome is written to the sheet before the next row starts**, so an
@@ -103,10 +105,56 @@ class Result:
     # True when this row's phone could not be confirmed stopped. The summary
     # must never claim nothing is billing while this is set.
     still_running: bool = False
+    # True when the phone was deleted rather than kept - see UNREUSABLE.
+    discarded: bool = False
 
     @property
     def status_text(self) -> str:
         return "done" if self.ok else f"failed:{self.reason}"
+
+
+# Failures after which the phone can never become useful, so keeping it only
+# holds a plan slot - and a full plan is what stops the *next* row from getting
+# a phone at all.
+#
+# The proxy is bound to a phone when it is created and cannot be changed
+# afterwards. A CAPTCHA is Google's verdict on that proxy's exit address, and
+# the exits here are sticky: row 3's answered three checks in a row with the
+# same IP (2026-08-04). So a retry on this phone meets the same address and the
+# same challenge. Getting past it needs a different proxy, and a different
+# proxy needs a different phone.
+#
+# Deliberately narrow. Everything else keeps its phone: wrong_password is
+# fixed in the sheet and retried on the same device, and unknown_screen is a
+# gap in the router that may be worth looking at.
+UNREUSABLE = frozenset({"captcha_shown"})
+
+
+def _discard(client: Client, sheet: Sheet, row: Row, phone_id: str,
+             ledger: Ledger, result: Result) -> None:
+    """Delete a phone no retry could use, and stop the sheet pointing at it.
+
+    Failing to delete is logged, never raised: the row's real outcome is
+    already written, and losing it to a cleanup error would be the worse bug.
+    The cost of the failure is one held slot, so it says so.
+    """
+    try:
+        phones.delete(client, [phone_id], ledger=ledger)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("row %d: could not delete %s (%s); it still holds a "
+                    "plan slot - 'geelark delete --phone %s'",
+                    row.number, phone_id, exc, phone_id)
+        return
+    result.discarded = True
+    log.info("row %d: deleted %s - %s cannot be retried on this proxy",
+             row.number, phone_id, result.reason)
+    try:
+        # The columns named a phone that no longer exists. Clearing them keeps
+        # the sheet honest; status and note still carry what happened.
+        sheet.update(row, phone_id="", serial="")
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("row %d: deleted %s but could not clear the sheet (%s)",
+                    row.number, phone_id, exc)
 
 
 def _existing_phone(client: Client, phone_id: str) -> bool:
@@ -266,6 +314,12 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 result.still_running = True
                 log.error("row %d: COULD NOT STOP %s (%s) - run 'geelark reap'",
                           row.number, phone_id, exc)
+            else:
+                # Only after a confirmed stop: deleting a running phone is not
+                # a documented way to end billing, so a phone this run could
+                # not stop is left for reap rather than deleted underneath it.
+                if result.reason in UNREUSABLE:
+                    _discard(client, sheet, row, phone_id, ledger, result)
             ledger.release(phone_id, note=result.reason)
 
 
@@ -418,8 +472,10 @@ def summarise(results: list[Result], *, artifact_dir: Path | None = None) -> str
         lines.append(f" {mark}  row {r.row:<3} {r.email:<34} "
                      f"{r.reason:<26} {r.seconds:>5.0f}s")
         if r.phone_id:
-            lines.append(f"          phone {r.phone_id}"
-                         + (f" (serial {r.serial})" if r.serial else ""))
+            detail = f" (serial {r.serial})" if r.serial else ""
+            if r.discarded:
+                detail += " - deleted, its slot is free again"
+            lines.append(f"          phone {r.phone_id}{detail}")
 
     ready = sum(1 for r in results if r.ok)
     unstopped = [r for r in results if r.still_running]
@@ -438,8 +494,17 @@ def summarise(results: list[Result], *, artifact_dir: Path | None = None) -> str
     else:
         lines.append(" All phones are stopped; nothing is billing.")
     if ready < len(results):
-        lines.append(" Failed rows keep their phones for inspection - the sheet "
-                     "records why.")
+        kept = sum(1 for r in results if not r.ok and r.phone_id
+                   and not r.discarded)
+        discarded = sum(1 for r in results if r.discarded)
+        if kept:
+            lines.append(" Failed rows keep their phones for inspection and "
+                         "retry - the sheet records why.")
+        if discarded:
+            lines.append(f" {discarded} phone(s) deleted: a CAPTCHA is a verdict "
+                         "on the proxy's exit IP, and the proxy cannot be "
+                         "changed on an existing phone. Give those rows a "
+                         "different proxy.")
         if artifact_dir:
             lines.append(f" Screen captures: {artifact_dir}")
     return "\n".join(lines)
