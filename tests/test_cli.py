@@ -124,3 +124,37 @@ def test_the_live_view_link_is_kept_rather_than_shown_as_a_step():
     assert entry["phone"] == "477"
     # The step moved on; the link did not.
     assert entry["step"] == "screen: password_entry (visit 1)"
+
+
+def test_each_live_link_is_offered_for_printing_exactly_once():
+    """The table cell can only offer an OSC 8 hyperlink, and a terminal without
+    OSC 8 shows it as the bare word "open" with no way to reach the link - as
+    one did on 2026-08-06. So the URL is also printed in full, above the table,
+    where it stays in the scrollback and the terminal's own URL detection can
+    find it.
+
+    Once, though. The render loop drains this four times a second, so a link
+    that came back on every tick would bury the table under its own URL.
+    """
+    from geelark_farm.ui import LiveReporter
+
+    class FakeRow:
+        number, email = 6, "x@example.com"
+
+    reporter = LiveReporter(total=1)
+    reporter.start(6, FakeRow())
+    reporter.note(6, "created 631291280617374014 (serial 495): vivo / Android 15")
+    reporter.note(6, "watch it live: https://phone.geelark.com/i.html?t=abc")
+
+    # The serial travels with the link: it is what mints a fresh one with
+    # `geelark start` after this one has expired.
+    assert reporter.drain_links() == [(6, "495", "https://phone.geelark.com/i.html?t=abc")]
+    assert reporter.drain_links() == []
+
+    # The same URL logged again is still not new.
+    reporter.note(6, "watch it live: https://phone.geelark.com/i.html?t=abc")
+    assert reporter.drain_links() == []
+
+    # A freshly minted one is.
+    reporter.note(6, "watch it live: https://phone.geelark.com/i.html?t=xyz")
+    assert reporter.drain_links() == [(6, "495", "https://phone.geelark.com/i.html?t=xyz")]

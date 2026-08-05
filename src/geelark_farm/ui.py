@@ -188,10 +188,11 @@ def _watch_cell(url: str) -> Text:
     """A clickable word rather than the URL itself.
 
     The URL is some four hundred characters of signed token; printed in full it
-    would be the only thing on the line. Terminals that support OSC 8 - Windows
-    Terminal among them - make the word itself clickable, and the ones that do
-    not still show that a live view exists, which the phone id then opens via
-    `geelark start`.
+    would be the only thing on the line. Terminals that support OSC 8 make the
+    word itself clickable - but not every terminal does, and one that does not
+    shows this as plain text with no way to reach the link. So the word is a
+    convenience, never the only route: the full URL is also printed above the
+    table, once, where the terminal's own URL detection can reach it.
     """
     if not url:
         return Text("")
@@ -211,6 +212,11 @@ class LiveReporter:
     total: int
     rows: dict[int, dict] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Links seen but not yet printed. Collected here rather than printed from
+    # the logging handler, because that runs on the worker threads and every
+    # write to the console has to come from the one thread driving Live.
+    new_links: list[tuple[int, str, str]] = field(default_factory=list)
+    seen_links: set[str] = field(default_factory=set)
 
     def start(self, index: int, row) -> None:
         with self.lock:
@@ -230,6 +236,12 @@ class LiveReporter:
                          # A link that opens a dead page is worse than none.
                          link="")
 
+    def drain_links(self) -> list[tuple[int, str, str]]:
+        """Take the links that have arrived since the last call."""
+        with self.lock:
+            found, self.new_links = self.new_links, []
+            return found
+
     def note(self, row: int, message: str) -> None:
         with self.lock:
             entry = self.rows.get(row)
@@ -239,7 +251,11 @@ class LiveReporter:
                 # Held in its own field rather than shown as a step. As a step
                 # the next log line replaced it within a second, which made the
                 # one message worth clicking the one you could not click.
-                entry["link"] = message[len(LIVE_PREFIX):].strip()
+                url = message[len(LIVE_PREFIX):].strip()
+                entry["link"] = url
+                if url and url not in self.seen_links:
+                    self.seen_links.add(url)
+                    self.new_links.append((row, entry.get("phone", ""), url))
                 return
             found = CREATED_SERIAL.search(message)
             if found:
@@ -302,6 +318,27 @@ class ReporterLogHandler(logging.Handler):
             self.reporter.note(row, record.getMessage())
 
 
+def print_new_links(live: Live, reporter: LiveReporter) -> None:
+    """Write each live-view link once, above the table.
+
+    The table cell can only offer an OSC 8 hyperlink, and a terminal without
+    OSC 8 renders that as the bare word "open" with no way to reach the link -
+    which is what happened in practice. Printing the URL in full is the route
+    that needs nothing from the terminal: it stays in the scrollback instead of
+    being redrawn away, terminals that linkify URLs of their own accord pick it
+    up, and it can always be selected and copied.
+
+    soft_wrap keeps it in one logical line. Rich's own wrapping would insert
+    real line breaks mid-URL, and a URL broken by a newline is one no terminal
+    will detect and no double-click will select.
+    """
+    for number, serial, url in reporter.drain_links():
+        where = f"row {number}" + (f", phone {serial}" if serial else "")
+        live.console.print(f"[{DIM}]{where} - watch live:[/]")
+        live.console.print(url, soft_wrap=True)
+        live.console.print()
+
+
 def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
     """`run`, drawn as a table instead of a scrolling log."""
     client = build_client(settings)
@@ -334,8 +371,10 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
         with Live(reporter.render(), console=console, refresh_per_second=4,
                   transient=False) as live:
             while worker.is_alive():
+                print_new_links(live, reporter)
                 live.update(reporter.render())
                 time.sleep(0.25)
+            print_new_links(live, reporter)
             live.update(reporter.render())
     finally:
         root.removeHandler(handler)
