@@ -194,7 +194,12 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
 
     def finish(ok: bool, reason: str, detail: str = "", serial: str = "") -> Result:
         result.ok, result.reason, result.detail = ok, reason, detail
-        result.phone_id, result.serial = phone_id, serial
+        result.phone_id = phone_id
+        # Never blank a serial already known. The failure paths call finish()
+        # without one, which used to erase the serial recorded when the phone
+        # was created - so every failed row reported a phone with no serial,
+        # and the console fell back to eight characters of the phone id.
+        result.serial = serial or result.serial
         result.seconds = time.monotonic() - started
         return result
 

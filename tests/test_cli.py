@@ -99,3 +99,28 @@ def test_a_stale_claim_does_not_lock_a_phone_forever(tmp_path, make_settings):
 def test_an_unknown_phone_is_not_refused(tmp_path, make_settings):
     """Nothing recorded means nothing is holding it."""
     cli.refuse_if_busy(make_settings(state_dir=tmp_path), "NEVER-SEEN")
+
+
+# ------------------------------------------------------- the live console
+def test_the_live_view_link_is_kept_rather_than_shown_as_a_step():
+    """The link arrived as just another log line, so the next one replaced it
+    within a second - the one message worth clicking was the one that could
+    not be clicked. It belongs in its own column, and the phone's serial is
+    read from the creation line so a fresh link is obtainable once it expires.
+    """
+    from geelark_farm.ui import LiveReporter
+
+    class FakeRow:
+        number, email = 1, "x@example.com"
+
+    reporter = LiveReporter(total=1)
+    reporter.start(1, FakeRow())
+    reporter.note(1, "created 631291280617374014 (serial 477): vivo / Android 15")
+    reporter.note(1, "watch it live: https://phone.geelark.com/index.html?t=abc")
+    reporter.note(1, "screen: password_entry (visit 1)")
+
+    entry = reporter.rows[1]
+    assert entry["link"] == "https://phone.geelark.com/index.html?t=abc"
+    assert entry["phone"] == "477"
+    # The step moved on; the link did not.
+    assert entry["step"] == "screen: password_entry (visit 1)"

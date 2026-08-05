@@ -19,6 +19,7 @@ Two things the menu is for beyond convenience:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -56,6 +57,9 @@ class Snapshot:
     rows_done: int = 0
     rows_pending: int = 0
     rows_failed: int = 0
+    # What --retry-failed would actually pick up: the pending rows as well as
+    # the failed and stuck ones. Counting only the failures understated it.
+    rows_retryable: int = 0
     rows_bad: int = 0
     phones_total: int = 0
     phones_running: int = 0
@@ -128,6 +132,7 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.rows_failed = sum(1 for r in rows if r.is_failed)
             snap.rows_bad = sum(1 for r in rows if r.error)
             snap.rows_pending = len(selectable(rows))
+            snap.rows_retryable = len(selectable(rows, retry_failed=True))
         except SheetError as exc:
             snap.error = snap.error or str(exc).splitlines()[0]
     return snap
@@ -169,6 +174,30 @@ def dashboard(snap: Snapshot) -> Panel:
 
 
 # ------------------------------------------------------------ live batch
+# How phones.start announces the live view. Matching on the message is the
+# price of taking progress from the logs the flows already emit, which is also
+# what keeps the flows unaware that a console exists.
+LIVE_PREFIX = "watch it live:"
+# phones.create announces "created <id> (serial <n>): <model> ...". Reading the
+# serial from it fills the phone column while the row is still working, which
+# is what mints a fresh link with `geelark start` once this one has expired.
+CREATED_SERIAL = re.compile(r"created \S+ \(serial (\w+)\)")
+
+
+def _watch_cell(url: str) -> Text:
+    """A clickable word rather than the URL itself.
+
+    The URL is some four hundred characters of signed token; printed in full it
+    would be the only thing on the line. Terminals that support OSC 8 - Windows
+    Terminal among them - make the word itself clickable, and the ones that do
+    not still show that a live view exists, which the phone id then opens via
+    `geelark start`.
+    """
+    if not url:
+        return Text("")
+    return Text("open", style=f"link {url}")
+
+
 @dataclass
 class LiveReporter:
     """Draws a batch as one line per row, updated as it happens.
@@ -188,6 +217,7 @@ class LiveReporter:
             self.rows[row.number] = {
                 "email": row.email, "state": "working", "step": "starting",
                 "started": time.monotonic(), "seconds": 0.0, "phone": "",
+                "link": "",
             }
 
     def finish(self, result: Result) -> None:
@@ -195,12 +225,26 @@ class LiveReporter:
             entry = self.rows.setdefault(result.row, {"email": result.email})
             entry.update(state="ready" if result.ok else "failed",
                          step=result.reason, seconds=result.seconds,
-                         phone=result.serial or result.phone_id[:8])
+                         phone=result.serial or result.phone_id[:8],
+                         # The phone is stopped now, so its live view is gone.
+                         # A link that opens a dead page is worse than none.
+                         link="")
 
     def note(self, row: int, message: str) -> None:
         with self.lock:
             entry = self.rows.get(row)
-            if entry and entry["state"] == "working":
+            if not entry:
+                return
+            if message.startswith(LIVE_PREFIX):
+                # Held in its own field rather than shown as a step. As a step
+                # the next log line replaced it within a second, which made the
+                # one message worth clicking the one you could not click.
+                entry["link"] = message[len(LIVE_PREFIX):].strip()
+                return
+            found = CREATED_SERIAL.search(message)
+            if found:
+                entry["phone"] = found.group(1)
+            if entry["state"] == "working":
                 entry["step"] = message
 
     def render(self) -> Table:
@@ -221,6 +265,7 @@ class LiveReporter:
         table.add_column("phone", style=DIM)
         table.add_column("state")
         table.add_column("time", justify="right", style=DIM)
+        table.add_column("watch")
 
         with self.lock:
             for number in sorted(self.rows):
@@ -235,7 +280,8 @@ class LiveReporter:
                     state = e.get("step", "failed")
                 table.add_row(str(number), e.get("email", ""),
                               e.get("phone", ""),
-                              f"[{style}]{state}[/]", f"{seconds:.0f}s")
+                              f"[{style}]{state}[/]", f"{seconds:.0f}s",
+                              _watch_cell(e.get("link", "")))
         return table
 
 
@@ -441,10 +487,16 @@ def menu() -> Table:
 def confirm_run(settings: Settings, snap: Snapshot, *,
                 retry_failed: bool) -> dict | None:
     """Ask what to run, and make the cost visible before anything starts."""
-    count = snap.rows_failed if retry_failed else snap.rows_pending
-    if not count:
+    available = snap.rows_retryable if retry_failed else snap.rows_pending
+    if not available:
         console.print(f"[{DIM}]nothing to do[/]")
         return None
+
+    # Two separate questions, because they mean different things and only one
+    # of them changes the bill. How many rows decides how many phones are
+    # created; how many at a time decides only how long the wall clock is.
+    count = IntPrompt.ask(f"how many rows (of {available})", default=available)
+    count = max(1, min(count, available))
 
     workers = IntPrompt.ask("how many at a time",
                             default=min(settings.max_concurrent_phones, count))
@@ -452,12 +504,15 @@ def confirm_run(settings: Settings, snap: Snapshot, *,
     if snap.parallels and workers > snap.parallels:
         console.print(f"[{WARN}]the plan's parallel limit is {snap.parallels}; "
                       f"more may cost extra[/]")
+    if count > snap.slots_free:
+        console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free; "
+                      f"rows past that will fail with no_phone[/]")
 
     console.print(f"\n[{WARN}]{count} row(s), {workers} at a time. "
                   f"Phones bill per running minute.[/]")
     if not Confirm.ask("start", default=True):
         return None
-    return {"workers": workers, "retry_failed": retry_failed}
+    return {"workers": workers, "retry_failed": retry_failed, "limit": count}
 
 
 def run_console(settings: Settings) -> int:

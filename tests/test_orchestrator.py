@@ -367,3 +367,15 @@ def test_a_phone_that_could_not_be_stopped_is_never_deleted(tmp_path,
     assert result.still_running
     assert not result.discarded
     assert not any(e[0] == "delete" for e in events)
+
+
+def test_a_failed_row_keeps_the_serial_of_the_phone_it_created(tmp_path,
+                                                               make_settings):
+    """finish() assigned result.serial unconditionally, and every failure path
+    calls it without one - so the serial recorded at creation was erased on the
+    way out. The console then fell back to eight characters of the phone id,
+    which is what a real run showed for row 1 on 2026-08-05."""
+    result, _ = _row_ending_in("stuck_on_email_entry", tmp_path, make_settings)
+
+    assert not result.ok
+    assert result.serial == "500"
