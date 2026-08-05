@@ -336,12 +336,39 @@ SCREENS: list[Screen] = [
                       and not authenticator_offered(c)),
            act_choose_authenticator, max_visits=1),
 
+    # Google's g.co/sc challenge: "To get your security code, go to g.co/sc in
+    # a new browser window". Unattended, that is a dead end - there is no other
+    # browser to go to - but the page also offers "Try another way", and on an
+    # account with an authenticator that leads to the method list and straight
+    # back into the normal path. Confirmed by hand on 2026-08-06: one tap, then
+    # the flow finished the sign-in unaided.
+    #
+    # Ranked below the authenticator entry for the usual reason: if a screen
+    # ever offers both, taking the authenticator is always right.
+    Screen("2fa_security_code_prompt",
+           lambda c: (c.has("get a code to sign in", "g.co/sc",
+                            "get your security code")
+                      and not authenticator_offered(c)),
+           act_try_another_way, max_visits=2),
+
     Screen("password_entry",
            lambda c: screen.find_input(c.elements, password=True) is not None,
            act_password),
 
+    # Matched on text unique to the email page, never on "sign in". That
+    # phrase appears on half of Google's verification screens - including
+    # "Get a code to sign in", whose security-code box is also a non-password
+    # input, so this entry claimed it and typed the address into it (2026-08-05,
+    # row 1). Google answered "This code is invalid", the loop repeated until
+    # the visit budget ran out, and the row failed as "stuck_on_email_entry"
+    # while never having been on the email screen at all.
+    #
+    # A screen this no longer matches is archived as unknown_screen, which is a
+    # task. Typing an address into whatever box is on offer is a wrong answer
+    # wearing the wrong name.
     Screen("email_entry",
-           lambda c: (c.has("sign in", "email or phone", "enter your email")
+           lambda c: (c.has("email or phone", "enter your email",
+                            "forgot email", "use your google account")
                       and screen.find_input(c.elements, password=False) is not None),
            act_email),
 

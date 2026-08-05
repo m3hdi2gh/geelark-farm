@@ -124,3 +124,43 @@ def test_the_code_field_is_found_although_it_has_no_label():
     assert field is not None
     assert field.label == ""          # nothing to match on but the class
     assert field.focused
+
+
+# ------------------------------------------- the g.co/sc security-code page
+def test_the_security_code_page_is_not_mistaken_for_the_email_screen():
+    """The costliest kind of bug: a wrong answer wearing the wrong name.
+
+    email_entry matched on "sign in", which is also in "Get a code to sign in".
+    That page's security-code box is a non-password input, so the entry claimed
+    it and typed the address into it. Google answered "This code is invalid",
+    the loop repeated until the visit budget ran out, and the row was reported
+    as stuck_on_email_entry - having never reached the email screen at all
+    (2026-08-05, row 1).
+
+    The fixture is that capture: the field still holds the address that was
+    typed into it.
+    """
+    ctx = context_from("google-security-code-g-co-sc.xml")
+
+    assert ctx.has("get a code to sign in")
+    assert matched_screen(ctx).name == "2fa_security_code_prompt"
+
+
+def test_the_security_code_page_asks_for_another_way():
+    """Unattended there is no second browser to visit g.co/sc in, but the page
+    offers "Try another way", and on an account with an authenticator that
+    leads to the method list and back into the normal path. Confirmed by hand
+    on 2026-08-06: one tap, then the sign-in completed unaided."""
+    ctx = context_from("google-security-code-g-co-sc.xml")
+
+    assert ctx.has("try another way")
+    assert not login.authenticator_offered(ctx)
+    assert matched_screen(ctx).act is login.act_try_another_way
+
+
+def test_the_real_email_screen_still_matches():
+    """The counterweight to tightening it. Google's email page is identified by
+    text unique to it, so removing "sign in" must not cost us the page itself.
+    """
+    ctx = context_from("google-email-entry.xml")
+    assert matched_screen(ctx).name == "email_entry"
