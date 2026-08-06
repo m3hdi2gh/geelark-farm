@@ -303,3 +303,56 @@ def test_the_web_view_exposes_a_real_text_field():
     assert field is not None
     assert "EditText" in field.cls
     assert field.clickable
+
+
+def test_the_google_consent_sheet_is_closed_not_accepted():
+    """The app raises Google's account chooser by itself after the email path
+    is chosen, offering the account that owns the device. Accepting it would
+    sign in the wrong account and raise nothing: the app would work, the
+    composer would appear, and the row would be recorded as ready.
+
+    It covers the login page completely - while it is up, the page's text field
+    is not in the hierarchy at all - so it has to be recognised on its own.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-google-account-sheet.xml")
+
+    assert screen.find_input(ctx.elements) is None, "the page underneath is gone"
+    assert app_screen(ctx).name == "google_account_sheet"
+    assert app_screen(ctx).act is chatgpt_login.act_close_google_sheet
+    # And the way out is on the sheet itself.
+    assert screen.find_first(ctx.elements,
+                             chatgpt_login.CLOSE_SHEET_LABELS) is not None
+
+
+def test_no_login_label_can_ever_match_a_google_button():
+    """"Sign in" was in the login labels and matching is partial, so it found
+    "Sign in with Google" on the consent sheet and tapped it (2026-08-07). The
+    phrase is gone, and a second lock refuses any match containing "google" -
+    the app would not complain about the wrong account, which is what makes
+    this the worst failure available here."""
+    from geelark_farm.flows import chatgpt_login
+
+    for label in chatgpt_login.LOGIN_LABELS:
+        assert "sign in" != label.casefold()
+
+    ctx = app_context("chatgpt-google-account-sheet.xml")
+    for label in chatgpt_login.LOGIN_LABELS:
+        found = ctx.find(label)
+        if found is not None:
+            assert chatgpt_login.GOOGLE_BUTTON not in found.label.casefold(), (
+                f"{label!r} still reaches {found.label!r}")
+
+
+def test_this_app_version_offers_log_in_another_way():
+    """The welcome screen has no "Log in or sign up" any more - the July
+    capture's wording. It is a different phrase now, which is why these are
+    phrases rather than variants of one word."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-welcome-another-way.xml")
+
+    assert app_screen(ctx).name == "welcome"
+    found = screen.find_first(ctx.elements, chatgpt_login.LOGIN_LABELS)
+    assert found is not None and found.label == "Log in another way"

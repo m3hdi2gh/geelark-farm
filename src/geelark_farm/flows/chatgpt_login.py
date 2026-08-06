@@ -87,10 +87,30 @@ FATAL_ADVICE = {
         "is buildable - it is not built",
 }
 
-# The welcome screen's two ways in. Only the second is used: "Continue with
-# Google" would sign in whichever account owns the device, which is not the
-# account the sheet names.
-LOGIN_LABELS = ("Log in", "Log in or sign up", "LOG IN", "Sign in")
+# The way in that is not Google. Matching is case-insensitive and partial, so
+# these are phrases rather than variants of one word - and "Sign in" is
+# deliberately not among them: it matched "Sign in with Google" on the consent
+# sheet, which is the one button in this whole flow that must never be pressed
+# (2026-08-07). GOOGLE_BUTTON below is the second lock on that door.
+LOGIN_LABELS = (
+    "Log in another way",
+    "Log in or sign up",
+    "Log in with email",
+    "Log in",
+)
+
+# Never tapped, however a label happens to match. Signing in the account that
+# owns the device instead of the one the sheet names would not raise anything -
+# the app would work, the composer would appear, and the row would be recorded
+# as ready with the wrong account on it. That is the worst failure available
+# here, so it is guarded twice.
+GOOGLE_BUTTON = "google"
+
+# Google's account-chooser sheet, which the app raises by itself after the
+# email path is chosen. It covers the login page - while it is up, the page's
+# text field is not in the hierarchy at all.
+GOOGLE_SHEET_TEXTS = ("sign in with google", "use your account for")
+CLOSE_SHEET_LABELS = ("Close sheet", "Close", "Dismiss")
 
 # Post-login onboarding, cleared the same way Google's consent pages are.
 DISMISS_LABELS = (
@@ -154,13 +174,54 @@ def act_choose_login(ctx: Context) -> Outcome | None:
     than failing, because it looks like success.
     """
     for label in LOGIN_LABELS:
-        if ctx.tap(label):
-            log.info("taking the email login path")
+        found = ctx.find(label)
+        if found is None:
+            continue
+        if GOOGLE_BUTTON in found.label.casefold():
+            # The label matched something Google's. Matching here is partial,
+            # so this is not hypothetical: "Sign in" found "Sign in with
+            # Google" on the consent sheet and tapped it.
+            log.warning("%r matched %r; refusing to take the Google path",
+                        label, found.label)
+            continue
+        if screen.tap_element(ctx.client, ctx.phone_id, found):
+            log.info("taking the email login path via %r", found.label)
             time.sleep(6)
             return None
     path = ctx.save("no-login-button")
     return Outcome("unknown", "no_login_button",
                    "the welcome screen offered no email login",
+                   artifacts=[path] if path else [])
+
+
+def act_close_google_sheet(ctx: Context) -> Outcome | None:
+    """Dismiss Google's account chooser without choosing anything.
+
+    The app raises it by itself after the email path is chosen, offering the
+    account that owns the device - which is not the account the sheet names.
+    Tapping outside it is what closes it, and the sheet helpfully provides the
+    target: a clickable View labelled "Close sheet" covering the whole area
+    above it (captured 2026-08-07).
+    """
+    tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
+                                      CLOSE_SHEET_LABELS)
+    if tapped:
+        log.info("closed Google's account chooser (%r)", tapped)
+        time.sleep(4)
+        return None
+    # No labelled way out, so tap the strip above the sheet directly: whatever
+    # the topmost element of the sheet is, the page is above it.
+    top = min((e.centre[1] for e in ctx.elements
+               if e.centre and e.label and GOOGLE_BUTTON not in e.label.casefold()),
+              default=0)
+    if top > 200:
+        shell.tap(ctx.client, ctx.phone_id, 360, top // 2)
+        log.info("tapped above Google's sheet to dismiss it")
+        time.sleep(4)
+        return None
+    path = ctx.save("google-sheet-stuck")
+    return Outcome("unknown", "google_sheet_stuck",
+                   "Google's account chooser would not close",
                    artifacts=[path] if path else [])
 
 
@@ -238,6 +299,13 @@ SCREENS: list[Screen] = [
     Screen("password_entry",
            lambda c: screen.find_input(c.elements, password=True) is not None,
            act_password),
+
+    # Above the login screens, because it covers them: while this sheet is up
+    # the login page's text field is not in the hierarchy at all, so nothing
+    # below would match the page underneath anyway.
+    Screen("google_account_sheet",
+           lambda c: c.has(*GOOGLE_SHEET_TEXTS),
+           act_close_google_sheet, max_visits=3),
 
     # The field carries no label of its own - "Email" is a sibling TextView
     # above it - so this matches the box and the word, not a sentence. The
