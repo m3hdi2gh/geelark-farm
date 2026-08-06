@@ -356,3 +356,52 @@ def test_this_app_version_offers_log_in_another_way():
     assert app_screen(ctx).name == "welcome"
     found = screen.find_first(ctx.elements, chatgpt_login.LOGIN_LABELS)
     assert found is not None and found.label == "Log in another way"
+
+
+def test_the_chat_screen_counts_as_signed_in():
+    """The first sign-in that actually worked was reported as an unknown
+    screen. The flow had reached the chat page - the login was complete, the
+    account was in - but the composer's placeholder had been reworded to "Ask
+    ChatGPT" since the list was written, so nothing recognised it.
+
+    The fixture is that screen.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-signed-in.xml")
+    assert chatgpt_login.verified_on_device(ctx)
+
+
+def test_the_login_page_is_never_read_as_signed_in():
+    """The counterweight, and the reason a text box alone cannot be the test:
+    the login page has one too. Calling that success would hand over a phone
+    that never signed in, recorded as ready."""
+    from geelark_farm.flows import chatgpt_login
+
+    for fixture in ("chatgpt-login-page.xml", "chatgpt-welcome.xml",
+                    "chatgpt-welcome-another-way.xml",
+                    "chatgpt-google-account-sheet.xml"):
+        ctx = app_context(fixture)
+        assert not chatgpt_login.verified_on_device(ctx), fixture
+
+
+def test_a_reworded_placeholder_does_not_break_the_check_again():
+    """Wording moves; the controls beside the composer have not. Either half
+    satisfies the second condition, so the next rename costs a fixture rather
+    than a failed run."""
+    from geelark_farm import screen as screen_mod
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-signed-in.xml")
+    # Strip every known placeholder and the check must still hold.
+    survivors = []
+    for e in ctx.elements:
+        label = e.label.casefold()
+        if any(p.casefold() == label for p in chatgpt_login.COMPOSER_PLACEHOLDERS):
+            continue
+        survivors.append(e)
+    ctx.elements = survivors
+
+    assert screen_mod.find_first(
+        ctx.elements, chatgpt_login.COMPOSER_PLACEHOLDERS) is None
+    assert chatgpt_login.verified_on_device(ctx)

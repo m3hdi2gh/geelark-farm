@@ -118,10 +118,18 @@ DISMISS_LABELS = (
     "Allow", "Next", "Done", "Start chatting",
 )
 
-# Present only once signed in. Deliberately specific: it is the composer, not
-# merely the absence of a login button.
-COMPOSER_LABELS = (
-    "Message", "Ask anything", "Message ChatGPT", "New chat",
+# The composer's placeholder. It has been worded at least three ways across
+# versions, and the first live sign-in reached the chat screen and reported
+# app_unknown_screen because this list had two of them and not the third
+# (2026-08-07: "Ask ChatGPT").
+COMPOSER_PLACEHOLDERS = (
+    "Ask ChatGPT", "Message ChatGPT", "Ask anything", "New chat", "Message",
+)
+
+# The controls beside the composer. A placeholder is wording and wording
+# changes; these are the affordances of the chat screen and outlast it.
+COMPOSER_CONTROLS = (
+    "Dictation", "Attachment", "Start a voice conversation",
 )
 
 
@@ -143,11 +151,21 @@ def verified_on_device(ctx: Context) -> bool:
     """The best available evidence that the session exists.
 
     See the module docstring: this is screen evidence, not device truth, and it
-    is the one step in the pipeline that has none. Keep it narrow - a composer
-    element that cannot appear before sign-in - so that at least it cannot be
-    satisfied by an empty or half-drawn page.
+    is the one step in the pipeline that has none. So it is made as hard to
+    satisfy accidentally as screen evidence can be - a text box AND something
+    that only sits beside the chat composer.
+
+    The box alone would not do: the login page has one too. The wording alone
+    would not do either, and that is not hypothetical - the first successful
+    sign-in was reported as an unknown screen because the placeholder had been
+    reworded since this list was written. Hence two ways to satisfy the second
+    half: the placeholder, whose wording moves, and the controls around it,
+    which have not.
     """
-    return screen.find_first(ctx.elements, COMPOSER_LABELS) is not None
+    if screen.find_input(ctx.elements) is None:
+        return False
+    return (screen.find_first(ctx.elements, COMPOSER_PLACEHOLDERS) is not None
+            or screen.find_first(ctx.elements, COMPOSER_CONTROLS) is not None)
 
 
 # ------------------------------------------------------------------ screens
