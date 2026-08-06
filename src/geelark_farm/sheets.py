@@ -16,10 +16,13 @@ are required; the rest are written back and created as needed.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from requests.exceptions import RequestException
 
 from .accounts import Account, AccountError, normalize_totp_secret
 from .config import Settings
@@ -218,8 +221,39 @@ class Sheet:
             })
             row.values[name] = value
         if payload:
-            with self._lock:
-                self._ws.batch_update(payload)
+            self._write(payload, row)
+
+    # How many times a write is attempted before the outcome is given up on.
+    WRITE_ATTEMPTS = 4
+
+    def _write(self, payload: list[dict], row: Row) -> None:
+        """Send a batch update, retrying transient network failures.
+
+        This is where a row's outcome becomes durable, so it is the last place
+        that should fail on a blip. On 2026-08-06 a ConnectionResetError landed
+        here while recording row 13's login failure; the exception unwound into
+        process_row's catch-all, which recorded "error" instead - so the run
+        reported a network fault where a diagnosis should have been, and the
+        reason the login actually failed was lost.
+
+        Only the network is retried. An APIError means Google understood and
+        refused - a bad range, a revoked key - and repeating it changes nothing.
+        """
+        for attempt in range(1, self.WRITE_ATTEMPTS + 1):
+            try:
+                with self._lock:
+                    self._ws.batch_update(payload)
+                return
+            except (OSError, RequestException) as exc:
+                if attempt == self.WRITE_ATTEMPTS:
+                    raise SheetError(
+                        f"row {row.number}: the sheet could not be written "
+                        f"after {attempt} attempts ({exc})"
+                    ) from exc
+                delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
+                log.warning("row %d: sheet write failed (%s); retrying in "
+                            "%.1fs", row.number, exc, delay)
+                time.sleep(delay)
 
     def claim(self, row: Row, phone_id: str = "") -> None:
         self.update(row, status=RUNNING, phone_id=phone_id, note="")

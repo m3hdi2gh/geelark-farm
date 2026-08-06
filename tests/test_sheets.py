@@ -7,6 +7,10 @@ once. Neither raises - both just quietly cost money.
 
 from __future__ import annotations
 
+import threading
+
+import pytest
+
 from geelark_farm.accounts import Account
 from geelark_farm.sheets import Row, Sheet, _a1_column, selectable
 
@@ -113,3 +117,53 @@ def test_a_retry_never_erases_a_serial_it_could_not_determine():
 
     FakeSheet().succeed(row, phone_id="P1", serial="454", note="n")
     assert written[1]["serial"] == "454"
+
+
+def test_a_network_blip_does_not_cost_a_row_its_outcome(monkeypatch):
+    """This is where a row's outcome becomes durable, so it is the last place
+    that should fail on a blip. On 2026-08-06 a ConnectionResetError landed
+    here while recording row 13's login failure; it unwound into process_row's
+    catch-all, which wrote "error" instead. The run reported a network fault
+    where a diagnosis should have been, and the real reason was lost.
+    """
+    import geelark_farm.sheets as sheets_mod
+
+    attempts: list[list[dict]] = []
+
+    class FlakyWorksheet:
+        def batch_update(self, payload):
+            attempts.append(payload)
+            if len(attempts) < 3:
+                raise ConnectionResetError(10054, "forcibly closed")
+
+    sheet = Sheet.__new__(Sheet)
+    sheet._ws = FlakyWorksheet()
+    sheet._lock = threading.Lock()
+    sheet._index = {"status": 4, "note": 7, "updated_at": 8}
+
+    row = make_row(13)
+    monkeypatch.setattr(sheets_mod.time, "sleep", lambda _s: None)
+    sheet.update(row, status="failed:captcha_shown", note="why")
+
+    assert len(attempts) == 3, "it retried until the write landed"
+    assert row.values["status"] == "failed:captcha_shown"
+
+
+def test_a_write_that_never_lands_says_so_as_a_sheet_error(monkeypatch):
+    """Retrying forever would hold a phone; the run has to be told instead, in
+    a form its error handling already knows."""
+    import geelark_farm.sheets as sheets_mod
+
+    class DeadWorksheet:
+        def batch_update(self, payload):
+            raise ConnectionResetError(10054, "forcibly closed")
+
+    sheet = Sheet.__new__(Sheet)
+    sheet._ws = DeadWorksheet()
+    sheet._lock = threading.Lock()
+    sheet._index = {"status": 4}
+    sheet.WRITE_ATTEMPTS = 2          # keep the test quick
+    monkeypatch.setattr(sheets_mod.time, "sleep", lambda _s: None)
+
+    with pytest.raises(sheets_mod.SheetError, match="could not be written"):
+        sheet.update(make_row(13), status="failed:x")

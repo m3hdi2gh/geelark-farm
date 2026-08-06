@@ -121,6 +121,32 @@ Do not conclude anything about the account from a CAPTCHA raised at the email
 step: Google had not yet seen the password, so it is a judgement on the network
 and the device, not on the credentials.
 
+### `password_changed`
+Google accepted the address and rejected the password as the old one - the
+archived screen says when it was changed. Nothing on the device fixes this: put
+the current password in the sheet.
+
+The phone is deleted rather than kept, so the slot goes back. That is a choice,
+not a necessity - the phone would work with a corrected sheet. If these
+passwords do turn up in practice, take `password_changed` out of `UNREUSABLE`
+in `orchestrator.py` and the phone will be waiting for the retry.
+
+### `stuck_on_<screen>`
+The flow saw the same screen more times than its allowance and gave up. Read it
+as "the screen did not change when I acted on it", never as a description of
+what is wrong - twice now it has named the wrong screen entirely:
+
+- **row 1, 2026-08-05** reported `stuck_on_email_entry` while sitting on
+  Google's g.co/sc security-code page, because `email_entry` matched on the
+  word "sign in" and typed the address into the code box.
+- **row 13, 2026-08-06** reported the same thing while the email page was
+  merely still loading; the flow read the page behind the spinner and retyped
+  into it four times.
+
+Both are fixed, and the lesson holds for the next one: open the last archived
+XML before believing the name. `artifacts/<run>/` keeps every screen the flow
+visited, in order.
+
 ### "still installing..." repeats until the budget runs out
 The Install tap did not land on the Install button. Look at the run's
 `*-play-package-page.xml`: if there is no Install element on it, something was

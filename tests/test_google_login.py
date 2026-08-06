@@ -164,3 +164,53 @@ def test_the_real_email_screen_still_matches():
     """
     ctx = context_from("google-email-entry.xml")
     assert matched_screen(ctx).name == "email_entry"
+
+
+# --------------------------------------------------- a password Google moved
+def test_a_changed_password_is_named_rather_than_retyped():
+    """Google accepts the address and says the password on file is the old one.
+    Nothing on the device fixes that, but the router had no entry for it, so
+    password_entry matched and retyped the same password until the visit budget
+    ran out - five minutes per row to report stuck_on_password_entry, which
+    names the symptom and not the cause (2026-08-06, rows 11 and 12).
+    """
+    ctx = context_from("google-password-changed.xml")
+
+    assert login._fatal_reason(ctx) == "password_changed"
+    assert matched_screen(ctx).name == "fatal"
+
+
+def test_a_changed_password_costs_the_phone_its_slot():
+    """A decision, not a necessity: the phone would work with a corrected
+    sheet, but an account whose password moved without us is rarely one we get
+    back, and the slot is worth more than the wait."""
+    from geelark_farm.orchestrator import UNREUSABLE
+
+    assert "password_changed" in UNREUSABLE
+
+
+# ------------------------------------------------------ racing the spinner
+def test_a_page_that_is_still_loading_is_waited_for_not_acted_on():
+    """The costliest way to be wrong: acting on the screen underneath the one
+    arriving. Row 13 tapped NEXT, Google began loading, and the flow read the
+    email page still showing behind the spinner - so it retyped the address and
+    tapped NEXT again, four times, and reported stuck_on_email_entry having
+    never left the first screen. Watching it live, it was simply slow.
+
+    The fixture is that capture: a real email page with the progress bar still
+    on it, and the address already in the field.
+    """
+    ctx = context_from("google-email-entry-loading.xml")
+
+    assert login.still_loading(ctx)
+    assert matched_screen(ctx).name == "loading"
+    assert matched_screen(ctx).act is login.act_wait
+
+
+def test_the_same_page_without_the_spinner_is_acted_on_normally():
+    """The counterweight. Waiting is only right while the bar is there - a
+    login that waits for a page already in front of it never finishes."""
+    ctx = context_from("google-email-entry.xml")
+
+    assert not login.still_loading(ctx)
+    assert matched_screen(ctx).name == "email_entry"

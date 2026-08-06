@@ -124,10 +124,17 @@ class Result:
 # same challenge. Getting past it needs a different proxy, and a different
 # proxy needs a different phone.
 #
-# Deliberately narrow. Everything else keeps its phone: wrong_password is
-# fixed in the sheet and retried on the same device, and unknown_screen is a
-# gap in the router that may be worth looking at.
-UNREUSABLE = frozenset({"captcha_shown"})
+# password_changed is here by decision rather than necessity. Google has
+# accepted the address and rejected the password as the old one; the phone
+# itself is fine and a corrected sheet could reuse it. But an account whose
+# password moved without us is rarely one we get back, and the slot is worth
+# more than the wait - so it goes. If those passwords do turn up, take this
+# out: the cost of keeping it here is one wasted phone per recovered account.
+#
+# Everything else keeps its phone. wrong_password is corrected in the sheet and
+# retried on the same device, and unknown_screen is a gap in the router that is
+# worth looking at before anything is thrown away.
+UNREUSABLE = frozenset({"captcha_shown", "password_changed"})
 
 
 def _discard(client: Client, sheet: Sheet, row: Row, phone_id: str,

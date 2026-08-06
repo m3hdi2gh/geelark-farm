@@ -62,6 +62,12 @@ FATAL_TEXTS = {
         "i'm not a robot",
     ),
     "wrong_password": ("wrong password", "incorrect password"),
+    # Google accepts the address, then says the password on file is the old
+    # one. Nothing on the device can fix that, and without this the flow simply
+    # retyped the same password until the visit budget ran out and reported
+    # stuck_on_password_entry - five minutes to not say "the password is stale"
+    # (2026-08-06, rows 11 and 12).
+    "password_changed": ("your password was changed",),
     # Google's risk check, not a broken account: it decided this device and
     # network are too unfamiliar to trust, and says so explicitly. Distinct
     # from a disabled account because the fix is different - the account needs
@@ -89,6 +95,9 @@ FATAL_TEXTS = {
 FATAL_ADVICE = {
     "captcha_shown":
         "Google is challenging this exit IP; a cleaner proxy is the fix",
+    "password_changed":
+        "the password in the sheet is the old one - Google says when it was "
+        "changed on the archived screen",
     "verification_blocked":
         "Google refused a brand-new device on an unfamiliar network. The "
         "account needs prior history somewhere Google trusts - warming it up "
@@ -210,6 +219,31 @@ def act_fatal(ctx: Context) -> Outcome:
     return Outcome("fatal", reason, detail, artifacts=[path] if path else [])
 
 
+def still_loading(ctx: Context) -> bool:
+    """Whether Google is mid-navigation.
+
+    A ProgressBar node is what an unfinished page looks like: an 8px
+    indeterminate bar across the top, present only while loading - the same
+    screen a moment later has none.
+    """
+    return any("ProgressBar" in e.cls for e in ctx.elements)
+
+
+def act_wait(ctx: Context) -> Outcome | None:
+    """Do nothing, on purpose.
+
+    The page the spinner belongs to has not arrived yet, and acting on the one
+    underneath it is acting on the wrong screen. Row 13 tapped NEXT, Google
+    began loading, and the flow read the email page still showing behind the
+    spinner - so it retyped the address and tapped NEXT again, four times, and
+    reported stuck_on_email_entry having never left the first screen
+    (2026-08-06). Watching it live, it was simply slow.
+    """
+    log.info("the page is still loading; waiting")
+    time.sleep(4)
+    return None
+
+
 def act_account_picker(ctx: Context) -> Outcome | None:
     """The "Add an account" type list - choose Google."""
     if ctx.tap("Google"):
@@ -308,6 +342,14 @@ def act_dismiss(ctx: Context) -> Outcome | None:
 # catch-all dismissal comes last.
 SCREENS: list[Screen] = [
     Screen("fatal", lambda c: _fatal_reason(c) is not None, act_fatal, max_visits=1),
+
+    # Ranked above every screen that acts, and below fatal only because a page
+    # that says the sign-in cannot proceed says so whether or not it is still
+    # painting. Waiting is the cheapest thing this loop can do and the login
+    # budget bounds it either way, so the visit allowance is generous: the cost
+    # of waiting a little too long is seconds, and the cost of acting too early
+    # is a whole login.
+    Screen("loading", still_loading, act_wait, max_visits=20),
 
     # Code entry outranks the method list: once a code box is on screen the
     # choice has already been made, and re-choosing would leave it.
