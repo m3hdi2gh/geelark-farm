@@ -102,11 +102,12 @@ def test_an_unknown_phone_is_not_refused(tmp_path, make_settings):
 
 
 # ------------------------------------------------------- the live console
-def test_the_live_view_link_is_kept_rather_than_shown_as_a_step():
+def test_the_live_view_link_is_taken_out_of_the_progress_messages():
     """The link arrived as just another log line, so the next one replaced it
-    within a second - the one message worth clicking was the one that could
-    not be clicked. It belongs in its own column, and the phone's serial is
-    read from the creation line so a fresh link is obtainable once it expires.
+    within a second - the one message worth clicking was the one that could not
+    be clicked. It is diverted for printing in full instead, and the phone's
+    serial is read from the creation line, since that is what mints a fresh
+    link once this one expires.
     """
     from geelark_farm.ui import LiveReporter
 
@@ -120,9 +121,9 @@ def test_the_live_view_link_is_kept_rather_than_shown_as_a_step():
     reporter.note(1, "screen: password_entry (visit 1)")
 
     entry = reporter.rows[1]
-    assert entry["link"] == "https://phone.geelark.com/index.html?t=abc"
     assert entry["phone"] == "477"
-    # The step moved on; the link did not.
+    # The step is the flow's, never the URL: a step is overwritten by the next
+    # one, and that is exactly what must not happen to a link.
     assert entry["step"] == "screen: password_entry (visit 1)"
 
 

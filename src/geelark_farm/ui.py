@@ -184,21 +184,6 @@ LIVE_PREFIX = "watch it live:"
 CREATED_SERIAL = re.compile(r"created \S+ \(serial (\w+)\)")
 
 
-def _watch_cell(url: str) -> Text:
-    """A clickable word rather than the URL itself.
-
-    The URL is some four hundred characters of signed token; printed in full it
-    would be the only thing on the line. Terminals that support OSC 8 make the
-    word itself clickable - but not every terminal does, and one that does not
-    shows this as plain text with no way to reach the link. So the word is a
-    convenience, never the only route: the full URL is also printed above the
-    table, once, where the terminal's own URL detection can reach it.
-    """
-    if not url:
-        return Text("")
-    return Text("open", style=f"link {url}")
-
-
 @dataclass
 class LiveReporter:
     """Draws a batch as one line per row, updated as it happens.
@@ -223,7 +208,6 @@ class LiveReporter:
             self.rows[row.number] = {
                 "email": row.email, "state": "working", "step": "starting",
                 "started": time.monotonic(), "seconds": 0.0, "phone": "",
-                "link": "",
             }
 
     def finish(self, result: Result) -> None:
@@ -231,10 +215,7 @@ class LiveReporter:
             entry = self.rows.setdefault(result.row, {"email": result.email})
             entry.update(state="ready" if result.ok else "failed",
                          step=result.reason, seconds=result.seconds,
-                         phone=result.serial or result.phone_id[:8],
-                         # The phone is stopped now, so its live view is gone.
-                         # A link that opens a dead page is worse than none.
-                         link="")
+                         phone=result.serial or result.phone_id[:8])
 
     def drain_links(self) -> list[tuple[int, str, str]]:
         """Take the links that have arrived since the last call."""
@@ -252,7 +233,6 @@ class LiveReporter:
                 # the next log line replaced it within a second, which made the
                 # one message worth clicking the one you could not click.
                 url = message[len(LIVE_PREFIX):].strip()
-                entry["link"] = url
                 if url and url not in self.seen_links:
                     self.seen_links.add(url)
                     self.new_links.append((row, entry.get("phone", ""), url))
@@ -281,7 +261,6 @@ class LiveReporter:
         table.add_column("phone", style=DIM)
         table.add_column("state")
         table.add_column("time", justify="right", style=DIM)
-        table.add_column("watch")
 
         with self.lock:
             for number in sorted(self.rows):
@@ -296,8 +275,7 @@ class LiveReporter:
                     state = e.get("step", "failed")
                 table.add_row(str(number), e.get("email", ""),
                               e.get("phone", ""),
-                              f"[{style}]{state}[/]", f"{seconds:.0f}s",
-                              _watch_cell(e.get("link", "")))
+                              f"[{style}]{state}[/]", f"{seconds:.0f}s")
         return table
 
 
@@ -321,12 +299,13 @@ class ReporterLogHandler(logging.Handler):
 def print_new_links(live: Live, reporter: LiveReporter) -> None:
     """Write each live-view link once, above the table.
 
-    The table cell can only offer an OSC 8 hyperlink, and a terminal without
-    OSC 8 renders that as the bare word "open" with no way to reach the link -
-    which is what happened in practice. Printing the URL in full is the route
-    that needs nothing from the terminal: it stays in the scrollback instead of
-    being redrawn away, terminals that linkify URLs of their own accord pick it
-    up, and it can always be selected and copied.
+    This started as a column holding an OSC 8 hyperlink on the word "open".
+    Terminals that do not implement OSC 8 - PyCharm's among them - showed the
+    word and nothing else, so the only route to the link depended on a terminal
+    capability. Printing the URL in full needs nothing from the terminal: it
+    stays in the scrollback instead of being redrawn away, terminals that
+    linkify URLs of their own accord pick it up, and it can always be selected
+    and copied. That works everywhere, so the column went.
 
     soft_wrap keeps it in one logical line. Rich's own wrapping would insert
     real line breaks mid-URL, and a URL broken by a newline is one no terminal
