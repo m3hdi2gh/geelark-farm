@@ -216,3 +216,27 @@ def test_the_app_totp_secret_is_normalised_like_the_google_one():
                              "chatgpt_totp": "jbsw y3dp ehpk 3pxp"})
     assert creds.totp_secret == "JBSWY3DPEHPK3PXP"
     assert len(creds.totp_now()) == 6
+
+
+def test_a_failed_row_records_the_serial_of_the_phone_it_left_behind():
+    """The serial is what names a phone in GeeLark's own list, so it is what
+    someone reads when they go and look at what went wrong - and a failure is
+    exactly when they do. Only succeed() wrote it, so every failed row pointed
+    at a phone id and an empty serial (2026-08-07, row 1)."""
+    written: list[dict] = []
+
+    class FakeSheet(Sheet):
+        def __init__(self):
+            pass
+        def update(self, row, **fields):
+            written.append(fields)
+
+    FakeSheet().fail(make_row(1), "app_stuck_on_welcome",
+                     phone_id="631709801071509864", serial="503")
+
+    assert written[0]["serial"] == "503"
+    assert written[0]["status"] == "failed:app_stuck_on_welcome"
+
+    # And the same rule as succeed(): an empty serial is a loss, not an update.
+    FakeSheet().fail(make_row(1), "x", phone_id="P1", serial="")
+    assert "serial" not in written[1]

@@ -239,16 +239,29 @@ SCREENS: list[Screen] = [
            lambda c: screen.find_input(c.elements, password=True) is not None,
            act_password),
 
+    # The field carries no label of its own - "Email" is a sibling TextView
+    # above it - so this matches the box and the word, not a sentence. The
+    # first attempt looked for "email address" / "your email"; the page says
+    # only "Email", so nothing matched and the welcome entry below claimed it.
     Screen("email_entry",
-           lambda c: (c.has("email address", "your email", "enter your email")
+           lambda c: (c.has("email")
                       and screen.find_input(c.elements, password=False)
                       is not None),
            act_email),
 
+    # No text field anywhere is what makes this the welcome screen rather than
+    # the login page. Without that guard this entry matched the login page too,
+    # because "Log in or sign up" is both the button here and the heading
+    # there - so the flow arrived where it wanted to be and then tapped that
+    # page's own title until it ran out of visits (2026-08-07, row 1). The tap
+    # coordinates in the log are the tell: y=1216 the first time, y=366 the
+    # second.
     Screen("welcome",
-           lambda c: (c.has("welcome to chatgpt", "log in or sign up",
-                            "continue without logging in")
-                      or screen.find_first(c.elements, LOGIN_LABELS) is not None),
+           lambda c: (screen.find_input(c.elements) is None
+                      and (c.has("welcome to chatgpt",
+                                 "continue without logging in")
+                           or screen.find_first(c.elements, LOGIN_LABELS)
+                           is not None)),
            act_choose_login, max_visits=2),
 
     Screen("onboarding",

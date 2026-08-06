@@ -253,3 +253,53 @@ def test_the_app_login_is_the_one_step_with_no_device_truth():
         '<hierarchy><node text="Message ChatGPT" class="android.widget.EditText"'
         ' bounds="[0,0][100,100]" /></hierarchy>')
     assert chatgpt_login.verified_on_device(ctx)
+
+
+def app_context(fixture: str):
+    from geelark_farm.flows import chatgpt_login
+    xml = (FIXTURES / fixture).read_text(encoding="utf-8")
+    ctx = chatgpt_login.Context(client=None, phone_id="P", creds=ACCOUNT)
+    ctx.elements = screen.parse(xml)
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+def app_screen(ctx):
+    from geelark_farm.flows import chatgpt_login
+    return next((s for s in chatgpt_login.SCREENS if s.match(ctx)), None)
+
+
+def test_the_login_page_is_not_mistaken_for_the_welcome_screen():
+    """"Log in or sign up" is the button on the welcome screen AND the heading
+    of the page it opens. Matching that phrase alone, the flow arrived exactly
+    where it wanted to be and then tapped the new page's own title until it ran
+    out of visits (2026-08-07, row 1). The tap coordinates are the tell: y=1216
+    the first time, y=366 the second.
+
+    What separates them is the text box: the login page has one, the welcome
+    screen has none.
+    """
+    ctx = app_context("chatgpt-login-page.xml")
+
+    assert screen.find_input(ctx.elements) is not None
+    assert app_screen(ctx).name == "email_entry"
+
+
+def test_the_welcome_screen_still_matches():
+    ctx = app_context("chatgpt-welcome.xml")
+
+    assert screen.find_input(ctx.elements) is None
+    assert app_screen(ctx).name == "welcome"
+
+
+def test_the_web_view_exposes_a_real_text_field():
+    """The open question this whole step was written around. OpenAI renders the
+    form in a web view, and had its fields not surfaced in the hierarchy the
+    approach would have needed replacing. They do: a genuine EditText, clickable
+    and focusable (captured 2026-08-07)."""
+    ctx = app_context("chatgpt-login-page.xml")
+
+    field = screen.find_input(ctx.elements, password=False)
+    assert field is not None
+    assert "EditText" in field.cls
+    assert field.clickable

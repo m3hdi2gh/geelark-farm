@@ -266,8 +266,15 @@ class Sheet:
                             "%.1fs", row.number, exc, delay)
                 time.sleep(delay)
 
-    def claim(self, row: Row, phone_id: str = "") -> None:
-        self.update(row, status=RUNNING, phone_id=phone_id, note="")
+    def claim(self, row: Row, phone_id: str = "", serial: str = "") -> None:
+        """Mark the row as in progress, naming the phone it now owns.
+
+        The serial is written here, at the earliest moment it is known, so a
+        run killed before it can record any outcome still leaves the sheet
+        pointing at something findable in GeeLark's list.
+        """
+        self.update(row, status=RUNNING, phone_id=phone_id, note="",
+                    **({"serial": str(serial)} if serial else {}))
 
     def succeed(self, row: Row, phone_id: str, serial: str = "",
                 note: str = "") -> None:
@@ -280,9 +287,21 @@ class Sheet:
         self.update(row, **fields)
 
     def fail(self, row: Row, reason: str, note: str = "",
-             phone_id: str = "") -> None:
-        self.update(row, status=f"failed:{reason}", note=note,
-                    **({"phone_id": phone_id} if phone_id else {}))
+             phone_id: str = "", serial: str = "") -> None:
+        """Record why a row failed, and which phone it left behind.
+
+        The serial matters most on a failure: it is what names the phone in
+        GeeLark's own list, so it is what someone reads when they go and look
+        at what went wrong. Only succeed() used to write it, which left every
+        failed row pointing at a phone id and no serial (2026-08-07, row 1).
+
+        Empty values are omitted rather than written, for the same reason as in
+        succeed(): a retry that cannot determine one must not erase the one
+        already there.
+        """
+        extra = {name: value for name, value in
+                 (("phone_id", phone_id), ("serial", str(serial))) if value}
+        self.update(row, status=f"failed:{reason}", note=note, **extra)
 
 
 def _a1_column(number: int) -> str:

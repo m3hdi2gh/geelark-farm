@@ -252,7 +252,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         # about this phone.
         on_phone(phone_id)
     ledger.claim(phone_id, label=account.label)
-    sheet.claim(row, phone_id=phone_id)
+    sheet.claim(row, phone_id=phone_id, serial=result.serial)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     artifact_dir = settings.artifact_dir / f"{stamp}-row{row.number}"
@@ -266,7 +266,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
 
         if remaining() <= 0:
             sheet.fail(row, "account_budget_exhausted",
-                       note="the phone took too long to boot", phone_id=phone_id)
+                       note="the phone took too long to boot",
+                       phone_id=phone_id, serial=result.serial)
             return finish(False, "account_budget_exhausted",
                           f"no time left after boot "
                           f"({settings.account_budget_seconds}s budget)")
@@ -278,13 +279,13 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         )
         if not login.ok:
             sheet.fail(row, login.reason, note=login.detail[:200],
-                       phone_id=phone_id)
+                       phone_id=phone_id, serial=result.serial)
             return finish(False, login.reason, login.detail)
 
         if remaining() <= 0:
             sheet.fail(row, "account_budget_exhausted",
                        note="signed in, but no time left to install",
-                       phone_id=phone_id)
+                       phone_id=phone_id, serial=result.serial)
             return finish(False, "account_budget_exhausted",
                           "signed in, but the account budget ran out first")
 
@@ -295,7 +296,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         )
         if not installed.ok:
             sheet.fail(row, installed.reason, note=installed.detail[:200],
-                       phone_id=phone_id)
+                       phone_id=phone_id, serial=result.serial)
             return finish(False, installed.reason, installed.detail)
 
         # The app's own account, if the row carries one. A row without those
@@ -306,7 +307,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
             if remaining() <= 0:
                 sheet.fail(row, "account_budget_exhausted",
                            note="installed, but no time left to sign into the app",
-                           phone_id=phone_id)
+                           phone_id=phone_id, serial=result.serial)
                 return finish(False, "account_budget_exhausted",
                               "installed, but the account budget ran out first")
 
@@ -325,7 +326,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 # runbook entry someone reaches for will be the wrong one.
                 reason = f"app_{signed.reason}"
                 sheet.fail(row, reason, note=signed.detail[:200],
-                           phone_id=phone_id)
+                           phone_id=phone_id, serial=result.serial)
                 return finish(False, reason, signed.detail)
             app_note = f"; app: {account.app.email}"
 
@@ -342,7 +343,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
         # "running", which no later run will select - the work is neither done
         # nor retryable, and the phone it names is invisible.
         log.exception("row %d failed with an unhandled error", row.number)
-        sheet.fail(row, "error", note=str(exc)[:200], phone_id=phone_id)
+        sheet.fail(row, "error", note=str(exc)[:200],
+                   phone_id=phone_id, serial=result.serial)
         return finish(False, "error", str(exc))
     finally:
         # Unconditional: an unattended batch must never leave a phone billing,
