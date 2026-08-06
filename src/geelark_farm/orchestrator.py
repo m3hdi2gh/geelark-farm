@@ -5,6 +5,7 @@ Per account, in order:
     validate -> check proxy -> create or reuse phone -> boot
     -> sign into Google -> verify against the device
     -> install the app  -> verify against the device
+    -> sign into the app, if the row carries app credentials
     -> stop the phone   -> write the outcome back to the sheet
 
 Rules that shape the code:
@@ -58,7 +59,7 @@ from . import phones, proxy, shell
 from .accounts import Account
 from .api import ApiError, Client
 from .config import Settings
-from .flows import google_login, play_install
+from .flows import chatgpt_login, google_login, play_install
 from .ledger import Ledger
 from .sheets import Row, Sheet
 
@@ -297,10 +298,41 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                        phone_id=phone_id)
             return finish(False, installed.reason, installed.detail)
 
-        # Both steps already verified against the device; this is the record of
+        # The app's own account, if the row carries one. A row without those
+        # columns is complete at this point, which is what keeps a sheet that
+        # predates them working unchanged.
+        app_note = ""
+        if account.app is not None:
+            if remaining() <= 0:
+                sheet.fail(row, "account_budget_exhausted",
+                           note="installed, but no time left to sign into the app",
+                           phone_id=phone_id)
+                return finish(False, "account_budget_exhausted",
+                              "installed, but the account budget ran out first")
+
+            signed = chatgpt_login.sign_in(
+                client, phone_id, account.app,
+                package=settings.target_package,
+                budget_seconds=min(settings.app_login_budget_seconds,
+                                   remaining()),
+                artifact_dir=artifact_dir,
+            )
+            if not signed.ok:
+                # Named apart from the Google reasons on purpose. The phone is
+                # not a failure in the way a phone that never signed in is: it
+                # has the account, it has the app, and only the last step is
+                # missing - so the reason has to say which login it was, or the
+                # runbook entry someone reaches for will be the wrong one.
+                reason = f"app_{signed.reason}"
+                sheet.fail(row, reason, note=signed.detail[:200],
+                           phone_id=phone_id)
+                return finish(False, reason, signed.detail)
+            app_note = f"; app: {account.app.email}"
+
+        # Every step above verified before returning; this is the record of
         # what the phone is being handed over with.
         packages = shell.third_party_packages(client, phone_id)
-        note = f"{account.email}; apps: {', '.join(packages) or 'none'}"
+        note = f"{account.email}; apps: {', '.join(packages) or 'none'}{app_note}"
         sheet.succeed(row, phone_id=phone_id, serial=result.serial, note=note[:200])
         return finish(True, "ready", note, serial=result.serial)
 

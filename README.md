@@ -11,6 +11,7 @@ follows starts from a ready device.
 sheet row ──► create phone (behind the row's proxy) ──► boot
           ──► sign into Google ──► verify on device
           ──► install the app  ──► verify on device
+          ──► sign into the app  (only if the row carries app credentials)
           ──► stop the phone   ──► write the result back to the sheet
 ```
 
@@ -75,7 +76,8 @@ screen looks like never also knows how to sign an HTTP request.
 | | |
 |---|---|
 | `cli.py`, `orchestrator.py` | which rows, in what order, with what budget |
-| `flows/google_login.py`, `flows/play_install.py` | multi-screen procedures |
+| `flows/router.py` | the screen loop every flow runs on |
+| `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | multi-screen procedures |
 | `screen.py`, `shell.py` | see the device / act on the device |
 | `phones.py`, `sheets.py`, `ledger.py` | phone lifecycle, work queue, local record |
 | `api.py`, `config.py` | signed transport, settings |
@@ -106,6 +108,16 @@ The spreadsheet is both the work queue and the result:
 
 Only the first four are yours to fill in; the rest are written back. Share the
 sheet with the service account's email address as an **Editor**.
+
+Three more columns are optional, and add a step: signing into the app's own
+account once it is installed.
+
+| chatgpt_email | chatgpt_password | chatgpt_totp |
+|---|---|---|
+
+A row that leaves them blank, or a sheet without the columns at all, is a
+complete row that stops after the install — so adding them breaks nothing that
+already works.
 
 `status` drives everything: `pending` → `running` → `done` or `failed:<reason>`.
 A blank status counts as pending, so pasting rows in is enough.

@@ -28,45 +28,45 @@ def normalize_totp_secret(raw: str) -> str:
 
 
 @dataclass(frozen=True)
-class Account:
+class Credentials:
+    """An address, a password and an authenticator secret.
+
+    Two sets of these are signed into on one phone - the Google account that
+    owns the device, and the account inside the app - and neither the checks
+    nor the code generation differ between them, so they share this.
+    """
+
     email: str
     password: str
     totp_secret: str
-    proxy: str = ""
-    row: int | None = None
 
-    @property
-    def label(self) -> str:
-        """Short identifier for logs and the ledger."""
-        where = f"row {self.row} / " if self.row else ""
-        return f"{where}{self.email}"
-
-    def validate(self) -> None:
+    def validate(self, *, what: str = "") -> None:
         """Everything checkable offline. Called before a phone is created,
         because a row that cannot work should cost nothing to reject."""
+        where = f"{what} " if what else ""
         if "@" not in self.email:
-            raise AccountError(f"{self.email!r} is not an email address")
+            raise AccountError(f"{where}{self.email!r} is not an email address")
         if not self.password:
-            raise AccountError(f"{self.email}: no password")
+            raise AccountError(f"{where}{self.email}: no password")
         for field, value in (("password", self.password), ("email", self.email)):
             try:
                 check_typeable(value)
             except TypingError as exc:
                 raise AccountError(
-                    f"{self.email}: {field} cannot be typed - {exc}"
+                    f"{where}{self.email}: {field} cannot be typed - {exc}"
                 ) from exc
         try:
             base64.b32decode(self.totp_secret, casefold=True)
         except (binascii.Error, ValueError) as exc:
             raise AccountError(
-                f"{self.email}: totp_secret is not valid base32 ({exc})"
+                f"{where}{self.email}: totp_secret is not valid base32 ({exc})"
             ) from exc
 
     def totp_now(self, *, min_life: float = 8.0) -> str:
         """A code with enough life left to survive being typed.
 
         A code that expires between typing and submitting reads as a wrong
-        code, and Google counts that against the account.
+        code, and the service counts that against the account.
         """
         import pyotp
 
@@ -77,6 +77,46 @@ class Account:
         return totp.now()
 
 
+@dataclass(frozen=True)
+class Account(Credentials):
+    """The Google account a phone is built for, and optionally the app account
+    to sign into once the app is installed.
+
+    `app` is optional on purpose: a sheet without those columns, or a row with
+    them blank, is a complete row that simply stops after the install. Making
+    it required would invalidate every existing sheet to add a step that not
+    every row wants.
+    """
+
+    proxy: str = ""
+    row: int | None = None
+    app: Credentials | None = None
+
+    @property
+    def label(self) -> str:
+        """Short identifier for logs and the ledger."""
+        where = f"row {self.row} / " if self.row else ""
+        return f"{where}{self.email}"
+
+    def validate(self, *, what: str = "") -> None:
+        super().validate(what=what)
+        if self.app is not None:
+            # Named separately in the error, because "the password cannot be
+            # typed" is a different row to fix depending on which one it is.
+            self.app.validate(what="app account:")
+
+
+def app_credentials(row: dict) -> Credentials | None:
+    """The app account from a sheet row, or None if the row has no such columns
+    or leaves them blank."""
+    email = (row.get("chatgpt_email") or "").strip()
+    password = (row.get("chatgpt_password") or "").strip()
+    secret = normalize_totp_secret(row.get("chatgpt_totp") or "")
+    if not any((email, password, secret)):
+        return None
+    return Credentials(email=email, password=password, totp_secret=secret)
+
+
 def parse_row(row: dict, *, number: int | None = None) -> Account:
     account = Account(
         email=(row.get("email") or "").strip(),
@@ -84,6 +124,7 @@ def parse_row(row: dict, *, number: int | None = None) -> Account:
         totp_secret=normalize_totp_secret(row.get("totp_secret") or ""),
         proxy=(row.get("proxy") or "").strip(),
         row=number,
+        app=app_credentials(row),
     )
     account.validate()
     return account

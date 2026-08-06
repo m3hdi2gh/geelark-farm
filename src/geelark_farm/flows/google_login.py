@@ -34,13 +34,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import phones, screen, shell
 from ..accounts import Account
 from ..api import Client
+from . import router
+from .router import Outcome, Screen, act_wait, fill, still_loading
 
 log = logging.getLogger(__name__)
 
@@ -110,89 +111,13 @@ FATAL_ADVICE = {
 
 
 @dataclass
-class Outcome:
-    """Why the flow stopped. `ok` is the only success, and it is always backed
-    by the device, never by what the screen said."""
+class Context(router.Context):
+    """The generic context plus the account being signed in."""
 
-    kind: str                 # success | fatal | unknown | budget
-    reason: str
-    detail: str = ""
-    artifacts: list[str] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return self.kind == "success"
-
-    def __str__(self) -> str:
-        text = f"{self.kind}:{self.reason}"
-        return f"{text} - {self.detail}" if self.detail else text
-
-
-@dataclass
-class Context:
-    """Everything a screen action needs, refreshed each iteration."""
-
-    client: Client
-    phone_id: str
-    account: Account
-    elements: list[screen.Element] = field(default_factory=list)
-    blob: str = ""
-    artifact_dir: Path | None = None
-    seen: dict[str, int] = field(default_factory=dict)
-    saved: list[str] = field(default_factory=list)
-
-    def refresh(self) -> None:
-        xml = screen.capture(self.client, self.phone_id)
-        self.raw = xml or ""
-        self.elements = screen.parse(xml) if xml else []
-        self.blob = screen.texts(self.elements)
-
-    def find(self, label: str) -> screen.Element | None:
-        return screen.find(self.elements, label)
-
-    def tap(self, label: str) -> bool:
-        return screen.tap_label(self.client, self.phone_id, self.elements, label)
-
-    def has(self, *needles: str) -> bool:
-        return any(n.casefold() in self.blob for n in needles)
-
-    def save(self, name: str) -> str | None:
-        """Archive the current screen so an unrecognised page can become a
-        registry entry rather than a mystery."""
-        if not self.artifact_dir:
-            return None
-        stamp = time.strftime("%H%M%S")
-        path = self.artifact_dir / f"{stamp}-{name}.xml"
-        screen.save_fixture(getattr(self, "raw", ""), path)
-        self.saved.append(str(path))
-        return str(path)
-
-
-@dataclass
-class Screen:
-    """One recognisable page and what to do about it."""
-
-    name: str
-    match: Callable[[Context], bool]
-    act: Callable[[Context], Outcome | None]
-    # A screen that repeats this many times without the flow progressing is
-    # stuck: the action is not having the effect it assumes.
-    max_visits: int = 4
+    account: Account = None                                     # type: ignore
 
 
 # --------------------------------------------------------------- primitives
-def fill(ctx: Context, element: screen.Element, text: str) -> bool:
-    """Focus a field and type into it, replacing anything already there."""
-    if not screen.tap_element(ctx.client, ctx.phone_id, element):
-        return False
-    time.sleep(1)
-    if element.text:
-        shell.clear_field(ctx.client, ctx.phone_id, max_chars=len(element.text) + 4)
-    shell.type_text(ctx.client, ctx.phone_id, text)
-    time.sleep(1)
-    return True
-
-
 def submit(ctx: Context) -> None:
     """Advance the form. Google labels the button Next, but the on-screen
     keyboard's enter key works when the button is scrolled out of view."""
@@ -217,31 +142,6 @@ def act_fatal(ctx: Context) -> Outcome:
     detail = FATAL_ADVICE.get(reason,
                               "the screen says this cannot proceed unattended")
     return Outcome("fatal", reason, detail, artifacts=[path] if path else [])
-
-
-def still_loading(ctx: Context) -> bool:
-    """Whether Google is mid-navigation.
-
-    A ProgressBar node is what an unfinished page looks like: an 8px
-    indeterminate bar across the top, present only while loading - the same
-    screen a moment later has none.
-    """
-    return any("ProgressBar" in e.cls for e in ctx.elements)
-
-
-def act_wait(ctx: Context) -> Outcome | None:
-    """Do nothing, on purpose.
-
-    The page the spinner belongs to has not arrived yet, and acting on the one
-    underneath it is acting on the wrong screen. Row 13 tapped NEXT, Google
-    began loading, and the flow read the email page still showing behind the
-    spinner - so it retyped the address and tapped NEXT again, four times, and
-    reported stuck_on_email_entry having never left the first screen
-    (2026-08-06). Watching it live, it was simply slow.
-    """
-    log.info("the page is still loading; waiting")
-    time.sleep(4)
-    return None
 
 
 def act_account_picker(ctx: Context) -> Outcome | None:
@@ -468,58 +368,15 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
 
     ctx = Context(client=client, phone_id=phone_id, account=account,
                   artifact_dir=artifact_dir)
-    deadline = time.time() + budget_seconds
-    unknown_streak = 0
 
-    while time.time() < deadline:
-        # Device truth first: the only definition of success.
+    def signed_in() -> Outcome | None:
         if account.email.lower() in shell.device_accounts(client, phone_id):
             return Outcome("success", "signed_in",
                            f"{account.email} is on the device")
+        return None
 
-        ctx.refresh()
-        if not ctx.elements:
-            log.info("screen is empty; waiting")
-            time.sleep(5)
-            continue
-
-        matched = next((s for s in SCREENS if s.match(ctx)), None)
-        if matched is None:
-            # Could be a transition. Look again before giving up, since a dump
-            # taken mid-animation legitimately matches nothing.
-            unknown_streak += 1
-            if unknown_streak < 3:
-                time.sleep(4)
-                continue
-            path = ctx.save("unknown-screen")
-            labels = [e.label for e in ctx.elements if e.label][:12]
-            return Outcome("unknown", "unknown_screen",
-                           f"nothing matched; on screen: {labels}",
-                           artifacts=[path] if path else [])
-        unknown_streak = 0
-
-        visits = ctx.seen.get(matched.name, 0) + 1
-        ctx.seen[matched.name] = visits
-        if visits > matched.max_visits:
-            path = ctx.save(f"stuck-{matched.name}")
-            return Outcome("unknown", f"stuck_on_{matched.name}",
-                           f"handled {visits} times without progress",
-                           artifacts=[path] if path else [])
-
-        log.info("screen: %s (visit %d)", matched.name, visits)
-        if visits == 1:
-            # Archive each page the first time it is seen, so every run leaves a
-            # record of the path it took without anyone having to ask for one.
-            ctx.save(matched.name)
-        outcome = matched.act(ctx)
-        if outcome:
-            return outcome
-
-    path = ctx.save("budget-exhausted")
-    return Outcome("budget", "budget_exhausted",
-                   f"no result within {budget_seconds:.0f}s; "
-                   f"screens seen: {dict(ctx.seen)}",
-                   artifacts=[path] if path else [])
+    return router.drive(ctx, SCREENS, is_done=signed_in,
+                        budget_seconds=budget_seconds, logger=log)
 
 
 def sign_in_on_phone(client: Client, phone_id: str, account: Account,

@@ -24,7 +24,12 @@ from typing import Any
 
 from requests.exceptions import RequestException
 
-from .accounts import Account, AccountError, normalize_totp_secret
+from .accounts import (
+    Account,
+    AccountError,
+    app_credentials,
+    normalize_totp_secret,
+)
 from .config import Settings
 
 log = logging.getLogger(__name__)
@@ -32,6 +37,11 @@ log = logging.getLogger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 INPUT_COLUMNS = ("proxy", "email", "password", "totp_secret")
+# The app account, signed into after the install. Optional: a sheet without
+# these columns, or a row that leaves them blank, is a complete row that simply
+# stops after the install. They are not in INPUT_COLUMNS because a row is not
+# blank-and-skippable just because it has no app credentials.
+APP_COLUMNS = ("chatgpt_email", "chatgpt_password", "chatgpt_totp")
 OUTPUT_COLUMNS = ("status", "phone_id", "serial", "note", "updated_at")
 
 PENDING, RUNNING, DONE = "pending", "running", "done"
@@ -176,6 +186,7 @@ class Sheet:
                     totp_secret=normalize_totp_secret(values["totp_secret"]),
                     proxy=values["proxy"],
                     row=row.number,
+                    app=app_credentials(values),
                 )
                 account.validate()
                 row.account = account

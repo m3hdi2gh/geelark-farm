@@ -214,3 +214,42 @@ def test_the_same_page_without_the_spinner_is_acted_on_normally():
 
     assert not login.still_loading(ctx)
     assert matched_screen(ctx).name == "email_entry"
+
+
+# ------------------------------------------------- the app login, separately
+def test_the_app_login_never_takes_the_google_button():
+    """"Continue with Google" would sign in whichever account owns the device,
+    and the sheet names a different one. Signing in the wrong account is worse
+    than failing, because it looks like success."""
+    from geelark_farm.flows import chatgpt_login
+
+    assert not any("google" in label.casefold()
+                   for label in chatgpt_login.LOGIN_LABELS)
+
+
+def test_the_app_login_is_the_one_step_with_no_device_truth():
+    """Stated as a test so it cannot quietly stop being true. Google's sign-in
+    ends with dumpsys naming the address and the install ends with pm naming
+    the package; an app's own session lives in private storage that needs root
+    to read, so this step's evidence is a composer element on screen.
+
+    Keep it a specific element that cannot appear before sign-in - never the
+    absence of an error, which an empty screen also satisfies.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = chatgpt_login.Context(client=None, phone_id="P", creds=ACCOUNT)
+
+    ctx.elements = []
+    assert not chatgpt_login.verified_on_device(ctx), "an empty screen is not proof"
+
+    ctx.elements = screen.parse(
+        '<hierarchy><node text="Welcome to ChatGPT" class="android.widget.TextView"'
+        ' bounds="[0,0][100,100]" /></hierarchy>')
+    assert not chatgpt_login.verified_on_device(ctx)
+
+    ctx.elements = screen.parse(
+        '<hierarchy><node text="Message ChatGPT" class="android.widget.EditText"'
+        ' bounds="[0,0][100,100]" /></hierarchy>')
+    assert chatgpt_login.verified_on_device(ctx)

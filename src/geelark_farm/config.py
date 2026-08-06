@@ -90,6 +90,7 @@ class Settings:
     account_budget_seconds: int
     login_budget_seconds: int
     install_budget_seconds: int
+    app_login_budget_seconds: int
 
     # GeeLark bans a key for 2 hours past 200 req/min; stay well under.
     api_requests_per_minute: int
@@ -122,6 +123,7 @@ class Settings:
             account_budget_seconds=_int("ACCOUNT_BUDGET_SECONDS", 1800),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
+            app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),
             api_requests_per_minute=_int("API_REQUESTS_PER_MINUTE", 120),
             state_dir=_path("STATE_DIR", "./state"),
             artifact_dir=_path("ARTIFACT_DIR", "./artifacts"),

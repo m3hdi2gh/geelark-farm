@@ -167,3 +167,52 @@ def test_a_write_that_never_lands_says_so_as_a_sheet_error(monkeypatch):
 
     with pytest.raises(sheets_mod.SheetError, match="could not be written"):
         sheet.update(make_row(13), status="failed:x")
+
+
+# --------------------------------------------------- the app account columns
+def test_a_sheet_without_the_app_columns_still_works():
+    """The columns were added to sheets that already existed and already had
+    rows marked done. Requiring them would have invalidated every one of those,
+    to add a step not every row wants."""
+    from geelark_farm.accounts import app_credentials, parse_row
+
+    values = {"proxy": "1.2.3.4:1080", "email": "a@example.com",
+              "password": "p", "totp_secret": "JBSWY3DPEHPK3PXP"}
+
+    assert app_credentials(values) is None
+    assert parse_row(values, number=1).app is None
+
+
+def test_blank_app_columns_are_the_same_as_absent_ones():
+    """Adding the headers should not oblige every row to fill them in."""
+    from geelark_farm.accounts import app_credentials
+
+    assert app_credentials({"chatgpt_email": "", "chatgpt_password": "",
+                            "chatgpt_totp": ""}) is None
+
+
+def test_an_unusable_app_account_is_rejected_before_a_phone_is_created():
+    """The same rule as the Google credentials: a row that cannot work should
+    cost nothing to reject. The message has to say which of the two accounts is
+    at fault, or the wrong cell gets corrected."""
+    from geelark_farm.accounts import AccountError, parse_row
+
+    values = {"proxy": "1.2.3.4:1080", "email": "a@example.com",
+              "password": "p", "totp_secret": "JBSWY3DPEHPK3PXP",
+              "chatgpt_email": "b@example.com", "chatgpt_password": "q",
+              "chatgpt_totp": "not-base32!"}
+
+    with pytest.raises(AccountError, match="app account"):
+        parse_row(values, number=1)
+
+
+def test_the_app_totp_secret_is_normalised_like_the_google_one():
+    """Google shows the key lowercase in groups of four, and so does everyone
+    else; base32 wants uppercase and unspaced."""
+    from geelark_farm.accounts import app_credentials
+
+    creds = app_credentials({"chatgpt_email": "b@example.com",
+                             "chatgpt_password": "q",
+                             "chatgpt_totp": "jbsw y3dp ehpk 3pxp"})
+    assert creds.totp_secret == "JBSWY3DPEHPK3PXP"
+    assert len(creds.totp_now()) == 6
