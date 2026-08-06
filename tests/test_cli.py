@@ -159,3 +159,39 @@ def test_each_live_link_is_offered_for_printing_exactly_once():
     # A freshly minted one is.
     reporter.note(6, "watch it live: https://phone.geelark.com/i.html?t=xyz")
     assert reporter.drain_links() == [(6, "495", "https://phone.geelark.com/i.html?t=xyz")]
+
+
+def test_only_the_narrating_layers_reach_the_state_column():
+    """The column showed "tapping 'NEXT' at (615, 843) (clickable=True)" most
+    of the time, because tapping is most of what happens - true, and no answer
+    to where the row has got to. screen and shell are the mechanics under the
+    flows, so they no longer narrate.
+    """
+    import logging
+
+    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+
+    class FakeRow:
+        number, email = 1, "x@example.com"
+
+    reporter = LiveReporter(total=1)
+    reporter.start(1, FakeRow())
+    handler = ReporterLogHandler(reporter)
+
+    def emit(logger: str, message: str) -> None:
+        record = logging.LogRecord(logger, logging.INFO, "f", 1, message,
+                                   None, None)
+        record.row = 1
+        handler.emit(record)
+
+    emit("geelark_farm.flows.google_login", "entering the password")
+    emit("geelark_farm.screen", "tapping 'NEXT' at (615, 843) (clickable=True)")
+    emit("geelark_farm.shell", "input text ****")
+    assert reporter.rows[1]["step"] == "entering the password"
+
+    # phones must keep narrating: the console reads the serial and the
+    # live-view link out of its messages, so silencing it would take both.
+    emit("geelark_farm.phones", "created 631 (serial 477): vivo / Android 15")
+    assert reporter.rows[1]["phone"] == "477"
+    emit("geelark_farm.phones", "watch it live: https://phone.geelark.com/i?t=1")
+    assert reporter.drain_links() == [(1, "477", "https://phone.geelark.com/i?t=1")]

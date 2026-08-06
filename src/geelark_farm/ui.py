@@ -279,11 +279,25 @@ class LiveReporter:
         return table
 
 
+# Which layers narrate. A row's state is the step it has reached, and steps
+# happen in the flows and in the phone's lifecycle. screen and shell are the
+# mechanics underneath: "tapping 'NEXT' at (615, 843) (clickable=True)" is
+# perfectly true and says nothing about where the row has got to - it was what
+# the column showed most of the time, because tapping is most of what happens.
+#
+# An allowlist rather than a denylist of the two noisy modules: a layer added
+# below this one should be silent here by default, not until someone notices it
+# in the column. phones is on it for its own sake and for two messages the
+# console depends on - the serial it creates and the live-view link.
+NARRATING = ("geelark_farm.flows.", "geelark_farm.phones", "geelark_farm.proxy")
+
+
 class ReporterLogHandler(logging.Handler):
     """Feeds each row's current activity into the live table.
 
-    Only INFO from the flows is interesting; warnings and errors still reach the
-    normal handler, so a real problem is never swallowed by the pretty output.
+    Only INFO from the narrating layers is interesting; warnings and errors
+    still reach the normal handler, so a real problem is never swallowed by the
+    pretty output.
     """
 
     def __init__(self, reporter: LiveReporter):
@@ -292,7 +306,7 @@ class ReporterLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         row = getattr(record, "row", "-")
-        if isinstance(row, int):
+        if isinstance(row, int) and record.name.startswith(NARRATING):
             self.reporter.note(row, record.getMessage())
 
 
