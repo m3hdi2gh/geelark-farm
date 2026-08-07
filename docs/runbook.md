@@ -147,6 +147,25 @@ Both are fixed, and the lesson holds for the next one: open the last archived
 XML before believing the name. `artifacts/<run>/` keeps every screen the flow
 visited, in order.
 
+### `app_<reason>` — the app login failed, not the phone
+Everything before it worked. The phone is signed into Google and has the app
+installed; only the last step is missing, and the note in the sheet says so.
+The usual fix is the app account rather than anything about the phone, and a
+retry reuses it:
+
+```bash
+geelark run --retry-failed
+```
+
+`app_email_code_required` is the common one: the app account has no
+authenticator, so OpenAI emails a one-time code instead. Nothing on the device
+can read that. Set up 2FA on that account, or put one that has it in the sheet.
+
+Do not confuse it with a login failure. Before this reason existed the page
+saying "Enter the verification code we just sent to..." was matched as the
+authenticator prompt, and the flow typed TOTP codes into it until they ran out
+— each one answered "Incorrect code" (2026-08-07).
+
 ### "still installing..." repeats until the budget runs out
 The Install tap did not land on the Install button. Look at the run's
 `*-play-package-page.xml`: if there is no Install element on it, something was
@@ -160,6 +179,13 @@ label-shaped - the query as a whole word, in a string not much longer than the
 query - so a paragraph can never win over a button.
 
 If it recurs, the archived XML names the screen that needs a new entry.
+
+### The download never starts
+"Waiting for connection… Download will begin once restored" — Play has parked
+the download rather than failed it, and left it parked. One row spent its whole
+budget on that page (2026-08-07). The flow now cancels and asks again, up to
+three times, since the page keeps its Cancel button and the state is
+recoverable. Three failures in a row means something other than the download.
 
 ### `fatal:no_install_button` with nothing on the archived screen
 The Play Store had not finished drawing the page. The archived

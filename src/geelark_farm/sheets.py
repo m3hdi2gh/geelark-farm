@@ -249,11 +249,19 @@ class Sheet:
 
         Only the network is retried. An APIError means Google understood and
         refused - a bad range, a revoked key - and repeating it changes nothing.
+
+        Each attempt sends its own copy of the payload, because gspread
+        rewrites the one it is given: batch_update prefixes every range with
+        the worksheet title in place. Retrying the same list therefore sent
+        `'geelark'!'geelark'!I3` and drew a 400, which the caller could not
+        retry and recorded as "error" - the exact loss this method exists to
+        prevent, caused by this method (2026-08-07, row 2).
         """
         for attempt in range(1, self.WRITE_ATTEMPTS + 1):
+            fresh = [dict(item) for item in payload]
             try:
                 with self._lock:
-                    self._ws.batch_update(payload)
+                    self._ws.batch_update(fresh)
                 return
             except (OSError, RequestException) as exc:
                 if attempt == self.WRITE_ATTEMPTS:

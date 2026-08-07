@@ -144,6 +144,24 @@ def act_fatal(ctx: Context) -> Outcome:
     return Outcome("fatal", reason, detail, artifacts=[path] if path else [])
 
 
+def act_go_back(ctx: Context) -> Outcome | None:
+    """Take the page at its word and go back.
+
+    "Something went wrong. Please go back and try again." is Google's generic
+    stumble, and it says what to do about it. Row 1 met it 143 seconds in and
+    reported unknown_screen, which reads like a gap in this registry rather
+    than what it was: a transient failure with printed instructions.
+
+    Bounded by the entry's visit allowance, so a page that keeps returning
+    becomes stuck_on_transient_error - a named, diagnosable outcome instead of
+    a loop.
+    """
+    log.info("Google reported a transient error; going back to retry")
+    shell.keyevent(ctx.client, ctx.phone_id, 4)          # BACK
+    time.sleep(5)
+    return None
+
+
 def act_account_picker(ctx: Context) -> Outcome | None:
     """The "Add an account" type list - choose Google."""
     if ctx.tap("Google"):
@@ -250,6 +268,13 @@ SCREENS: list[Screen] = [
     # of waiting a little too long is seconds, and the cost of acting too early
     # is a whole login.
     Screen("loading", still_loading, act_wait, max_visits=20),
+
+    # Google's generic stumble, which prints its own remedy. Above the acting
+    # screens because the page underneath it is not the page it claims to be.
+    Screen("transient_error",
+           lambda c: c.has("something went wrong",
+                           "please go back and try again"),
+           act_go_back, max_visits=3),
 
     # Code entry outranks the method list: once a code box is on screen the
     # choice has already been made, and re-choosing would leave it.

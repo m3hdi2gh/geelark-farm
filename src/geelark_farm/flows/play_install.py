@@ -131,6 +131,39 @@ def _fatal_reason(blob: str) -> str | None:
     return None
 
 
+# Play parks a download it cannot start and says so, then waits indefinitely.
+# The page keeps its Cancel button, so the parked state is recoverable - it
+# just never recovers on its own within a budget.
+STALLED_TEXTS = (
+    "waiting for connection", "download will begin once restored",
+    "waiting for wi-fi", "download pending",
+)
+MAX_DOWNLOAD_RESTARTS = 3
+
+
+def _download_stalled(blob: str) -> bool:
+    return any(n in blob for n in STALLED_TEXTS)
+
+
+def _restart_download(client: Client, phone_id: str, package: str,
+                      elements: list[screen.Element]) -> None:
+    """Cancel a parked download and ask for it again.
+
+    Best effort by design: if any step of it does not land, the polling loop
+    simply carries on and may try again, which is better than giving up on a
+    download that is one tap from starting.
+    """
+    if screen.tap_label(client, phone_id, elements, "Cancel"):
+        time.sleep(5)
+    open_package_page(client, phone_id, package)
+    fresh = screen.read_screen(client, phone_id)
+    button = screen.find(fresh, "Install")
+    if button and screen.tap_element(client, phone_id, button):
+        log.info("asked for the download again")
+    else:
+        log.warning("could not find Install after cancelling; will keep polling")
+
+
 def still_loading(elements: list[screen.Element], xml: str) -> bool:
     """Whether the Play Store has not finished drawing the page yet.
 
@@ -227,6 +260,7 @@ def install(client: Client, phone_id: str, package: str, *,
 
     deadline = time.time() + budget_seconds
     seen: set[str] = set()
+    restarts = 0
     while time.time() < deadline:
         time.sleep(POLL_SECONDS)
         if shell.package_installed(client, phone_id, package):
@@ -242,6 +276,18 @@ def install(client: Client, phone_id: str, package: str, *,
             return Outcome("fatal", reason,
                            "the Play Store stopped being able to install",
                            artifacts=saved)
+
+        if _download_stalled(blob) and restarts < MAX_DOWNLOAD_RESTARTS:
+            # Play has parked the download rather than failed it, and left it
+            # parked: row 5 sat on "Waiting for connection..." for its whole
+            # budget and installed nothing (2026-08-07). Cancelling and asking
+            # again is what shifts it, and Play offers Cancel on that same page.
+            restarts += 1
+            archive(f"download-stalled-{restarts}", xml or "")
+            log.warning("the download is stalled (%d/%d); cancelling and "
+                        "starting it again", restarts, MAX_DOWNLOAD_RESTARTS)
+            _restart_download(client, phone_id, package, elements)
+            continue
 
         tapped = screen.tap_first_present(client, phone_id, elements,
                                           INTERSTITIAL_LABELS)

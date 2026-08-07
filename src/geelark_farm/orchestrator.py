@@ -325,7 +325,15 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 # missing - so the reason has to say which login it was, or the
                 # runbook entry someone reaches for will be the wrong one.
                 reason = f"app_{signed.reason}"
-                sheet.fail(row, reason, note=signed.detail[:200],
+                # The note leads with what still works. Every app_ failure
+                # leaves a phone that is signed into Google and has the app on
+                # it - only the last step is missing - and the fix is almost
+                # always a different app account rather than anything about
+                # this phone. Whoever reads the sheet needs that before they
+                # decide to throw it away.
+                note = (f"phone is ready: Google signed in, app installed. "
+                        f"Only the app login failed - {signed.detail}")
+                sheet.fail(row, reason, note=note[:200],
                            phone_id=phone_id, serial=result.serial)
                 return finish(False, reason, signed.detail)
             app_note = f"; app: {account.app.email}"

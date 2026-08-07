@@ -66,7 +66,14 @@ FATAL_TEXTS = {
         "incorrect email or password", "wrong email or password",
         "password is incorrect",
     ),
+    # An account with no authenticator set up. OpenAI emails a code instead,
+    # and the page asking for it says "verification code" - which is also what
+    # the authenticator page says, so totp_entry claimed it and typed TOTP
+    # codes into it three times, each answered "Incorrect code" (2026-08-07,
+    # row 4). Being fatal, and checked first, is what keeps that from
+    # happening: the needles below are what the page actually said.
     "email_code_required": (
+        "check your inbox", "resend email", "we just sent to",
         "check your email for a code", "enter the code we sent",
         "we sent a code to your email",
     ),
@@ -82,9 +89,10 @@ FATAL_ADVICE = {
         "OpenAI is challenging this exit IP, the same way Google does; a "
         "cleaner proxy is the fix and no code change helps",
     "email_code_required":
-        "OpenAI wants a one-time code from the inbox rather than the "
-        "authenticator. The device is signed into that Gmail account, so this "
-        "is buildable - it is not built",
+        "this app account has no authenticator, so OpenAI emails a one-time "
+        "code instead. The phone is fine: Google is signed in and the app is "
+        "installed. Set up 2FA on the app account, or put one that has it in "
+        "the sheet, and retry - the phone is reused",
 }
 
 # The way in that is not Google. Matching is case-insensitive and partial, so
@@ -350,9 +358,13 @@ SCREENS: list[Screen] = [
                            is not None)),
            act_choose_login, max_visits=2),
 
+    # Not clickable_only. Nothing in this app reports clickable=true - every
+    # label so far, including the two buttons on the notification card, is a
+    # plain TextView whose centre taps correctly. Requiring the flag meant this
+    # entry could never match, so a signed-in session sat on an onboarding card
+    # and was reported as an unknown screen (2026-08-07, row 2).
     Screen("onboarding",
-           lambda c: screen.find_first(c.elements, DISMISS_LABELS,
-                                       clickable_only=True) is not None,
+           lambda c: screen.find_first(c.elements, DISMISS_LABELS) is not None,
            act_dismiss, max_visits=8),
 ]
 

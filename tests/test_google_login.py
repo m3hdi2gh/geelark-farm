@@ -405,3 +405,60 @@ def test_a_reworded_placeholder_does_not_break_the_check_again():
     assert screen_mod.find_first(
         ctx.elements, chatgpt_login.COMPOSER_PLACEHOLDERS) is None
     assert chatgpt_login.verified_on_device(ctx)
+
+
+# ------------------------------------- what the five-row batch taught (08-07)
+def test_googles_transient_error_is_retried_not_reported_as_a_gap():
+    """"Something went wrong. Please go back and try again." prints its own
+    remedy. Row 1 met it 143 seconds in and reported unknown_screen, which
+    reads like a missing registry entry rather than what it was."""
+    ctx = context_from("google-transient-error.xml")
+
+    assert matched_screen(ctx).name == "transient_error"
+    assert matched_screen(ctx).act is login.act_go_back
+    # Bounded: a page that keeps coming back becomes a named outcome, not a loop.
+    assert matched_screen(ctx).max_visits <= 3
+
+
+def test_the_notification_card_is_dismissed_although_nothing_is_clickable():
+    """Nothing in the ChatGPT app reports clickable=true - every label, both
+    buttons on this card included, is a plain TextView whose centre taps
+    correctly. Requiring the flag meant the onboarding entry could never match,
+    so a signed-in session sat on this card and was reported as an unknown
+    screen (2026-08-07, row 2)."""
+    ctx = app_context("chatgpt-notification-card.xml")
+
+    assert all(not e.clickable for e in ctx.elements), "still nothing clickable"
+    assert app_screen(ctx).name == "onboarding"
+
+    # And of the two buttons, the one that declines must win.
+    from geelark_farm.flows import chatgpt_login
+    assert screen.find_first(ctx.elements,
+                             chatgpt_login.DISMISS_LABELS).label == "Maybe later"
+
+
+def test_an_emailed_code_is_named_not_answered_with_a_totp():
+    """This account had no authenticator, so OpenAI emailed a code. The page
+    says "verification code", which is what the authenticator page says too, so
+    totp_entry claimed it and typed TOTP codes into it three times - each
+    answered "Incorrect code", each burning an attempt (2026-08-07, row 4).
+
+    Fatal is checked first, which is what makes naming it sufficient.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-email-code.xml")
+
+    assert chatgpt_login._fatal_reason(ctx) == "email_code_required"
+    assert app_screen(ctx).name == "fatal"
+
+
+def test_the_advice_for_an_emailed_code_says_the_phone_is_fine():
+    """The phone signed into Google and installed the app; only the app account
+    is unusable. Whoever reads the sheet needs that before deciding to throw it
+    away."""
+    from geelark_farm.flows import chatgpt_login
+
+    advice = chatgpt_login.FATAL_ADVICE["email_code_required"]
+    assert "phone is fine" in advice
+    assert "retry" in advice

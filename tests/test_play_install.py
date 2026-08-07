@@ -121,3 +121,43 @@ def test_a_dialog_is_not_mistaken_for_a_loading_page():
     out - otherwise the flow would sit there until its budget expired."""
     xml = (FIXTURES / "play-terms-of-service.xml").read_text(encoding="utf-8")
     assert not play_install.still_loading(screen.parse(xml), xml)
+
+
+def test_a_parked_download_is_restarted_rather_than_waited_out():
+    """Play parks a download it cannot start - "Waiting for connection...
+    Download will begin once restored" - and then waits indefinitely. Row 5 sat
+    on that page for its entire budget and installed nothing (2026-08-07).
+
+    The page keeps its Cancel button, so the state is recoverable; it just
+    never recovers on its own.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    xml = (FIXTURES / "play-download-stalled.xml").read_text(encoding="utf-8")
+    elements = screen.parse(xml)
+    blob = screen.texts(elements)
+
+    assert play_install._download_stalled(blob)
+    assert screen.find(elements, "Cancel") is not None, "the way out is on the page"
+
+
+def test_a_healthy_install_page_is_not_read_as_stalled():
+    """The counterweight: restarting a download that is simply running would
+    reset it every ten seconds and never finish."""
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    for fixture in ("play-package-page.xml", "play-terms-of-service.xml"):
+        blob = screen.texts(screen.parse(
+            (FIXTURES / fixture).read_text(encoding="utf-8")))
+        assert not play_install._download_stalled(blob), fixture
+
+
+def test_restarts_are_bounded():
+    """A page that stays parked however often it is asked has something else
+    wrong with it, and the budget should report that rather than be spent
+    cancelling."""
+    from geelark_farm.flows import play_install
+
+    assert 1 <= play_install.MAX_DOWNLOAD_RESTARTS <= 5

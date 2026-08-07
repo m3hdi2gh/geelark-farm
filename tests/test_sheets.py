@@ -240,3 +240,33 @@ def test_a_failed_row_records_the_serial_of_the_phone_it_left_behind():
     # And the same rule as succeed(): an empty serial is a loss, not an update.
     FakeSheet().fail(make_row(1), "x", phone_id="P1", serial="")
     assert "serial" not in written[1]
+
+
+def test_a_retried_write_sends_a_fresh_payload():
+    """gspread rewrites the payload it is given: batch_update prefixes every
+    range with the worksheet title, in place. Retrying the same list therefore
+    sent 'geelark'!'geelark'!I3 and drew a 400 - which is not retryable, so the
+    caller recorded "error" and row 2's real reason was lost (2026-08-07).
+
+    The exact loss the retry exists to prevent, caused by the retry.
+    """
+    seen: list[str] = []
+
+    class PrefixingWorksheet:
+        """Behaves as gspread does: mutates, then fails the first time."""
+        def batch_update(self, payload):
+            for item in payload:
+                item["range"] = f"'geelark'!{item['range']}"
+                seen.append(item["range"])
+            if len(seen) == 1:
+                raise ConnectionResetError(10054, "forcibly closed")
+
+    sheet = Sheet.__new__(Sheet)
+    sheet._ws = PrefixingWorksheet()
+    sheet._lock = threading.Lock()
+    sheet._index = {"status": 8}
+
+    sheet.update(make_row(2), status="failed:app_unknown_screen")
+
+    assert seen == ["'geelark'!I3", "'geelark'!I3"], (
+        f"the retry re-sent a mutated range: {seen}")
