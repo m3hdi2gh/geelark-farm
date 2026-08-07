@@ -231,15 +231,15 @@ def test_the_app_login_is_the_one_step_with_no_device_truth():
     """Stated as a test so it cannot quietly stop being true. Google's sign-in
     ends with dumpsys naming the address and the install ends with pm naming
     the package; an app's own session lives in private storage that needs root
-    to read, so this step's evidence is a composer element on screen.
-
-    Keep it a specific element that cannot appear before sign-in - never the
-    absence of an error, which an empty screen also satisfies.
+    to read, so this step's evidence is a composer element on screen - plus
+    this run having actually signed in, because the composer alone is a thing
+    the logged-out app has too.
     """
     from geelark_farm import screen
     from geelark_farm.flows import chatgpt_login
 
     ctx = chatgpt_login.Context(client=None, phone_id="P", creds=ACCOUNT)
+    ctx.submitted_password = True
 
     ctx.elements = []
     assert not chatgpt_login.verified_on_device(ctx), "an empty screen is not proof"
@@ -369,6 +369,7 @@ def test_the_chat_screen_counts_as_signed_in():
     from geelark_farm.flows import chatgpt_login
 
     ctx = app_context("chatgpt-signed-in.xml")
+    ctx.submitted_password = True
     assert chatgpt_login.verified_on_device(ctx)
 
 
@@ -393,6 +394,7 @@ def test_a_reworded_placeholder_does_not_break_the_check_again():
     from geelark_farm.flows import chatgpt_login
 
     ctx = app_context("chatgpt-signed-in.xml")
+    ctx.submitted_password = True
     # Strip every known placeholder and the check must still hold.
     survivors = []
     for e in ctx.elements:
@@ -518,3 +520,54 @@ def test_the_tls_refusal_keeps_its_phone():
 
     assert "app_network_ssl_rejected" not in UNREUSABLE
     assert "network_ssl_rejected" not in UNREUSABLE
+
+
+# --------------------------------------- the false "ready" (2026-08-08)
+def test_a_composer_is_not_proof_of_a_session():
+    """The worst bug this project has produced, and the one it exists to
+    prevent: a row reported ready with nobody signed into the app.
+
+    ChatGPT has a logged-out mode - its welcome screen offers "Continue without
+    logging in" - and that mode has the same composer, the same text box, the
+    same controls. A phone opened straight into it. No registry entry matched,
+    so nothing was logged and nothing was archived; the next pass through the
+    loop read those same elements, saw a composer, and called it success. It
+    was found by someone opening the phone by hand.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-signed-in.xml")
+
+    # Exactly the screen a successful login ends on...
+    assert chatgpt_login.composer_on_screen(ctx)
+    # ...and not evidence, until this run has put the password in.
+    assert not ctx.submitted_password
+    assert not chatgpt_login.verified_on_device(ctx)
+
+    ctx.submitted_password = True
+    assert chatgpt_login.verified_on_device(ctx)
+
+
+def test_an_unproven_chat_screen_is_reset_rather_than_believed():
+    """From outside, "logged out" and "signed in by an earlier run" look
+    identical. Guessing costs a phone reported ready with nobody in it, so the
+    flow stops guessing: pm clear brings the app back to its welcome screen and
+    the ordinary path applies."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-signed-in.xml")
+    matched = app_screen(ctx)
+
+    assert matched.name == "logged_out_chat"
+    assert matched.act is chatgpt_login.act_reset_app
+    # Bounded, or a screen that keeps coming back becomes a loop of wipes.
+    assert matched.max_visits <= 2
+
+
+def test_the_reset_never_runs_once_the_password_is_in():
+    """The counterweight. Clearing the app after a real login would throw the
+    session away and then report failure for the screen it had just earned."""
+    ctx = app_context("chatgpt-signed-in.xml")
+    ctx.submitted_password = True
+
+    assert app_screen(ctx) is None or app_screen(ctx).name != "logged_out_chat"

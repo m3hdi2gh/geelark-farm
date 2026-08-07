@@ -8,17 +8,28 @@ come in a fixed order. What differs is what can be proved.
 Google's sign-in ends with `dumpsys account` naming the address, and the
 install ends with `pm list packages` naming the package. Both are the device
 answering a question. **There is no such question for an app's own session.**
-The session lives in the app's private storage, which is unreadable without
-root, so the best available evidence is that the composer is on screen and the
-welcome screen is not.
+The session lives in the app's private storage, which needs root to read.
 
-That is screen evidence, which this project spends most of its effort
-distrusting - GeeLark's RPA tasks report success from exactly this kind of
-claim. It is used here because the alternative is no check at all, and it is
-kept as narrow as possible: a specific element that only exists once signed in,
-never the absence of an error. `verified_on_device()` is where a stronger check
-would go if these phones ever turn out to be rooted, and it is the only place
-that would need to change.
+So this step has to judge from the screen, which is what this project spends
+most of its effort distrusting - reporting success from a screen is exactly
+what GeeLark's own RPA tasks do, and avoiding it is why this tool exists.
+
+**And the obvious screen check is wrong.** The app has a logged-out mode; its
+welcome screen offers "Continue without logging in". That mode has the same
+composer, the same text box, the same controls as a signed-in session. On
+2026-08-08 a phone opened straight into it and the row was reported ready with
+nobody in the app. It was found by someone opening the phone by hand.
+
+The composer therefore only counts once this run has submitted the password
+(`Context.submitted_password`), and a chat screen without that is not believed:
+`pm clear` puts the app back at its welcome screen, where the ordinary path
+applies. That is conservative on purpose. A phone genuinely signed in by an
+earlier run gets signed in again rather than assumed, and a wasted login is
+worth far more than a phone handed over as ready with nobody in it.
+
+It is still the weakest check in the pipeline. The honest fix is to read the
+account's address out of the app's own menu, and that needs a capture of that
+menu to write. `verified_on_device()` is the only place that would change.
 
 ## The path
 
@@ -144,7 +155,7 @@ DISMISS_LABELS = (
 # app_unknown_screen because this list had two of them and not the third
 # (2026-08-07: "Ask ChatGPT").
 COMPOSER_PLACEHOLDERS = (
-    "Ask ChatGPT", "Message ChatGPT", "Ask anything", "New chat", "Message",
+    "Ask ChatGPT", "Message ChatGPT", "Ask anything", "New chat",
 )
 
 # The controls beside the composer. A placeholder is wording and wording
@@ -159,6 +170,11 @@ class Context(router.Context):
     """The generic context plus the app account being signed in."""
 
     creds: Credentials = None                                   # type: ignore
+    package: str = ""
+    # Set when this run has actually put the account's password into the form.
+    # See verified_on_device: a composer on screen is not evidence of a
+    # session, because the app has a logged-out mode that has one too.
+    submitted_password: bool = False
 
 
 def launch(client: Client, phone_id: str, package: str) -> None:
@@ -168,25 +184,46 @@ def launch(client: Client, phone_id: str, package: str) -> None:
     time.sleep(8)
 
 
-def verified_on_device(ctx: Context) -> bool:
-    """The best available evidence that the session exists.
+def composer_on_screen(ctx: Context) -> bool:
+    """Whether the chat screen is up. NOT whether anyone is signed in.
 
-    See the module docstring: this is screen evidence, not device truth, and it
-    is the one step in the pipeline that has none. So it is made as hard to
-    satisfy accidentally as screen evidence can be - a text box AND something
-    that only sits beside the chat composer.
-
-    The box alone would not do: the login page has one too. The wording alone
-    would not do either, and that is not hypothetical - the first successful
-    sign-in was reported as an unknown screen because the placeholder had been
-    reworded since this list was written. Hence two ways to satisfy the second
-    half: the placeholder, whose wording moves, and the controls around it,
-    which have not.
+    A text box plus something that only sits beside the composer. The box alone
+    would not do - the login page has one; the wording alone would not do
+    either, since the placeholder has been reworded at least three times, hence
+    the controls around it as a second way to satisfy it.
     """
     if screen.find_input(ctx.elements) is None:
         return False
     return (screen.find_first(ctx.elements, COMPOSER_PLACEHOLDERS) is not None
             or screen.find_first(ctx.elements, COMPOSER_CONTROLS) is not None)
+
+
+def verified_on_device(ctx: Context) -> bool:
+    """The best available evidence that the session exists.
+
+    The composer is not that evidence, and believing it was is the worst bug
+    this project has produced. The app has a logged-out mode - its welcome
+    screen offers "Continue without logging in" - and that mode has the same
+    composer, the same text box, the same controls. On 2026-08-08 a phone
+    opened straight into it: no registry entry matched, so nothing was logged
+    and nothing was archived, and the next pass through the loop read those
+    same elements, saw a composer, and reported the row ready. It was found by
+    someone opening the phone by hand.
+
+    Reporting success from a screen is exactly what GeeLark's own RPA tasks do,
+    and avoiding it is why this tool exists.
+
+    So the composer only counts once this run has actually submitted the
+    password. That is deliberately conservative: a phone genuinely signed in by
+    an earlier run now has to be signed in again rather than be assumed, and a
+    wasted login is worth far more than a phone handed over as ready with
+    nobody in it.
+
+    It is still screen evidence, and it is still the weakest check in the
+    pipeline. The honest fix is to read the account's address out of the app's
+    own menu, which needs a capture of that menu to write.
+    """
+    return ctx.submitted_password and composer_on_screen(ctx)
 
 
 # ------------------------------------------------------------------ screens
@@ -282,6 +319,9 @@ def act_password(ctx: Context) -> Outcome | None:
     log.info("entering the app account's password")
     fill(ctx, field, ctx.creds.password)
     submit(ctx)
+    # Recorded because success depends on it: a composer means nothing unless
+    # this run put the password in. See verified_on_device.
+    ctx.submitted_password = True
     time.sleep(6)
     return None
 
@@ -295,6 +335,30 @@ def act_totp(ctx: Context) -> Outcome | None:
     fill(ctx, field, ctx.creds.totp_now())
     submit(ctx)
     time.sleep(6)
+    return None
+
+
+def act_reset_app(ctx: Context) -> Outcome | None:
+    """Wipe the app's state and start it again, so its screen means something.
+
+    Reached when the chat screen is up but this run never signed in - the app
+    is either in its logged-out mode or holding a session from an earlier run,
+    and from outside those look identical. Guessing costs a phone reported as
+    ready with nobody in it, which is what happened.
+
+    `pm clear` settles it: the app comes back at its welcome screen, and the
+    ordinary path applies. A session an earlier run left behind is thrown away
+    in the process, which is the right trade - signing in again takes a minute
+    and the credentials are right here, while assuming costs a phone.
+    """
+    path = ctx.save("logged-out-chat")
+    log.warning("the chat screen is up but this run has not signed in; "
+                "clearing the app so its state is known")
+    shell.run(ctx.client, ctx.phone_id, f"pm clear {ctx.package}")
+    time.sleep(3)
+    launch(ctx.client, ctx.phone_id, ctx.package)
+    if path:
+        ctx.saved.append(path)
     return None
 
 
@@ -383,6 +447,12 @@ SCREENS: list[Screen] = [
                            is not None)),
            act_choose_login, max_visits=2),
 
+    # The chat screen with nobody signed in. Above onboarding, because a card
+    # on that screen is not the thing that matters about it.
+    Screen("logged_out_chat",
+           lambda c: composer_on_screen(c) and not c.submitted_password,
+           act_reset_app, max_visits=2),
+
     # Not clickable_only. Nothing in this app reports clickable=true - every
     # label so far, including the two buttons on the notification card, is a
     # plain TextView whose centre taps correctly. Requiring the flag meant this
@@ -408,7 +478,7 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
 
     launch(client, phone_id, package)
     ctx = Context(client=client, phone_id=phone_id, creds=creds,
-                  artifact_dir=artifact_dir)
+                  package=package, artifact_dir=artifact_dir)
 
     def logged_in() -> Outcome | None:
         # Unlike the other two steps this reads the screen, because the app's
