@@ -211,6 +211,7 @@ def install(client: Client, phone_id: str, package: str, *,
     elements: list[screen.Element] = []
     deadline = time.time() + PRE_INSTALL_SECONDS
     dialogs = 0
+    restarts = 0
     first = True
     while time.time() < deadline:
         xml = screen.capture(client, phone_id) or ""
@@ -228,6 +229,25 @@ def install(client: Client, phone_id: str, package: str, *,
 
         if screen.find(elements, "Install"):
             break
+
+        if _download_stalled(screen.texts(elements)):
+            # A download is already parked from an earlier attempt, so the page
+            # shows Cancel and Open where Install would be. Reporting
+            # no_install_button here is true and useless: the button is absent
+            # because the work is half done, not because the page is wrong
+            # (2026-08-07, row 5, on its own retry).
+            if restarts >= MAX_DOWNLOAD_RESTARTS:
+                archive("download-stalled-final", xml)
+                return Outcome("fatal", "download_stalled",
+                               "Play parked the download and would not restart "
+                               "it", artifacts=saved)
+            restarts += 1
+            archive(f"download-stalled-{restarts}", xml)
+            log.warning("a parked download is holding the page (%d/%d); "
+                        "cancelling and starting again", restarts,
+                        MAX_DOWNLOAD_RESTARTS)
+            _restart_download(client, phone_id, package, elements)
+            continue
 
         if still_loading(elements, xml):
             log.info("the package page is still loading")
@@ -248,6 +268,15 @@ def install(client: Client, phone_id: str, package: str, *,
 
     button = screen.find(elements, "Install")
     if not button:
+        if still_loading(elements, xml):
+            # The page never painted at all. Saying "no Install button" of a
+            # blank screen sends whoever reads it looking for a button that was
+            # never missing - row 1 spent its pre-install budget waiting and
+            # was then reported as though Play had refused it (2026-08-07).
+            archive("play-page-never-loaded", xml)
+            return Outcome("fatal", "play_page_never_loaded",
+                           f"the package page was still blank after "
+                           f"{PRE_INSTALL_SECONDS}s", artifacts=saved)
         labels = [e.label for e in elements if e.label][:12]
         return Outcome("fatal", "no_install_button",
                        f"on screen: {labels}", artifacts=saved)
@@ -260,7 +289,6 @@ def install(client: Client, phone_id: str, package: str, *,
 
     deadline = time.time() + budget_seconds
     seen: set[str] = set()
-    restarts = 0
     while time.time() < deadline:
         time.sleep(POLL_SECONDS)
         if shell.package_installed(client, phone_id, package):

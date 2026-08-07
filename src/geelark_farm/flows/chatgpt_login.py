@@ -286,8 +286,20 @@ def act_totp(ctx: Context) -> Outcome | None:
 
 
 def act_dismiss(ctx: Context) -> Outcome | None:
+    """Clear an onboarding card or a permission dialog.
+
+    clickable_only=False, to agree with the entry that matched. Nothing in this
+    app reports clickable - not the notification card's buttons, not Android's
+    own "Allow" on the permission dialog it raises - so with the default the
+    screen matched eight times and tapped nothing, and the row was reported
+    stuck on a card one tap from gone (2026-08-07, row 2).
+
+    The label list is therefore the only thing keeping this off the wrong
+    control, which is why it is an allowlist of things that decline or proceed
+    and never contains a refusal like "Don't allow".
+    """
     tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
-                                      DISMISS_LABELS)
+                                      DISMISS_LABELS, clickable_only=False)
     if tapped:
         log.info("dismissed %r", tapped)
         time.sleep(3)

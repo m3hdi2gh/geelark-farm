@@ -462,3 +462,35 @@ def test_the_advice_for_an_emailed_code_says_the_phone_is_fine():
     advice = chatgpt_login.FATAL_ADVICE["email_code_required"]
     assert "phone is fine" in advice
     assert "retry" in advice
+
+
+def test_the_permission_dialog_is_answered_although_nothing_is_clickable():
+    """The matcher was fixed and the action was not: tap_first_present defaults
+    to clickable_only, so the screen matched eight times and tapped nothing,
+    and the row was reported stuck on a dialog one tap from gone (2026-08-07,
+    row 2's retry). Android's own permission dialog reports clickable=false
+    here too.
+    """
+    from geelark_farm import screen as screen_mod
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-notification-permission.xml")
+
+    assert all(not e.clickable for e in ctx.elements)
+    assert app_screen(ctx).name == "onboarding"
+    # The default would find nothing to press; the flow passes False.
+    assert screen_mod.find_first(ctx.elements, chatgpt_login.DISMISS_LABELS,
+                                 clickable_only=True) is None
+    assert screen_mod.find_first(ctx.elements,
+                                 chatgpt_login.DISMISS_LABELS) is not None
+
+
+def test_the_dismiss_list_never_contains_a_refusal():
+    """With clickable_only off, the label list is the only thing keeping this
+    off the wrong control - and the dialog it answers offers "Don't allow"
+    right beside "Allow"."""
+    from geelark_farm.flows import chatgpt_login
+
+    for label in chatgpt_login.DISMISS_LABELS:
+        assert "don't" not in label.casefold()
+        assert "deny" not in label.casefold()

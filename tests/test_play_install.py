@@ -161,3 +161,32 @@ def test_restarts_are_bounded():
     from geelark_farm.flows import play_install
 
     assert 1 <= play_install.MAX_DOWNLOAD_RESTARTS <= 5
+
+
+def test_a_parked_download_is_not_reported_as_a_missing_button():
+    """On its retry, row 5's page showed Cancel and Open where Install would
+    be, because a download from the previous attempt was still parked.
+    "no_install_button" is true of that page and useless: the button is absent
+    because the work is half done (2026-08-07)."""
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    elements = screen.parse(
+        (FIXTURES / "play-download-stalled.xml").read_text(encoding="utf-8"))
+
+    assert screen.find(elements, "Install") is None, "the premise of the bug"
+    assert play_install._download_stalled(screen.texts(elements))
+
+
+def test_a_page_that_never_painted_is_not_a_page_without_a_button():
+    """Row 1 spent its pre-install budget on a blank page and was reported as
+    though Play had refused it, which sends whoever reads it looking for a
+    button that was never missing."""
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    xml = (FIXTURES / "play-page-never-loaded.xml").read_text(encoding="utf-8")
+    elements = screen.parse(xml)
+
+    assert elements == []
+    assert play_install.still_loading(elements, xml)

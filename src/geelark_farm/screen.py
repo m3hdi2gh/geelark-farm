@@ -280,10 +280,18 @@ def tap_label(client: Client, phone_id: str, elements: list[Element],
 
 
 def tap_first_present(client: Client, phone_id: str, elements: list[Element],
-                      labels: tuple[str, ...] | list[str]) -> str | None:
+                      labels: tuple[str, ...] | list[str], *,
+                      clickable_only: bool = True) -> str | None:
     """Tap the first label present and return which one - the primitive for
-    clearing a chain of interstitials whose order is not known."""
-    element = find_first(elements, labels, clickable_only=True)
+    clearing a chain of interstitials whose order is not known.
+
+    clickable_only defaults to True because in Google's and Play's dialogs a
+    clickable button is what a button is, and an unclickable label of the same
+    name is usually body text. Apps that render everything as plain TextViews
+    - the ChatGPT app is one - pass False, and then the caller's label list is
+    the only thing keeping it off the wrong control.
+    """
+    element = find_first(elements, labels, clickable_only=clickable_only)
     if not element:
         return None
     if not tap_element(client, phone_id, element):
