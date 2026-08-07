@@ -137,6 +137,22 @@ class Result:
 # worth looking at before anything is thrown away.
 UNREUSABLE = frozenset({"captcha_shown", "password_changed"})
 
+# App-login failures that a different exit address would probably not have.
+# The phone keeps its proxy, but a restart opens a new session through it and
+# comes out somewhere else, so the row gets one more attempt before it is
+# recorded as failed.
+#
+# Only where the evidence supports it. OpenAI's TLS refusal was measured across
+# twelve attempts: every gateway produced both successes and rejections, and
+# all four rejections cleared on a later attempt - one whose only difference
+# was that the phone had been restarted in between. Nothing else here behaves
+# that way: an emailed code and a wrong password are the same on any address.
+RETRY_ON_A_NEW_EXIT = frozenset({"network_ssl_rejected"})
+
+# What that second attempt needs: a restart, a boot, and a login. Below this
+# there is no point starting, and the row is better off reporting its reason.
+NEW_EXIT_SECONDS = 420
+
 
 def _discard(client: Client, sheet: Sheet, row: Row, phone_id: str,
              ledger: Ledger, result: Result) -> None:
@@ -311,13 +327,37 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 return finish(False, "account_budget_exhausted",
                               "installed, but the account budget ran out first")
 
-            signed = chatgpt_login.sign_in(
-                client, phone_id, account.app,
-                package=settings.target_package,
-                budget_seconds=min(settings.app_login_budget_seconds,
-                                   remaining()),
-                artifact_dir=artifact_dir,
-            )
+            def app_login():
+                return chatgpt_login.sign_in(
+                    client, phone_id, account.app,
+                    package=settings.target_package,
+                    budget_seconds=min(settings.app_login_budget_seconds,
+                                       remaining()),
+                    artifact_dir=artifact_dir,
+                )
+
+            signed = app_login()
+            if (signed.reason in RETRY_ON_A_NEW_EXIT
+                    and remaining() > NEW_EXIT_SECONDS):
+                # Not the account and not the proxy: measured across twelve
+                # attempts, every gateway produced both successes and this
+                # failure, and all four rejections cleared on a later attempt.
+                # What every one of those later attempts had in common was a
+                # phone restart, which opens a new session through the proxy
+                # and comes out of a different exit address.
+                #
+                # So the run does that itself rather than waiting for someone
+                # to type --retry-failed. It belongs here rather than in the
+                # flow: the flow acts on a device, this layer owns whether the
+                # device is running.
+                log.warning("row %d: %s - restarting the phone for a new exit "
+                            "address and trying the app login once more",
+                            row.number, signed.reason)
+                phones.stop(client, phone_id)
+                time.sleep(5)
+                phones.ensure_running(client, phone_id, timeout=remaining())
+                signed = app_login()
+
             if not signed.ok:
                 # Named apart from the Google reasons on purpose. The phone is
                 # not a failure in the way a phone that never signed in is: it

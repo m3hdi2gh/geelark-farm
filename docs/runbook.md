@@ -192,12 +192,25 @@ clickable button" starts the game.
 "For your security, ChatGPT can't connect while this network is presenting an
 unexpected SSL certificate."
 
-The proxy is intercepting TLS, and OpenAI checks. Nothing about the account is
-involved, and the phone is fine — Google signed in and the app installed over
-that same proxy, so only the app login is missing.
+Nothing about the account is involved, and the phone is fine — Google signed in
+and the app installed over that same proxy, so only the app login is missing.
 
-These exits rotate between sessions, so a retry may land on a different one and
-work. If it recurs on the same row, replace the proxy.
+**It is the exit address, not the proxy.** Measured across twelve attempts on
+five gateways: every gateway produced both successes and this refusal, and all
+four refusals cleared on a later attempt. What every one of those later
+attempts had in common was a phone restart, which opens a new session through
+the proxy and comes out somewhere else.
+
+So the run now restarts the phone once by itself and tries again, which is why
+you should rarely see this reason at all. Seeing it means the second exit was
+refused too, or the row had under seven minutes of budget left. Re-run it:
+
+```bash
+geelark run --retry-failed
+```
+
+Replacing the proxy is the answer only if one row keeps producing it while
+others on the same provider do not.
 
 ### The download never starts
 "Waiting for connection… Download will begin once restored" — Play has parked

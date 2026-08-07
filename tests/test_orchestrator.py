@@ -379,3 +379,116 @@ def test_a_failed_row_keeps_the_serial_of_the_phone_it_created(tmp_path,
 
     assert not result.ok
     assert result.serial == "500"
+
+
+# ------------------------------------------ one more exit before giving up
+def _app_login_row(reasons, tmp_path, make_settings, budget=1800):
+    """Drive process_row to the app-login step, returning `reasons` in turn."""
+    from geelark_farm import orchestrator
+    from geelark_farm.accounts import Account, Credentials
+    from geelark_farm.ledger import Entry
+    from geelark_farm.sheets import Row
+
+    events: list = []
+    attempts = iter(reasons)
+
+    class FakeSheet:
+        def claim(self, row, **kw): pass
+        def succeed(self, row, **kw): events.append(("succeed",))
+        def fail(self, row, reason, **kw): events.append(("fail", reason))
+        def update(self, row, **f): pass
+
+    class FakeOutcome:
+        def __init__(self, reason):
+            self.reason, self.detail = reason, ""
+            self.ok = reason == "logged_in"
+
+    app = Credentials(email="app@example.com", password="p",
+                      totp_secret="JBSWY3DPEHPK3PXP")
+    row = Row(number=6, sheet_row=7,
+              values={"email": "x@example.com", "proxy": "1.2.3.4:1080"},
+              account=Account(email="x@example.com", password="p",
+                              totp_secret="JBSWY3DPEHPK3PXP",
+                              proxy="1.2.3.4:1080", row=6, app=app))
+
+    saved = {n: getattr(orchestrator.phones, n)
+             for n in ("create", "ensure_running", "stop", "delete")}
+    original = (orchestrator.proxy.check, orchestrator.google_login.sign_in,
+                orchestrator.play_install.install,
+                orchestrator.chatgpt_login.sign_in,
+                orchestrator.shell.third_party_packages)
+
+    def sign_in(*a, **k):
+        events.append(("app_login",))
+        return FakeOutcome(next(attempts))
+
+    orchestrator.proxy.check = lambda *a, **k: {}
+    orchestrator.phones.create = lambda *a, **k: Entry(
+        phone_id="P1", created_at=0.0, serial="516")
+    orchestrator.phones.ensure_running = lambda *a, **k: events.append(("boot",))
+    orchestrator.phones.stop = lambda *a, **k: events.append(("stop",))
+    orchestrator.phones.delete = lambda c, ids, **k: None
+    orchestrator.google_login.sign_in = lambda *a, **k: FakeOutcome("signed_in")
+    orchestrator.google_login.sign_in = lambda *a, **k: type(
+        "O", (), {"ok": True, "reason": "signed_in", "detail": ""})()
+    orchestrator.play_install.install = lambda *a, **k: type(
+        "O", (), {"ok": True, "reason": "installed", "detail": ""})()
+    orchestrator.chatgpt_login.sign_in = sign_in
+    orchestrator.shell.third_party_packages = lambda *a, **k: []
+    try:
+        result = orchestrator.process_row(
+            object(),
+            make_settings(state_dir=tmp_path, artifact_dir=tmp_path,
+                          account_budget_seconds=budget),
+            FakeSheet(), row, Ledger.load(tmp_path))
+    finally:
+        for n, fn in saved.items():
+            setattr(orchestrator.phones, n, fn)
+        (orchestrator.proxy.check, orchestrator.google_login.sign_in,
+         orchestrator.play_install.install, orchestrator.chatgpt_login.sign_in,
+         orchestrator.shell.third_party_packages) = original
+    return result, events
+
+
+def test_a_tls_refusal_gets_one_more_exit_before_being_recorded(tmp_path,
+                                                                make_settings):
+    """Measured across twelve attempts: every gateway produced both successes
+    and OpenAI's TLS refusal, and all four rejections cleared on a later
+    attempt whose only difference was a phone restart - which opens a new
+    session through the proxy and comes out of a different address.
+
+    So the run does that itself rather than waiting for someone to type
+    --retry-failed.
+    """
+    result, events = _app_login_row(
+        ["network_ssl_rejected", "logged_in"], tmp_path, make_settings)
+
+    assert result.ok, result.reason
+    kinds = [e[0] for e in events]
+    assert kinds.count("app_login") == 2
+    # Restarted between the two, not merely retried on the same session.
+    first, second = [i for i, k in enumerate(kinds) if k == "app_login"]
+    assert "stop" in kinds[first:second] and "boot" in kinds[first:second]
+
+
+def test_only_the_tls_refusal_earns_a_second_exit(tmp_path, make_settings):
+    """An emailed code and a wrong password are the same on any address.
+    Restarting for those would spend two minutes to fail identically."""
+    result, events = _app_login_row(
+        ["email_code_required", "logged_in"], tmp_path, make_settings)
+
+    assert not result.ok
+    assert result.reason == "app_email_code_required"
+    assert [e[0] for e in events].count("app_login") == 1
+
+
+def test_the_second_exit_is_skipped_when_the_budget_cannot_cover_it(
+        tmp_path, make_settings):
+    """A restart, a boot and a login do not fit in what is left, so starting
+    one would only turn a named failure into a budget exhaustion."""
+    result, events = _app_login_row(
+        ["network_ssl_rejected", "logged_in"], tmp_path, make_settings,
+        budget=60)
+
+    assert result.reason == "app_network_ssl_rejected"
+    assert [e[0] for e in events].count("app_login") == 1
