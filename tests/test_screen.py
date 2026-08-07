@@ -92,3 +92,35 @@ def test_segments_always_reconstruct_the_original():
     for text in ("Xr@6n31Pkd", "p%ssw0rd", "a b%sc", "%%%", "s%s", "100%"):
         typed = "".join(type_segments(text)).replace("%s", " ")
         assert typed == text.replace("%s", " ") or "%" in text
+
+
+# ------------------------------------------------- clearing a filled field
+def test_clearing_a_field_deletes_in_both_directions():
+    """Backspace only removes what is to the LEFT of the cursor, and a field is
+    focused by tapping it - which puts the cursor wherever the tap landed. On a
+    filled field that is the middle of the text, so everything to the right
+    survived: an email box was retyped four times and grew "com" on each pass,
+    until it read `...@gmail.comcomcom` (2026-08-08, row 7).
+    """
+    from geelark_farm import shell
+
+    sent: list[str] = []
+
+    class FakeClient:
+        pass
+
+    original = shell.run
+    shell.run = lambda c, p, cmd, **kw: sent.append(cmd)
+    try:
+        shell.clear_field(FakeClient(), "P1", max_chars=5)
+    finally:
+        shell.run = original
+
+    keys = sent[0].removeprefix("input keyevent ").split()
+    assert keys[0] == str(shell.MOVE_END), "the cursor goes to the end first"
+    assert keys.count(str(shell.BACKSPACE)) == 5
+    # And forward deletes after them, so the right-hand side dies even if a
+    # web view ignores MOVE_END. Either alone would do if the other always
+    # worked; together they hold whichever fails.
+    assert keys.count(str(shell.FORWARD_DELETE)) == 5
+    assert keys.index(str(shell.BACKSPACE)) < keys.index(str(shell.FORWARD_DELETE))

@@ -147,6 +147,19 @@ Both are fixed, and the lesson holds for the next one: open the last archived
 XML before believing the name. `artifacts/<run>/` keeps every screen the flow
 visited, in order.
 
+### A field ends up holding more than was typed
+Backspace only deletes to the left of the cursor, and a field is focused by
+tapping it — on a filled field that puts the cursor in the middle of the text,
+so the right-hand side survives. An email box grew "com" on every retry until
+it read `...@gmail.comcomcom`, four submissions later (2026-08-08).
+
+`clear_field` now sends the cursor to the end first and follows the backspaces
+with forward deletes, and `fill` reads the field back and corrects it once.
+If this ever recurs, the warning names both values:
+
+    the field holds '...' after typing '...'; clearing it properly and trying
+    once more
+
 ### `app_<reason>` — the app login failed, not the phone
 Everything before it worked. The phone is signed into Google and has the app
 installed; only the last step is missing, and the note in the sheet says so.

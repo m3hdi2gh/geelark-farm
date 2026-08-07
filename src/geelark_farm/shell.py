@@ -161,7 +161,26 @@ def type_text(client: Client, phone_id: str, text: str) -> None:
         run(client, phone_id, f"input text {shlex.quote(payload)}")
 
 
+MOVE_END = 123          # KEYCODE_MOVE_END
+BACKSPACE = 67          # KEYCODE_DEL, deletes to the LEFT of the cursor
+FORWARD_DELETE = 112    # KEYCODE_FORWARD_DEL, deletes to the right
+
+
 def clear_field(client: Client, phone_id: str, max_chars: int = 64) -> None:
-    """Empty the focused field. select-all + delete is unreliable across
-    keyboards, so send backspaces - crude, but it always works."""
-    run(client, phone_id, f"input keyevent {' '.join(['67'] * max_chars)}")
+    """Empty the focused field.
+
+    select-all + delete is unreliable across keyboards, so this deletes
+    character by character - but backspace only removes what is to the LEFT of
+    the cursor, and a field is focused by tapping it, which puts the cursor
+    wherever the tap landed. On a filled field that is the middle of the text,
+    so everything to the right survived: an email box was retyped four times
+    and grew "com" on each pass, until the address in it was
+    `...@gmail.comcomcom` (2026-08-08, row 7).
+
+    So the cursor is sent to the end first, and forward deletes follow the
+    backspaces. Either alone would do if the other always worked - together
+    they hold whether or not a web view honours MOVE_END.
+    """
+    keys = ([MOVE_END] + [BACKSPACE] * max_chars + [FORWARD_DELETE] * max_chars)
+    run(client, phone_id,
+        f"input keyevent {' '.join(str(k) for k in keys)}")

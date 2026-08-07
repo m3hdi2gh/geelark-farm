@@ -99,7 +99,18 @@ class Screen:
 
 
 def fill(ctx: Context, element: screen.Element, text: str) -> bool:
-    """Focus a field and type into it, replacing anything already there."""
+    """Focus a field and type into it, replacing anything already there.
+
+    The result is read back and corrected once. A field that does not end up
+    holding what was typed is the worst kind of quiet failure here: the form
+    submits, the service rejects it, the flow sees the same page and tries
+    again - and each attempt is an attempt against a real account. One email
+    box grew "com" on every pass until it read `...@gmail.comcomcom`, four
+    submissions later (2026-08-08, row 7).
+
+    Password fields are exempt: they report dots, so there is nothing to
+    compare against.
+    """
     if not screen.tap_element(ctx.client, ctx.phone_id, element):
         return False
     time.sleep(1)
@@ -107,7 +118,31 @@ def fill(ctx: Context, element: screen.Element, text: str) -> bool:
         shell.clear_field(ctx.client, ctx.phone_id, max_chars=len(element.text) + 4)
     shell.type_text(ctx.client, ctx.phone_id, text)
     time.sleep(1)
+
+    if element.password:
+        return True
+    actual = _typed_value(ctx, element)
+    if actual is None or actual == text:
+        return True
+
+    log.warning("the field holds %r after typing %r; clearing it properly and "
+                "trying once more", actual, text)
+    field = screen.find_input(ctx.elements, password=False)
+    if field is None or not screen.tap_element(ctx.client, ctx.phone_id, field):
+        return False
+    # Generously: the point of a second attempt is not to be precise about how
+    # much is in there, and deleting past the start of a field costs nothing.
+    shell.clear_field(ctx.client, ctx.phone_id, max_chars=len(actual) + len(text))
+    shell.type_text(ctx.client, ctx.phone_id, text)
+    time.sleep(1)
     return True
+
+
+def _typed_value(ctx: Context, element: screen.Element) -> str | None:
+    """What the field holds now, or None if it cannot be read back."""
+    ctx.refresh()
+    field = screen.find_input(ctx.elements, password=False)
+    return field.text if field is not None else None
 
 
 def still_loading(ctx: Context) -> bool:
