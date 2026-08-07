@@ -82,6 +82,13 @@ FATAL_TEXTS = {
         "account has been suspended",
     ),
     "rate_limited": ("too many attempts", "try again later"),
+    # OpenAI inspecting the TLS chain and refusing it, which is the proxy's
+    # doing rather than the account's. Distinct from a CAPTCHA: it is not a
+    # judgement about whether we look like a person, it is a refusal to speak
+    # over this connection at all.
+    "network_ssl_rejected": (
+        "unexpected ssl certificate", "network configuration issue",
+    ),
 }
 
 FATAL_ADVICE = {
@@ -93,6 +100,12 @@ FATAL_ADVICE = {
         "code instead. The phone is fine: Google is signed in and the app is "
         "installed. Set up 2FA on the app account, or put one that has it in "
         "the sheet, and retry - the phone is reused",
+    "network_ssl_rejected":
+        "OpenAI refused the TLS chain this proxy presents, so nothing about "
+        "the account is involved. Google signed in and the app installed over "
+        "the same proxy, so the phone is fine. These exits rotate between "
+        "sessions, so a retry may simply land on a different one; if it "
+        "recurs on this row, the proxy is intercepting TLS and needs replacing",
 }
 
 # The way in that is not Google. Matching is case-insensitive and partial, so

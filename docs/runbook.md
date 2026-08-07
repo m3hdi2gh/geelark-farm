@@ -180,6 +180,25 @@ query - so a paragraph can never win over a button.
 
 If it recurs, the archived XML names the screen that needs a new entry.
 
+### `play_server_error`
+Play replaced the package page with "Server error" and a Try again button. The
+flow presses it up to three times; three failures means Play, not the flow.
+
+That page also offers a mini-game while you wait, whose button is labelled
+**Play**. Anything added here must target a label by name — "press the
+clickable button" starts the game.
+
+### `app_network_ssl_rejected`
+"For your security, ChatGPT can't connect while this network is presenting an
+unexpected SSL certificate."
+
+The proxy is intercepting TLS, and OpenAI checks. Nothing about the account is
+involved, and the phone is fine — Google signed in and the app installed over
+that same proxy, so only the app login is missing.
+
+These exits rotate between sessions, so a retry may land on a different one and
+work. If it recurs on the same row, replace the proxy.
+
 ### The download never starts
 "Waiting for connection… Download will begin once restored" — Play has parked
 the download rather than failed it, and left it parked. One row spent its whole

@@ -70,6 +70,9 @@ PLAY_PACKAGE = "com.android.vending"
 INTERSTITIAL_LABELS = (
     "Accept", "I agree", "Agree",
     "Continue", "Skip", "Not now", "No thanks", "Got it", "Dismiss", "OK",
+    # Last, so a real dialog is always preferred: Play's transient server
+    # error can also land after the Install tap, and this is the way out of it.
+    "Try again",
 )
 
 # How many dialogs may stand between the deep link and the Install button before
@@ -145,6 +148,18 @@ def _download_stalled(blob: str) -> bool:
     return any(n in blob for n in STALLED_TEXTS)
 
 
+# Play's own transient failure. It replaces the whole package page with an
+# error and a Try again button, so there is no Install to find and nothing in
+# the interstitial list to press - one row reported no_install_button for two
+# minutes of it (2026-08-08).
+SERVER_ERROR_TEXTS = ("server error", "something went wrong", "no connection")
+MAX_PLAY_RETRIES = 3
+
+
+def _server_error(blob: str) -> bool:
+    return any(n in blob for n in SERVER_ERROR_TEXTS)
+
+
 def _restart_download(client: Client, phone_id: str, package: str,
                       elements: list[screen.Element]) -> None:
     """Cancel a parked download and ask for it again.
@@ -212,6 +227,7 @@ def install(client: Client, phone_id: str, package: str, *,
     deadline = time.time() + PRE_INSTALL_SECONDS
     dialogs = 0
     restarts = 0
+    retries = 0
     first = True
     while time.time() < deadline:
         xml = screen.capture(client, phone_id) or ""
@@ -247,6 +263,23 @@ def install(client: Client, phone_id: str, package: str, *,
                         "cancelling and starting again", restarts,
                         MAX_DOWNLOAD_RESTARTS)
             _restart_download(client, phone_id, package, elements)
+            continue
+
+        if _server_error(screen.texts(elements)):
+            if retries >= MAX_PLAY_RETRIES:
+                archive("play-server-error-final", xml)
+                return Outcome("fatal", "play_server_error",
+                               f"Play answered with an error {retries} times",
+                               artifacts=saved)
+            retries += 1
+            archive(f"play-server-error-{retries}", xml)
+            log.warning("Play returned an error (%d/%d); pressing Try again",
+                        retries, MAX_PLAY_RETRIES)
+            # By name, not by "the clickable button": this page also offers a
+            # mini-game to pass the time, whose button is called Play.
+            if not screen.tap_label(client, phone_id, elements, "Try again"):
+                open_package_page(client, phone_id, package)
+            time.sleep(6)
             continue
 
         if still_loading(elements, xml):

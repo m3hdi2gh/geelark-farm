@@ -494,3 +494,27 @@ def test_the_dismiss_list_never_contains_a_refusal():
     for label in chatgpt_login.DISMISS_LABELS:
         assert "don't" not in label.casefold()
         assert "deny" not in label.casefold()
+
+
+def test_openai_refusing_the_proxys_tls_is_named_as_such():
+    """"For your security, ChatGPT can't connect while this network is
+    presenting an unexpected SSL certificate." Nothing about the account is
+    involved - the proxy is intercepting TLS - and it was reported as an
+    unknown screen, which points at the registry instead (2026-08-08, row 4).
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-ssl-rejected.xml")
+
+    assert chatgpt_login._fatal_reason(ctx) == "network_ssl_rejected"
+    assert app_screen(ctx).name == "fatal"
+
+
+def test_the_tls_refusal_keeps_its_phone():
+    """Unlike a Google CAPTCHA, this arrives after the phone is signed in and
+    the app is installed - over the same proxy. Throwing the phone away for a
+    connection OpenAI alone objected to would waste three working steps."""
+    from geelark_farm.orchestrator import UNREUSABLE
+
+    assert "app_network_ssl_rejected" not in UNREUSABLE
+    assert "network_ssl_rejected" not in UNREUSABLE

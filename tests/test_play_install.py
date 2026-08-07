@@ -190,3 +190,35 @@ def test_a_page_that_never_painted_is_not_a_page_without_a_button():
 
     assert elements == []
     assert play_install.still_loading(elements, xml)
+
+
+def test_plays_server_error_is_retried_by_name():
+    """Play replaces the whole package page with an error and a Try again
+    button, so there is no Install to find and nothing in the interstitial list
+    to press - a row reported no_install_button for two minutes of it
+    (2026-08-08).
+
+    By name, because the same page offers a mini-game to pass the time, and
+    its button is called Play. "Press the clickable button" would start that.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    elements = screen.parse(
+        (FIXTURES / "play-server-error.xml").read_text(encoding="utf-8"))
+
+    assert play_install._server_error(screen.texts(elements))
+    assert screen.find(elements, "Install") is None
+    assert screen.find(elements, "Try again") is not None
+    # The trap on this very page.
+    assert screen.find(elements, "Play") is not None
+    assert "Play" not in play_install.INTERSTITIAL_LABELS
+
+
+def test_a_normal_package_page_is_not_read_as_an_error():
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    blob = screen.texts(screen.parse(
+        (FIXTURES / "play-package-page.xml").read_text(encoding="utf-8")))
+    assert not play_install._server_error(blob)
