@@ -146,6 +146,16 @@ NOT_FATAL_BESIDE_AUTHENTICATOR = frozenset({"phone_verification_required"})
 # simply been read a second too early (2026-08-08, row 1).
 CHECKING_TEXTS = ("checking info", "just a moment", "one moment")
 
+# Where the add-account flow actually lives. Settings hosts it and Google Play
+# services draws it, so either in front means the flow is still where it should
+# be; anything else - a launcher, most likely - means it has been dropped out
+# of and has to be started again.
+SIGN_IN_PACKAGES = (
+    "com.android.settings",
+    "com.google.android.gms",
+    "com.google.android.gsf",
+)
+
 
 def _fatal_reason(ctx: Context) -> str | None:
     for reason, needles in FATAL_TEXTS.items():
@@ -185,6 +195,19 @@ def act_go_back(ctx: Context) -> Outcome | None:
     log.info("Google reported a transient error; going back to retry")
     shell.keyevent(ctx.client, ctx.phone_id, 4)          # BACK
     time.sleep(5)
+
+    # Back does not always return to the previous step - once it closed the
+    # sign-in outright and left the phone on its home screen, where nothing
+    # matched and the row was reported as unknown_screen with a launcher full
+    # of app icons in its archive (2026-08-09, row 1).
+    #
+    # Asked of the device, because a screen this flow does not recognise looks
+    # the same whether Google has shown something new or the flow is no longer
+    # in Google at all.
+    front = shell.foreground_package(ctx.client, ctx.phone_id)
+    if front and not any(front.startswith(p) for p in SIGN_IN_PACKAGES):
+        log.warning("back left the sign-in (%s is in front); reopening it", front)
+        open_add_account(ctx.client, ctx.phone_id)
     return None
 
 

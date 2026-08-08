@@ -227,3 +227,38 @@ def test_a_resize_restarts_the_live_display_once():
         after = _restart_after_resize(live, 100)
         assert after != 100
         assert calls == ["stop", "start"], "once, not once per refresh"
+
+
+def test_the_state_column_shows_steps_not_announcements():
+    """The column wrapped onto a second line when it held a proxy URL, which
+    changes the table's height between frames - and Live erases its last frame
+    by the height it recorded, so copies of the table stayed on screen
+    (2026-08-09).
+
+    Height is now a function of the row count alone: the column never wraps,
+    and the long announcements never reach it. None of them answered the
+    question it exists for anyway.
+    """
+    from geelark_farm.ui import LiveReporter
+
+    class FakeRow:
+        number, email = 1, "x@example.com"
+
+    reporter = LiveReporter(total=1)
+    reporter.start(1, FakeRow())
+
+    for noise in (
+        "created 6318 (serial 542): vivo V2419A / Android 15, USA / New_York",
+        "netType came back 0 (Wi-Fi) despite requesting mobile data",
+        "phone is stopped - starting it (billing is per minute)",
+        "billing: Per-minute usage",
+        "socks5://ul01k:***@190.2.143.20:10406 exits from 156.241.217.238",
+    ):
+        reporter.note(1, noise)
+
+    # The serial was taken from the first of those; none became the step.
+    assert reporter.rows[1]["phone"] == "542"
+    assert reporter.rows[1]["step"] == "starting"
+
+    reporter.note(1, "phone starting (1)")
+    assert reporter.rows[1]["step"] == "phone starting (1)"

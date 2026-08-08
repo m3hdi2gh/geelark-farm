@@ -73,9 +73,14 @@ FATAL_TEXTS = {
         "verify you are human", "verify you're human", "i'm not a robot",
         "confirm you are human", "checking if the site connection is secure",
     ),
+    # The page says "Incorrect email address or password" - "email address",
+    # not "email" - so none of the first three needles matched it and the flow
+    # retyped the same password until its visits ran out, reporting
+    # stuck_on_password_entry after seven and a half minutes (2026-08-09,
+    # row 5). Matched on the shortest phrase that is unambiguous now.
     "wrong_password": (
-        "incorrect email or password", "wrong email or password",
-        "password is incorrect",
+        "incorrect email", "wrong email", "password is incorrect",
+        "incorrect password", "wrong password",
     ),
     # An account with no authenticator set up. OpenAI emails a code instead,
     # and the page asking for it says "verification code" - which is also what

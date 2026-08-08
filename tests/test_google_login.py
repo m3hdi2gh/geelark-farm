@@ -703,3 +703,35 @@ def test_the_foreground_check_never_blocks_on_its_own_failure():
         assert shell.foreground_package(object(), "P1") == ""
     finally:
         shell.read = original
+
+
+# ------------------------------------------------ what 2026-08-09 taught
+def test_chatgpt_names_a_rejected_password_instead_of_retyping_it():
+    """The page says "Incorrect email address or password" - "email address",
+    not "email" - so none of the needles matched, and the flow retyped the same
+    password until its visits ran out: seven and a half minutes to report
+    stuck_on_password_entry about a password the service had already refused
+    (2026-08-09, row 5)."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-wrong-password.xml")
+
+    assert ctx.has("incorrect email address or password")
+    assert chatgpt_login._fatal_reason(ctx) == "wrong_password"
+    assert app_screen(ctx).name == "fatal"
+
+
+def test_back_out_of_the_sign_in_is_noticed_and_undone():
+    """"Something went wrong. Please go back and try again." is answered with
+    BACK, and once that closed the sign-in outright: the phone was left on its
+    launcher and the row reported unknown_screen with a screenful of app icons
+    in its archive (2026-08-09, row 1).
+
+    The launcher is not in the registry and should not be - what identifies
+    this is the device saying which app is in front.
+    """
+    ctx = context_from("android-home-screen.xml")
+
+    assert matched_screen(ctx) is None, "nothing here belongs to a login"
+    assert "com.android.settings" in login.SIGN_IN_PACKAGES
+    assert "com.google.android.gms" in login.SIGN_IN_PACKAGES

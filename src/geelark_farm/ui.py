@@ -183,6 +183,17 @@ LIVE_PREFIX = "watch it live:"
 # is what mints a fresh link with `geelark start` once this one has expired.
 CREATED_SERIAL = re.compile(r"created \S+ \(serial (\w+)\)")
 
+# Announcements rather than steps. Each is worth having in the log and none of
+# them answers the question this column exists for - and two of them are long
+# enough to have wrapped the cell, which changes the table's height and is what
+# left copies of it on screen (2026-08-09).
+NOT_A_STEP = (
+    "netType came back",
+    "billing:",
+    "is stopped - starting it",
+    "exits from",
+)
+
 
 @dataclass
 class LiveReporter:
@@ -239,7 +250,12 @@ class LiveReporter:
                 return
             found = CREATED_SERIAL.search(message)
             if found:
+                # The serial is what this line is for; the rest of it is the
+                # device's model and timezone, which is not a step.
                 entry["phone"] = found.group(1)
+                return
+            if any(n in message for n in NOT_A_STEP):
+                return
             if entry["state"] == "working":
                 entry["step"] = message
 
@@ -259,7 +275,12 @@ class LiveReporter:
         table.add_column("account", overflow="ellipsis", no_wrap=True,
                          max_width=34)
         table.add_column("phone", style=DIM)
-        table.add_column("state")
+        # Never wrapped. A cell that wraps makes the row two lines tall, so the
+        # table's height changes from one frame to the next for reasons that
+        # have nothing to do with how many rows there are - and Live erases its
+        # last frame by the height it recorded. A proxy URL wrapping in this
+        # column is what left copies of the table on screen (2026-08-09).
+        table.add_column("state", overflow="ellipsis", no_wrap=True)
         table.add_column("time", justify="right", style=DIM)
 
         with self.lock:
@@ -289,7 +310,7 @@ class LiveReporter:
 # below this one should be silent here by default, not until someone notices it
 # in the column. phones is on it for its own sake and for two messages the
 # console depends on - the serial it creates and the live-view link.
-NARRATING = ("geelark_farm.flows.", "geelark_farm.phones", "geelark_farm.proxy")
+NARRATING = ("geelark_farm.flows.", "geelark_farm.phones")
 
 
 class ReporterLogHandler(logging.Handler):
