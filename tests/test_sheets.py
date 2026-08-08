@@ -270,3 +270,43 @@ def test_a_retried_write_sends_a_fresh_payload():
 
     assert seen == ["'geelark'!I3", "'geelark'!I3"], (
         f"the retry re-sent a mutated range: {seen}")
+
+
+# ------------------------------------------ what a bad totp cell should say
+def test_a_cell_holding_the_wrong_thing_says_so_not_padding():
+    """b32decode checks the length before the characters, so anything whose
+    length is not a multiple of eight comes back as "Incorrect padding" however
+    wrong its contents are. A chatgpt_totp cell holding an email address by
+    mistake was reported as a padding problem, which points at the wrong thing
+    entirely (2026-08-08, row 7)."""
+    from geelark_farm.accounts import AccountError, check_totp_secret
+
+    with pytest.raises(AccountError) as caught:
+        check_totp_secret("EVIFOPUL007@GMAIL.COM")
+
+    message = str(caught.value)
+    assert "not an authenticator key" in message
+    assert "'@'" in message and "'.'" in message
+    assert "padding" not in message.casefold()
+
+
+def test_a_secret_pyotp_accepts_is_not_rejected():
+    """pyotp pads before decoding, and pyotp is what actually generates the
+    codes - so rejecting a length it would have accepted is our bug rather than
+    the sheet's."""
+    import pyotp
+
+    from geelark_farm.accounts import check_totp_secret
+
+    for secret in ("JBSWY3DPEHPK3PXP",              # 16, already a multiple
+                   "JBSWY3DPEHPK3PXPJBSW",          # 20, needs padding
+                   "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"):   # 32
+        check_totp_secret(secret)                    # no raise
+        assert len(pyotp.TOTP(secret).now()) == 6
+
+
+def test_an_empty_secret_is_named_as_empty():
+    from geelark_farm.accounts import AccountError, check_totp_secret
+
+    with pytest.raises(AccountError, match="no totp_secret"):
+        check_totp_secret("")

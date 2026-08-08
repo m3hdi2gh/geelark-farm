@@ -21,10 +21,49 @@ class AccountError(ValueError):
     """The row cannot be used, and no phone should be created for it."""
 
 
+# A-Z and 2-7. Not 0, 1 or 8, which is why a secret that is really something
+# else - an address, a password - almost always contains a character from
+# outside it.
+BASE32_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+
+
 def normalize_totp_secret(raw: str) -> str:
     """Google shows the key lowercase in groups of four; base32 wants
     uppercase, unspaced and unpadded."""
     return (raw or "").replace(" ", "").replace("-", "").upper().rstrip("=")
+
+
+def check_totp_secret(secret: str) -> None:
+    """Raise AccountError if `secret` cannot produce codes, saying which
+    problem it has.
+
+    b32decode checks the length before it checks the characters, so anything
+    whose length is not a multiple of eight is reported as "Incorrect padding"
+    however wrong its contents are. A cell holding an email address by mistake
+    came back as a padding complaint, which sent the reader looking at the
+    wrong thing entirely (2026-08-08, row 7).
+
+    So the characters are checked first and named, and the length is padded the
+    way pyotp pads it - because pyotp is what actually generates the codes, and
+    rejecting a secret it would accept would be our bug rather than the sheet's.
+    """
+    if not secret:
+        raise AccountError("no totp_secret")
+
+    outside = sorted({c for c in secret if c not in BASE32_ALPHABET})
+    if outside:
+        raise AccountError(
+            f"totp_secret is not an authenticator key: it contains "
+            f"{', '.join(repr(c) for c in outside)}, and base32 keys are only "
+            f"A-Z and 2-7. Check the column - a {len(secret)}-character value "
+            f"with these in it is usually something else pasted by mistake"
+        )
+
+    padded = secret + "=" * (-len(secret) % 8)
+    try:
+        base64.b32decode(padded, casefold=True)
+    except (binascii.Error, ValueError) as exc:
+        raise AccountError(f"totp_secret is not valid base32 ({exc})") from exc
 
 
 @dataclass(frozen=True)
@@ -56,11 +95,9 @@ class Credentials:
                     f"{where}{self.email}: {field} cannot be typed - {exc}"
                 ) from exc
         try:
-            base64.b32decode(self.totp_secret, casefold=True)
-        except (binascii.Error, ValueError) as exc:
-            raise AccountError(
-                f"{where}{self.email}: totp_secret is not valid base32 ({exc})"
-            ) from exc
+            check_totp_secret(self.totp_secret)
+        except AccountError as exc:
+            raise AccountError(f"{where}{self.email}: {exc}") from exc
 
     def totp_now(self, *, min_life: float = 8.0) -> str:
         """A code with enough life left to survive being typed.
