@@ -81,8 +81,9 @@ MAX_PRE_INSTALL_DIALOGS = 4
 
 # How long to keep waiting for the package page to render and its dialogs to be
 # cleared. Generous, because it is bounded by finding the button rather than by
-# elapsed time in the normal case.
-PRE_INSTALL_SECONDS = 120
+# elapsed time in the normal case - and because a download parked here has to be
+# waited out and restarted, which needs several times what a dialog does.
+PRE_INSTALL_SECONDS = 300
 
 # Text that means the Play Store is not usable for this account yet, rather
 # than a page to click through.
@@ -143,13 +144,34 @@ STALLED_TEXTS = (
 )
 MAX_DOWNLOAD_RESTARTS = 3
 
-# How many consecutive polls a download has to look parked before it is
-# treated as parked. "Pending..." is also what a queued download says for its
-# first few seconds, so acting on the word alone would cancel healthy
-# downloads; acting only after it has not moved for a minute tells the two
-# apart. A row spent its whole budget on that page saying "still installing..."
-# because the word was not in the list at all (2026-08-09, row 13).
-STALLED_POLLS = 6
+# How long a page has to look parked before it is treated as parked, and how
+# long to leave a restarted download alone afterwards.
+#
+# "Pending..." is what a queued download says for its first seconds too, so the
+# word alone is not evidence - and a download that has JUST been restarted says
+# it by definition. Acting without this, the pre-install phase cancelled and
+# restarted three times inside thirty seconds, spending every attempt it had on
+# the state it had itself created (2026-08-09, row 13).
+STALLED_SECONDS = 45.0
+
+
+class Stall:
+    """How long the page has looked parked, shared by both phases so they
+    cannot disagree about it."""
+
+    def __init__(self) -> None:
+        self.since: float | None = None
+
+    def held_for(self, stalled: bool) -> float:
+        if not stalled:
+            self.since = None
+            return 0.0
+        if self.since is None:
+            self.since = time.time()
+        return time.time() - self.since
+
+    def reset(self) -> None:
+        self.since = None
 
 
 def _download_stalled(blob: str) -> bool:
@@ -241,6 +263,7 @@ def install(client: Client, phone_id: str, package: str, *,
     # meets nothing. So this loops on what is actually on screen rather than
     # assuming a fixed number of dialogs.
     elements: list[screen.Element] = []
+    stall = Stall()
     deadline = time.time() + PRE_INSTALL_SECONDS
     dialogs = 0
     restarts = 0
@@ -269,6 +292,10 @@ def install(client: Client, phone_id: str, package: str, *,
             # no_install_button here is true and useless: the button is absent
             # because the work is half done, not because the page is wrong
             # (2026-08-07, row 5, on its own retry).
+            if stall.held_for(True) < STALLED_SECONDS:
+                log.info("the download says it is pending; giving it a moment")
+                time.sleep(POLL_SECONDS)
+                continue
             if restarts >= MAX_DOWNLOAD_RESTARTS:
                 archive("download-stalled-final", xml)
                 return Outcome("fatal", "download_stalled",
@@ -348,7 +375,6 @@ def install(client: Client, phone_id: str, package: str, *,
 
     deadline = time.time() + budget_seconds
     seen: set[str] = set()
-    stalled_polls = 0
     while time.time() < deadline:
         time.sleep(POLL_SECONDS)
         if shell.package_installed(client, phone_id, package):
@@ -365,25 +391,19 @@ def install(client: Client, phone_id: str, package: str, *,
                            "the Play Store stopped being able to install",
                            artifacts=saved)
 
-        if _download_stalled(blob):
-            stalled_polls += 1
-        else:
-            stalled_polls = 0
-
-        if (stalled_polls >= STALLED_POLLS
+        if (stall.held_for(_download_stalled(blob)) >= STALLED_SECONDS
                 and restarts < MAX_DOWNLOAD_RESTARTS):
             # Play has parked the download rather than failed it, and left it
             # parked: row 5 sat on "Waiting for connection..." for its whole
             # budget and installed nothing (2026-08-07). Cancelling and asking
             # again is what shifts it, and Play offers Cancel on that same page.
             restarts += 1
-            stalled_polls = 0
             archive(f"download-stalled-{restarts}", xml or "")
             log.warning("the download has not moved for %.0fs (%d/%d); "
-                        "cancelling and starting it again",
-                        STALLED_POLLS * POLL_SECONDS, restarts,
-                        MAX_DOWNLOAD_RESTARTS)
+                        "cancelling and starting it again", STALLED_SECONDS,
+                        restarts, MAX_DOWNLOAD_RESTARTS)
             _restart_download(client, phone_id, package, elements)
+            stall.reset()
             continue
 
         tapped = screen.tap_first_present(client, phone_id, elements,

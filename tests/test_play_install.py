@@ -308,13 +308,32 @@ def test_a_pending_download_is_recognised_at_all():
 
 
 def test_pending_is_only_acted_on_once_it_has_not_moved():
-    """"Pending..." is also what a healthy queued download says for its first
-    few seconds. Cancelling on the word alone would fight normal behaviour, so
-    what separates the two is that one of them stops saying it."""
+    """"Pending..." is what a healthy queued download says for its first
+    seconds too - and what a download that has just been restarted says by
+    definition. Acting on the word alone, the pre-install phase cancelled and
+    restarted three times inside thirty seconds, spending every attempt it had
+    on the state it had itself created (2026-08-09, row 13).
+    """
     from geelark_farm.flows import play_install
 
-    assert play_install.STALLED_POLLS >= 3
-    # Long enough to be a real wait, short enough to leave room for the
-    # restarts it guards.
-    settle = play_install.STALLED_POLLS * play_install.POLL_SECONDS
-    assert 30 <= settle <= 120
+    stall = play_install.Stall()
+
+    # Not stalled yet: the clock does not run.
+    assert stall.held_for(False) == 0.0
+    # It starts on the first sighting, and zero elapsed is not enough to act.
+    assert stall.held_for(True) < play_install.STALLED_SECONDS
+    # A page that recovers clears it, so the next sighting starts over.
+    assert stall.held_for(False) == 0.0
+    assert stall.held_for(True) < play_install.STALLED_SECONDS
+
+    assert play_install.STALLED_SECONDS >= 30
+
+
+def test_the_pre_install_phase_has_room_for_the_waits_it_must_do():
+    """Three restarts, each preceded by a wait for the page to stop looking
+    pending, need several times what clearing a dialog does. If they do not
+    fit, the phase runs out and reports a missing button instead."""
+    from geelark_farm.flows import play_install
+
+    needed = play_install.MAX_DOWNLOAD_RESTARTS * play_install.STALLED_SECONDS
+    assert play_install.PRE_INSTALL_SECONDS > needed
