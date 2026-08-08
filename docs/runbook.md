@@ -211,11 +211,16 @@ The identifier is a **Cloudflare Ray ID** — this is their edge refusing the
 request, not their login rejecting the credentials. It is a judgement about
 where the request came from. The account and the password were never examined.
 
-**Retry first.** These proxies hand out a different exit each session, and that
-alone has fixed it:
+**The run retries it for you.** On this reason it stops the phone, starts it
+again for a different exit, and tries the login once more before recording
+anything — the same handling the TLS refusal gets, and for the same reason.
+
+So seeing this at all means **both** addresses were refused. The note in the
+sheet opens with `ALREADY RETRIED` when that is what happened, and then the
+answer is the proxy:
 
 ```bash
-geelark run --retry-failed
+geelark run --failed-only    # only if the note does NOT say ALREADY RETRIED
 ```
 
 **If it recurs on the same row, change the proxy — and delete the phone.** A

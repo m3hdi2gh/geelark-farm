@@ -566,3 +566,30 @@ def test_a_first_time_refusal_still_says_to_retry(tmp_path, make_settings):
 
     assert result.reason == "app_network_ssl_rejected"
     assert notes and not notes[0].startswith("ALREADY RETRIED")
+
+
+def test_an_edge_refusal_also_gets_one_more_exit(tmp_path, make_settings):
+    """"There is a problem with your request", with a Cloudflare Ray ID, is a
+    verdict on where the request came from - made before the account or the
+    password was examined, and seen from two different Cloudflare datacenters
+    on two runs of the same row (2026-08-09). Same kind of thing as the TLS
+    refusal, so the same one extra address."""
+    result, events = _app_login_row(
+        ["request_rejected", "logged_in"], tmp_path, make_settings)
+
+    assert result.ok, result.reason
+    kinds = [e[0] for e in events]
+    assert kinds.count("app_login") == 2
+    first, second = [i for i, k in enumerate(kinds) if k == "app_login"]
+    assert "stop" in kinds[first:second] and "boot" in kinds[first:second]
+
+
+def test_a_second_edge_refusal_says_the_retry_was_spent(tmp_path, make_settings):
+    """And when the second address is refused too, the note stops suggesting a
+    retry and names the proxy."""
+    notes: list[str] = []
+    result, _ = _app_login_row(["request_rejected", "request_rejected"],
+                               tmp_path, make_settings, notes=notes)
+
+    assert result.reason == "app_request_rejected"
+    assert notes[0].startswith("ALREADY RETRIED")

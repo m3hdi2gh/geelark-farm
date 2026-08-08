@@ -145,9 +145,23 @@ UNREUSABLE = frozenset({"captcha_shown", "password_changed"})
 # Only where the evidence supports it. OpenAI's TLS refusal was measured across
 # twelve attempts: every gateway produced both successes and rejections, and
 # all four rejections cleared on a later attempt - one whose only difference
-# was that the phone had been restarted in between. Nothing else here behaves
-# that way: an emailed code and a wrong password are the same on any address.
-RETRY_ON_A_NEW_EXIT = frozenset({"network_ssl_rejected"})
+# was that the phone had been restarted in between.
+#
+# The edge refusal - "There is a problem with your request", with a Cloudflare
+# Ray ID - is the same kind of verdict: made about where the request came from,
+# before the account or the password was examined, and seen from two different
+# Cloudflare datacenters on two runs of the same row. So it gets the same one
+# extra address.
+#
+# Note what this costs that row: the flow submits the address twice per
+# attempt, so a retried row puts it to OpenAI four times. Spread across two
+# network sessions two minutes apart, from different exits - which is the shape
+# of the thing that works, not the rapid repetition that a bot-protection layer
+# exists to punish.
+#
+# Nothing else here behaves this way: an emailed code and a wrong password are
+# the same on any address.
+RETRY_ON_A_NEW_EXIT = frozenset({"network_ssl_rejected", "request_rejected"})
 
 # What that second attempt needs: a restart, a boot, and a login. Below this
 # there is no point starting, and the row is better off reporting its reason.
