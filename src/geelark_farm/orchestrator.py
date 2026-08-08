@@ -339,6 +339,7 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 )
 
             signed = app_login()
+            took_a_new_exit = False
             if (signed.reason in RETRY_ON_A_NEW_EXIT
                     and remaining() > NEW_EXIT_SECONDS):
                 # Not the account and not the proxy: measured across twelve
@@ -358,7 +359,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 phones.stop(client, phone_id)
                 time.sleep(5)
                 phones.ensure_running(client, phone_id, timeout=remaining(),
-                              cancelled=cancelled)
+                                      cancelled=cancelled)
+                took_a_new_exit = True
                 signed = app_login()
 
             if not signed.ok:
@@ -376,6 +378,15 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 # decide to throw it away.
                 note = (f"phone is ready: Google signed in, app installed. "
                         f"Only the app login failed - {signed.detail}")
+                if took_a_new_exit:
+                    # The advice for this reason opens with "retry first", and
+                    # that is exactly what just happened - refused twice, on
+                    # two different exit addresses. Saying so is the difference
+                    # between a sheet suggesting what was already tried and a
+                    # sheet naming the next thing to do.
+                    note = ("ALREADY RETRIED on a second exit address and "
+                            "refused again - change the proxy AND delete this "
+                            "phone. " + note)
                 sheet.fail(row, reason, note=note[:200],
                            phone_id=phone_id, serial=result.serial)
                 return finish(False, reason, signed.detail)

@@ -384,7 +384,8 @@ def test_a_failed_row_keeps_the_serial_of_the_phone_it_created(tmp_path,
 
 
 # ------------------------------------------ one more exit before giving up
-def _app_login_row(reasons, tmp_path, make_settings, budget=1800):
+def _app_login_row(reasons, tmp_path, make_settings, budget=1800,
+                   notes=None):
     """Drive process_row to the app-login step, returning `reasons` in turn."""
     from geelark_farm import orchestrator
     from geelark_farm.accounts import Account, Credentials
@@ -397,7 +398,10 @@ def _app_login_row(reasons, tmp_path, make_settings, budget=1800):
     class FakeSheet:
         def claim(self, row, **kw): pass
         def succeed(self, row, **kw): events.append(("succeed",))
-        def fail(self, row, reason, **kw): events.append(("fail", reason))
+        def fail(self, row, reason, note="", **kw):
+            events.append(("fail", reason))
+            if notes is not None:
+                notes.append(note)
         def update(self, row, **f): pass
 
     class FakeOutcome:
@@ -532,3 +536,33 @@ def test_a_boot_wait_is_unaffected_when_nothing_is_shutting_down():
                                   cancelled=lambda: False)
     finally:
         phones.status = original
+
+
+def test_a_second_refusal_says_the_retry_was_already_spent(tmp_path,
+                                                           make_settings):
+    """The advice for a TLS refusal opens with "retry first" - and when the run
+    has already restarted the phone for a new exit and been refused again, that
+    is the one instruction that is no longer useful. The note escalates instead
+    (2026-08-09, row 1: refused, restarted, refused).
+    """
+    notes: list[str] = []
+
+    result, events = _app_login_row(
+        ["network_ssl_rejected", "network_ssl_rejected"], tmp_path,
+        make_settings, notes=notes)
+
+    assert result.reason == "app_network_ssl_rejected"
+    assert notes and notes[0].startswith("ALREADY RETRIED")
+    assert "change the proxy" in notes[0]
+    assert "delete this phone" in notes[0]
+
+
+def test_a_first_time_refusal_still_says_to_retry(tmp_path, make_settings):
+    """The counterweight: when there was no budget for a second exit, retrying
+    is still the right first move and the note must not tell them otherwise."""
+    notes: list[str] = []
+    result, _ = _app_login_row(["network_ssl_rejected"], tmp_path,
+                               make_settings, budget=60, notes=notes)
+
+    assert result.reason == "app_network_ssl_rejected"
+    assert notes and not notes[0].startswith("ALREADY RETRIED")
