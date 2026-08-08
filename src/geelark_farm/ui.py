@@ -351,23 +351,21 @@ def print_new_links(live: Live, reporter: LiveReporter) -> None:
     if not new:
         return
 
-    # Stopped around the printing, and started again afterwards.
+    # Printed straight through the live console, which puts it above the table
+    # and redraws - no stopping and starting.
     #
-    # Live erases its last frame by moving the cursor up over the lines it
-    # believes it drew. Its region sits at the bottom, and ten of these blocks
-    # fill the window - so the next time the table grows the terminal scrolls,
-    # the top of the previous frame goes into the scrollback where no cursor
-    # can reach it, and it stays there. The leftovers are always a header and
-    # one row, which is exactly the part that scrolled off (2026-08-08).
-    #
-    # Restarting forgets the stale measurement, the same way a resize does.
-    live.stop()
+    # This did stop and start for a while, to re-anchor a display whose frames
+    # were leaking. That was treating a symptom: the leaks came from the state
+    # column wrapping, which made the table's height change between frames, and
+    # they went when that column stopped wrapping. What the stopping added was
+    # a leftover copy of the table per link printed - eight links, eight copies
+    # (2026-08-09). Live keeps its last frame on stop, which is exactly what
+    # makes the final table stay on screen, and exactly what made this wrong.
     for number, serial, url in new:
         where = f"row {number}" + (f", phone {serial}" if serial else "")
         live.console.print(f"[{DIM}]{where} - watch live:[/]")
         live.console.print(url, soft_wrap=True)
     live.console.print()
-    live.start(refresh=True)
 
 
 def _restart_after_resize(live: Live, width: int) -> int:

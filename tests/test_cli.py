@@ -198,6 +198,45 @@ def test_only_the_narrating_layers_reach_the_state_column():
     assert reporter.drain_links() == [(1, "477", "https://phone.geelark.com/i?t=1")]
 
 
+def test_printing_links_does_not_restart_the_display():
+    """Live keeps its last frame when it stops - that is what makes the final
+    table stay on screen. So stopping around each link print left a copy of the
+    table behind every time: eight links, eight copies (2026-08-09).
+
+    Printing through the live console is already handled by rich; the stopping
+    was there to re-anchor frames that were leaking for a different reason, and
+    that reason - a wrapping state column - is fixed at its source.
+    """
+    import io
+
+    from rich.console import Console
+    from rich.live import Live
+
+    from geelark_farm.ui import LiveReporter, print_new_links
+
+    class FakeRow:
+        def __init__(self, n):
+            self.number, self.email = n, f"r{n}@example.com"
+
+    console = Console(width=100, force_terminal=True, file=io.StringIO())
+    reporter = LiveReporter(total=2)
+    for n in (1, 2):
+        reporter.start(n, FakeRow(n))
+        reporter.note(n, f"watch it live: https://phone.geelark.com/i?row={n}")
+
+    calls: list[str] = []
+    with Live(reporter.render(), console=console) as live:
+        real_stop, real_start = live.stop, live.start
+        live.stop = lambda: (calls.append("stop"), real_stop())[1]
+        live.start = lambda refresh=False: (calls.append("start"),
+                                            real_start(refresh))[1]
+        print_new_links(live, reporter)
+        during_the_print = list(calls)      # before the block's own stop
+
+    assert during_the_print == [], "the display is never stopped to print"
+    assert console.file.getvalue().count("phone.geelark.com") == 2
+
+
 def test_a_resize_restarts_the_live_display_once():
     """Live erases its last frame by moving the cursor up over the number of
     lines it believes it drew - a count worked out at the old width. After a
