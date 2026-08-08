@@ -434,6 +434,7 @@ class Reporter(Protocol):
 
 def run(client: Client, settings: Settings, *, limit: int | None = None,
         only_row: int | None = None, retry_failed: bool = False,
+        failed_only: bool = False,
         dry_run: bool = False, workers: int | None = None,
         on_ready: Callable[[str], None] | None = None,
         reporter: Reporter | None = None) -> list[Result]:
@@ -442,7 +443,8 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
 
     sheet = Sheet.open(settings)
     rows = sheet.read()
-    chosen = selectable(rows, retry_failed=retry_failed)
+    chosen = selectable(rows, retry_failed=retry_failed,
+                        failed_only=failed_only)
     if only_row is not None:
         chosen = [r for r in chosen if r.number == only_row]
     if limit:

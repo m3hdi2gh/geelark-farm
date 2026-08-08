@@ -138,7 +138,8 @@ geelark rows                    # validate every row, spend nothing
 geelark run --dry-run           # show the plan
 geelark run                     # process the pending rows
 geelark run --workers 3         # ...three at a time
-geelark run --retry-failed      # also retry failed and stuck rows
+geelark run --failed-only       # retry ONLY what failed - nothing pending
+geelark run --retry-failed      # the failed rows AND the pending ones
 geelark reap                    # stop anything left running
 ```
 

@@ -57,8 +57,9 @@ class Snapshot:
     rows_done: int = 0
     rows_pending: int = 0
     rows_failed: int = 0
-    # What --retry-failed would actually pick up: the pending rows as well as
-    # the failed and stuck ones. Counting only the failures understated it.
+    # What the retry menu entry picks up: the failed and the stuck, and
+    # nothing pending. The entry says "Retry failed and stuck rows" and for a
+    # while did not mean it - it also took every pending row with it.
     rows_retryable: int = 0
     rows_bad: int = 0
     phones_total: int = 0
@@ -132,7 +133,7 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.rows_failed = sum(1 for r in rows if r.is_failed)
             snap.rows_bad = sum(1 for r in rows if r.error)
             snap.rows_pending = len(selectable(rows))
-            snap.rows_retryable = len(selectable(rows, retry_failed=True))
+            snap.rows_retryable = len(selectable(rows, failed_only=True))
         except SheetError as exc:
             snap.error = snap.error or str(exc).splitlines()[0]
     return snap
@@ -606,7 +607,10 @@ def confirm_run(settings: Settings, snap: Snapshot, *,
                   f"Phones bill per running minute.[/]")
     if not Confirm.ask("start", default=True):
         return None
-    return {"workers": workers, "retry_failed": retry_failed, "limit": count}
+    # failed_only, not retry_failed: the menu entry promises the failed and
+    # stuck rows, so it has to leave the pending ones where they are.
+    mode = {"failed_only": True} if retry_failed else {}
+    return {"workers": workers, "limit": count, **mode}
 
 
 def run_console(settings: Settings) -> int:

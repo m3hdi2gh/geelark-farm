@@ -60,7 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--row", type=int, metavar="N",
                        help="process only this sheet row")
     p_run.add_argument("--retry-failed", action="store_true",
-                       help="also retry rows marked failed:*")
+                       help="also retry rows marked failed:* (as well as the "
+                            "pending ones)")
+    p_run.add_argument("--failed-only", action="store_true",
+                       help="retry ONLY the failed and stuck rows - nothing "
+                            "pending. What you want after reading a summary")
     p_run.add_argument("--workers", type=int, metavar="N",
                        help="how many rows to run at once "
                             "(default: MAX_CONCURRENT_PHONES)")
@@ -569,7 +573,8 @@ def cmd_run(settings: Settings, args) -> int:
     results = run_batch(
         client, settings,
         limit=args.limit, only_row=args.row,
-        retry_failed=args.retry_failed, dry_run=args.dry_run,
+        retry_failed=args.retry_failed, failed_only=args.failed_only,
+        dry_run=args.dry_run,
         workers=args.workers,
         on_ready=announce if args.watch else None,
     )

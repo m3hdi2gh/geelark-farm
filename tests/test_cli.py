@@ -26,7 +26,8 @@ class Args:
 
     def __init__(self, **kw):
         defaults = dict(limit=None, row=None, retry_failed=False,
-                        dry_run=False, workers=None, watch=False)
+                        failed_only=False, dry_run=False, workers=None,
+                        watch=False)
         defaults.update(kw)
         self.__dict__.update(defaults)
 

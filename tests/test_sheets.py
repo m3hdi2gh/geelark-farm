@@ -310,3 +310,29 @@ def test_an_empty_secret_is_named_as_empty():
 
     with pytest.raises(AccountError, match="no totp_secret"):
         check_totp_secret("")
+
+
+def test_failed_only_leaves_the_pending_rows_alone():
+    """"Retry what went wrong" and "carry on with the sheet" are different
+    intentions, and a sheet usually holds both kinds of row. --retry-failed on
+    a sheet with ten still to do created ten phones nobody asked for
+    (2026-08-09)."""
+    rows = [
+        make_row(1, status="failed:app_wrong_password"),
+        make_row(2, status="done"),
+        make_row(3, status="pending"),
+        make_row(4, status=""),                 # blank counts as pending
+        make_row(5, status="running"),          # stuck, so it belongs with the failures
+    ]
+
+    assert [r.number for r in selectable(rows)] == [3, 4]
+    assert [r.number for r in selectable(rows, retry_failed=True)] == [1, 3, 4, 5]
+    assert [r.number for r in selectable(rows, failed_only=True)] == [1, 5]
+
+
+def test_failed_only_never_returns_a_finished_row():
+    """A done row has a phone someone is using. Re-running it would sign the
+    account in again on a device that is already handed over."""
+    rows = [make_row(1, status="done"), make_row(2, status="failed:x")]
+
+    assert [r.number for r in selectable(rows, failed_only=True)] == [2]

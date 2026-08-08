@@ -321,7 +321,8 @@ def _a1_column(number: int) -> str:
     return letters
 
 
-def selectable(rows: list[Row], *, retry_failed: bool = False) -> list[Row]:
+def selectable(rows: list[Row], *, retry_failed: bool = False,
+               failed_only: bool = False) -> list[Row]:
     """Rows a run should process: pending, valid, and not already done.
 
     `running` rows are normally left alone, since another run may be holding
@@ -332,13 +333,23 @@ def selectable(rows: list[Row], *, retry_failed: bool = False) -> list[Row]:
 
     Use it when no other run is in progress; `geelark phones --ledger` shows
     whether one is.
+
+    `failed_only` narrows it to exactly those: the failed and the stuck, and
+    nothing pending. "Retry what went wrong" and "carry on with the sheet" are
+    different intentions, and a sheet usually has both kinds of row in it - so
+    --retry-failed on a sheet with ten rows still to do creates ten phones
+    nobody asked for, which is what it did (2026-08-09).
     """
     chosen = []
     for row in rows:
         if row.error or not row.account:
             continue
-        if row.is_pending:
+        stuck_or_failed = row.is_failed or row.status == RUNNING
+        if failed_only:
+            if stuck_or_failed:
+                chosen.append(row)
+        elif row.is_pending:
             chosen.append(row)
-        elif retry_failed and (row.is_failed or row.status == RUNNING):
+        elif retry_failed and stuck_or_failed:
             chosen.append(row)
     return chosen

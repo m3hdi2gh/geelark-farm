@@ -58,6 +58,21 @@ That hang was a bug, fixed on 2026-08-08: an interrupt stopped the phones but
 never told the workers, so each carried on polling the phone that had just been
 stopped underneath it for the rest of its boot timeout.
 
+## Retrying only what failed
+After reading a summary, the command is:
+
+```bash
+geelark run --failed-only
+```
+
+**Not `--retry-failed`.** That one means "the failed rows as well as the
+pending ones", which on a part-finished sheet is every row left in it — on
+2026-08-09 that turned a three-row retry into thirteen, creating ten phones
+nobody had asked for. `geelark run --dry-run --failed-only` prints the list
+before anything is spent.
+
+The console's "Retry failed and stuck rows" is `--failed-only`.
+
 ## Known failure modes
 
 ### A step reports success but nothing happened
