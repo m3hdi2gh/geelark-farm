@@ -571,3 +571,58 @@ def test_the_reset_never_runs_once_the_password_is_in():
     ctx.submitted_password = True
 
     assert app_screen(ctx) is None or app_screen(ctx).name != "logged_out_chat"
+
+
+# --------------------------- OpenAI's edge refusing the request (2026-08-08)
+def _email_page(submissions: int):
+    """The email page with the address already in the box, after `submissions`
+    attempts - which is what a refused submission leaves behind."""
+    ctx = app_context("chatgpt-request-problem.xml")
+    ctx.creds = ACCOUNT
+    ctx.email_submissions = submissions
+    return ctx
+
+
+def test_a_refused_submission_is_identified_by_the_count_not_the_message():
+    """OpenAI shows "There is a problem with your request" with a Cloudflare
+    Ray ID, and the toast fades within seconds - the archived capture from the
+    failing run was taken with the address in the box and no message anywhere.
+    So what identifies it is being back on this page having already submitted.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = _email_page(submissions=chatgpt_login.MAX_EMAIL_SUBMISSIONS)
+
+    assert screen.find_input(ctx.elements, password=False).text == ACCOUNT.email
+    assert not ctx.has("there is a problem"), "the message has already faded"
+
+    outcome = chatgpt_login.act_email(ctx)
+    assert outcome is not None
+    assert outcome.kind == "fatal"
+    assert outcome.reason == "request_rejected"
+
+
+def test_one_resubmission_is_allowed_before_giving_up():
+    """A genuine one-off should not cost a row, and two attempts is not a
+    pattern anything would penalise."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = _email_page(submissions=1)
+    assert chatgpt_login.MAX_EMAIL_SUBMISSIONS == 2
+
+    # Still under the limit, so it resubmits rather than reporting - which
+    # needs a device, so only the decision is checked here.
+    assert ctx.email_submissions < chatgpt_login.MAX_EMAIL_SUBMISSIONS
+
+
+def test_the_reason_says_what_to_do_about_it():
+    """The point of the reason is that the sheet tells you the next action
+    without anyone having to read a log."""
+    from geelark_farm.flows import chatgpt_login
+
+    advice = chatgpt_login.FATAL_ADVICE["request_rejected"]
+    assert "CHANGE THE EXIT IP" in advice
+    # And the trap that would waste the change: a phone keeps the proxy it was
+    # created with, so a new proxy needs a new phone.
+    assert "delete this phone" in advice

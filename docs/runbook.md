@@ -147,6 +147,42 @@ Both are fixed, and the lesson holds for the next one: open the last archived
 XML before believing the name. `artifacts/<run>/` keeps every screen the flow
 visited, in order.
 
+### `app_request_rejected` — change the exit IP
+OpenAI answered the sign-in with:
+
+    There is a problem with your request. (a27a1dff7e6fe572-EWR)
+
+The identifier is a **Cloudflare Ray ID** — this is their edge refusing the
+request, not their login rejecting the credentials. It is a judgement about
+where the request came from. The account and the password were never examined.
+
+**Retry first.** These proxies hand out a different exit each session, and that
+alone has fixed it:
+
+```bash
+geelark run --retry-failed
+```
+
+**If it recurs on the same row, change the proxy — and delete the phone.** A
+phone keeps the proxy it was created with, so a new proxy in the sheet does
+nothing until the row gets a new phone:
+
+```bash
+geelark delete --phone <id>
+```
+
+Then clear that row's `phone_id` and `serial` and re-run it.
+
+The flow submits the address twice and then stops. Not more, deliberately:
+rapid repetition is what a bot-protection layer exists to punish, so hammering
+it makes the score worse rather than better, and every attempt counts against a
+real account. Spamming it by hand does eventually work — that is winning a
+lottery on which requests happen to share an exit, not a strategy to automate.
+
+Note the toast fades within seconds, so an archived capture of this usually
+shows the address sitting in the box with no error anywhere. That is why the
+flow identifies it by having already submitted rather than by the message.
+
 ### A field ends up holding more than was typed
 Backspace only deletes to the left of the cursor, and a field is focused by
 tapping it — on a filled field that puts the cursor in the middle of the text,

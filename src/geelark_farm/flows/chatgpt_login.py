@@ -117,6 +117,14 @@ FATAL_ADVICE = {
         "the same proxy, so the phone is fine. These exits rotate between "
         "sessions, so a retry may simply land on a different one; if it "
         "recurs on this row, the proxy is intercepting TLS and needs replacing",
+    "request_rejected":
+        "CHANGE THE EXIT IP. OpenAI's edge refused the sign-in twice - "
+        "'There is a problem with your request', with a Cloudflare Ray ID - "
+        "which is a judgement on where the request came from, not on the "
+        "account or the password. Retry first: these proxies hand out a "
+        "different exit each session, and that alone has fixed it before. If "
+        "it recurs, put a different proxy in the sheet AND delete this phone, "
+        "because a phone keeps the proxy it was created with",
 }
 
 # The way in that is not Google. Matching is case-insensitive and partial, so
@@ -164,6 +172,19 @@ COMPOSER_CONTROLS = (
     "Dictation", "Attachment", "Start a voice conversation",
 )
 
+# How many times the address is put to OpenAI before the row is told that its
+# exit address is the problem.
+#
+# Two, not fifty. The refusal - "There is a problem with your request", with a
+# Cloudflare Ray ID after it - comes from the edge rather than from the login,
+# so it is a judgement about where the request came from and not about what was
+# in it. Repeating quickly is the behaviour that layer exists to penalise, and
+# every attempt is an attempt against a real account. One resubmission covers a
+# genuine one-off; past that the answer is a different address, which no amount
+# of pressing this button produces.
+MAX_EMAIL_SUBMISSIONS = 2
+RESUBMIT_PAUSE = 20.0
+
 
 @dataclass
 class Context(router.Context):
@@ -171,6 +192,9 @@ class Context(router.Context):
 
     creds: Credentials = None                                   # type: ignore
     package: str = ""
+    # How many times the address has been put to OpenAI. See act_email: the
+    # count is what tells a refused submission apart from a fresh page.
+    email_submissions: int = 0
     # Set when this run has actually put the account's password into the form.
     # See verified_on_device: a composer on screen is not evidence of a
     # session, because the app has a logged-out mode that has one too.
@@ -302,11 +326,35 @@ def act_close_google_sheet(ctx: Context) -> Outcome | None:
 
 
 def act_email(ctx: Context) -> Outcome | None:
+    """Put the address in and submit it - or name why that keeps failing.
+
+    Being back on this page with the address still in the box means the last
+    submission was refused, not mistyped. OpenAI shows why in a toast that
+    fades within seconds, so by the next screen read it is usually gone and the
+    page looks untouched again - which is why the count, not the message, is
+    what identifies this.
+    """
     field = screen.find_input(ctx.elements, password=False)
     if not field:
         return None
-    log.info("entering the app account's email address")
-    fill(ctx, field, ctx.creds.email)
+
+    resubmitting = field.text.strip().casefold() == ctx.creds.email.casefold()
+
+    if resubmitting and ctx.email_submissions >= MAX_EMAIL_SUBMISSIONS:
+        path = ctx.save("request_rejected")
+        return Outcome("fatal", "request_rejected",
+                       FATAL_ADVICE["request_rejected"],
+                       artifacts=[path] if path else [])
+
+    if resubmitting:
+        log.info("the address is still in the box - the last submission was "
+                 "refused; sending it once more")
+        time.sleep(RESUBMIT_PAUSE)
+    else:
+        log.info("entering the app account's email address")
+        fill(ctx, field, ctx.creds.email)
+
+    ctx.email_submissions += 1
     submit(ctx)
     time.sleep(5)
     return None
