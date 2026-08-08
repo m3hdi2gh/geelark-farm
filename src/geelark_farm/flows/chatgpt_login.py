@@ -201,11 +201,39 @@ class Context(router.Context):
     submitted_password: bool = False
 
 
-def launch(client: Client, phone_id: str, package: str) -> None:
-    """Bring the app to the front, from wherever it was."""
-    shell.run(client, phone_id,
-              f"monkey -p {package} -c android.intent.category.LAUNCHER 1")
-    time.sleep(8)
+LAUNCH_ATTEMPTS = 3
+
+
+def launch(client: Client, phone_id: str, package: str) -> bool:
+    """Bring the app to the front, and check that it came.
+
+    One monkey and a fixed wait was the whole of this, and it silently did
+    nothing twice: the install had only just finished, the app did not come up
+    inside eight seconds, and the flow drove on against the Play Store's own
+    page - reading "Uninstall" and "Open", matching nothing, and reporting
+    app_unknown_screen about a screen that was never this app's (2026-08-08,
+    rows 7 and 8).
+
+    Asking the device which app is in front is the check, rather than looking
+    for something recognisable on screen: an unrecognised page looks identical
+    whether the app is showing something new or was never started.
+    """
+    for attempt in range(1, LAUNCH_ATTEMPTS + 1):
+        shell.run(client, phone_id,
+                  f"monkey -p {package} -c android.intent.category.LAUNCHER 1")
+        time.sleep(8)
+        front = shell.foreground_package(client, phone_id)
+        if not front:
+            # The device would not say. Carrying on beats refusing to start
+            # over a diagnostic that is not available.
+            log.info("could not read the foreground app; assuming it started")
+            return True
+        if front == package:
+            return True
+        log.warning("%s is in front, not %s (attempt %d/%d)",
+                    front, package, attempt, LAUNCH_ATTEMPTS)
+        time.sleep(5)
+    return False
 
 
 def composer_on_screen(ctx: Context) -> bool:
@@ -524,7 +552,10 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
         return Outcome("fatal", "app_not_installed",
                        f"{package} is not on this phone")
 
-    launch(client, phone_id, package)
+    if not launch(client, phone_id, package):
+        return Outcome("unknown", "app_would_not_start",
+                       f"{package} did not come to the front after "
+                       f"{LAUNCH_ATTEMPTS} attempts")
     ctx = Context(client=client, phone_id=phone_id, creds=creds,
                   package=package, artifact_dir=artifact_dir)
 

@@ -665,3 +665,41 @@ def test_googles_checking_interstitial_is_waited_for():
 
     assert login.is_loading(ctx)
     assert matched_screen(ctx).name == "loading"
+
+
+def test_the_app_is_confirmed_in_front_before_the_flow_drives_it():
+    """Two rows installed the app, launched it, and drove against the Play
+    Store's own page - reading "Uninstall" and "Open", matching nothing, and
+    reporting app_unknown_screen about a screen that was never this app's
+    (2026-08-08, rows 7 and 8). The launch never checked that anything came up.
+
+    Asked of the device, not the screen: an unrecognised page looks identical
+    whether the app is showing something new or was never started.
+    """
+    from geelark_farm import screen as screen_mod
+    from geelark_farm.flows import chatgpt_login
+
+    els = screen_mod.parse(
+        (FIXTURES / "play-page-after-install.xml").read_text(encoding="utf-8"))
+    ctx = chatgpt_login.Context(client=None, phone_id="P", creds=ACCOUNT)
+    ctx.elements = els
+    ctx.blob = screen_mod.texts(els)
+
+    # Nothing here belongs to the app, and nothing in the registry claims it -
+    # which is correct, and is why the check has to happen before the loop.
+    assert not chatgpt_login.composer_on_screen(ctx)
+    assert app_screen(ctx) is None
+    assert chatgpt_login.LAUNCH_ATTEMPTS >= 2
+
+
+def test_the_foreground_check_never_blocks_on_its_own_failure():
+    """A diagnostic that is unavailable must not stop a launch that would have
+    worked - so an unreadable answer means carry on."""
+    from geelark_farm import shell
+
+    original = shell.read
+    shell.read = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no shell"))
+    try:
+        assert shell.foreground_package(object(), "P1") == ""
+    finally:
+        shell.read = original

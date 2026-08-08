@@ -325,11 +325,27 @@ def print_new_links(live: Live, reporter: LiveReporter) -> None:
     real line breaks mid-URL, and a URL broken by a newline is one no terminal
     will detect and no double-click will select.
     """
-    for number, serial, url in reporter.drain_links():
+    new = reporter.drain_links()
+    if not new:
+        return
+
+    # Stopped around the printing, and started again afterwards.
+    #
+    # Live erases its last frame by moving the cursor up over the lines it
+    # believes it drew. Its region sits at the bottom, and ten of these blocks
+    # fill the window - so the next time the table grows the terminal scrolls,
+    # the top of the previous frame goes into the scrollback where no cursor
+    # can reach it, and it stays there. The leftovers are always a header and
+    # one row, which is exactly the part that scrolled off (2026-08-08).
+    #
+    # Restarting forgets the stale measurement, the same way a resize does.
+    live.stop()
+    for number, serial, url in new:
         where = f"row {number}" + (f", phone {serial}" if serial else "")
         live.console.print(f"[{DIM}]{where} - watch live:[/]")
         live.console.print(url, soft_wrap=True)
-        live.console.print()
+    live.console.print()
+    live.start(refresh=True)
 
 
 def _restart_after_resize(live: Live, width: int) -> int:

@@ -154,6 +154,11 @@ def _download_stalled(blob: str) -> bool:
 # minutes of it (2026-08-08).
 SERVER_ERROR_TEXTS = ("server error", "something went wrong", "no connection")
 MAX_PLAY_RETRIES = 3
+# Between attempts. The first version went again after twelve seconds, three
+# times, and got the same page each time - which is pressure rather than
+# patience, and these failures clear by waiting (2026-08-08, row 2). Three
+# attempts at this spacing still fit inside PRE_INSTALL_SECONDS.
+PLAY_RETRY_PAUSE = 25.0
 
 
 def _server_error(blob: str) -> bool:
@@ -281,9 +286,18 @@ def install(client: Client, phone_id: str, package: str, *,
                         retries, MAX_PLAY_RETRIES)
             # By name, not by "the clickable button": this page also offers a
             # mini-game to pass the time, whose button is called Play.
-            if not screen.tap_label(client, phone_id, elements, "Try again"):
+            # A real button only. Row 2's page said "Something went wrong.
+            # Please go back and try again." and had nothing to press - and
+            # "try again" is a whole word inside that sentence, so the label
+            # search matched the subtitle. Every attempt tapped a line of text
+            # and reported success, so the page was never actually re-opened
+            # and the row failed three identical times (2026-08-08).
+            button = screen.find(elements, "Try again", clickable_only=True)
+            if button and screen.tap_element(client, phone_id, button):
+                log.info("pressed Play's Try again")
+            else:
                 open_package_page(client, phone_id, package)
-            time.sleep(6)
+            time.sleep(PLAY_RETRY_PAUSE)
             continue
 
         if still_loading(elements):

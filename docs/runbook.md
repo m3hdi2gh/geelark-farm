@@ -168,6 +168,25 @@ Both are fixed, and the lesson holds for the next one: open the last archived
 XML before believing the name. `artifacts/<run>/` keeps every screen the flow
 visited, in order.
 
+### `app_unknown_screen` showing the Play Store
+The app was installed but never came to the front, so the flow drove against
+Play's own package page — "Uninstall", "Open" — matched nothing, and named the
+screen rather than the cause. Fixed on 2026-08-08: the launch now asks the
+device which app is in front and retries.
+
+If it recurs, the archived XML says which app was showing. `geelark shell
+"dumpsys window | grep mCurrentFocus"` answers the same question live.
+
+### The live table leaves copies of itself behind
+Cosmetic. Live erases its previous frame by moving the cursor up over the lines
+it drew; its region sits at the bottom of the window, so when the table grows
+and the terminal scrolls, the part that scrolled off is in the scrollback where
+no cursor can reach it. The leftovers are always a header and one row.
+
+Restarting the display on a resize, and around printing the live-view links,
+covers the cases that caused it. **The summary at the end is authoritative** —
+it is printed once, after the table is finished with.
+
 ### `app_request_rejected` — change the exit IP
 OpenAI answered the sign-in with:
 

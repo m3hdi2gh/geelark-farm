@@ -51,6 +51,26 @@ def device_accounts(client: Client, phone_id: str) -> list[str]:
     return sorted({m.lower() for m in ACCOUNT_RE.findall(output)})
 
 
+def foreground_package(client: Client, phone_id: str) -> str:
+    """Which app is in front, or "" if the device will not say.
+
+    Asking the device rather than reading the screen, because "this is not my
+    app" is exactly the judgement a screen cannot be trusted to make - an
+    unrecognised page looks the same whether the app is showing something new
+    or was never brought to the front at all.
+
+    Empty on any doubt: a caller that cannot find out should carry on rather
+    than act on a guess.
+    """
+    try:
+        out = read(client, phone_id,
+                   "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'")
+    except Exception:                                             # noqa: BLE001
+        return ""
+    found = re.search(r"([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)/", out)
+    return found.group(1) if found else ""
+
+
 def package_installed(client: Client, phone_id: str, package: str) -> bool:
     """Whether `package` is really installed. The only acceptable proof."""
     output = read(client, phone_id, f"pm list packages {shlex.quote(package)}")

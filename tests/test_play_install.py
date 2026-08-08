@@ -238,3 +238,52 @@ def test_a_page_of_bare_layout_is_still_loading():
     assert xml.count("<node") > 0, "and it is not an empty dump either"
 
     assert play_install.still_loading(screen.parse(xml))
+
+
+def test_a_sentence_is_not_the_try_again_button():
+    """Row 2's page said "Something went wrong. Please go back and try again."
+    and had no button at all. "try again" is a whole word inside that sentence,
+    so the label search matched the subtitle - and tapping a line of text
+    reports success, so the retry never re-opened the page and the row failed
+    three identical times (2026-08-08).
+
+    Requiring the match to be clickable is what separates the button from the
+    sentence describing it.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    els = screen.parse(
+        (FIXTURES / "play-something-went-wrong.xml").read_text(encoding="utf-8"))
+
+    assert play_install._server_error(screen.texts(els))
+    assert screen.find(els, "Install") is None
+
+    # The trap, still there: the sentence matches by label.
+    loose = screen.find(els, "Try again")
+    assert loose is not None and not loose.clickable
+    # And the guard that steps around it.
+    assert screen.find(els, "Try again", clickable_only=True) is None
+
+
+def test_a_real_try_again_button_is_still_found():
+    """The counterweight: Play's other error page has a genuine Button, and
+    pressing it is what recovered that row."""
+    from geelark_farm import screen
+
+    els = screen.parse(
+        (FIXTURES / "play-server-error.xml").read_text(encoding="utf-8"))
+
+    button = screen.find(els, "Try again", clickable_only=True)
+    assert button is not None and button.clickable
+
+
+def test_the_retries_are_spaced_and_still_fit_the_budget():
+    """Three attempts twelve seconds apart got the same page three times. These
+    failures clear by waiting, so the spacing is the fix - and it has to stay
+    inside the pre-install budget or it turns a named failure into a timeout."""
+    from geelark_farm.flows import play_install
+
+    total = play_install.MAX_PLAY_RETRIES * play_install.PLAY_RETRY_PAUSE
+    assert play_install.PLAY_RETRY_PAUSE >= 20
+    assert total < play_install.PRE_INSTALL_SECONDS
