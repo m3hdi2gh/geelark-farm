@@ -194,7 +194,8 @@ def _existing_phone(client: Client, phone_id: str) -> bool:
 def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                 ledger: Ledger,
                 on_ready: Callable[[str], None] | None = None,
-                on_phone: Callable[[str], None] | None = None) -> Result:
+                on_phone: Callable[[str], None] | None = None,
+                cancelled: Callable[[], bool] | None = None) -> Result:
     """Take one row from pending to a stopped, ready phone.
 
     Returns a Result rather than raising: the caller is a batch, and one bad
@@ -274,7 +275,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
     artifact_dir = settings.artifact_dir / f"{stamp}-row{row.number}"
 
     try:
-        phones.ensure_running(client, phone_id, timeout=remaining())
+        phones.ensure_running(client, phone_id, timeout=remaining(),
+                              cancelled=cancelled)
         if on_ready:
             # The caller may want to watch: fired after boot, before the
             # first screen is touched, so nothing is missed.
@@ -355,7 +357,8 @@ def process_row(client: Client, settings: Settings, sheet: Sheet, row: Row,
                             row.number, signed.reason)
                 phones.stop(client, phone_id)
                 time.sleep(5)
-                phones.ensure_running(client, phone_id, timeout=remaining())
+                phones.ensure_running(client, phone_id, timeout=remaining(),
+                              cancelled=cancelled)
                 signed = app_login()
 
             if not signed.ok:
@@ -478,6 +481,13 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
     started: set[str] = set()
     started_lock = threading.Lock()
 
+    # And the other half of an interrupt: telling the workers to stop waiting.
+    # Stopping their phones is not enough on its own - they carry on polling
+    # the phone that was just stopped underneath them, for the rest of the boot
+    # timeout, and a ThreadPoolExecutor's threads are not daemons, so Python
+    # joins them on the way out and the process cannot exit (2026-08-08).
+    shutting_down = threading.Event()
+
     def note_phone(phone_id: str) -> None:
         with started_lock:
             started.add(phone_id)
@@ -490,7 +500,8 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
             print(f"\n=== row {row.number} ({index}/{len(chosen)}): "
                   f"{row.email} ===", flush=True)
         result = process_row(client, settings, sheet, row, ledger,
-                             on_ready=on_ready, on_phone=note_phone)
+                             on_ready=on_ready, on_phone=note_phone,
+                             cancelled=shutting_down.is_set)
         if reporter:
             reporter.finish(result)
         else:
@@ -506,6 +517,7 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
                 results.append(work(index, row))
         except KeyboardInterrupt:
             print("\ninterrupted - stopping here", flush=True)
+            shutting_down.set()
             _stop_all(client, started, ledger)
         return results
 
@@ -519,6 +531,11 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
             wait(futures, return_when=FIRST_EXCEPTION)
     except KeyboardInterrupt:
         print("\ninterrupted - stopping every phone this run started", flush=True)
+        # Set first. Cancelling a future does nothing to a row already running,
+        # and stopping its phone does not release it either - it carries on
+        # polling the phone that was just stopped underneath it. This is what
+        # lets those workers finish, and therefore what lets the process exit.
+        shutting_down.set()
         for future in futures:
             future.cancel()
         _stop_all(client, started, ledger)

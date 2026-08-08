@@ -37,6 +37,27 @@ If the ledger is lost or corrupt, every phone looks like an orphan, so `reap`
 would stop a run in progress. It logs an error in that case; check
 `geelark phones --ledger` before reaping.
 
+## The run will not stop
+Ctrl+C once is enough, and the summary tells you whether anything is still
+billing. If a second Ctrl+C does nothing and the phone log keeps scrolling,
+the main thread has already died and Python is waiting on the worker threads
+(a ThreadPoolExecutor's are not daemons). Kill it and check:
+
+```powershell
+Stop-Process -Name geelark -Force
+```
+
+```bash
+geelark reap
+```
+
+Killing it is safe — `reap` is the backstop, and it is what tells you the
+truth about billing rather than the terminal you just closed.
+
+That hang was a bug, fixed on 2026-08-08: an interrupt stopped the phones but
+never told the workers, so each carried on polling the phone that had just been
+stopped underneath it for the rest of its boot timeout.
+
 ## Known failure modes
 
 ### A step reports success but nothing happened

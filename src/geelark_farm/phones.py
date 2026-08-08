@@ -167,14 +167,25 @@ def stop(client: Client, phone_id: str) -> None:
 
 
 def wait_until_running(client: Client, phone_id: str, *,
-                       timeout: float = 600, settle: float = 30) -> None:
+                       timeout: float = 600, settle: float = 30,
+                       cancelled: Callable[[], bool] | None = None) -> None:
     """Block until the phone reports running, then let Play Services settle.
 
     The settle wait is not superstition: a dump taken immediately after boot
     returns a hierarchy that is still changing.
+
+    `cancelled` is how an interrupt reaches this loop. Without it, Ctrl+C
+    stopped the phones and then left every worker polling the phone it had just
+    had stopped underneath it - for the full ten minutes, printing "phone
+    stopped" the whole way. The process could not exit either: a
+    ThreadPoolExecutor's threads are not daemons and Python joins them on the
+    way out, so the terminal sat there ignoring further Ctrl+C (2026-08-08).
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if cancelled and cancelled():
+            raise PhoneError(f"stopped waiting for phone {phone_id}: "
+                             f"the run is shutting down")
         state = status(client, phone_id)
         if state == RUNNING:
             log.info("phone running; settling for %.0fs", settle)
@@ -189,7 +200,8 @@ def wait_until_running(client: Client, phone_id: str, *,
 
 def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
                    timeout: float = 600,
-                   on_url: Callable[[str], None] | None = None) -> str | None:
+                   on_url: Callable[[str], None] | None = None,
+                   cancelled: Callable[[], bool] | None = None) -> str | None:
     """Start the phone if needed. Returns the live-view URL when it started
     it, None when it was already up.
 
@@ -216,7 +228,8 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
         log.info("watch it live: %s", url)
         if on_url:
             on_url(url)
-    wait_until_running(client, phone_id, settle=settle, timeout=timeout)
+    wait_until_running(client, phone_id, settle=settle, timeout=timeout,
+                       cancelled=cancelled)
     return url
 
 

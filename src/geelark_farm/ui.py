@@ -561,8 +561,17 @@ def run_console(settings: Settings) -> int:
         console.print(Align.left(menu()))
         console.print()
 
-        choice = Prompt.ask("action", choices=[k for k, _, _ in ACTIONS],
-                            default="q", show_choices=False)
+        try:
+            choice = Prompt.ask("action", choices=[k for k, _, _ in ACTIONS],
+                                default="q", show_choices=False)
+        except (EOFError, KeyboardInterrupt):
+            # Ctrl+C at the menu, or stdin closing under it - which is what a
+            # Ctrl+C during the batch above leaves behind. Untrapped, this
+            # ended the process from inside the loop with a traceback, past
+            # every check that says whether anything is still billing
+            # (2026-08-08). Quitting is a menu choice, so make it one.
+            console.print()
+            choice = "q"
         console.print()
 
         try:

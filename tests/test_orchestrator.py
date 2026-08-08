@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from geelark_farm.ledger import Ledger
 
 
@@ -492,3 +494,41 @@ def test_the_second_exit_is_skipped_when_the_budget_cannot_cover_it(
 
     assert result.reason == "app_network_ssl_rejected"
     assert [e[0] for e in events].count("app_login") == 1
+
+
+# --------------------------------- an interrupt has to reach the workers too
+def test_a_boot_wait_gives_up_when_the_run_is_shutting_down():
+    """Stopping the phones is only half of an interrupt. Without this the
+    workers carried on polling the phone that had just been stopped underneath
+    them, for the rest of the ten-minute boot timeout - and a
+    ThreadPoolExecutor's threads are not daemons, so Python joins them on the
+    way out and the process could not exit. Ctrl+C did nothing after that,
+    because there was nothing left listening for it (2026-08-08).
+    """
+    from geelark_farm import phones
+
+    polls = []
+    original = phones.status
+    phones.status = lambda c, p: polls.append(p) or phones.STOPPED
+    try:
+        with pytest.raises(phones.PhoneError, match="shutting down"):
+            phones.wait_until_running(object(), "P1", timeout=600,
+                                      cancelled=lambda: True)
+    finally:
+        phones.status = original
+
+    assert polls == [], "it should not even ask once"
+
+
+def test_a_boot_wait_is_unaffected_when_nothing_is_shutting_down():
+    """The counterweight: a run that is not being interrupted must still wait
+    for its phone."""
+    from geelark_farm import phones
+
+    original = phones.status
+    phones.status = lambda c, p: phones.RUNNING
+    try:
+        phones.wait_until_running(object(), "P1", timeout=600, settle=0,
+                                  cancelled=lambda: False)
+    finally:
+        phones.status = original
