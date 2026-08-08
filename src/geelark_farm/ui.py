@@ -214,6 +214,9 @@ class LiveReporter:
     # write to the console has to come from the one thread driving Live.
     new_links: list[tuple[int, str, str]] = field(default_factory=list)
     seen_links: set[str] = field(default_factory=set)
+    # Warnings and errors, waiting to be printed above the table rather than
+    # into the middle of a row.
+    new_notices: list[tuple[object, str]] = field(default_factory=list)
 
     def start(self, index: int, row) -> None:
         with self.lock:
@@ -233,6 +236,16 @@ class LiveReporter:
         """Take the links that have arrived since the last call."""
         with self.lock:
             found, self.new_links = self.new_links, []
+            return found
+
+    def notice(self, row, message: str) -> None:
+        """Queue something that must be read, to be printed above the table."""
+        with self.lock:
+            self.new_notices.append((row, message))
+
+    def drain_notices(self) -> list[tuple[object, str]]:
+        with self.lock:
+            found, self.new_notices = self.new_notices, []
             return found
 
     def note(self, row: int, message: str) -> None:
@@ -315,21 +328,43 @@ NARRATING = ("geelark_farm.flows.", "geelark_farm.phones")
 
 
 class ReporterLogHandler(logging.Handler):
-    """Feeds each row's current activity into the live table.
+    """Feeds a batch's output into the live display.
 
-    Only INFO from the narrating layers is interesting; warnings and errors
-    still reach the normal handler, so a real problem is never swallowed by the
-    pretty output.
+    Two things, in two places. Progress from the narrating layers becomes each
+    row's state, in the table. Anything at warning level or above is queued to
+    be printed ABOVE the table instead - it is not a step, it is news, and it
+    has to stay on screen.
+
+    Warnings used to go straight to the stream handler while the table was
+    drawing, which wrote them into the middle of a row and cut them off:
+
+        9  Omega...  phone running; settling for 30s  109s  WARNING [row 9] the cha
+
+    They are worth reading - "the chat screen is up but this run has not signed
+    in", "sheet write failed; retrying" - so the answer is to place them rather
+    than to silence them (2026-08-09).
     """
 
     def __init__(self, reporter: LiveReporter):
         super().__init__(level=logging.INFO)
         self.reporter = reporter
+        self.setFormatter(
+            logging.Formatter("%(levelname)s %(name)s: %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         row = getattr(record, "row", "-")
+        if record.levelno >= logging.WARNING:
+            self.reporter.notice(row, self.format(record))
+            return
         if isinstance(row, int) and record.name.startswith(NARRATING):
             self.reporter.note(row, record.getMessage())
+
+
+def print_new_notices(live: Live, reporter: LiveReporter) -> None:
+    """Put warnings and errors above the table, where they stay readable."""
+    for row, message in reporter.drain_notices():
+        where = f"row {row}" if isinstance(row, int) else "run"
+        live.console.print(f"[{WARN}]{where}[/]  {message}")
 
 
 def print_new_links(live: Live, reporter: LiveReporter) -> None:
@@ -400,11 +435,13 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
     reporter = LiveReporter(total=0)
     handler = ReporterLogHandler(reporter)
     root = logging.getLogger()
-    # Quieten the stream handler for the duration: its lines would fight with
-    # the live table for the same terminal. Warnings and above still print.
+    # Silence the stream handlers completely for the duration. Anything they
+    # print goes straight to the terminal, underneath rich, and lands in the
+    # middle of whatever the table was drawing. Warnings are not lost - the
+    # handler below queues them to be printed above the table instead.
     previous = [(h, h.level) for h in root.handlers]
     for existing, _ in previous:
-        existing.setLevel(logging.WARNING)
+        existing.setLevel(logging.CRITICAL + 1)
     root.addHandler(handler)
 
     results: list[Result] = []
@@ -425,9 +462,11 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
             width = console.size.width
             while worker.is_alive():
                 width = _restart_after_resize(live, width)
+                print_new_notices(live, reporter)
                 print_new_links(live, reporter)
                 live.update(reporter.render())
                 time.sleep(0.25)
+            print_new_notices(live, reporter)
             print_new_links(live, reporter)
             live.update(reporter.render())
     finally:

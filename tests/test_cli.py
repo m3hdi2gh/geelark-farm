@@ -302,3 +302,63 @@ def test_the_state_column_shows_steps_not_announcements():
 
     reporter.note(1, "phone starting (1)")
     assert reporter.rows[1]["step"] == "phone starting (1)"
+
+
+def test_warnings_go_above_the_table_not_into_it():
+    """While the table is drawing, anything the stream handler prints lands
+    underneath rich and in the middle of whatever row was being drawn:
+
+        9  Omega...  phone running; settling for 30s  109s  WARNING [row 9] the cha
+
+    They are worth reading - "the chat screen is up but this run has not signed
+    in", "sheet write failed; retrying" - so they are placed rather than
+    silenced (2026-08-09).
+    """
+    import logging
+
+    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+
+    class FakeRow:
+        number, email = 9, "x@example.com"
+
+    reporter = LiveReporter(total=1)
+    reporter.start(9, FakeRow())
+    handler = ReporterLogHandler(reporter)
+
+    def emit(name: str, level: int, message: str) -> None:
+        record = logging.LogRecord(name, level, "f", 1, message, None, None)
+        record.row = 9
+        handler.emit(record)
+
+    emit("geelark_farm.phones", logging.INFO, "phone starting (1)")
+    emit("geelark_farm.flows.chatgpt_login", logging.WARNING,
+         "the chat screen is up but this run has not signed in")
+
+    # The step is the step; the warning is not.
+    assert reporter.rows[9]["step"] == "phone starting (1)"
+
+    notices = reporter.drain_notices()
+    assert len(notices) == 1
+    row, text = notices[0]
+    assert row == 9
+    assert "WARNING" in text and "has not signed in" in text
+    assert reporter.drain_notices() == [], "each one is printed once"
+
+
+def test_a_run_level_warning_is_kept_too():
+    """Not every warning belongs to a row - the ones from before any row starts
+    have no number, and dropping them would lose the ones about the run
+    itself."""
+    import logging
+
+    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+
+    reporter = LiveReporter(total=0)
+    handler = ReporterLogHandler(reporter)
+
+    record = logging.LogRecord("geelark_farm.api", logging.WARNING, "f", 1,
+                               "waited 4s for rate limit", None, None)
+    record.row = "-"
+    handler.emit(record)
+
+    assert len(reporter.drain_notices()) == 1
