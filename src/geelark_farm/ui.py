@@ -332,6 +332,29 @@ def print_new_links(live: Live, reporter: LiveReporter) -> None:
         live.console.print()
 
 
+def _restart_after_resize(live: Live, width: int) -> int:
+    """Re-anchor the live display when the terminal changes width.
+
+    Live erases its previous frame by moving the cursor up over the number of
+    lines it believes it drew. That count was worked out at the old width, so
+    after a resize it is wrong, the erase misses, and every refresh lands below
+    the last one instead of on top of it - four copies of the table a second,
+    for the rest of the run. Resizing the window mid-batch did exactly that
+    (2026-08-08).
+
+    Stopping and starting forgets the stale measurement. It costs one leftover
+    copy of the table per resize, which is a great deal better than one per
+    refresh, and the alternative - drawing on the alternate screen - would take
+    the live-view links out of the scrollback with it.
+    """
+    current = live.console.size.width
+    if current == width:
+        return width
+    live.stop()
+    live.start(refresh=True)
+    return current
+
+
 def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
     """`run`, drawn as a table instead of a scrolling log."""
     client = build_client(settings)
@@ -363,7 +386,9 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
     try:
         with Live(reporter.render(), console=console, refresh_per_second=4,
                   transient=False) as live:
+            width = console.size.width
             while worker.is_alive():
+                width = _restart_after_resize(live, width)
                 print_new_links(live, reporter)
                 live.update(reporter.render())
                 time.sleep(0.25)

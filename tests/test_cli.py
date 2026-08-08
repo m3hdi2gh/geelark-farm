@@ -195,3 +195,35 @@ def test_only_the_narrating_layers_reach_the_state_column():
     assert reporter.rows[1]["phone"] == "477"
     emit("geelark_farm.phones", "watch it live: https://phone.geelark.com/i?t=1")
     assert reporter.drain_links() == [(1, "477", "https://phone.geelark.com/i?t=1")]
+
+
+def test_a_resize_restarts_the_live_display_once():
+    """Live erases its last frame by moving the cursor up over the number of
+    lines it believes it drew - a count worked out at the old width. After a
+    resize the erase misses and every refresh lands below the last one instead
+    of on top of it: four copies of the table a second for the rest of the run,
+    which is what resizing the window mid-batch produced (2026-08-08).
+    """
+    import io
+
+    from rich.console import Console
+    from rich.live import Live
+
+    from geelark_farm.ui import _restart_after_resize
+
+    console = Console(width=100, force_terminal=True, file=io.StringIO())
+    calls: list[str] = []
+
+    with Live("frame", console=console) as live:
+        real_stop, real_start = live.stop, live.start
+        live.stop = lambda: (calls.append("stop"), real_stop())[1]
+        live.start = lambda refresh=False: (calls.append("start"),
+                                            real_start(refresh))[1]
+
+        assert _restart_after_resize(live, 100) == 100
+        assert calls == [], "an unchanged width costs nothing"
+
+        console.size = (140, 30)
+        after = _restart_after_resize(live, 100)
+        assert after != 100
+        assert calls == ["stop", "start"], "once, not once per refresh"

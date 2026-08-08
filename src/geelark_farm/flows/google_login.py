@@ -129,11 +129,37 @@ def submit(ctx: Context) -> None:
 
 
 # ------------------------------------------------------------------ screens
+# Reasons that describe one option among several rather than a verdict on the
+# page. Google's 2-Step list puts "Get a verification code at •••••34" - which
+# this tool cannot receive - directly beside "Get a verification code from the
+# Google Authenticator app", which it can. Fatal is checked before every other
+# entry, so matching the SMS row there killed a login that was one tap from
+# working (2026-08-08, row 7).
+#
+# Everything else in FATAL_TEXTS is a statement about the whole page: a CAPTCHA,
+# a changed password, a disabled account. Those stay fatal wherever they appear.
+NOT_FATAL_BESIDE_AUTHENTICATOR = frozenset({"phone_verification_required"})
+
+# Google's transient interstitial while it decides what to show next. No
+# progress bar on it, so the generic check does not catch it, and there is
+# nothing to act on - a row reported unknown_screen from this page having
+# simply been read a second too early (2026-08-08, row 1).
+CHECKING_TEXTS = ("checking info", "just a moment", "one moment")
+
+
 def _fatal_reason(ctx: Context) -> str | None:
     for reason, needles in FATAL_TEXTS.items():
-        if ctx.has(*needles):
-            return reason
+        if not ctx.has(*needles):
+            continue
+        if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and authenticator_offered(ctx):
+            continue
+        return reason
     return None
+
+
+def is_loading(ctx: Context) -> bool:
+    """The generic progress bar, or Google saying it is still thinking."""
+    return still_loading(ctx) or ctx.has(*CHECKING_TEXTS)
 
 
 def act_fatal(ctx: Context) -> Outcome:
@@ -267,7 +293,7 @@ SCREENS: list[Screen] = [
     # budget bounds it either way, so the visit allowance is generous: the cost
     # of waiting a little too long is seconds, and the cost of acting too early
     # is a whole login.
-    Screen("loading", still_loading, act_wait, max_visits=20),
+    Screen("loading", is_loading, act_wait, max_visits=20),
 
     # Google's generic stumble, which prints its own remedy. Above the acting
     # screens because the page underneath it is not the page it claims to be.

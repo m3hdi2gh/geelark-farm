@@ -108,19 +108,19 @@ def test_a_still_loading_page_is_waited_for_not_given_up_on():
 
     assert rows == []                     # not one labelled element
     assert "ProgressBar" in xml
-    assert play_install.still_loading(rows, xml)
+    assert play_install.still_loading(rows)
 
 
 def test_a_rendered_page_is_never_mistaken_for_a_loading_one():
     xml = (FIXTURES / "play-package-page.xml").read_text(encoding="utf-8")
-    assert not play_install.still_loading(screen.parse(xml), xml)
+    assert not play_install.still_loading(screen.parse(xml))
 
 
 def test_a_dialog_is_not_mistaken_for_a_loading_page():
     """The Terms dialog has content, so it must be cleared rather than waited
     out - otherwise the flow would sit there until its budget expired."""
     xml = (FIXTURES / "play-terms-of-service.xml").read_text(encoding="utf-8")
-    assert not play_install.still_loading(screen.parse(xml), xml)
+    assert not play_install.still_loading(screen.parse(xml))
 
 
 def test_a_parked_download_is_restarted_rather_than_waited_out():
@@ -189,7 +189,7 @@ def test_a_page_that_never_painted_is_not_a_page_without_a_button():
     elements = screen.parse(xml)
 
     assert elements == []
-    assert play_install.still_loading(elements, xml)
+    assert play_install.still_loading(elements)
 
 
 def test_plays_server_error_is_retried_by_name():
@@ -222,3 +222,19 @@ def test_a_normal_package_page_is_not_read_as_an_error():
     blob = screen.texts(screen.parse(
         (FIXTURES / "play-package-page.xml").read_text(encoding="utf-8")))
     assert not play_install._server_error(blob)
+
+
+def test_a_page_of_bare_layout_is_still_loading():
+    """The check used to require a ProgressBar in the raw XML, which made it a
+    question about whether Google had drawn a spinner rather than about whether
+    the page had arrived. A hierarchy of twelve layout nodes with no text and no
+    spinner was reported as no_install_button - true, and about a page that was
+    not there (2026-08-08, row 2)."""
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    xml = (FIXTURES / "play-page-layout-only.xml").read_text(encoding="utf-8")
+    assert "ProgressBar" not in xml, "the premise: no spinner to go by"
+    assert xml.count("<node") > 0, "and it is not an empty dump either"
+
+    assert play_install.still_loading(screen.parse(xml))

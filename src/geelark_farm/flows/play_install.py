@@ -179,22 +179,26 @@ def _restart_download(client: Client, phone_id: str, package: str,
         log.warning("could not find Install after cancelling; will keep polling")
 
 
-def still_loading(elements: list[screen.Element], xml: str) -> bool:
+def still_loading(elements: list[screen.Element]) -> bool:
     """Whether the Play Store has not finished drawing the page yet.
 
-    A rendered package page always has text on it, so no labelled elements at
-    all means nothing has arrived - usually with a spinner sitting in the
-    middle. Distinguishing this from "a page I do not recognise" matters: the
-    first should be waited for, the second is a genuine dead end.
+    A rendered package page always has text on it, so no usable elements at all
+    means nothing has arrived. Distinguishing this from "a page I do not
+    recognise" matters: the first should be waited for, the second is a genuine
+    dead end.
 
     Measured 2026-08-01: with three rows running at once everything is slower,
     and one row reached this check six seconds after the deep link with a bare
     ProgressBar on screen. Treating that as "no Install button" failed a row
     whose page was about to appear.
+
+    It used to require a ProgressBar in the raw XML as well, which made it a
+    question about whether Google had drawn a spinner rather than about whether
+    the page was there. On 2026-08-08 a row got a hierarchy of twelve layout
+    nodes, no text and no spinner, and was reported as no_install_button - true,
+    and about a page that had not arrived.
     """
-    if elements:
-        return False
-    return "ProgressBar" in xml or not xml.strip()
+    return not elements
 
 
 def install(client: Client, phone_id: str, package: str, *,
@@ -282,7 +286,7 @@ def install(client: Client, phone_id: str, package: str, *,
             time.sleep(6)
             continue
 
-        if still_loading(elements, xml):
+        if still_loading(elements):
             log.info("the package page is still loading")
             time.sleep(4)
             continue
@@ -301,7 +305,7 @@ def install(client: Client, phone_id: str, package: str, *,
 
     button = screen.find(elements, "Install")
     if not button:
-        if still_loading(elements, xml):
+        if still_loading(elements):
             # The page never painted at all. Saying "no Install button" of a
             # blank screen sends whoever reads it looking for a button that was
             # never missing - row 1 spent its pre-install budget waiting and

@@ -626,3 +626,42 @@ def test_the_reason_says_what_to_do_about_it():
     # And the trap that would waste the change: a phone keeps the proxy it was
     # created with, so a new proxy needs a new phone.
     assert "delete this phone" in advice
+
+
+# ------------------------------ a fatal that was one option among several
+def test_the_sms_row_is_not_fatal_beside_the_authenticator():
+    """Google's 2-Step list puts "Get a verification code at •••••34" - which
+    this tool cannot receive - directly beside "Get a verification code from
+    the Google Authenticator app", which it can.
+
+    Fatal is checked before every other entry, so matching the SMS row there
+    ended a login that was one tap from working (2026-08-08, row 7).
+    """
+    ctx = context_from("google-2fa-list-with-sms.xml")
+
+    assert ctx.has("get a verification code at"), "the SMS row is on the page"
+    assert login.authenticator_offered(ctx), "and so is the one that works"
+
+    assert login._fatal_reason(ctx) is None
+    assert matched_screen(ctx).name == "2fa_authenticator_offered"
+
+
+def test_the_sms_demand_is_still_fatal_on_its_own():
+    """The counterweight. When SMS really is the only way offered, nothing here
+    can receive it and the row has to say so."""
+    ctx = login.Context(client=None, phone_id="P", account=ACCOUNT)
+    ctx.elements = []
+    ctx.blob = screen.normalize("Get a verification code at (•••) •••-••34").casefold()
+
+    assert not login.authenticator_offered(ctx)
+    assert login._fatal_reason(ctx) == "phone_verification_required"
+
+
+def test_googles_checking_interstitial_is_waited_for():
+    """"Checking info..." with nothing else on the page, and no progress bar to
+    catch it by. A row reported unknown_screen from this, having been read a
+    second too early (2026-08-08, row 1)."""
+    ctx = context_from("google-checking-info.xml")
+
+    assert login.is_loading(ctx)
+    assert matched_screen(ctx).name == "loading"
