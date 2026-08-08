@@ -139,9 +139,17 @@ def _fatal_reason(blob: str) -> str | None:
 # just never recovers on its own within a budget.
 STALLED_TEXTS = (
     "waiting for connection", "download will begin once restored",
-    "waiting for wi-fi", "download pending",
+    "waiting for wi-fi", "download pending", "pending...",
 )
 MAX_DOWNLOAD_RESTARTS = 3
+
+# How many consecutive polls a download has to look parked before it is
+# treated as parked. "Pending..." is also what a queued download says for its
+# first few seconds, so acting on the word alone would cancel healthy
+# downloads; acting only after it has not moved for a minute tells the two
+# apart. A row spent its whole budget on that page saying "still installing..."
+# because the word was not in the list at all (2026-08-09, row 13).
+STALLED_POLLS = 6
 
 
 def _download_stalled(blob: str) -> bool:
@@ -340,6 +348,7 @@ def install(client: Client, phone_id: str, package: str, *,
 
     deadline = time.time() + budget_seconds
     seen: set[str] = set()
+    stalled_polls = 0
     while time.time() < deadline:
         time.sleep(POLL_SECONDS)
         if shell.package_installed(client, phone_id, package):
@@ -356,15 +365,24 @@ def install(client: Client, phone_id: str, package: str, *,
                            "the Play Store stopped being able to install",
                            artifacts=saved)
 
-        if _download_stalled(blob) and restarts < MAX_DOWNLOAD_RESTARTS:
+        if _download_stalled(blob):
+            stalled_polls += 1
+        else:
+            stalled_polls = 0
+
+        if (stalled_polls >= STALLED_POLLS
+                and restarts < MAX_DOWNLOAD_RESTARTS):
             # Play has parked the download rather than failed it, and left it
             # parked: row 5 sat on "Waiting for connection..." for its whole
             # budget and installed nothing (2026-08-07). Cancelling and asking
             # again is what shifts it, and Play offers Cancel on that same page.
             restarts += 1
+            stalled_polls = 0
             archive(f"download-stalled-{restarts}", xml or "")
-            log.warning("the download is stalled (%d/%d); cancelling and "
-                        "starting it again", restarts, MAX_DOWNLOAD_RESTARTS)
+            log.warning("the download has not moved for %.0fs (%d/%d); "
+                        "cancelling and starting it again",
+                        STALLED_POLLS * POLL_SECONDS, restarts,
+                        MAX_DOWNLOAD_RESTARTS)
             _restart_download(client, phone_id, package, elements)
             continue
 

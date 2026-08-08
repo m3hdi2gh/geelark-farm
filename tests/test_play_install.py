@@ -287,3 +287,34 @@ def test_the_retries_are_spaced_and_still_fit_the_budget():
     total = play_install.MAX_PLAY_RETRIES * play_install.PLAY_RETRY_PAUSE
     assert play_install.PLAY_RETRY_PAUSE >= 20
     assert total < play_install.PRE_INSTALL_SECONDS
+
+
+def test_a_pending_download_is_recognised_at_all():
+    """Play parks a queued download as "Pending..." with a Cancel button. The
+    stalled list had "download pending" and not that, so the poll loop logged
+    "still installing..." for the whole budget while nothing moved
+    (2026-08-09, row 13)."""
+    from geelark_farm import screen
+    from geelark_farm.flows import play_install
+
+    els = screen.parse(
+        (FIXTURES / "play-download-pending.xml").read_text(encoding="utf-8"))
+    blob = screen.texts(els)
+
+    assert "pending" in blob
+    assert play_install._download_stalled(blob)
+    assert screen.find(els, "Cancel") is not None, "the way out is on the page"
+    assert screen.find(els, "Install") is None
+
+
+def test_pending_is_only_acted_on_once_it_has_not_moved():
+    """"Pending..." is also what a healthy queued download says for its first
+    few seconds. Cancelling on the word alone would fight normal behaviour, so
+    what separates the two is that one of them stops saying it."""
+    from geelark_farm.flows import play_install
+
+    assert play_install.STALLED_POLLS >= 3
+    # Long enough to be a real wait, short enough to leave room for the
+    # restarts it guards.
+    settle = play_install.STALLED_POLLS * play_install.POLL_SECONDS
+    assert 30 <= settle <= 120
