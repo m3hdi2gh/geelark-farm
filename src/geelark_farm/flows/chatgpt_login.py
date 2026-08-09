@@ -122,6 +122,12 @@ FATAL_ADVICE = {
         "the same proxy, so the phone is fine. These exits rotate between "
         "sessions, so a retry may simply land on a different one; if it "
         "recurs on this row, the proxy is intercepting TLS and needs replacing",
+    "email_not_accepted":
+        "the address was submitted twice and the page did not move, and "
+        "OpenAI never said why - no error was on screen either time. So this "
+        "is NOT known to be an exit-IP problem; check the archived screens "
+        "before changing anything. The phone is fine: Google is signed in and "
+        "the app is installed",
     "request_rejected":
         "CHANGE THE EXIT IP. OpenAI's edge refused the sign-in twice - "
         "'There is a problem with your request', with a Cloudflare Ray ID - "
@@ -190,6 +196,19 @@ COMPOSER_CONTROLS = (
 MAX_EMAIL_SUBMISSIONS = 2
 RESUBMIT_PAUSE = 20.0
 
+# What OpenAI's edge says when it refuses, with a Cloudflare Ray ID after it.
+# The toast fades within seconds, so it is only there to be seen if the screen
+# is read almost immediately - which is why the reason used to be inferred from
+# the count instead. Inferring it meant telling someone to change their exit IP
+# on the strength of a page that showed nothing at all (2026-08-10).
+REQUEST_PROBLEM_TEXTS = (
+    "there is a problem with your request",
+    "something went wrong",
+)
+# How soon after pressing the button to look. Long enough for the answer to
+# arrive, short enough to still be there when it does.
+GLANCE_SECONDS = 2.0
+
 
 @dataclass
 class Context(router.Context):
@@ -197,9 +216,10 @@ class Context(router.Context):
 
     creds: Credentials = None                                   # type: ignore
     package: str = ""
-    # How many times the address has been put to OpenAI. See act_email: the
-    # count is what tells a refused submission apart from a fresh page.
+    # How many times the address has been put to OpenAI, and whether its edge
+    # was ever actually seen refusing one. See act_email.
     email_submissions: int = 0
+    saw_edge_refusal: bool = False
     # Set when this run has actually put the account's password into the form.
     # See verified_on_device: a composer on screen is not evidence of a
     # session, because the app has a logged-out mode that has one too.
@@ -362,10 +382,14 @@ def act_email(ctx: Context) -> Outcome | None:
     """Put the address in and submit it - or name why that keeps failing.
 
     Being back on this page with the address still in the box means the last
-    submission was refused, not mistyped. OpenAI shows why in a toast that
-    fades within seconds, so by the next screen read it is usually gone and the
-    page looks untouched again - which is why the count, not the message, is
-    what identifies this.
+    submission did not take. WHY it did not take is a separate question, and
+    for a while this did not ask it: it assumed OpenAI's edge had refused, and
+    told people to change their exit IP on the strength of a page that showed
+    nothing at all. Three rows were sent round that loop across two runs, and
+    every archived screen was a clean email form (2026-08-10).
+
+    So the page is now glanced at two seconds after the button, while the toast
+    is still up, and what it says decides the reason.
     """
     field = screen.find_input(ctx.elements, password=False)
     if not field:
@@ -374,14 +398,19 @@ def act_email(ctx: Context) -> Outcome | None:
     resubmitting = field.text.strip().casefold() == ctx.creds.email.casefold()
 
     if resubmitting and ctx.email_submissions >= MAX_EMAIL_SUBMISSIONS:
-        path = ctx.save("request_rejected")
-        return Outcome("fatal", "request_rejected",
-                       FATAL_ADVICE["request_rejected"],
+        if ctx.saw_edge_refusal:
+            path = ctx.save("request_rejected")
+            return Outcome("fatal", "request_rejected",
+                           FATAL_ADVICE["request_rejected"],
+                           artifacts=[path] if path else [])
+        path = ctx.save("email_not_accepted")
+        return Outcome("unknown", "email_not_accepted",
+                       FATAL_ADVICE["email_not_accepted"],
                        artifacts=[path] if path else [])
 
     if resubmitting:
-        log.info("the address is still in the box - the last submission was "
-                 "refused; sending it once more")
+        log.info("the address is still in the box - the last submission did "
+                 "not take; sending it once more")
         time.sleep(RESUBMIT_PAUSE)
     else:
         log.info("entering the app account's email address")
@@ -389,7 +418,17 @@ def act_email(ctx: Context) -> Outcome | None:
 
     ctx.email_submissions += 1
     submit(ctx)
-    time.sleep(5)
+
+    # Look while the answer is still on screen. Five seconds later - which is
+    # where the loop reads next - the toast has gone and the page is a clean
+    # form again, which is exactly how this came to be guessed at.
+    time.sleep(GLANCE_SECONDS)
+    ctx.refresh()
+    if ctx.has(*REQUEST_PROBLEM_TEXTS):
+        ctx.saw_edge_refusal = True
+        ctx.save("edge-refusal")
+        log.warning("OpenAI's edge refused the submission")
+    time.sleep(3)
     return None
 
 

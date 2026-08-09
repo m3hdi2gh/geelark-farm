@@ -583,24 +583,33 @@ def _email_page(submissions: int):
     return ctx
 
 
-def test_a_refused_submission_is_identified_by_the_count_not_the_message():
-    """OpenAI shows "There is a problem with your request" with a Cloudflare
-    Ray ID, and the toast fades within seconds - the archived capture from the
-    failing run was taken with the address in the box and no message anywhere.
-    So what identifies it is being back on this page having already submitted.
+def test_the_edge_refusal_is_only_named_when_it_was_seen():
+    """Telling someone to change their exit IP is worth being sure about. For
+    two runs this was inferred from the address still being in the box, and
+    every archived screen was a clean email form with no error on it - three
+    rows sent round that loop on the strength of nothing (2026-08-10).
+
+    Now the page is glanced at while the toast is still up, and only what was
+    actually read decides the reason.
     """
     from geelark_farm import screen
     from geelark_farm.flows import chatgpt_login
 
     ctx = _email_page(submissions=chatgpt_login.MAX_EMAIL_SUBMISSIONS)
-
     assert screen.find_input(ctx.elements, password=False).text == ACCOUNT.email
     assert not ctx.has("there is a problem"), "the message has already faded"
 
+    # Never seen: the reason says so rather than blaming the network.
     outcome = chatgpt_login.act_email(ctx)
-    assert outcome is not None
-    assert outcome.kind == "fatal"
-    assert outcome.reason == "request_rejected"
+    assert outcome is not None and outcome.reason == "email_not_accepted"
+    assert "NOT known to be an exit-IP problem" in outcome.detail
+
+    # Seen at the time: the reason names it, and says what to do.
+    ctx = _email_page(submissions=chatgpt_login.MAX_EMAIL_SUBMISSIONS)
+    ctx.saw_edge_refusal = True
+    outcome = chatgpt_login.act_email(ctx)
+    assert outcome is not None and outcome.reason == "request_rejected"
+    assert "CHANGE THE EXIT IP" in outcome.detail
 
 
 def test_one_resubmission_is_allowed_before_giving_up():

@@ -202,6 +202,18 @@ Restarting the display on a resize, and around printing the live-view links,
 covers the cases that caused it. **The summary at the end is authoritative** —
 it is printed once, after the table is finished with.
 
+### `app_email_not_accepted` — nothing was observed
+The address was submitted twice, the page did not move, and **OpenAI never
+said why**: no error was on screen either time it was looked for.
+
+So this is *not* known to be an exit-IP problem. Open the archived screens
+before changing anything — `artifacts/<run>/*email_not_accepted.xml` is the
+page as it stood.
+
+It exists because the alternative was worse. For two runs a page that showed
+nothing was reported as `app_request_rejected`, and three rows were sent round
+a change-your-proxy loop on the strength of a clean email form (2026-08-10).
+
 ### `app_request_rejected` — change the exit IP
 OpenAI answered the sign-in with:
 
