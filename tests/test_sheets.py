@@ -336,3 +336,31 @@ def test_failed_only_never_returns_a_finished_row():
     rows = [make_row(1, status="done"), make_row(2, status="failed:x")]
 
     assert [r.number for r in selectable(rows, failed_only=True)] == [2]
+
+
+def test_an_at_sign_alone_is_not_an_address():
+    """A chatgpt_email cell held "fifa19.900t@pAss" - a password that had
+    drifted into the wrong column. It has an @, so it passed, so a phone was
+    created for it and the sign-in was refused with a reason that pointed at
+    the network (2026-08-09, row 10).
+
+    Validation exists to reject a row before it costs anything.
+    """
+    from geelark_farm.accounts import AccountError, Credentials
+
+    for bad in ("fifa19.900t@pAss", "@gmail.com", "nobody@", "no-at-sign",
+                "someone@two words.com"):
+        with pytest.raises(AccountError, match="not an email address"):
+            Credentials(email=bad, password="p",
+                        totp_secret="JBSWY3DPEHPK3PXP").validate()
+
+
+def test_ordinary_addresses_still_pass():
+    """The counterweight - the shapes actually in the sheet, including a
+    subdomain and a plus tag."""
+    from geelark_farm.accounts import Credentials
+
+    for good in ("mahsa.kh.880088@gmail.com", "R10719853@yahoo.com",
+                 "a+tag@mail.example.co.uk"):
+        Credentials(email=good, password="p",
+                    totp_secret="JBSWY3DPEHPK3PXP").validate()

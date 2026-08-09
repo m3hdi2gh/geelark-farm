@@ -83,8 +83,18 @@ class Credentials:
         """Everything checkable offline. Called before a phone is created,
         because a row that cannot work should cost nothing to reject."""
         where = f"{what} " if what else ""
-        if "@" not in self.email:
-            raise AccountError(f"{where}{self.email!r} is not an email address")
+        # An "@" alone is not an address. A chatgpt_email cell held
+        # "fifa19.900t@pAss" - a password that had drifted into the wrong
+        # column - and passed, so a phone was created for it and the sign-in
+        # was refused with a reason that pointed at the network (2026-08-09,
+        # row 10). Validation exists to reject a row before it costs anything,
+        # and this one it let through.
+        local, _, domain = self.email.partition("@")
+        if not local or "." not in domain or " " in domain or not domain:
+            raise AccountError(
+                f"{where}{self.email!r} is not an email address - it needs a "
+                f"name, an @ and a domain with a dot in it"
+            )
         if not self.password:
             raise AccountError(f"{where}{self.email}: no password")
         for field, value in (("password", self.password), ("email", self.email)):
