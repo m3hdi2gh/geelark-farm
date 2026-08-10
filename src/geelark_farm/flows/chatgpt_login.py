@@ -164,9 +164,14 @@ GOOGLE_SHEET_TEXTS = ("sign in with google", "use your account for")
 CLOSE_SHEET_LABELS = ("Close sheet", "Close", "Dismiss")
 
 # Post-login onboarding, cleared the same way Google's consent pages are.
+# Still an allowlist of things that proceed or decline, never "press any
+# button" - with clickable_only off it is the only thing keeping this off the
+# wrong control. "Agree" is here for the updated-terms dialog the app raises
+# after a login, which stopped a signed-in row dead (2026-08-10, row 14); the
+# Google flow has accepted the equivalent since July.
 DISMISS_LABELS = (
     "Continue", "Not now", "Skip", "Maybe later", "Okay", "OK", "Got it",
-    "Allow", "Next", "Done", "Start chatting",
+    "Agree", "I agree", "Accept", "Allow", "Next", "Done", "Start chatting",
 )
 
 # The composer's placeholder. It has been worded at least three ways across
@@ -179,8 +184,14 @@ COMPOSER_PLACEHOLDERS = (
 
 # The controls beside the composer. A placeholder is wording and wording
 # changes; these are the affordances of the chat screen and outlast it.
+#
+# The last two are voice mode, which has no text box at all - the composer is
+# replaced by "Hold to speak to ChatGPT". A signed-in phone sat in it and was
+# reported as an unknown screen, because the check insisted on a box that mode
+# does not have (2026-08-10, row 13).
 COMPOSER_CONTROLS = (
     "Dictation", "Attachment", "Start a voice conversation",
+    "Hold to speak to ChatGPT", "Return to keyboard",
 )
 
 # How many times the address is put to OpenAI before the row is told that its
@@ -264,15 +275,21 @@ def launch(client: Client, phone_id: str, package: str) -> bool:
 def composer_on_screen(ctx: Context) -> bool:
     """Whether the chat screen is up. NOT whether anyone is signed in.
 
-    A text box plus something that only sits beside the composer. The box alone
-    would not do - the login page has one; the wording alone would not do
-    either, since the placeholder has been reworded at least three times, hence
-    the controls around it as a second way to satisfy it.
+    Its own controls are enough on their own - an Attachment button or a voice
+    control belongs to nothing else in this app. Failing those, a text box with
+    a known placeholder: the box alone would not do, since the login page has
+    one too.
+
+    The box used to be required in both cases. Voice mode has no box, so a
+    signed-in phone sitting in it was reported as an unknown screen (2026-08-10,
+    row 13) - the check was describing one way the chat screen looks rather
+    than what makes it the chat screen.
     """
+    if screen.find_first(ctx.elements, COMPOSER_CONTROLS) is not None:
+        return True
     if screen.find_input(ctx.elements) is None:
         return False
-    return (screen.find_first(ctx.elements, COMPOSER_PLACEHOLDERS) is not None
-            or screen.find_first(ctx.elements, COMPOSER_CONTROLS) is not None)
+    return screen.find_first(ctx.elements, COMPOSER_PLACEHOLDERS) is not None
 
 
 def verified_on_device(ctx: Context) -> bool:

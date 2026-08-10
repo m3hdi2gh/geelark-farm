@@ -744,3 +744,60 @@ def test_back_out_of_the_sign_in_is_noticed_and_undone():
     assert matched_screen(ctx) is None, "nothing here belongs to a login"
     assert "com.android.settings" in login.SIGN_IN_PACKAGES
     assert "com.google.android.gms" in login.SIGN_IN_PACKAGES
+
+
+# ------------------------------ signed in, and not recognised (2026-08-10)
+def test_voice_mode_is_still_the_chat_screen():
+    """Both rows walked the whole path - welcome, email, password, code,
+    onboarding - and were then reported as an unknown screen. One had landed in
+    voice mode, where the composer is replaced by "Hold to speak to ChatGPT"
+    and there is no text box at all.
+
+    The check insisted on a box, which described one way the chat screen looks
+    rather than what makes it the chat screen.
+    """
+    from geelark_farm import screen
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-voice-mode.xml")
+    ctx.submitted_password = True
+
+    assert screen.find_input(ctx.elements) is None, "voice mode has no box"
+    assert chatgpt_login.composer_on_screen(ctx)
+    assert chatgpt_login.verified_on_device(ctx)
+
+
+def test_the_updated_terms_dialog_is_dismissed():
+    """The other row met "We've updated our Terms of Use and Privacy Policy"
+    with an Agree button - which was not in this flow's dismiss list, though
+    the Google flow has accepted the equivalent since July."""
+    from geelark_farm import screen
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = app_context("chatgpt-updated-terms.xml")
+
+    assert app_screen(ctx).name == "onboarding"
+    assert screen.find_first(ctx.elements,
+                             chatgpt_login.DISMISS_LABELS).label == "Agree"
+
+
+def test_the_dismiss_list_still_refuses_nothing_by_accident():
+    """It is matched without requiring clickable, so the list is the only guard
+    on what gets pressed."""
+    from geelark_farm.flows import chatgpt_login
+
+    for label in chatgpt_login.DISMISS_LABELS:
+        low = label.casefold()
+        assert "don't" not in low and "deny" not in low and "disagree" not in low
+
+
+def test_the_login_page_is_not_read_as_a_composer():
+    """The counterweight to accepting controls on their own: the login page has
+    a text box, and must never look like the chat screen."""
+    from geelark_farm.flows import chatgpt_login
+
+    for fixture in ("chatgpt-login-page.xml", "chatgpt-welcome.xml",
+                    "chatgpt-request-problem.xml"):
+        ctx = app_context(fixture)
+        ctx.submitted_password = True
+        assert not chatgpt_login.composer_on_screen(ctx), fixture
