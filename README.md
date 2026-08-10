@@ -144,13 +144,22 @@ tab, where that column doubles as the record of whether the proxy still works.
 Claiming writes `in_use` before the row is handed out, so nothing takes it
 twice; `geelark pools --release-stuck` frees what a dead run left behind.
 
-What this changes is what a failure costs. A bad Gmail is marked in its own tab
-and the **next one is tried on the same phone**, which is already booted. A
-CAPTCHA or an OpenAI refusal is not the credential's fault at all — it is a
-verdict on the exit address — so the build **swaps the proxy on the phone it
-already has** and retries the same credential. The proxy that was swapped out
-goes back to the pool as `unused`, not condemned: those refusals were measured
-to be per-session, not per-proxy.
+What this changes is what a failure costs. A bad Gmail — wrong password, a
+CAPTCHA, a locked account — is marked in its own tab and the **next one is
+tried on the same phone**, which is already booted.
+
+OpenAI's two network refusals are the exception: they arrive before any account
+is examined, so they are a verdict on the exit address rather than on the
+credential. Those get a **new exit on the phone that already exists**, and the
+same credential is tried again. The cheapest form first — sx.org will hand a
+proxy a different exit three times a day while keeping its host, port and
+credentials, so nothing on the phone changes. Only when that allowance is spent
+does the build take another proxy (`/phone/detail/update`). Fill the Proxy
+tab's `Port ID` and set `SXORG_API_KEY` to enable the refresh; without either,
+it goes straight to the next proxy.
+
+A proxy left behind goes back to the pool as `unused`, not condemned: those
+refusals were measured to be per-session, not per-proxy.
 
 ## Use
 

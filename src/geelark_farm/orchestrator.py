@@ -118,16 +118,22 @@ class Result:
 # holds a plan slot - and a full plan is what stops the *next* row from getting
 # a phone at all.
 #
-# A CAPTCHA is Google's verdict on the proxy's exit address, and the exits here
-# are sticky: row 3's answered three checks in a row with the same IP
-# (2026-08-04). So a retry through the same proxy meets the same challenge.
+# captcha_shown is here on two beliefs that are both now known to be wrong, and
+# it is kept only because correcting it means deciding something this shape of
+# sheet cannot answer on its own.
 #
-# This deletes the phone because it was believed a proxy could not be changed
-# after creation. It can - `/phone/detail/update`, see phones.set_proxy - and
-# `builder.py` swaps the proxy on the phone it already has instead, which is
-# the better answer. This path has not been corrected yet; doing so means
-# deciding what `--retry-failed` should take the new proxy FROM, since a row
-# here names its own.
+# The first belief was that a CAPTCHA is a verdict on the proxy's exit address.
+# It follows the account: Google raises it on an address whose history it
+# distrusts, while the same exit signs the next account in. builder.py treats
+# it as the Gmail's failure and tries the next one on the same phone.
+#
+# The second was that a proxy could not be changed after creation. It can -
+# `/phone/detail/update`, see phones.set_proxy.
+#
+# So this deletes a working phone for a reason that is probably not about the
+# phone at all. What stops the fix here is that a row names its own proxy: to
+# retry on a different exit, `run` would need somewhere to get one FROM, which
+# is exactly what the resource tabs give `build` and this sheet does not.
 #
 # password_changed is here by decision rather than necessity. Google has
 # accepted the address and rejected the password as the old one; the phone

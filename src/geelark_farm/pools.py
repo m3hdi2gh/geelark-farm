@@ -291,6 +291,38 @@ class ProxyPool(Pool):
         if exit_ip:
             self._set(resource, {"Last Exit IP": exit_ip})
 
+    @staticmethod
+    def port_id(resource: Resource) -> str:
+        """What sx.org needs to refresh this proxy, or "" if the row has none.
+
+        Empty is the normal case for the Unlimited product, which does not
+        appear in the vendor's port listing at all - so this being blank means
+        "cannot be refreshed", not "not filled in yet".
+        """
+        return (resource.values.get("Port ID") or "").strip()
+
+    def refreshes_today(self, resource: Resource) -> int:
+        """How much of today's allowance this proxy has already spent.
+
+        Kept in the sheet rather than in memory, because the allowance is the
+        vendor's and it does not reset when a run ends. The cell reads
+        `2026-08-11 x2`, which is also legible to whoever is looking at the tab
+        wondering why a proxy stopped being refreshed.
+        """
+        raw = (resource.values.get("Last Refresh") or "").strip()
+        date, _, count = raw.partition(" x")
+        if date.strip() != time.strftime("%Y-%m-%d"):
+            return 0
+        try:
+            return int(count)
+        except ValueError:
+            return 1                       # a date with no count is one refresh
+
+    def note_refresh(self, resource: Resource) -> None:
+        spent = self.refreshes_today(resource) + 1
+        self._set(resource,
+                  {"Last Refresh": f"{time.strftime('%Y-%m-%d')} x{spent}"})
+
 
 class PhoneLog:
     """The `Phones` tab: one row per phone this tool built.

@@ -17,21 +17,27 @@ thing being built and the credentials are stock: a bad one is marked in its own
 tab and the next is tried on the same device, which is already booted and
 already signed in as far as it got.
 
-Two rules decide which of those two branches a failure takes, and they are the
-only judgement in this module:
+Three rules decide which branch a failure takes, and they are the only
+judgement in this module:
 
-**A failure about the exit address is not the credential's fault.** A CAPTCHA is
-Google's verdict on where the request came from; OpenAI's TLS refusal and its
-Cloudflare "problem with your request" are the same kind of verdict, made before
-the account was examined. Burning three Gmails against one bad exit is how a
-morning's stock disappears, so those swap the proxy instead - which is possible
-at all only because `/phone/detail/update` can repoint a phone that already
-exists (`phones.set_proxy`).
+**Only the network refusals are about the exit address.** OpenAI's TLS refusal
+and its Cloudflare "problem with your request" are made before any account is
+examined, so they say nothing about the credential. Everything else - including
+a CAPTCHA - follows the account: Google raises one on an address whose history
+it distrusts, while the same exit signs the next account in without a murmur.
+So a CAPTCHA costs that Gmail and the next one is tried, on the same phone.
 
-**A proxy is not condemned for one refusal.** The TLS refusal was measured
-across twelve attempts: every gateway produced both successes and rejections
-(2026-08-09). So a swapped-out proxy goes back to the pool as `unused` with a
-note. Only a proxy GeeLark cannot reach at all is marked `dead`.
+**A new exit is a refresh before it is a new proxy.** sx.org will give a proxy
+a different exit address three times a day while keeping its host, port and
+credentials, so nothing on the phone has to change. Only when that allowance is
+gone, or the address comes back the same, does the build take another proxy -
+which is possible at all because `/phone/detail/update` can repoint a phone
+that already exists (`phones.set_proxy`).
+
+**A proxy is not condemned for one refusal.** It was measured across twelve
+attempts: every gateway produced both successes and rejections (2026-08-09). So
+a proxy left behind goes back to the pool as `unused` with a note. Only a proxy
+GeeLark cannot reach at all is marked `dead`.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from . import phones, shell
+from . import phones, shell, sxorg
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client
@@ -81,30 +87,32 @@ def install_build_logging() -> None:
 # How many credentials one phone may work through before the phone itself is
 # reported as the failure. Three is a diagnosis, not a limit: if three Gmails in
 # a row fail on one booted phone, the next one will too, and the thing to look
-# at is the stock or the exit rather than the fourth account.
+# at is the stock rather than the fourth account.
+#
+# Exit changes are counted separately and do not spend these, because they are
+# not attempts at a credential - the same one is being retried.
 MAX_GMAIL_ATTEMPTS = 3
 MAX_APP_ATTEMPTS = 3
 
-# How many exit addresses one build may try. Each swap costs a stop, an API
-# call and a boot - about two minutes - so this is bounded by the budget as
-# much as by the count.
-MAX_PROXY_SWAPS = 2
+# How many times one build may move to a different exit address. Each costs a
+# stop, a call and a boot - about two minutes - so the budget bounds this as
+# much as the number does.
+MAX_EXIT_CHANGES = 3
 
 # How many proxies may be skipped as unreachable before the build gives up.
 # Every one of these is a proxy GeeLark could not connect through at all.
 MAX_DEAD_PROXIES = 4
 
 # Failures that are a verdict on the exit address rather than on the
-# credential. These swap the proxy and retry the SAME credential; everything
+# credential. These get a new exit and retry the SAME credential; everything
 # else moves on to the next credential.
 #
-# `captcha_shown` is Google deciding it does not trust where the request came
-# from. `network_ssl_rejected` and `request_rejected` are OpenAI's two forms of
-# the same thing - a TLS handshake refused, and a Cloudflare edge refusal with
-# a Ray ID - both seen before any account was submitted.
-EXIT_VERDICTS = frozenset({
-    "captcha_shown", "network_ssl_rejected", "request_rejected",
-})
+# Both are OpenAI's, and both arrive before an account has been submitted: a
+# TLS handshake refused outright, and a Cloudflare edge refusal carrying a Ray
+# ID. A CAPTCHA is deliberately NOT here. It looks like a network verdict and
+# is not one - Google raises it on the account it is being shown, and burning a
+# proxy for it wastes the proxy and keeps the Gmail that caused it.
+EXIT_VERDICTS = frozenset({"network_ssl_rejected", "request_rejected"})
 
 # What a build needs left to be worth starting another attempt: a stop, a boot
 # and a login. Below this the honest thing is to report what it has.
@@ -189,7 +197,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     gmail_row: Resource | None = None
     app_row: Resource | None = None
     log_row: int | None = None
-    swaps = 0
+    # Counted apart on purpose: an exit change is not an attempt at a
+    # credential, it is the same credential being given a fair hearing.
+    exits = tried_gmails = tried_apps = 0
     # Whether each credential ended up on the device. Not the same question as
     # "did the build succeed" - see _release.
     gmail_signed_in = False
@@ -238,8 +248,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             on_ready(phone_id)
 
         # ------------------------------------------------------- the Gmail
-        for attempt in range(1, MAX_GMAIL_ATTEMPTS + 1):
+        while not gmail_signed_in:
             check_cancelled()
+            if tried_gmails >= MAX_GMAIL_ATTEMPTS:
+                return finish("no_usable_gmail",
+                              f"{MAX_GMAIL_ATTEMPTS} addresses failed on this "
+                              f"phone: {'; '.join(build.tried)}")
             if remaining() <= ATTEMPT_SECONDS:
                 return finish("budget_exhausted",
                               "ran out of budget before a Gmail signed in")
@@ -254,7 +268,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 totp_secret=gmail_row.credentials.totp_secret,
                 proxy=build.proxy,
             )
-            log.info("attempt %d: signing in as %s", attempt, account.email)
+            log.info("signing in as %s", account.email)
             outcome = google_login.sign_in(
                 client, phone_id, account,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
@@ -266,21 +280,18 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 break
             build.tried.append(f"{account.email}: {outcome.reason}")
 
-            if outcome.reason in EXIT_VERDICTS and swaps < MAX_PROXY_SWAPS:
-                # Not this account's fault. Keep it, change where the request
-                # comes from, and put the proxy back rather than condemning it.
-                proxy_row = _swap_proxy(client, book, build, phone_id,
-                                        proxy_row, outcome.reason, remaining(),
-                                        cancelled=cancelled)
-                swaps += 1
+            if outcome.reason in EXIT_VERDICTS and exits < MAX_EXIT_CHANGES:
+                # Refused before the account was looked at. Keep it and change
+                # where the request comes from; this costs an exit, not a Gmail.
+                proxy_row = _new_exit(client, settings, book, build, phone_id,
+                                      proxy_row, outcome.reason, remaining(),
+                                      cancelled=cancelled)
+                exits += 1
                 continue
             book.gmails.fail(gmail_row, outcome.reason,
                              note=outcome.detail[:300])
             gmail_row = None
-        else:
-            return finish("no_usable_gmail",
-                          f"{MAX_GMAIL_ATTEMPTS} addresses failed on this "
-                          f"phone: {'; '.join(build.tried)}")
+            tried_gmails += 1
 
         # ----------------------------------------------------- the install
         check_cancelled()
@@ -295,8 +306,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("install_failed", installed.detail)
 
         # ------------------------------------------------- the app account
-        for attempt in range(1, MAX_APP_ATTEMPTS + 1):
+        while not app_signed_in:
             check_cancelled()
+            if tried_apps >= MAX_APP_ATTEMPTS:
+                return finish("no_usable_gpt",
+                              f"{MAX_APP_ATTEMPTS} accounts failed on this "
+                              f"phone: {'; '.join(build.tried)}")
             if remaining() <= ATTEMPT_SECONDS:
                 return finish("budget_exhausted",
                               "installed, but no budget left for the app login")
@@ -305,8 +320,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 if app_row is None:
                     return finish("no_usable_gpt",
                                   "the Gpt Info tab has no unused account left")
-            log.info("attempt %d: signing into the app as %s",
-                     attempt, app_row.credentials.email)
+            log.info("signing into the app as %s", app_row.credentials.email)
             outcome = chatgpt_login.sign_in(
                 client, phone_id, app_row.credentials,
                 package=settings.target_package,
@@ -320,18 +334,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 break
             build.tried.append(f"{app_row.credentials.email}: {outcome.reason}")
 
-            if outcome.reason in EXIT_VERDICTS and swaps < MAX_PROXY_SWAPS:
-                proxy_row = _swap_proxy(client, book, build, phone_id,
-                                        proxy_row, outcome.reason, remaining(),
-                                        cancelled=cancelled)
-                swaps += 1
+            if outcome.reason in EXIT_VERDICTS and exits < MAX_EXIT_CHANGES:
+                proxy_row = _new_exit(client, settings, book, build, phone_id,
+                                      proxy_row, outcome.reason, remaining(),
+                                      cancelled=cancelled)
+                exits += 1
                 continue
             book.apps.fail(app_row, outcome.reason, note=outcome.detail[:300])
             app_row = None
-        else:
-            return finish("no_usable_gpt",
-                          f"{MAX_APP_ATTEMPTS} accounts failed on this phone: "
-                          f"{'; '.join(build.tried)}")
+            tried_apps += 1
 
         packages = shell.third_party_packages(client, phone_id)
         return finish("ready", f"apps: {', '.join(packages) or 'none'}", ok=True)
@@ -366,18 +377,77 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             ledger.release(phone_id, note=build.status)
 
 
-def _swap_proxy(client: Client, book: Book, build: Build, phone_id: str,
-                current: Resource | None, why: str, budget: float,
-                cancelled: Callable[[], bool] | None = None) -> Resource:
-    """Repoint the phone at a different exit, and put the old proxy back.
+def _refreshed(client: Client, settings: Settings, book: Book,
+               current: Resource) -> bool:
+    """Ask sx.org for a new exit on the proxy the phone already has.
 
-    The phone is stopped first for two reasons: GeeLark's own documentation
-    says not to call the update while a phone is starting, and Android reads
-    the proxy when the network comes up - a phone left running would keep the
-    exit that was just judged.
+    Cheaper than another proxy in every way that matters: the host, port and
+    credentials do not change, so the phone needs no update call - only a
+    restart, which it needs anyway.
+
+    Returns whether the exit actually moved. A refresh that comes back on the
+    same address has spent one of the day's three and achieved nothing, so it
+    must not be reported as a new exit - the caller would retry into the same
+    refusal and call it a second opinion.
     """
-    log.warning("%s - swapping the proxy and trying again", why)
+    port_id = book.proxies.port_id(current)
+    if not port_id:
+        log.info("%s has no Port ID, so sx.org cannot refresh it", current.label)
+        return False
+    if not settings.sxorg_api_key:
+        log.info("SXORG_API_KEY is not set, so no proxy can be refreshed")
+        return False
+    spent = book.proxies.refreshes_today(current)
+    if spent >= sxorg.REFRESHES_PER_DAY:
+        log.info("%s has used all %d refreshes today",
+                 current.label, sxorg.REFRESHES_PER_DAY)
+        return False
+
+    before = (current.values.get("Last Exit IP") or "").strip()
+    try:
+        sxorg.refresh(settings.sxorg_api_key, port_id)
+    except sxorg.SxError as exc:
+        log.warning("sx.org would not refresh %s: %s", current.label, exc)
+        return False
+    # Recorded even if the address turns out unchanged: the allowance was spent
+    # either way, and a count that only tracks the successes will hand the
+    # vendor a fourth request tomorrow morning and be surprised.
+    book.proxies.note_refresh(current)
+
+    try:
+        after = str(proxy_mod.check(client, current.proxy).get("outboundIP") or "")
+    except (proxy_mod.ProxyError, ApiError) as exc:
+        log.warning("%s did not answer after the refresh: %s", current.label, exc)
+        return False
+    book.proxies.record_exit(current, after)
+    if before and after == before:
+        log.warning("%s refreshed to the same address (%s) - taking another "
+                    "proxy instead", current.label, after)
+        return False
+    log.info("%s refreshed: %s -> %s", current.label, before or "?", after)
+    return True
+
+
+def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
+              phone_id: str, current: Resource | None, why: str, budget: float,
+              cancelled: Callable[[], bool] | None = None) -> Resource | None:
+    """Get the phone onto a different exit address, the cheapest way first.
+
+    The phone is stopped before anything, for two reasons that both apply
+    whichever branch is taken: GeeLark's documentation says not to call the
+    update while a phone is starting, and Android reads the proxy when the
+    network comes up - a phone left running would keep the exit just judged.
+    """
+    log.warning("%s - getting a different exit address", why)
     phones.stop(client, phone_id)
+
+    if current is not None and _refreshed(client, settings, book, current):
+        # Same credentials, different address: nothing on the phone changes.
+        time.sleep(5)
+        phones.ensure_running(client, phone_id, timeout=budget,
+                              cancelled=cancelled)
+        return current
+
     replacement = _fresh_proxy(client, book)
     try:
         phones.set_proxy(client, phone_id, replacement.proxy)

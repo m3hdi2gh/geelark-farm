@@ -127,7 +127,13 @@ Two RPA tasks on one phone. Concurrency is across phones only.
 lower `API_REQUESTS_PER_MINUTE`.
 
 ### CAPTCHA, or a demand for a phone number
-Usually the proxy IP's reputation, not the automation.
+**Treat this as the account's problem, not the proxy's.** Google raises it on
+an address whose history it distrusts, and the same exit signs the next account
+in without a murmur. `geelark build` therefore marks that Gmail and tries the
+next one on the same phone; it does not spend a proxy on it.
+
+The IP still matters — it is the other half of the same judgement — so it is
+worth checking when a whole batch draws challenges rather than one row.
 
 Check the **outbound** IP, not the host you dialled — with a backconnect proxy
 they differ, and Google judges the exit address. `geelark proxy <url>` prints
@@ -145,21 +151,16 @@ curl "http://ip-api.com/json/<outbound-ip>?fields=country,isp,proxy,hosting,mobi
 challenges. Scamalytics and spur.us give a fuller reputation picture. A
 residential or mobile ISP with `hosting: false` is what you want.
 
-**The fix is a different exit address, and only that.** A retry through the
-same one meets the same challenge: measured on 2026-08-04, a row's exit
-answered three consecutive checks with the same IP, so these addresses are
-sticky rather than rotating.
+If you do decide the exit is at fault, note that a retry through the same one
+meets the same challenge: measured on 2026-08-04, a row's exit answered three
+consecutive checks with the same IP, so these addresses are sticky rather than
+rotating. Getting a different one is cheap now — see **A network refusal**
+below — but it is not what a single CAPTCHA calls for.
 
-What "a different exit" costs depends on which command you are running.
-`geelark build` changes the proxy on the phone it already has
-(`/phone/detail/update`) and retries the same Gmail — the account was never the
-problem. `geelark run` still deletes the phone and leaves the row for you to
-give a new proxy to, which is the old behaviour from when the proxy was
-believed to be fixed at creation. It is not; correcting `run` is still to do.
-
-Do not conclude anything about the account from a CAPTCHA raised at the email
-step: Google had not yet seen the password, so it is a judgement on the network
-and the device, not on the credentials.
+`geelark run` still deletes the phone on a CAPTCHA and leaves the row for you
+to give a new proxy to. That is doubly wrong now: the account is the likelier
+cause, and the proxy could have been changed on the phone anyway. Correcting
+`run` is still to do.
 
 ### `no_authenticator`
 The row has no `totp_secret` and Google asked for a code anyway.
@@ -250,13 +251,20 @@ answer is the proxy:
 geelark run --failed-only    # only if the note does NOT say ALREADY RETRIED
 ```
 
-**If it recurs on the same row, change the proxy — and delete the phone.** A
-phone keeps the proxy it was created with, so a new proxy in the sheet does
-nothing until the row gets a new phone:
+**If it recurs on the same row, change the proxy — and delete the phone.** For
+`geelark run` only: it never repoints an existing phone, so a new proxy in the
+sheet does nothing until the row gets a new one.
 
 ```bash
 geelark delete --phone <id>
 ```
+
+`geelark build` handles this itself and does not need either step. It asks
+sx.org for a new exit on the proxy the phone already has — three a day per
+proxy, same host and credentials — and only takes a different proxy when that
+allowance is spent or the address comes back unchanged. Both need the Proxy
+tab's `Port ID`; the Unlimited product has none, so those proxies can only be
+replaced, not refreshed.
 
 Then clear that row's `phone_id` and `serial` and re-run it.
 

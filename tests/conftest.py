@@ -22,7 +22,8 @@ from geelark_farm.config import Settings
 
 def _settings(**overrides) -> Settings:
     base = dict(
-        app_id="APPID", api_key="APIKEY", sheet_id="", sheet_tab="accounts",
+        app_id="APPID", api_key="APIKEY", sxorg_api_key="",
+        sheet_id="", sheet_tab="accounts",
         service_account_json="/nowhere", region="sgp", android="Android 15",
         phone_name_prefix="farm", target_package="com.example",
         max_concurrent_phones=1, account_budget_seconds=1800,

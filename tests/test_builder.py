@@ -160,20 +160,21 @@ def test_a_bad_app_account_does_not_touch_the_proxy(device, settings, drive):
     assert book.apps._rows[0].values["Status"] == "wrong_password"
 
 
-# -------------------------------------------------- the exit address's fault
-def test_a_captcha_swaps_the_proxy_and_keeps_the_gmail(device, settings, drive):
-    """A CAPTCHA is Google's verdict on where the request came from. Marking
-    the account bad for it throws away good stock."""
+def test_a_captcha_costs_the_gmail_not_the_proxy(device, settings, drive):
+    """A CAPTCHA looks like a network verdict and is not one: Google raises it
+    on the account it is being shown. Swapping the proxy for it would waste the
+    proxy and keep the address that caused it."""
     book = make_book()
     build = drive(book, settings,
                   google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
 
     assert build.ok
-    assert build.gmail == "g0@example.com"          # same address, kept
-    assert device.proxies_set == ["10.0.0.1"]       # different exit
-    assert book.gmails._rows[1].values["Status"] == ""   # nothing else spent
+    assert build.gmail == "g1@example.com"          # the next address
+    assert device.proxies_set == []                 # the proxy is untouched
+    assert book.gmails._rows[0].values["Status"] == "captcha_shown"
 
 
+# -------------------------------------------------- the exit address's fault
 def test_a_swapped_out_proxy_goes_back_to_the_pool_not_condemned(device, settings,
                                                                  drive):
     """Measured across twelve attempts: every gateway produced both successes
@@ -191,21 +192,120 @@ def test_the_proxy_swap_stops_the_phone_first(device, settings, drive):
     """Android reads the proxy when the network comes up, and GeeLark's own
     docs refuse the call on a starting phone."""
     book = make_book()
-    drive(book, settings,
-          google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
+    drive(book, settings, google=[Outcome("fatal", "network_ssl_rejected"),
+                                  SIGNED_IN])
 
     assert device.stops == 2          # once for the swap, once at the end
 
 
-def test_swaps_are_bounded_so_a_build_cannot_eat_the_proxy_tab(device, settings,
-                                                               drive):
-    book = make_book(proxies=6)
+def test_an_exit_change_does_not_cost_a_credential(device, settings, drive):
+    """The same Gmail is being given a fair hearing, not a second chance."""
+    book = make_book(proxies=4)
+    refused = Outcome("fatal", "network_ssl_rejected")
+    build = drive(book, settings, google=[refused, refused, SIGNED_IN])
+
+    assert build.ok and build.gmail == "g0@example.com"
+    assert len(device.proxies_set) == 2
+
+
+def test_exit_changes_are_bounded_so_a_build_cannot_eat_the_proxy_tab(
+        device, settings, drive):
+    book = make_book(proxies=8)
     refused = Outcome("fatal", "network_ssl_rejected")
     build = drive(book, settings, google=[SIGNED_IN],
-                  app=[refused, refused, refused])
+                  app=[refused] * (builder.MAX_EXIT_CHANGES + 1))
 
     assert not build.ok
-    assert len(device.proxies_set) == builder.MAX_PROXY_SWAPS
+    assert len(device.proxies_set) == builder.MAX_EXIT_CHANGES
+
+
+# ------------------------------------------------------- refreshing an exit
+@pytest.fixture
+def sx(monkeypatch):
+    """sx.org answering, and a record of what it was asked for."""
+    calls: list[str] = []
+    monkeypatch.setattr(builder.sxorg, "refresh",
+                        lambda key, port_id: calls.append(str(port_id)))
+    return calls
+
+
+def with_port_ids(book, exit_ip="9.9.9.9"):
+    """Give every proxy row a Port ID and a known exit, as a refreshable
+    proxy would have."""
+    for offset, resource in enumerate(book.proxies._rows):
+        book.proxies._set(resource, {"Port ID": str(100 + offset),
+                                     "Last Exit IP": exit_ip})
+
+
+def test_a_refusal_refreshes_the_proxy_before_taking_another(device, settings,
+                                                             drive, sx,
+                                                             monkeypatch):
+    """The host, port and credentials do not change, so the phone needs no
+    update call - which makes this cheaper than another proxy in every way."""
+    seen = ["9.9.9.9", "8.8.8.8"]         # before the refresh, and after
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": seen.pop(0)})
+    settings = settings.__class__(**{**settings.__dict__,
+                                     "sxorg_api_key": "KEY"})
+    book = make_book()
+    with_port_ids(book)
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "request_rejected"), SIGNED_IN])
+
+    assert build.ok
+    assert sx == ["100"]                  # the proxy it already had
+    assert device.proxies_set == []       # no second proxy was taken
+    assert book.proxies._rows[0].values["Last Exit IP"] == "8.8.8.8"
+    assert book.proxies._rows[0].values["Last Refresh"].endswith(" x1")
+
+
+def test_a_refresh_that_lands_on_the_same_address_is_not_a_new_exit(
+        device, settings, drive, sx, monkeypatch):
+    """It spent one of the day's three and achieved nothing. Retrying into it
+    would meet the same refusal and call it a second opinion."""
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "9.9.9.9"})
+    settings = settings.__class__(**{**settings.__dict__,
+                                     "sxorg_api_key": "KEY"})
+    book = make_book()
+    with_port_ids(book, exit_ip="9.9.9.9")
+    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
+                                  SIGNED_IN])
+
+    assert sx == ["100"]
+    assert device.proxies_set == ["10.0.0.1"]      # fell through to the next
+
+
+def test_the_daily_allowance_is_read_from_the_sheet(device, settings, drive,
+                                                    sx, monkeypatch):
+    """It is the vendor's allowance, and it does not reset when a run ends."""
+    import time as real_time
+
+    settings = settings.__class__(**{**settings.__dict__,
+                                     "sxorg_api_key": "KEY"})
+    book = make_book()
+    with_port_ids(book)
+    today = real_time.strftime("%Y-%m-%d")
+    book.proxies._set(book.proxies._rows[0],
+                      {"Last Refresh": f"{today} x{builder.sxorg.REFRESHES_PER_DAY}"})
+    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
+                                  SIGNED_IN])
+
+    assert sx == []                                # nothing left to spend
+    assert device.proxies_set == ["10.0.0.1"]
+
+
+def test_a_proxy_with_no_port_id_is_never_refreshed(device, settings, drive, sx):
+    """The Unlimited product does not appear in the vendor's port listing, so a
+    blank Port ID means 'cannot be refreshed', not 'not filled in yet'."""
+    settings = settings.__class__(**{**settings.__dict__,
+                                     "sxorg_api_key": "KEY"})
+    book = make_book()
+    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
+                                  SIGNED_IN])
+
+    assert sx == []
+    assert device.proxies_set == ["10.0.0.1"]
 
 
 # ------------------------------------------------- what must never go back
