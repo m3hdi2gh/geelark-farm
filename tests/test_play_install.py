@@ -337,3 +337,29 @@ def test_the_pre_install_phase_has_room_for_the_waits_it_must_do():
 
     needed = play_install.MAX_DOWNLOAD_RESTARTS * play_install.STALLED_SECONDS
     assert play_install.PRE_INSTALL_SECONDS > needed
+
+
+def test_a_page_without_install_is_asked_for_again_before_giving_up():
+    """Play wanders. After its Terms dialog was cleared, one row was left on
+    the "About this app" description page - which has no Install button at all
+    - and it was reported as though Play had refused the install (2026-08-10,
+    row 10). The deep link puts it back on the package page, so it is worth
+    asking again."""
+    from geelark_farm.flows import play_install
+
+    assert play_install.MAX_PAGE_REOPENS >= 1
+    # Bounded, or a Play Store that never shows the page loops until the budget.
+    assert play_install.MAX_PAGE_REOPENS <= 3
+
+
+def test_no_install_button_keeps_the_page_it_is_about():
+    """The reason is only ever diagnosed from what was on screen, and the
+    labels in its message are truncated - the last one had to be read out of
+    the sheet's note column."""
+    import inspect
+
+    from geelark_farm.flows import play_install
+
+    source = inspect.getsource(play_install.install)
+    where = source.index('"no_install_button"')
+    assert 'archive("no-install-button"' in source[:where]

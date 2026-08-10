@@ -79,6 +79,10 @@ INTERSTITIAL_LABELS = (
 # something is clearly wrong.
 MAX_PRE_INSTALL_DIALOGS = 4
 
+# How many times to ask for the package page again when the Play Store is
+# showing something else entirely - its own description page, most often.
+MAX_PAGE_REOPENS = 2
+
 # How long to keep waiting for the package page to render and its dialogs to be
 # cleared. Generous, because it is bounded by finding the button rather than by
 # elapsed time in the normal case - and because a download parked here has to be
@@ -268,6 +272,7 @@ def install(client: Client, phone_id: str, package: str, *,
     dialogs = 0
     restarts = 0
     retries = 0
+    reopens = 0
     first = True
     while time.time() < deadline:
         xml = screen.capture(client, phone_id) or ""
@@ -346,7 +351,21 @@ def install(client: Client, phone_id: str, package: str, *,
             client, phone_id, elements,
             ("Complete account setup",) + INTERSTITIAL_LABELS)
         if not tapped:
-            break            # real content, but nothing this flow recognises
+            # Real content, no Install, nothing to press. Play wanders: after
+            # its Terms dialog was cleared, one row was left on the "About this
+            # app" description page, which has no Install button on it at all
+            # and was reported as though Play had refused the install
+            # (2026-08-10, row 10). The deep link puts it back on the package
+            # page, so ask again before giving up on the page it happens to be
+            # showing.
+            if reopens >= MAX_PAGE_REOPENS:
+                break
+            reopens += 1
+            archive(f"page-without-install-{reopens}", xml)
+            log.warning("no Install and nothing to clear (%d/%d); asking for "
+                        "the package page again", reopens, MAX_PAGE_REOPENS)
+            open_package_page(client, phone_id, package)
+            continue
         dialogs += 1
         log.info("cleared %r before looking for Install", tapped)
         archive(f"pre-install-{tapped.replace(' ', '-')}", xml)
@@ -363,6 +382,9 @@ def install(client: Client, phone_id: str, package: str, *,
             return Outcome("fatal", "play_page_never_loaded",
                            f"the package page was still blank after "
                            f"{PRE_INSTALL_SECONDS}s", artifacts=saved)
+        # Archived, because the labels in the message are truncated and this
+        # reason is only ever diagnosed from what was actually on the page.
+        archive("no-install-button", xml)
         labels = [e.label for e in elements if e.label][:12]
         return Outcome("fatal", "no_install_button",
                        f"on screen: {labels}", artifacts=saved)

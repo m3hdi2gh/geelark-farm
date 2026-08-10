@@ -90,6 +90,11 @@ FATAL_TEXTS = {
         "couldn't find your google account", "enter a valid email",
     ),
     "too_many_attempts": ("too many failed attempts",),
+    # Google rejecting the authenticator code. Without this the flow generated
+    # a fresh one and sent it again, four times - four wrong codes against a
+    # real account - before reporting stuck_on_2fa_code_entry, which names the
+    # screen it was standing on (2026-08-10, row 15).
+    "wrong_2fa_code": ("wrong code", "invalid code", "that code didn't work"),
 }
 
 # Detail lines for the reasons where the fix is not obvious from the name.
@@ -107,6 +112,11 @@ FATAL_ADVICE = {
         "Google declined without saying why; check the screenshot",
     "phone_verification_required":
         "the account wants an SMS code, which this tool has no way to receive",
+    "wrong_2fa_code":
+        "Google rejected the authenticator code, so the totp_secret in the "
+        "sheet is not this account's - a fresh code from a wrong secret is "
+        "wrong every time, which is why this stops rather than retrying. "
+        "Check the secret against the account's authenticator setup",
 }
 
 

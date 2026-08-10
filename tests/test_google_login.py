@@ -801,3 +801,29 @@ def test_the_login_page_is_not_read_as_a_composer():
         ctx = app_context(fixture)
         ctx.submitted_password = True
         assert not chatgpt_login.composer_on_screen(ctx), fixture
+
+
+def test_a_rejected_authenticator_code_stops_rather_than_repeating():
+    """Google answered "Wrong code. Try again." and the flow generated a fresh
+    code and sent it again, four times - four wrong codes against a real
+    account - before reporting stuck_on_2fa_code_entry, which names the screen
+    it was standing on (2026-08-10, row 15).
+
+    A fresh code from a wrong secret is wrong every time, so repeating cannot
+    help and only spends attempts.
+    """
+    ctx = context_from("google-wrong-2fa-code.xml")
+
+    assert ctx.has("wrong code")
+    assert login._fatal_reason(ctx) == "wrong_2fa_code"
+    assert matched_screen(ctx).name == "fatal"
+    assert "totp_secret" in login.FATAL_ADVICE["wrong_2fa_code"]
+
+
+def test_a_code_page_without_a_rejection_is_still_answered():
+    """The counterweight: the ordinary code prompt must keep being typed into.
+    """
+    ctx = context_from("google-2fa-code-entry.xml")
+
+    assert login._fatal_reason(ctx) is None
+    assert matched_screen(ctx).name == "2fa_code_entry"
