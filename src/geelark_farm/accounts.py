@@ -47,9 +47,6 @@ def check_totp_secret(secret: str) -> None:
     way pyotp pads it - because pyotp is what actually generates the codes, and
     rejecting a secret it would accept would be our bug rather than the sheet's.
     """
-    if not secret:
-        raise AccountError("no totp_secret")
-
     outside = sorted({c for c in secret if c not in BASE32_ALPHABET})
     if outside:
         raise AccountError(
@@ -79,6 +76,18 @@ class Credentials:
     password: str
     totp_secret: str
 
+    @property
+    def has_authenticator(self) -> bool:
+        """Whether this account can answer a code prompt at all.
+
+        Some accounts are sold without 2FA. They sign in on the shorter path -
+        password, consent, done - and the router never reaches the code screen,
+        so the secret is genuinely optional. What is not optional is knowing
+        which kind an account is, because a code prompt on one of these is a
+        dead end rather than a step.
+        """
+        return bool(self.totp_secret)
+
     def validate(self, *, what: str = "") -> None:
         """Everything checkable offline. Called before a phone is created,
         because a row that cannot work should cost nothing to reject."""
@@ -104,10 +113,16 @@ class Credentials:
                 raise AccountError(
                     f"{where}{self.email}: {field} cannot be typed - {exc}"
                 ) from exc
-        try:
-            check_totp_secret(self.totp_secret)
-        except AccountError as exc:
-            raise AccountError(f"{where}{self.email}: {exc}") from exc
+        # An empty secret is a fact about the account, not a broken row: some
+        # are sold without 2FA and sign in on the shorter path. A secret that
+        # is PRESENT is still checked, so a cell holding something else - the
+        # 'fifa19.900t@pAss' of 2026-08-09 - is still caught here rather than
+        # ten minutes into a phone.
+        if self.totp_secret:
+            try:
+                check_totp_secret(self.totp_secret)
+            except AccountError as exc:
+                raise AccountError(f"{where}{self.email}: {exc}") from exc
 
     def totp_now(self, *, min_life: float = 8.0) -> str:
         """A code with enough life left to survive being typed.
@@ -115,6 +130,10 @@ class Credentials:
         A code that expires between typing and submitting reads as a wrong
         code, and the service counts that against the account.
         """
+        if not self.totp_secret:
+            raise AccountError(
+                f"{self.email} has no authenticator secret, so no code can be "
+                f"produced for it")
         import pyotp
 
         totp = pyotp.TOTP(self.totp_secret)

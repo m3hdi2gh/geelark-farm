@@ -112,6 +112,11 @@ FATAL_ADVICE = {
         "Google declined without saying why; check the screenshot",
     "phone_verification_required":
         "the account wants an SMS code, which this tool has no way to receive",
+    "no_authenticator":
+        "this account has no 2FA secret in the sheet, and Google asked for a "
+        "code anyway. Nothing here can produce one. Either the account does "
+        "have 2FA and its secret is missing from the row, or Google decided "
+        "this sign-in needed a second factor and the account cannot give one",
     "wrong_2fa_code":
         "Google rejected the authenticator code, so the totp_secret in the "
         "sheet is not this account's - a fresh code from a wrong secret is "
@@ -255,6 +260,15 @@ def act_totp(ctx: Context) -> Outcome | None:
     field = screen.find_input(ctx.elements)
     if not field:
         return None
+    if not ctx.account.has_authenticator:
+        # Accounts sold without 2FA normally never reach this screen. When one
+        # does, Google is asking for something the row cannot produce, and
+        # saying so beats an AccountError escaping into the catch-all and
+        # arriving in the sheet as "error".
+        path = ctx.save("no_authenticator")
+        return Outcome("fatal", "no_authenticator",
+                       FATAL_ADVICE["no_authenticator"],
+                       artifacts=[path] if path else [])
     code = ctx.account.totp_now()
     log.info("entering a fresh authenticator code")
     fill(ctx, field, code)

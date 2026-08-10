@@ -106,7 +106,10 @@ The spreadsheet is both the work queue and the result:
 | proxy | email | password | totp_secret | status | phone_id | serial | note | updated_at |
 |---|---|---|---|---|---|---|---|---|
 
-Only the first four are yours to fill in; the rest are written back. Share the
+Only the first four are yours to fill in; the rest are written back.
+`totp_secret` may be left blank for an account that has no 2FA — those sign in
+on the shorter path. A secret that *is* present is still checked, so a wrong
+value in that cell is still caught before a phone is created. Share the
 sheet with the service account's email address as an **Editor**.
 
 Three more columns are optional, and add a step: signing into the app's own

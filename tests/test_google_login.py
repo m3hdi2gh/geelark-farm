@@ -827,3 +827,26 @@ def test_a_code_page_without_a_rejection_is_still_answered():
 
     assert login._fatal_reason(ctx) is None
     assert matched_screen(ctx).name == "2fa_code_entry"
+
+
+def test_a_code_prompt_on_an_account_without_2fa_is_named():
+    """Accounts sold without 2FA normally never reach the code screen. When one
+    does, Google is asking for something the row cannot produce - and before
+    this the AccountError escaped into process_row's catch-all and arrived in
+    the sheet as "error", which says nothing (2026-08-10)."""
+    from geelark_farm.accounts import Account
+
+    ctx = context_from("google-2fa-code-entry.xml")
+    ctx.account = Account(email="a@example.com", password="p", totp_secret="")
+
+    assert matched_screen(ctx).name == "2fa_code_entry"
+    outcome = login.act_totp(ctx)
+    assert outcome is not None
+    assert outcome.reason == "no_authenticator"
+    assert "no 2FA secret" in outcome.detail
+
+
+def test_the_same_prompt_is_answered_when_there_is_a_secret():
+    """The counterweight: nothing changes for the accounts that have one."""
+    ctx = context_from("google-2fa-code-entry.xml")
+    assert ctx.account.has_authenticator

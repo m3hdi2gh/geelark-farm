@@ -305,11 +305,42 @@ def test_a_secret_pyotp_accepts_is_not_rejected():
         assert len(pyotp.TOTP(secret).now()) == 6
 
 
-def test_an_empty_secret_is_named_as_empty():
-    from geelark_farm.accounts import AccountError, check_totp_secret
+def test_an_account_without_2fa_is_usable():
+    """Some Gmails are sold without 2FA. They sign in on the shorter path -
+    password, consent, done - and the router never reaches the code screen, so
+    the secret is genuinely optional.
 
-    with pytest.raises(AccountError, match="no totp_secret"):
-        check_totp_secret("")
+    It used to be required, which meant those rows were rejected as unusable
+    and never got as far as a phone (2026-08-10).
+    """
+    from geelark_farm.accounts import parse_row
+
+    row = {"proxy": "1.2.3.4:1080", "email": "a@example.com",
+           "password": "pw", "totp_secret": ""}
+    account = parse_row(row, number=1)
+
+    assert account.has_authenticator is False
+    assert parse_row({**row, "totp_secret": "JBSWY3DPEHPK3PXP"}).has_authenticator
+
+
+def test_a_secret_that_is_present_is_still_checked():
+    """Optional is not unchecked. The cell that held 'fifa19.900t@pAss' has to
+    keep being caught here rather than ten minutes into a phone."""
+    from geelark_farm.accounts import AccountError, parse_row
+
+    with pytest.raises(AccountError, match="not an authenticator key"):
+        parse_row({"proxy": "1.2.3.4:1080", "email": "a@example.com",
+                   "password": "pw", "totp_secret": "fifa19.900t@pAss"})
+
+
+def test_no_code_can_be_produced_without_a_secret():
+    """And the one place that would have raised deep inside a run says what is
+    wrong instead of failing on an empty base32 string."""
+    from geelark_farm.accounts import AccountError, Credentials
+
+    with pytest.raises(AccountError, match="no authenticator secret"):
+        Credentials(email="a@example.com", password="p",
+                    totp_secret="").totp_now()
 
 
 def test_failed_only_leaves_the_pending_rows_alone():

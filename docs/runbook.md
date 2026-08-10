@@ -157,6 +157,17 @@ Do not conclude anything about the account from a CAPTCHA raised at the email
 step: Google had not yet seen the password, so it is a judgement on the network
 and the device, not on the credentials.
 
+### `no_authenticator`
+The row has no `totp_secret` and Google asked for a code anyway.
+
+An empty secret is allowed — accounts sold without 2FA sign in on the shorter
+path and never reach that screen. This reason means one did. Either the account
+does have 2FA and its secret is missing from the row, or Google decided this
+particular sign-in needed a second factor.
+
+Nothing on the device can produce a code, so it stops. Before this existed the
+row died with `error`, which said nothing at all (2026-08-10).
+
 ### `password_changed`
 Google accepted the address and rejected the password as the old one - the
 archived screen says when it was changed. Nothing on the device fixes this: put
