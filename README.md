@@ -76,6 +76,7 @@ screen looks like never also knows how to sign an HTTP request.
 | | |
 |---|---|
 | `cli.py`, `orchestrator.py` | which rows, in what order, with what budget |
+| `builder.py`, `pools.py` | the same steps, driven from resource pools |
 | `flows/router.py` | the screen loop every flow runs on |
 | `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | multi-screen procedures |
 | `screen.py`, `shell.py` | see the device / act on the device |
@@ -125,6 +126,32 @@ already works.
 `status` drives everything: `pending` → `running` → `done` or `failed:<reason>`.
 A blank status counts as pending, so pasting rows in is enough.
 
+### The other shape: resource tabs
+
+`geelark build` reads the same spreadsheet a different way. Instead of a row
+that names its proxy, its Gmail and its app account in advance, it takes them
+from three pools and builds a phone out of whatever is still usable:
+
+| tab | you fill in | the tool writes back |
+|---|---|---|
+| `Gmails` | Address, Password, 2FA Secret | Used Date, Phone Serial, Status, Note |
+| `Proxy` | Proxy String (or Host/Port/Username/Password) | Last Exit IP, Used By, Status, Note |
+| `Gpt Info` | Address, Password, 2FA Secret | Phone Serial, Status, Note |
+| `Phones` | — | one row per phone built, ready or not |
+
+A resource is available while its `Status` is blank — or `unused` on the Proxy
+tab, where that column doubles as the record of whether the proxy still works.
+Claiming writes `in_use` before the row is handed out, so nothing takes it
+twice; `geelark pools --release-stuck` frees what a dead run left behind.
+
+What this changes is what a failure costs. A bad Gmail is marked in its own tab
+and the **next one is tried on the same phone**, which is already booted. A
+CAPTCHA or an OpenAI refusal is not the credential's fault at all — it is a
+verdict on the exit address — so the build **swaps the proxy on the phone it
+already has** and retries the same credential. The proxy that was swapped out
+goes back to the pool as `unused`, not condemned: those refusals were measured
+to be per-session, not per-proxy.
+
 ## Use
 
 ```bash
@@ -137,6 +164,8 @@ interleaved. Everything below is the same set of actions without prompts, which
 is what cron and CI need:
 
 ```bash
+geelark build --count 5         # build 5 phones from the resource tabs
+geelark pools                   # what those tabs hold, spend nothing
 geelark rows                    # validate every row, spend nothing
 geelark run --dry-run           # show the plan
 geelark run                     # process the pending rows
@@ -191,11 +220,11 @@ Each failed row keeps its phone (stopped) and its archived screens, and the
 sheet records the reason. `geelark run --retry-failed` reuses that phone rather
 than paying for another.
 
-The exception is `captcha_shown`, where the phone is deleted and its plan slot
-freed. A CAPTCHA is Google's verdict on the proxy's exit address; the proxy is
-fixed when the phone is created, so nothing that reuses the phone can pass.
-That row needs a different proxy, which means a different phone anyway — and a
-kept one would only hold a slot the next row needs.
+The exception is `captcha_shown`, where `geelark run` deletes the phone and
+frees its plan slot. That behaviour predates knowing that
+`/phone/detail/update` can repoint an existing phone at a different proxy —
+`geelark build` swaps the proxy instead, which is the better answer. Correcting
+`run` to match is still to do.
 
 ## Cost
 

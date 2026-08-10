@@ -26,6 +26,7 @@ def _settings(**overrides) -> Settings:
         service_account_json="/nowhere", region="sgp", android="Android 15",
         phone_name_prefix="farm", target_package="com.example",
         max_concurrent_phones=1, account_budget_seconds=1800,
+        build_budget_seconds=3600,
         login_budget_seconds=900, install_budget_seconds=600,
         app_login_budget_seconds=600,
         api_requests_per_minute=120, state_dir="/tmp", artifact_dir="/tmp",

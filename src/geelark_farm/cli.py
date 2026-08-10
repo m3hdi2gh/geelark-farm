@@ -72,6 +72,27 @@ def build_parser() -> argparse.ArgumentParser:
                        help="for each row, print a live-view link and wait for "
                             "Enter before driving")
 
+    p_build = sub.add_parser(
+        "build", help="build N phones from the Gmails/Proxy/Gpt Info tabs"
+    )
+    p_build.add_argument("--count", type=int, default=1, metavar="N",
+                         help="how many phones to build (default: 1)")
+    p_build.add_argument("--workers", type=int, metavar="N",
+                         help="how many to build at once "
+                              "(default: MAX_CONCURRENT_PHONES)")
+    p_build.add_argument("--dry-run", action="store_true",
+                         help="show what each pool holds, spend nothing")
+    p_build.add_argument("--watch", action="store_true",
+                         help="print a live-view link and wait for Enter "
+                              "before driving each phone")
+
+    p_pools = sub.add_parser(
+        "pools", help="what the resource tabs hold, and what is stuck"
+    )
+    p_pools.add_argument("--release-stuck", action="store_true",
+                         help="free rows a dead run left claimed as in_use. "
+                              "Only when no other run is in progress")
+
     # ------------------------------------------------------------- input
     p_rows = sub.add_parser("rows", help="list and validate the sheet rows")
     p_rows.add_argument("--status", metavar="FILTER",
@@ -587,6 +608,51 @@ def cmd_run(settings: Settings, args) -> int:
     return 0 if all(r.ok for r in results) else 1
 
 
+def cmd_build(settings: Settings, args) -> int:
+    """Build phones out of the resource tabs, rather than one row at a time."""
+    from . import builder
+
+    client = build_client(settings)
+
+    def announce(phone_id: str) -> None:
+        # Minted here, not at boot: the live-view token expires within seconds.
+        url = phones.start(client, phone_id)
+        if url:
+            print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
+        input("Open it, then press Enter to start this phone... ")
+
+    builds = builder.run(client, settings, count=args.count,
+                         workers=args.workers, dry_run=args.dry_run,
+                         on_ready=announce if args.watch else None)
+    if args.dry_run:
+        return 0
+    print(builder.summarise(builds))
+    return 0 if builds and all(b.ok for b in builds) else 1
+
+
+def cmd_pools(settings: Settings, args) -> int:
+    """What the resource tabs hold. Spends nothing."""
+    from .pools import Book
+
+    book = Book.open(settings)
+    if args.release_stuck:
+        freed = book.release_stuck()
+        print(f"released {freed} row(s) that were left claimed.")
+        return 0
+
+    for pool in (book.proxies, book.gmails, book.apps):
+        print(f"\n{pool.tab}")
+        print(f"  {len(pool.available):>3} available")
+        if pool.stuck:
+            print(f"  {len(pool.stuck):>3} stuck as in_use - "
+                  f"'geelark pools --release-stuck' frees them")
+        if pool.broken:
+            print(f"  {len(pool.broken):>3} unusable:")
+            for resource in pool.broken:
+                print(f"      row {resource.sheet_row}: {resource.error}")
+    return 0
+
+
 ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
 
 
@@ -748,6 +814,8 @@ def main(argv: list[str] | None = None) -> int:
         "install": cmd_install,
         "rows": cmd_rows,
         "run": cmd_run,
+        "build": cmd_build,
+        "pools": cmd_pools,
     }
     handler = handlers.get(args.command)
     if not handler:

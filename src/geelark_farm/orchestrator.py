@@ -118,12 +118,16 @@ class Result:
 # holds a plan slot - and a full plan is what stops the *next* row from getting
 # a phone at all.
 #
-# The proxy is bound to a phone when it is created and cannot be changed
-# afterwards. A CAPTCHA is Google's verdict on that proxy's exit address, and
-# the exits here are sticky: row 3's answered three checks in a row with the
-# same IP (2026-08-04). So a retry on this phone meets the same address and the
-# same challenge. Getting past it needs a different proxy, and a different
-# proxy needs a different phone.
+# A CAPTCHA is Google's verdict on the proxy's exit address, and the exits here
+# are sticky: row 3's answered three checks in a row with the same IP
+# (2026-08-04). So a retry through the same proxy meets the same challenge.
+#
+# This deletes the phone because it was believed a proxy could not be changed
+# after creation. It can - `/phone/detail/update`, see phones.set_proxy - and
+# `builder.py` swaps the proxy on the phone it already has instead, which is
+# the better answer. This path has not been corrected yet; doing so means
+# deciding what `--retry-failed` should take the new proxy FROM, since a row
+# here names its own.
 #
 # password_changed is here by decision rather than necessity. Google has
 # accepted the address and rejected the password as the old one; the phone
@@ -640,9 +644,9 @@ def summarise(results: list[Result], *, artifact_dir: Path | None = None) -> str
                          "retry - the sheet records why.")
         if discarded:
             lines.append(f" {discarded} phone(s) deleted: a CAPTCHA is a verdict "
-                         "on the proxy's exit IP, and the proxy cannot be "
-                         "changed on an existing phone. Give those rows a "
-                         "different proxy.")
+                         "on the proxy's exit IP. Give those rows a different "
+                         "proxy - or use 'geelark build', which swaps the proxy "
+                         "on the phone rather than throwing it away.")
         if artifact_dir:
             lines.append(f" Screen captures: {artifact_dir}")
     return "\n".join(lines)

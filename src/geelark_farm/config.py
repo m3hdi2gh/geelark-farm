@@ -88,6 +88,11 @@ class Settings:
     # well as time.
     max_concurrent_phones: int
     account_budget_seconds: int
+    # What one `geelark build` phone may spend. Larger than the per-account
+    # budget on purpose: a build may try several Gmails and several app
+    # accounts on one phone, and the point of it is that a bad credential costs
+    # a credential rather than the phone.
+    build_budget_seconds: int
     login_budget_seconds: int
     install_budget_seconds: int
     app_login_budget_seconds: int
@@ -121,6 +126,7 @@ class Settings:
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
             account_budget_seconds=_int("ACCOUNT_BUDGET_SECONDS", 1800),
+            build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
             app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),

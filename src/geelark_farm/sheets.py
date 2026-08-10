@@ -238,41 +238,8 @@ class Sheet:
     WRITE_ATTEMPTS = 4
 
     def _write(self, payload: list[dict], row: Row) -> None:
-        """Send a batch update, retrying transient network failures.
-
-        This is where a row's outcome becomes durable, so it is the last place
-        that should fail on a blip. On 2026-08-06 a ConnectionResetError landed
-        here while recording row 13's login failure; the exception unwound into
-        process_row's catch-all, which recorded "error" instead - so the run
-        reported a network fault where a diagnosis should have been, and the
-        reason the login actually failed was lost.
-
-        Only the network is retried. An APIError means Google understood and
-        refused - a bad range, a revoked key - and repeating it changes nothing.
-
-        Each attempt sends its own copy of the payload, because gspread
-        rewrites the one it is given: batch_update prefixes every range with
-        the worksheet title in place. Retrying the same list therefore sent
-        `'geelark'!'geelark'!I3` and drew a 400, which the caller could not
-        retry and recorded as "error" - the exact loss this method exists to
-        prevent, caused by this method (2026-08-07, row 2).
-        """
-        for attempt in range(1, self.WRITE_ATTEMPTS + 1):
-            fresh = [dict(item) for item in payload]
-            try:
-                with self._lock:
-                    self._ws.batch_update(fresh)
-                return
-            except (OSError, RequestException) as exc:
-                if attempt == self.WRITE_ATTEMPTS:
-                    raise SheetError(
-                        f"row {row.number}: the sheet could not be written "
-                        f"after {attempt} attempts ({exc})"
-                    ) from exc
-                delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
-                log.warning("row %d: sheet write failed (%s); retrying in "
-                            "%.1fs", row.number, exc, delay)
-                time.sleep(delay)
+        batch_write(self._ws, self._lock, payload, what=f"row {row.number}",
+                    attempts=self.WRITE_ATTEMPTS)
 
     def claim(self, row: Row, phone_id: str = "", serial: str = "") -> None:
         """Mark the row as in progress, naming the phone it now owns.
@@ -310,6 +277,48 @@ class Sheet:
         extra = {name: value for name, value in
                  (("phone_id", phone_id), ("serial", str(serial))) if value}
         self.update(row, status=f"failed:{reason}", note=note, **extra)
+
+
+def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
+                what: str, attempts: int = 4) -> None:
+    """Send a batch update, retrying transient network failures.
+
+    This is where an outcome becomes durable, so it is the last place that
+    should fail on a blip. On 2026-08-06 a ConnectionResetError landed here
+    while recording row 13's login failure; the exception unwound into
+    process_row's catch-all, which recorded "error" instead - so the run
+    reported a network fault where a diagnosis should have been, and the reason
+    the login actually failed was lost.
+
+    Only the network is retried. An APIError means Google understood and
+    refused - a bad range, a revoked key - and repeating it changes nothing.
+
+    Each attempt sends its own copy of the payload, because gspread rewrites
+    the one it is given: batch_update prefixes every range with the worksheet
+    title in place. Retrying the same list therefore sent
+    `'geelark'!'geelark'!I3` and drew a 400, which the caller could not retry
+    and recorded as "error" - the exact loss this function exists to prevent,
+    caused by this function (2026-08-07, row 2).
+
+    `what` names the thing being recorded - a row, a Gmail, a phone - because
+    the only reason anyone reads this error is to find out what was lost.
+    """
+    for attempt in range(1, attempts + 1):
+        fresh = [dict(item) for item in payload]
+        try:
+            with lock:
+                worksheet.batch_update(fresh)
+            return
+        except (OSError, RequestException) as exc:
+            if attempt == attempts:
+                raise SheetError(
+                    f"{what}: the sheet could not be written after "
+                    f"{attempt} attempts ({exc})"
+                ) from exc
+            delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
+            log.warning("%s: sheet write failed (%s); retrying in %.1fs",
+                        what, exc, delay)
+            time.sleep(delay)
 
 
 def _a1_column(number: int) -> str:

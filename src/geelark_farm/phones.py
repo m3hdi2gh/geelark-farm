@@ -51,6 +51,14 @@ def plan(client: Client) -> dict:
     return client.data("/v1/pay/plan/info") or {}
 
 
+def info(client: Client, phone_id: str) -> dict:
+    """Everything the phone list knows about one phone, or {} if it is gone."""
+    for item in listing(client):
+        if item.get("id") == phone_id:
+            return item
+    return {}
+
+
 def serial_of(client: Client, phone_id: str) -> str:
     """The human-facing serial for a phone that already exists.
 
@@ -58,10 +66,47 @@ def serial_of(client: Client, phone_id: str) -> str:
     serial is how a phone is identified in the GeeLark panel, so a row without
     one is harder to act on than it needs to be.
     """
-    for item in listing(client):
-        if item.get("id") == phone_id:
-            return str(item.get("serialNo") or "")
-    return ""
+    return str(info(client, phone_id).get("serialNo") or "")
+
+
+# GeeLark's proxy type ids, from the vendor's own CLI reference:
+# -1 direct, 1 socks5, 2 http, 3 https, 20+ are named providers.
+PROXY_TYPE_IDS = {"socks5": 1, "http": 2, "https": 3}
+
+
+def set_proxy(client: Client, phone_id: str, proxy: Proxy) -> None:
+    """Point an existing phone at a different proxy.
+
+    This is the call the whole retry story rests on. It was assumed for most of
+    this project's life that a proxy was fixed at creation - which made a
+    CAPTCHA a reason to delete the phone, since the verdict was on an exit
+    address that could not be changed. It can be changed, and everything built
+    on that assumption is wrong (see UNREUSABLE in orchestrator.py).
+
+    Two constraints from the vendor's docs, both learned the expensive way if
+    ignored:
+
+    - "Do not call while starting a cloud phone." So callers stop the phone
+      first, which is needed anyway: Android reads the proxy when the network
+      comes up, and a phone that is already running keeps the old exit.
+    - The proxy is checked by GeeLark as part of this call. [45004] means the
+      new proxy did not answer, and the phone keeps the one it had - so a
+      failure here is safe, it just has not achieved anything.
+    """
+    type_id = PROXY_TYPE_IDS.get(proxy.scheme)
+    if type_id is None:                                          # pragma: no cover
+        raise PhoneError(f"GeeLark has no proxy type for {proxy.scheme!r}")
+    client.post("/v1/phone/detail/update", {
+        "id": phone_id,
+        "proxyConfig": {
+            "typeId": type_id,
+            "server": proxy.host,
+            "port": proxy.port,
+            "username": proxy.username,
+            "password": proxy.password,
+        },
+    })
+    log.info("phone %s now uses %s", phone_id, proxy)
 
 
 def newest(client: Client) -> dict | None:

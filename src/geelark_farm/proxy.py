@@ -1,8 +1,9 @@
 """Parse and check proxies.
 
-A proxy is bound to a phone at creation time, so the device never reaches the
+A proxy is set on a phone at creation time, so the device never reaches the
 network unproxied. That makes parsing a spend gate: a malformed row must fail
-here, before a phone exists.
+here, before a phone exists. It can be changed afterwards - see
+`phones.set_proxy` - but only after the phone, and the money, already exist.
 
 Vendors hand out four shapes and none of them is canonical, so all four are
 accepted and normalised.
