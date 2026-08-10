@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
 from .config import Settings
@@ -73,7 +73,6 @@ class Resource:
     credentials: Credentials | None = None
     proxy: Proxy | None = None
     error: str | None = None
-    _pool: Pool | None = field(default=None, repr=False, compare=False)
 
     @property
     def label(self) -> str:
@@ -119,7 +118,7 @@ class Pool:
             }
             if not any(values.values()):
                 continue                       # a blank spacer row, not a gap
-            resource = Resource(sheet_row=offset, values=values, _pool=self)
+            resource = Resource(sheet_row=offset, values=values)
             try:
                 self._interpret(resource)
             except (AccountError, ProxyError) as exc:

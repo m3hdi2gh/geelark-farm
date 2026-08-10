@@ -188,35 +188,44 @@ def test_a_swapped_out_proxy_goes_back_to_the_pool_not_condemned(device, setting
     assert "request_rejected" in first.values["Note"]
 
 
+# The exit refusals are OpenAI's, so they only ever arrive in the app phase -
+# Google login has no such reason. These drive them there.
 def test_the_proxy_swap_stops_the_phone_first(device, settings, drive):
     """Android reads the proxy when the network comes up, and GeeLark's own
     docs refuse the call on a starting phone."""
     book = make_book()
-    drive(book, settings, google=[Outcome("fatal", "network_ssl_rejected"),
-                                  SIGNED_IN])
+    drive(book, settings, google=[SIGNED_IN],
+          app=[Outcome("fatal", "network_ssl_rejected"), SIGNED_IN])
 
     assert device.stops == 2          # once for the swap, once at the end
 
 
 def test_an_exit_change_does_not_cost_a_credential(device, settings, drive):
-    """The same Gmail is being given a fair hearing, not a second chance."""
+    """The same account is being given a fair hearing, not a second chance."""
     book = make_book(proxies=4)
     refused = Outcome("fatal", "network_ssl_rejected")
-    build = drive(book, settings, google=[refused, refused, SIGNED_IN])
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[refused, refused, SIGNED_IN])
 
-    assert build.ok and build.gmail == "g0@example.com"
+    assert build.ok and build.app_account == "a0@example.com"
     assert len(device.proxies_set) == 2
 
 
-def test_exit_changes_are_bounded_so_a_build_cannot_eat_the_proxy_tab(
+def test_exit_changes_run_out_without_condemning_the_account(
         device, settings, drive):
+    """Refused at the edge past every exit change: the network's verdict, not
+    the account's. The account was never judged, so it must go back as stock -
+    condemning it would lose a good account to a bad afternoon."""
     book = make_book(proxies=8)
     refused = Outcome("fatal", "network_ssl_rejected")
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[refused] * (builder.MAX_EXIT_CHANGES + 1))
 
     assert not build.ok
+    assert build.status == "network_ssl_rejected"
     assert len(device.proxies_set) == builder.MAX_EXIT_CHANGES
+    # the account is back on the shelf, not marked with a network reason
+    assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
 
 
 # ------------------------------------------------------- refreshing an exit
@@ -249,8 +258,8 @@ def test_a_refusal_refreshes_the_proxy_before_taking_another(device, settings,
                                      "sxorg_api_key": "KEY"})
     book = make_book()
     with_port_ids(book)
-    build = drive(book, settings,
-                  google=[Outcome("fatal", "request_rejected"), SIGNED_IN])
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     assert build.ok
     assert sx == ["100"]                  # the proxy it already had
@@ -269,8 +278,8 @@ def test_a_refresh_that_lands_on_the_same_address_is_not_a_new_exit(
                                      "sxorg_api_key": "KEY"})
     book = make_book()
     with_port_ids(book, exit_ip="9.9.9.9")
-    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
-                                  SIGNED_IN])
+    drive(book, settings, google=[SIGNED_IN],
+          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     assert sx == ["100"]
     assert device.proxies_set == ["10.0.0.1"]      # fell through to the next
@@ -288,8 +297,8 @@ def test_the_daily_allowance_is_read_from_the_sheet(device, settings, drive,
     today = real_time.strftime("%Y-%m-%d")
     book.proxies._set(book.proxies._rows[0],
                       {"Last Refresh": f"{today} x{builder.sxorg.REFRESHES_PER_DAY}"})
-    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
-                                  SIGNED_IN])
+    drive(book, settings, google=[SIGNED_IN],
+          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     assert sx == []                                # nothing left to spend
     assert device.proxies_set == ["10.0.0.1"]
@@ -301,8 +310,8 @@ def test_a_proxy_with_no_port_id_is_never_refreshed(device, settings, drive, sx)
     settings = settings.__class__(**{**settings.__dict__,
                                      "sxorg_api_key": "KEY"})
     book = make_book()
-    drive(book, settings, google=[Outcome("fatal", "request_rejected"),
-                                  SIGNED_IN])
+    drive(book, settings, google=[SIGNED_IN],
+          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     assert sx == []
     assert device.proxies_set == ["10.0.0.1"]

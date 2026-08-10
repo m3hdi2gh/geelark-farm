@@ -3,11 +3,11 @@
     take a proxy  ──►  create the phone behind it  ──►  boot
       ──►  first usable Gmail  ──►  sign in
              │ the Gmail was bad ──► take the next one, same phone
-             │ the exit was bad  ──► put it back, swap the proxy, same Gmail
       ──►  install the app
       ──►  first usable app account  ──►  sign in
-             │ the account was bad ──► take the next one, same phone
-             │ the exit was bad    ──► put it back, swap the proxy, same account
+             │ the account was bad  ──► take the next one, same phone
+             │ refused at the edge  ──► new exit (refresh, else new proxy),
+             │                          same account
       ──►  record the phone  ──►  stop it
 
 The difference from `orchestrator.py` is what a failure costs. There a row
@@ -32,7 +32,9 @@ a different exit address three times a day while keeping its host, port and
 credentials, so nothing on the phone has to change. Only when that allowance is
 gone, or the address comes back the same, does the build take another proxy -
 which is possible at all because `/phone/detail/update` can repoint a phone
-that already exists (`phones.set_proxy`).
+that already exists (`phones.set_proxy`). When no new exit can be had at all,
+the build stops and says so; the account it was carrying goes back to the pool
+untouched, because a network that would not carry the request never judged it.
 
 **A proxy is not condemned for one refusal.** It was measured across twelve
 attempts: every gateway produced both successes and rejections (2026-08-09). So
@@ -278,16 +280,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 build.gmail = account.email
                 gmail_signed_in = True
                 break
+            # Every way a Google sign-in fails is about the account or the
+            # device, never the exit: a CAPTCHA is Google distrusting this
+            # address's history, not the IP (the network refusals that ARE the
+            # exit's fault come only from the app, in the loop below). So the
+            # Gmail is marked and the next one is tried on the same phone.
             build.tried.append(f"{account.email}: {outcome.reason}")
-
-            if outcome.reason in EXIT_VERDICTS and exits < MAX_EXIT_CHANGES:
-                # Refused before the account was looked at. Keep it and change
-                # where the request comes from; this costs an exit, not a Gmail.
-                proxy_row = _new_exit(client, settings, book, build, phone_id,
-                                      proxy_row, outcome.reason, remaining(),
-                                      cancelled=cancelled)
-                exits += 1
-                continue
             book.gmails.fail(gmail_row, outcome.reason,
                              note=outcome.detail[:300])
             gmail_row = None
@@ -334,12 +332,25 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 break
             build.tried.append(f"{app_row.credentials.email}: {outcome.reason}")
 
-            if outcome.reason in EXIT_VERDICTS and exits < MAX_EXIT_CHANGES:
-                proxy_row = _new_exit(client, settings, book, build, phone_id,
-                                      proxy_row, outcome.reason, remaining(),
-                                      cancelled=cancelled)
-                exits += 1
-                continue
+            if outcome.reason in EXIT_VERDICTS:
+                if exits < MAX_EXIT_CHANGES:
+                    # Refused before the account was looked at. Keep it and
+                    # change where the request comes from; this costs an exit,
+                    # not an account.
+                    proxy_row = _new_exit(client, settings, book, build,
+                                          phone_id, proxy_row, outcome.reason,
+                                          remaining(), cancelled=cancelled)
+                    exits += 1
+                    continue
+                # Out of exit changes and still refused at the edge. This is the
+                # network's verdict, and it was reached before the account was
+                # examined - so the account is not to blame and must not be
+                # marked as if it were. Stop, and let _release put it back as
+                # stock; condemning it here would lose a good account to a bad
+                # afternoon (the exact loss this module exists to prevent).
+                return finish(outcome.reason,
+                              f"refused at the edge across {exits} exit "
+                              f"changes; the app account was never judged")
             book.apps.fail(app_row, outcome.reason, note=outcome.detail[:300])
             app_row = None
             tried_apps += 1
