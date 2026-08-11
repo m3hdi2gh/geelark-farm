@@ -2,13 +2,20 @@
 
     take a proxy  ──►  create the phone behind it  ──►  boot
       ──►  first usable Gmail  ──►  sign in
-             │ the Gmail was bad ──► take the next one, same phone
+             │ the Gmail was bad ──► take the next one, same phone,
+             │                       until the pool or the budget runs out
       ──►  install the app
       ──►  first usable app account  ──►  sign in
-             │ the account was bad  ──► take the next one, same phone
+             │ the account was bad  ──► take the next one, same phone,
+             │                          until the pool or the budget runs out
              │ refused at the edge  ──► new exit (refresh, else new proxy),
-             │                          same account
+             │                          same account, same "until"
       ──►  record the phone  ──►  stop it
+
+Nothing in that loop stops at a fixed number of tries. A phone gives up only
+when the tab has nothing left to hand it, when the budget will not cover
+another attempt, or when the failure says the phone itself is the problem
+rather than the credential (FLOW_BLOCKED).
 
 The difference from `orchestrator.py` is what a failure costs. There a row
 names its proxy, its Gmail and its app account in advance, so a bad Gmail fails
@@ -86,15 +93,36 @@ def install_build_logging() -> None:
         )
 
 
-# How many credentials one phone may work through before the phone itself is
-# reported as the failure. Three is a diagnosis, not a limit: if three Gmails in
-# a row fail on one booted phone, the next one will too, and the thing to look
-# at is the stock rather than the fourth account.
+# A credential the service judged and rejected costs that credential and nothing
+# else: the build takes the next one and tries it on the phone it already has,
+# for as long as the pool and the budget allow. There is deliberately no cap on
+# how many it may work through - a cap would stop a phone with usable stock
+# still sitting in the tab, which is what a run of three bad passwords did
+# (2026-08-11, phones 654 and 656: three refused, eleven accounts still free).
 #
-# Exit changes are counted separately and do not spend these, because they are
-# not attempts at a credential - the same one is being retried.
-MAX_GMAIL_ATTEMPTS = 3
-MAX_APP_ATTEMPTS = 3
+# What bounds it is real: the pool empties (no_usable_gpt / no_usable_gmail) or
+# the budget will not cover another attempt (budget_exhausted). Both name what
+# actually ran out.
+#
+# The cost of this is worth stating: a tab full of bad credentials will be worked
+# through by one phone until the budget ends. That is the intended trade - every
+# one of them is recorded with the reason it failed, so a bad batch surfaces
+# itself in a single run instead of three at a time.
+
+# Failures where the flow never reached a verdict about the credential at all -
+# the app would not start, no login control appeared, the router did not
+# recognise the screen. The next credential meets the same wall, so the build
+# stops on the phone's problem rather than feeding the pool into it. Everything
+# not named here is a verdict about the credential, so a reason added to a flow
+# later gets "try the next one" by default, which is the behaviour the flow
+# describes.
+FLOW_BLOCKED = frozenset({
+    "app_not_installed", "app_would_not_start", "no_login_button",
+    "google_sheet_stuck", "unknown_screen", "unknown_fatal",
+    # Both are the service refusing to keep talking to this device or address,
+    # not a judgement on the account being offered.
+    "rate_limited", "too_many_attempts",
+})
 
 # A network refusal is not the account's fault and not this exit's alone: it
 # was measured to be per-session, so the next exit has a real chance where this
@@ -266,10 +294,6 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # ------------------------------------------------------- the Gmail
         while not gmail_signed_in:
             check_cancelled()
-            if tried_gmails >= MAX_GMAIL_ATTEMPTS:
-                return finish("no_usable_gmail",
-                              f"{MAX_GMAIL_ATTEMPTS} addresses failed on this "
-                              f"phone: {'; '.join(build.tried)}")
             if remaining() <= ATTEMPT_SECONDS:
                 return finish("budget_exhausted",
                               "ran out of budget before a Gmail signed in")
@@ -300,6 +324,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # exit's fault come only from the app, in the loop below). So the
             # Gmail is marked and the next one is tried on the same phone.
             build.tried.append(f"{account.email}: {outcome.reason}")
+            if outcome.reason in FLOW_BLOCKED:
+                # Nothing was decided about this address, so it keeps its place
+                # in the pool - _release puts it back as stock. Trying the next
+                # one would only meet the same wall.
+                return finish(outcome.reason,
+                              f"the sign-in could not proceed on this phone: "
+                              f"{outcome.detail}")
             note = (CAPTCHA_SET_ASIDE if outcome.reason == "captcha_shown"
                     else outcome.detail[:300])
             book.gmails.fail(gmail_row, outcome.reason, note=note)
@@ -321,10 +352,6 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # ------------------------------------------------- the app account
         while not app_signed_in:
             check_cancelled()
-            if tried_apps >= MAX_APP_ATTEMPTS:
-                return finish("no_usable_gpt",
-                              f"{MAX_APP_ATTEMPTS} accounts failed on this "
-                              f"phone: {'; '.join(build.tried)}")
             if remaining() <= ATTEMPT_SECONDS:
                 return finish("budget_exhausted",
                               "installed, but no budget left for the app login")
@@ -361,6 +388,14 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                       remaining(), cancelled=cancelled)
                 exits += 1
                 continue
+            if outcome.reason in FLOW_BLOCKED:
+                # The app never got as far as judging this account, so it goes
+                # back to the pool untouched and the phone reports its own
+                # problem. Named app_* so the runbook entry someone reaches for
+                # is the app's, not Google's - the same convention as `run`.
+                return finish(f"app_{outcome.reason}",
+                              f"the app login could not proceed on this phone: "
+                              f"{outcome.detail}")
             book.apps.fail(app_row, outcome.reason, note=outcome.detail[:300])
             app_row = None
             tried_apps += 1

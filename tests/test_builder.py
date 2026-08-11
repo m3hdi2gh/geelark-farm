@@ -176,6 +176,67 @@ def test_a_bad_app_account_does_not_touch_the_proxy(device, settings, drive):
     assert book.apps._rows[0].values["Status"] == "wrong_password"
 
 
+def test_bad_app_accounts_are_worked_through_past_any_fixed_count(
+        device, settings, drive):
+    """Per the described flow, a rejected account costs that account and the
+    next is tried on the same phone. A cap stopped this at three while eleven
+    usable accounts sat in the tab (2026-08-11, phones 654 and 656)."""
+    book = make_book(apps=6)
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[wrong, wrong, wrong, wrong, SIGNED_IN])
+
+    assert build.ok and build.app_account == "a4@example.com"
+    assert device.created == 1                    # all on the one phone
+    # the four refused are marked, the untried one is still stock
+    assert [r.values["Status"] for r in book.apps._rows[:4]] == ["wrong_password"] * 4
+    assert [r.credentials.email for r in book.apps.available] == ["a5@example.com"]
+
+
+def test_an_empty_app_pool_is_what_stops_it_not_a_count(device, settings, drive):
+    book = make_book(apps=4)
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(book, settings, google=[SIGNED_IN], app=[wrong] * 4)
+
+    assert not build.ok and build.status == "no_usable_gpt"
+    assert "no unused account left" in build.detail
+
+
+def test_bad_gmails_are_worked_through_past_any_fixed_count(device, settings,
+                                                            drive):
+    """The same for the Gmail phase - the phone is already booted, so the next
+    address is cheap to try."""
+    book = make_book(gmails=6)
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(book, settings, google=[wrong, wrong, wrong, wrong, SIGNED_IN])
+
+    assert build.ok and build.gmail == "g4@example.com"
+    assert device.created == 1
+
+
+def test_a_phone_level_failure_stops_instead_of_eating_the_pool(
+        device, settings, drive):
+    """app_would_not_start says nothing about the account - the app never got
+    far enough to judge it. Feeding the pool into that wall would lose accounts
+    to a broken phone, so the build stops and the account stays stock."""
+    book = make_book(apps=5)
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[Outcome("unknown", "app_would_not_start")])
+
+    assert not build.ok
+    assert build.status == "app_app_would_not_start"
+    # nothing was condemned; every account is still available
+    assert len(book.apps.available) == 5
+
+
+def test_a_stuck_router_stops_the_gmail_phase_too(device, settings, drive):
+    book = make_book(gmails=5)
+    build = drive(book, settings, google=[Outcome("unknown", "unknown_screen")])
+
+    assert not build.ok and build.status == "unknown_screen"
+    assert len(book.gmails.available) == 5
+
+
 def test_a_captcha_costs_the_gmail_not_the_proxy(device, settings, drive):
     """A CAPTCHA looks like a network verdict and is not one: Google raises it
     on the account it is being shown. Swapping the proxy for it would waste the
