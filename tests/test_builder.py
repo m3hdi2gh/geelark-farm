@@ -306,15 +306,26 @@ def test_network_refusals_have_no_fixed_cap(device, settings, drive):
     assert len(device.proxies_set) == 5      # five swaps, no ceiling at three
 
 
-def test_a_network_failure_that_runs_out_of_proxies_keeps_the_account(
-        device, settings, drive, monkeypatch):
-    """When swapping genuinely runs out the build fails with
-    'all_exits_refused' - never the network reason itself - and the account it
-    never got to judge goes back as stock.
+def test_working_proxies_that_all_refuse_are_reported_as_refused(
+        device, settings, drive):
+    """The pool was reachable throughout and the service turned every exit
+    down. That is 'all_exits_refused' - and never the network reason itself,
+    since the account was never judged and goes back as stock."""
+    book = make_book(proxies=3)
+    refused = Outcome("fatal", "network_ssl_rejected")
+    build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 8)
 
-    Named apart from 'no_usable_proxy', which means a build never got one at
-    all: this phone went through the pool, which says something about the pool
-    or the service rather than about the account it was carrying."""
+    assert not build.ok
+    assert build.status == "all_exits_refused"
+    assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
+
+
+def test_dead_stock_is_not_reported_as_the_service_refusing(
+        device, settings, drive, monkeypatch):
+    """A swap that finds only unreachable proxies is a fact about the stock,
+    not a verdict from OpenAI. Reporting it as 'all_exits_refused' sent the
+    reader looking at the wrong thing when a whole purchase batch expired
+    mid-run (2026-08-11, phone 671)."""
     from geelark_farm.proxy import ProxyError
 
     def check(client, proxy):
@@ -327,9 +338,30 @@ def test_a_network_failure_that_runs_out_of_proxies_keeps_the_account(
     refused = Outcome("fatal", "network_ssl_rejected")
     build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 8)
 
-    assert not build.ok
-    assert build.status == "all_exits_refused"
+    assert build.status == "no_working_proxy"
     assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
+
+
+def test_dead_proxies_are_skipped_past_any_fixed_count(device, settings, drive,
+                                                       monkeypatch):
+    """Each dead one is marked before the next is claimed, so the pool bounds
+    the search and a cap only costs working phones: a build hit five dead
+    proxies from an expired batch and gave up while live ones sat in the tab."""
+    from geelark_farm.proxy import ProxyError
+
+    def check(client, proxy):
+        if proxy.host == "10.0.0.7":          # only the last one answers
+            return {"outboundIP": "1.1.1.1"}
+        raise ProxyError("no answer")
+
+    monkeypatch.setattr(builder.proxy_mod, "check", check)
+    book = make_book(proxies=8)
+    build = drive(book, settings, google=[SIGNED_IN])
+
+    assert build.ok                            # it reached the live one
+    assert build.proxy.endswith("10.0.0.7:9999")
+    assert sum(1 for r in book.proxies._rows
+               if r.values["Status"] == "dead") == 7
 
 
 def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,

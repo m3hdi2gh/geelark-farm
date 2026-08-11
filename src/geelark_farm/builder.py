@@ -134,10 +134,6 @@ FLOW_BLOCKED = frozenset({
 # nothing left ends the build). Neither leaves the phone reporting the network
 # error itself - it reports what actually ran out, budget or proxies.
 
-# How many proxies may be skipped as unreachable before the build gives up.
-# Every one of these is a proxy GeeLark could not connect through at all.
-MAX_DEAD_PROXIES = 4
-
 # Failures that are a verdict on the exit address rather than on the
 # credential. These get a new exit and retry the SAME credential; everything
 # else moves on to the next credential.
@@ -315,20 +311,32 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
 
     The proxy being replaced is released only after this returns, so `claim()`
     cannot hand back the very proxy that was just judged.
+
+    There is no cap on how many dead ones it will skip. Each is marked `dead`
+    before the next is claimed, so the pool strictly shrinks and this cannot
+    spin - and a cap costs working phones: when a whole purchase batch died,
+    one build hit five dead proxies in a row and gave up while four live ones
+    sat in the tab (2026-08-11).
+
+    The two ways to run out are told apart, because they need different things
+    doing. `no_usable_proxy` means the tab has nothing left to hand out.
+    `no_working_proxy` means it had rows and every one of them was unreachable,
+    which is a fact about the stock rather than about this run.
     """
-    for _ in range(MAX_DEAD_PROXIES + 1):
+    skipped = 0
+    while True:
         resource = book.proxies.claim()
         if resource is None:
-            raise Aborted("no_usable_proxy")
+            raise Aborted("no_working_proxy" if skipped else "no_usable_proxy")
         try:
             result = proxy_mod.check(client, resource.proxy)
         except (proxy_mod.ProxyError, ApiError) as exc:
             log.warning("proxy %s is dead: %s", resource.label, exc)
             book.proxies.fail(resource, "dead", note=str(exc)[:200])
+            skipped += 1
             continue
         book.proxies.record_exit(resource, str(result.get("outboundIP") or ""))
         return resource
-    raise Aborted("no_usable_proxy")
 
 
 def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
@@ -695,7 +703,14 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
 
     try:
         replacement = _fresh_proxy(client, book)
-    except Aborted:
+    except Aborted as exc:
+        if str(exc) != "no_usable_proxy":
+            # The stock was unreachable, not refusing. Reported as it is:
+            # "every exit refused" would send the reader looking at OpenAI when
+            # the answer is that their proxies are down (2026-08-11, phone 671,
+            # which met three dead proxies from an expired batch and was
+            # recorded as though the service had judged it).
+            raise
         # Every proxy this build could claim has now been tried and refused.
         # Named apart from a build that never got one at all: this phone has
         # been through the pool, and that is a fact about the pool or the
