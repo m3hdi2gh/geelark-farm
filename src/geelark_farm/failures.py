@@ -1,0 +1,184 @@
+"""What every failure means, and who is to blame for it - in one table.
+
+A flow reports what it saw: `captcha_shown`, `network_ssl_rejected`,
+`app_would_not_start`. Deciding what that costs is a different question, and
+for most of this project's life it was answered in four frozensets across three
+modules. Every behavioural bug worth the name came from getting one of them
+wrong, and each was invisible until a batch had already spent the stock:
+
+- a CAPTCHA was filed as a verdict on the exit, so a build spent a proxy on it
+  and then retried the very Gmail that caused it (2026-08-11);
+- an OpenAI edge refusal was filed as the account's fault once the exit budget
+  ran out, condemning an account the service had never examined;
+- a phone that could not start the app worked through the whole account pool
+  against the same wall;
+- `email_code_required` appeared mid-run from a flow that had grown it, and was
+  classified by whatever the default happened to be.
+
+So the classification lives here, once, and says three things about each
+reason: whose fault it is, what a build should do about it, and what to tell
+whoever reads the sheet afterwards.
+
+The point is not tidiness. It is that `test_failures.py` asserts every reason
+the flows can emit appears below, so a reason added to a flow cannot reach a
+build without someone deciding what it means.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# ---------------------------------------------------------------- who erred
+#: The credential that was offered. The service looked at it and said no, so
+#: the next one deserves a turn on the same phone.
+CREDENTIAL = "credential"
+#: Where the request came from. Decided before any account was examined, so the
+#: credential is untouched and what has to change is the exit address.
+EXIT = "exit"
+#: The phone or the app on it. Nothing was decided about the credential, and
+#: the next one would meet the same wall.
+DEVICE = "device"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What one reason means for the build that hit it."""
+
+    blame: str
+    #: What an operator should do, in the sheet or in the panel. Written for
+    #: someone reading the tab a day later with no memory of the run.
+    advice: str
+
+    @property
+    def costs_the_credential(self) -> bool:
+        """Whether the credential is spent - marked, and the next one tried."""
+        return self.blame == CREDENTIAL
+
+    @property
+    def needs_a_new_exit(self) -> bool:
+        """Whether the answer is a different exit address, same credential."""
+        return self.blame == EXIT
+
+    @property
+    def stops_the_phone(self) -> bool:
+        """Whether to give up on this phone rather than feed it more stock."""
+        return self.blame == DEVICE
+
+
+# The table. Reasons are grouped by which flow reports them, because that is
+# how you find one when a run surprises you.
+VERDICTS: dict[str, Verdict] = {
+    # -------------------------------------------------- google_login.py
+    "captcha_shown": Verdict(
+        CREDENTIAL,
+        "Google challenged this address. It follows the account, not the IP - "
+        "the same exit signs the next one in. Blank the status to try it again "
+        "later, ideally on a residential exit."),
+    "wrong_password": Verdict(
+        CREDENTIAL, "The password in the sheet is not the account's. Correct "
+        "it and blank the status."),
+    "password_changed": Verdict(
+        CREDENTIAL, "Google accepted the address and called the password old. "
+        "The account has moved on without us."),
+    "verification_blocked": Verdict(
+        CREDENTIAL, "Google wants a verification this cannot answer."),
+    "account_disabled": Verdict(
+        CREDENTIAL, "Google has disabled the account. Nothing to retry."),
+    "sign_in_refused": Verdict(
+        CREDENTIAL, "Google refused the sign-in outright."),
+    "phone_verification_required": Verdict(
+        CREDENTIAL, "Google wants a phone number. Usually a young account on "
+        "an exit it distrusts; a better exit sometimes clears it."),
+    "email_not_found": Verdict(
+        CREDENTIAL, "Google does not know this address. Check it for typos."),
+    "wrong_2fa_code": Verdict(
+        CREDENTIAL, "The code was rejected. Usually the wrong 2FA secret in "
+        "the sheet - check the column."),
+    "no_authenticator": Verdict(
+        CREDENTIAL, "Google asked for a code and the row has no 2FA secret. "
+        "Add it, or the account cannot be used unattended."),
+    "no_authenticator_option": Verdict(
+        CREDENTIAL, "Google offered no authenticator choice on this account."),
+
+    # ------------------------------------------------- chatgpt_login.py
+    "email_code_required": Verdict(
+        CREDENTIAL, "OpenAI wants a code emailed to the address, which cannot "
+        "be answered without reading that inbox. Not automatable as it is."),
+    "account_deactivated": Verdict(
+        CREDENTIAL, "OpenAI has deactivated the account."),
+    "email_not_accepted": Verdict(
+        CREDENTIAL, "The address was not accepted and no refusal was shown. "
+        "Check it against the account it belongs to."),
+    "network_ssl_rejected": Verdict(
+        EXIT,
+        "The TLS handshake was refused before any account was sent. Measured "
+        "per-session rather than per-proxy, so the same proxy often works "
+        "again - the build takes a new exit and keeps the account."),
+    "request_rejected": Verdict(
+        EXIT,
+        "Cloudflare refused at the edge, with a Ray ID, before the account was "
+        "examined. A different exit address is the whole answer."),
+
+    # --------------------------------------------------- play_install.py
+    # None of these is a credential's fault: the install happens between the
+    # Google sign-in and the app account, and touches neither.
+    "play_page_never_loaded": Verdict(
+        DEVICE, "The Play page for the package never appeared. Check the "
+        "package id, and that this phone's exit can reach Play at all."),
+    "no_install_button": Verdict(
+        DEVICE, "The Play page loaded with nothing to press. Often means the "
+        "app is already there in a broken state, or the page is regional."),
+    "download_stalled": Verdict(
+        DEVICE, "The download stopped making progress and restarting it did "
+        "not help. Usually the exit address; the phone is otherwise fine."),
+    "play_server_error": Verdict(
+        DEVICE, "Play itself returned an error and kept returning it. Leave "
+        "the phone and retry later - it is not about the account."),
+
+    # -------------------------------- the phone, or the app on it, is stuck
+    "no_login_button": Verdict(
+        DEVICE, "The app showed no way to log in. Look at the archived screen "
+        "under artifacts/ - the app's layout may have moved."),
+    "google_sheet_stuck": Verdict(
+        DEVICE, "Google's account chooser would not close. The phone needs "
+        "looking at."),
+    "app_would_not_start": Verdict(
+        DEVICE, "The app never came to the foreground. Usually the install is "
+        "damaged; delete the phone rather than spending accounts on it."),
+    "app_not_installed": Verdict(
+        DEVICE, "The package is not on the device, so there was nothing to "
+        "sign into."),
+    "rate_limited": Verdict(
+        DEVICE, "OpenAI is refusing to keep talking to this device. Leave it "
+        "and come back later; another account now meets the same limit."),
+    "too_many_attempts": Verdict(
+        DEVICE, "Google is refusing to keep talking to this device. Leave it "
+        "and come back later."),
+    "unknown_screen": Verdict(
+        DEVICE, "The router did not recognise the page. Its XML is under "
+        "artifacts/ - that capture is what a new registry entry is written "
+        "from."),
+    "unknown_fatal": Verdict(
+        DEVICE, "A refusal was detected but not identified. The archived "
+        "screen says which."),
+    "budget_exhausted": Verdict(
+        DEVICE, "The step ran out of time. Raise its budget, or find out what "
+        "the phone was waiting for."),
+}
+
+#: Reasons a flow may return that mean success, so nothing needs a verdict.
+SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
+                       "already_installed", "logged_in"})
+
+
+def verdict(reason: str) -> Verdict:
+    """What `reason` means.
+
+    An unlisted reason is treated as the device's problem, which is the safe
+    default in the only way that matters: it stops the phone instead of feeding
+    the pool into something nobody has classified. The test suite exists so
+    this never happens in practice.
+    """
+    return VERDICTS.get(reason, Verdict(
+        DEVICE, f"{reason} has no entry in failures.py, so nothing is known "
+                f"about it. Add one before trusting what a build did here."))

@@ -161,9 +161,14 @@ def test_a_captcha_note_does_not_tell_you_to_change_the_proxy(device, settings,
                           "Google is challenging this exit IP; a cleaner "
                           "proxy is the fix"), SIGNED_IN])
 
+    from geelark_farm import failures
+
     note = book.gmails._rows[0].values["Note"]
     assert "proxy is the fix" not in note
-    assert "blank this status" in note        # says how to undo it instead
+    # the sheet carries the taxonomy's advice, which is written for whoever
+    # reads that row later rather than for whoever is debugging the flow
+    assert note == failures.verdict("captcha_shown").advice
+    assert failures.verdict("captcha_shown").costs_the_credential
 
 
 def test_a_bad_app_account_does_not_touch_the_proxy(device, settings, drive):

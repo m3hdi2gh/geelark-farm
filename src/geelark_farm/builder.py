@@ -15,7 +15,7 @@
 Nothing in that loop stops at a fixed number of tries. A phone gives up only
 when the tab has nothing left to hand it, when the budget will not cover
 another attempt, or when the failure says the phone itself is the problem
-rather than the credential (FLOW_BLOCKED).
+rather than the credential (see failures.py).
 
 The difference from `orchestrator.py` is what a failure costs. There a row
 names its proxy, its Gmail and its app account in advance, so a bad Gmail fails
@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import phones, shell, sxorg
+from . import failures, phones, shell, sxorg
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client
@@ -110,50 +110,15 @@ def install_build_logging() -> None:
 # one of them is recorded with the reason it failed, so a bad batch surfaces
 # itself in a single run instead of three at a time.
 
-# Failures where the flow never reached a verdict about the credential at all -
-# the app would not start, no login control appeared, the router did not
-# recognise the screen. The next credential meets the same wall, so the build
-# stops on the phone's problem rather than feeding the pool into it. Everything
-# not named here is a verdict about the credential, so a reason added to a flow
-# later gets "try the next one" by default, which is the behaviour the flow
-# describes.
-FLOW_BLOCKED = frozenset({
-    "app_not_installed", "app_would_not_start", "no_login_button",
-    "google_sheet_stuck", "unknown_screen", "unknown_fatal",
-    # Both are the service refusing to keep talking to this device or address,
-    # not a judgement on the account being offered.
-    "rate_limited", "too_many_attempts",
-})
-
-# A network refusal is not the account's fault and not this exit's alone: it
-# was measured to be per-session, so the next exit has a real chance where this
-# one failed. So a build keeps taking a new exit and retrying the SAME account
-# for as long as it can - there is deliberately no fixed limit on the count.
-# What bounds it is real resource: the build budget (the loop stops starting an
-# attempt once too little of it is left) and the proxy pool (a swap that finds
-# nothing left ends the build). Neither leaves the phone reporting the network
-# error itself - it reports what actually ran out, budget or proxies.
-
-# Failures that are a verdict on the exit address rather than on the
-# credential. These get a new exit and retry the SAME credential; everything
-# else moves on to the next credential.
+# Whose fault a failure is, and therefore what it costs, is decided in
+# failures.py - one table, with a test that no flow can report something it
+# does not classify. It used to be two frozensets here and two more in the
+# module that has since been deleted, and every behavioural bug of the last
+# week was one of them being wrong.
 #
-# Both are OpenAI's, and both arrive before an account has been submitted: a
-# TLS handshake refused outright, and a Cloudflare edge refusal carrying a Ray
-# ID. A CAPTCHA is deliberately NOT here. It looks like a network verdict and
-# is not one - Google raises it on the account it is being shown, and burning a
-# proxy for it wastes the proxy and keeps the Gmail that caused it.
-EXIT_VERDICTS = frozenset({"network_ssl_rejected", "request_rejected"})
-
-# The note left on a Gmail this build set aside for a CAPTCHA. The flow's own
-# advice for captcha_shown says "a cleaner proxy is the fix" - true for the
-# single-row `run`, which changes the proxy - but here the build treats a
-# CAPTCHA as the address's own problem and moves to the next Gmail, so that
-# advice would tell the reader to do the opposite of what happened. This says
-# what the build did, and how to undo it if the address is believed good.
-CAPTCHA_SET_ASIDE = ("CAPTCHA at sign-in - set aside and the next Gmail tried. "
-                     "A residential exit usually clears it; blank this status "
-                     "to let the address be tried again.")
+#   the credential's   mark it, try the next one on this phone
+#   the exit's         keep the credential, get a different exit address
+#   the device's       stop; the next credential meets the same wall
 
 # What a build needs left to be worth starting another attempt: a stop, a boot
 # and a login. Below this the honest thing is to report what it has.
@@ -271,7 +236,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             return None
         s.build.tried.append(f"{s.app_row.credentials.email}: {outcome.reason}")
 
-        if outcome.reason in EXIT_VERDICTS:
+        if failures.verdict(outcome.reason).needs_a_new_exit:
             # Refused before the account was looked at, so it is the exit's
             # problem, not the account's. Keep the account, change where the
             # request comes from, and try again - for as long as there is
@@ -289,7 +254,7 @@ def _sign_into_app(session: _Session) -> Build | None:
                 s.refused_exits.append((previous, outcome.reason))
             s.exits += 1
             continue
-        if outcome.reason in FLOW_BLOCKED:
+        if failures.verdict(outcome.reason).stops_the_phone:
             # The app never got as far as judging this account, so it goes
             # back to the pool untouched and the phone reports its own
             # problem. Named app_* so the runbook entry someone reaches for
@@ -297,7 +262,8 @@ def _sign_into_app(session: _Session) -> Build | None:
             return s.finish(f"app_{outcome.reason}",
                             f"the app login could not proceed on this phone: "
                             f"{outcome.detail}")
-        s.book.apps.fail(s.app_row, outcome.reason, note=outcome.detail[:300])
+        s.book.apps.fail(s.app_row, outcome.reason,
+                         note=failures.verdict(outcome.reason).advice)
         s.app_row = None
     return None
 
@@ -445,16 +411,20 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # exit's fault come only from the app, in the loop below). So the
             # Gmail is marked and the next one is tried on the same phone.
             build.tried.append(f"{account.email}: {outcome.reason}")
-            if outcome.reason in FLOW_BLOCKED:
+            if failures.verdict(outcome.reason).stops_the_phone:
                 # Nothing was decided about this address, so it keeps its place
                 # in the pool - _release puts it back as stock. Trying the next
                 # one would only meet the same wall.
                 return finish(outcome.reason,
                               f"the sign-in could not proceed on this phone: "
                               f"{outcome.detail}")
-            note = (CAPTCHA_SET_ASIDE if outcome.reason == "captcha_shown"
-                    else outcome.detail[:300])
-            book.gmails.fail(gmail_row, outcome.reason, note=note)
+            # The tab gets the taxonomy's advice, not the flow's. A flow
+            # writes for whoever is debugging it; the sheet is read a day
+            # later by someone deciding what to do with that row - and for a
+            # CAPTCHA the two say opposite things, since the flow suggests a
+            # cleaner proxy and the build has just set the address aside.
+            book.gmails.fail(gmail_row, outcome.reason,
+                             note=failures.verdict(outcome.reason).advice)
             gmail_row = None
             tried_gmails += 1
 
