@@ -2,35 +2,36 @@
 
 Provision GeeLark cloud phones from a spreadsheet.
 
-One row describes one account — a proxy, a Gmail address, a password, a TOTP
-secret. One run turns every pending row into a **stopped** cloud phone that is
-signed into that account with the target app installed, so the manual work that
-follows starts from a ready device.
+You keep three tabs of stock — proxies, Gmail accounts, app accounts. A run
+turns that stock into **stopped** cloud phones, each signed into a Gmail with
+the target app installed and signed in, so the manual work that follows starts
+from a ready device.
 
 ```
-sheet row ──► create phone (behind the row's proxy) ──► boot
-          ──► sign into Google ──► verify on device
-          ──► install the app  ──► verify on device
-          ──► sign into the app  (only if the row carries app credentials)
-          ──► stop the phone   ──► write the result back to the sheet
+take a proxy ──► create phone behind it ──► boot
+             ──► first usable Gmail ──► sign in  ──► verify on device
+             ──► install the app                 ──► verify on device
+             ──► first usable app account ──► sign in
+             ──► stop the phone ──► record it in the Phones tab
 ```
 
-Re-running is safe: rows already marked `done` are skipped, so `geelark run` is
-a habit rather than an operation.
+Nothing is spent in advance. A credential the service rejects costs that
+credential — the next one is tried on the same phone, which is already booted.
+A refusal aimed at the network costs an exit address instead, and the
+credential is kept. Which is which is decided in one place,
+[failures.py](src/geelark_farm/failures.py).
 
 ```
-$ geelark run --workers 3
-=== row 1 (1/3): first@example.com ===
-=== row 2 (2/3): second@example.com ===
-=== row 3 (3/3): third@example.com ===
-  row 2 OK: ready (330s)
-  row 3 OK: ready (340s)
-  row 1 OK: ready (302s)
+$ geelark build --count 3 --workers 3
+  build    account                             phone   state    time
+      1    FrozenStorm658294@… + fuyironoxu…   650     ready    403s
+      2    QuantumKnight472186@… + gijozuka…   651     ready    461s
+      3    EchoWolf915320@… + dehilixihat83…   652     ready    426s
 
  3/3 phones ready. All phones are stopped; nothing is billing.
 ```
 
-About five minutes per account, unattended.
+About six minutes per phone, unattended.
 
 ---
 
@@ -63,10 +64,15 @@ Supporting a screen Google has just started showing means adding one entry to
 that registry. Anything unrecognised is archived as XML under `artifacts/` and
 reported as `unknown_screen` — a task, not a mystery.
 
-**A running phone costs money every minute.** `ACCOUNT_BUDGET_SECONDS` bounds
-what one row can spend and every step is capped by what is left of it; every
+**A running phone costs money every minute.** `BUILD_BUDGET_SECONDS` bounds
+what one phone can spend and every step is capped by what is left of it; every
 path that starts a phone stops it in a `finally`; and `geelark reap` is the
 backstop for when that cannot run.
+
+**Nothing retries a fixed number of times.** Caps were tried and each one cost
+something real: three Gmails while eleven sat unused, five dead proxies while
+four live ones waited. What bounds a phone is the stock and the budget, and
+whichever runs out is what gets reported.
 
 ## Layout
 
@@ -75,13 +81,14 @@ screen looks like never also knows how to sign an HTTP request.
 
 | | |
 |---|---|
-| `cli.py`, `orchestrator.py` | which rows, in what order, with what budget |
-| `builder.py`, `pools.py` | the same steps, driven from resource pools |
+| `cli.py`, `ui.py` | what to ask for, and how it is shown |
+| `builder.py` | what to do with a phone, and what a failure costs |
+| `failures.py` | whose fault each failure is — one table, nothing else decides |
 | `flows/router.py` | the screen loop every flow runs on |
 | `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | multi-screen procedures |
 | `screen.py`, `shell.py` | see the device / act on the device |
-| `phones.py`, `sheets.py`, `ledger.py` | phone lifecycle, work queue, local record |
-| `api.py`, `config.py` | signed transport, settings |
+| `phones.py`, `pools.py`, `ledger.py` | phone lifecycle, the stock tabs, local record |
+| `api.py`, `gsheet.py`, `config.py` | signed transport, sheet transport, settings |
 
 `tests/fixtures/` holds real view hierarchies captured from live runs. They are
 the record of how each screen actually looks, and why each selector is written
@@ -102,35 +109,11 @@ cp .env.example .env            # then fill it in
 service-account key, and the budgets. Every field is documented in
 [.env.example](.env.example).
 
-The spreadsheet is both the work queue and the result:
+### The tabs
 
-| proxy | email | password | totp_secret | status | phone_id | serial | note | updated_at |
-|---|---|---|---|---|---|---|---|---|
-
-Only the first four are yours to fill in; the rest are written back.
-`totp_secret` may be left blank for an account that has no 2FA — those sign in
-on the shorter path. A secret that *is* present is still checked, so a wrong
-value in that cell is still caught before a phone is created. Share the
-sheet with the service account's email address as an **Editor**.
-
-Three more columns are optional, and add a step: signing into the app's own
-account once it is installed.
-
-| chatgpt_email | chatgpt_password | chatgpt_totp |
-|---|---|---|
-
-A row that leaves them blank, or a sheet without the columns at all, is a
-complete row that stops after the install — so adding them breaks nothing that
-already works.
-
-`status` drives everything: `pending` → `running` → `done` or `failed:<reason>`.
-A blank status counts as pending, so pasting rows in is enough.
-
-### The other shape: resource tabs
-
-`geelark build` reads the same spreadsheet a different way. Instead of a row
-that names its proxy, its Gmail and its app account in advance, it takes them
-from three pools and builds a phone out of whatever is still usable:
+One spreadsheet, four tabs. Three are stock you fill in; the fourth is what the
+tool produced. Share it with the service account's email address as an
+**Editor**.
 
 | tab | you fill in | the tool writes back |
 |---|---|---|
@@ -144,7 +127,8 @@ tab, where that column doubles as the record of whether the proxy still works.
 Claiming writes `in_use` before the row is handed out, so nothing takes it
 twice; `geelark pools --release-stuck` frees what a dead run left behind.
 
-What this changes is what a failure costs. A bad Gmail — wrong password, a
+What a failure costs is decided by [failures.py](src/geelark_farm/failures.py),
+which is the only place that classifies one. A bad Gmail — wrong password, a
 CAPTCHA, a locked account — is marked in its own tab and the **next one is
 tried on the same phone**, which is already booted.
 
@@ -167,22 +151,26 @@ refusals were measured to be per-session, not per-proxy.
 geelark ui                      # interactive console - everything, one screen
 ```
 
-It opens on a dashboard - sheet, phones, free slots - and a menu. A batch drawn
-there is one line per row, updated live, instead of four workers' logs
-interleaved. Everything below is the same set of actions without prompts, which
-is what cron and CI need:
+It opens on a dashboard - stock, phones, free slots - and a menu, and it
+defaults the count to what the stock can actually produce. A batch drawn there
+is one line per phone, updated live, instead of several workers' logs
+interleaved. Ctrl+C asks the run to stop and waits while each phone is stopped
+and its rows released.
+
+Everything below is the same set of actions without prompts, which is what cron
+and CI need:
 
 ```bash
-geelark build --count 5         # build 5 phones from the resource tabs
-geelark pools                   # what those tabs hold, spend nothing
-geelark rows                    # validate every row, spend nothing
-geelark run --dry-run           # show the plan
-geelark run                     # process the pending rows
-geelark run --workers 3         # ...three at a time
-geelark run --failed-only       # retry ONLY what failed - nothing pending
-geelark run --retry-failed      # the failed rows AND the pending ones
+geelark build --count 5         # end up with 5 ready phones
+geelark build --dry-run         # ...show what that would take, spend nothing
+geelark finish                  # only the phones one step short of ready
+geelark pools                   # what the tabs hold; frees stranded proxies
 geelark reap                    # stop anything left running
 ```
+
+`build` finishes before it builds: a phone that already has its Gmail and the
+app costs one app account, where a new one costs a phone, a Gmail and a proxy
+to reach the same place.
 
 One account at a time, with `--watch` to print a live-view link and wait so you
 can follow along:
@@ -225,15 +213,14 @@ the signing scheme, the rate limit that bans a key for two hours, response
 envelopes that differ per endpoint, and what `/proxy/check` does and does not
 tell you.
 
-Each failed row keeps its phone (stopped) and its archived screens, and the
-sheet records the reason. `geelark run --retry-failed` reuses that phone rather
-than paying for another.
+Every phone reaches the `Phones` tab whether it worked or not, with what it
+tried and why it stopped, and keeps its archived screens under `artifacts/`.
+Nothing is thrown away for failing: a phone that got as far as its Gmail and
+the app is one `geelark finish` from ready once the app tab is topped up.
 
-The exception is `captcha_shown`, where `geelark run` deletes the phone and
-frees its plan slot. That behaviour predates knowing that
-`/phone/detail/update` can repoint an existing phone at a different proxy —
-`geelark build` swaps the proxy instead, which is the better answer. Correcting
-`run` to match is still to do.
+Each `Status` in the tabs is a reason from
+[failures.py](src/geelark_farm/failures.py), and that file says what to do
+about it in plain words — it is the first place to look, not the code.
 
 ## Cost
 

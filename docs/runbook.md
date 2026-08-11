@@ -62,16 +62,17 @@ stopped underneath it for the rest of its boot timeout.
 After reading a summary, the command is:
 
 ```bash
-geelark run --failed-only
+geelark finish
 ```
 
-**Not `--retry-failed`.** That one means "the failed rows as well as the
-pending ones", which on a part-finished sheet is every row left in it — on
-2026-08-09 that turned a three-row retry into thirteen, creating ten phones
-nobody had asked for. `geelark run --dry-run --failed-only` prints the list
-before anything is spent.
+It takes only phones that already have a Gmail and the app and want an app
+account, so it spends one account each and no new phone, Gmail or proxy.
+`geelark finish --dry-run` prints the list before anything is spent.
 
-The console's "Retry failed and stuck rows" is `--failed-only`.
+`geelark build` does the same thing first, then builds the remainder - "build
+5" means "end up with 5", not "create 5".
+
+The console's "Finish phones waiting on an app account" is the same command.
 
 ## Known failure modes
 
@@ -157,10 +158,9 @@ consecutive checks with the same IP, so these addresses are sticky rather than
 rotating. Getting a different one is cheap now — see **A network refusal**
 below — but it is not what a single CAPTCHA calls for.
 
-`geelark run` still deletes the phone on a CAPTCHA and leaves the row for you
-to give a new proxy to. That is doubly wrong now: the account is the likelier
-cause, and the proxy could have been changed on the phone anyway. Correcting
-`run` is still to do.
+A CAPTCHA now costs the Gmail and nothing else - the next address is tried on
+the same phone. `failures.py` is where that is decided, and where the note the
+tab carries comes from.
 
 ### `no_authenticator`
 The row has no `totp_secret` and Google asked for a code anyway.
@@ -181,7 +181,7 @@ the current password in the sheet.
 The phone is deleted rather than kept, so the slot goes back. That is a choice,
 not a necessity - the phone would work with a corrected sheet. If these
 passwords do turn up in practice, take `password_changed` out of `UNREUSABLE`
-in `orchestrator.py` and the phone will be waiting for the retry.
+in `builder.py` and the phone will be waiting for `geelark finish`.
 
 ### `stuck_on_<screen>`
 The flow saw the same screen more times than its allowance and gave up. Read it
@@ -248,17 +248,10 @@ sheet opens with `ALREADY RETRIED` when that is what happened, and then the
 answer is the proxy:
 
 ```bash
-geelark run --failed-only    # only if the note does NOT say ALREADY RETRIED
+geelark finish               # retries the app login on that phone
 ```
 
 **If it recurs on the same row, change the proxy — and delete the phone.** For
-`geelark run` only: it never repoints an existing phone, so a new proxy in the
-sheet does nothing until the row gets a new one.
-
-```bash
-geelark delete --phone <id>
-```
-
 `geelark build` handles this itself and does not need either step. It asks
 sx.org for a new exit on the proxy the phone already has — three a day per
 proxy, same host and credentials — and only takes a different proxy when that
@@ -298,7 +291,7 @@ The usual fix is the app account rather than anything about the phone, and a
 retry reuses it:
 
 ```bash
-geelark run --retry-failed
+geelark finish
 ```
 
 `app_email_code_required` is the common one: the app account has no
@@ -350,7 +343,7 @@ you should rarely see this reason at all. Seeing it means the second exit was
 refused too, or the row had under seven minutes of budget left. Re-run it:
 
 ```bash
-geelark run --retry-failed
+geelark finish
 ```
 
 Replacing the proxy is the answer only if one row keeps producing it while
@@ -383,10 +376,10 @@ phone it names.
 
 ```bash
 geelark phones --ledger    # confirm no run is actually holding it
-geelark run --retry-failed # reclaims running rows as well as failed ones
+geelark finish             # picks up phones one step short of ready
 ```
 
-Since 2026-08-01 the orchestrator catches every exception per row, so this
+Since 2026-08-01 the builder catches every exception per phone, so this
 should only be reachable after a hard crash or power loss. It happened once
 because a raw `requests` exception escaped the handler; both that and the
 reclaim path are fixed.
@@ -428,7 +421,7 @@ they live behind the local agent - so look in the GeeLark desktop app.
 Free a slot, or raise the plan, then:
 
 ```bash
-geelark run --retry-failed
+geelark finish
 ```
 
 `geelark plan` also reports the parallel limit, which is what the account may run
@@ -440,7 +433,7 @@ openapi.geelark.com`; the rest of the batch carries on. Read-only calls retry
 automatically, which is why some rows survive a blip and only the unlucky ones
 do not.
 
-Afterwards: `geelark reap` first, then `geelark run --retry-failed`, which
+Afterwards: `geelark reap` first, then `geelark finish`, which
 reuses the phones those rows already created rather than paying again.
 
 ### A password containing '%'
