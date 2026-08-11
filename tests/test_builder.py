@@ -227,20 +227,40 @@ def test_an_exit_change_does_not_cost_a_credential(device, settings, drive):
     assert len(device.proxies_set) == 2
 
 
-def test_exit_changes_run_out_without_condemning_the_account(
-        device, settings, drive):
-    """Refused at the edge past every exit change: the network's verdict, not
-    the account's. The account was never judged, so it must go back as stock -
-    condemning it would lose a good account to a bad afternoon."""
-    book = make_book(proxies=8)
+def test_network_refusals_have_no_fixed_cap(device, settings, drive):
+    """The build gave up after three exit changes; the described flow says keep
+    setting the next proxy and retrying. Five refusals - more than that old cap
+    - still reach a sign-in, on the same account. A swapped-out proxy returns
+    to the pool, so a small pool is cycled rather than exhausted."""
+    book = make_book(proxies=3)
     refused = Outcome("fatal", "network_ssl_rejected")
     build = drive(book, settings, google=[SIGNED_IN],
-                  app=[refused] * (builder.MAX_EXIT_CHANGES + 1))
+                  app=[refused] * 5 + [SIGNED_IN])
+
+    assert build.ok and build.app_account == "a0@example.com"
+    assert len(device.proxies_set) == 5      # five swaps, no ceiling at three
+
+
+def test_a_network_failure_that_runs_out_of_proxies_keeps_the_account(
+        device, settings, drive, monkeypatch):
+    """When swapping genuinely runs out - here every other proxy is unreachable,
+    so the dead ones do not return to the pool - the build fails with
+    'no_usable_proxy', never the network reason, and the account it never got to
+    judge goes back as stock."""
+    from geelark_farm.proxy import ProxyError
+
+    def check(client, proxy):
+        if proxy.host != "10.0.0.0":          # only the first answers
+            raise ProxyError("no answer")
+        return {"outboundIP": "1.1.1.1"}
+
+    monkeypatch.setattr(builder.proxy_mod, "check", check)
+    book = make_book(proxies=3)
+    refused = Outcome("fatal", "network_ssl_rejected")
+    build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 8)
 
     assert not build.ok
-    assert build.status == "network_ssl_rejected"
-    assert len(device.proxies_set) == builder.MAX_EXIT_CHANGES
-    # the account is back on the shelf, not marked with a network reason
+    assert build.status == "no_usable_proxy"          # never the network reason
     assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
 
 

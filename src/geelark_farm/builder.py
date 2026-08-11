@@ -96,10 +96,14 @@ def install_build_logging() -> None:
 MAX_GMAIL_ATTEMPTS = 3
 MAX_APP_ATTEMPTS = 3
 
-# How many times one build may move to a different exit address. Each costs a
-# stop, a call and a boot - about two minutes - so the budget bounds this as
-# much as the number does.
-MAX_EXIT_CHANGES = 3
+# A network refusal is not the account's fault and not this exit's alone: it
+# was measured to be per-session, so the next exit has a real chance where this
+# one failed. So a build keeps taking a new exit and retrying the SAME account
+# for as long as it can - there is deliberately no fixed limit on the count.
+# What bounds it is real resource: the build budget (the loop stops starting an
+# attempt once too little of it is left) and the proxy pool (a swap that finds
+# nothing left ends the build). Neither leaves the phone reporting the network
+# error itself - it reports what actually ran out, budget or proxies.
 
 # How many proxies may be skipped as unreachable before the build gives up.
 # Every one of these is a proxy GeeLark could not connect through at all.
@@ -344,24 +348,19 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             build.tried.append(f"{app_row.credentials.email}: {outcome.reason}")
 
             if outcome.reason in EXIT_VERDICTS:
-                if exits < MAX_EXIT_CHANGES:
-                    # Refused before the account was looked at. Keep it and
-                    # change where the request comes from; this costs an exit,
-                    # not an account.
-                    proxy_row = _new_exit(client, settings, book, build,
-                                          phone_id, proxy_row, outcome.reason,
-                                          remaining(), cancelled=cancelled)
-                    exits += 1
-                    continue
-                # Out of exit changes and still refused at the edge. This is the
-                # network's verdict, and it was reached before the account was
-                # examined - so the account is not to blame and must not be
-                # marked as if it were. Stop, and let _release put it back as
-                # stock; condemning it here would lose a good account to a bad
-                # afternoon (the exact loss this module exists to prevent).
-                return finish(outcome.reason,
-                              f"refused at the edge across {exits} exit "
-                              f"changes; the app account was never judged")
+                # Refused before the account was looked at, so it is the exit's
+                # problem, not the account's. Keep the account, change where the
+                # request comes from, and try again - for as long as there is
+                # budget and there are proxies. This does not count against the
+                # account's attempts and never fails the phone with the network
+                # reason: if it runs out, it runs out of budget or proxies, and
+                # _new_exit says which. The account goes back to the pool as
+                # stock, never judged.
+                proxy_row = _new_exit(client, settings, book, build,
+                                      phone_id, proxy_row, outcome.reason,
+                                      remaining(), cancelled=cancelled)
+                exits += 1
+                continue
             book.apps.fail(app_row, outcome.reason, note=outcome.detail[:300])
             app_row = None
             tried_apps += 1
