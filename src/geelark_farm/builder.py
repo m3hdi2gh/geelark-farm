@@ -216,6 +216,11 @@ class _Session:
     phone_id: str
     artifacts: Path
     deadline: float
+    # When the work on this phone began, so a build that ends inside the app
+    # phase still reports how long it took. Without it the summary said 0s for
+    # every phone that ran out of accounts - several minutes of work reported
+    # as none (2026-08-11, phones 668 and 670).
+    started: float = 0.0
     cancelled: Callable[[], bool] | None = None
     proxy_row: Resource | None = None
     app_row: Resource | None = None
@@ -234,6 +239,8 @@ class _Session:
 
     def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
         self.build.ok, self.build.status, self.build.detail = ok, status, detail
+        if self.started:
+            self.build.seconds = time.monotonic() - self.started
         return self.build
 
 
@@ -458,7 +465,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,
                            build=build, phone_id=phone_id, artifacts=artifacts,
-                           deadline=deadline, cancelled=cancelled,
+                           deadline=deadline, started=started,
+                           cancelled=cancelled,
                            proxy_row=proxy_row, refused_exits=refused_exits)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
@@ -578,7 +586,8 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # which is why proxy_row starts as None.
         session = _Session(client=client, settings=settings, book=book,
                            build=build, phone_id=phone_id, artifacts=artifacts,
-                           deadline=deadline, cancelled=cancelled)
+                           deadline=deadline, started=started,
+                           cancelled=cancelled)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up

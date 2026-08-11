@@ -200,6 +200,9 @@ def test_an_empty_app_pool_is_what_stops_it_not_a_count(device, settings, drive)
 
     assert not build.ok and build.status == "no_usable_gpt"
     assert "no unused account left" in build.detail
+    # A build that gives up inside the app phase still reports how long it
+    # took; the summary said 0s for several minutes of work (phones 668, 670).
+    assert build.seconds > 0
 
 
 def test_bad_gmails_are_worked_through_past_any_fixed_count(device, settings,
