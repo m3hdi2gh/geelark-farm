@@ -32,12 +32,14 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import phones
+from . import builder, phones
 from .api import ApiError, TransportError, build_client
+from .builder import Build
 from .config import Settings
 from .ledger import Ledger
-from .orchestrator import Result, install_row_logging
+from .orchestrator import Result, RowContextFilter, install_row_logging
 from .orchestrator import run as run_batch
+from .pools import Book
 from .sheets import Sheet, SheetError, selectable
 
 console = Console()
@@ -62,12 +64,23 @@ class Snapshot:
     # while did not mean it - it also took every pending row with it.
     rows_retryable: int = 0
     rows_bad: int = 0
+    # The resource pools `geelark build` draws from. -1 means "not read" - the
+    # tabs may not exist on a sheet that only feeds the single-row `run` flow,
+    # and a zero there would wrongly read as "empty" rather than "not asked".
+    proxies_free: int = -1
+    gmails_free: int = 0
+    apps_free: int = 0
+    pools_stuck: int = 0
     phones_total: int = 0
     phones_running: int = 0
     slots_total: int = 0
     slots_free: int = 0
     parallels: int = 0
     error: str = ""
+
+    @property
+    def has_pools(self) -> bool:
+        return self.proxies_free >= 0
 
 
 # The plan endpoint allows one request per minute, and the menu redraws after
@@ -136,6 +149,20 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.rows_retryable = len(selectable(rows, failed_only=True))
         except SheetError as exc:
             snap.error = snap.error or str(exc).splitlines()[0]
+
+        # The resource tabs, if this sheet has them. Their absence is not an
+        # error - a sheet can carry only the single-row flow - so a missing tab
+        # leaves has_pools False rather than filling the dashboard with a
+        # complaint about a feature this sheet does not use.
+        try:
+            book = Book.open(settings)
+            snap.proxies_free = len(book.proxies.available)
+            snap.gmails_free = len(book.gmails.available)
+            snap.apps_free = len(book.apps.available)
+            snap.pools_stuck = sum(len(p.stuck) for p in
+                                   (book.proxies, book.gmails, book.apps))
+        except SheetError:
+            pass
     return snap
 
 
@@ -154,6 +181,19 @@ def dashboard(snap: Snapshot) -> Panel:
     table.add_row("sheet",
                   f"{snap.rows_total} rows   " + "   ".join(sheet_bits)
                   if snap.rows_total else "[bright_black]not configured[/]")
+
+    # The pools `build` draws from. Each count is coloured by its own value -
+    # a build needs one of each and stops at whichever runs out, so the empty
+    # one is the one to see, not all three dimmed to match it.
+    if snap.has_pools:
+        def tint(count: int, label: str) -> str:
+            return f"[{OK if count else BAD}]{count} {label}[/]"
+        pool_bits = "   ".join((tint(snap.proxies_free, "proxies"),
+                                tint(snap.gmails_free, "gmails"),
+                                tint(snap.apps_free, "gpt")))
+        if snap.pools_stuck:
+            pool_bits += f"   [{WARN}]{snap.pools_stuck} stuck in_use[/]"
+        table.add_row("pools", pool_bits)
 
     # Running phones are the only thing here that costs money by the second.
     billing = (f"[{BAD}]{snap.phones_running} RUNNING (billing)[/]"
@@ -197,16 +237,18 @@ NOT_A_STEP = (
 
 
 @dataclass
-class LiveReporter:
-    """Draws a batch as one line per row, updated as it happens.
+class _LiveTable:
+    """The half of a live display that is the same for every batch.
 
-    Row progress comes from the log records the flows already emit: they are
-    stamped with the row number by RowContextFilter, so a handler can turn
-    "screen: password_entry" into that row's current step without any flow
-    knowing a console exists.
+    Both the row batch and the build batch feed on the log records the flows
+    already emit - each stamped with its worker's key (a row number, a build
+    index) - so a handler can turn "screen: password_entry" into that line's
+    current step without any flow knowing a console exists. What differs
+    between the two is only how a line starts, finishes and renders; the
+    plumbing that collects steps, links and warnings is here.
     """
 
-    total: int
+    total: int = 0
     rows: dict[int, dict] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     # Links seen but not yet printed. Collected here rather than printed from
@@ -217,20 +259,6 @@ class LiveReporter:
     # Warnings and errors, waiting to be printed above the table rather than
     # into the middle of a row.
     new_notices: list[tuple[object, str]] = field(default_factory=list)
-
-    def start(self, index: int, row) -> None:
-        with self.lock:
-            self.rows[row.number] = {
-                "email": row.email, "state": "working", "step": "starting",
-                "started": time.monotonic(), "seconds": 0.0, "phone": "",
-            }
-
-    def finish(self, result: Result) -> None:
-        with self.lock:
-            entry = self.rows.setdefault(result.row, {"email": result.email})
-            entry.update(state="ready" if result.ok else "failed",
-                         step=result.reason, seconds=result.seconds,
-                         phone=result.serial or result.phone_id[:8])
 
     def drain_links(self) -> list[tuple[int, str, str]]:
         """Take the links that have arrived since the last call."""
@@ -248,9 +276,9 @@ class LiveReporter:
             found, self.new_notices = self.new_notices, []
             return found
 
-    def note(self, row: int, message: str) -> None:
+    def note(self, key: int, message: str) -> None:
         with self.lock:
-            entry = self.rows.get(row)
+            entry = self.rows.get(key)
             if not entry:
                 return
             if message.startswith(LIVE_PREFIX):
@@ -260,7 +288,7 @@ class LiveReporter:
                 url = message[len(LIVE_PREFIX):].strip()
                 if url and url not in self.seen_links:
                     self.seen_links.add(url)
-                    self.new_links.append((row, entry.get("phone", ""), url))
+                    self.new_links.append((key, entry.get("phone", ""), url))
                 return
             found = CREATED_SERIAL.search(message)
             if found:
@@ -273,8 +301,8 @@ class LiveReporter:
             if entry["state"] == "working":
                 entry["step"] = message
 
-    def render(self) -> Table:
-        """One line per row.
+    def _render(self, first_heading: str) -> Table:
+        """One line per worker, coloured by state.
 
         State is carried by colour and a plain word, never by a glyph: the
         check marks this started with rendered as replacement characters in a
@@ -283,9 +311,7 @@ class LiveReporter:
         table = Table(box=None, padding=(0, 2))
         # No fixed widths: rich sizes to the content, and a width small enough
         # to look tidy in one terminal truncates the word "working" in another.
-        # One state column, not two - on a finished row the state and the last
-        # step are the same thing said twice.
-        table.add_column("row", justify="right", style=DIM)
+        table.add_column(first_heading, justify="right", style=DIM)
         table.add_column("account", overflow="ellipsis", no_wrap=True,
                          max_width=34)
         table.add_column("phone", style=DIM)
@@ -312,6 +338,60 @@ class LiveReporter:
                               e.get("phone", ""),
                               f"[{style}]{state}[/]", f"{seconds:.0f}s")
         return table
+
+
+@dataclass
+class LiveReporter(_LiveTable):
+    """A `geelark run` batch, one line per sheet row."""
+
+    def start(self, index: int, row) -> None:
+        with self.lock:
+            self.rows[row.number] = {
+                "email": row.email, "state": "working", "step": "starting",
+                "started": time.monotonic(), "seconds": 0.0, "phone": "",
+            }
+
+    def finish(self, result: Result) -> None:
+        with self.lock:
+            entry = self.rows.setdefault(result.row, {"email": result.email})
+            entry.update(state="ready" if result.ok else "failed",
+                         step=result.reason, seconds=result.seconds,
+                         phone=result.serial or result.phone_id[:8])
+
+    def render(self) -> Table:
+        return self._render("row")
+
+
+@dataclass
+class BuildReporter(_LiveTable):
+    """A `geelark build` batch, one line per phone being built.
+
+    A build has no account until it signs one in, so the account column fills
+    in only when the build finishes - until then the line is carried by its
+    serial and the step the flow last reached, which is exactly what the log
+    stamping provides.
+    """
+
+    def start(self, index: int, total: int) -> None:
+        with self.lock:
+            self.rows[index] = {
+                "email": "", "state": "working", "step": "starting",
+                "started": time.monotonic(), "seconds": 0.0, "phone": "",
+            }
+
+    def finish(self, build: Build) -> None:
+        with self.lock:
+            entry = self.rows.setdefault(build.index, {"email": ""})
+            account = build.gmail
+            if build.app_account:
+                account = f"{account} + {build.app_account}"
+            entry.update(state="ready" if build.ok else "failed",
+                         step=build.status, seconds=build.seconds,
+                         phone=build.serial or build.phone_id[:8],
+                         email=account or entry.get("email", ""))
+
+    def render(self) -> Table:
+        return self._render("build")
 
 
 # Which layers narrate. A row's state is the step it has reached, and steps
@@ -345,7 +425,7 @@ class ReporterLogHandler(logging.Handler):
     than to silence them (2026-08-09).
     """
 
-    def __init__(self, reporter: LiveReporter):
+    def __init__(self, reporter: _LiveTable):
         super().__init__(level=logging.INFO)
         self.reporter = reporter
         self.setFormatter(
@@ -360,14 +440,14 @@ class ReporterLogHandler(logging.Handler):
             self.reporter.note(row, record.getMessage())
 
 
-def print_new_notices(live: Live, reporter: LiveReporter) -> None:
+def print_new_notices(live: Live, reporter: _LiveTable) -> None:
     """Put warnings and errors above the table, where they stay readable."""
     for row, message in reporter.drain_notices():
-        where = f"row {row}" if isinstance(row, int) else "run"
+        where = f"#{row}" if isinstance(row, int) else "run"
         live.console.print(f"[{WARN}]{where}[/]  {message}")
 
 
-def print_new_links(live: Live, reporter: LiveReporter) -> None:
+def print_new_links(live: Live, reporter: _LiveTable) -> None:
     """Write each live-view link once, above the table.
 
     This started as a column holding an OSC 8 hyperlink on the word "open".
@@ -397,7 +477,7 @@ def print_new_links(live: Live, reporter: LiveReporter) -> None:
     # (2026-08-09). Live keeps its last frame on stop, which is exactly what
     # makes the final table stay on screen, and exactly what made this wrong.
     for number, serial, url in new:
-        where = f"row {number}" + (f", phone {serial}" if serial else "")
+        where = f"#{number}" + (f", phone {serial}" if serial else "")
         live.console.print(f"[{DIM}]{where} - watch live:[/]")
         live.console.print(url, soft_wrap=True)
     live.console.print()
@@ -426,35 +506,38 @@ def _restart_after_resize(live: Live, width: int) -> int:
     return current
 
 
-def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
-    """`run`, drawn as a table instead of a scrolling log."""
-    client = build_client(settings)
-    settings.ensure_dirs()
-    install_row_logging()
+def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
+                      work) -> None:
+    """Run `work()` in a thread while drawing `reporter.render()` live.
 
-    reporter = LiveReporter(total=0)
+    The context filter goes on the reporter's own handler, not on the stream
+    handlers `install_*_logging` touched: those are silenced for the duration
+    (see below), so a filter on them never runs and the record reaches here
+    with no key stamped - which is what would leave the step column stuck on
+    "starting" for the whole batch. On this handler it runs every time, so each
+    log line knows which worker it belongs to.
+    """
     handler = ReporterLogHandler(reporter)
+    handler.addFilter(context_filter)
     root = logging.getLogger()
     # Silence the stream handlers completely for the duration. Anything they
     # print goes straight to the terminal, underneath rich, and lands in the
     # middle of whatever the table was drawing. Warnings are not lost - the
-    # handler below queues them to be printed above the table instead.
+    # handler queues them to be printed above the table instead.
     previous = [(h, h.level) for h in root.handlers]
     for existing, _ in previous:
         existing.setLevel(logging.CRITICAL + 1)
     root.addHandler(handler)
 
-    results: list[Result] = []
-    failure: Exception | None = None
+    failure: dict = {"exc": None}
 
-    def work() -> None:
-        nonlocal results, failure
+    def runner() -> None:
         try:
-            results = run_batch(client, settings, reporter=reporter, **kwargs)
+            work()
         except Exception as exc:                                  # noqa: BLE001
-            failure = exc
+            failure["exc"] = exc
 
-    worker = threading.Thread(target=work, daemon=True)
+    worker = threading.Thread(target=runner, daemon=True)
     worker.start()
     try:
         with Live(reporter.render(), console=console, refresh_per_second=4,
@@ -475,9 +558,42 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
             existing.setLevel(level)
 
     worker.join()
-    if failure:
-        console.print(f"[{BAD}]the run failed: {failure}[/]")
+    if failure["exc"]:
+        console.print(f"[{BAD}]the run failed: {failure['exc']}[/]")
+
+
+def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
+    """`run`, drawn as a table instead of a scrolling log."""
+    client = build_client(settings)
+    settings.ensure_dirs()
+    install_row_logging()
+
+    reporter = LiveReporter()
+    results: list[Result] = []
+
+    def work() -> None:
+        nonlocal results
+        results = run_batch(client, settings, reporter=reporter, **kwargs)
+
+    _drive_live_table(reporter, RowContextFilter(), work)
     return results
+
+
+def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
+    """`build`, drawn as a table instead of a scrolling log."""
+    client = build_client(settings)
+    settings.ensure_dirs()
+    builder.install_build_logging()
+
+    reporter = BuildReporter()
+    builds: list[Build] = []
+
+    def work() -> None:
+        nonlocal builds
+        builds = builder.run(client, settings, reporter=reporter, **kwargs)
+
+    _drive_live_table(reporter, builder.BuildContextFilter(), work)
+    return builds
 
 
 def summary_panel(results: list[Result]) -> Panel:
@@ -513,7 +629,65 @@ def summary_panel(results: list[Result]) -> Panel:
     return Panel(Group(*body), title="summary", border_style=DIM, padding=(1, 2))
 
 
+def build_summary_panel(builds: list[Build]) -> Panel:
+    """The same shape as summary_panel, for the build flow's own result.
+
+    A build's failure names a resource state, not a row - "no_usable_gpt", "the
+    account was never judged" - and a ready one names what it produced, so the
+    lines read differently even though the shell is the same.
+    """
+    if not builds:
+        return Panel("nothing was built", border_style=DIM)
+
+    ready = sum(1 for b in builds if b.ok)
+    unstopped = [b for b in builds if b.still_running]
+
+    body: list = [Text(f"{ready}/{len(builds)} phones ready",
+                       style=f"bold {OK if ready == len(builds) else WARN}")]
+
+    if unstopped:
+        body.append(Text(""))
+        body.append(Text(f"{len(unstopped)} PHONE(S) COULD NOT BE STOPPED - "
+                         f"STILL BILLING", style=f"bold {BAD}"))
+        for b in unstopped:
+            body.append(Text(f"   {b.phone_id}", style=BAD))
+        body.append(Text("Run 'reap' from the menu now.", style=BAD))
+    else:
+        body.append(Text("All phones are stopped; nothing is billing.",
+                         style=DIM))
+
+    for b in builds:
+        if b.ok:
+            who = b.gmail + (f" + {b.app_account}" if b.app_account else "")
+            body.append(Text(f"   {b.name}: {who}", style=OK))
+        else:
+            body.append(Text(f"   {b.name}: {b.status}", style=BAD))
+
+    return Panel(Group(*body), title="build summary", border_style=DIM,
+                 padding=(1, 2))
+
+
 # ------------------------------------------------------------------ views
+def pools_view(settings: Settings) -> Panel:
+    """What each resource tab holds, and what a dead run left claimed."""
+    book = Book.open(settings)
+    table = Table.grid(padding=(0, 3))
+    table.add_column(style=DIM, justify="right")
+    table.add_column()
+    for pool in (book.proxies, book.gmails, book.apps):
+        bits = f"[{OK if pool.available else BAD}]{len(pool.available)} available[/]"
+        if pool.stuck:
+            bits += f"   [{WARN}]{len(pool.stuck)} stuck in_use[/]"
+        if pool.broken:
+            bits += f"   [{BAD}]{len(pool.broken)} unusable[/]"
+        table.add_row(pool.tab, bits)
+        for resource in pool.broken:
+            table.add_row("", f"[{BAD}]row {resource.sheet_row}: "
+                              f"{resource.error}[/]")
+    return Panel(table, title="resource pools", border_style=DIM, padding=(1, 2))
+
+
+
 def rows_table(settings: Settings) -> Table:
     table = Table(box=None, padding=(0, 2))
     table.add_column("row", justify="right", style=DIM, width=3)
@@ -595,13 +769,16 @@ def plan_panel(settings: Settings) -> Panel:
 
 # ------------------------------------------------------------------- menu
 ACTIONS = [
-    ("1", "Run pending rows", "create, sign in, install, stop - the main job"),
-    ("2", "Retry failed and stuck rows", "reuses the phones they already have"),
-    ("3", "Validate the sheet", "spends nothing"),
-    ("4", "Phones", "what exists, and what is billing"),
-    ("5", "Stop everything", "ends all billing now"),
-    ("6", "Reap", "stop phones nothing is accountable for"),
-    ("7", "Subscription", "slots, free slots, parallel limit"),
+    ("1", "Build phones from pools",
+     "take a proxy, sign in a Gmail, install, sign in ChatGPT - the main job"),
+    ("2", "Resource pools", "what the Gmails/Proxy/Gpt tabs hold; free stuck rows"),
+    ("3", "Run pending rows", "the older single-row sheet flow"),
+    ("4", "Retry failed and stuck rows", "reuses the phones they already have"),
+    ("5", "Validate the sheet", "spends nothing"),
+    ("6", "Phones", "what exists, and what is billing"),
+    ("7", "Stop everything", "ends all billing now"),
+    ("8", "Reap", "stop phones nothing is accountable for"),
+    ("9", "Subscription", "slots, free slots, parallel limit"),
     ("q", "Quit", ""),
 ]
 
@@ -650,6 +827,48 @@ def confirm_run(settings: Settings, snap: Snapshot, *,
     return {"workers": workers, "limit": count, **mode}
 
 
+def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
+    """Ask how many phones to build, and make the cost and the stock visible.
+
+    The proxies count is the ceiling on clean builds - one is consumed per
+    phone - and the Gmails and Gpt counts are one each per phone when the first
+    candidate works, so the smallest of the three is how many are safe to
+    promise. More is allowed: a tab just topped up will read low here, and a
+    build that runs out simply stops with a named reason rather than a mess.
+    """
+    if not snap.has_pools:
+        console.print(f"[{BAD}]the resource tabs (Gmails, Proxy, Gpt Info) are "
+                      f"not in this sheet - `build` has nothing to read[/]")
+        return None
+
+    buildable = min(snap.proxies_free, snap.gmails_free, snap.apps_free)
+    console.print(f"[{DIM}]pools: {snap.proxies_free} proxies, "
+                  f"{snap.gmails_free} gmails, {snap.apps_free} gpt "
+                  f"- enough for {buildable} without topping up[/]")
+    if not buildable:
+        console.print(f"[{WARN}]at least one pool is empty; a build stops at "
+                      f"whichever runs out first[/]")
+
+    count = IntPrompt.ask("how many phones to build", default=max(1, buildable))
+    count = max(1, count)
+
+    workers = IntPrompt.ask("how many at a time",
+                            default=min(settings.max_concurrent_phones, count))
+    workers = max(1, min(workers, count))
+    if snap.parallels and workers > snap.parallels:
+        console.print(f"[{WARN}]the plan's parallel limit is {snap.parallels}; "
+                      f"more may cost extra[/]")
+    if count > snap.slots_free:
+        console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free; "
+                      f"builds past that will fail to create a phone[/]")
+
+    console.print(f"\n[{WARN}]{count} phone(s), {workers} at a time. "
+                  f"Phones bill per running minute.[/]")
+    if not Confirm.ask("start", default=True):
+        return None
+    return {"count": count, "workers": workers}
+
+
 def run_console(settings: Settings) -> int:
     """The loop. Draw the state, take one action, draw it again."""
     console.print()
@@ -686,26 +905,40 @@ def run_console(settings: Settings) -> int:
                         stop_all(settings)
                 return 0
 
-            if choice in ("1", "2"):
+            if choice == "1":
+                options = confirm_build(settings, snap)
+                if options:
+                    builds = build_with_live_table(settings, **options)
+                    console.print(build_summary_panel(builds))
+
+            elif choice == "2":
+                console.print(pools_view(settings))
+                if snap.pools_stuck and Confirm.ask(
+                        f"release {snap.pools_stuck} row(s) stuck as in_use - "
+                        f"only if no other run is in progress", default=False):
+                    freed = Book.open(settings).release_stuck()
+                    console.print(f"[{OK}]released {freed}[/]")
+
+            elif choice in ("3", "4"):
                 options = confirm_run(settings, snap,
-                                      retry_failed=(choice == "2"))
+                                      retry_failed=(choice == "4"))
                 if options:
                     results = run_with_live_table(settings, **options)
                     console.print(summary_panel(results))
 
-            elif choice == "3":
+            elif choice == "5":
                 console.print(rows_table(settings))
 
-            elif choice == "4":
+            elif choice == "6":
                 console.print(phones_table(settings))
 
-            elif choice == "5":
+            elif choice == "7":
                 stop_all(settings)
 
-            elif choice == "6":
+            elif choice == "8":
                 reap(settings)
 
-            elif choice == "7":
+            elif choice == "9":
                 console.print(plan_panel(settings))
 
         except (ApiError, TransportError, SheetError) as exc:

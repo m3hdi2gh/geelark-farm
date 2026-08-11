@@ -362,3 +362,46 @@ def test_a_run_level_warning_is_kept_too():
     handler.emit(record)
 
     assert len(reporter.drain_notices()) == 1
+
+
+def test_a_build_line_fills_its_account_only_when_it_finishes():
+    """A build has no account until it signs one in, so the column is blank
+    while it works and names the pair it ended with once it is done. The serial
+    still arrives mid-build, from the creation line, the same way a row's does.
+    """
+    from geelark_farm.builder import Build
+    from geelark_farm.ui import BuildReporter
+
+    reporter = BuildReporter()
+    reporter.start(1, 3)
+    reporter.note(1, "created 631 (serial 500): vivo / Android 15")
+    assert reporter.rows[1]["email"] == ""        # nothing signed in yet
+    assert reporter.rows[1]["phone"] == "500"
+
+    reporter.finish(Build(index=1, ok=True, status="ready", serial="500",
+                          gmail="g@example.com", app_account="a@example.com"))
+    assert reporter.rows[1]["email"] == "g@example.com + a@example.com"
+
+
+def test_a_builds_steps_reach_its_state_column():
+    """The step column only updates if the record carries the build's index,
+    and that is stamped by BuildContextFilter - which has to be on the handler
+    that actually runs (the reporter's), not the silenced stream handlers. With
+    it on the reporter handler, a flow log with no row set gets one and lands.
+    """
+    import logging
+
+    from geelark_farm import builder
+    from geelark_farm.ui import BuildReporter, ReporterLogHandler
+
+    reporter = BuildReporter()
+    reporter.start(7, 1)
+    handler = ReporterLogHandler(reporter)
+    handler.addFilter(builder.BuildContextFilter())
+
+    builder._context.build = 7
+    record = logging.LogRecord("geelark_farm.flows.chatgpt_login", logging.INFO,
+                               "f", 1, "screen: password_entry", None, None)
+    # No record.row set: the filter on the handler is what must supply it.
+    handler.handle(record)
+    assert reporter.rows[7]["step"] == "screen: password_entry"
