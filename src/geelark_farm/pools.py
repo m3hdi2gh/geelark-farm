@@ -366,6 +366,38 @@ class PhoneLog:
                         what=f"{self.tab} row {sheet_row}")
         return sheet_row
 
+    def unfinished(self) -> list[dict]:
+        """Phones that got a Gmail but never an app account.
+
+        Read from the columns rather than from Status, because Status names why
+        a build stopped and there are several ways to stop one step short -
+        the tab emptied, every exit was refused, the budget ran out. What they
+        have in common is the thing that matters here: a Gmail on the device
+        and no app account beside it.
+
+        `building` is excluded: a run may be holding it right now.
+        """
+        with self._lock:
+            rows = self._ws.get_all_values()
+        found = []
+        for offset, line in enumerate(rows[1:], start=2):
+            if not any(line):
+                continue
+
+            def cell(name: str, line: list = line) -> str:
+                index = self._index.get(name)
+                return (line[index].strip()
+                        if index is not None and index < len(line) else "")
+
+            if cell("Status") in (self.BUILDING, "ready") or not cell("Phone ID"):
+                continue
+            if not cell("Gmail") or cell("GPT Account"):
+                continue
+            found.append({"sheet_row": offset, "phone_id": cell("Phone ID"),
+                          "serial": cell("Serial"), "gmail": cell("Gmail"),
+                          "proxy": cell("Proxy"), "status": cell("Status")})
+        return found
+
     def finish(self, sheet_row: int, **fields: str) -> None:
         payload = []
         for name, value in fields.items():

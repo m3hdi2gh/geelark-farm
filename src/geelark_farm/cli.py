@@ -86,6 +86,16 @@ def build_parser() -> argparse.ArgumentParser:
                          help="print a live-view link and wait for Enter "
                               "before driving each phone")
 
+    p_finish = sub.add_parser(
+        "finish", help="sign an app account into phones that are one step short"
+    )
+    p_finish.add_argument("--limit", type=int, metavar="N",
+                          help="finish at most N phones")
+    p_finish.add_argument("--workers", type=int, metavar="N",
+                          help="how many at once (default: MAX_CONCURRENT_PHONES)")
+    p_finish.add_argument("--dry-run", action="store_true",
+                          help="show which phones would be finished, spend nothing")
+
     p_pools = sub.add_parser(
         "pools", help="what the resource tabs hold, and what is stuck"
     )
@@ -630,6 +640,22 @@ def cmd_build(settings: Settings, args) -> int:
     return 0 if builds and all(b.ok for b in builds) else 1
 
 
+def cmd_finish(settings: Settings, args) -> int:
+    """Complete phones that have everything but an app account."""
+    from . import builder
+
+    client = build_client(settings)
+    builds = builder.finish_run(client, settings, limit=args.limit,
+                                workers=args.workers, dry_run=args.dry_run)
+    if args.dry_run:
+        return 0
+    if not builds:
+        print("nothing to finish - no phone is waiting on an app account")
+        return 0
+    print(builder.summarise(builds))
+    return 0 if all(b.ok for b in builds) else 1
+
+
 def cmd_pools(settings: Settings, args) -> int:
     """What the resource tabs hold. Spends nothing."""
     from .pools import Book
@@ -815,6 +841,7 @@ def main(argv: list[str] | None = None) -> int:
         "rows": cmd_rows,
         "run": cmd_run,
         "build": cmd_build,
+        "finish": cmd_finish,
         "pools": cmd_pools,
     }
     handler = handlers.get(args.command)

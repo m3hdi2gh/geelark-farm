@@ -57,6 +57,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 from . import phones, shell, sxorg
@@ -198,6 +199,106 @@ class Aborted(Exception):
     """The run is shutting down; stop what this build is doing."""
 
 
+@dataclass
+class _Session:
+    """One phone being worked on, and everything claimed for it.
+
+    Exists so `build` and `finish` drive the app login through the same code.
+    They differ only in how the phone got here - built from nothing, or picked
+    up already signed in and installed - and the moment those two grew separate
+    copies of this loop is the moment its rules start drifting apart.
+    """
+
+    client: Client
+    settings: Settings
+    book: Book
+    build: Build
+    phone_id: str
+    artifacts: Path
+    deadline: float
+    cancelled: Callable[[], bool] | None = None
+    proxy_row: Resource | None = None
+    app_row: Resource | None = None
+    app_signed_in: bool = False
+    exits: int = 0
+    # Proxies tried and moved on from, with what was seen through each. Held
+    # claimed for the rest of the run so a swap cannot hand one back.
+    refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
+
+    def remaining(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def check_cancelled(self) -> None:
+        if self.cancelled and self.cancelled():
+            raise Aborted("interrupted")
+
+    def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
+        self.build.ok, self.build.status, self.build.detail = ok, status, detail
+        return self.build
+
+
+def _sign_into_app(session: _Session) -> Build | None:
+    """Work through the app accounts on a phone that is signed in and installed.
+
+    Returns a finished Build when it gives up, or None once an account is in -
+    so the caller can carry on to whatever it does after.
+    """
+    s = session
+    while not s.app_signed_in:
+        s.check_cancelled()
+        if s.remaining() <= ATTEMPT_SECONDS:
+            return s.finish("budget_exhausted",
+                            "installed, but no budget left for the app login")
+        if s.app_row is None:
+            s.app_row = s.book.apps.claim()
+            if s.app_row is None:
+                return s.finish("no_usable_gpt",
+                                "the Gpt Info tab has no unused account left")
+        log.info("signing into the app as %s", s.app_row.credentials.email)
+        outcome = chatgpt_login.sign_in(
+            s.client, s.phone_id, s.app_row.credentials,
+            package=s.settings.target_package,
+            budget_seconds=min(s.settings.app_login_budget_seconds,
+                               s.remaining()),
+            artifact_dir=s.artifacts,
+        )
+        if outcome.ok:
+            s.build.app_account = s.app_row.credentials.email
+            s.app_signed_in = True
+            return None
+        s.build.tried.append(f"{s.app_row.credentials.email}: {outcome.reason}")
+
+        if outcome.reason in EXIT_VERDICTS:
+            # Refused before the account was looked at, so it is the exit's
+            # problem, not the account's. Keep the account, change where the
+            # request comes from, and try again - for as long as there is
+            # budget and there are proxies. This does not count against the
+            # account's attempts and never fails the phone with the network
+            # reason: if it runs out, it runs out of budget or proxies, and
+            # _new_exit says which. The account goes back as stock, never
+            # judged.
+            previous = s.proxy_row
+            s.proxy_row = _new_exit(s.client, s.settings, s.book, s.build,
+                                    s.phone_id, s.proxy_row, outcome.reason,
+                                    s.remaining(), cancelled=s.cancelled)
+            if previous is not None and previous is not s.proxy_row:
+                # Held, not freed - see _new_exit. Released at the end.
+                s.refused_exits.append((previous, outcome.reason))
+            s.exits += 1
+            continue
+        if outcome.reason in FLOW_BLOCKED:
+            # The app never got as far as judging this account, so it goes
+            # back to the pool untouched and the phone reports its own
+            # problem. Named app_* so the runbook entry someone reaches for
+            # is the app's, not Google's - the same convention as `run`.
+            return s.finish(f"app_{outcome.reason}",
+                            f"the app login could not proceed on this phone: "
+                            f"{outcome.detail}")
+        s.book.apps.fail(s.app_row, outcome.reason, note=outcome.detail[:300])
+        s.app_row = None
+    return None
+
+
 def _fresh_proxy(client: Client, book: Book) -> Resource:
     """Claim a proxy GeeLark can actually reach.
 
@@ -245,9 +346,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # each. They stay claimed for the rest of the build so a swap cannot hand
     # one back, and are released together at the end.
     refused_exits: list[tuple[Resource, str]] = []
-    # Counted apart on purpose: an exit change is not an attempt at a
-    # credential, it is the same credential being given a fair hearing.
-    exits = tried_gmails = tried_apps = 0
+    # The Gmail phase counts its own attempts; the app phase's are the
+    # session's, since that loop is shared with `finish`.
+    tried_gmails = 0
+    session: _Session | None = None
     # Whether each credential ended up on the device. Not the same question as
     # "did the build succeed" - see _release.
     gmail_signed_in = False
@@ -354,59 +456,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("install_failed", installed.detail)
 
         # ------------------------------------------------- the app account
-        while not app_signed_in:
-            check_cancelled()
-            if remaining() <= ATTEMPT_SECONDS:
-                return finish("budget_exhausted",
-                              "installed, but no budget left for the app login")
-            if app_row is None:
-                app_row = book.apps.claim()
-                if app_row is None:
-                    return finish("no_usable_gpt",
-                                  "the Gpt Info tab has no unused account left")
-            log.info("signing into the app as %s", app_row.credentials.email)
-            outcome = chatgpt_login.sign_in(
-                client, phone_id, app_row.credentials,
-                package=settings.target_package,
-                budget_seconds=min(settings.app_login_budget_seconds,
-                                   remaining()),
-                artifact_dir=artifacts,
-            )
-            if outcome.ok:
-                build.app_account = app_row.credentials.email
-                app_signed_in = True
-                break
-            build.tried.append(f"{app_row.credentials.email}: {outcome.reason}")
-
-            if outcome.reason in EXIT_VERDICTS:
-                # Refused before the account was looked at, so it is the exit's
-                # problem, not the account's. Keep the account, change where the
-                # request comes from, and try again - for as long as there is
-                # budget and there are proxies. This does not count against the
-                # account's attempts and never fails the phone with the network
-                # reason: if it runs out, it runs out of budget or proxies, and
-                # _new_exit says which. The account goes back to the pool as
-                # stock, never judged.
-                previous = proxy_row
-                proxy_row = _new_exit(client, settings, book, build,
-                                      phone_id, proxy_row, outcome.reason,
-                                      remaining(), cancelled=cancelled)
-                if previous is not None and previous is not proxy_row:
-                    # Held, not freed - see _new_exit. Released at the end.
-                    refused_exits.append((previous, outcome.reason))
-                exits += 1
-                continue
-            if outcome.reason in FLOW_BLOCKED:
-                # The app never got as far as judging this account, so it goes
-                # back to the pool untouched and the phone reports its own
-                # problem. Named app_* so the runbook entry someone reaches for
-                # is the app's, not Google's - the same convention as `run`.
-                return finish(f"app_{outcome.reason}",
-                              f"the app login could not proceed on this phone: "
-                              f"{outcome.detail}")
-            book.apps.fail(app_row, outcome.reason, note=outcome.detail[:300])
-            app_row = None
-            tried_apps += 1
+        session = _Session(client=client, settings=settings, book=book,
+                           build=build, phone_id=phone_id, artifacts=artifacts,
+                           deadline=deadline, cancelled=cancelled,
+                           proxy_row=proxy_row, refused_exits=refused_exits)
+        gave_up = _sign_into_app(session)
+        if gave_up is not None:
+            return gave_up
 
         packages = shell.third_party_packages(client, phone_id)
         return finish("ready", f"apps: {', '.join(packages) or 'none'}", ok=True)
@@ -420,6 +476,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.exception("build %d failed with an unhandled error", index)
         return finish("error", str(exc))
     finally:
+        # Once the app phase starts, the session is what holds the claims - it
+        # swaps proxies and claims accounts as it goes. Read them back from it
+        # here rather than from the locals, because an Aborted raised inside it
+        # never returns to update them, and the account it was holding would
+        # stay in_use with nothing to free it.
+        if session is not None:
+            proxy_row, app_row = session.proxy_row, session.app_row
+            app_signed_in = session.app_signed_in
+            refused_exits = session.refused_exits
         # A proxy counts as used the moment a phone exists behind it: that
         # phone keeps it until someone deletes the phone, and handing it to the
         # next build would put two devices on one exit address.
@@ -444,6 +509,108 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
                           phone_id, exc)
             ledger.release(phone_id, note=build.status)
+
+
+def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
+               phone: dict, index: int, *,
+               on_phone: Callable[[str], None] | None = None,
+               cancelled: Callable[[], bool] | None = None) -> Build:
+    """Complete a phone that has everything but its app account.
+
+    A phone that ran out of app accounts is not a failure to throw away: it is
+    signed into Google and has the app on it, and only the last step is
+    missing. Building a replacement pays for a phone, a Gmail and a proxy to
+    get back to where this one already is - so when the tab is topped up, this
+    picks it up instead.
+
+    What it is willing to do is checked against the device, not the sheet. The
+    sheet says what the run believed; `dumpsys` and `pm list` say what is
+    actually there, and a phone whose Google account is gone is not something
+    to sign an app account into.
+    """
+    started = time.monotonic()
+    build = Build(index=index, phone_id=phone["phone_id"],
+                  serial=phone["serial"], gmail=phone.get("gmail", ""),
+                  proxy=phone.get("proxy", ""))
+    deadline = started + settings.build_budget_seconds
+    session: _Session | None = None
+
+    def finish(status: str, detail: str = "", ok: bool = False) -> Build:
+        build.ok, build.status, build.detail = ok, status, detail
+        build.seconds = time.monotonic() - started
+        return build
+
+    phone_id = build.phone_id
+    try:
+        if on_phone:
+            on_phone(phone_id)
+        ledger.claim(phone_id, label=f"finish {build.serial}")
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        artifacts = settings.artifact_dir / f"{stamp}-finish{build.serial}"
+        phones.ensure_running(client, phone_id, timeout=deadline - time.monotonic(),
+                              cancelled=cancelled)
+
+        # The device is the only truth. A row can say anything; what decides
+        # whether this phone can be finished is what is on it.
+        present = shell.device_accounts(client, phone_id)
+        if not present:
+            return finish("no_google_account",
+                          "nothing is signed into Google on this phone, so "
+                          "there is nothing to finish - rebuild it")
+        build.gmail = build.gmail or present[0]
+
+        if settings.target_package not in shell.third_party_packages(client,
+                                                                     phone_id):
+            log.info("%s is not installed here; installing it first",
+                     settings.target_package)
+            installed = play_install.install(
+                client, phone_id, settings.target_package,
+                budget_seconds=min(settings.install_budget_seconds,
+                                   deadline - time.monotonic()),
+                artifact_dir=artifacts,
+            )
+            if not installed.ok:
+                return finish("install_failed", installed.detail)
+
+        # The proxy this phone already has. It is not claimed from the pool -
+        # the phone owns it - so a swap must not release it back as stock,
+        # which is why proxy_row starts as None.
+        session = _Session(client=client, settings=settings, book=book,
+                           build=build, phone_id=phone_id, artifacts=artifacts,
+                           deadline=deadline, cancelled=cancelled)
+        gave_up = _sign_into_app(session)
+        if gave_up is not None:
+            return gave_up
+
+        packages = shell.third_party_packages(client, phone_id)
+        return finish("ready", f"apps: {', '.join(packages) or 'none'}", ok=True)
+
+    except Aborted as exc:
+        return finish(str(exc), f"finishing stopped: {exc}")
+    except Exception as exc:                                      # noqa: BLE001
+        log.exception("finishing %s failed with an unhandled error", build.serial)
+        return finish("error", str(exc))
+    finally:
+        held: list[tuple] = []
+        if session is not None:
+            held.append((book.apps, session.app_row, session.app_signed_in, ""))
+            # A proxy swapped IN during finishing belongs to this phone now.
+            if session.proxy_row is not None:
+                held.append((book.proxies, session.proxy_row, True, ""))
+            held += [(book.proxies, resource, False,
+                      f"{why} seen through it on {time.strftime('%Y-%m-%d')}")
+                     for resource, why in session.refused_exits]
+        _release(book, build, held)
+        _record(book, phone["sheet_row"], build)
+        try:
+            phones.stop(client, phone_id)
+            log.info("stopped %s", phone_id)
+        except Exception as exc:                                  # noqa: BLE001
+            build.still_running = True
+            log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
+                      phone_id, exc)
+        ledger.release(phone_id, note=build.status)
 
 
 def _refreshed(client: Client, settings: Settings, book: Book,
@@ -692,6 +859,109 @@ def run(client: Client, settings: Settings, *, count: int,
         except Exception as exc:                                  # noqa: BLE001
             log.error("build %d raised: %s", index, exc)
             builds.append(Build(index=index, status="error", detail=str(exc)))
+    builds.sort(key=lambda b: b.index)
+    return builds
+
+
+def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
+               workers: int | None = None, dry_run: bool = False,
+               reporter: Reporter | None = None,
+               cancel: threading.Event | None = None) -> list[Build]:
+    """Complete every phone that is one step short, oldest first."""
+    book = Book.open(settings)
+    pending = book.phones.unfinished()
+    live = {p.get("id") for p in phones.listing(client)}
+    gone = [p for p in pending if p["phone_id"] not in live]
+    pending = [p for p in pending if p["phone_id"] in live]
+    if limit:
+        pending = pending[:limit]
+
+    if dry_run:
+        print(f"{len(pending)} phone(s) would be finished:")
+        for phone in pending:
+            print(f"  phone {phone['serial']:<6} {phone['gmail']:<34} "
+                  f"(stopped at {phone['status']})")
+        if gone:
+            print(f"\n{len(gone)} row(s) name a phone that no longer exists "
+                  f"and are skipped: "
+                  f"{', '.join(p['serial'] for p in gone)}")
+        print(f"\napp accounts free: {len(book.apps.available)}")
+        print("\nNothing was changed (--dry-run).")
+        return []
+
+    if gone:
+        log.info("skipping %d row(s) whose phone no longer exists", len(gone))
+    if not pending:
+        return []
+
+    settings.ensure_dirs()
+    ledger = Ledger.load(settings.state_dir)
+    install_build_logging()
+
+    started: set[str] = set()
+    started_lock = threading.Lock()
+    shutting_down = cancel if cancel is not None else threading.Event()
+
+    def note_phone(phone_id: str) -> None:
+        with started_lock:
+            started.add(phone_id)
+
+    def work(index: int, phone: dict) -> Build:
+        _context.build = index
+        if reporter:
+            reporter.start(index, len(pending))
+        else:
+            print(f"\n=== finishing phone {phone['serial']} "
+                  f"({index}/{len(pending)}) ===", flush=True)
+        build = finish_one(client, settings, book, ledger, phone, index,
+                           on_phone=note_phone,
+                           cancelled=shutting_down.is_set)
+        if reporter:
+            reporter.finish(build)
+        else:
+            mark = "OK" if build.ok else "FAIL"
+            print(f"  {build.name} {mark}: {build.status} "
+                  f"({build.seconds:.0f}s)", flush=True)
+        return build
+
+    parallel = min(max(1, workers or settings.max_concurrent_phones),
+                   len(pending))
+    if parallel == 1:
+        builds: list[Build] = []
+        try:
+            for index, phone in enumerate(pending, start=1):
+                builds.append(work(index, phone))
+        except KeyboardInterrupt:
+            print("\ninterrupted - stopping here", flush=True)
+            shutting_down.set()
+            _stop_all(client, started, ledger)
+        return builds
+
+    log.info("%d phones to finish, %d at a time", len(pending), parallel)
+    futures = {}
+    try:
+        with ThreadPoolExecutor(max_workers=parallel,
+                                thread_name_prefix="finish") as pool:
+            futures = {pool.submit(work, i, p): p
+                       for i, p in enumerate(pending, start=1)}
+            wait(futures, return_when=FIRST_EXCEPTION)
+    except KeyboardInterrupt:
+        print("\ninterrupted - stopping every phone this run started", flush=True)
+        shutting_down.set()
+        for future in futures:
+            future.cancel()
+        _stop_all(client, started, ledger)
+
+    builds = []
+    for future, phone in futures.items():
+        if future.cancelled():
+            continue
+        try:
+            builds.append(future.result())
+        except Exception as exc:                                  # noqa: BLE001
+            log.error("finishing %s raised: %s", phone["serial"], exc)
+            builds.append(Build(index=0, status="error", detail=str(exc),
+                                serial=phone["serial"]))
     builds.sort(key=lambda b: b.index)
     return builds
 

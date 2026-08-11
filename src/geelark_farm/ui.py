@@ -71,6 +71,9 @@ class Snapshot:
     gmails_free: int = 0
     apps_free: int = 0
     pools_stuck: int = 0
+    # Phones with a Gmail and no app account: built, one step short, and
+    # cheaper to finish than to replace.
+    phones_unfinished: int = 0
     phones_total: int = 0
     phones_running: int = 0
     slots_total: int = 0
@@ -161,6 +164,7 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.apps_free = len(book.apps.available)
             snap.pools_stuck = sum(len(p.stuck) for p in
                                    (book.proxies, book.gmails, book.apps))
+            snap.phones_unfinished = len(book.phones.unfinished())
         except SheetError:
             pass
     return snap
@@ -198,7 +202,9 @@ def dashboard(snap: Snapshot) -> Panel:
     # Running phones are the only thing here that costs money by the second.
     billing = (f"[{BAD}]{snap.phones_running} RUNNING (billing)[/]"
                if snap.phones_running else f"[{OK}]none running[/]")
-    table.add_row("phones", f"{snap.phones_total} total   {billing}")
+    waiting = (f"   [{WARN}]{snap.phones_unfinished} waiting on an app account[/]"
+               if snap.phones_unfinished else "")
+    table.add_row("phones", f"{snap.phones_total} total   {billing}{waiting}")
 
     slots = f"{snap.slots_free} free of {snap.slots_total}"
     if snap.slots_total and not snap.slots_free:
@@ -645,6 +651,26 @@ def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     return builds
 
 
+def finish_with_live_table(settings: Settings, **kwargs) -> list[Build]:
+    """`finish`, drawn as a table - the same display as a build, because from
+    the operator's side it is the same thing happening to fewer steps."""
+    client = build_client(settings)
+    settings.ensure_dirs()
+    builder.install_build_logging()
+
+    reporter = BuildReporter()
+    builds: list[Build] = []
+    cancel = threading.Event()
+
+    def work() -> None:
+        nonlocal builds
+        builds = builder.finish_run(client, settings, reporter=reporter,
+                                    cancel=cancel, **kwargs)
+
+    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel)
+    return builds
+
+
 def summary_panel(results: list[Result]) -> Panel:
     if not results:
         return Panel("nothing was processed", border_style=DIM)
@@ -820,14 +846,16 @@ def plan_panel(settings: Settings) -> Panel:
 ACTIONS = [
     ("1", "Build phones from pools",
      "take a proxy, sign in a Gmail, install, sign in ChatGPT - the main job"),
-    ("2", "Resource pools", "what the Gmails/Proxy/Gpt tabs hold; free stuck rows"),
-    ("3", "Run pending rows", "the older single-row sheet flow"),
-    ("4", "Retry failed and stuck rows", "reuses the phones they already have"),
-    ("5", "Validate the sheet", "spends nothing"),
-    ("6", "Phones", "what exists, and what is billing"),
-    ("7", "Stop everything", "ends all billing now"),
-    ("8", "Reap", "stop phones nothing is accountable for"),
-    ("9", "Subscription", "slots, free slots, parallel limit"),
+    ("2", "Finish phones waiting on an app account",
+     "reuses phones that are one step short - no new phone, Gmail or proxy"),
+    ("3", "Resource pools", "what the Gmails/Proxy/Gpt tabs hold; free stuck rows"),
+    ("4", "Run pending rows", "the older single-row sheet flow"),
+    ("5", "Retry failed and stuck rows", "reuses the phones they already have"),
+    ("6", "Validate the sheet", "spends nothing"),
+    ("7", "Phones", "what exists, and what is billing"),
+    ("8", "Stop everything", "ends all billing now"),
+    ("9", "Reap", "stop phones nothing is accountable for"),
+    ("0", "Subscription", "slots, free slots, parallel limit"),
     ("q", "Quit", ""),
 ]
 
@@ -918,6 +946,41 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     return {"count": count, "workers": workers}
 
 
+def confirm_finish(settings: Settings, snap: Snapshot) -> dict | None:
+    """Ask how many one-step-short phones to complete.
+
+    The app pool is the real ceiling here: finishing needs one account per
+    phone and nothing else, so a pool smaller than the queue means some of them
+    will stop where they stopped last time.
+    """
+    if not snap.phones_unfinished:
+        console.print(f"[{DIM}]no phone is waiting on an app account[/]")
+        return None
+    if not snap.apps_free:
+        console.print(f"[{WARN}]{snap.phones_unfinished} phone(s) are waiting, "
+                      f"but the Gpt Info tab is empty - top it up first, or "
+                      f"they will stop exactly where they stopped before[/]")
+        if not Confirm.ask("go anyway", default=False):
+            return None
+
+    count = IntPrompt.ask(
+        f"how many to finish (of {snap.phones_unfinished}, "
+        f"{snap.apps_free} account(s) free)",
+        default=min(snap.phones_unfinished, snap.apps_free) or 1)
+    count = max(1, min(count, snap.phones_unfinished))
+
+    workers = IntPrompt.ask("how many at a time",
+                            default=min(settings.max_concurrent_phones, count))
+    workers = max(1, min(workers, count))
+
+    console.print(f"\n[{WARN}]{count} phone(s), {workers} at a time. No new "
+                  f"phone, Gmail or proxy is spent. Phones bill per running "
+                  f"minute.[/]")
+    if not Confirm.ask("start", default=True):
+        return None
+    return {"limit": count, "workers": workers}
+
+
 def run_console(settings: Settings) -> int:
     """The loop. Draw the state, take one action, draw it again."""
     console.print()
@@ -961,6 +1024,12 @@ def run_console(settings: Settings) -> int:
                     console.print(build_summary_panel(builds))
 
             elif choice == "2":
+                options = confirm_finish(settings, snap)
+                if options:
+                    builds = finish_with_live_table(settings, **options)
+                    console.print(build_summary_panel(builds))
+
+            elif choice == "3":
                 console.print(pools_view(settings))
                 if snap.pools_stuck and Confirm.ask(
                         f"release {snap.pools_stuck} row(s) stuck as in_use - "
@@ -968,26 +1037,26 @@ def run_console(settings: Settings) -> int:
                     freed = Book.open(settings).release_stuck()
                     console.print(f"[{OK}]released {freed}[/]")
 
-            elif choice in ("3", "4"):
+            elif choice in ("4", "5"):
                 options = confirm_run(settings, snap,
-                                      retry_failed=(choice == "4"))
+                                      retry_failed=(choice == "5"))
                 if options:
                     results = run_with_live_table(settings, **options)
                     console.print(summary_panel(results))
 
-            elif choice == "5":
+            elif choice == "6":
                 console.print(rows_table(settings))
 
-            elif choice == "6":
+            elif choice == "7":
                 console.print(phones_table(settings))
 
-            elif choice == "7":
+            elif choice == "8":
                 stop_all(settings)
 
-            elif choice == "8":
+            elif choice == "9":
                 reap(settings)
 
-            elif choice == "9":
+            elif choice == "0":
                 console.print(plan_panel(settings))
 
         except (ApiError, TransportError, SheetError) as exc:
