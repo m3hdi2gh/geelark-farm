@@ -388,6 +388,32 @@ def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
     assert "network_ssl_rejected" in book.proxies._rows[0].values["Note"]
 
 
+# --------------------------------------------------- what the stock allows
+@pytest.mark.parametrize("waiting,proxies,gmails,apps,total,finishing,limit", [
+    # the reported case: adding waiting to buildable promised one phone too many
+    (1, 13, 13, 2, 2, 1, "app accounts"),
+    # accounts to spare, so the thing to top up is not accounts
+    (0, 2, 9, 10, 2, 0, "proxies"),
+    (0, 9, 2, 10, 2, 0, "gmails"),
+    # nothing to build with, but a waiting phone needs only an account
+    (3, 0, 0, 4, 3, 3, "proxies"),
+    # an empty app tab means no ready phone is obtainable at all
+    (3, 5, 5, 0, 0, 0, "app accounts"),
+])
+def test_capacity_counts_each_app_account_once(waiting, proxies, gmails, apps,
+                                               total, finishing, limit):
+    """A phone waiting to be finished and a phone built from nothing both
+    consume exactly one app account, so they cannot be added up independently -
+    the app pool caps the run as a whole."""
+    can = builder.Capacity(waiting=waiting, proxies=proxies, gmails=gmails,
+                           app_accounts=apps)
+
+    assert can.total == total
+    assert can.finishing == finishing          # finishing is the cheaper half
+    assert can.building == total - finishing
+    assert can.limited_by == limit
+
+
 # ------------------------------------------- finishing before building anew
 def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
         device, settings, monkeypatch):

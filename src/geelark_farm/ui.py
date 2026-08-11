@@ -736,57 +736,43 @@ def menu() -> Table:
 def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     """Ask how many phones to end up with, defaulting to what the stock allows.
 
-    Every ready phone consumes exactly one app account, whether it was built
-    from nothing or finished from one that was waiting - so the app pool is the
-    ceiling on the whole run, not on the building half of it. Adding the two
-    together offered three phones against two accounts, and the third was
-    guaranteed to end on no_usable_gpt having spent a phone, a Gmail and a
-    proxy to get there (2026-08-11).
-
-    Under that ceiling, finishing comes before building, so the default is also
-    the cheapest way to use up the accounts: the fewest new phones that gets
-    every free app account onto a device.
+    What that number is, and which pool decides it, is `builder.Capacity` - the
+    arithmetic is the domain's, not the console's. This shows it and takes the
+    answer.
     """
     if not snap.has_pools:
         console.print(f"[{BAD}]the resource tabs (Gmails, Proxy, Gpt Info) are "
                       f"not in this sheet - `build` has nothing to read[/]")
         return None
 
-    # What can be built from scratch, ignoring app accounts - those are counted
-    # once, below, for finished and built phones together.
-    from_scratch = min(snap.proxies_free, snap.gmails_free)
-    reachable = snap.phones_unfinished + from_scratch
-    ceiling = min(snap.apps_free, reachable)
+    can = builder.Capacity(waiting=snap.phones_unfinished,
+                           proxies=snap.proxies_free, gmails=snap.gmails_free,
+                           app_accounts=snap.apps_free)
 
-    console.print(f"[{DIM}]pools: {snap.proxies_free} proxies, "
-                  f"{snap.gmails_free} gmails, {snap.apps_free} gpt[/]")
-    if snap.phones_unfinished:
+    console.print(f"[{DIM}]pools: {can.proxies} proxies, {can.gmails} gmails, "
+                  f"{can.app_accounts} gpt[/]")
+    if can.waiting:
         # Said before the number is asked for, because it changes what the
         # number costs: these need an app account and nothing else.
-        console.print(f"[{OK}]{snap.phones_unfinished} phone(s) already have a "
-                      f"Gmail and the app - those are finished first, and cost "
-                      f"only an app account each[/]")
-    if ceiling:
-        finishing = min(ceiling, snap.phones_unfinished)
-        building = ceiling - finishing
-        # Name whichever pool actually binds, not just the app one. Saying "10
-        # gpt accounts is the ceiling, so 2 phones uses them all" is visibly
-        # untrue, and a line that does not add up is not read again.
-        if snap.apps_free <= reachable:
-            why = (f"{snap.apps_free} gpt account(s) is the limit - one per "
+        console.print(f"[{OK}]{can.waiting} phone(s) already have a Gmail and "
+                      f"the app - those are finished first, and cost only an "
+                      f"app account each[/]")
+    if can.total:
+        if can.limited_by == "app accounts":
+            why = (f"{can.app_accounts} gpt account(s) is the limit - one per "
                    f"ready phone - so this uses them all")
         else:
-            why = (f"{from_scratch} more can be built ("
-                   f"{min(snap.proxies_free, snap.gmails_free)} proxies/gmails), "
-                   f"leaving {snap.apps_free - ceiling} gpt account(s) spare")
-        console.print(f"[{DIM}]{ceiling} phone(s) ({finishing} finished, "
-                      f"{building} new): {why}[/]")
-    elif not snap.apps_free:
+            why = (f"{can.limited_by} run out first, leaving "
+                   f"{can.app_accounts - can.total} gpt account(s) spare")
+        console.print(f"[{DIM}]{can.total} phone(s) ({can.finishing} finished, "
+                      f"{can.building} new): {why}[/]")
+    elif not can.app_accounts:
         console.print(f"[{WARN}]the Gpt Info tab is empty; every phone would "
                       f"stop at no_usable_gpt[/]")
     else:
         console.print(f"[{WARN}]no proxies or Gmails free and no phone waiting; "
                       f"a build has nothing to work with[/]")
+    ceiling = can.total
 
     count = IntPrompt.ask("how many phones to end up with",
                           default=max(1, ceiling))

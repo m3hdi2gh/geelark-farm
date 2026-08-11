@@ -149,6 +149,63 @@ class Build:
         return f"phone {self.serial}" if self.serial else f"build {self.index}"
 
 
+@dataclass(frozen=True)
+class Capacity:
+    """How many ready phones the current stock can produce, and out of what.
+
+    Domain arithmetic, not presentation, which is why it is here rather than in
+    the console that asks the question. Getting it wrong offered three phones
+    against two app accounts, and the third was certain to end on
+    no_usable_gpt having spent a phone, a Gmail and a proxy to get there
+    (2026-08-11).
+
+    The trap is that a phone waiting to be finished and a phone built from
+    nothing both consume exactly one app account. They cannot be added up
+    independently: the app pool caps the run as a whole.
+    """
+
+    waiting: int          # phones that need only an app account
+    proxies: int
+    gmails: int
+    app_accounts: int
+
+    @property
+    def from_scratch(self) -> int:
+        """New phones the proxies and Gmails allow, app accounts aside."""
+        return min(self.proxies, self.gmails)
+
+    @property
+    def total(self) -> int:
+        """Ready phones obtainable now."""
+        return min(self.app_accounts, self.waiting + self.from_scratch)
+
+    @property
+    def finishing(self) -> int:
+        """Of those, how many are finished rather than built. Finishing comes
+        first because it is the cheapest ready phone available."""
+        return min(self.total, self.waiting)
+
+    @property
+    def building(self) -> int:
+        return self.total - self.finishing
+
+    @property
+    def limited_by(self) -> str:
+        """Which pool is actually binding - the one worth topping up.
+
+        Named rather than assumed: "10 gpt accounts is the limit, so 2 phones
+        uses them all" is visibly untrue, and a line that does not add up stops
+        being read.
+        """
+        if not self.app_accounts:
+            return "app accounts"
+        if self.app_accounts <= self.waiting + self.from_scratch:
+            return "app accounts"
+        if self.proxies <= self.gmails:
+            return "proxies"
+        return "gmails"
+
+
 class Reporter(Protocol):
     """Where a run announces its progress - the plain CLI or the console."""
 
