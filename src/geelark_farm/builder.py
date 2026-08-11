@@ -116,6 +116,16 @@ MAX_DEAD_PROXIES = 4
 # proxy for it wastes the proxy and keeps the Gmail that caused it.
 EXIT_VERDICTS = frozenset({"network_ssl_rejected", "request_rejected"})
 
+# The note left on a Gmail this build set aside for a CAPTCHA. The flow's own
+# advice for captcha_shown says "a cleaner proxy is the fix" - true for the
+# single-row `run`, which changes the proxy - but here the build treats a
+# CAPTCHA as the address's own problem and moves to the next Gmail, so that
+# advice would tell the reader to do the opposite of what happened. This says
+# what the build did, and how to undo it if the address is believed good.
+CAPTCHA_SET_ASIDE = ("CAPTCHA at sign-in - set aside and the next Gmail tried. "
+                     "A residential exit usually clears it; blank this status "
+                     "to let the address be tried again.")
+
 # What a build needs left to be worth starting another attempt: a stop, a boot
 # and a login. Below this the honest thing is to report what it has.
 ATTEMPT_SECONDS = 420
@@ -286,8 +296,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # exit's fault come only from the app, in the loop below). So the
             # Gmail is marked and the next one is tried on the same phone.
             build.tried.append(f"{account.email}: {outcome.reason}")
-            book.gmails.fail(gmail_row, outcome.reason,
-                             note=outcome.detail[:300])
+            note = (CAPTCHA_SET_ASIDE if outcome.reason == "captcha_shown"
+                    else outcome.detail[:300])
+            book.gmails.fail(gmail_row, outcome.reason, note=note)
             gmail_row = None
             tried_gmails += 1
 

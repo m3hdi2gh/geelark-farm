@@ -150,6 +150,22 @@ def test_a_bad_gmail_costs_a_gmail_not_a_phone(device, settings, drive):
     assert book.gmails._rows[0].values["Status"] == "wrong_password"
 
 
+def test_a_captcha_note_does_not_tell_you_to_change_the_proxy(device, settings,
+                                                              drive):
+    """The build condemns the Gmail on a CAPTCHA and moves on, so the note must
+    not carry the flow's proxy-oriented advice, which would tell the reader to
+    do the opposite of what happened."""
+    book = make_book()
+    drive(book, settings,
+          google=[Outcome("fatal", "captcha_shown",
+                          "Google is challenging this exit IP; a cleaner "
+                          "proxy is the fix"), SIGNED_IN])
+
+    note = book.gmails._rows[0].values["Note"]
+    assert "proxy is the fix" not in note
+    assert "blank this status" in note        # says how to undo it instead
+
+
 def test_a_bad_app_account_does_not_touch_the_proxy(device, settings, drive):
     book = make_book(apps=2)
     build = drive(book, settings, google=[SIGNED_IN],
