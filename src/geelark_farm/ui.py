@@ -523,7 +523,7 @@ def _restart_after_resize(live: Live, width: int) -> int:
 
 
 def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
-                      work) -> None:
+                      work, cancel: threading.Event) -> None:
     """Run `work()` in a thread while drawing `reporter.render()` live.
 
     The context filter goes on the reporter's own handler, not on the stream
@@ -532,6 +532,15 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
     with no key stamped - which is what would leave the step column stuck on
     "starting" for the whole batch. On this handler it runs every time, so each
     log line knows which worker it belongs to.
+
+    Ctrl+C is delivered to this thread, not to the worker, so it has to be
+    turned into a signal the worker reads. Without that the interrupt only
+    ended the drawing: the batch carried on as an orphaned daemon thread, its
+    log lines appeared over the menu, and it eventually crashed against a phone
+    the console had stopped underneath it (2026-08-11). The first Ctrl+C now
+    asks the run to stop - each phone still gets stopped and its resources
+    released, which is the part that must not be skipped - and a second one
+    abandons the wait for anyone who cannot afford it.
     """
     handler = ReporterLogHandler(reporter)
     handler.addFilter(context_filter)
@@ -555,16 +564,30 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
 
     worker = threading.Thread(target=runner, daemon=True)
     worker.start()
+    abandoned = False
     try:
         with Live(reporter.render(), console=console, refresh_per_second=4,
                   transient=False) as live:
             width = console.size.width
             while worker.is_alive():
-                width = _restart_after_resize(live, width)
-                print_new_notices(live, reporter)
-                print_new_links(live, reporter)
-                live.update(reporter.render())
-                time.sleep(0.25)
+                try:
+                    width = _restart_after_resize(live, width)
+                    print_new_notices(live, reporter)
+                    print_new_links(live, reporter)
+                    live.update(reporter.render())
+                    time.sleep(0.25)
+                except KeyboardInterrupt:
+                    if cancel.is_set():
+                        # Asked twice. Stop waiting and say plainly what that
+                        # leaves behind, rather than implying a clean stop.
+                        abandoned = True
+                        break
+                    cancel.set()
+                    live.console.print(
+                        f"[{WARN}]stopping - each phone finishes its current "
+                        f"step, then is stopped and its accounts released. "
+                        f"This can take a few minutes. Ctrl+C again to stop "
+                        f"waiting.[/]")
             print_new_notices(live, reporter)
             print_new_links(live, reporter)
             live.update(reporter.render())
@@ -573,7 +596,13 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
         for existing, level in previous:
             existing.setLevel(level)
 
-    worker.join()
+    if abandoned:
+        console.print(f"[{BAD}]stopped waiting while the run was still "
+                      f"working. Phones it had may still be running, and its "
+                      f"rows may still say in_use - check 'Phones' and "
+                      f"'Resource pools'.[/]")
+    else:
+        worker.join()
     if failure["exc"]:
         console.print(f"[{BAD}]the run failed: {failure['exc']}[/]")
 
@@ -586,12 +615,14 @@ def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
 
     reporter = LiveReporter()
     results: list[Result] = []
+    cancel = threading.Event()
 
     def work() -> None:
         nonlocal results
-        results = run_batch(client, settings, reporter=reporter, **kwargs)
+        results = run_batch(client, settings, reporter=reporter,
+                            cancel=cancel, **kwargs)
 
-    _drive_live_table(reporter, RowContextFilter(), work)
+    _drive_live_table(reporter, RowContextFilter(), work, cancel)
     return results
 
 
@@ -603,12 +634,14 @@ def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
 
     reporter = BuildReporter()
     builds: list[Build] = []
+    cancel = threading.Event()
 
     def work() -> None:
         nonlocal builds
-        builds = builder.run(client, settings, reporter=reporter, **kwargs)
+        builds = builder.run(client, settings, reporter=reporter,
+                             cancel=cancel, **kwargs)
 
-    _drive_live_table(reporter, builder.BuildContextFilter(), work)
+    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel)
     return builds
 
 

@@ -472,8 +472,14 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
         failed_only: bool = False,
         dry_run: bool = False, workers: int | None = None,
         on_ready: Callable[[str], None] | None = None,
-        reporter: Reporter | None = None) -> list[Result]:
-    """Process the sheet's pending rows and return one Result each."""
+        reporter: Reporter | None = None,
+        cancel: threading.Event | None = None) -> list[Result]:
+    """Process the sheet's pending rows and return one Result each.
+
+    `cancel` lets a caller on another thread stop the run - the console needs
+    it, because Ctrl+C reaches the thread drawing the table and never the
+    worker running this.
+    """
     from .sheets import selectable
 
     sheet = Sheet.open(settings)
@@ -523,7 +529,7 @@ def run(client: Client, settings: Settings, *, limit: int | None = None,
     # the phone that was just stopped underneath them, for the rest of the boot
     # timeout, and a ThreadPoolExecutor's threads are not daemons, so Python
     # joins them on the way out and the process cannot exit (2026-08-08).
-    shutting_down = threading.Event()
+    shutting_down = cancel if cancel is not None else threading.Event()
 
     def note_phone(phone_id: str) -> None:
         with started_lock:

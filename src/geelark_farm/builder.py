@@ -241,6 +241,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     gmail_row: Resource | None = None
     app_row: Resource | None = None
     log_row: int | None = None
+    # Proxies this build tried and moved on from, with what was seen through
+    # each. They stay claimed for the rest of the build so a swap cannot hand
+    # one back, and are released together at the end.
+    refused_exits: list[tuple[Resource, str]] = []
     # Counted apart on purpose: an exit change is not an attempt at a
     # credential, it is the same credential being given a fair hearing.
     exits = tried_gmails = tried_apps = 0
@@ -383,9 +387,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # reason: if it runs out, it runs out of budget or proxies, and
                 # _new_exit says which. The account goes back to the pool as
                 # stock, never judged.
+                previous = proxy_row
                 proxy_row = _new_exit(client, settings, book, build,
                                       phone_id, proxy_row, outcome.reason,
                                       remaining(), cancelled=cancelled)
+                if previous is not None and previous is not proxy_row:
+                    # Held, not freed - see _new_exit. Released at the end.
+                    refused_exits.append((previous, outcome.reason))
                 exits += 1
                 continue
             if outcome.reason in FLOW_BLOCKED:
@@ -415,11 +423,16 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # A proxy counts as used the moment a phone exists behind it: that
         # phone keeps it until someone deletes the phone, and handing it to the
         # next build would put two devices on one exit address.
-        _release(book, build, [
-            (book.proxies, proxy_row, bool(phone_id)),
-            (book.gmails, gmail_row, gmail_signed_in),
-            (book.apps, app_row, app_signed_in),
-        ])
+        held = [(book.proxies, proxy_row, bool(phone_id), ""),
+                (book.gmails, gmail_row, gmail_signed_in, ""),
+                (book.apps, app_row, app_signed_in, "")]
+        # Every exit this build tried and left behind. `unused`, not condemned:
+        # these refusals were measured to be per-session rather than per-proxy,
+        # so the stock goes back on the shelf saying what was seen through it.
+        held += [(book.proxies, resource, False,
+                  f"{why} seen through it on {time.strftime('%Y-%m-%d')}")
+                 for resource, why in refused_exits]
+        _release(book, build, held)
         if log_row is not None:
             _record(book, log_row, build)
         if phone_id:
@@ -504,7 +517,14 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
                               cancelled=cancelled)
         return current
 
-    replacement = _fresh_proxy(client, book)
+    try:
+        replacement = _fresh_proxy(client, book)
+    except Aborted:
+        # Every proxy this build could claim has now been tried and refused.
+        # Named apart from a build that never got one at all: this phone has
+        # been through the pool, and that is a fact about the pool or the
+        # service, not about the account it is carrying.
+        raise Aborted("all_exits_refused") from None
     try:
         phones.set_proxy(client, phone_id, replacement.proxy)
     except ApiError as exc:
@@ -513,14 +533,14 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # failed" would hide that.
         book.proxies.release(replacement, note=f"GeeLark refused it: {exc}")
         raise Aborted("proxy_change_refused") from exc
-    if current is not None:
-        # `unused`, not condemned: the refusals that reach here were measured
-        # to be about the session rather than the proxy, so this stock goes
-        # back on the shelf with a note saying what was seen through it. Done
-        # only now - releasing it before the replacement was claimed would let
-        # claim() hand back the proxy that was just judged.
-        book.proxies.release(current, note=f"{why} seen through it "
-                                           f"on {time.strftime('%Y-%m-%d')}")
+    # `current` is deliberately NOT released here. Releasing it put it straight
+    # back on the shelf as `unused`, where the very next swap could claim it
+    # again - so a phone that kept being refused went round the pool instead of
+    # through it, for as long as its budget lasted: phone 658 spent 49 minutes
+    # alternating request_rejected and network_ssl_rejected across the same
+    # proxies (2026-08-11). Holding it claimed for the rest of the build is
+    # what makes the loop terminate: each swap costs one proxy, so the pool is
+    # the bound. The caller collects these and releases them all at the end.
     build.proxy = str(replacement.proxy)
     time.sleep(5)
     phones.ensure_running(client, phone_id, timeout=budget, cancelled=cancelled)
@@ -541,7 +561,7 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
     the build's real result with a network complaint, and the resources would
     stay claimed either way.
     """
-    for pool, resource, spent in held:
+    for pool, resource, spent, note in held:
         if resource is None:
             continue
         try:
@@ -550,9 +570,11 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
                            note=f"phone {build.serial}: {build.status}")
             else:
                 # Claimed but never put on a device - the Gmail fetched just as
-                # the budget ran out, the app account nothing was tried with.
-                # It is stock, and it goes back as stock.
-                pool.release(resource, note=f"build ended: {build.status}")
+                # the budget ran out, the app account nothing was tried with,
+                # the exit that was swapped away from. It is stock, and it goes
+                # back as stock.
+                pool.release(resource,
+                             note=note or f"build ended: {build.status}")
         except SheetError as exc:
             log.error("%s: could not release %s (%s) - it stays in_use until "
                       "'geelark pools --release-stuck'",
@@ -577,8 +599,15 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
 def run(client: Client, settings: Settings, *, count: int,
         workers: int | None = None, dry_run: bool = False,
         reporter: Reporter | None = None,
-        on_ready: Callable[[str], None] | None = None) -> list[Build]:
-    """Build `count` phones from the pools."""
+        on_ready: Callable[[str], None] | None = None,
+        cancel: threading.Event | None = None) -> list[Build]:
+    """Build `count` phones from the pools.
+
+    `cancel` lets a caller on another thread stop the run. The console needs
+    it: Ctrl+C is delivered to the main thread, which is drawing the table, and
+    never reaches the worker running this - so without a signal to pass in, the
+    interrupt left the build running as an orphan (2026-08-11).
+    """
     book = Book.open(settings)
 
     if dry_run:
@@ -600,7 +629,7 @@ def run(client: Client, settings: Settings, *, count: int,
 
     started: set[str] = set()
     started_lock = threading.Lock()
-    shutting_down = threading.Event()
+    shutting_down = cancel if cancel is not None else threading.Event()
 
     def note_phone(phone_id: str) -> None:
         with started_lock:

@@ -290,10 +290,11 @@ def test_an_exit_change_does_not_cost_a_credential(device, settings, drive):
 
 def test_network_refusals_have_no_fixed_cap(device, settings, drive):
     """The build gave up after three exit changes; the described flow says keep
-    setting the next proxy and retrying. Five refusals - more than that old cap
-    - still reach a sign-in, on the same account. A swapped-out proxy returns
-    to the pool, so a small pool is cycled rather than exhausted."""
-    book = make_book(proxies=3)
+    setting the next proxy and retrying. Five refusals - well past that old cap
+    - still reach a sign-in, on the same account. What limits it is the pool:
+    each proxy is tried once, so this needs one to create the phone and five to
+    swap in."""
+    book = make_book(proxies=8)
     refused = Outcome("fatal", "network_ssl_rejected")
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[refused] * 5 + [SIGNED_IN])
@@ -304,10 +305,13 @@ def test_network_refusals_have_no_fixed_cap(device, settings, drive):
 
 def test_a_network_failure_that_runs_out_of_proxies_keeps_the_account(
         device, settings, drive, monkeypatch):
-    """When swapping genuinely runs out - here every other proxy is unreachable,
-    so the dead ones do not return to the pool - the build fails with
-    'no_usable_proxy', never the network reason, and the account it never got to
-    judge goes back as stock."""
+    """When swapping genuinely runs out the build fails with
+    'all_exits_refused' - never the network reason itself - and the account it
+    never got to judge goes back as stock.
+
+    Named apart from 'no_usable_proxy', which means a build never got one at
+    all: this phone went through the pool, which says something about the pool
+    or the service rather than about the account it was carrying."""
     from geelark_farm.proxy import ProxyError
 
     def check(client, proxy):
@@ -321,8 +325,27 @@ def test_a_network_failure_that_runs_out_of_proxies_keeps_the_account(
     build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 8)
 
     assert not build.ok
-    assert build.status == "no_usable_proxy"          # never the network reason
+    assert build.status == "all_exits_refused"
     assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
+
+
+def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
+                                                             drive):
+    """The bug that cost 49 minutes: a swapped-away proxy went straight back to
+    the pool as `unused`, so the next swap could claim it again and the phone
+    went round the pool instead of through it (2026-08-11, phone 658). Each
+    proxy must be tried at most once per build, and the pool is what ends it."""
+    book = make_book(proxies=4)
+    refused = Outcome("fatal", "network_ssl_rejected")
+    build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 10)
+
+    assert build.status == "all_exits_refused"
+    # one proxy created the phone, the other three were swapped in - each once
+    assert device.proxies_set == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    assert len(device.proxies_set) == len(set(device.proxies_set))
+    # and they all come back to the pool afterwards, with what was seen
+    assert len(book.proxies.available) == 3
+    assert "network_ssl_rejected" in book.proxies._rows[0].values["Note"]
 
 
 # ------------------------------------------------------- refreshing an exit
