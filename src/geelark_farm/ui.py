@@ -224,6 +224,13 @@ LIVE_PREFIX = "watch it live:"
 # is what mints a fresh link with `geelark start` once this one has expired.
 CREATED_SERIAL = re.compile(r"created \S+ \(serial (\w+)\)")
 
+# builder announces "signing in as <email>" / "signing into the app as <email>"
+# as it works through the pools. A build has no account column to start with -
+# it does not know which Gmail it will use until it tries one - so this is what
+# fills it, and updates it when a bad candidate is dropped for the next. The
+# run flow already has the address from the row, so only builds ever match.
+SIGNING_IN = re.compile(r"signing (?:in|into the app) as (\S+@\S+)")
+
 # Announcements rather than steps. Each is worth having in the log and none of
 # them answers the question this column exists for - and two of them are long
 # enough to have wrapped the cell, which changes the table's height and is what
@@ -233,6 +240,7 @@ NOT_A_STEP = (
     "billing:",
     "is stopped - starting it",
     "exits from",
+    "stopped ",            # builder's "stopped <id>" - an outcome, not a step
 )
 
 
@@ -295,6 +303,11 @@ class _LiveTable:
                 # The serial is what this line is for; the rest of it is the
                 # device's model and timezone, which is not a step.
                 entry["phone"] = found.group(1)
+                return
+            found = SIGNING_IN.search(message)
+            if found:
+                # Who the build is trying now - the account column, not a step.
+                entry["email"] = found.group(1)
                 return
             if any(n in message for n in NOT_A_STEP):
                 return
@@ -403,8 +416,11 @@ class BuildReporter(_LiveTable):
 # An allowlist rather than a denylist of the two noisy modules: a layer added
 # below this one should be silent here by default, not until someone notices it
 # in the column. phones is on it for its own sake and for two messages the
-# console depends on - the serial it creates and the live-view link.
-NARRATING = ("geelark_farm.flows.", "geelark_farm.phones")
+# console depends on - the serial it creates and the live-view link. builder is
+# on it so a build's own coordinating lines - which Gmail it is trying, which
+# app account - reach the table; without it the account column of a build stays
+# blank until the moment it finishes.
+NARRATING = ("geelark_farm.flows.", "geelark_farm.phones", "geelark_farm.builder")
 
 
 class ReporterLogHandler(logging.Handler):

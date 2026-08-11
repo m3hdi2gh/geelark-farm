@@ -405,3 +405,26 @@ def test_a_builds_steps_reach_its_state_column():
     # No record.row set: the filter on the handler is what must supply it.
     handler.handle(record)
     assert reporter.rows[7]["step"] == "screen: password_entry"
+
+
+def test_a_builds_account_column_fills_from_its_own_log():
+    """A build does not know its Gmail until it tries one, so the account
+    column is blank until 'signing in as <email>' reaches it - and it follows
+    the build to the next candidate when the first is dropped. The run flow
+    already has the address from the row, so this only ever matters to builds.
+    """
+    from geelark_farm.ui import BuildReporter
+
+    reporter = BuildReporter()
+    reporter.start(1, 1)
+    assert reporter.rows[1]["email"] == ""
+
+    reporter.note(1, "signing in as first@example.com")
+    assert reporter.rows[1]["email"] == "first@example.com"
+    # ...and it is not mistaken for a step.
+    assert reporter.rows[1]["step"] == "starting"
+
+    reporter.note(1, "signing in as second@example.com")   # first was bad
+    assert reporter.rows[1]["email"] == "second@example.com"
+    reporter.note(1, "signing into the app as gpt@example.com")
+    assert reporter.rows[1]["email"] == "gpt@example.com"
