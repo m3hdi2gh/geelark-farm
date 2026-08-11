@@ -351,6 +351,58 @@ def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
     assert "network_ssl_rejected" in book.proxies._rows[0].values["Note"]
 
 
+# ------------------------------------------- finishing before building anew
+def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
+        device, settings, monkeypatch):
+    """`count` is how many phones to end up with, not how many to create. A
+    phone that already has its Gmail and the app costs one app account; a new
+    one costs a phone, a Gmail and a proxy to reach the same place - so four
+    sat one step short while a later run built five more beside them."""
+    book = make_book()
+    waiting = [{"sheet_row": 2, "phone_id": "P1", "serial": "668",
+                "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"},
+               {"sheet_row": 3, "phone_id": "P2", "serial": "670",
+                "gmail": "b@example.com", "proxy": "", "status": "no_usable_gpt"}]
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
+
+    jobs = []
+    monkeypatch.setattr(builder, "finish_one",
+                        lambda *a, **k: jobs.append(("finish", a[4]["serial"]))
+                        or builder.Build(index=a[5], ok=True, status="ready"))
+    monkeypatch.setattr(builder, "build_one",
+                        lambda *a, **k: jobs.append(("build", None))
+                        or builder.Build(index=a[4], ok=True, status="ready"))
+
+    builder.run(None, settings, count=3, workers=1)
+
+    assert jobs == [("finish", "668"), ("finish", "670"), ("build", None)]
+
+
+def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
+        device, settings, monkeypatch):
+    book = make_book()
+    waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
+                "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}
+               for r in (2, 3, 4)]
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
+
+    jobs = []
+    monkeypatch.setattr(builder, "finish_one",
+                        lambda *a, **k: jobs.append("finish")
+                        or builder.Build(index=a[5], ok=True, status="ready"))
+    monkeypatch.setattr(builder, "build_one",
+                        lambda *a, **k: jobs.append("build")
+                        or builder.Build(index=a[4], ok=True, status="ready"))
+
+    builder.run(None, settings, count=2, workers=1)
+
+    assert jobs == ["finish", "finish"]
+
+
 # ------------------------------------------------------- refreshing an exit
 @pytest.fixture
 def sx(monkeypatch):

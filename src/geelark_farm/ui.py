@@ -921,12 +921,19 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     buildable = min(snap.proxies_free, snap.gmails_free, snap.apps_free)
     console.print(f"[{DIM}]pools: {snap.proxies_free} proxies, "
                   f"{snap.gmails_free} gmails, {snap.apps_free} gpt "
-                  f"- enough for {buildable} without topping up[/]")
-    if not buildable:
+                  f"- enough to build {buildable} from scratch[/]")
+    if snap.phones_unfinished:
+        # Said before the number is asked for, because it changes what the
+        # number costs: these need an app account and nothing else.
+        console.print(f"[{OK}]{snap.phones_unfinished} phone(s) already have "
+                      f"a Gmail and the app - those are finished first, and "
+                      f"cost only an app account each[/]")
+    if not buildable and not snap.phones_unfinished:
         console.print(f"[{WARN}]at least one pool is empty; a build stops at "
                       f"whichever runs out first[/]")
 
-    count = IntPrompt.ask("how many phones to build", default=max(1, buildable))
+    count = IntPrompt.ask("how many phones to end up with",
+                          default=max(1, buildable + snap.phones_unfinished))
     count = max(1, count)
 
     workers = IntPrompt.ask("how many at a time",
@@ -935,11 +942,17 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     if snap.parallels and workers > snap.parallels:
         console.print(f"[{WARN}]the plan's parallel limit is {snap.parallels}; "
                       f"more may cost extra[/]")
-    if count > snap.slots_free:
-        console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free; "
-                      f"builds past that will fail to create a phone[/]")
+    # Only the ones actually created need a slot; the finished ones have theirs.
+    creating = max(0, count - snap.phones_unfinished)
+    if creating > snap.slots_free:
+        console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free "
+                      f"and {creating} phone(s) would be created; the rest "
+                      f"will fail to create a phone[/]")
 
-    console.print(f"\n[{WARN}]{count} phone(s), {workers} at a time. "
+    finishing = min(count, snap.phones_unfinished)
+    split = (f" ({finishing} finished, {creating} built new)"
+             if finishing else "")
+    console.print(f"\n[{WARN}]{count} phone(s){split}, {workers} at a time. "
                   f"Phones bill per running minute.[/]")
     if not Confirm.ask("start", default=True):
         return None

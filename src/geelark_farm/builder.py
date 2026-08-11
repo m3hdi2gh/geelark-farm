@@ -772,37 +772,32 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
         log.error("could not record phone %s (%s)", build.phone_id, exc)
 
 
-def run(client: Client, settings: Settings, *, count: int,
-        workers: int | None = None, dry_run: bool = False,
-        reporter: Reporter | None = None,
-        on_ready: Callable[[str], None] | None = None,
-        cancel: threading.Event | None = None) -> list[Build]:
-    """Build `count` phones from the pools.
+def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
+    """Phones one step short, split into those that still exist and those that
+    do not. GeeLark's own listing is what says which."""
+    pending = book.phones.unfinished()
+    live = {p.get("id") for p in phones.listing(client)}
+    return ([p for p in pending if p["phone_id"] in live],
+            [p for p in pending if p["phone_id"] not in live])
 
-    `cancel` lets a caller on another thread stop the run. The console needs
-    it: Ctrl+C is delivered to the main thread, which is drawing the table, and
-    never reaches the worker running this - so without a signal to pass in, the
-    interrupt left the build running as an orphan (2026-08-11).
+
+def _run_jobs(client: Client, settings: Settings, book: Book,
+              jobs: list[dict], *, workers: int | None,
+              reporter: Reporter | None,
+              on_ready: Callable[[str], None] | None,
+              cancel: threading.Event | None) -> list[Build]:
+    """Run a mixed list of build and finish jobs, up to `workers` at a time.
+
+    One runner for both, because they are the same thing to everyone watching:
+    a phone being worked on, one line in the table, one row in the tab. Only
+    the first steps differ.
     """
-    book = Book.open(settings)
-
-    if dry_run:
-        print(f"{count} phone(s) would be built from:")
-        for pool in (book.proxies, book.gmails, book.apps):
-            print(f"  {pool.tab:<10} {len(pool.available):>3} available"
-                  f"{f', {len(pool.stuck)} stuck in_use' if pool.stuck else ''}"
-                  f"{f', {len(pool.broken)} unusable' if pool.broken else ''}")
-        for pool in (book.proxies, book.gmails, book.apps):
-            for resource in pool.broken:
-                print(f"  ! {pool.tab} row {resource.sheet_row}: {resource.error}")
-        print("\nNothing was created and nothing was written (--dry-run).")
-        return []
-
     settings.ensure_dirs()
     ledger = Ledger.load(settings.state_dir)
     phones.prune_ledger(client, ledger)
     install_build_logging()
 
+    total = len(jobs)
     started: set[str] = set()
     started_lock = threading.Lock()
     shutting_down = cancel if cancel is not None else threading.Event()
@@ -811,15 +806,24 @@ def run(client: Client, settings: Settings, *, count: int,
         with started_lock:
             started.add(phone_id)
 
-    def work(index: int) -> Build:
+    def work(index: int, job: dict) -> Build:
         _context.build = index
         if reporter:
-            reporter.start(index, count)
+            reporter.start(index, total)
+        elif job["kind"] == "finish":
+            print(f"\n=== finishing phone {job['phone']['serial']} "
+                  f"({index}/{total}) ===", flush=True)
         else:
-            print(f"\n=== building phone {index}/{count} ===", flush=True)
-        build = build_one(client, settings, book, ledger, index,
-                          on_phone=note_phone, on_ready=on_ready,
-                          cancelled=shutting_down.is_set)
+            print(f"\n=== building phone {index}/{total} ===", flush=True)
+
+        if job["kind"] == "finish":
+            build = finish_one(client, settings, book, ledger, job["phone"],
+                               index, on_phone=note_phone,
+                               cancelled=shutting_down.is_set)
+        else:
+            build = build_one(client, settings, book, ledger, index,
+                              on_phone=note_phone, on_ready=on_ready,
+                              cancelled=shutting_down.is_set)
         if reporter:
             reporter.finish(build)
         else:
@@ -830,27 +834,28 @@ def run(client: Client, settings: Settings, *, count: int,
 
     parallel = max(1, workers or settings.max_concurrent_phones)
     if on_ready and parallel > 1:
-        log.info("--watch builds one phone at a time")
+        log.info("--watch works on one phone at a time")
         parallel = 1
-    parallel = min(parallel, count)
+    parallel = min(parallel, total)
 
     if parallel == 1:
         builds: list[Build] = []
         try:
-            for index in range(1, count + 1):
-                builds.append(work(index))
+            for index, job in enumerate(jobs, start=1):
+                builds.append(work(index, job))
         except KeyboardInterrupt:
             print("\ninterrupted - stopping here", flush=True)
             shutting_down.set()
             _stop_all(client, started, ledger)
         return builds
 
-    log.info("%d phones, %d at a time", count, parallel)
+    log.info("%d phones, %d at a time", total, parallel)
     futures = {}
     try:
         with ThreadPoolExecutor(max_workers=parallel,
-                                thread_name_prefix="build") as pool:
-            futures = {pool.submit(work, i): i for i in range(1, count + 1)}
+                                thread_name_prefix="phone") as pool:
+            futures = {pool.submit(work, i, j): i
+                       for i, j in enumerate(jobs, start=1)}
             wait(futures, return_when=FIRST_EXCEPTION)
     except KeyboardInterrupt:
         print("\ninterrupted - stopping every phone this run started", flush=True)
@@ -866,22 +871,88 @@ def run(client: Client, settings: Settings, *, count: int,
         try:
             builds.append(future.result())
         except Exception as exc:                                  # noqa: BLE001
-            log.error("build %d raised: %s", index, exc)
+            log.error("phone %d raised: %s", index, exc)
             builds.append(Build(index=index, status="error", detail=str(exc)))
     builds.sort(key=lambda b: b.index)
     return builds
+
+
+def run(client: Client, settings: Settings, *, count: int,
+        workers: int | None = None, dry_run: bool = False,
+        reporter: Reporter | None = None,
+        on_ready: Callable[[str], None] | None = None,
+        cancel: threading.Event | None = None,
+        finish_first: bool = True) -> list[Build]:
+    """Produce `count` ready phones, finishing before building.
+
+    `count` is how many phones are worked on, not how many new ones are made.
+    A phone that already has its Gmail and its app and wants only an account is
+    the cheapest ready phone available: it costs one app account, where a new
+    one costs a phone, a Gmail and a proxy to reach the same place. So those go
+    first, and only the remainder is built from nothing.
+
+    That is also what the operator means. Four phones sat one step short while
+    a later run built five more from scratch beside them, because "build 5"
+    only ever meant "create 5" (2026-08-11). Pass finish_first=False for a
+    caller that really does mean new phones.
+
+    `cancel` lets a caller on another thread stop the run. The console needs
+    it: Ctrl+C is delivered to the main thread, which is drawing the table, and
+    never reaches the worker running this - so without a signal to pass in, the
+    interrupt left the build running as an orphan (2026-08-11).
+    """
+    book = Book.open(settings)
+
+    waiting: list[dict] = []
+    gone: list[dict] = []
+    if finish_first:
+        waiting, gone = _unfinished(client, book)
+    to_finish = waiting[:count]
+    to_build = count - len(to_finish)
+
+    if dry_run:
+        print(f"{count} phone(s) would be worked on:")
+        if to_finish:
+            print(f"  {len(to_finish)} finished "
+                  f"(no new phone, Gmail or proxy spent):")
+            for phone in to_finish:
+                print(f"      phone {phone['serial']:<6} {phone['gmail']:<34} "
+                      f"stopped at {phone['status']}")
+        print(f"  {to_build} built from the pools:")
+        for pool in (book.proxies, book.gmails, book.apps):
+            print(f"      {pool.tab:<10} {len(pool.available):>3} available"
+                  f"{f', {len(pool.stuck)} stuck in_use' if pool.stuck else ''}"
+                  f"{f', {len(pool.broken)} unusable' if pool.broken else ''}")
+        for pool in (book.proxies, book.gmails, book.apps):
+            for resource in pool.broken:
+                print(f"  ! {pool.tab} row {resource.sheet_row}: {resource.error}")
+        if gone:
+            print(f"\n{len(gone)} row(s) name a phone that no longer exists "
+                  f"and are skipped: {', '.join(p['serial'] for p in gone)}")
+        print("\nNothing was created and nothing was written (--dry-run).")
+        return []
+
+    if gone:
+        log.info("skipping %d row(s) whose phone no longer exists", len(gone))
+    if to_finish:
+        log.info("%d phone(s) need only an app account; finishing those first",
+                 len(to_finish))
+
+    jobs = ([{"kind": "finish", "phone": p} for p in to_finish]
+            + [{"kind": "build", "phone": None} for _ in range(to_build)])
+    if not jobs:
+        return []
+    return _run_jobs(client, settings, book, jobs, workers=workers,
+                     reporter=reporter, on_ready=on_ready, cancel=cancel)
 
 
 def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
                workers: int | None = None, dry_run: bool = False,
                reporter: Reporter | None = None,
                cancel: threading.Event | None = None) -> list[Build]:
-    """Complete every phone that is one step short, oldest first."""
+    """Complete every phone that is one step short, and build nothing."""
     book = Book.open(settings)
-    pending = book.phones.unfinished()
-    live = {p.get("id") for p in phones.listing(client)}
-    gone = [p for p in pending if p["phone_id"] not in live]
-    pending = [p for p in pending if p["phone_id"] in live]
+    pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]
 
@@ -892,8 +963,7 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
                   f"(stopped at {phone['status']})")
         if gone:
             print(f"\n{len(gone)} row(s) name a phone that no longer exists "
-                  f"and are skipped: "
-                  f"{', '.join(p['serial'] for p in gone)}")
+                  f"and are skipped: {', '.join(p['serial'] for p in gone)}")
         print(f"\napp accounts free: {len(book.apps.available)}")
         print("\nNothing was changed (--dry-run).")
         return []
@@ -902,77 +972,9 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         log.info("skipping %d row(s) whose phone no longer exists", len(gone))
     if not pending:
         return []
-
-    settings.ensure_dirs()
-    ledger = Ledger.load(settings.state_dir)
-    install_build_logging()
-
-    started: set[str] = set()
-    started_lock = threading.Lock()
-    shutting_down = cancel if cancel is not None else threading.Event()
-
-    def note_phone(phone_id: str) -> None:
-        with started_lock:
-            started.add(phone_id)
-
-    def work(index: int, phone: dict) -> Build:
-        _context.build = index
-        if reporter:
-            reporter.start(index, len(pending))
-        else:
-            print(f"\n=== finishing phone {phone['serial']} "
-                  f"({index}/{len(pending)}) ===", flush=True)
-        build = finish_one(client, settings, book, ledger, phone, index,
-                           on_phone=note_phone,
-                           cancelled=shutting_down.is_set)
-        if reporter:
-            reporter.finish(build)
-        else:
-            mark = "OK" if build.ok else "FAIL"
-            print(f"  {build.name} {mark}: {build.status} "
-                  f"({build.seconds:.0f}s)", flush=True)
-        return build
-
-    parallel = min(max(1, workers or settings.max_concurrent_phones),
-                   len(pending))
-    if parallel == 1:
-        builds: list[Build] = []
-        try:
-            for index, phone in enumerate(pending, start=1):
-                builds.append(work(index, phone))
-        except KeyboardInterrupt:
-            print("\ninterrupted - stopping here", flush=True)
-            shutting_down.set()
-            _stop_all(client, started, ledger)
-        return builds
-
-    log.info("%d phones to finish, %d at a time", len(pending), parallel)
-    futures = {}
-    try:
-        with ThreadPoolExecutor(max_workers=parallel,
-                                thread_name_prefix="finish") as pool:
-            futures = {pool.submit(work, i, p): p
-                       for i, p in enumerate(pending, start=1)}
-            wait(futures, return_when=FIRST_EXCEPTION)
-    except KeyboardInterrupt:
-        print("\ninterrupted - stopping every phone this run started", flush=True)
-        shutting_down.set()
-        for future in futures:
-            future.cancel()
-        _stop_all(client, started, ledger)
-
-    builds = []
-    for future, phone in futures.items():
-        if future.cancelled():
-            continue
-        try:
-            builds.append(future.result())
-        except Exception as exc:                                  # noqa: BLE001
-            log.error("finishing %s raised: %s", phone["serial"], exc)
-            builds.append(Build(index=0, status="error", detail=str(exc),
-                                serial=phone["serial"]))
-    builds.sort(key=lambda b: b.index)
-    return builds
+    jobs = [{"kind": "finish", "phone": p} for p in pending]
+    return _run_jobs(client, settings, book, jobs, workers=workers,
+                     reporter=reporter, on_ready=None, cancel=cancel)
 
 
 def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:
