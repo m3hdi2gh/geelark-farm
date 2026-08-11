@@ -658,6 +658,7 @@ def cmd_finish(settings: Settings, args) -> int:
 
 def cmd_pools(settings: Settings, args) -> int:
     """What the resource tabs hold. Spends nothing."""
+    from . import builder
     from .pools import Book
 
     book = Book.open(settings)
@@ -665,6 +666,15 @@ def cmd_pools(settings: Settings, args) -> int:
         freed = book.release_stuck()
         print(f"released {freed} row(s) that were left claimed.")
         return 0
+
+    # Corrected before it is reported, so the numbers below are what a run
+    # would actually find rather than what the sheet last recorded.
+    reclaimed = builder.reclaim_proxies(build_client(settings), book)
+    if reclaimed:
+        print(f"freed {len(reclaimed)} proxy(s) held by phones that no longer "
+              f"exist:")
+        for resource in reclaimed:
+            print(f"  {resource.label}")
 
     for pool in (book.proxies, book.gmails, book.apps):
         print(f"\n{pool.tab}")

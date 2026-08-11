@@ -290,6 +290,32 @@ class ProxyPool(Pool):
         if exit_ip:
             self._set(resource, {"Last Exit IP": exit_ip})
 
+    def reclaim(self, in_use: set[str]) -> list[Resource]:
+        """Free proxies held by a phone that no longer exists.
+
+        `ok` means "a phone is behind this", which is what stops two devices
+        sharing one exit. Nothing was undoing it when the phone went away, so
+        every deleted phone quietly took a working proxy out of circulation:
+        thirteen of twenty-two were locked to phones that had been gone for
+        days, and a run failed with no_usable_proxy while they sat there
+        (2026-08-11).
+
+        `in_use` is the set of `host:port` a live phone is actually using -
+        asked of the vendor, not of this sheet, since the sheet is the thing
+        being corrected. Rows that are `in_use` (claimed by a running build)
+        are untouched: that build has not created its phone yet.
+        """
+        freed = []
+        for resource in self._rows:
+            if self.status_of(resource) != self.SPENT_STATUS or not resource.proxy:
+                continue
+            if f"{resource.proxy.host}:{resource.proxy.port}" in in_use:
+                continue
+            self.release(resource, note="freed: the phone using it is gone")
+            self._set(resource, {self.serial_column: ""})
+            freed.append(resource)
+        return freed
+
     @staticmethod
     def port_id(resource: Resource) -> str:
         """What sx.org needs to refresh this proxy, or "" if the row has none.

@@ -787,6 +787,25 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
         log.error("could not record phone %s (%s)", build.phone_id, exc)
 
 
+def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
+    """Put back every proxy whose phone has been deleted.
+
+    Run before a batch for the same reason `prune_ledger` is: the sheet records
+    what was true when it was written, and phones get deleted from the panel
+    without telling it. Left alone, each deletion permanently removes a working
+    proxy from the pool.
+    """
+    in_use = set()
+    for phone in phones.listing(client):
+        config = phone.get("proxy") or {}
+        if config.get("server"):
+            in_use.add(f"{config['server']}:{config.get('port')}")
+    freed = book.proxies.reclaim(in_use)
+    if freed:
+        log.info("freed %d proxy(s) whose phone no longer exists", len(freed))
+    return freed
+
+
 def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
     """Phones one step short, split into those that still exist and those that
     do not. GeeLark's own listing is what says which."""
@@ -917,6 +936,8 @@ def run(client: Client, settings: Settings, *, count: int,
     interrupt left the build running as an orphan (2026-08-11).
     """
     book = Book.open(settings)
+    if not dry_run:
+        reclaim_proxies(client, book)
 
     waiting: list[dict] = []
     gone: list[dict] = []
@@ -926,6 +947,17 @@ def run(client: Client, settings: Settings, *, count: int,
     to_build = count - len(to_finish)
 
     if dry_run:
+        # Not actually freed here, but counted: the pool numbers below would be
+        # wrong by exactly this much, and that is the difference between "there
+        # is nothing left" and "nothing has been put back".
+        stale = len([r for r in book.proxies._rows
+                     if book.proxies.status_of(r) == book.proxies.SPENT_STATUS])
+        live = len({f"{(p.get('proxy') or {}).get('server')}:"
+                    f"{(p.get('proxy') or {}).get('port')}"
+                    for p in phones.listing(client)})
+        if stale > live:
+            print(f"note: {stale - live} proxy(s) are held by phones that no "
+                  f"longer exist and would be freed first\n")
         print(f"{count} phone(s) would be worked on:")
         if to_finish:
             print(f"  {len(to_finish)} finished "
@@ -967,6 +999,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
                cancel: threading.Event | None = None) -> list[Build]:
     """Complete every phone that is one step short, and build nothing."""
     book = Book.open(settings)
+    if not dry_run:
+        reclaim_proxies(client, book)
     pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]

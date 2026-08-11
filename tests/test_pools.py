@@ -202,6 +202,33 @@ def test_an_ok_proxy_is_taken_as_already_spoken_for():
     assert pool.claim().proxy.host == "5.6.7.8"
 
 
+def test_a_proxy_is_freed_when_its_phone_is_gone():
+    """`ok` means a phone is behind it, and nothing undid that when the phone
+    was deleted - so every deleted phone quietly took a working proxy out of
+    circulation. Thirteen of twenty-two were locked to phones long gone while a
+    run failed for want of one (2026-08-11)."""
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="ok", used_by="650"),
+                       proxy_row("5.6.7.8:9999:u:p", status="ok", used_by="651")])
+
+    freed = pool.reclaim({"5.6.7.8:9999"})        # only 651 still exists
+
+    assert [r.proxy.host for r in freed] == ["1.2.3.4"]
+    assert [r.proxy.host for r in pool.available] == ["1.2.3.4"]
+    # the stale serial goes with it, or the column keeps naming a dead phone
+    assert freed[0].values["Used By"] == ""
+    # the one still in use is untouched
+    assert pool._rows[1].values["Status"] == "ok"
+
+
+def test_reclaiming_never_takes_a_row_a_run_is_holding():
+    """`in_use` is a build that has claimed a proxy and not yet created its
+    phone. Freeing that would hand the same exit to two devices."""
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="in_use")])
+
+    assert pool.reclaim(set()) == []
+    assert pool._rows[0].values["Status"] == "in_use"
+
+
 @pytest.mark.parametrize("status", ["dead", "captcha", "expired",
                                     "tls_intercepted", "edge_refused"])
 def test_a_condemned_proxy_is_never_claimed(status):
