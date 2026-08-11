@@ -180,16 +180,6 @@ def test_a_changed_password_is_named_rather_than_retyped():
     assert matched_screen(ctx).name == "fatal"
 
 
-def test_a_changed_password_costs_the_phone_its_slot():
-    """A decision, not a necessity: the phone would work with a corrected
-    sheet, but an account whose password moved without us is rarely one we get
-    back, and the slot is worth more than the wait."""
-    from geelark_farm.orchestrator import UNREUSABLE
-
-    assert "password_changed" in UNREUSABLE
-
-
-# ------------------------------------------------------ racing the spinner
 def test_a_page_that_is_still_loading_is_waited_for_not_acted_on():
     """The costliest way to be wrong: acting on the screen underneath the one
     arriving. Row 13 tapped NEXT, Google began loading, and the flow read the
@@ -512,17 +502,6 @@ def test_openai_refusing_the_proxys_tls_is_named_as_such():
     assert app_screen(ctx).name == "fatal"
 
 
-def test_the_tls_refusal_keeps_its_phone():
-    """Unlike a Google CAPTCHA, this arrives after the phone is signed in and
-    the app is installed - over the same proxy. Throwing the phone away for a
-    connection OpenAI alone objected to would waste three working steps."""
-    from geelark_farm.orchestrator import UNREUSABLE
-
-    assert "app_network_ssl_rejected" not in UNREUSABLE
-    assert "network_ssl_rejected" not in UNREUSABLE
-
-
-# --------------------------------------- the false "ready" (2026-08-08)
 def test_a_composer_is_not_proof_of_a_session():
     """The worst bug this project has produced, and the one it exists to
     prevent: a row reported ready with nobody signed into the app.

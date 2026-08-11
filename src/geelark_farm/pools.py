@@ -37,9 +37,9 @@ from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
 from .config import Settings
+from .gsheet import SCOPES, SheetError, a1_column, batch_write
 from .proxy import Proxy, ProxyError
 from .proxy import parse as parse_proxy
-from .sheets import SCOPES, SheetError, _a1_column, batch_write
 
 log = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ class Pool:
                 log.debug("no %r column in %s; skipping", name, self.tab)
                 continue
             payload.append({
-                "range": f"{_a1_column(index + 1)}{resource.sheet_row}",
+                "range": f"{a1_column(index + 1)}{resource.sheet_row}",
                 "values": [[value]],
             })
             resource.values[name] = value
@@ -387,7 +387,7 @@ class PhoneLog:
             sheet_row = used + 1
             batch_write(self._ws, self._lock,
                         [{"range": f"A{sheet_row}:"
-                                   f"{_a1_column(self.width)}{sheet_row}",
+                                   f"{a1_column(self.width)}{sheet_row}",
                           "values": [line]}],
                         what=f"{self.tab} row {sheet_row}")
         return sheet_row
@@ -432,7 +432,7 @@ class PhoneLog:
                 log.debug("no %r column in %s; skipping", name, self.tab)
                 continue
             payload.append({
-                "range": f"{_a1_column(index + 1)}{sheet_row}",
+                "range": f"{a1_column(index + 1)}{sheet_row}",
                 "values": [[value]],
             })
         if payload:

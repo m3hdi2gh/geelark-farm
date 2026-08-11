@@ -25,11 +25,9 @@ from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
 from .config import ConfigError, Settings
 from .flows import google_login, play_install
+from .gsheet import SheetError
 from .ledger import Ledger
-from .orchestrator import run as run_batch
-from .orchestrator import summarise
 from .proxy import ProxyError
-from .sheets import Sheet, SheetError
 from .shell import TypingError
 
 # Local fallback when no sheet is configured. Same columns as the sheet.
@@ -50,28 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     # ---------------------------------------------------------- pipeline
-    p_run = sub.add_parser(
-        "run", help="process every pending row in the sheet"
-    )
-    p_run.add_argument("--dry-run", action="store_true",
-                       help="show what would be processed, spend nothing")
-    p_run.add_argument("--limit", type=int, metavar="N",
-                       help="process at most N rows")
-    p_run.add_argument("--row", type=int, metavar="N",
-                       help="process only this sheet row")
-    p_run.add_argument("--retry-failed", action="store_true",
-                       help="also retry rows marked failed:* (as well as the "
-                            "pending ones)")
-    p_run.add_argument("--failed-only", action="store_true",
-                       help="retry ONLY the failed and stuck rows - nothing "
-                            "pending. What you want after reading a summary")
-    p_run.add_argument("--workers", type=int, metavar="N",
-                       help="how many rows to run at once "
-                            "(default: MAX_CONCURRENT_PHONES)")
-    p_run.add_argument("--watch", action="store_true",
-                       help="for each row, print a live-view link and wait for "
-                            "Enter before driving")
-
     p_build = sub.add_parser(
         "build", help="build N phones from the Gmails/Proxy/Gpt Info tabs"
     )
@@ -104,10 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
                               "Only when no other run is in progress")
 
     # ------------------------------------------------------------- input
-    p_rows = sub.add_parser("rows", help="list and validate the sheet rows")
-    p_rows.add_argument("--status", metavar="FILTER",
-                        help="only rows whose status matches, e.g. pending")
-
     # ------------------------------------------------------ diagnostics
     sub.add_parser("ping", help="verify API credentials and list phones")
 
@@ -506,19 +478,35 @@ def cmd_screenshot(settings: Settings, args) -> int:
 
 
 def pick_account(settings: Settings, row: int):
-    """One account by row number, from the sheet when one is configured.
+    """The Nth usable Gmail, with a proxy to reach Google through.
+
+    Read, never claimed: this is the diagnostic path, and a debugging session
+    that quietly consumed stock from under a running build would be its own
+    kind of bug. It means two of these at once would drive the same address,
+    which is the caller's business to avoid.
 
     Falls back to the gitignored TSV so the tool still works before the sheet
-    is set up - the columns are identical, so nothing else changes.
+    is set up.
     """
     if settings.sheet_id:
-        rows = Sheet.open(settings).read()
-        match = next((r for r in rows if r.number == row), None)
-        if not match:
-            raise SystemExit(f"--row {row} is out of range (1..{len(rows)})")
-        if match.error:
-            raise SystemExit(f"row {row} is unusable: {match.error}")
-        return match.account
+        from .pools import Book
+
+        book = Book.open(settings)
+        usable = book.gmails.available
+        if not 1 <= row <= len(usable):
+            raise SystemExit(f"--row {row} is out of range "
+                             f"(1..{len(usable)} usable Gmails)")
+        found = usable[row - 1]
+        exits = book.proxies.available
+        if not exits:
+            raise SystemExit("no proxy is free in the Proxy tab")
+        return accounts.Account(
+            email=found.credentials.email,
+            password=found.credentials.password,
+            totp_secret=found.credentials.totp_secret,
+            proxy=str(exits[0].values.get("Proxy String") or ""),
+            row=row,
+        )
 
     path = settings.state_dir.parent / DEV_ACCOUNTS
     loaded = accounts.load_dev_accounts(path)
@@ -588,36 +576,6 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
-def cmd_run(settings: Settings, args) -> int:
-    """Process the sheet. The one command the whole project exists for."""
-    client = build_client(settings)
-    settings.ensure_dirs()
-
-    def announce(phone_id: str) -> None:
-        # Minted here, not at boot: the live-view token expires within seconds,
-        # so it is only usable immediately before the flow acts.
-        url = phones.start(client, phone_id)
-        if url:
-            print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
-        input("Open it, then press Enter to start this row... ")
-
-    results = run_batch(
-        client, settings,
-        limit=args.limit, only_row=args.row,
-        retry_failed=args.retry_failed, failed_only=args.failed_only,
-        dry_run=args.dry_run,
-        workers=args.workers,
-        on_ready=announce if args.watch else None,
-    )
-    if args.dry_run:
-        return 0
-    print(summarise(results, artifact_dir=settings.artifact_dir))
-    # An empty result is success: there was nothing pending, which is the normal
-    # state of a finished sheet. Exiting non-zero for it would make `geelark run`
-    # unusable from cron or CI, where a no-op has to look like a no-op.
-    return 0 if all(r.ok for r in results) else 1
-
-
 def cmd_build(settings: Settings, args) -> int:
     """Build phones out of the resource tabs, rather than one row at a time."""
     from . import builder
@@ -636,8 +594,13 @@ def cmd_build(settings: Settings, args) -> int:
                          on_ready=announce if args.watch else None)
     if args.dry_run:
         return 0
+    if not builds:
+        print("nothing to do - no phone is waiting and the pools are empty")
+        return 0
     print(builder.summarise(builds))
-    return 0 if builds and all(b.ok for b in builds) else 1
+    # An empty result is success: a finished pool is the normal state, and
+    # exiting non-zero for it would make this unusable from cron.
+    return 0 if all(b.ok for b in builds) else 1
 
 
 def cmd_finish(settings: Settings, args) -> int:
@@ -686,44 +649,6 @@ def cmd_pools(settings: Settings, args) -> int:
             print(f"  {len(pool.broken):>3} unusable:")
             for resource in pool.broken:
                 print(f"      row {resource.sheet_row}: {resource.error}")
-    return 0
-
-
-ROW_MARKS = {"done": "OK  ", "running": "BUSY", "": "    ", "pending": "    "}
-
-
-def cmd_rows(settings: Settings, args) -> int:
-    """Read and validate the sheet. Spends nothing - no phone is created, no
-    proxy is dialled, and nothing is written back."""
-    sheet = Sheet.open(settings)
-    rows = sheet.read()
-    if not rows:
-        print("no data rows in the sheet")
-        return 0
-
-    shown = 0
-    problems = 0
-    for row in rows:
-        if args.status and not row.status.startswith(args.status.lower()):
-            continue
-        shown += 1
-        mark = ROW_MARKS.get(row.status, "FAIL" if row.is_failed else "    ")
-        if row.error:
-            mark = "BAD "
-            problems += 1
-        line = (f" {mark} row {row.number:<3} {row.email or '(no email)':<34} "
-                f"{row.status or 'pending':<24}")
-        if row.phone_id:
-            line += f" phone {row.phone_id}"
-        print(line)
-        if row.error:
-            print(f"        -> {row.error}")
-
-    print(f"\n{shown} row(s) shown, {len(rows)} total")
-    ready = len([r for r in rows if r.is_pending and not r.error])
-    print(f"{ready} ready to process, {problems} unusable")
-    if problems:
-        print("Unusable rows are skipped by 'geelark run' - fix them in the sheet.")
     return 0
 
 
@@ -848,8 +773,6 @@ def main(argv: list[str] | None = None) -> int:
         "screenshot": cmd_screenshot,
         "login": cmd_login,
         "install": cmd_install,
-        "rows": cmd_rows,
-        "run": cmd_run,
         "build": cmd_build,
         "finish": cmd_finish,
         "pools": cmd_pools,

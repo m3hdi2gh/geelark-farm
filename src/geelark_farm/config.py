@@ -74,9 +74,8 @@ class Settings:
     # next proxy instead of refreshing the one it has.
     sxorg_api_key: str
 
-    # Google Sheets input.
+    # Google Sheets input: the workbook holding the resource tabs.
     sheet_id: str
-    sheet_tab: str
     service_account_json: Path
 
     # Phone specs. region 'us' only offers Android 15; sgp and cn are broader.
@@ -91,11 +90,11 @@ class Settings:
     # Budgets. Billing is per running minute, so each of these caps spend as
     # well as time.
     max_concurrent_phones: int
-    account_budget_seconds: int
-    # What one `geelark build` phone may spend. Larger than the per-account
-    # budget on purpose: a build may try several Gmails and several app
-    # accounts on one phone, and the point of it is that a bad credential costs
-    # a credential rather than the phone.
+    # The outer bound on what one phone may spend, and so on what it can cost.
+    # It wins: each step below gets whichever is smaller, its own budget or the
+    # time left. A build may work through several Gmails and several app
+    # accounts on one phone, which is the point of it, so this has to cover
+    # more than one pass of the steps.
     build_budget_seconds: int
     login_budget_seconds: int
     install_budget_seconds: int
@@ -121,7 +120,6 @@ class Settings:
             api_key=_str("GEELARK_API_KEY", required=True),
             sxorg_api_key=_str("SXORG_API_KEY"),
             sheet_id=_str("GOOGLE_SHEET_ID"),
-            sheet_tab=_str("GOOGLE_SHEET_TAB", "accounts"),
             service_account_json=_path(
                 "GOOGLE_SERVICE_ACCOUNT_JSON", "./secrets/service-account.json"
             ),
@@ -130,7 +128,6 @@ class Settings:
             phone_name_prefix=_str("PHONE_NAME_PREFIX", "farm"),
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
-            account_budget_seconds=_int("ACCOUNT_BUDGET_SECONDS", 1800),
             build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),

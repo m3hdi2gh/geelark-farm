@@ -66,9 +66,9 @@ from .accounts import Account
 from .api import ApiError, Client
 from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
+from .gsheet import SheetError
 from .ledger import Ledger
 from .pools import Book, Resource
-from .sheets import SheetError
 
 log = logging.getLogger(__name__)
 

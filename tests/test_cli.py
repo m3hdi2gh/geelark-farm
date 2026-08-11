@@ -13,52 +13,55 @@ import pytest
 from geelark_farm import cli
 from geelark_farm import ledger as ledger_mod
 from geelark_farm.ledger import Ledger
-from geelark_farm.orchestrator import Result
-
-
-def result(row: int, ok: bool) -> Result:
-    return Result(row=row, email=f"r{row}@example.com", ok=ok,
-                  reason="ready" if ok else "error")
 
 
 class Args:
     """argparse.Namespace stand-in."""
 
     def __init__(self, **kw):
-        defaults = dict(limit=None, row=None, retry_failed=False,
-                        failed_only=False, dry_run=False, workers=None,
+        defaults = dict(count=1, limit=None, dry_run=False, workers=None,
                         watch=False)
         defaults.update(kw)
         self.__dict__.update(defaults)
 
 
+def build(index: int, ok: bool):
+    from geelark_farm.builder import Build
+    return Build(index=index, ok=ok, status="ready" if ok else "error")
+
+
 # ------------------------------------------------------------- exit codes
-@pytest.mark.parametrize("results,expected", [
-    ([], 0),                                        # nothing pending
-    ([result(1, True)], 0),
-    ([result(1, True), result(2, True)], 0),
-    ([result(1, True), result(2, False)], 1),
-    ([result(1, False)], 1),
+@pytest.mark.parametrize("builds,expected", [
+    ([], 0),                                        # nothing to do
+    ([build(1, True)], 0),
+    ([build(1, True), build(2, True)], 0),
+    ([build(1, True), build(2, False)], 1),
+    ([build(1, False)], 1),
 ])
-def test_run_exit_code(results, expected, tmp_path, monkeypatch, capsys, make_settings):
-    """An empty result is success. A finished sheet is the normal state, and
-    exiting non-zero for it makes `geelark run` unusable from cron or CI, where
-    a no-op has to look like a no-op."""
+def test_build_exit_code(builds, expected, tmp_path, monkeypatch, capsys,
+                         make_settings):
+    """An empty result is success. Nothing waiting and nothing buildable is the
+    normal state of a finished pool, and exiting non-zero for it makes the
+    command unusable from cron or CI, where a no-op has to look like one."""
+    from geelark_farm import builder as builder_mod
+
     settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
     monkeypatch.setattr(cli, "build_client", lambda s: object())
-    monkeypatch.setattr(cli, "run_batch", lambda *a, **k: results)
+    monkeypatch.setattr(builder_mod, "run", lambda *a, **k: builds)
 
-    assert cli.cmd_run(settings, Args()) == expected
+    assert cli.cmd_build(settings, Args()) == expected
     capsys.readouterr()
 
 
 def test_a_dry_run_always_succeeds(tmp_path, monkeypatch, capsys, make_settings):
     """It changes nothing, so it cannot fail at anything."""
+    from geelark_farm import builder as builder_mod
+
     settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
     monkeypatch.setattr(cli, "build_client", lambda s: object())
-    monkeypatch.setattr(cli, "run_batch", lambda *a, **k: [])
+    monkeypatch.setattr(builder_mod, "run", lambda *a, **k: [])
 
-    assert cli.cmd_run(settings, Args(dry_run=True)) == 0
+    assert cli.cmd_build(settings, Args(dry_run=True)) == 0
     capsys.readouterr()
 
 
@@ -110,13 +113,11 @@ def test_the_live_view_link_is_taken_out_of_the_progress_messages():
     serial is read from the creation line, since that is what mints a fresh
     link once this one expires.
     """
-    from geelark_farm.ui import LiveReporter
+    from geelark_farm.ui import BuildReporter
 
-    class FakeRow:
-        number, email = 1, "x@example.com"
 
-    reporter = LiveReporter(total=1)
-    reporter.start(1, FakeRow())
+    reporter = BuildReporter()
+    reporter.start(1, 1)
     reporter.note(1, "created 631291280617374014 (serial 477): vivo / Android 15")
     reporter.note(1, "watch it live: https://phone.geelark.com/index.html?t=abc")
     reporter.note(1, "screen: password_entry (visit 1)")
@@ -138,13 +139,11 @@ def test_each_live_link_is_offered_for_printing_exactly_once():
     Once, though. The render loop drains this four times a second, so a link
     that came back on every tick would bury the table under its own URL.
     """
-    from geelark_farm.ui import LiveReporter
+    from geelark_farm.ui import BuildReporter
 
-    class FakeRow:
-        number, email = 6, "x@example.com"
 
-    reporter = LiveReporter(total=1)
-    reporter.start(6, FakeRow())
+    reporter = BuildReporter()
+    reporter.start(6, 1)
     reporter.note(6, "created 631291280617374014 (serial 495): vivo / Android 15")
     reporter.note(6, "watch it live: https://phone.geelark.com/i.html?t=abc")
 
@@ -170,13 +169,11 @@ def test_only_the_narrating_layers_reach_the_state_column():
     """
     import logging
 
-    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+    from geelark_farm.ui import BuildReporter, ReporterLogHandler
 
-    class FakeRow:
-        number, email = 1, "x@example.com"
 
-    reporter = LiveReporter(total=1)
-    reporter.start(1, FakeRow())
+    reporter = BuildReporter()
+    reporter.start(1, 1)
     handler = ReporterLogHandler(reporter)
 
     def emit(logger: str, message: str) -> None:
@@ -212,16 +209,13 @@ def test_printing_links_does_not_restart_the_display():
     from rich.console import Console
     from rich.live import Live
 
-    from geelark_farm.ui import LiveReporter, print_new_links
+    from geelark_farm.ui import BuildReporter, print_new_links
 
-    class FakeRow:
-        def __init__(self, n):
-            self.number, self.email = n, f"r{n}@example.com"
 
     console = Console(width=100, force_terminal=True, file=io.StringIO())
-    reporter = LiveReporter(total=2)
+    reporter = BuildReporter()
     for n in (1, 2):
-        reporter.start(n, FakeRow(n))
+        reporter.start(n, 2)
         reporter.note(n, f"watch it live: https://phone.geelark.com/i?row={n}")
 
     calls: list[str] = []
@@ -279,13 +273,11 @@ def test_the_state_column_shows_steps_not_announcements():
     and the long announcements never reach it. None of them answered the
     question it exists for anyway.
     """
-    from geelark_farm.ui import LiveReporter
+    from geelark_farm.ui import BuildReporter
 
-    class FakeRow:
-        number, email = 1, "x@example.com"
 
-    reporter = LiveReporter(total=1)
-    reporter.start(1, FakeRow())
+    reporter = BuildReporter()
+    reporter.start(1, 1)
 
     for noise in (
         "created 6318 (serial 542): vivo V2419A / Android 15, USA / New_York",
@@ -316,13 +308,11 @@ def test_warnings_go_above_the_table_not_into_it():
     """
     import logging
 
-    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+    from geelark_farm.ui import BuildReporter, ReporterLogHandler
 
-    class FakeRow:
-        number, email = 9, "x@example.com"
 
-    reporter = LiveReporter(total=1)
-    reporter.start(9, FakeRow())
+    reporter = BuildReporter()
+    reporter.start(9, 1)
     handler = ReporterLogHandler(reporter)
 
     def emit(name: str, level: int, message: str) -> None:
@@ -351,9 +341,9 @@ def test_a_run_level_warning_is_kept_too():
     itself."""
     import logging
 
-    from geelark_farm.ui import LiveReporter, ReporterLogHandler
+    from geelark_farm.ui import BuildReporter, ReporterLogHandler
 
-    reporter = LiveReporter(total=0)
+    reporter = BuildReporter()
     handler = ReporterLogHandler(reporter)
 
     record = logging.LogRecord("geelark_farm.api", logging.WARNING, "f", 1,

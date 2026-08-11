@@ -36,11 +36,9 @@ from . import builder, phones
 from .api import ApiError, TransportError, build_client
 from .builder import Build
 from .config import Settings
+from .gsheet import SheetError
 from .ledger import Ledger
-from .orchestrator import Result, RowContextFilter, install_row_logging
-from .orchestrator import run as run_batch
 from .pools import Book
-from .sheets import Sheet, SheetError, selectable
 
 console = Console()
 
@@ -55,18 +53,9 @@ DIM = "bright_black"
 class Snapshot:
     """Everything worth knowing before deciding what to do next."""
 
-    rows_total: int = 0
-    rows_done: int = 0
-    rows_pending: int = 0
-    rows_failed: int = 0
-    # What the retry menu entry picks up: the failed and the stuck, and
-    # nothing pending. The entry says "Retry failed and stuck rows" and for a
-    # while did not mean it - it also took every pending row with it.
-    rows_retryable: int = 0
-    rows_bad: int = 0
-    # The resource pools `geelark build` draws from. -1 means "not read" - the
-    # tabs may not exist on a sheet that only feeds the single-row `run` flow,
-    # and a zero there would wrongly read as "empty" rather than "not asked".
+    # The resource pools a build draws from. -1 means "not read": the tabs may
+    # be missing or unreachable, and a zero there would read as "empty" rather
+    # than "not asked".
     proxies_free: int = -1
     gmails_free: int = 0
     apps_free: int = 0
@@ -143,21 +132,6 @@ def take_snapshot(settings: Settings) -> Snapshot:
 
     if settings.sheet_id:
         try:
-            rows = Sheet.open(settings).read()
-            snap.rows_total = len(rows)
-            snap.rows_done = sum(1 for r in rows if r.is_done)
-            snap.rows_failed = sum(1 for r in rows if r.is_failed)
-            snap.rows_bad = sum(1 for r in rows if r.error)
-            snap.rows_pending = len(selectable(rows))
-            snap.rows_retryable = len(selectable(rows, failed_only=True))
-        except SheetError as exc:
-            snap.error = snap.error or str(exc).splitlines()[0]
-
-        # The resource tabs, if this sheet has them. Their absence is not an
-        # error - a sheet can carry only the single-row flow - so a missing tab
-        # leaves has_pools False rather than filling the dashboard with a
-        # complaint about a feature this sheet does not use.
-        try:
             book = Book.open(settings)
             snap.proxies_free = len(book.proxies.available)
             snap.gmails_free = len(book.gmails.available)
@@ -165,8 +139,8 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.pools_stuck = sum(len(p.stuck) for p in
                                    (book.proxies, book.gmails, book.apps))
             snap.phones_unfinished = len(book.phones.unfinished())
-        except SheetError:
-            pass
+        except SheetError as exc:
+            snap.error = snap.error or str(exc).splitlines()[0]
     return snap
 
 
@@ -174,17 +148,6 @@ def dashboard(snap: Snapshot) -> Panel:
     table = Table.grid(padding=(0, 3))
     table.add_column(style=DIM, justify="right")
     table.add_column()
-
-    sheet_bits = [f"[{OK}]{snap.rows_done} done[/]"]
-    if snap.rows_pending:
-        sheet_bits.append(f"[{WARN}]{snap.rows_pending} to do[/]")
-    if snap.rows_failed:
-        sheet_bits.append(f"[{BAD}]{snap.rows_failed} failed[/]")
-    if snap.rows_bad:
-        sheet_bits.append(f"[{BAD}]{snap.rows_bad} unusable[/]")
-    table.add_row("sheet",
-                  f"{snap.rows_total} rows   " + "   ".join(sheet_bits)
-                  if snap.rows_total else "[bright_black]not configured[/]")
 
     # The pools `build` draws from. Each count is coloured by its own value -
     # a build needs one of each and stops at whichever runs out, so the empty
@@ -360,27 +323,6 @@ class _LiveTable:
 
 
 @dataclass
-class LiveReporter(_LiveTable):
-    """A `geelark run` batch, one line per sheet row."""
-
-    def start(self, index: int, row) -> None:
-        with self.lock:
-            self.rows[row.number] = {
-                "email": row.email, "state": "working", "step": "starting",
-                "started": time.monotonic(), "seconds": 0.0, "phone": "",
-            }
-
-    def finish(self, result: Result) -> None:
-        with self.lock:
-            entry = self.rows.setdefault(result.row, {"email": result.email})
-            entry.update(state="ready" if result.ok else "failed",
-                         step=result.reason, seconds=result.seconds,
-                         phone=result.serial or result.phone_id[:8])
-
-    def render(self) -> Table:
-        return self._render("row")
-
-
 @dataclass
 class BuildReporter(_LiveTable):
     """A `geelark build` batch, one line per phone being built.
@@ -613,25 +555,6 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
         console.print(f"[{BAD}]the run failed: {failure['exc']}[/]")
 
 
-def run_with_live_table(settings: Settings, **kwargs) -> list[Result]:
-    """`run`, drawn as a table instead of a scrolling log."""
-    client = build_client(settings)
-    settings.ensure_dirs()
-    install_row_logging()
-
-    reporter = LiveReporter()
-    results: list[Result] = []
-    cancel = threading.Event()
-
-    def work() -> None:
-        nonlocal results
-        results = run_batch(client, settings, reporter=reporter,
-                            cancel=cancel, **kwargs)
-
-    _drive_live_table(reporter, RowContextFilter(), work, cancel)
-    return results
-
-
 def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     """`build`, drawn as a table instead of a scrolling log."""
     client = build_client(settings)
@@ -669,39 +592,6 @@ def finish_with_live_table(settings: Settings, **kwargs) -> list[Build]:
 
     _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel)
     return builds
-
-
-def summary_panel(results: list[Result]) -> Panel:
-    if not results:
-        return Panel("nothing was processed", border_style=DIM)
-
-    ready = sum(1 for r in results if r.ok)
-    unstopped = [r for r in results if r.still_running]
-
-    body: list = []
-    line = Text(f"{ready}/{len(results)} phones ready",
-                style=f"bold {OK if ready == len(results) else WARN}")
-    body.append(line)
-
-    if unstopped:
-        # The one claim that must never be made loosely.
-        body.append(Text(""))
-        body.append(Text(f"{len(unstopped)} PHONE(S) COULD NOT BE STOPPED - "
-                         f"STILL BILLING", style=f"bold {BAD}"))
-        for r in unstopped:
-            body.append(Text(f"   row {r.row}: {r.phone_id}", style=BAD))
-        body.append(Text("Run 'reap' from the menu now.", style=BAD))
-    else:
-        body.append(Text("All phones are stopped; nothing is billing.",
-                         style=DIM))
-
-    failed = [r for r in results if not r.ok]
-    if failed:
-        body.append(Text(""))
-        for r in failed:
-            body.append(Text(f"   row {r.row} {r.email}: {r.reason}", style=BAD))
-
-    return Panel(Group(*body), title="summary", border_style=DIM, padding=(1, 2))
 
 
 def build_summary_panel(builds: list[Build]) -> Panel:
@@ -761,30 +651,6 @@ def pools_view(settings: Settings) -> Panel:
                               f"{resource.error}[/]")
     return Panel(table, title="resource pools", border_style=DIM, padding=(1, 2))
 
-
-
-def rows_table(settings: Settings) -> Table:
-    table = Table(box=None, padding=(0, 2))
-    table.add_column("row", justify="right", style=DIM, width=3)
-    table.add_column("account", overflow="ellipsis", no_wrap=True,
-                     max_width=34)
-    table.add_column("status")
-    table.add_column("phone", style=DIM)
-
-    for row in Sheet.open(settings).read():
-        if row.error:
-            style, status = BAD, row.error[:44]
-        elif row.is_done:
-            style, status = OK, "done"
-        elif row.is_failed:
-            style, status = BAD, row.status
-        elif row.status == "running":
-            style, status = WARN, "running"
-        else:
-            style, status = DIM, "pending"
-        table.add_row(str(row.number), row.email,
-                      f"[{style}]{status}[/]", row.phone_id)
-    return table
 
 
 def phones_table(settings: Settings) -> Table:
@@ -849,13 +715,10 @@ ACTIONS = [
     ("2", "Finish phones waiting on an app account",
      "reuses phones that are one step short - no new phone, Gmail or proxy"),
     ("3", "Resource pools", "what the Gmails/Proxy/Gpt tabs hold; free stuck rows"),
-    ("4", "Run pending rows", "the older single-row sheet flow"),
-    ("5", "Retry failed and stuck rows", "reuses the phones they already have"),
-    ("6", "Validate the sheet", "spends nothing"),
-    ("7", "Phones", "what exists, and what is billing"),
-    ("8", "Stop everything", "ends all billing now"),
-    ("9", "Reap", "stop phones nothing is accountable for"),
-    ("0", "Subscription", "slots, free slots, parallel limit"),
+    ("4", "Phones", "what exists, and what is billing"),
+    ("5", "Stop everything", "ends all billing now"),
+    ("6", "Reap", "stop phones nothing is accountable for"),
+    ("7", "Subscription", "slots, free slots, parallel limit"),
     ("q", "Quit", ""),
 ]
 
@@ -868,40 +731,6 @@ def menu() -> Table:
     for key, label, hint in ACTIONS:
         table.add_row(key, label, hint)
     return table
-
-
-def confirm_run(settings: Settings, snap: Snapshot, *,
-                retry_failed: bool) -> dict | None:
-    """Ask what to run, and make the cost visible before anything starts."""
-    available = snap.rows_retryable if retry_failed else snap.rows_pending
-    if not available:
-        console.print(f"[{DIM}]nothing to do[/]")
-        return None
-
-    # Two separate questions, because they mean different things and only one
-    # of them changes the bill. How many rows decides how many phones are
-    # created; how many at a time decides only how long the wall clock is.
-    count = IntPrompt.ask(f"how many rows (of {available})", default=available)
-    count = max(1, min(count, available))
-
-    workers = IntPrompt.ask("how many at a time",
-                            default=min(settings.max_concurrent_phones, count))
-    workers = max(1, min(workers, count))
-    if snap.parallels and workers > snap.parallels:
-        console.print(f"[{WARN}]the plan's parallel limit is {snap.parallels}; "
-                      f"more may cost extra[/]")
-    if count > snap.slots_free:
-        console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free; "
-                      f"rows past that will fail with no_phone[/]")
-
-    console.print(f"\n[{WARN}]{count} row(s), {workers} at a time. "
-                  f"Phones bill per running minute.[/]")
-    if not Confirm.ask("start", default=True):
-        return None
-    # failed_only, not retry_failed: the menu entry promises the failed and
-    # stuck rows, so it has to leave the pending ones where they are.
-    mode = {"failed_only": True} if retry_failed else {}
-    return {"workers": workers, "limit": count, **mode}
 
 
 def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
@@ -1077,26 +906,16 @@ def run_console(settings: Settings) -> int:
                     freed = Book.open(settings).release_stuck()
                     console.print(f"[{OK}]released {freed}[/]")
 
-            elif choice in ("4", "5"):
-                options = confirm_run(settings, snap,
-                                      retry_failed=(choice == "5"))
-                if options:
-                    results = run_with_live_table(settings, **options)
-                    console.print(summary_panel(results))
-
-            elif choice == "6":
-                console.print(rows_table(settings))
-
-            elif choice == "7":
+            elif choice == "4":
                 console.print(phones_table(settings))
 
-            elif choice == "8":
+            elif choice == "5":
                 stop_all(settings)
 
-            elif choice == "9":
+            elif choice == "6":
                 reap(settings)
 
-            elif choice == "0":
+            elif choice == "7":
                 console.print(plan_panel(settings))
 
         except (ApiError, TransportError, SheetError) as exc:
