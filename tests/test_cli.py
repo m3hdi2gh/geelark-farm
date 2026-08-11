@@ -364,6 +364,43 @@ def test_a_run_level_warning_is_kept_too():
     assert len(reporter.drain_notices()) == 1
 
 
+def test_the_build_default_never_promises_more_phones_than_gpt_accounts():
+    """Every ready phone consumes one app account, whether it was built from
+    nothing or finished from one that was waiting - so the app pool caps the
+    whole run. Adding the two together offered three phones against two
+    accounts, and the third was certain to end on no_usable_gpt having spent a
+    phone, a Gmail and a proxy to get there (2026-08-11).
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from geelark_farm.ui import Snapshot, confirm_build
+
+    settings = SimpleNamespace(max_concurrent_phones=1)
+    asked = []
+
+    def run(**pools):
+        snap = Snapshot(slots_total=30, slots_free=21, **pools)
+        with patch("geelark_farm.ui.IntPrompt.ask",
+                   side_effect=lambda *a, **k: asked.append(k["default"])
+                   or k["default"]), \
+             patch("geelark_farm.ui.Confirm.ask", return_value=False):
+            confirm_build(settings, snap)
+        return asked.pop(0)
+
+    # the reported case: one waiting phone, two accounts -> two phones, not three
+    assert run(proxies_free=13, gmails_free=13, apps_free=2,
+               phones_unfinished=1) == 2
+    asked.clear()
+    # accounts to spare: the proxies and Gmails bind instead
+    assert run(proxies_free=2, gmails_free=9, apps_free=10,
+               phones_unfinished=0) == 2
+    asked.clear()
+    # nothing to build with, but waiting phones need only an account each
+    assert run(proxies_free=0, gmails_free=0, apps_free=4,
+               phones_unfinished=3) == 3
+
+
 def test_a_build_line_fills_its_account_only_when_it_finishes():
     """A build has no account until it signs one in, so the column is blank
     while it works and names the pair it ended with once it is done. The serial
