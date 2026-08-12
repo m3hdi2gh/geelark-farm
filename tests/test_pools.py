@@ -23,8 +23,8 @@ PROXY_HEADERS = ["Name", "Proxy String", "Expires", "Last Exit IP",
                  "Used By", "Status", "Note"]
 APP_HEADERS = ["Address", "Password", "2FA Secret", "Phone Serial", "Status",
                "Note"]
-PHONE_HEADERS = ["Created", "Serial", "Phone ID", "Proxy", "Gmail",
-                 "GPT Account", "Status", "Note", "State"]
+PHONE_HEADERS = ["Created", "Serial", "State", "Phone ID", "Proxy",
+                 "Gmail", "GPT Account", "Status", "Note"]
 
 # Columns the code still understands but this sheet no longer carries: the
 # split-out parts, for someone filling the tab by hand, and the sx.org refresh
@@ -281,7 +281,7 @@ def test_a_phone_is_recorded_before_it_is_finished():
     written = worksheet.writes[0]["values"][0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
     assert written[PHONE_HEADERS.index("Status")] == "building"
-    assert written[PHONE_HEADERS.index("State")] == "Unused"
+    assert written[PHONE_HEADERS.index("State")] == "unused"
 
 
 def test_a_second_phone_lands_on_the_next_row():

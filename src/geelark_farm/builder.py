@@ -865,6 +865,71 @@ def _this_module():
     return sys.modules[__name__]
 
 
+def apply_phone_states(client: Client, book: Book,
+                       ledger: Ledger) -> dict[str, list[str]]:
+    """Carry out what the operator wrote in the Phones tab's `State` column.
+
+    `Status` is what a run concluded about a phone. `State` is the other
+    direction - an instruction back to the tool, written by hand between runs:
+
+        done     finished with it. Delete the phone and drop the row.
+        failed   something is wrong with it. Free its app account so a new
+                 phone can use it, then delete the phone and drop the row.
+        unused   the default. Leave it alone.
+
+    A running phone is never touched, only reported. Deleting one is not a
+    documented way to end its billing, and stopping it to make deletion safe is
+    not this function's business.
+
+    The Gmail on a failed phone is deliberately left marked `ready`. It signed
+    in fine; whether an address that has been on a phone you have judged bad
+    should go back into circulation is a decision, not a cleanup.
+    """
+    marked = book.phones.marked()
+    if not marked:
+        return {}
+
+    alive = {p.get("id"): p for p in phones.listing(client)}
+    outcome: dict[str, list[str]] = {"deleted": [], "freed": [], "running": []}
+    finished_rows: list[int] = []
+
+    for row in marked:
+        phone_id, serial = row["phone_id"], row["serial"] or row["phone_id"][:8]
+        present = alive.get(phone_id)
+        if present and present.get("status") in (phones.RUNNING, phones.STARTING):
+            # Left exactly as it is, and said out loud: a phone deleted while
+            # running is not a documented way to stop it billing.
+            outcome["running"].append(serial)
+            continue
+
+        if row["state"] == book.phones.FAILED and row["app_account"]:
+            # The account never got a fair phone. Back to the pool, so the next
+            # build can put it on one that works.
+            account = book.apps.find(row["app_account"])
+            if account is not None:
+                book.apps.release(
+                    account, note=f"phone {serial} was marked failed; "
+                                  f"free to try on another")
+                outcome["freed"].append(row["app_account"])
+
+        if present:
+            try:
+                phones.delete(client, [phone_id], ledger=ledger)
+                outcome["deleted"].append(serial)
+            except Exception as exc:                              # noqa: BLE001
+                log.error("could not delete phone %s (%s); its row is kept",
+                          serial, exc)
+                continue
+        finished_rows.append(row["sheet_row"])
+
+    # Only now, and bottom up: the row numbers were read before any moved.
+    book.phones.delete_rows(finished_rows)
+    for label, items in outcome.items():
+        if items:
+            log.info("%s: %s", label, ", ".join(items))
+    return outcome
+
+
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
     """Put back every proxy whose phone has been deleted.
 
@@ -1056,10 +1121,12 @@ def run(client: Client, settings: Settings, *, count: int,
     """
     book = Book.open(settings)
     if not dry_run:
-        # Bring the Proxy tab up to date before anything is counted or spent:
-        # give back what deleted phones were holding, then find out which of
-        # the free ones still answer. Both change the numbers printed below,
-        # and a count that is fiction is worse than no count.
+        # Order matters. Acting on the State column deletes phones, which is
+        # what frees their proxies for the reclaim below and their app accounts
+        # for the build that follows. Then find out which free proxies still
+        # answer, so the numbers printed are the ones a run will meet.
+        apply_phone_states(client, book, Ledger.load(settings.state_dir))
+        book.reload()
         reclaim_proxies(client, book)
         check_free_proxies(client, book)
 
@@ -1124,6 +1191,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
     """Complete every phone that is one step short, and build nothing."""
     book = Book.open(settings)
     if not dry_run:
+        apply_phone_states(client, book, Ledger.load(settings.state_dir))
+        book.reload()
         reclaim_proxies(client, book)
     pending, gone = _unfinished(client, book)
     if limit:

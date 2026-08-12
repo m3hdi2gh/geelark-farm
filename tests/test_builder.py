@@ -688,3 +688,104 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
     written = book.phones._ws.rows[0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
     assert written[PHONE_HEADERS.index("Status")] == "no_usable_gmail"
+
+
+# ------------------------------------- acting on what the operator marked
+class FakePhoneLog:
+    """A Phones tab that answers `marked` and records what was deleted."""
+
+    DONE, FAILED, UNUSED = "done", "failed", "unused"
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.deleted_rows = []
+
+    def marked(self):
+        return [r for r in self._rows if r["state"] in (self.DONE, self.FAILED)]
+
+    def delete_rows(self, numbers):
+        self.deleted_rows.extend(numbers)
+
+
+def state_book(rows, *, apps=2):
+    book = make_book(apps=apps)
+    book.phones = FakePhoneLog(rows)
+    return book
+
+
+def test_a_phone_marked_done_is_deleted_with_its_row(monkeypatch):
+    """`State` is the instruction back to the tool: finished with it."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = state_book([{"sheet_row": 5, "state": "done", "phone_id": "P1",
+                        "serial": "650", "gmail": "g@example.com",
+                        "app_account": "a0@example.com"}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert deleted == ["P1"] and out["deleted"] == ["650"]
+    assert book.phones.deleted_rows == [5]
+    # done means finished with, not failed: the account stays spent
+    assert out["freed"] == []
+
+
+def test_a_phone_marked_failed_gives_its_app_account_back(monkeypatch):
+    """The account never got a fair phone, so it returns to the pool for the
+    next build - which is the whole point of marking one failed."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 7, "state": "failed", "phone_id": "P1",
+                        "serial": "651", "gmail": "g@example.com",
+                        "app_account": "a0@example.com"}], apps=1)
+    book.apps.spend(book.apps.claim(), serial="651")      # as a build left it
+    assert book.apps.available == []
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["freed"] == ["a0@example.com"]
+    assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
+
+
+def test_a_running_phone_is_reported_rather_than_deleted(monkeypatch):
+    """Deleting a running phone is not a documented way to end its billing,
+    and stopping it to make deletion safe is not this function's business."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 0}])   # running
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = state_book([{"sheet_row": 5, "state": "done", "phone_id": "P1",
+                        "serial": "650", "gmail": "", "app_account": ""}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert deleted == [] and out["running"] == ["650"]
+    assert book.phones.deleted_rows == []      # the row survives to be retried
+
+
+def test_an_unused_phone_is_left_entirely_alone(monkeypatch):
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 2}])
+    book = state_book([{"sheet_row": 5, "state": "unused", "phone_id": "P1",
+                        "serial": "650", "gmail": "", "app_account": ""}])
+
+    assert builder.apply_phone_states(None, book, FakeLedger()) == {}
+    assert book.phones.deleted_rows == []
+
+
+def test_a_row_whose_phone_is_already_gone_is_still_tidied(monkeypatch):
+    """Deleted from the panel by hand. Nothing to delete, but the row and the
+    account it names should not linger."""
+    monkeypatch.setattr(builder.phones, "listing", lambda c: [])
+    book = state_book([{"sheet_row": 9, "state": "failed", "phone_id": "GONE",
+                        "serial": "660", "gmail": "", "app_account": "a0@example.com"}])
+    book.apps.spend(book.apps.claim(), serial="660")
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["deleted"] == [] and out["freed"] == ["a0@example.com"]
+    assert book.phones.deleted_rows == [9]

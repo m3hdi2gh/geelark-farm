@@ -187,6 +187,14 @@ class Pool:
                 return resource
         return None
 
+    def find(self, email: str) -> Resource | None:
+        """The row holding this address, whatever state it is in."""
+        wanted = (email or "").strip().lower()
+        if not wanted:
+            return None
+        return next((r for r in self._rows if r.credentials
+                     and r.credentials.email.lower() == wanted), None)
+
     def release(self, resource: Resource, *, note: str = "") -> None:
         """Put a claimed row back, available again.
 
@@ -408,7 +416,7 @@ class PhoneLog:
         """
         fields.setdefault("Created", time.strftime("%Y-%m-%d %H:%M"))
         fields.setdefault("Status", self.BUILDING)
-        fields.setdefault("State", "Unused")
+        fields.setdefault("State", self.UNUSED)
         line = [""] * self.width
         for name, value in fields.items():
             index = self._index.get(name)
@@ -456,6 +464,54 @@ class PhoneLog:
                           "serial": cell("Serial"), "gmail": cell("Gmail"),
                           "proxy": cell("Proxy"), "status": cell("Status")})
         return found
+
+    #: What the operator writes in `State` to say what should happen next.
+    #: `Status` is what a run concluded; this is an instruction back to it.
+    DONE = "done"          # finished with - delete the phone
+    FAILED = "failed"      # something is wrong with it - free its app account
+    UNUSED = "unused"      # the default: leave it alone
+
+    def marked(self) -> list[dict]:
+        """Rows the operator has marked `done` or `failed`.
+
+        Read every time rather than cached: the whole point of the column is
+        that it is edited by hand between runs.
+        """
+        with self._lock:
+            rows = self._ws.get_all_values()
+        found = []
+        for offset, line in enumerate(rows[1:], start=2):
+            if not any(line):
+                continue
+
+            def cell(name: str, line: list = line) -> str:
+                index = self._index.get(name)
+                return (line[index].strip()
+                        if index is not None and index < len(line) else "")
+
+            state = cell("State").lower()
+            if state in (self.DONE, self.FAILED):
+                found.append({"sheet_row": offset, "state": state,
+                              "phone_id": cell("Phone ID"),
+                              "serial": cell("Serial"),
+                              "gmail": cell("Gmail"),
+                              "app_account": cell("GPT Account")})
+        return found
+
+    def delete_rows(self, sheet_rows: list[int]) -> None:
+        """Remove rows for phones that no longer exist.
+
+        Bottom up, because deleting one shifts everything below it - and the
+        numbers were read before any of them moved.
+        """
+        if not sheet_rows:
+            return
+        requests = [{"deleteDimension": {"range": {
+            "sheetId": self._ws.id, "dimension": "ROWS",
+            "startIndex": n - 1, "endIndex": n}}}
+            for n in sorted(sheet_rows, reverse=True)]
+        with self._lock:
+            self._ws.spreadsheet.batch_update({"requests": requests})
 
     def finish(self, sheet_row: int, **fields: str) -> None:
         payload = []
@@ -588,6 +644,16 @@ class Book:
         if payload:
             batch_write(self._lists, self._lock, payload, what="Lists")
         return wanted
+
+    def reload(self) -> None:
+        """Re-read the pools after something changed a tab underneath them.
+
+        Deleting a phone frees its app account, and the in-memory rows were
+        read before that happened - a build using them would not see the
+        account it had just been handed back.
+        """
+        for pool in (self.gmails, self.proxies, self.apps):
+            pool.load()
 
     def release_stuck(self) -> int:
         """Free every row a dead run left claimed. Reported rather than done
