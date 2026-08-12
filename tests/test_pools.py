@@ -14,16 +14,25 @@ import pytest
 
 from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
 
+# The tabs as they are. Columns are located by header name, so these are the
+# real shapes rather than a superset - a test that passes against columns the
+# sheet does not have proves less than it looks like it does.
 GMAIL_HEADERS = ["Purchase Date", "Seller", "Address", "Password", "2FA Secret",
                  "Used Date", "Phone Serial", "Status", "Note"]
-PROXY_HEADERS = ["Purchase Date", "Seller", "Proxy String", "Host", "Port",
-                 "Username", "Password", "Port ID", "Country", "ASN",
-                 "Expires", "Last Exit IP", "Last Refresh", "Used By",
+PROXY_HEADERS = ["Proxy String", "Expires", "Last Exit IP", "Used By",
                  "Status", "Note"]
 APP_HEADERS = ["Address", "Password", "2FA Secret", "Phone Serial", "Status",
                "Note"]
-PHONE_HEADERS = ["Created", "Serial", "Phone ID", "Model", "Region", "Proxy",
-                 "Gmail", "GPT Account", "Status", "Note", "State"]
+PHONE_HEADERS = ["Created", "Serial", "Phone ID", "Proxy", "Gmail",
+                 "GPT Account", "Status", "Note", "State"]
+
+# Columns the code still understands but this sheet no longer carries: the
+# split-out parts, for someone filling the tab by hand, and the sx.org refresh
+# hook, which needs a `Port ID` the Unlimited product does not have. Tests that
+# exercise either build their worksheet from this instead.
+PROXY_HEADERS_OPTIONAL = ["Proxy String", "Host", "Port", "Username",
+                          "Password", "Port ID", "Expires", "Last Exit IP",
+                          "Last Refresh", "Used By", "Status", "Note"]
 
 SECRET = "JBSWY3DPEHPK3PXP"
 
@@ -67,19 +76,20 @@ def gmail_row(address: str, status: str = "") -> list[str]:
     return ["2026-08-01", "seller", address, "pw", SECRET, "", "", status, ""]
 
 
-def proxy_pool(rows) -> ProxyPool:
-    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, rows), PROXY_HEADERS,
-                     threading.Lock())
+def proxy_pool(rows, headers=None) -> ProxyPool:
+    headers = headers or PROXY_HEADERS
+    pool = ProxyPool(FakeWorksheet(headers, rows), headers, threading.Lock())
     pool.load()
     return pool
 
 
-def proxy_row(string: str, status: str = "unused",
-              used_by: str = "") -> list[str]:
-    row = [""] * len(PROXY_HEADERS)
-    row[PROXY_HEADERS.index("Proxy String")] = string
-    row[PROXY_HEADERS.index("Used By")] = used_by
-    row[PROXY_HEADERS.index("Status")] = status
+def proxy_row(string: str, status: str = "unused", used_by: str = "",
+              headers=None) -> list[str]:
+    headers = headers or PROXY_HEADERS
+    row = [""] * len(headers)
+    row[headers.index("Proxy String")] = string
+    row[headers.index("Used By")] = used_by
+    row[headers.index("Status")] = status
     return row
 
 
@@ -182,12 +192,13 @@ def test_a_used_proxy_keeps_every_phone_it_has_carried():
 
 
 def test_a_proxy_is_parsed_from_its_parts_when_the_string_is_missing():
-    """Someone filling the tab by hand fills the columns."""
-    row = [""] * len(PROXY_HEADERS)
+    """Someone filling the tab by hand fills the columns. The sheet carries
+    only the joined string now, but the code still understands both."""
+    row = [""] * len(PROXY_HEADERS_OPTIONAL)
     for name, value in (("Host", "1.2.3.4"), ("Port", "9999"),
                         ("Username", "u"), ("Password", "p")):
-        row[PROXY_HEADERS.index(name)] = value
-    pool = proxy_pool([row])
+        row[PROXY_HEADERS_OPTIONAL.index(name)] = value
+    pool = proxy_pool([row], PROXY_HEADERS_OPTIONAL)
     claimed = pool.claim()
     assert claimed.proxy.host == "1.2.3.4"
     assert claimed.proxy.port == 9999

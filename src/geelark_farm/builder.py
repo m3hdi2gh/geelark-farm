@@ -418,14 +418,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             on_phone(phone_id)
         ledger.claim(phone_id, label=f"build {index}")
 
-        details = phones.info(client, phone_id).get("equipmentInfo") or {}
-        log_row = book.phones.start(
-            Serial=build.serial, **{"Phone ID": phone_id},
-            Model=f"{details.get('deviceBrand', '')} "
-                  f"{details.get('deviceModel', '')}".strip(),
-            Region=details.get("countryName") or settings.region,
-            Proxy=build.proxy,
-        )
+        # Serial, id and proxy - the three things that identify this phone
+        # somewhere else. The model and region used to be written beside them
+        # and cost a phone-list call each build to find out; nothing ever read
+        # them back, and every phone had the same two values anyway.
+        log_row = book.phones.start(Serial=build.serial, Proxy=build.proxy,
+                                    **{"Phone ID": phone_id})
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-build{index}"

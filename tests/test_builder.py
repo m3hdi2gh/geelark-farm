@@ -20,6 +20,7 @@ from tests.test_pools import (
     GMAIL_HEADERS,
     PHONE_HEADERS,
     PROXY_HEADERS,
+    PROXY_HEADERS_OPTIONAL,
     SECRET,
     FakeWorksheet,
     gmail_row,
@@ -30,16 +31,18 @@ SIGNED_IN = Outcome("success", "signed_in")
 INSTALLED = Outcome("success", "installed")
 
 
-def make_book(*, gmails=2, proxies=2, apps=1) -> Book:
+def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
+    proxy_headers = proxy_headers or PROXY_HEADERS
     lock = threading.Lock()
     gmail_pool = GmailPool(
         FakeWorksheet(GMAIL_HEADERS,
                       [gmail_row(f"g{i}@example.com") for i in range(gmails)]),
         GMAIL_HEADERS, lock)
     proxy_pool = ProxyPool(
-        FakeWorksheet(PROXY_HEADERS,
-                      [proxy_row(f"10.0.0.{i}:9999:u:p") for i in range(proxies)]),
-        PROXY_HEADERS, lock)
+        FakeWorksheet(proxy_headers,
+                      [proxy_row(f"10.0.0.{i}:9999:u:p", headers=proxy_headers)
+                       for i in range(proxies)]),
+        proxy_headers, lock)
     app_pool = AppPool(
         FakeWorksheet(APP_HEADERS,
                       [[f"a{i}@example.com", "pw", SECRET, "", "", ""]
@@ -479,8 +482,9 @@ def sx(monkeypatch):
 
 
 def with_port_ids(book, exit_ip="9.9.9.9"):
-    """Give every proxy row a Port ID and a known exit, as a refreshable
-    proxy would have."""
+    """Give every proxy row a Port ID and a known exit, as a refreshable proxy
+    would have. Needs PROXY_HEADERS_OPTIONAL: the live sheet dropped both
+    columns, since the Unlimited product has no Port ID to put in one."""
     for offset, resource in enumerate(book.proxies._rows):
         book.proxies._set(resource, {"Port ID": str(100 + offset),
                                      "Last Exit IP": exit_ip})
@@ -496,7 +500,7 @@ def test_a_refusal_refreshes_the_proxy_before_taking_another(device, settings,
                         lambda *a, **k: {"outboundIP": seen.pop(0)})
     settings = settings.__class__(**{**settings.__dict__,
                                      "sxorg_api_key": "KEY"})
-    book = make_book()
+    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
     with_port_ids(book)
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
@@ -516,7 +520,7 @@ def test_a_refresh_that_lands_on_the_same_address_is_not_a_new_exit(
                         lambda *a, **k: {"outboundIP": "9.9.9.9"})
     settings = settings.__class__(**{**settings.__dict__,
                                      "sxorg_api_key": "KEY"})
-    book = make_book()
+    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
     with_port_ids(book, exit_ip="9.9.9.9")
     drive(book, settings, google=[SIGNED_IN],
           app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
@@ -532,7 +536,7 @@ def test_the_daily_allowance_is_read_from_the_sheet(device, settings, drive,
 
     settings = settings.__class__(**{**settings.__dict__,
                                      "sxorg_api_key": "KEY"})
-    book = make_book()
+    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
     with_port_ids(book)
     today = real_time.strftime("%Y-%m-%d")
     book.proxies._set(book.proxies._rows[0],
