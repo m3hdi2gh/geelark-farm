@@ -313,10 +313,13 @@ def _sign_into_app(session: _Session) -> Build | None:
             continue
         if failures.verdict(outcome.reason).stops_the_phone:
             # The app never got as far as judging this account, so it goes
-            # back to the pool untouched and the phone reports its own
-            # problem. Named app_* so the runbook entry someone reaches for
-            # is the app's, not Google's - the same convention as `run`.
-            return s.finish(f"app_{outcome.reason}",
+            # back to the pool untouched and the phone reports its own problem.
+            # Named app_* so the runbook entry someone reaches for is the
+            # app's, not Google's - unless the reason already says so, since
+            # "app_app_would_not_start" helps nobody.
+            named = (outcome.reason if outcome.reason.startswith("app")
+                     else f"app_{outcome.reason}")
+            return s.finish(named,
                             f"the app login could not proceed on this phone: "
                             f"{outcome.detail}")
         s.book.apps.fail(s.app_row, outcome.reason,
@@ -810,6 +813,56 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
         )
     except SheetError as exc:
         log.error("could not record phone %s (%s)", build.phone_id, exc)
+
+
+def possible_statuses() -> list[str]:
+    """Every value that can land in the Phones tab's Status column.
+
+    Read out of this module rather than listed beside it, for the reason the
+    Gmail list drifted: a status added to a `finish(...)` here would not reach
+    the dropdown, and one deleted would linger in it, and neither is visible
+    until someone is staring at a tab wondering what a word means.
+
+    Three sources, because a phone stops for three kinds of reason: something
+    this module decided, something a flow reported that stops the phone (those
+    pass straight through), and the same again from the app phase, where they
+    are prefixed to say which login it was.
+    """
+    import ast
+    import inspect
+
+    from . import failures
+    from .flows import chatgpt_login, google_login, play_install
+    from .pools import PhoneLog
+
+    found: set[str] = {PhoneLog.BUILDING}
+    for node in ast.walk(ast.parse(inspect.getsource(_this_module()))):
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "id", "") in ("finish", "Aborted")
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            found.add(node.args[0].value)
+        # s.finish(...) inside the shared session
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "attr", "") == "finish"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            found.add(node.args[0].value)
+
+    for module, prefix in ((google_login, ""), (play_install, ""),
+                           (chatgpt_login, "app_")):
+        for reason in failures.reasons_reported_by(module):
+            if failures.verdict(reason).stops_the_phone:
+                found.add(reason if reason.startswith("app") or not prefix
+                          else f"{prefix}{reason}")
+    return sorted(found)
+
+
+def _this_module():
+    import sys
+    return sys.modules[__name__]
 
 
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:

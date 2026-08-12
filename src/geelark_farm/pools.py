@@ -550,7 +550,7 @@ class Book:
         if self._lists is None:
             raise SheetError("this workbook has no Lists tab to sync")
 
-        from . import failures
+        from . import builder, failures
         from .flows import chatgpt_login, google_login
 
         def credential_reasons(module) -> list[str]:
@@ -566,6 +566,9 @@ class Book:
             # go, never judged - so they come from the pool, not the taxonomy.
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
                                ProxyPool.spent_status, "dead"],
+            # A phone's status is what a build ended on, which is the builder's
+            # vocabulary rather than any one flow's.
+            "Phone Statuses": builder.possible_statuses(),
         }
 
         with self._lock:

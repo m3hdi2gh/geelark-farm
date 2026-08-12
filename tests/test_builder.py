@@ -235,7 +235,8 @@ def test_a_phone_level_failure_stops_instead_of_eating_the_pool(
                   app=[Outcome("unknown", "app_would_not_start")])
 
     assert not build.ok
-    assert build.status == "app_app_would_not_start"
+    # not "app_app_would_not_start" - the reason already says app
+    assert build.status == "app_would_not_start"
     # nothing was condemned; every account is still available
     assert len(book.apps.available) == 5
 

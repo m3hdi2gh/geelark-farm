@@ -134,6 +134,18 @@ VERDICTS: dict[str, Verdict] = {
     "play_server_error": Verdict(
         DEVICE, "Play itself returned an error and kept returning it. Leave "
         "the phone and retry later - it is not about the account."),
+    "play_not_signed_in": Verdict(
+        DEVICE, "Play says to sign in, so the Google account did not reach it "
+        "even though the device reported one. The phone is the problem, not "
+        "the address - rebuild it."),
+    "play_needs_payment": Verdict(
+        DEVICE, "Play wants a payment method before it will install anything. "
+        "Nothing this tool does resolves that; the Google account needs one "
+        "added by hand, or use a different one."),
+    "app_unavailable": Verdict(
+        DEVICE, "Play will not offer the app to this account or country - "
+        "'not available in your country', 'item not found'. Usually the exit "
+        "address's region; a different proxy region is what changes it."),
 
     # -------------------------------- the phone, or the app on it, is stuck
     "no_login_button": Verdict(

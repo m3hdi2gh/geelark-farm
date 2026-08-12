@@ -8,7 +8,7 @@ the flow cannot grow a reason without someone deciding, here, whose fault it is.
 
 from __future__ import annotations
 
-import ast
+import importlib
 import pathlib
 
 import pytest
@@ -19,23 +19,20 @@ FLOWS = pathlib.Path(__file__).resolve().parents[1] / "src/geelark_farm/flows"
 
 
 def reported_reasons() -> set[str]:
-    """Every literal a flow passes to Outcome() as its reason.
+    """Every reason any flow can hand back.
 
-    Read out of the source rather than listed by hand, because a list by hand
-    is exactly the thing that goes stale - and going stale is the failure this
-    test is here to catch.
+    Uses the same function the sheet sync uses, so what the tests check and
+    what the dropdowns offer cannot come apart - and so a flow module added
+    later is covered without anyone remembering to list it here. An earlier
+    version of this file named two of the three flows by hand and missed three
+    reasons in the one it forgot (2026-08-12).
     """
     found: set[str] = set()
     for path in FLOWS.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "Outcome"
-                    and len(node.args) >= 2
-                    and isinstance(node.args[1], ast.Constant)
-                    and isinstance(node.args[1].value, str)):
-                found.add(node.args[1].value)
+        if path.stem.startswith("_"):
+            continue
+        module = importlib.import_module(f"geelark_farm.flows.{path.stem}")
+        found |= failures.reasons_reported_by(module)
     return found
 
 
@@ -52,23 +49,6 @@ def test_every_reported_reason_has_a_verdict():
         f"these reasons reach a build with nothing said about them: {missing}. "
         f"Add each to VERDICTS in failures.py, deciding whether it is the "
         f"credential's fault, the exit's, or the device's.")
-
-
-def test_the_fatal_reason_tables_are_covered_too():
-    """google_login and chatgpt_login name reasons in dict literals as well as
-    in Outcome() calls - FATAL_TEXTS and friends. Those reach a build the same
-    way."""
-    from geelark_farm.flows import chatgpt_login, google_login
-
-    named: set[str] = set()
-    for module in (google_login, chatgpt_login):
-        for attribute in dir(module):
-            value = getattr(module, attribute)
-            if isinstance(value, dict) and attribute.isupper():
-                named.update(k for k in value if isinstance(k, str))
-    missing = sorted(r for r in named - failures.SUCCESSES
-                     if r not in failures.VERDICTS)
-    assert not missing, f"named in a flow's tables but not classified: {missing}"
 
 
 @pytest.mark.parametrize("reason,blame", [
