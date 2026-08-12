@@ -632,11 +632,17 @@ def cmd_pools(settings: Settings, args) -> int:
 
     # Corrected before it is reported, so the numbers below are what a run
     # would actually find rather than what the sheet last recorded.
-    reclaimed = builder.reclaim_proxies(build_client(settings), book)
+    client = build_client(settings)
+    reclaimed = builder.reclaim_proxies(client, book)
     if reclaimed:
         print(f"freed {len(reclaimed)} proxy(s) held by phones that no longer "
               f"exist:")
         for resource in reclaimed:
+            print(f"  {resource.label}")
+    dead = builder.check_free_proxies(client, book)
+    if dead:
+        print(f"{len(dead)} proxy(s) no longer answer and are marked dead:")
+        for resource in dead:
             print(f"  {resource.label}")
 
     for pool in (book.proxies, book.gmails, book.apps):

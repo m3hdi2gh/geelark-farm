@@ -391,6 +391,46 @@ def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
     assert "network_ssl_rejected" in book.proxies._rows[0].values["Note"]
 
 
+# ------------------------------------------ keeping the Proxy tab current
+def test_a_proxy_that_died_since_the_last_run_is_marked_before_anything_starts(
+        settings, monkeypatch):
+    """A whole purchase batch expired overnight, so a run began against a pool
+    a third of which no longer answered - and the count the operator had just
+    been shown was fiction (2026-08-11)."""
+    from geelark_farm.proxy import ProxyError
+
+    book = make_book(proxies=3)
+
+    def check(client, proxy):
+        if proxy.host == "10.0.0.1":
+            raise ProxyError("no answer")
+        return {"outboundIP": "8.8.8.8"}
+
+    monkeypatch.setattr(builder.proxy_mod, "check", check)
+    dead = builder.check_free_proxies(None, book)
+
+    assert [r.proxy.host for r in dead] == ["10.0.0.1"]
+    assert [r.proxy.host for r in book.proxies.available] == ["10.0.0.0",
+                                                              "10.0.0.2"]
+    # the survivors get their exit recorded while we are asking anyway
+    assert book.proxies._rows[0].values["Last Exit IP"] == "8.8.8.8"
+
+
+def test_checking_leaves_proxies_that_are_already_on_a_phone_alone(
+        settings, monkeypatch):
+    """Not a candidate for this run, so a call would learn something that
+    changes nothing."""
+    book = make_book(proxies=2)
+    book.proxies.spend(book.proxies.claim(), serial="650")   # now `ok`
+    asked = []
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda c, p: asked.append(p.host) or {"outboundIP": "1.1.1.1"})
+
+    builder.check_free_proxies(None, book)
+
+    assert asked == ["10.0.0.1"]
+
+
 # --------------------------------------------------- what the stock allows
 @pytest.mark.parametrize("waiting,proxies,gmails,apps,total,finishing,limit", [
     # the reported case: adding waiting to buildable promised one phone too many
@@ -431,6 +471,7 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
                 "gmail": "b@example.com", "proxy": "", "status": "no_usable_gpt"}]
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
     monkeypatch.setattr(builder, "reclaim_proxies", lambda c, b: [])
+    monkeypatch.setattr(builder, "check_free_proxies", lambda c, b: [])
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
 
@@ -455,6 +496,7 @@ def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
                for r in (2, 3, 4)]
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
     monkeypatch.setattr(builder, "reclaim_proxies", lambda c, b: [])
+    monkeypatch.setattr(builder, "check_free_proxies", lambda c, b: [])
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
 

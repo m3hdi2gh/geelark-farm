@@ -831,6 +831,47 @@ def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
     return freed
 
 
+def check_free_proxies(client: Client, book: Book) -> list[Resource]:
+    """Test every free proxy before a run, and mark the ones that have died.
+
+    A dead proxy used to be discovered by claiming it: the build spent an
+    attempt, marked it, and took the next one. That is fine for one, and it was
+    a whole purchase batch that expired overnight - eight of them - so a run
+    began against a pool a third of which no longer answered, and the count the
+    operator had just been shown was fiction (2026-08-11).
+
+    Only the free ones. A proxy already behind a phone is not a candidate for
+    this run, and checking it would cost a call to learn something that changes
+    nothing. Checked in parallel because they are independent and each takes a
+    few seconds; the rate limiter in api.py keeps the burst honest.
+    """
+    free = book.proxies.available
+    if not free:
+        return []
+
+    def test(resource: Resource) -> tuple[Resource, str | None, str]:
+        try:
+            result = proxy_mod.check(client, resource.proxy)
+        except (proxy_mod.ProxyError, ApiError) as exc:
+            return resource, None, str(exc)[:200]
+        return resource, str(result.get("outboundIP") or ""), ""
+
+    dead = []
+    with ThreadPoolExecutor(max_workers=min(8, len(free)),
+                            thread_name_prefix="proxy-check") as pool:
+        for resource, exit_ip, error in pool.map(test, free):
+            if exit_ip is None:
+                log.warning("proxy %s is dead: %s", resource.label, error)
+                book.proxies.fail(resource, "dead", note=error)
+                dead.append(resource)
+            else:
+                book.proxies.record_exit(resource, exit_ip)
+    if dead:
+        log.info("%d of %d free proxies had died since the last run",
+                 len(dead), len(free))
+    return dead
+
+
 def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
     """Phones one step short, split into those that still exist and those that
     do not. GeeLark's own listing is what says which."""
@@ -962,7 +1003,12 @@ def run(client: Client, settings: Settings, *, count: int,
     """
     book = Book.open(settings)
     if not dry_run:
+        # Bring the Proxy tab up to date before anything is counted or spent:
+        # give back what deleted phones were holding, then find out which of
+        # the free ones still answer. Both change the numbers printed below,
+        # and a count that is fiction is worse than no count.
         reclaim_proxies(client, book)
+        check_free_proxies(client, book)
 
     waiting: list[dict] = []
     gone: list[dict] = []
