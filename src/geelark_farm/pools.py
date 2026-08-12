@@ -76,10 +76,18 @@ class Resource:
 
     @property
     def label(self) -> str:
+        """What to call this row in a log line or a note.
+
+        A proxy leads with the name it has in the vendor's panel, when the tab
+        carries one. "proxy SX13 is dead" is something you can act on - find it
+        in the panel, renew it - where a host and port send you comparing
+        strings across two windows.
+        """
         if self.credentials:
             return self.credentials.email
         if self.proxy:
-            return str(self.proxy)
+            name = (self.values.get("Name") or "").strip()
+            return f"{name} ({self.proxy})" if name else str(self.proxy)
         return f"row {self.sheet_row}"
 
 

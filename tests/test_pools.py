@@ -19,8 +19,8 @@ from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
 # sheet does not have proves less than it looks like it does.
 GMAIL_HEADERS = ["Purchase Date", "Seller", "Address", "Password", "2FA Secret",
                  "Used Date", "Phone Serial", "Status", "Note"]
-PROXY_HEADERS = ["Proxy String", "Expires", "Last Exit IP", "Used By",
-                 "Status", "Note"]
+PROXY_HEADERS = ["Name", "Proxy String", "Expires", "Last Exit IP",
+                 "Used By", "Status", "Note"]
 APP_HEADERS = ["Address", "Password", "2FA Secret", "Phone Serial", "Status",
                "Note"]
 PHONE_HEADERS = ["Created", "Serial", "Phone ID", "Proxy", "Gmail",
@@ -30,7 +30,7 @@ PHONE_HEADERS = ["Created", "Serial", "Phone ID", "Proxy", "Gmail",
 # split-out parts, for someone filling the tab by hand, and the sx.org refresh
 # hook, which needs a `Port ID` the Unlimited product does not have. Tests that
 # exercise either build their worksheet from this instead.
-PROXY_HEADERS_OPTIONAL = ["Proxy String", "Host", "Port", "Username",
+PROXY_HEADERS_OPTIONAL = ["Name", "Proxy String", "Host", "Port", "Username",
                           "Password", "Port ID", "Expires", "Last Exit IP",
                           "Last Refresh", "Used By", "Status", "Note"]
 
@@ -84,9 +84,10 @@ def proxy_pool(rows, headers=None) -> ProxyPool:
 
 
 def proxy_row(string: str, status: str = "unused", used_by: str = "",
-              headers=None) -> list[str]:
+              headers=None, name: str = "") -> list[str]:
     headers = headers or PROXY_HEADERS
     row = [""] * len(headers)
+    row[headers.index("Name")] = name
     row[headers.index("Proxy String")] = string
     row[headers.index("Used By")] = used_by
     row[headers.index("Status")] = status
@@ -180,6 +181,16 @@ def test_a_released_proxy_goes_back_as_unused_not_blank():
     pool.release(claimed, note="request_rejected seen through it")
     assert claimed.values["Status"] == "unused"
     assert len(pool.available) == 1
+
+
+def test_a_proxy_is_named_by_the_panel_name_when_it_has_one():
+    """"proxy SX13 is dead" is something to act on; a host and port send you
+    comparing strings across two windows."""
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", name="SX13")])
+    assert pool.claim().label.startswith("SX13 (")
+
+    bare = proxy_pool([proxy_row("1.2.3.4:9999:u:p")])
+    assert bare.claim().label.startswith("socks5://")
 
 
 def test_a_used_proxy_keeps_every_phone_it_has_carried():
