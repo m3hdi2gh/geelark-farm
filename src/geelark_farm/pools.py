@@ -470,9 +470,13 @@ class PhoneLog:
                 continue
             if not cell("Gmail") or cell("GPT Account"):
                 continue
+            # The reason is the head of the note now, not the status - which
+            # says only whether the phone is usable. Whoever is deciding what
+            # to finish wants the reason.
+            reason = cell("Note").split(".")[0].strip() or cell("Status")
             found.append({"sheet_row": offset, "phone_id": cell("Phone ID"),
                           "serial": cell("Serial"), "gmail": cell("Gmail"),
-                          "proxy": cell("Proxy"), "status": cell("Status")})
+                          "proxy": cell("Proxy"), "status": reason})
         return found
 
     #: What the operator writes in `State` to say what should happen next.
