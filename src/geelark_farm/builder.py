@@ -1022,7 +1022,7 @@ def run(client: Client, settings: Settings, *, count: int,
         # wrong by exactly this much, and that is the difference between "there
         # is nothing left" and "nothing has been put back".
         stale = len([r for r in book.proxies._rows
-                     if book.proxies.status_of(r) == book.proxies.SPENT_STATUS])
+                     if book.proxies.status_of(r) == book.proxies.spent_status])
         live = len({f"{(p.get('proxy') or {}).get('server')}:"
                     f"{(p.get('proxy') or {}).get('port')}"
                     for p in phones.listing(client)})

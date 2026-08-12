@@ -83,7 +83,7 @@ def proxy_pool(rows, headers=None) -> ProxyPool:
     return pool
 
 
-def proxy_row(string: str, status: str = "unused", used_by: str = "",
+def proxy_row(string: str, status: str = "free", used_by: str = "",
               headers=None, name: str = "") -> list[str]:
     headers = headers or PROXY_HEADERS
     row = [""] * len(headers)
@@ -173,13 +173,13 @@ def test_a_stuck_row_is_reported_and_released_on_request():
 
 
 # ----------------------------------------------------------------- proxies
-def test_a_released_proxy_goes_back_as_unused_not_blank():
+def test_a_released_proxy_goes_back_as_free_not_blank():
     """That column is also the record of whether a proxy works, and a blank
     there reads as 'never checked' rather than 'free'."""
     pool = proxy_pool([proxy_row("1.2.3.4:9999:user:pass")])
     claimed = pool.claim()
     pool.release(claimed, note="request_rejected seen through it")
-    assert claimed.values["Status"] == "unused"
+    assert claimed.values["Status"] == "free"
     assert len(pool.available) == 1
 
 
@@ -219,7 +219,7 @@ def test_a_proxy_is_parsed_from_its_parts_when_the_string_is_missing():
 def test_an_ok_proxy_is_taken_as_already_spoken_for():
     """`ok` means a phone is behind it. Handing it out again would put two
     devices on one exit address."""
-    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="ok"),
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="on a phone"),
                        proxy_row("5.6.7.8:9999:u:p")])
     assert pool.claim().proxy.host == "5.6.7.8"
 
@@ -229,8 +229,9 @@ def test_a_proxy_is_freed_when_its_phone_is_gone():
     was deleted - so every deleted phone quietly took a working proxy out of
     circulation. Thirteen of twenty-two were locked to phones long gone while a
     run failed for want of one (2026-08-11)."""
-    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="ok", used_by="650"),
-                       proxy_row("5.6.7.8:9999:u:p", status="ok", used_by="651")])
+    pool = proxy_pool([
+        proxy_row("1.2.3.4:9999:u:p", status="on a phone", used_by="650"),
+        proxy_row("5.6.7.8:9999:u:p", status="on a phone", used_by="651")])
 
     freed = pool.reclaim({"5.6.7.8:9999"})        # only 651 still exists
 
@@ -239,16 +240,16 @@ def test_a_proxy_is_freed_when_its_phone_is_gone():
     # the stale serial goes with it, or the column keeps naming a dead phone
     assert freed[0].values["Used By"] == ""
     # the one still in use is untouched
-    assert pool._rows[1].values["Status"] == "ok"
+    assert pool._rows[1].values["Status"] == "on a phone"
 
 
 def test_reclaiming_never_takes_a_row_a_run_is_holding():
     """`in_use` is a build that has claimed a proxy and not yet created its
     phone. Freeing that would hand the same exit to two devices."""
-    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="in_use")])
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", status="claimed")])
 
     assert pool.reclaim(set()) == []
-    assert pool._rows[0].values["Status"] == "in_use"
+    assert pool._rows[0].values["Status"] == "claimed"
 
 
 @pytest.mark.parametrize("status", ["dead", "captcha", "expired",

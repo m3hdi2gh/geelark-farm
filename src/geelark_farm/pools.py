@@ -21,11 +21,14 @@ Four tabs, located by header name so columns can be reordered or annotated:
     Gpt Info   Address, Password, 2FA Secret       -> Phone Serial, Status, Note
     Phones     everything a finished phone is
 
-A resource is available when its Status is blank (or `unused`, which is the
-Proxy tab's way of writing the same thing). Claiming writes `in_use` before the
-resource is handed out, so a second run - or a second worker - cannot take it,
-and a run that dies leaves visible evidence rather than a silent double-use.
-`geelark pools --release-stuck` is how those come back.
+A resource is available when its Status is blank. Claiming writes a holding
+status before the row is handed out, so a second run - or a second worker -
+cannot take it, and a run that dies leaves visible evidence rather than a
+silent double-use. `geelark pools --release-stuck` is how those come back.
+
+Each tab has its own words for that, because they are not the same thing. A
+credential is consumed: blank, `in_use`, then `ready` or the reason it failed.
+A proxy is occupied and then let go: `free`, `claimed`, `on a phone`, `dead`.
 """
 
 from __future__ import annotations
@@ -48,17 +51,18 @@ PROXY_TAB = "Proxy"
 APPS_TAB = "Gpt Info"
 PHONES_TAB = "Phones"
 
-# What a row's Status says while a build holds it. Written before the resource
-# leaves the pool: the alternative is claiming in memory only, which is safe
-# for one process and silently signs the same Gmail into two phones as soon as
-# there are two.
+# The default vocabulary a tab's Status column speaks. A pool can override any
+# of it - the Proxy tab does, because a proxy is not consumed the way a
+# credential is, and words that fit one read as nonsense on the other.
+#
+# `in_use` is written before the resource leaves the pool. The alternative is
+# claiming in memory only, which is safe for one process and silently signs the
+# same Gmail into two phones as soon as there are two.
 IN_USE = "in_use"
 
-# Statuses that mean "nobody has used this yet". Blank is the normal one - a
-# freshly pasted row should be picked up without anyone typing a word - and the
-# Proxy tab spells it `unused` because that column doubles as the record of
-# whether a proxy still works.
-AVAILABLE = frozenset({"", "unused"})
+# Blank means nobody has used this yet: a freshly pasted row should be picked
+# up without anyone typing a word into it.
+AVAILABLE = frozenset({""})
 
 # What a resource's Status becomes when the build it served succeeded.
 SPENT = "ready"
@@ -106,6 +110,13 @@ class Pool:
     note_column = "Note"
     serial_column = ""
 
+    # The words this tab's Status column uses. Overridable, because "ready"
+    # and "in_use" describe a credential being consumed, and a proxy is not
+    # consumed - it is occupied and then let go.
+    available_statuses = AVAILABLE
+    claimed_status = IN_USE
+    spent_status = SPENT
+
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
         self._lock = lock
@@ -144,7 +155,7 @@ class Pool:
         """Usable rows, in sheet order. Order is the whole contract: "the first
         usable one" is what the operator sees when they look at the tab."""
         return [r for r in self._rows
-                if not r.error and self.status_of(r) in AVAILABLE]
+                if not r.error and self.status_of(r) in self.available_statuses]
 
     @property
     def broken(self) -> list[Resource]:
@@ -154,7 +165,8 @@ class Pool:
     def stuck(self) -> list[Resource]:
         """Rows a dead run left claimed. Nothing can use these until they are
         released, and nothing will release them on its own."""
-        return [r for r in self._rows if self.status_of(r) == IN_USE]
+        return [r for r in self._rows
+                if self.status_of(r) == self.claimed_status]
 
     # ------------------------------------------------------------ claiming
     def claim(self) -> Resource | None:
@@ -166,15 +178,16 @@ class Pool:
         """
         with self._claim_lock:
             for resource in self._rows:
-                if resource.error or self.status_of(resource) not in AVAILABLE:
+                if (resource.error
+                        or self.status_of(resource) not in self.available_statuses):
                     continue
-                self._set(resource, {self.status_column: IN_USE})
+                self._set(resource, {self.status_column: self.claimed_status})
                 log.info("claimed %s from %s", resource.label, self.tab)
                 return resource
         return None
 
     def release(self, resource: Resource, *, note: str = "") -> None:
-        """Put a claimed row back, unused.
+        """Put a claimed row back, available again.
 
         For resources a build touched but did not spend - the Gmail that was
         never tried because the proxy was the problem, the proxy swapped out on
@@ -187,7 +200,8 @@ class Pool:
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:
         """Mark a row as used up by a phone that worked."""
-        fields = {self.status_column: SPENT, self.note_column: note}
+        fields = {self.status_column: self.spent_status,
+                  self.note_column: note}
         if self.serial_column and serial:
             fields[self.serial_column] = str(serial)
         self._set(resource, fields)
@@ -259,8 +273,18 @@ class ProxyPool(Pool):
     serial_column = "Used By"
 
     # A proxy is not spent by being used - it keeps working, and the column
-    # says so. `ok` is the Proxy tab's word for "used, and it carried a build".
-    SPENT_STATUS = "ok"
+    # says where it is rather than whether it is gone.
+    #
+    # The words matter more here than anywhere else in the sheet, because the
+    # tab is read at a glance to answer "what have I got". `ok` beside `unused`
+    # invited exactly the wrong reading - that `ok` meant healthy and `unused`
+    # meant idle, when both are healthy and `ok` means busy.
+    available_statuses = frozenset({"", "free",
+                                    # what earlier runs wrote, so a row nobody
+                                    # has touched since is still usable
+                                    "unused"})
+    claimed_status = "claimed"
+    spent_status = "on a phone"
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -274,14 +298,13 @@ class ProxyPool(Pool):
         resource.proxy = parse_proxy(raw)
 
     def release(self, resource: Resource, *, note: str = "") -> None:
-        # `unused` rather than blank: this column is also the record of whether
-        # a proxy works, and a blank there reads as "never checked".
-        self._set(resource, {self.status_column: "unused",
-                             self.note_column: note})
+        # `free` rather than blank: this column is also the record of whether a
+        # proxy works, and a blank there reads as "never checked".
+        self._set(resource, {self.status_column: "free", self.note_column: note})
 
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:
-        fields = {self.status_column: self.SPENT_STATUS, self.note_column: note}
+        fields = {self.status_column: self.spent_status, self.note_column: note}
         if serial:
             # Appended, not replaced: a proxy that has carried two phones has
             # to name both, or the column cannot answer "what is on this exit".
@@ -315,7 +338,8 @@ class ProxyPool(Pool):
         """
         freed = []
         for resource in self._rows:
-            if self.status_of(resource) != self.SPENT_STATUS or not resource.proxy:
+            if (self.status_of(resource) != self.spent_status
+                    or not resource.proxy):
                 continue
             if f"{resource.proxy.host}:{resource.proxy.port}" in in_use:
                 continue

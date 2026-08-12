@@ -272,7 +272,7 @@ def test_a_swapped_out_proxy_goes_back_to_the_pool_not_condemned(device, setting
           app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     first = book.proxies._rows[0]
-    assert first.values["Status"] == "unused"
+    assert first.values["Status"] == "free"
     assert "request_rejected" in first.values["Note"]
 
 
@@ -625,7 +625,7 @@ def test_a_proxy_is_never_freed_once_a_phone_exists_behind_it(device, settings, 
                   google=[Outcome("fatal", "wrong_password")])
 
     assert not build.ok
-    assert book.proxies._rows[0].values["Status"] == "ok"
+    assert book.proxies._rows[0].values["Status"] == "on a phone"
     assert book.proxies._rows[0].values["Used By"] == "622"
 
 
