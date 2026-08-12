@@ -399,7 +399,12 @@ class PhoneLog:
     """
 
     tab = PHONES_TAB
-    BUILDING = "building"
+
+    #: What a run writes here. Three, because three is how many the reader acts
+    #: on differently - see builder.possible_statuses.
+    BUILDING = "building"      # a run holds it right now
+    READY = "ready"            # signed in, installed, app account on it
+    INCOMPLETE = "incomplete"  # anything else; the Note says what happened
 
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
@@ -456,7 +461,12 @@ class PhoneLog:
                 return (line[index].strip()
                         if index is not None and index < len(line) else "")
 
-            if cell("Status") in (self.BUILDING, "ready") or not cell("Phone ID"):
+            # `building` means a run holds it right now; `ready` means there
+            # is nothing left to do. Everything else is a candidate, whatever
+            # word it uses - rows written before the statuses were collapsed
+            # still say things like no_usable_gpt, and they are picked up on
+            # exactly the same test as the ones that say `incomplete`.
+            if cell("Status") in (self.BUILDING, self.READY) or not cell("Phone ID"):
                 continue
             if not cell("Gmail") or cell("GPT Account"):
                 continue

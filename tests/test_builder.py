@@ -687,7 +687,10 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
 
     written = book.phones._ws.rows[0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
-    assert written[PHONE_HEADERS.index("Status")] == "no_usable_gmail"
+    # the tab answers "can I use this phone", in one of three words
+    assert written[PHONE_HEADERS.index("Status")] == "incomplete"
+    # and the reason it is not ready leads the note, in full
+    assert written[PHONE_HEADERS.index("Note")].startswith("no_usable_gmail")
 
 
 # ------------------------------------- acting on what the operator marked

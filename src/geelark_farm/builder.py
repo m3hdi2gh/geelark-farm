@@ -124,6 +124,12 @@ def install_build_logging() -> None:
 # and a login. Below this the honest thing is to report what it has.
 ATTEMPT_SECONDS = 420
 
+# What the Phones tab records. The build knows exactly why it stopped and says
+# so in the note; the Status column answers the only question asked of it at a
+# glance - can I use this phone.
+READY = "ready"
+INCOMPLETE = "incomplete"
+
 
 @dataclass
 class Build:
@@ -801,14 +807,25 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
 
 
 def _record(book: Book, sheet_row: int, build: Build) -> None:
-    """Write the finished phone to the Phones tab. Also in a finally."""
-    note = build.detail
+    """Write the finished phone to the Phones tab. Also in a finally.
+
+    The precise reason leads the note rather than filling the Status column.
+    `build.status` stays exact everywhere else - the summary, the logs, the
+    notes on the credentials it spent - but the tab is read to answer one
+    question, and twenty-four ways of saying "not ready" did not help answer it.
+    """
+    parts = []
+    if not build.ok:
+        parts.append(build.status)
     if build.tried:
-        note = f"tried: {'; '.join(build.tried)}. {note}"
+        parts.append(f"tried: {'; '.join(build.tried)}")
+    if build.detail:
+        parts.append(build.detail)
+    note = ". ".join(parts)
     try:
         book.phones.finish(
-            sheet_row, Status=build.status, Proxy=build.proxy,
-            Gmail=build.gmail, Note=note[:500],
+            sheet_row, Status=READY if build.ok else INCOMPLETE,
+            Proxy=build.proxy, Gmail=build.gmail, Note=note[:500],
             **{"GPT Account": build.app_account},
         )
     except SheetError as exc:
@@ -816,48 +833,19 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
 
 
 def possible_statuses() -> list[str]:
-    """Every value that can land in the Phones tab's Status column.
+    """What the Phones tab's Status column can hold.
 
-    Read out of this module rather than listed beside it, for the reason the
-    Gmail list drifted: a status added to a `finish(...)` here would not reach
-    the dropdown, and one deleted would linger in it, and neither is visible
-    until someone is staring at a tab wondering what a word means.
+    Three, because three is how many the reader acts on differently. It used to
+    be twenty-four - every reason a build could stop for - and across every run
+    ever made only two of them appeared. The rest were noise in a dropdown, and
+    the same detail was already in the Note beside them, in full.
 
-    Three sources, because a phone stops for three kinds of reason: something
-    this module decided, something a flow reported that stops the phone (those
-    pass straight through), and the same again from the app phase, where they
-    are prefixed to say which login it was.
+    What is lost is nothing: `Status` says whether a phone is usable, `Note`
+    says why not.
     """
-    import ast
-    import inspect
-
-    from . import failures
-    from .flows import chatgpt_login, google_login, play_install
     from .pools import PhoneLog
 
-    found: set[str] = {PhoneLog.BUILDING}
-    for node in ast.walk(ast.parse(inspect.getsource(_this_module()))):
-        if (isinstance(node, ast.Call)
-                and getattr(node.func, "id", "") in ("finish", "Aborted")
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)):
-            found.add(node.args[0].value)
-        # s.finish(...) inside the shared session
-        if (isinstance(node, ast.Call)
-                and getattr(node.func, "attr", "") == "finish"
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)):
-            found.add(node.args[0].value)
-
-    for module, prefix in ((google_login, ""), (play_install, ""),
-                           (chatgpt_login, "app_")):
-        for reason in failures.reasons_reported_by(module):
-            if failures.verdict(reason).stops_the_phone:
-                found.add(reason if reason.startswith("app") or not prefix
-                          else f"{prefix}{reason}")
-    return sorted(found)
+    return [PhoneLog.BUILDING, READY, INCOMPLETE]
 
 
 def _this_module():
