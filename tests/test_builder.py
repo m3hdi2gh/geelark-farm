@@ -838,3 +838,56 @@ def test_a_retired_credential_keeps_no_serial_for_a_deleted_phone(monkeypatch):
 
     assert book.gmails._rows[0].values["Phone Serial"] == ""
     assert book.gmails._rows[0].values["Used Date"]      # the date survives
+
+
+# ---------------------------------------- one account's page is not the next's
+def test_each_app_attempt_after_the_first_starts_from_a_cleared_app(
+        device, settings, monkeypatch):
+    """`launch` resumes the task the app already had, so the page the previous
+    attempt stopped on is still there. Eight archived screens all named the
+    first address while seven further accounts were condemned by it
+    (2026-08-13)."""
+    fresh_flags = []
+    answers = [Outcome("fatal", "wrong_password"),
+               Outcome("fatal", "wrong_password"), SIGNED_IN]
+    monkeypatch.setattr(builder.google_login, "sign_in", lambda *a, **k: SIGNED_IN)
+    monkeypatch.setattr(
+        builder.chatgpt_login, "sign_in",
+        lambda *a, **k: fresh_flags.append(k.get("fresh")) or answers.pop(0))
+
+    book = make_book(apps=3)
+    builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    # the first runs on a freshly installed app; every one after it clears
+    assert fresh_flags == [False, True, True]
+
+
+def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
+        device, settings, drive):
+    """OpenAI emailing a code says nothing about the account - three addresses
+    it retired had already signed in fine on earlier phones. It is held for
+    this build so it is not claimed twice, then goes back available."""
+    book = make_book(apps=2)
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[Outcome("fatal", "email_code_required"), SIGNED_IN])
+
+    assert build.ok and build.app_account == "a1@example.com"
+    # not marked with the reason, and back in the pool for another day
+    challenged = book.apps._rows[0]
+    assert challenged.values["Status"] == ""
+    assert "challenged" in challenged.values["Note"]
+    assert "a0@example.com" in [r.credentials.email for r in book.apps.available]
+
+
+def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
+        device, settings, drive):
+    """Held rather than released on the spot: released, `claim` would return
+    the same first-available row and the build would loop on it."""
+    book = make_book(apps=2)
+    challenge = Outcome("fatal", "email_code_required")
+    build = drive(book, settings, google=[SIGNED_IN], app=[challenge, challenge])
+
+    assert not build.ok and build.status == "no_usable_gpt"
+    # both were tried once each, and both are available again afterwards
+    assert len(build.tried) == 2
+    assert len(book.apps.available) == 2

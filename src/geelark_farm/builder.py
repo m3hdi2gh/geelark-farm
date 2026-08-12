@@ -250,6 +250,13 @@ class _Session:
     app_row: Resource | None = None
     app_signed_in: bool = False
     exits: int = 0
+    #: How many app logins this phone has been through. The first starts on a
+    #: freshly installed app; every one after it has to clear what the last
+    #: attempt left on screen.
+    attempted: int = 0
+    #: Accounts the service challenged rather than judged - held so this build
+    #: does not take them again, and released as available at the end.
+    set_aside: list[Resource] = field(default_factory=list)
     # Proxies tried and moved on from, with what was seen through each. Held
     # claimed for the rest of the run so a swap cannot hand one back.
     refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
@@ -292,7 +299,13 @@ def _sign_into_app(session: _Session) -> Build | None:
             budget_seconds=min(s.settings.app_login_budget_seconds,
                                s.remaining()),
             artifact_dir=s.artifacts,
+            # Every attempt after the first starts from a cleared app. The
+            # previous one left the app wherever it stopped, and the router
+            # matches whatever is on screen - so without this, one account's
+            # verification page is read as the next account's problem.
+            fresh=s.attempted > 0,
         )
+        s.attempted += 1
         if outcome.ok:
             s.build.app_account = s.app_row.credentials.email
             s.app_signed_in = True
@@ -316,6 +329,23 @@ def _sign_into_app(session: _Session) -> Build | None:
                 # Held, not freed - see _new_exit. Released at the end.
                 s.refused_exits.append((previous, outcome.reason))
             s.exits += 1
+            continue
+        if failures.verdict(outcome.reason).sets_aside:
+            # The service asked for something no unattended run can give - a
+            # code in an inbox. It judged nothing about the account, so the
+            # account is held rather than marked, and goes back on the shelf
+            # when the build ends.
+            s.set_aside.append(s.app_row)
+            s.app_row = None
+            continue
+        if failures.verdict(outcome.reason).sets_aside:
+            # The service asked for something no unattended run can give - a
+            # code in an inbox. It judged nothing about the account, so the
+            # account is held rather than marked, and goes back on the shelf
+            # as available when the build ends. Held rather than released now,
+            # so this build does not immediately claim it again.
+            s.set_aside.append(s.app_row)
+            s.app_row = None
             continue
         if failures.verdict(outcome.reason).stops_the_phone:
             # The app never got as far as judging this account, so it goes
@@ -389,6 +419,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     gmail_row: Resource | None = None
     app_row: Resource | None = None
     log_row: int | None = None
+    set_aside: list[Resource] = []
     # Proxies this build tried and moved on from, with what was seen through
     # each. They stay claimed for the rest of the build so a swap cannot hand
     # one back, and are released together at the end.
@@ -535,6 +566,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             proxy_row, app_row = session.proxy_row, session.app_row
             app_signed_in = session.app_signed_in
             refused_exits = session.refused_exits
+            set_aside = session.set_aside
         # A proxy counts as used the moment a phone exists behind it: that
         # phone keeps it until someone deletes the phone, and handing it to the
         # next build would put two devices on one exit address.
@@ -547,6 +579,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         held += [(book.proxies, resource, False,
                   f"{why} seen through it on {time.strftime('%Y-%m-%d')}")
                  for resource, why in refused_exits]
+        # Accounts the service challenged rather than judged. They go back
+        # available: nothing was decided about them, and three that had already
+        # signed in fine elsewhere were retired by the old behaviour.
+        held += [(book.apps, resource, False,
+                  f"challenged on {time.strftime('%Y-%m-%d')}; not judged, "
+                  f"free to try again")
+                 for resource in set_aside]
         _release(book, build, held)
         if log_row is not None:
             _record(book, log_row, build)

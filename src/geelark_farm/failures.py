@@ -38,6 +38,17 @@ EXIT = "exit"
 #: The phone or the app on it. Nothing was decided about the credential, and
 #: the next one would meet the same wall.
 DEVICE = "device"
+#: The service asked for something no unattended run can supply - a code in an
+#: inbox, a box only a human can tick. It judged nothing: the credential may be
+#: perfectly good, and often is. Set aside for this build, kept for the next.
+#:
+#: This exists because the alternative was wrong in a way that cost stock.
+#: `email_code_required` was filed as the credential's fault and retired the
+#: account for good - and three accounts that had already signed in
+#: successfully on earlier phones were later retired by it, having done nothing
+#: wrong (2026-08-13). The challenge follows the device and the exit, not the
+#: account.
+CHALLENGED = "challenged"
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,15 @@ class Verdict:
     def needs_a_new_exit(self) -> bool:
         """Whether the answer is a different exit address, same credential."""
         return self.blame == EXIT
+
+    @property
+    def sets_aside(self) -> bool:
+        """Whether to keep the credential and try the next one.
+
+        Not the same as costs_the_credential: nothing was decided here, so the
+        row keeps its place in the pool.
+        """
+        return self.blame == CHALLENGED
 
     @property
     def stops_the_phone(self) -> bool:
@@ -102,8 +122,13 @@ VERDICTS: dict[str, Verdict] = {
 
     # ------------------------------------------------- chatgpt_login.py
     "email_code_required": Verdict(
-        CREDENTIAL, "OpenAI wants a code emailed to the address, which cannot "
-        "be answered without reading that inbox. Not automatable as it is."),
+        CHALLENGED,
+        "OpenAI emailed a one-time code instead of accepting the "
+        "authenticator, which no unattended run can read. It says nothing "
+        "about the account - the same addresses have signed in fine on other "
+        "phones - so this one is set aside and tried again another time. An "
+        "account challenged every run is one to give an authenticator, or "
+        "retire by hand."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account."),
     "email_not_accepted": Verdict(

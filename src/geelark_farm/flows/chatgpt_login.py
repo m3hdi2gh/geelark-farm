@@ -601,10 +601,33 @@ SCREENS: list[Screen] = [
 ]
 
 
+def reset(client: Client, phone_id: str, package: str) -> None:
+    """Put the app back at its welcome screen.
+
+    Between one account and the next, this is not optional. `launch` resumes
+    the task the app already had, so a page left behind by the previous
+    attempt is still there when the next one starts - and the router matches
+    it, and reports the previous account's problem against an address it never
+    typed.
+
+    That is not hypothetical. One account genuinely needed an emailed code, and
+    the seven tried after it on the same phone were each condemned by its
+    verification page: eight archived screens, all naming the first address
+    (2026-08-13). Three of the seven had already signed in successfully on
+    earlier phones.
+    """
+    shell.run(client, phone_id, f"pm clear {package}")
+    time.sleep(3)
+
+
 def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             package: str, budget_seconds: float = 600,
-            artifact_dir: Path | None = None) -> Outcome:
+            artifact_dir: Path | None = None,
+            fresh: bool = False) -> Outcome:
     """Drive the app login to a named outcome.
+
+    `fresh` clears the app first. A caller trying a second account on one phone
+    must pass it: see reset().
 
     Returns rather than raises: a batch needs to record why a row failed and
     move on, not unwind.
@@ -612,6 +635,9 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
     if not shell.package_installed(client, phone_id, package):
         return Outcome("fatal", "app_not_installed",
                        f"{package} is not on this phone")
+
+    if fresh:
+        reset(client, phone_id, package)
 
     if not launch(client, phone_id, package):
         return Outcome("unknown", "app_would_not_start",
