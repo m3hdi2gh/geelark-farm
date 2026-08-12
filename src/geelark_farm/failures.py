@@ -171,6 +171,38 @@ SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
                        "already_installed", "logged_in"})
 
 
+def reasons_reported_by(module) -> set[str]:
+    """Every reason one flow module can hand back.
+
+    Two places to look, because a flow names reasons in two ways: literally, in
+    an `Outcome(...)` call, and as the keys of its own fatal-reason tables,
+    which reach `Outcome` through a variable. Reading only the first missed
+    `captcha_shown` - a reason written to the sheet thirty times.
+
+    Derived rather than listed, so that what the sheet offers and what the code
+    can write cannot drift apart. They had: the Gmail dropdown offered three
+    statuses no build writes and omitted two it does (2026-08-12).
+    """
+    import ast
+    import inspect
+
+    found: set[str] = set()
+    source = inspect.getsource(module)
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Outcome"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            found.add(node.args[1].value)
+    for attribute in dir(module):
+        value = getattr(module, attribute)
+        if isinstance(value, dict) and attribute.isupper():
+            found.update(k for k in value if isinstance(k, str))
+    return found - SUCCESSES
+
+
 def verdict(reason: str) -> Verdict:
     """What `reason` means.
 

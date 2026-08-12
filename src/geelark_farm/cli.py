@@ -75,6 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_pools = sub.add_parser(
         "pools", help="what the resource tabs hold, and what is stuck"
     )
+    p_pools.add_argument("--sync-lists", action="store_true",
+                         help="rewrite the Status dropdowns from failures.py, "
+                              "so each offers what a run can actually write")
     p_pools.add_argument("--release-stuck", action="store_true",
                          help="free rows a dead run left claimed as in_use. "
                               "Only when no other run is in progress")
@@ -625,6 +628,11 @@ def cmd_pools(settings: Settings, args) -> int:
     from .pools import Book
 
     book = Book.open(settings)
+    if args.sync_lists:
+        for column, values in book.sync_lists().items():
+            print(f"{column}: {', '.join(values)}")
+        return 0
+
     if args.release_stuck:
         freed = book.release_stuck()
         print(f"released {freed} row(s) that were left claimed.")

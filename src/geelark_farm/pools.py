@@ -50,6 +50,7 @@ GMAILS_TAB = "Gmails"
 PROXY_TAB = "Proxy"
 APPS_TAB = "Gpt Info"
 PHONES_TAB = "Phones"
+LISTS_TAB = "Lists"
 
 # The default vocabulary a tab's Status column speaks. A pool can override any
 # of it - the Proxy tab does, because a proxy is not consumed the way a
@@ -481,11 +482,14 @@ class Book:
     """
 
     def __init__(self, gmails: GmailPool, proxies: ProxyPool, apps: AppPool,
-                 phones: PhoneLog):
+                 phones: PhoneLog, lists=None, lock: threading.Lock | None = None):
         self.gmails = gmails
         self.proxies = proxies
         self.apps = apps
         self.phones = phones
+        # Only sync_lists needs these, and only when a real workbook is open.
+        self._lists = lists
+        self._lock = lock or threading.Lock()
 
     @classmethod
     def open(cls, settings: Settings) -> Book:
@@ -524,10 +528,63 @@ class Book:
             proxies=ProxyPool(tabs[PROXY_TAB], headers(PROXY_TAB), lock),
             apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),
             phones=PhoneLog(tabs[PHONES_TAB], headers(PHONES_TAB), lock),
+            lists=tabs.get(LISTS_TAB), lock=lock,
         )
         for pool in (pools.gmails, pools.proxies, pools.apps):
             pool.load()
         return pools
+
+    def sync_lists(self) -> dict[str, list[str]]:
+        """Rewrite the Lists tab so each dropdown offers what a run can write.
+
+        The lists were maintained by hand and drifted, in both directions at
+        once: the Gmail column offered three statuses no build ever writes -
+        device failures, which stop the phone rather than mark the address -
+        and omitted two it does. A dropdown that disagrees with the code is
+        worse than none, because it invites setting a status by hand that the
+        pool will then act on.
+
+        Derived from failures.py, so the answer comes from the same table the
+        build consults. Run it after a flow grows a new reason.
+        """
+        if self._lists is None:
+            raise SheetError("this workbook has no Lists tab to sync")
+
+        from . import failures
+        from .flows import chatgpt_login, google_login
+
+        def credential_reasons(module) -> list[str]:
+            return sorted(r for r in failures.reasons_reported_by(module)
+                          if failures.verdict(r).costs_the_credential)
+
+        wanted = {
+            "Gmail Statuses": [GmailPool.claimed_status, GmailPool.spent_status,
+                               *credential_reasons(google_login)],
+            "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
+                             *credential_reasons(chatgpt_login)],
+            # The proxy tab's words are its own - a proxy is occupied and let
+            # go, never judged - so they come from the pool, not the taxonomy.
+            "Proxy Statuses": ["free", ProxyPool.claimed_status,
+                               ProxyPool.spent_status, "dead"],
+        }
+
+        with self._lock:
+            grid = self._lists.get_all_values()
+        head = grid[0]
+        payload = []
+        for column, values in wanted.items():
+            if column not in head:
+                continue
+            letter = a1_column(head.index(column) + 1)
+            # Cleared to the bottom first: a shorter list must not leave the
+            # tail of the old one behind, still selectable.
+            for offset in range(max(len(grid) - 1, len(values))):
+                value = values[offset] if offset < len(values) else ""
+                payload.append({"range": f"{letter}{offset + 2}",
+                                "values": [[value]]})
+        if payload:
+            batch_write(self._lists, self._lock, payload, what="Lists")
+        return wanted
 
     def release_stuck(self) -> int:
         """Free every row a dead run left claimed. Reported rather than done

@@ -97,3 +97,33 @@ def test_an_unclassified_reason_stops_the_phone_rather_than_the_pool():
     assert unknown.stops_the_phone
     assert not unknown.costs_the_credential
     assert "failures.py" in unknown.advice
+
+
+def test_a_flow_reports_more_than_its_literal_outcomes():
+    """A flow names reasons two ways - literally in an Outcome() call, and as
+    the keys of its own fatal tables, which reach Outcome through a variable.
+    Reading only the first missed captcha_shown, a reason written to the sheet
+    thirty times."""
+    from geelark_farm.flows import google_login
+
+    reported = failures.reasons_reported_by(google_login)
+
+    assert "captcha_shown" in reported          # only ever named in a table
+    assert "no_authenticator" in reported       # only ever an Outcome literal
+    assert failures.SUCCESSES.isdisjoint(reported)
+
+
+def test_the_dropdowns_would_offer_exactly_what_a_build_writes():
+    """The lists were maintained by hand and drifted both ways at once: the
+    Gmail column offered three device failures no build writes to an address,
+    and omitted two credential reasons it does."""
+    from geelark_farm.flows import google_login
+
+    offered = sorted(r for r in failures.reasons_reported_by(google_login)
+                     if failures.verdict(r).costs_the_credential)
+
+    assert "captcha_shown" in offered
+    assert "no_authenticator" in offered
+    # device failures stop the phone; they never mark the address
+    assert "too_many_attempts" not in offered
+    assert "unknown_screen" not in offered
