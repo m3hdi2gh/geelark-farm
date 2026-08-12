@@ -117,6 +117,9 @@ class Pool:
     available_statuses = AVAILABLE
     claimed_status = IN_USE
     spent_status = SPENT
+    #: Where a credential ends up once the phone carrying it is gone. Not in
+    #: available_statuses, so nothing claims it again - which is the point.
+    retired_status = "used"
 
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
@@ -187,6 +190,20 @@ class Pool:
                 return resource
         return None
 
+    def retire(self, resource: Resource, *, note: str = "") -> None:
+        """Take a credential out of circulation for good.
+
+        The serial goes with it. It named a phone that has just been deleted,
+        so leaving it there points whoever reads the row at nothing - the same
+        stale-reference problem that quietly held thirteen proxies out of the
+        pool (2026-08-11).
+        """
+        fields = {self.status_column: self.retired_status,
+                  self.note_column: note}
+        if self.serial_column:
+            fields[self.serial_column] = ""
+        self._set(resource, fields)
+
     def find(self, email: str) -> Resource | None:
         """The row holding this address, whatever state it is in."""
         wanted = (email or "").strip().lower()
@@ -242,6 +259,10 @@ class Pool:
 class GmailPool(Pool):
     tab = GMAILS_TAB
     serial_column = "Phone Serial"
+    # An address that has signed into a phone has spent whatever first-use
+    # credit it had, whether that phone went on to work or not. `used` retires
+    # it: the Used Date beside it says when.
+    retired_status = "used"
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -265,6 +286,10 @@ class GmailPool(Pool):
 class AppPool(Pool):
     tab = APPS_TAB
     serial_column = "Phone Serial"
+    # `delivered` rather than `used`: this account went out on a phone the
+    # operator finished with, which is the product. An account on a phone that
+    # FAILED is freed instead - it never got a fair device.
+    retired_status = "delivered"
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -629,8 +654,10 @@ class Book:
 
         wanted = {
             "Gmail Statuses": [GmailPool.claimed_status, GmailPool.spent_status,
+                               GmailPool.retired_status,
                                *credential_reasons(google_login)],
             "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
+                             AppPool.retired_status,
                              *credential_reasons(chatgpt_login)],
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.

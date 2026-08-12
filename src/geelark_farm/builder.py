@@ -869,16 +869,26 @@ def apply_phone_states(client: Client, book: Book,
     documented way to end its billing, and stopping it to make deletion safe is
     not this function's business.
 
-    The Gmail on a failed phone is deliberately left marked `ready`. It signed
-    in fine; whether an address that has been on a phone you have judged bad
-    should go back into circulation is a decision, not a cleanup.
+    What happens to the credentials the phone carried follows from which of the
+    two it was:
+
+        Gmail        retired as `used` either way. It signed into that phone,
+                     and that is the credit it had to spend.
+        app account  `delivered` after `done` - the phone was the product and
+                     it went out on it. Freed after `failed` - it never got a
+                     fair device, so the next build can put it on one.
+
+    Neither is ever left pointing at the deleted phone. A stale serial is how
+    thirteen proxies sat out of the pool for days without anyone noticing.
     """
     marked = book.phones.marked()
     if not marked:
         return {}
 
     alive = {p.get("id"): p for p in phones.listing(client)}
-    outcome: dict[str, list[str]] = {"deleted": [], "freed": [], "running": []}
+    outcome: dict[str, list[str]] = {"deleted": [], "freed": [],
+                                     "delivered": [], "retired": [],
+                                     "running": []}
     finished_rows: list[int] = []
 
     for row in marked:
@@ -890,15 +900,34 @@ def apply_phone_states(client: Client, book: Book,
             outcome["running"].append(serial)
             continue
 
-        if row["state"] == book.phones.FAILED and row["app_account"]:
-            # The account never got a fair phone. Back to the pool, so the next
-            # build can put it on one that works.
+        failed = row["state"] == book.phones.FAILED
+
+        # The Gmail is spent either way. It signed into that phone without
+        # complaint, and whatever became of the phone afterwards, the address
+        # has been on one - so it retires rather than going back on the shelf.
+        if row["gmail"]:
+            address = book.gmails.find(row["gmail"])
+            if address is not None:
+                book.gmails.retire(
+                    address, note=f"phone {serial} was marked "
+                                  f"{row['state']}; not used again")
+                outcome["retired"].append(row["gmail"])
+
+        if row["app_account"]:
             account = book.apps.find(row["app_account"])
-            if account is not None:
+            if account is not None and failed:
+                # It never got a fair phone. Back to the pool, so the next
+                # build can put it on one that works.
                 book.apps.release(
                     account, note=f"phone {serial} was marked failed; "
                                   f"free to try on another")
                 outcome["freed"].append(row["app_account"])
+            elif account is not None:
+                # `done` means the phone was the product and it has been
+                # handed over. The account went with it.
+                book.apps.retire(
+                    account, note=f"delivered on phone {serial}")
+                outcome["delivered"].append(row["app_account"])
 
         if present:
             try:

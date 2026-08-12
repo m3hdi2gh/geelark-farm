@@ -731,8 +731,10 @@ def test_a_phone_marked_done_is_deleted_with_its_row(monkeypatch):
 
     assert deleted == ["P1"] and out["deleted"] == ["650"]
     assert book.phones.deleted_rows == [5]
-    # done means finished with, not failed: the account stays spent
-    assert out["freed"] == []
+    # done means the phone was the product and went out with the account on it
+    assert out["freed"] == [] and out["delivered"] == ["a0@example.com"]
+    assert book.apps._rows[0].values["Status"] == "delivered"
+    assert book.apps._rows[0].values["Phone Serial"] == ""   # 650 is gone
 
 
 def test_a_phone_marked_failed_gives_its_app_account_back(monkeypatch):
@@ -792,3 +794,47 @@ def test_a_row_whose_phone_is_already_gone_is_still_tidied(monkeypatch):
 
     assert out["deleted"] == [] and out["freed"] == ["a0@example.com"]
     assert book.phones.deleted_rows == [9]
+
+
+def test_the_gmail_is_retired_whichever_way_the_phone_ended(monkeypatch):
+    """It signed into that phone without complaint, and that is the credit it
+    had to spend - so `done` and `failed` retire it alike, and neither hands it
+    back to be signed into a second device."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 2},
+                                   {"id": "P2", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([
+        {"sheet_row": 4, "state": "done", "phone_id": "P1", "serial": "650",
+         "gmail": "g0@example.com", "app_account": "a0@example.com"},
+        {"sheet_row": 5, "state": "failed", "phone_id": "P2", "serial": "651",
+         "gmail": "g1@example.com", "app_account": "a1@example.com"}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert sorted(out["retired"]) == ["g0@example.com", "g1@example.com"]
+    assert [r.values["Status"] for r in book.gmails._rows] == ["used", "used"]
+    assert book.gmails.available == []          # never handed out again
+    # the app accounts diverge, though: one was delivered, one never got a
+    # fair phone and goes back
+    assert out["delivered"] == ["a0@example.com"]
+    assert out["freed"] == ["a1@example.com"]
+    assert [r.credentials.email for r in book.apps.available] == ["a1@example.com"]
+
+
+def test_a_retired_credential_keeps_no_serial_for_a_deleted_phone(monkeypatch):
+    """A stale serial points the reader at nothing. That is how thirteen
+    proxies sat out of the pool for days."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 4, "state": "done", "phone_id": "P1",
+                        "serial": "650", "gmail": "g0@example.com",
+                        "app_account": "a0@example.com"}])
+    book.gmails.spend(book.gmails.claim(), serial="650")
+    assert book.gmails._rows[0].values["Phone Serial"] == "650"
+
+    builder.apply_phone_states(None, book, FakeLedger())
+
+    assert book.gmails._rows[0].values["Phone Serial"] == ""
+    assert book.gmails._rows[0].values["Used Date"]      # the date survives
