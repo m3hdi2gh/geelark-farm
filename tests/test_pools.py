@@ -289,3 +289,37 @@ def test_a_second_phone_lands_on_the_next_row():
     log = PhoneLog(worksheet, PHONE_HEADERS, threading.Lock())
     assert log.start(Serial="622") == 2
     assert log.start(Serial="623") == 3
+
+
+# ------------------------------------------------------------- duplicates
+def test_the_same_address_twice_is_only_handed_out_once():
+    """Two rows for one address sign it into two phones, and their 2FA codes
+    race each other. The single-row sheet checked this; the check was lost when
+    that module went, and a duplicate app account was in the tab within the day
+    (2026-08-13, rows 5 and 14)."""
+    pool = gmail_pool([gmail_row("a@example.com"),
+                       gmail_row("b@example.com"),
+                       gmail_row("A@Example.com")])      # same address, cased
+
+    assert [r.credentials.email for r in pool.available] == ["a@example.com",
+                                                             "b@example.com"]
+    late = pool._rows[2]
+    assert late.error and "duplicate of row 2" in late.error
+    assert pool.claim().credentials.email == "a@example.com"
+    assert pool.claim().credentials.email == "b@example.com"
+    assert pool.claim() is None                          # never the third
+
+
+def test_the_same_proxy_twice_would_put_two_phones_on_one_exit():
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p"),
+                       proxy_row("1.2.3.4:9999:other:pass")])
+
+    assert len(pool.available) == 1
+    assert "duplicate of row 2" in pool._rows[1].error
+
+
+def test_a_row_that_was_already_unusable_keeps_its_own_error():
+    """The reason a row cannot be used is more useful than 'duplicate'."""
+    pool = gmail_pool([gmail_row("a@example.com"), gmail_row("not-an-address")])
+
+    assert "not an email address" in pool._rows[1].error

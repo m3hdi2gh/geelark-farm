@@ -147,6 +147,41 @@ class Pool:
             except (AccountError, ProxyError) as exc:
                 resource.error = str(exc)
             self._rows.append(resource)
+        self._flag_duplicates()
+
+    def _identity(self, resource: Resource) -> str:
+        """What makes two rows the same resource rather than two of them."""
+        if resource.credentials:
+            return resource.credentials.email.strip().lower()
+        if resource.proxy:
+            return f"{resource.proxy.host}:{resource.proxy.port}"
+        return ""
+
+    def _flag_duplicates(self) -> None:
+        """Refuse every row after the first that names the same thing.
+
+        Two rows for one address hand it out twice: the same account signs into
+        two phones and their 2FA codes race each other. Two rows for one proxy
+        put two devices behind one exit, which is the thing `on a phone` exists
+        to prevent.
+
+        The old single-row sheet checked this and the check was lost when that
+        module went. A duplicate app account was sitting in the tab within the
+        day (2026-08-13, tararrashnooo@gmail.com on rows 5 and 14).
+
+        The first occurrence is kept, so the fix is to delete the later row -
+        and the error says which one it is.
+        """
+        seen: dict[str, int] = {}
+        for resource in self._rows:
+            key = self._identity(resource)
+            if not key or resource.error:
+                continue
+            if key in seen:
+                resource.error = (f"duplicate of row {seen[key]} ({key}) - "
+                                  f"delete one of them")
+            else:
+                seen[key] = resource.sheet_row
 
     def _interpret(self, resource: Resource) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
