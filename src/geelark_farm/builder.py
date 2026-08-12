@@ -417,9 +417,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     phone_id = ""
     proxy_row: Resource | None = None
     gmail_row: Resource | None = None
-    app_row: Resource | None = None
     log_row: int | None = None
-    set_aside: list[Resource] = []
     # Proxies this build tried and moved on from, with what was seen through
     # each. They stay claimed for the rest of the build so a swap cannot hand
     # one back, and are released together at the end.
@@ -428,10 +426,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # session's, since that loop is shared with `finish`.
     tried_gmails = 0
     session: _Session | None = None
-    # Whether each credential ended up on the device. Not the same question as
-    # "did the build succeed" - see _release.
+    # Whether the Gmail ended up on the device. Not the same question as "did
+    # the build succeed" - see _release. The app account's equivalent lives on
+    # the session, which owns that phase.
     gmail_signed_in = False
-    app_signed_in = False
 
     def remaining() -> float:
         return deadline - time.monotonic()
@@ -562,30 +560,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # here rather than from the locals, because an Aborted raised inside it
         # never returns to update them, and the account it was holding would
         # stay in_use with nothing to free it.
-        if session is not None:
-            proxy_row, app_row = session.proxy_row, session.app_row
-            app_signed_in = session.app_signed_in
-            refused_exits = session.refused_exits
-            set_aside = session.set_aside
-        # A proxy counts as used the moment a phone exists behind it: that
-        # phone keeps it until someone deletes the phone, and handing it to the
-        # next build would put two devices on one exit address.
-        held = [(book.proxies, proxy_row, bool(phone_id), ""),
-                (book.gmails, gmail_row, gmail_signed_in, ""),
-                (book.apps, app_row, app_signed_in, "")]
-        # Every exit this build tried and left behind. `unused`, not condemned:
-        # these refusals were measured to be per-session rather than per-proxy,
-        # so the stock goes back on the shelf saying what was seen through it.
-        held += [(book.proxies, resource, False,
-                  f"{why} seen through it on {time.strftime('%Y-%m-%d')}")
-                 for resource, why in refused_exits]
-        # Accounts the service challenged rather than judged. They go back
-        # available: nothing was decided about them, and three that had already
-        # signed in fine elsewhere were retired by the old behaviour.
-        held += [(book.apps, resource, False,
-                  f"challenged on {time.strftime('%Y-%m-%d')}; not judged, "
-                  f"free to try again")
-                 for resource in set_aside]
+        # The Gmail is this function's own - the session never sees it. A
+        # proxy counts as used the moment a phone exists behind it: that phone
+        # keeps it until someone deletes the phone, and handing it on would put
+        # two devices on one exit address.
+        held = [(book.gmails, gmail_row, gmail_signed_in, "")]
+        if session is None:
+            held.append((book.proxies, proxy_row, bool(phone_id), ""))
+        else:
+            held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held)
         if log_row is not None:
             _record(book, log_row, build)
@@ -682,16 +665,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.exception("finishing %s failed with an unhandled error", build.serial)
         return finish("error", str(exc))
     finally:
-        held: list[tuple] = []
-        if session is not None:
-            held.append((book.apps, session.app_row, session.app_signed_in, ""))
-            # A proxy swapped IN during finishing belongs to this phone now.
-            if session.proxy_row is not None:
-                held.append((book.proxies, session.proxy_row, True, ""))
-            held += [(book.proxies, resource, False,
-                      f"{why} seen through it on {time.strftime('%Y-%m-%d')}")
-                     for resource, why in session.refused_exits]
-        _release(book, build, held)
+        # A proxy swapped in during finishing belongs to this phone now.
+        _release(book, build,
+                 _session_holds(book, session, proxy_spent=True))
         _record(book, phone["sheet_row"], build)
         try:
             phones.stop(client, phone_id)
@@ -809,6 +785,38 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     time.sleep(5)
     phones.ensure_running(client, phone_id, timeout=budget, cancelled=cancelled)
     return replacement
+
+
+def _session_holds(book: Book, session: _Session | None, *,
+                   proxy_spent: bool) -> list[tuple]:
+    """Everything the app phase is still holding, and what each should become.
+
+    One list, because there were two and they drifted. `build` and `finish`
+    each assembled their own, and when set_aside was added only `build` learned
+    about it - so two app accounts a finish had challenged sat `in_use` with
+    nothing left to free them (2026-08-13, rows 12 and 13).
+
+    `proxy_spent` is the one real difference: a build's proxy is spent the
+    moment its phone exists, while a finish only holds one if it swapped an
+    exit in, and then that phone owns it too.
+    """
+    if session is None:
+        return []
+    today = time.strftime("%Y-%m-%d")
+    held: list[tuple] = [(book.apps, session.app_row, session.app_signed_in, "")]
+    if session.proxy_row is not None:
+        held.append((book.proxies, session.proxy_row, proxy_spent, ""))
+    # Exits this phone tried and moved on from: back on the shelf, not
+    # condemned - the refusals were measured to be per-session.
+    held += [(book.proxies, resource, False,
+              f"{why} seen through it on {today}")
+             for resource, why in session.refused_exits]
+    # Accounts the service challenged rather than judged. Nothing was decided
+    # about them, so they go back available.
+    held += [(book.apps, resource, False,
+              f"challenged on {today}; not judged, free to try again")
+             for resource in session.set_aside]
+    return held
 
 
 def _release(book: Book, build: Build, held: list[tuple]) -> None:

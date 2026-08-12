@@ -891,3 +891,29 @@ def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
     # both were tried once each, and both are available again afterwards
     assert len(build.tried) == 2
     assert len(book.apps.available) == 2
+
+
+def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
+                                                        monkeypatch):
+    """`finish` assembled its own list of what a session was holding, and when
+    set_aside was added only `build` learned about it - so two challenged
+    accounts sat `in_use` with nothing left to free them (2026-08-13, rows 12
+    and 13 of the Gpt Info tab)."""
+    book = make_book(apps=2)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda *a, **k: ["g@example.com"])
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: Outcome("fatal", "email_code_required"))
+
+    build = builder.finish_one(
+        None, settings, book, FakeLedger(),
+        {"sheet_row": 3, "phone_id": "P1", "serial": "691",
+         "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
+
+    assert not build.ok and build.status == "no_usable_gpt"
+    # both were challenged, neither judged - so both are back on the shelf
+    assert [r.values["Status"] for r in book.apps._rows] == ["", ""]
+    assert len(book.apps.available) == 2
