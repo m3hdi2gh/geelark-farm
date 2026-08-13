@@ -148,6 +148,10 @@ class Build:
     phone_id: str = ""
     serial: str = ""
     proxy: str = ""
+    #: What the Proxy tab calls that exit - `SX4`. The Phones tab records this
+    #: rather than the address: it is the string you search the vendor's panel
+    #: with, and the address is already one column away in the Proxy tab.
+    proxy_name: str = ""
     gmail: str = ""
     app_account: str = ""
     detail: str = ""
@@ -451,6 +455,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     try:
         proxy_row = _fresh_proxy(client, book)
         build.proxy = str(proxy_row.proxy)
+        build.proxy_name = proxy_row.name
 
         entry = phones.create(client, settings, proxy_row.proxy, ledger=ledger,
                               label=f"build {index}")
@@ -465,8 +470,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # somewhere else. The model and region used to be written beside them
         # and cost a phone-list call each build to find out; nothing ever read
         # them back, and every phone had the same two values anyway.
-        log_row = book.phones.start(Serial=build.serial, Proxy=build.proxy,
-                                    **{"Phone ID": phone_id})
+        log_row = book.phones.start(Serial=build.serial,
+                                    Proxy=build.proxy_name or build.proxy)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-build{index}"
@@ -805,6 +810,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     # what makes the loop terminate: each swap costs one proxy, so the pool is
     # the bound. The caller collects these and releases them all at the end.
     build.proxy = str(replacement.proxy)
+    build.proxy_name = replacement.name
     time.sleep(5)
     phones.ensure_running(client, phone_id, timeout=budget, cancelled=cancelled)
     return replacement
@@ -941,7 +947,8 @@ def _record(book: Book, sheet_row: int, build: Build) -> None:
     try:
         book.phones.finish(
             sheet_row, Status=READY if build.ok else INCOMPLETE,
-            Proxy=build.proxy, Gmail=build.gmail, Note=note[:500],
+            Proxy=build.proxy_name or build.proxy,
+            Gmail=build.gmail, Note=note[:500],
             **{"GPT Account": build.app_account},
         )
     except SheetError as exc:
@@ -1001,15 +1008,15 @@ def apply_phone_states(client: Client, book: Book,
     if not marked:
         return {}
 
-    alive = {p.get("id"): p for p in phones.listing(client)}
+    alive = {str(p.get("serialNo")): p for p in phones.listing(client)}
     outcome: dict[str, list[str]] = {"deleted": [], "freed": [],
                                      "delivered": [], "retired": [],
                                      "running": []}
     finished_rows: list[int] = []
 
     for row in marked:
-        phone_id, serial = row["phone_id"], row["serial"] or row["phone_id"][:8]
-        present = alive.get(phone_id)
+        serial = row["serial"]
+        present = alive.get(str(serial))
         if present and present.get("status") in (phones.RUNNING, phones.STARTING):
             # Left exactly as it is, and said out loud: a phone deleted while
             # running is not a documented way to stop it billing.
@@ -1050,7 +1057,7 @@ def apply_phone_states(client: Client, book: Book,
 
         if present:
             try:
-                phones.delete(client, [phone_id], ledger=ledger)
+                phones.delete(client, [present["id"]], ledger=ledger)
                 outcome["deleted"].append(serial)
             except Exception as exc:                              # noqa: BLE001
                 log.error("could not delete phone %s (%s); its row is kept",
@@ -1180,20 +1187,22 @@ def sync_phone_proxies(client: Client, book: Book) -> list[str]:
     was created with, and that cell is what someone reads to answer "which
     exit is this phone on".
     """
-    live = {phone.get("id"): phone for phone in phones.listing(client)}
+    live = {str(phone.get("serialNo")): phone
+            for phone in phones.listing(client)}
+    # host:port -> what the Proxy tab calls it, so the correction is written in
+    # the same words a build would have written.
+    named = {f"{r.proxy.host}:{r.proxy.port}": (r.name or str(r.proxy))
+             for r in book.proxies._rows if r.proxy}
     corrected = []
     for row in book.phones.rows():
-        phone = live.get(row.get("Phone ID"))
+        phone = live.get(str(row.get("Serial")))
         if phone is None:
             continue
         config = phone.get("proxy") or {}
         if not config.get("server"):
             continue
-        actual = str(proxy_mod.Proxy(
-            scheme=config.get("type") or "socks5", host=config["server"],
-            port=int(config.get("port") or 0),
-            username=config.get("username", ""),
-            password=config.get("password", "")))
+        actual = named.get(f"{config['server']}:{config.get('port')}",
+                           f"{config['server']}:{config.get('port')}")
         if (row.get("Proxy") or "").strip() != actual:
             book.phones.finish(row["sheet_row"], Proxy=actual)
             corrected.append(f"phone {row.get('Serial')}")
@@ -1267,9 +1276,18 @@ def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
     """Phones one step short, split into those that still exist and those that
     do not. GeeLark's own listing is what says which."""
     pending = book.phones.unfinished()
-    live = {p.get("id") for p in phones.listing(client)}
-    return ([p for p in pending if p["phone_id"] in live],
-            [p for p in pending if p["phone_id"] not in live])
+    # Resolved here rather than stored in the tab. The id is a machine's
+    # handle - twenty digits nobody reads - and the serial is what the panel,
+    # the notes and the operator all call the phone by, so the sheet keeps the
+    # serial and this turns it into an id at the one moment anything needs one.
+    by_serial = {str(p.get("serialNo")): p.get("id")
+                 for p in phones.listing(client)}
+    waiting, gone = [], []
+    for row in pending:
+        phone_id = by_serial.get(str(row["serial"]))
+        (gone if phone_id is None else waiting).append({**row,
+                                                       "phone_id": phone_id})
+    return waiting, gone
 
 
 def _run_jobs(client: Client, settings: Settings, book: Book,

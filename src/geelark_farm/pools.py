@@ -19,7 +19,13 @@ Four tabs, located by header name so columns can be reordered or annotated:
                                                    -> Last Exit IP, Used By,
                                                       Status, Note
     Gpt Info   Address, Password, 2FA Secret       -> Phone Serial, Status, Note
-    Phones     everything a finished phone is
+    Phones     Created, Serial, State, Proxy, Gmail, GPT Account, Status, Note
+
+The Phones tab is keyed on `Serial` - the number the panel, the notes and the
+operator all call a phone by. GeeLark's own id is not stored: it is twenty
+digits nobody reads, and the listing turns a serial into one at the moment
+something needs to address the phone. `Proxy` there holds the exit's *name*,
+`SX4`, since the address it stands for is one column away in the Proxy tab.
 
 A resource is available when its Status is blank. Claiming writes a holding
 status before the row is handed out, so a second run - or a second worker -
@@ -80,6 +86,16 @@ class Resource:
     error: str | None = None
 
     @property
+    def name(self) -> str:
+        """The vendor's name for this row - `SX4` - when the tab carries one.
+
+        Blank for a tab with no Name column, and every caller falls back to the
+        address, so adding the column is what turns this on rather than a
+        setting.
+        """
+        return (self.values.get("Name") or "").strip()
+
+    @property
     def label(self) -> str:
         """What to call this row in a log line or a note.
 
@@ -91,8 +107,7 @@ class Resource:
         if self.credentials:
             return self.credentials.email
         if self.proxy:
-            name = (self.values.get("Name") or "").strip()
-            return f"{name} ({self.proxy})" if name else str(self.proxy)
+            return f"{self.name} ({self.proxy})" if self.name else str(self.proxy)
         return f"row {self.sheet_row}"
 
 
@@ -586,7 +601,7 @@ class PhoneLog:
             # word it uses - rows written before the statuses were collapsed
             # still say things like no_usable_gpt, and they are picked up on
             # exactly the same test as the ones that say `incomplete`.
-            if cell("Status") in (self.BUILDING, self.READY) or not cell("Phone ID"):
+            if cell("Status") in (self.BUILDING, self.READY) or not cell("Serial"):
                 continue
             if not cell("Gmail") or cell("GPT Account"):
                 continue
@@ -600,9 +615,9 @@ class PhoneLog:
             # in the sentence cuts it in half.
             reason = cell("Note").split(". ")[0].strip() or cell("Status")
             reason = reason.removeprefix("Stopped short: ").rstrip(".")
-            found.append({"sheet_row": offset, "phone_id": cell("Phone ID"),
-                          "serial": cell("Serial"), "gmail": cell("Gmail"),
-                          "proxy": cell("Proxy"), "status": reason})
+            found.append({"sheet_row": offset, "serial": cell("Serial"),
+                          "gmail": cell("Gmail"), "proxy": cell("Proxy"),
+                          "status": reason})
         return found
 
     #: What the operator writes in `State` to say what should happen next.
@@ -632,7 +647,6 @@ class PhoneLog:
             state = cell("State").lower()
             if state in (self.DONE, self.FAILED):
                 found.append({"sheet_row": offset, "state": state,
-                              "phone_id": cell("Phone ID"),
                               "serial": cell("Serial"),
                               "gmail": cell("Gmail"),
                               "app_account": cell("GPT Account")})

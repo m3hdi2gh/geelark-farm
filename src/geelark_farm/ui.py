@@ -787,7 +787,7 @@ def marks_preview(book: Book) -> tuple[list[dict], list]:
     lines: list = []
     for row in marked:
         done = row["state"] == book.phones.DONE
-        lines.append(Text(f"   phone {row['serial'] or row['phone_id'][:8]}  ",
+        lines.append(Text(f"   phone {row['serial']}  ",
                           style="") + Text(row["state"],
                                            style=OK if done else WARN))
         lines.append(Text("      delete the phone and drop its row", style=DIM))

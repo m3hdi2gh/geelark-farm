@@ -726,10 +726,10 @@ def test_a_phone_marked_done_is_deleted_with_its_row(monkeypatch):
     """`State` is the instruction back to the tool: finished with it."""
     deleted = []
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 2}])
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
     monkeypatch.setattr(builder.phones, "delete",
                         lambda c, ids, ledger=None: deleted.extend(ids))
-    book = state_book([{"sheet_row": 5, "state": "done", "phone_id": "P1",
+    book = state_book([{"sheet_row": 5, "state": "done",
                         "serial": "650", "gmail": "g@example.com",
                         "app_account": "a0@example.com"}])
 
@@ -747,9 +747,9 @@ def test_a_phone_marked_failed_gives_its_app_account_back(monkeypatch):
     """The account never got a fair phone, so it returns to the pool for the
     next build - which is the whole point of marking one failed."""
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 2}])
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
     monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
-    book = state_book([{"sheet_row": 7, "state": "failed", "phone_id": "P1",
+    book = state_book([{"sheet_row": 7, "state": "failed",
                         "serial": "651", "gmail": "g@example.com",
                         "app_account": "a0@example.com"}], apps=1)
     book.apps.spend(book.apps.claim(), serial="651")      # as a build left it
@@ -766,10 +766,10 @@ def test_a_running_phone_is_reported_rather_than_deleted(monkeypatch):
     and stopping it to make deletion safe is not this function's business."""
     deleted = []
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 0}])   # running
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 0}])
     monkeypatch.setattr(builder.phones, "delete",
                         lambda c, ids, ledger=None: deleted.extend(ids))
-    book = state_book([{"sheet_row": 5, "state": "done", "phone_id": "P1",
+    book = state_book([{"sheet_row": 5, "state": "done",
                         "serial": "650", "gmail": "", "app_account": ""}])
 
     out = builder.apply_phone_states(None, book, FakeLedger())
@@ -780,8 +780,8 @@ def test_a_running_phone_is_reported_rather_than_deleted(monkeypatch):
 
 def test_an_unused_phone_is_left_entirely_alone(monkeypatch):
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 2}])
-    book = state_book([{"sheet_row": 5, "state": "unused", "phone_id": "P1",
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
+    book = state_book([{"sheet_row": 5, "state": "unused",
                         "serial": "650", "gmail": "", "app_account": ""}])
 
     assert builder.apply_phone_states(None, book, FakeLedger()) == {}
@@ -807,13 +807,13 @@ def test_the_gmail_is_retired_whichever_way_the_phone_ended(monkeypatch):
     had to spend - so `done` and `failed` retire it alike, and neither hands it
     back to be signed into a second device."""
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 2},
-                                   {"id": "P2", "status": 2}])
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2},
+                                   {"id": "P2", "serialNo": "651", "status": 2}])
     monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
     book = state_book([
-        {"sheet_row": 4, "state": "done", "phone_id": "P1", "serial": "650",
+        {"sheet_row": 4, "state": "done", "serial": "650",
          "gmail": "g0@example.com", "app_account": "a0@example.com"},
-        {"sheet_row": 5, "state": "failed", "phone_id": "P2", "serial": "651",
+        {"sheet_row": 5, "state": "failed", "serial": "651",
          "gmail": "g1@example.com", "app_account": "a1@example.com"}])
 
     out = builder.apply_phone_states(None, book, FakeLedger())
@@ -832,9 +832,9 @@ def test_a_retired_credential_keeps_no_serial_for_a_deleted_phone(monkeypatch):
     """A stale serial points the reader at nothing. That is how thirteen
     proxies sat out of the pool for days."""
     monkeypatch.setattr(builder.phones, "listing",
-                        lambda c: [{"id": "P1", "status": 2}])
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
     monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
-    book = state_book([{"sheet_row": 4, "state": "done", "phone_id": "P1",
+    book = state_book([{"sheet_row": 4, "state": "done",
                         "serial": "650", "gmail": "g0@example.com",
                         "app_account": "a0@example.com"}])
     book.gmails.spend(book.gmails.claim(), serial="650")
@@ -977,3 +977,53 @@ def test_the_phone_note_says_what_happened_rather_than_listing_packages(
     note = book.phones._ws.rows[0][PHONE_HEADERS.index("Note")]
     assert note == ("Ready - signed into Google, and into ChatGPT in the app. "
                     "Also tried: g0@example.com (Google showed a CAPTCHA).")
+
+
+# ------------------------------------- what the Phones tab is keyed and read by
+def test_the_tab_records_the_proxys_name_rather_than_its_address(
+        device, settings, drive):
+    """`socks5://ul01kyxck1batp2n6q5fmzf7kzs0:***@212.8.252.6:10527` answers
+    no question a person reading that row is asking. `SX14` is the string the
+    vendor's panel is searched with, and the address is one column away in the
+    Proxy tab."""
+    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
+    book.proxies._rows[0].values["Name"] = "SX4"
+    build = drive(book, settings, google=[SIGNED_IN])
+
+    assert build.ok
+    assert build.proxy_name == "SX4"
+    assert build.proxy.startswith("socks5://")     # still what logs in
+    written = book.phones._ws.rows[0]
+    assert written[PHONE_HEADERS.index("Proxy")] == "SX4"
+
+
+def test_a_tab_with_no_names_still_records_the_address():
+    """The Name column is what turns this on. Without it there is nothing to
+    write but the address, and that is better than an empty cell."""
+    book = make_book()
+    assert book.proxies._rows[0].name == ""
+
+
+def test_a_phone_is_found_by_its_serial_now_that_the_id_is_not_stored(
+        monkeypatch):
+    """The id was twenty digits nobody reads, in a column beside the serial
+    that everything else - the panel, the notes, the operator - calls the
+    phone by. It is resolved from the listing at the one moment anything
+    needs one."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.unfinished = lambda: [
+        {"sheet_row": 3, "serial": "691", "gmail": "g@example.com",
+         "proxy": "SX14", "status": "no accounts left"},
+        {"sheet_row": 4, "serial": "999", "gmail": "h@example.com",
+         "proxy": "SX1", "status": "no accounts left"}]
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "PHONE-691", "serialNo": "691"}])
+
+    waiting, gone = builder._unfinished(None, book)
+
+    assert [p["serial"] for p in waiting] == ["691"]
+    assert waiting[0]["phone_id"] == "PHONE-691"
+    # 999 is in the tab and not on the account, so it is skipped rather than
+    # driven against an id that does not exist
+    assert [p["serial"] for p in gone] == ["999"]

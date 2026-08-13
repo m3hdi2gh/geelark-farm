@@ -118,9 +118,9 @@ def test_the_preview_says_what_each_mark_costs_before_anything_is_deleted():
     happen as a side effect of starting a build, before its first line of
     output."""
     book = FakeBook([
-        {"sheet_row": 5, "state": "done", "phone_id": "P1", "serial": "684",
+        {"sheet_row": 5, "state": "done", "serial": "684",
          "gmail": "g@example.com", "app_account": "a@example.com"},
-        {"sheet_row": 9, "state": "failed", "phone_id": "P2", "serial": "691",
+        {"sheet_row": 9, "state": "failed", "serial": "691",
          "gmail": "h@example.com", "app_account": "b@example.com"},
     ])
 
