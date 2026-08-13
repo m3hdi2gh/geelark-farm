@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from geelark_farm import builder
+from geelark_farm import builder, failures
 from geelark_farm.flows.router import Outcome
 from geelark_farm.pools import AppPool, Book, GmailPool, PhoneLog, ProxyPool
 from tests.test_pools import (
@@ -274,7 +274,12 @@ def test_a_swapped_out_proxy_goes_back_to_the_pool_not_condemned(device, setting
 
     first = book.proxies._rows[0]
     assert first.values["Status"] == "free"
-    assert "request_rejected" in first.values["Note"]
+    # said in words, and said to be about the attempt rather than the proxy -
+    # this row is the one someone reads when deciding whether to keep buying
+    # from this vendor
+    note = first.values["Note"]
+    assert failures.verdict("request_rejected").seen in note
+    assert "not about this proxy" in note
 
 
 # The exit refusals are OpenAI's, so they only ever arrive in the app phase -
@@ -389,7 +394,8 @@ def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
     assert len(device.proxies_set) == len(set(device.proxies_set))
     # and they all come back to the pool afterwards, with what was seen
     assert len(book.proxies.available) == 3
-    assert "network_ssl_rejected" in book.proxies._rows[0].values["Note"]
+    assert (failures.verdict("network_ssl_rejected").seen
+            in book.proxies._rows[0].values["Note"])
 
 
 # ------------------------------------------ keeping the Proxy tab current
@@ -689,8 +695,10 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
     assert written[PHONE_HEADERS.index("Serial")] == "622"
     # the tab answers "can I use this phone", in one of three words
     assert written[PHONE_HEADERS.index("Status")] == "incomplete"
-    # and the reason it is not ready leads the note, in full
-    assert written[PHONE_HEADERS.index("Note")].startswith("no_usable_gmail")
+    # and the note says why in words. The token is in the Status column's
+    # vocabulary and in the terminal summary; this cell is prose.
+    note = written[PHONE_HEADERS.index("Note")]
+    assert note == ("Stopped short: the Gmails tab has no unused address left.")
 
 
 # ------------------------------------- acting on what the operator marked
@@ -875,7 +883,7 @@ def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
     # not marked with the reason, and back in the pool for another day
     challenged = book.apps._rows[0]
     assert challenged.values["Status"] == ""
-    assert "challenged" in challenged.values["Note"]
+    assert "Challenged" in challenged.values["Note"]
     assert "a0@example.com" in [r.credentials.email for r in book.apps.available]
 
 
@@ -917,3 +925,50 @@ def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
     # both were challenged, neither judged - so both are back on the shelf
     assert [r.values["Status"] for r in book.apps._rows] == ["", ""]
     assert len(book.apps.available) == 2
+
+
+# --------------------------------------------------------- how a note reads
+def notes_written(book) -> list[tuple[str, str]]:
+    """Every Note cell a run left behind, with the tab it is in."""
+    found = [(pool.tab, row.values.get("Note", ""))
+             for pool in (book.gmails, book.proxies, book.apps)
+             for row in pool._rows]
+    found += [("Phones", line[PHONE_HEADERS.index("Note")])
+              for line in book.phones._ws.rows]
+    return [(tab, note) for tab, note in found if note]
+
+
+def test_no_note_makes_the_reader_learn_a_reason_token(device, settings, drive):
+    """The Note columns are prose, and this is the test that keeps them prose.
+
+    They were not: `no_usable_gpt. tried: a@b.com: email_code_required` in the
+    Phones tab, `phone 685: ready` beside a credential, and for a phone that
+    worked, the raw output of `pm list packages`. The tokens are exact and
+    still belong in the Status column, the terminal summary and the logs -
+    which is where you grep them. The cell a person reads gets sentences.
+    """
+    book = make_book(gmails=2, apps=2)
+    drive(book, settings,
+          google=[Outcome("fatal", "captcha_shown"), SIGNED_IN],
+          app=[Outcome("fatal", "request_rejected"),
+               Outcome("fatal", "email_code_required"), SIGNED_IN])
+
+    written = notes_written(book)
+    assert len(written) >= 4, written
+    for tab, note in written:
+        assert "_" not in note, f"{tab} note names a reason token: {note!r}"
+        assert note[0].isupper(), f"{tab} note does not open a sentence: {note!r}"
+        assert note.rstrip().endswith("."), f"{tab} note has no full stop: {note!r}"
+
+
+def test_the_phone_note_says_what_happened_rather_than_listing_packages(
+        device, settings, drive):
+    """A ready phone used to be described by `pm list packages`, which answers
+    a question nobody reading that tab was asking."""
+    book = make_book(gmails=2)
+    drive(book, settings,
+          google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
+
+    note = book.phones._ws.rows[0][PHONE_HEADERS.index("Note")]
+    assert note == ("Ready - signed into Google, and into ChatGPT in the app. "
+                    "Also tried: g0@example.com (Google showed a CAPTCHA).")

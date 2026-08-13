@@ -412,7 +412,8 @@ class ProxyPool(Pool):
                 continue
             if f"{resource.proxy.host}:{resource.proxy.port}" in in_use:
                 continue
-            self.release(resource, note="freed: the phone using it is gone")
+            self.release(resource, note=(
+                "Free again - the phone that was behind it no longer exists."))
             self._set(resource, {self.serial_column: ""})
             freed.append(resource)
         return freed
@@ -738,7 +739,9 @@ class Book:
         freed = 0
         for pool in (self.gmails, self.proxies, self.apps):
             for resource in pool.stuck:
-                pool.release(resource, note="released: no run was holding it")
+                pool.release(resource, note=(
+                    "Freed by hand: it was left claimed, and no run was "
+                    "holding it."))
                 log.info("%s: released %s", pool.tab, resource.label)
                 freed += 1
         return freed

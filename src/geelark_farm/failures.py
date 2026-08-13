@@ -26,6 +26,8 @@ build without someone deciding what it means.
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------- who erred
@@ -56,6 +58,15 @@ class Verdict:
     """What one reason means for the build that hit it."""
 
     blame: str
+    #: What happened, in the words someone would use out loud - "Google showed
+    #: a CAPTCHA", not "captcha_shown". A lowercase clause with no full stop,
+    #: because it gets dropped into a larger sentence: `a@b.com (Google showed
+    #: a CAPTCHA)`.
+    #:
+    #: This exists so no note has to name a reason token. The Status column is
+    #: where the token belongs - it is what you filter and sort on - and the
+    #: Note beside it is prose for whoever is reading the row.
+    seen: str
     #: What an operator should do, in the sheet or in the panel. Written for
     #: someone reading the tab a day later with no memory of the run.
     advice: str
@@ -90,39 +101,50 @@ class Verdict:
 VERDICTS: dict[str, Verdict] = {
     # -------------------------------------------------- google_login.py
     "captcha_shown": Verdict(
-        CREDENTIAL,
+        CREDENTIAL, "Google showed a CAPTCHA",
         "Google challenged this address. It follows the account, not the IP - "
         "the same exit signs the next one in. Blank the status to try it again "
         "later, ideally on a residential exit."),
     "wrong_password": Verdict(
-        CREDENTIAL, "The password in the sheet is not the account's. Correct "
+        CREDENTIAL, "Google would not take the password",
+        "The password in the sheet is not the account's. Correct "
         "it and blank the status."),
     "password_changed": Verdict(
-        CREDENTIAL, "Google accepted the address and called the password old. "
+        CREDENTIAL, "Google said the password was an old one",
+        "Google accepted the address and called the password old. "
         "The account has moved on without us."),
     "verification_blocked": Verdict(
-        CREDENTIAL, "Google wants a verification this cannot answer."),
+        CREDENTIAL, "Google asked for a verification the run cannot answer",
+        "Google wants a verification this cannot answer."),
     "account_disabled": Verdict(
-        CREDENTIAL, "Google has disabled the account. Nothing to retry."),
+        CREDENTIAL, "Google has disabled the account",
+        "Google has disabled the account. Nothing to retry."),
     "sign_in_refused": Verdict(
-        CREDENTIAL, "Google refused the sign-in outright."),
+        CREDENTIAL, "Google refused the sign-in outright",
+        "Google refused the sign-in outright."),
     "phone_verification_required": Verdict(
-        CREDENTIAL, "Google wants a phone number. Usually a young account on "
+        CREDENTIAL, "Google asked for a phone number",
+        "Google wants a phone number. Usually a young account on "
         "an exit it distrusts; a better exit sometimes clears it."),
     "email_not_found": Verdict(
-        CREDENTIAL, "Google does not know this address. Check it for typos."),
+        CREDENTIAL, "Google did not recognise the address",
+        "Google does not know this address. Check it for typos."),
     "wrong_2fa_code": Verdict(
-        CREDENTIAL, "The code was rejected. Usually the wrong 2FA secret in "
+        CREDENTIAL, "Google turned down the 2FA code",
+        "The code was rejected. Usually the wrong 2FA secret in "
         "the sheet - check the column."),
     "no_authenticator": Verdict(
-        CREDENTIAL, "Google asked for a code and the row has no 2FA secret. "
+        CREDENTIAL, "Google asked for a 2FA code and the row has no secret",
+        "Google asked for a code and the row has no 2FA secret. "
         "Add it, or the account cannot be used unattended."),
     "no_authenticator_option": Verdict(
-        CREDENTIAL, "Google offered no authenticator choice on this account."),
+        CREDENTIAL, "Google offered no authenticator to use",
+        "Google offered no authenticator choice on this account."),
 
     # ------------------------------------------------- chatgpt_login.py
     "email_code_required": Verdict(
         CHALLENGED,
+        "OpenAI emailed a one-time code instead of taking the authenticator",
         "OpenAI emailed a one-time code instead of accepting the "
         "authenticator, which no unattended run can read. It says nothing "
         "about the account - the same addresses have signed in fine on other "
@@ -130,17 +152,19 @@ VERDICTS: dict[str, Verdict] = {
         "account challenged every run is one to give an authenticator, or "
         "retire by hand."),
     "account_deactivated": Verdict(
-        CREDENTIAL, "OpenAI has deactivated the account."),
+        CREDENTIAL, "OpenAI has deactivated the account",
+        "OpenAI has deactivated the account."),
     "email_not_accepted": Verdict(
-        CREDENTIAL, "The address was not accepted and no refusal was shown. "
+        CREDENTIAL, "the login page would not move past the address",
+        "The address was not accepted and no refusal was shown. "
         "Check it against the account it belongs to."),
     "network_ssl_rejected": Verdict(
-        EXIT,
+        EXIT, "the secure connection was refused before the account was sent",
         "The TLS handshake was refused before any account was sent. Measured "
         "per-session rather than per-proxy, so the same proxy often works "
         "again - the build takes a new exit and keeps the account."),
     "request_rejected": Verdict(
-        EXIT,
+        EXIT, "Cloudflare turned the request away at the edge",
         "Cloudflare refused at the edge, with a Ray ID, before the account was "
         "examined. A different exit address is the whole answer."),
 
@@ -148,59 +172,90 @@ VERDICTS: dict[str, Verdict] = {
     # None of these is a credential's fault: the install happens between the
     # Google sign-in and the app account, and touches neither.
     "play_page_never_loaded": Verdict(
-        DEVICE, "The Play page for the package never appeared. Check the "
+        DEVICE, "the app's Play Store page never loaded",
+        "The Play page for the package never appeared. Check the "
         "package id, and that this phone's exit can reach Play at all."),
     "no_install_button": Verdict(
-        DEVICE, "The Play page loaded with nothing to press. Often means the "
+        DEVICE, "the Play Store page had nothing to press",
+        "The Play page loaded with nothing to press. Often means the "
         "app is already there in a broken state, or the page is regional."),
     "download_stalled": Verdict(
-        DEVICE, "The download stopped making progress and restarting it did "
+        DEVICE, "the download stopped making progress",
+        "The download stopped making progress and restarting it did "
         "not help. Usually the exit address; the phone is otherwise fine."),
     "play_server_error": Verdict(
-        DEVICE, "Play itself returned an error and kept returning it. Leave "
+        DEVICE, "the Play Store kept returning an error of its own",
+        "Play itself returned an error and kept returning it. Leave "
         "the phone and retry later - it is not about the account."),
     "play_not_signed_in": Verdict(
-        DEVICE, "Play says to sign in, so the Google account did not reach it "
+        DEVICE, "the Play Store said no Google account was signed in",
+        "Play says to sign in, so the Google account did not reach it "
         "even though the device reported one. The phone is the problem, not "
         "the address - rebuild it."),
     "play_needs_payment": Verdict(
-        DEVICE, "Play wants a payment method before it will install anything. "
+        DEVICE, "the Play Store wanted a payment method first",
+        "Play wants a payment method before it will install anything. "
         "Nothing this tool does resolves that; the Google account needs one "
         "added by hand, or use a different one."),
     "app_unavailable": Verdict(
-        DEVICE, "Play will not offer the app to this account or country - "
+        DEVICE, "the Play Store will not offer the app to this account",
+        "Play will not offer the app to this account or country - "
         "'not available in your country', 'item not found'. Usually the exit "
         "address's region; a different proxy region is what changes it."),
 
     # -------------------------------- the phone, or the app on it, is stuck
     "no_login_button": Verdict(
-        DEVICE, "The app showed no way to log in. Look at the archived screen "
+        DEVICE, "the app showed no way to log in",
+        "The app showed no way to log in. Look at the archived screen "
         "under artifacts/ - the app's layout may have moved."),
     "google_sheet_stuck": Verdict(
-        DEVICE, "Google's account chooser would not close. The phone needs "
+        DEVICE, "Google's account chooser would not close",
+        "Google's account chooser would not close. The phone needs "
         "looking at."),
     "app_would_not_start": Verdict(
-        DEVICE, "The app never came to the foreground. Usually the install is "
+        DEVICE, "the app never came to the foreground",
+        "The app never came to the foreground. Usually the install is "
         "damaged; delete the phone rather than spending accounts on it."),
     "app_not_installed": Verdict(
-        DEVICE, "The package is not on the device, so there was nothing to "
+        DEVICE, "the app was not on the phone",
+        "The package is not on the device, so there was nothing to "
         "sign into."),
     "rate_limited": Verdict(
-        DEVICE, "OpenAI is refusing to keep talking to this device. Leave it "
+        DEVICE, "OpenAI stopped answering this phone",
+        "OpenAI is refusing to keep talking to this device. Leave it "
         "and come back later; another account now meets the same limit."),
     "too_many_attempts": Verdict(
-        DEVICE, "Google is refusing to keep talking to this device. Leave it "
+        DEVICE, "Google stopped answering this phone",
+        "Google is refusing to keep talking to this device. Leave it "
         "and come back later."),
     "unknown_screen": Verdict(
-        DEVICE, "The router did not recognise the page. Its XML is under "
+        DEVICE, "the app showed a page the run did not recognise",
+        "The router did not recognise the page. Its XML is under "
         "artifacts/ - that capture is what a new registry entry is written "
         "from."),
     "unknown_fatal": Verdict(
-        DEVICE, "A refusal was detected but not identified. The archived "
+        DEVICE, "the app refused without saying why",
+        "A refusal was detected but not identified. The archived "
         "screen says which."),
     "budget_exhausted": Verdict(
-        DEVICE, "The step ran out of time. Raise its budget, or find out what "
+        DEVICE, "the step ran out of time",
+        "The step ran out of time. Raise its budget, or find out what "
         "the phone was waiting for."),
+}
+
+#: Why a build stopped, for the reasons the builder raises itself rather than
+#: reads off a screen. These never reach `VERDICTS` - there is no credential to
+#: blame and nothing to mark - but they do reach the Phones tab, and a row
+#: reading `all_exits_refused` tells a person less than a sentence does.
+#:
+#: Written to complete "the build stopped because ...", so they are lowercase
+#: clauses with no full stop, like `Verdict.seen`.
+SITUATIONS: dict[str, str] = {
+    "all_exits_refused": "every exit in the pool was refused in turn",
+    "no_usable_proxy": "the Proxy tab had no free proxy to give it",
+    "no_working_proxy": "none of the free proxies answered when tested",
+    "proxy_change_refused": "GeeLark would not move the phone to another exit",
+    "interrupted": "the run was stopped by hand",
 }
 
 #: Reasons a flow may return that mean success, so nothing needs a verdict.
@@ -249,5 +304,26 @@ def verdict(reason: str) -> Verdict:
     this never happens in practice.
     """
     return VERDICTS.get(reason, Verdict(
-        DEVICE, f"{reason} has no entry in failures.py, so nothing is known "
-                f"about it. Add one before trusting what a build did here."))
+        DEVICE, f"something happened that this tool has no name for ({reason})",
+        f"{reason} has no entry in failures.py, so nothing is known "
+        f"about it. Add one before trusting what a build did here."))
+
+
+def situation(reason: str) -> str:
+    """Why a build stopped, as a clause that finishes "the build stopped ...".
+
+    Falls back to the token, because a note that reads oddly is better than one
+    that leaves out the only word that would let someone search the logs for
+    what happened.
+    """
+    return SITUATIONS.get(reason, f"it stopped with {reason}")
+
+
+def today() -> str:
+    """The date the way a note should say it: `13 Aug 2026`.
+
+    Notes used to carry ISO dates because that is what `strftime('%Y-%m-%d')`
+    gives you for free. Nobody writes to another person in ISO, and these
+    columns are read by a person.
+    """
+    return time.strftime("%-d %b %Y" if os.name != "nt" else "%#d %b %Y")

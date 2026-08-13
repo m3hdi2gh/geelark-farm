@@ -148,7 +148,11 @@ class Build:
     # True when this build's phone could not be confirmed stopped. The summary
     # must never claim nothing is billing while this is set.
     still_running: bool = False
-    tried: list[str] = field(default_factory=list)
+    #: Every credential this build gave up on, as (address, reason). Kept as a
+    #: pair rather than a formatted string because the two readers want
+    #: different words for it: the terminal summary wants the reason token,
+    #: which is what you grep the logs for, and the sheet wants the sentence.
+    tried: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -310,7 +314,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             s.build.app_account = s.app_row.credentials.email
             s.app_signed_in = True
             return None
-        s.build.tried.append(f"{s.app_row.credentials.email}: {outcome.reason}")
+        s.build.tried.append((s.app_row.credentials.email, outcome.reason))
 
         if failures.verdict(outcome.reason).needs_a_new_exit:
             # Refused before the account was looked at, so it is the exit's
@@ -348,8 +352,8 @@ def _sign_into_app(session: _Session) -> Build | None:
             named = (outcome.reason if outcome.reason.startswith("app")
                      else f"app_{outcome.reason}")
             return s.finish(named,
-                            f"the app login could not proceed on this phone: "
-                            f"{outcome.detail}")
+                            f"the app login could not go on with this phone - "
+                            f"{failures.verdict(outcome.reason).seen}")
         s.book.apps.fail(s.app_row, outcome.reason,
                          note=failures.verdict(outcome.reason).advice)
         s.app_row = None
@@ -386,7 +390,9 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
             result = proxy_mod.check(client, resource.proxy)
         except (proxy_mod.ProxyError, ApiError) as exc:
             log.warning("proxy %s is dead: %s", resource.label, exc)
-            book.proxies.fail(resource, "dead", note=str(exc)[:200])
+            book.proxies.fail(resource, "dead", note=(
+                f"GeeLark could not reach it when a phone was put behind it: "
+                f"{exc}")[:200])
             skipped += 1
             continue
         book.proxies.record_exit(resource, str(result.get("outboundIP") or ""))
@@ -495,14 +501,14 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # address's history, not the IP (the network refusals that ARE the
             # exit's fault come only from the app, in the loop below). So the
             # Gmail is marked and the next one is tried on the same phone.
-            build.tried.append(f"{account.email}: {outcome.reason}")
+            build.tried.append((account.email, outcome.reason))
             if failures.verdict(outcome.reason).stops_the_phone:
                 # Nothing was decided about this address, so it keeps its place
                 # in the pool - _release puts it back as stock. Trying the next
                 # one would only meet the same wall.
                 return finish(outcome.reason,
-                              f"the sign-in could not proceed on this phone: "
-                              f"{outcome.detail}")
+                              f"the Google sign-in could not go on with this "
+                              f"phone - {failures.verdict(outcome.reason).seen}")
             # The tab gets the taxonomy's advice, not the flow's. A flow
             # writes for whoever is debugging it; the sheet is read a day
             # later by someone deciding what to do with that row - and for a
@@ -535,17 +541,21 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if gave_up is not None:
             return gave_up
 
+        # Asked of the device, not of the run's own belief - and logged rather
+        # than written to the tab, because "which packages are on it" is a
+        # debugging question and the Note column is read by a person.
         packages = shell.third_party_packages(client, phone_id)
-        return finish("ready", f"apps: {', '.join(packages) or 'none'}", ok=True)
+        log.info("installed here: %s", ", ".join(packages) or "nothing")
+        return finish("ready", "signed into Google and into the app", ok=True)
 
     except Aborted as exc:
-        return finish(str(exc), f"the build stopped: {exc}")
+        return finish(str(exc), failures.situation(str(exc)))
     except Exception as exc:                                      # noqa: BLE001
         # Deliberately broad. Whatever went wrong, the resources this build is
         # holding must go back and the phone must be stopped - an exception
         # escaping here leaves three tabs saying `in_use` and a phone billing.
         log.exception("build %d failed with an unhandled error", index)
-        return finish("error", str(exc))
+        return finish("error", f"an error nobody planned for stopped it: {exc}")
     finally:
         # Once the app phase starts, the session is what holds the claims - it
         # swaps proxies and claims accounts as it goes. Read them back from it
@@ -621,7 +631,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if not present:
             return finish("no_google_account",
                           "nothing is signed into Google on this phone, so "
-                          "there is nothing to finish - rebuild it")
+                          "there is nothing left to finish; rebuild it")
         build.gmail = build.gmail or present[0]
 
         if settings.target_package not in shell.third_party_packages(client,
@@ -648,11 +658,15 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if gave_up is not None:
             return gave_up
 
+        # Asked of the device, not of the run's own belief - and logged rather
+        # than written to the tab, because "which packages are on it" is a
+        # debugging question and the Note column is read by a person.
         packages = shell.third_party_packages(client, phone_id)
-        return finish("ready", f"apps: {', '.join(packages) or 'none'}", ok=True)
+        log.info("installed here: %s", ", ".join(packages) or "nothing")
+        return finish("ready", "signed into Google and into the app", ok=True)
 
     except Aborted as exc:
-        return finish(str(exc), f"finishing stopped: {exc}")
+        return finish(str(exc), failures.situation(str(exc)))
     except Exception as exc:                                      # noqa: BLE001
         log.exception("finishing %s failed with an unhandled error", build.serial)
         return finish("error", str(exc))
@@ -763,7 +777,8 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # The phone keeps the proxy it had, so nothing is broken - but this
         # build cannot do what it came here to do, and saying "the login
         # failed" would hide that.
-        book.proxies.release(replacement, note=f"GeeLark refused it: {exc}")
+        book.proxies.release(replacement, note=(
+            f"Free again - GeeLark would not move a phone onto it: {exc}"))
         raise Aborted("proxy_change_refused") from exc
     # `current` is deliberately NOT released here. Releasing it put it straight
     # back on the shelf as `unused`, where the very next swap could claim it
@@ -794,19 +809,22 @@ def _session_holds(book: Book, session: _Session | None, *,
     """
     if session is None:
         return []
-    today = time.strftime("%Y-%m-%d")
+    today = failures.today()
     held: list[tuple] = [(book.apps, session.app_row, session.app_signed_in, "")]
     if session.proxy_row is not None:
         held.append((book.proxies, session.proxy_row, proxy_spent, ""))
     # Exits this phone tried and moved on from: back on the shelf, not
     # condemned - the refusals were measured to be per-session.
-    held += [(book.proxies, resource, False,
-              f"{why} seen through it on {today}")
+    held += [(book.proxies, resource,  False,
+              f"On {today} {failures.verdict(why).seen}, so the phone moved to "
+              f"another exit. Free again - that refusal was about the attempt, "
+              f"not about this proxy.")
              for resource, why in session.refused_exits]
     # Accounts the service challenged rather than judged. Nothing was decided
     # about them, so they go back available.
     held += [(book.apps, resource, False,
-              f"challenged on {today}; not judged, free to try again")
+              f"Challenged on {today} rather than judged, so nothing is known "
+              f"against it. Free to try again.")
              for resource in session.set_aside]
     return held
 
@@ -830,37 +848,55 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
             continue
         try:
             if spent:
-                pool.spend(resource, serial=build.serial,
-                           note=f"phone {build.serial}: {build.status}")
+                pool.spend(resource, serial=build.serial, note=(
+                    f"On phone {build.serial}."
+                    if build.ok else
+                    f"On phone {build.serial}, which stopped short of ready - "
+                    f"see that row in the Phones tab."))
             else:
                 # Claimed but never put on a device - the Gmail fetched just as
                 # the budget ran out, the app account nothing was tried with,
                 # the exit that was swapped away from. It is stock, and it goes
                 # back as stock.
-                pool.release(resource,
-                             note=note or f"build ended: {build.status}")
+                pool.release(resource, note=note or (
+                    "Free again - a build claimed it but never got as far as "
+                    "using it."))
         except SheetError as exc:
             log.error("%s: could not release %s (%s) - it stays in_use until "
                       "'geelark pools --release-stuck'",
                       pool.tab, resource.label, exc)
 
 
-def _record(book: Book, sheet_row: int, build: Build) -> None:
-    """Write the finished phone to the Phones tab. Also in a finally.
+def _phone_note(build: Build) -> str:
+    """What the Phones tab says about this build, in sentences.
 
-    The precise reason leads the note rather than filling the Status column.
-    `build.status` stays exact everywhere else - the summary, the logs, the
-    notes on the credentials it spent - but the tab is read to answer one
-    question, and twenty-four ways of saying "not ready" did not help answer it.
+    The Status column already carries the verdict - `ready` or `incomplete` -
+    and the Gmail, GPT Account and Proxy columns already carry the what. This
+    is the only cell with room to say how it went, so it is written as prose
+    for someone reading the row rather than as a trace for someone debugging.
+
+    It used to be neither: `no_usable_gpt. tried: a@b.com: email_code_required.
+    the Gpt Info tab has no unused account left`, and for a phone that worked,
+    the output of `pm list packages`. The reason tokens are still exact in the
+    terminal summary and the logs, which is where you want to grep them.
     """
-    parts = []
-    if not build.ok:
-        parts.append(build.status)
-    if build.tried:
-        parts.append(f"tried: {'; '.join(build.tried)}")
-    if build.detail:
-        parts.append(build.detail)
-    note = ". ".join(parts)
+    if build.ok:
+        opening = "Ready - signed into Google, and into ChatGPT in the app."
+    else:
+        opening = f"Stopped short: {build.detail or failures.situation(build.status)}."
+    if not build.tried:
+        return opening
+    # Everything it gave up on before getting here. On a ready phone these are
+    # the false starts; on one that stopped short they are the whole story.
+    attempts = "; ".join(f"{email} ({failures.verdict(reason).seen})"
+                         for email, reason in build.tried)
+    lead = "Also tried" if build.ok else "Tried"
+    return f"{opening} {lead}: {attempts}."
+
+
+def _record(book: Book, sheet_row: int, build: Build) -> None:
+    """Write the finished phone to the Phones tab. Also in a finally."""
+    note = _phone_note(build)
     try:
         book.phones.finish(
             sheet_row, Status=READY if build.ok else INCOMPLETE,
@@ -948,8 +984,9 @@ def apply_phone_states(client: Client, book: Book,
             address = book.gmails.find(row["gmail"])
             if address is not None:
                 book.gmails.retire(
-                    address, note=f"phone {serial} was marked "
-                                  f"{row['state']}; not used again")
+                    address, note=f"Signed into phone {serial}, which was "
+                                  f"marked {row['state']} and deleted. Kept "
+                                  f"out of the pool from now on.")
                 outcome["retired"].append(row["gmail"])
 
         if row["app_account"]:
@@ -958,14 +995,16 @@ def apply_phone_states(client: Client, book: Book,
                 # It never got a fair phone. Back to the pool, so the next
                 # build can put it on one that works.
                 book.apps.release(
-                    account, note=f"phone {serial} was marked failed; "
-                                  f"free to try on another")
+                    account, note=f"Phone {serial} was marked failed and "
+                                  f"deleted before this account got a fair "
+                                  f"run. Free to try on another phone.")
                 outcome["freed"].append(row["app_account"])
             elif account is not None:
                 # `done` means the phone was the product and it has been
                 # handed over. The account went with it.
                 book.apps.retire(
-                    account, note=f"delivered on phone {serial}")
+                    account, note=f"Delivered on phone {serial}, which was marked "
+                                  f"done and handed over.")
                 outcome["delivered"].append(row["app_account"])
 
         if present:
@@ -1036,7 +1075,8 @@ def check_free_proxies(client: Client, book: Book) -> list[Resource]:
         for resource, exit_ip, error in pool.map(test, free):
             if exit_ip is None:
                 log.warning("proxy %s is dead: %s", resource.label, error)
-                book.proxies.fail(resource, "dead", note=error)
+                book.proxies.fail(resource, "dead", note=(
+                    f"Did not answer when the pool was checked: {error}"))
                 dead.append(resource)
             else:
                 book.proxies.record_exit(resource, exit_ip)
@@ -1301,8 +1341,10 @@ def summarise(builds: list[Build]) -> str:
                          f"{f'  +  {b.app_account}' if b.app_account else ''}")
         if b.proxy:
             lines.append(f"          via {b.proxy}")
-        for note in b.tried:
-            lines.append(f"          tried {note}")
+        # The token, not the sentence: this is the copy you grep the logs and
+        # the artifacts with. The sheet gets the sentence.
+        for email, reason in b.tried:
+            lines.append(f"          tried {email}: {reason}")
 
     ready = sum(1 for b in builds if b.ok)
     unstopped = [b for b in builds if b.still_running]

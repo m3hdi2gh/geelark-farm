@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import pathlib
+import re
 
 import pytest
 
@@ -107,3 +108,37 @@ def test_the_dropdowns_would_offer_exactly_what_a_build_writes():
     # device failures stop the phone; they never mark the address
     assert "too_many_attempts" not in offered
     assert "unknown_screen" not in offered
+
+
+def test_every_reason_can_be_said_out_loud():
+    """`seen` is what the sheet's Note columns are written from, so a reason
+    without one would put its token back in front of a person.
+
+    The shape matters as much as the presence: these get dropped into a larger
+    sentence - `a@b.com (Google showed a CAPTCHA)` - so a trailing full stop or
+    a leading capital reads as a seam.
+    """
+    for reason, verdict in failures.VERDICTS.items():
+        assert verdict.seen, f"{reason} has no plain-language description"
+        assert not verdict.seen.endswith("."), reason
+        assert "_" not in verdict.seen, (
+            f"{reason}'s description names a token: {verdict.seen!r}")
+        # Lowercase, unless it opens on the name of whoever refused.
+        first = re.match(r"[A-Za-z]+", verdict.seen).group()
+        assert first[0].islower() or first in ("Google", "OpenAI", "Cloudflare"), (
+            f"{reason}'s description is not a clause: {verdict.seen!r}")
+
+
+def test_the_reasons_a_build_raises_itself_can_also_be_said():
+    """`all_exits_refused` and its neighbours never reach VERDICTS - there is no
+    credential to blame - but they do reach the Phones tab."""
+    from geelark_farm import builder
+
+    raised = set(re.findall(r'Aborted\("([a-z_]+)"', builder.__file__ and
+                            pathlib.Path(builder.__file__).read_text("utf-8")))
+
+    assert raised, "the scan found no Aborted() reasons"
+    missing = sorted(r for r in raised if r not in failures.SITUATIONS)
+    assert not missing, (
+        f"these stop a build and land in the Phones tab with no way to say "
+        f"them in words: {missing}. Add each to SITUATIONS in failures.py.")
