@@ -619,7 +619,12 @@ def build_summary_panel(builds: list[Build]) -> Panel:
             body.append(Text(f"   {b.phone_id}", style=BAD))
         body.append(Text("Stop them from the menu now.", style=BAD))
     else:
-        body.append(Text("All phones are stopped; nothing is billing.",
+        # Not "nothing is billing": `stop` posts the request and returns, and
+        # GeeLark goes on listing the phone as running while it shuts down. So
+        # this panel said nothing was billing and the dashboard under it said
+        # two were RUNNING, in the same breath (2026-08-13).
+        body.append(Text("Every phone was told to stop. GeeLark can go on "
+                         "showing one as running for a minute after.",
                          style=DIM))
 
     body.append(Text(""))
@@ -666,12 +671,16 @@ def attention_view(settings: Settings) -> Panel:
             reason = pool.status_of(resource)
             blocks.append(Text(f"   {resource.label}  ", style="") +
                           Text(reason, style=BAD))
-            # The taxonomy's words, not the row's note - the note records what
-            # one run saw, this says what to do about it. Padded rather than
-            # indented with spaces, so the second line of a long one lands
-            # under the first instead of back at the margin.
-            blocks.append(Padding(Text(failures.verdict(reason).advice,
-                                       style=DIM), (0, 0, 0, 6)))
+            # The taxonomy's words when the status is a reason a flow gave.
+            # When it is a pool's own word - `challenged`, `dead` - there is no
+            # verdict to look up and asking for one returns the fallback, which
+            # tells the reader to go and edit failures.py. The note the run left
+            # already says what happened.
+            advice = (failures.verdict(reason).advice if reason in failures.VERDICTS
+                      else (resource.values.get(pool.note_column) or "").strip())
+            # Padded rather than indented with spaces, so the second line of a
+            # long one lands under the first instead of back at the margin.
+            blocks.append(Padding(Text(advice, style=DIM), (0, 0, 0, 6)))
         blocks.append(Text(""))
 
     waiting = book.phones.unfinished()

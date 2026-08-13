@@ -476,26 +476,43 @@ def act_totp(ctx: Context) -> Outcome | None:
 
 
 def act_reset_app(ctx: Context) -> Outcome | None:
-    """Wipe the app's state and start it again, so its screen means something.
+    """Get off a chat screen this run did not sign in to.
 
-    Reached when the chat screen is up but this run never signed in - the app
-    is either in its logged-out mode or holding a session from an earlier run,
-    and from outside those look identical. Guessing costs a phone reported as
-    ready with nobody in it, which is what happened.
+    Two ways off it, and which one applies is written on the screen.
 
-    `pm clear` settles it: the app comes back at its welcome screen, and the
-    ordinary path applies. A session an earlier run left behind is thrown away
-    in the process, which is the right trade - signing in again takes a minute
-    and the credentials are right here, while assuming costs a phone.
+    **A `Log in` control is on it.** Then nobody is signed in - the app does not
+    offer to log in to a session it already has - and the ambiguity this action
+    was written for is not there. Tap it and carry on.
+
+    **Nothing to log in with.** Then the app may be holding a session from an
+    earlier run, and from outside that is indistinguishable from its logged-out
+    mode. `pm clear` settles it. Throwing away someone else's session costs a
+    minute; assuming costs a phone handed over with nobody in it, which is what
+    happened before this action existed.
+
+    It only ever cleared, and that was slower than it looked: a cleared app
+    comes back to a guest chat as often as it comes back to the welcome screen,
+    so the clear matched this entry again, and again - three times on phone 695,
+    a minute of the five it took (2026-08-13). The `Log in` button was on every
+    one of those captures.
     """
     path = ctx.save("logged-out-chat")
-    log.warning("the chat screen is up but this run has not signed in; "
-                "clearing the app so its state is known")
+    if path:
+        ctx.saved.append(path)
+
+    button = screen.find_first(ctx.elements, LOGIN_LABELS)
+    if button is not None and screen.tap_element(ctx.client, ctx.phone_id,
+                                                 button):
+        log.info("the chat screen is up with nobody signed in; taking its "
+                 "%r", button.label)
+        return None
+
+    log.warning("the chat screen is up, this run has not signed in, and there "
+                "is nothing to log in with; clearing the app so its state is "
+                "known")
     shell.run(ctx.client, ctx.phone_id, f"pm clear {ctx.package}")
     time.sleep(3)
     launch(ctx.client, ctx.phone_id, ctx.package)
-    if path:
-        ctx.saved.append(path)
     return None
 
 

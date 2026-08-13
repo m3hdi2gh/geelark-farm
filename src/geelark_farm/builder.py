@@ -130,6 +130,13 @@ ATTEMPT_SECONDS = 420
 READY = "ready"
 INCOMPLETE = "incomplete"
 
+# What becomes of a resource a build was holding. It was a boolean - spent or
+# not - and a challenged app account is neither: it was not used, and putting
+# it back blank is what made every run pick the same one again.
+SPEND = "spend"
+RELEASE = "release"
+SET_ASIDE = "set aside"
+
 
 @dataclass
 class Build:
@@ -568,9 +575,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # proxy counts as used the moment a phone exists behind it: that phone
         # keeps it until someone deletes the phone, and handing it on would put
         # two devices on one exit address.
-        held = [(book.gmails, gmail_row, gmail_signed_in, "")]
+        held = [(book.gmails, gmail_row,
+                 SPEND if gmail_signed_in else RELEASE, "")]
         if session is None:
-            held.append((book.proxies, proxy_row, bool(phone_id), ""))
+            held.append((book.proxies, proxy_row,
+                         SPEND if phone_id else RELEASE, ""))
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held)
@@ -817,21 +826,26 @@ def _session_holds(book: Book, session: _Session | None, *,
     if session is None:
         return []
     today = failures.today()
-    held: list[tuple] = [(book.apps, session.app_row, session.app_signed_in, "")]
+    held: list[tuple] = [(book.apps, session.app_row,
+                          SPEND if session.app_signed_in else RELEASE, "")]
     if session.proxy_row is not None:
-        held.append((book.proxies, session.proxy_row, proxy_spent, ""))
+        held.append((book.proxies, session.proxy_row,
+                     SPEND if proxy_spent else RELEASE, ""))
     # Exits this phone tried and moved on from: back on the shelf, not
     # condemned - the refusals were measured to be per-session.
-    held += [(book.proxies, resource,  False,
+    held += [(book.proxies, resource, RELEASE,
               f"On {today} {failures.verdict(why).seen}, so the phone moved to "
               f"another exit. Free again - that refusal was about the attempt, "
               f"not about this proxy.")
              for resource, why in session.refused_exits]
-    # Accounts the service challenged rather than judged. Nothing was decided
-    # about them, so they go back available.
-    held += [(book.apps, resource, False,
+    # Accounts the service asked something of rather than judged. Its own verb,
+    # because neither of the other two is true: it was not spent, and releasing
+    # it put it back blank - indistinguishable from a row nobody had tried, so
+    # the next run picked the same one and met the same challenge.
+    held += [(book.apps, resource, SET_ASIDE,
               f"Challenged on {today} rather than judged, so nothing is known "
-              f"against it. Free to try again.")
+              f"against it. Blank this status to offer it again - and see the "
+              f"Note on why it may keep happening.")
              for resource in session.set_aside]
     return held
 
@@ -850,11 +864,13 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
     the build's real result with a network complaint, and the resources would
     stay claimed either way.
     """
-    for pool, resource, spent, note in held:
+    for pool, resource, action, note in held:
         if resource is None:
             continue
         try:
-            if spent:
+            if action == SET_ASIDE:
+                pool.set_aside(resource, note=note)
+            elif action == SPEND:
                 pool.spend(resource, serial=build.serial, note=(
                     f"On phone {build.serial}."
                     if build.ok else
@@ -1383,7 +1399,8 @@ def summarise(builds: list[Build]) -> str:
             lines.append(f"     {b.phone_id}")
         lines.append(" Run 'geelark reap' now.")
     else:
-        lines.append(" All phones are stopped; nothing is billing.")
+        lines.append(" Every phone was told to stop. GeeLark can go on showing "
+                     "one as running for a minute after.")
     if ready < len(builds):
         lines.append(" The Phones tab records every phone, ready or not; the "
                      "resource tabs record why each credential failed.")

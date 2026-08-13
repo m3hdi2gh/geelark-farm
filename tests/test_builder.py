@@ -873,18 +873,18 @@ def test_each_app_attempt_after_the_first_starts_from_a_cleared_app(
 def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
         device, settings, drive):
     """OpenAI emailing a code says nothing about the account - three addresses
-    it retired had already signed in fine on earlier phones. It is held for
-    this build so it is not claimed twice, then goes back available."""
+    it retired had already signed in fine on earlier phones. So it is not
+    marked with the reason, which is what `fail` would do and would mean the
+    account is bad. It gets its own word instead."""
     book = make_book(apps=2)
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[Outcome("fatal", "email_code_required"), SIGNED_IN])
 
     assert build.ok and build.app_account == "a1@example.com"
-    # not marked with the reason, and back in the pool for another day
     challenged = book.apps._rows[0]
-    assert challenged.values["Status"] == ""
+    assert challenged.values["Status"] == AppPool.challenged_status
+    assert challenged.values["Status"] != "email_code_required"
     assert "Challenged" in challenged.values["Note"]
-    assert "a0@example.com" in [r.credentials.email for r in book.apps.available]
 
 
 def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
@@ -896,9 +896,14 @@ def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
     build = drive(book, settings, google=[SIGNED_IN], app=[challenge, challenge])
 
     assert not build.ok and build.status == "no_usable_gpt"
-    # both were tried once each, and both are available again afterwards
     assert len(build.tried) == 2
-    assert len(book.apps.available) == 2
+    # and afterwards neither is offered again, which is the difference between
+    # this and the run before it: they went back blank, so the next run took
+    # the same two and met the same challenge - three runs running, five
+    # minutes each (2026-08-13)
+    assert book.apps.available == []
+    assert ([r.values["Status"] for r in book.apps._rows]
+            == [AppPool.challenged_status] * 2)
 
 
 def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
@@ -922,9 +927,11 @@ def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
          "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
 
     assert not build.ok and build.status == "no_usable_gpt"
-    # both were challenged, neither judged - so both are back on the shelf
-    assert [r.values["Status"] for r in book.apps._rows] == ["", ""]
-    assert len(book.apps.available) == 2
+    # both were challenged, neither judged - so neither carries a reason, and
+    # neither is left claimed, which was the bug this test was written for
+    assert ([r.values["Status"] for r in book.apps._rows]
+            == [AppPool.challenged_status] * 2)
+    assert book.apps.stuck == []
 
 
 # --------------------------------------------------------- how a note reads

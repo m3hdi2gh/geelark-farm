@@ -276,6 +276,11 @@ class Pool:
         """
         self._set(resource, {self.status_column: "", self.note_column: note})
 
+    def set_aside(self, resource: Resource, *, note: str = "") -> None:
+        """Put a row back after the service asked for something rather than
+        judging it. For most pools that is the same as releasing it."""
+        self.release(resource, note=note)
+
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:
         """Mark a row as used up by a phone that worked."""
@@ -343,6 +348,26 @@ class AppPool(Pool):
     # operator finished with, which is the product. An account on a phone that
     # FAILED is freed instead - it never got a fair device.
     retired_status = "delivered"
+
+    #: What an account gets when OpenAI asks for something no unattended run
+    #: can supply - a code in an inbox. Not a judgement on the account, which
+    #: is why it is not one of the failure reasons, and not blank either.
+    #:
+    #: It was blank. A challenged account went back indistinguishable from a
+    #: row nobody had ever tried, so every run picked the same two again and
+    #: spent five minutes each proving the same thing - three runs running, and
+    #: the tab showed nothing at all against them (2026-08-13). "The sheet has
+    #: not updated" was the right reading of it: the only record was a Note.
+    #:
+    #: Deliberately not in `available_statuses`, so it waits for a person. That
+    #: is not the same as condemning it - `fail()` would put the reason in this
+    #: column and mean the account is bad, and nothing here says that. Blank
+    #: the cell and the next run takes it again.
+    challenged_status = "challenged"
+
+    def set_aside(self, resource: Resource, *, note: str = "") -> None:
+        self._set(resource, {self.status_column: self.challenged_status,
+                             self.note_column: note})
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -718,6 +743,10 @@ class Book:
                                *credential_reasons(google_login)],
             "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
                              AppPool.retired_status,
+                             # Not a failure reason - the account was asked
+                             # something, not judged - so the taxonomy does not
+                             # supply it and it has to be named here.
+                             AppPool.challenged_status,
                              *credential_reasons(chatgpt_login)],
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.

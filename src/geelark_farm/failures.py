@@ -148,9 +148,11 @@ VERDICTS: dict[str, Verdict] = {
         "OpenAI emailed a one-time code instead of accepting the "
         "authenticator, which no unattended run can read. It says nothing "
         "about the account - the same addresses have signed in fine on other "
-        "phones - so this one is set aside and tried again another time. An "
-        "account challenged every run is one to give an authenticator, or "
-        "retire by hand."),
+        "phones - so it is set aside rather than marked bad. It waits for you: "
+        "give the account an authenticator OpenAI accepts, then blank its "
+        "Status to offer it again. Nothing retries it on its own, because "
+        "that is what had every run spending five minutes on the same two "
+        "accounts."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account",
         "OpenAI has deactivated the account."),

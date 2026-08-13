@@ -154,3 +154,33 @@ def test_the_advice_a_reason_carries_is_what_the_attention_view_shows():
     assert "failures.verdict(reason).advice" in view
     # the pools' own words for their four routine states are not decisions
     assert re.search(r"pool\.flagged", view)
+
+
+def test_a_pools_own_status_is_explained_by_its_note_not_by_the_taxonomy():
+    """`challenged` and `dead` are words a pool writes, not reasons a flow
+    reports, so there is no verdict to look up. Asking for one returns the
+    fallback, which tells the reader to go and edit failures.py."""
+    from geelark_farm import failures
+
+    assert "challenged" not in failures.VERDICTS
+    assert "dead" not in failures.VERDICTS
+    # what the fallback would have printed into the view
+    assert "failures.py" in failures.verdict("challenged").advice
+
+    source = SRC.read_text(encoding="utf-8")
+    view = source[source.index("def attention_view"):
+                  source.index("def pools_view")]
+    assert "reason in failures.VERDICTS" in view
+
+
+def test_the_summary_does_not_claim_a_phone_has_stopped_billing():
+    """`stop` posts the request and returns; GeeLark goes on listing the phone
+    as running while it shuts down. So the panel said nothing was billing and
+    the dashboard under it said two were RUNNING, in the same breath."""
+    build = builder.Build(index=1, ok=True, status="ready", serial="684",
+                          gmail="g@example.com", app_account="a@example.com")
+
+    text = rendered(ui.build_summary_panel([build]))
+
+    assert "nothing is billing" not in text
+    assert "told to stop" in text
