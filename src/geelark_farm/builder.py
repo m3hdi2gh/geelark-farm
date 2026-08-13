@@ -334,14 +334,6 @@ def _sign_into_app(session: _Session) -> Build | None:
             # The service asked for something no unattended run can give - a
             # code in an inbox. It judged nothing about the account, so the
             # account is held rather than marked, and goes back on the shelf
-            # when the build ends.
-            s.set_aside.append(s.app_row)
-            s.app_row = None
-            continue
-        if failures.verdict(outcome.reason).sets_aside:
-            # The service asked for something no unattended run can give - a
-            # code in an inbox. It judged nothing about the account, so the
-            # account is held rather than marked, and goes back on the shelf
             # as available when the build ends. Held rather than released now,
             # so this build does not immediately claim it again.
             s.set_aside.append(s.app_row)
