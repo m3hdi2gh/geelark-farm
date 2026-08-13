@@ -258,19 +258,29 @@ class Pool:
                 return resource
         return None
 
-    def retire(self, resource: Resource, *, note: str = "") -> None:
-        """Take a credential out of circulation for good.
+    def _off_a_phone(self, status: str, note: str) -> dict[str, str]:
+        """The fields for any row leaving a device, whatever it leaves for.
 
-        The serial goes with it. It named a phone that has just been deleted,
-        so leaving it there points whoever reads the row at nothing - the same
-        stale-reference problem that quietly held thirteen proxies out of the
-        pool (2026-08-11).
+        The serial column names the phone that has this resource *now*, so
+        anything that takes it off one clears it. Leaving a serial behind
+        points whoever reads the row at a phone that no longer exists, and the
+        same stale reference quietly held thirteen proxies out of the pool for
+        days (2026-08-11).
+
+        It was written out once, in `retire`, and the reasoning applied to
+        every one of these. `release` did not do it - so an app account freed
+        because its phone was marked failed went back into the pool still
+        naming that phone, and three rows in the live tab said `Phone Serial
+        684` about a phone deleted hours earlier (2026-08-13).
         """
-        fields = {self.status_column: self.retired_status,
-                  self.note_column: note}
+        fields = {self.status_column: status, self.note_column: note}
         if self.serial_column:
             fields[self.serial_column] = ""
-        self._set(resource, fields)
+        return fields
+
+    def retire(self, resource: Resource, *, note: str = "") -> None:
+        """Take a credential out of circulation for good."""
+        self._set(resource, self._off_a_phone(self.retired_status, note))
 
     def find(self, email: str) -> Resource | None:
         """The row holding this address, whatever state it is in."""
@@ -289,7 +299,7 @@ class Pool:
         of a failure that was measured to be about the session rather than the
         resource (2026-08-09).
         """
-        self._set(resource, {self.status_column: "", self.note_column: note})
+        self._set(resource, self._off_a_phone("", note))
 
     def set_aside(self, resource: Resource, *, note: str = "") -> None:
         """Put a row back after the service asked for something rather than
@@ -381,8 +391,7 @@ class AppPool(Pool):
     challenged_status = "challenged"
 
     def set_aside(self, resource: Resource, *, note: str = "") -> None:
-        self._set(resource, {self.status_column: self.challenged_status,
-                             self.note_column: note})
+        self._set(resource, self._off_a_phone(self.challenged_status, note))
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -427,7 +436,7 @@ class ProxyPool(Pool):
     def release(self, resource: Resource, *, note: str = "") -> None:
         # `free` rather than blank: this column is also the record of whether a
         # proxy works, and a blank there reads as "never checked".
-        self._set(resource, {self.status_column: "free", self.note_column: note})
+        self._set(resource, self._off_a_phone("free", note))
 
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:
@@ -488,7 +497,6 @@ class ProxyPool(Pool):
                 continue
             self.release(resource, note=(
                 "Free again - the phone that was behind it no longer exists."))
-            self._set(resource, {self.serial_column: ""})
             freed.append(resource)
         return freed
 

@@ -323,3 +323,42 @@ def test_a_row_that_was_already_unusable_keeps_its_own_error():
     pool = gmail_pool([gmail_row("a@example.com"), gmail_row("not-an-address")])
 
     assert "not an email address" in pool._rows[1].error
+
+
+# ------------------------------------ what happens to the serial on the way out
+def test_every_way_off_a_phone_drops_the_serial():
+    """The serial column names the phone that has this row *now*. Only
+    `retire` cleared it, and the reasoning was the same for all of them - so an
+    app account freed because its phone was marked failed went back into the
+    pool still naming that phone, and three rows in the live tab said
+    `Phone Serial 684` about a phone deleted hours earlier (2026-08-13).
+    """
+    for leaving in ("release", "retire", "set_aside"):
+        pool = AppPool(FakeWorksheet(APP_HEADERS, [
+            ["a@example.com", "pw", SECRET, "", "", ""]]), APP_HEADERS,
+            threading.Lock())
+        pool.load()
+        row = pool._rows[0]
+        pool.spend(row, serial="684", note="On phone 684.")
+        assert row.values["Phone Serial"] == "684"
+
+        getattr(pool, leaving)(row, note="whatever became of it")
+
+        assert row.values["Phone Serial"] == "", (
+            f"{leaving} left the row naming a phone it is no longer on")
+
+
+def test_a_proxy_let_go_stops_naming_its_phone_too():
+    """`Used By` is the same column by another name."""
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS,
+                                   [proxy_row("10.0.0.1:9999:u:p")]),
+                     PROXY_HEADERS, threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+    pool.spend(row, serial="691", note="On phone 691.")
+    assert row.values["Used By"] == "691"
+
+    pool.release(row, note="nothing is behind it")
+
+    assert row.values["Used By"] == ""
+    assert pool.status_of(row) == "free"

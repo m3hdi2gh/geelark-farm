@@ -1169,7 +1169,6 @@ def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
         elif status == book.proxies.spent_status:
             book.proxies.release(resource, note=(
                 "Free again - no phone is behind this exit any more."))
-            book.proxies._set(resource, {book.proxies.serial_column: ""})
             changed["released"].append(resource.label)
 
     for label, items in changed.items():
