@@ -529,7 +529,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             artifact_dir=artifacts,
         )
         if not installed.ok:
-            return finish("install_failed", installed.detail)
+            return finish("install_failed",
+                          f"the app could not be installed - "
+                          f"{failures.verdict(installed.reason).seen}")
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,
@@ -645,7 +647,12 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 artifact_dir=artifacts,
             )
             if not installed.ok:
-                return finish("install_failed", installed.detail)
+                # The taxonomy's words, not the flow's. play_install writes its
+                # detail for whoever is debugging it - "on screen: [Install,
+                # Uninstall]" - and that is not what the tab is read for.
+                return finish("install_failed",
+                              f"the app could not be installed - "
+                              f"{failures.verdict(installed.reason).seen}")
 
         # The proxy this phone already has. It is not claimed from the pool -
         # the phone owns it - so a swap must not release it back as stock,
