@@ -163,12 +163,14 @@ def dashboard(snap: Snapshot) -> Panel:
             pool_bits += f"   [{WARN}]{snap.pools_stuck} stuck in_use[/]"
         table.add_row("pools", pool_bits)
 
-    # Running phones are the only thing here that costs money by the second.
-    billing = (f"[{BAD}]{snap.phones_running} RUNNING (billing)[/]"
-               if snap.phones_running else f"[{OK}]none running[/]")
+    # Said, not shouted. Which phones are up is worth knowing; what it costs
+    # is the operator's business and they have said so, so this stopped being
+    # red and stopped saying the word.
+    running = (f"[{WARN}]{snap.phones_running} running[/]"
+               if snap.phones_running else f"[{DIM}]none running[/]")
     waiting = (f"   [{WARN}]{snap.phones_unfinished} waiting on an app account[/]"
                if snap.phones_unfinished else "")
-    table.add_row("phones", f"{snap.phones_total} total   {billing}{waiting}")
+    table.add_row("phones", f"{snap.phones_total} total   {running}{waiting}")
 
     slots = f"{snap.slots_free} free of {snap.slots_total}"
     if snap.slots_total and not snap.slots_free:
@@ -613,8 +615,8 @@ def build_summary_panel(builds: list[Build]) -> Panel:
 
     if unstopped:
         body.append(Text(""))
-        body.append(Text(f"{len(unstopped)} PHONE(S) COULD NOT BE STOPPED - "
-                         f"STILL BILLING", style=f"bold {BAD}"))
+        body.append(Text(f"{len(unstopped)} phone(s) could not be stopped and "
+                         f"are still up", style=f"bold {WARN}"))
         for b in unstopped:
             body.append(Text(f"   {b.phone_id}", style=BAD))
         body.append(Text("Stop them from the menu now.", style=BAD))
@@ -843,13 +845,13 @@ DOING = [
      "phones one step short - no new phone, Gmail or proxy is spent"),
     ("3", "Update the sheet",
      "make all four tabs agree with the panel, and carry out the State column"),
-    ("4", "Stop running phones", "ends billing"),
+    ("4", "Stop running phones", "whatever is up, or only the unaccounted"),
 ]
 LOOKING = [
     ("5", "Needs attention",
      "what a run set aside, and what to do about each - start here"),
     ("6", "What I have to work with", "the pool tabs, plan slots, anything stuck"),
-    ("7", "Phones", "what exists, and what is billing"),
+    ("7", "Phones", "what exists, and what is running"),
 ]
 ACTIONS = DOING + LOOKING + [("q", "Quit", "")]
 
@@ -930,7 +932,7 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     split = (f" ({finishing} finished, {creating} built new)"
              if finishing else "")
     console.print(f"\n[{WARN}]{count} phone(s){split}, {workers} at a time. "
-                  f"Phones bill per running minute.[/]")
+                  f"[/]")
     if not Confirm.ask("start", default=True):
         return None
     return {"count": count, "workers": workers}
@@ -964,16 +966,48 @@ def confirm_finish(settings: Settings, snap: Snapshot) -> dict | None:
     workers = max(1, min(workers, count))
 
     console.print(f"\n[{WARN}]{count} phone(s), {workers} at a time. No new "
-                  f"phone, Gmail or proxy is spent. Phones bill per running "
-                  f"minute.[/]")
+                  f"phone, Gmail or proxy is spent.[/]")
     if not Confirm.ask("start", default=True):
         return None
     return {"limit": count, "workers": workers}
 
 
+def sync_on_startup(settings: Settings) -> None:
+    """Bring the tabs up to date before the first screen is drawn.
+
+    The sync ran inside a build, so opening the console, looking at it and
+    closing it changed nothing - and the numbers on the dashboard were
+    whatever the sheet last recorded rather than what is true. Running the
+    program is meant to be what updates it, and this is the first thing the
+    program does.
+
+    It carries out the State column too, deletions included. That is what
+    writing `done` in that column means, and the point of writing it there
+    rather than pressing something is that the next run acts on it.
+
+    Never fatal. A console that will not open because a proxy check timed out
+    is worse than one showing yesterday's numbers, and the panel below says
+    which it is.
+    """
+    if not settings.sheet_id:
+        return
+    try:
+        with console.status("bringing the tabs up to date..."):
+            outcome = builder.sync_sheet(build_client(settings),
+                                         Book.open(settings),
+                                         Ledger.load(settings.state_dir))
+    except (ApiError, TransportError, SheetError) as exc:
+        console.print(f"[{WARN}]could not update the sheet first: {exc}[/]")
+        return
+    show_sync(outcome)
+    if outcome:
+        console.print()
+
+
 def run_console(settings: Settings) -> int:
     """The loop. Draw the state, take one action, draw it again."""
     console.print()
+    sync_on_startup(settings)
     while True:
         try:
             snap = take_snapshot(settings)
@@ -991,8 +1025,7 @@ def run_console(settings: Settings) -> int:
         except (EOFError, KeyboardInterrupt):
             # Ctrl+C at the menu, or stdin closing under it - which is what a
             # Ctrl+C during the batch above leaves behind. Untrapped, this
-            # ended the process from inside the loop with a traceback, past
-            # every check that says whether anything is still billing
+            # ended the process from inside the loop with a traceback
             # (2026-08-08). Quitting is a menu choice, so make it one.
             console.print()
             choice = "q"
@@ -1000,11 +1033,10 @@ def run_console(settings: Settings) -> int:
 
         try:
             if choice == "q":
-                if snap.phones_running:
-                    console.print(f"[{BAD}]{snap.phones_running} phone(s) are "
-                                  f"still running and billing.[/]")
-                    if Confirm.ask("stop them before quitting", default=True):
-                        stop_all(settings)
+                # No parting question about what is still running. Whether a
+                # phone should be left up is the operator's call and they make
+                # it deliberately, from the menu - being asked on the way out
+                # of every session is nagging, not safety.
                 return 0
 
             if choice == "1":
@@ -1048,8 +1080,7 @@ def run_console(settings: Settings) -> int:
 
 
 def stop_all(settings: Settings) -> None:
-    """Stop every running phone. Kept as its own function because quitting
-    with something still billing offers exactly this and nothing else."""
+    """Stop every running phone."""
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
     targets = [p["id"] for p in phones.listing(client)
@@ -1076,7 +1107,7 @@ def stop_phones(settings: Settings) -> None:
     running = [p for p in phones.listing(client)
                if p.get("status") in (phones.RUNNING, phones.STARTING)]
     if not running:
-        console.print(f"[{OK}]nothing is running; nothing is billing[/]")
+        console.print(f"[{OK}]nothing is running[/]")
         return
 
     loose = {phone_id for phone_id, _ in phones.reapable(client, ledger)}
@@ -1098,7 +1129,7 @@ def stop_phones(settings: Settings) -> None:
         stop_all(settings)
     elif choice == "u":
         phones.reap(client, ledger)
-        console.print(f"[{OK}]stopped {len(loose)}; billing ended[/]")
+        console.print(f"[{OK}]stopped {len(loose)}[/]")
 
 
 #: What each key of a sync report means, in the order a person would want to

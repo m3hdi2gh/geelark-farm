@@ -215,3 +215,40 @@ def test_the_console_asks_before_carrying_out_the_state_column():
     assert "apply_marks=apply" in body
     # declining the deletions still syncs the rest, which deletes nothing
     assert "sync the other tabs anyway" in body
+
+
+def test_quitting_asks_nothing_about_what_is_still_running():
+    """It offered to stop everything on the way out of every session. Whether
+    a phone should be left up is the operator's call, made deliberately from
+    the menu - being asked each time is nagging, not safety."""
+    source = SRC.read_text(encoding="utf-8")
+    loop = source[source.index("def run_console"):]
+    quitting = loop[loop.index('if choice == "q"'):loop.index("if choice ==", 40)]
+
+    assert "Confirm" not in quitting
+    assert "stop_all" not in quitting
+
+
+def test_the_console_updates_the_sheet_before_it_draws_anything():
+    """The sync ran inside a build, so opening the console, looking at it and
+    closing it changed nothing - and the dashboard showed whatever the sheet
+    last recorded rather than what is true."""
+    source = SRC.read_text(encoding="utf-8")
+    loop = source[source.index("def run_console"):]
+
+    assert loop.index("sync_on_startup") < loop.index("while True")
+    startup = source[source.index("def sync_on_startup"):
+                     source.index("def run_console")]
+    # including the deletions: writing `done` in that column is the request,
+    # and the point of writing it there is that the next run acts on it
+    assert "apply_marks" not in startup
+    assert "sync_sheet" in startup
+
+
+def test_the_dashboard_states_what_is_running_without_pricing_it():
+    from geelark_farm.ui import Snapshot
+
+    text = rendered(ui.dashboard(Snapshot(phones_total=10, phones_running=2)))
+
+    assert "2 running" in text
+    assert "billing" not in text.lower()
