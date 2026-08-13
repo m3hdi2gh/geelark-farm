@@ -207,6 +207,24 @@ class Pool:
         return [r for r in self._rows
                 if self.status_of(r) == self.claimed_status]
 
+    @property
+    def flagged(self) -> list[Resource]:
+        """Rows a run judged and set aside, with the reason it gave.
+
+        Everything that is not one of the four routine states - free, claimed,
+        on a device, retired. What is left is the pile someone has to make a
+        decision about, and until now the only way to see it was to open the
+        tab and read the Status column by eye.
+
+        Derived by elimination rather than by listing the failure reasons,
+        because the reasons are `failures.py`'s to know and this should not
+        need editing when one is added.
+        """
+        settled = set(self.available_statuses) | {
+            self.claimed_status, self.spent_status, self.retired_status}
+        return [r for r in self._rows
+                if not r.error and self.status_of(r) not in settled]
+
     # ------------------------------------------------------------ claiming
     def claim(self) -> Resource | None:
         """Take the first usable row, marking it so nothing else can.
@@ -534,7 +552,13 @@ class PhoneLog:
             # The reason is the head of the note now, not the status - which
             # says only whether the phone is usable. Whoever is deciding what
             # to finish wants the reason.
-            reason = cell("Note").split(".")[0].strip() or cell("Status")
+            # The first sentence of the note, without the opening the note
+            # writes for the tab - "Stopped short:" is worth saying in a cell
+            # whose neighbours are prose and not in a list of things to finish.
+            # Split on ". " rather than ".", or an address or a version number
+            # in the sentence cuts it in half.
+            reason = cell("Note").split(". ")[0].strip() or cell("Status")
+            reason = reason.removeprefix("Stopped short: ").rstrip(".")
             found.append({"sheet_row": offset, "phone_id": cell("Phone ID"),
                           "serial": cell("Serial"), "gmail": cell("Gmail"),
                           "proxy": cell("Proxy"), "status": reason})

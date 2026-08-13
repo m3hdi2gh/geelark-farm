@@ -27,12 +27,13 @@ from dataclasses import dataclass, field
 from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import builder, phones
+from . import builder, failures, phones
 from .api import ApiError, TransportError, build_client
 from .builder import Build
 from .config import Settings
@@ -616,31 +617,118 @@ def build_summary_panel(builds: list[Build]) -> Panel:
                          f"STILL BILLING", style=f"bold {BAD}"))
         for b in unstopped:
             body.append(Text(f"   {b.phone_id}", style=BAD))
-        body.append(Text("Run 'reap' from the menu now.", style=BAD))
+        body.append(Text("Stop them from the menu now.", style=BAD))
     else:
         body.append(Text("All phones are stopped; nothing is billing.",
                          style=DIM))
 
+    body.append(Text(""))
     for b in builds:
         if b.ok:
             who = b.gmail + (f" + {b.app_account}" if b.app_account else "")
-            body.append(Text(f"   {b.name}: {who}", style=OK))
+            body.append(Text(f"   {b.name}  ", style=OK) + Text(who, style=OK))
         else:
-            body.append(Text(f"   {b.name}: {b.status}", style=BAD))
+            # The same sentence the Phones tab gets. This printed `b.status` -
+            # so after twenty minutes the console said `no_usable_gpt` and left
+            # you to open the sheet to find out which accounts it had tried.
+            body.append(Text(f"   {b.name}  ", style=BAD)
+                        + Text(builder.outcome_of(b), style=BAD))
+        for attempt in builder.attempts_of(b):
+            body.append(Padding(Text(f"tried {attempt}", style=DIM),
+                                (0, 0, 0, 6)))
 
     return Panel(Group(*body), title="build summary", border_style=DIM,
                  padding=(1, 2))
 
 
 # ------------------------------------------------------------------ views
+def attention_view(settings: Settings) -> Panel:
+    """Everything waiting on a decision, and what the decision is.
+
+    The view this console did not have. Every question asked of this project
+    in a fortnight - which accounts were wrongly condemned, why that phone
+    stopped, what is safe to retry - was answered by opening the workbook and
+    reading Status columns by eye, then looking up what each reason meant.
+
+    All of it was already in the code: `failures.py` has written the advice
+    since the taxonomy landed, and nothing ever showed it to anyone.
+    """
+    book = Book.open(settings)
+    blocks: list = []
+
+    for pool in (book.gmails, book.apps, book.proxies):
+        flagged = pool.flagged
+        if not flagged:
+            continue
+        blocks.append(Text(f"{pool.tab} - {len(flagged)} set aside",
+                           style=f"bold {WARN}"))
+        for resource in flagged:
+            reason = pool.status_of(resource)
+            blocks.append(Text(f"   {resource.label}  ", style="") +
+                          Text(reason, style=BAD))
+            # The taxonomy's words, not the row's note - the note records what
+            # one run saw, this says what to do about it. Padded rather than
+            # indented with spaces, so the second line of a long one lands
+            # under the first instead of back at the margin.
+            blocks.append(Padding(Text(failures.verdict(reason).advice,
+                                       style=DIM), (0, 0, 0, 6)))
+        blocks.append(Text(""))
+
+    waiting = book.phones.unfinished()
+    if waiting:
+        blocks.append(Text(f"phones one step short - {len(waiting)}",
+                           style=f"bold {WARN}"))
+        for phone in waiting:
+            blocks.append(Text(f"   phone {phone['serial']}  {phone['gmail']}"))
+            blocks.append(Padding(Text(phone["status"], style=DIM), (0, 0, 0, 6)))
+        blocks.append(Text("Finish them from the menu - no new phone, Gmail or "
+                           "proxy is spent.", style=DIM))
+        blocks.append(Text(""))
+
+    stuck = [(pool, r) for pool in (book.proxies, book.gmails, book.apps)
+             for r in pool.stuck]
+    if stuck:
+        blocks.append(Text(f"claimed by a run that is gone - {len(stuck)}",
+                           style=f"bold {WARN}"))
+        for pool, resource in stuck:
+            blocks.append(Text(f"   {pool.tab}: {resource.label}", style=DIM))
+        blocks.append(Text("Free these from 'What I have to work with'.",
+                           style=DIM))
+        blocks.append(Text(""))
+
+    broken = [(pool, r) for pool in (book.proxies, book.gmails, book.apps)
+              for r in pool.broken]
+    if broken:
+        blocks.append(Text(f"rows this tool cannot use - {len(broken)}",
+                           style=f"bold {BAD}"))
+        for pool, resource in broken:
+            blocks.append(Padding(Text(f"{pool.tab} row {resource.sheet_row}: "
+                                       f"{resource.error}", style=BAD),
+                                  (0, 0, 0, 3)))
+        blocks.append(Text(""))
+
+    if not blocks:
+        return Panel(Text("Nothing is waiting on you.", style=OK),
+                     title="needs attention", border_style=DIM, padding=(1, 2))
+    return Panel(Group(*blocks[:-1]), title="needs attention",
+                 border_style=DIM, padding=(1, 2))
+
+
 def pools_view(settings: Settings) -> Panel:
-    """What each resource tab holds, and what a dead run left claimed."""
+    """What a build has to draw on: the sheet's stock and the plan's slots.
+
+    One view, because they are one question. They were two menu entries, and
+    the answer to "why did that phone never get created" is in whichever of
+    them you did not open.
+    """
     book = Book.open(settings)
     table = Table.grid(padding=(0, 3))
     table.add_column(style=DIM, justify="right")
     table.add_column()
     for pool in (book.proxies, book.gmails, book.apps):
         bits = f"[{OK if pool.available else BAD}]{len(pool.available)} available[/]"
+        if pool.flagged:
+            bits += f"   [{WARN}]{len(pool.flagged)} set aside[/]"
         if pool.stuck:
             bits += f"   [{WARN}]{len(pool.stuck)} stuck in_use[/]"
         if pool.broken:
@@ -649,7 +737,57 @@ def pools_view(settings: Settings) -> Panel:
         for resource in pool.broken:
             table.add_row("", f"[{BAD}]row {resource.sheet_row}: "
                               f"{resource.error}[/]")
-    return Panel(table, title="resource pools", border_style=DIM, padding=(1, 2))
+
+    try:
+        client = build_client(settings)
+        info = cached_plan(client)
+        used = len(phones.listing(client))
+        total = info.get("profiles") or 0
+        free = info.get("availableProfiles") or 0
+        table.add_row("", "")
+        table.add_row("plan slots", f"{total} total, "
+                                    f"[{OK if free else BAD}]{free} free[/]"
+                                    f"   [{DIM}]{used} are cloud phones[/]")
+        other = total - free - used
+        if other > 0:
+            # The answer to a create failing while the tab looks full.
+            table.add_row("", f"[{WARN}]{other} held by something else - "
+                              f"browser profiles share this pool[/]")
+        parallel = info.get("parallels")
+        table.add_row("parallel", str(parallel) if parallel else
+                      f"[{WARN}]none - concurrent phones may cost extra[/]")
+        table.add_row("renews", time.strftime(
+            "%d %b %Y", time.localtime(info.get("expirationTime", 0))))
+    except (ApiError, TransportError) as exc:
+        table.add_row("plan", f"[{BAD}]{str(exc).splitlines()[0]}[/]")
+
+    return Panel(table, title="what I have to work with", border_style=DIM,
+                 padding=(1, 2))
+
+
+def marks_preview(book: Book) -> tuple[list[dict], list]:
+    """What `Apply what I marked` would do, before it does any of it.
+
+    Deleting a phone is the one irreversible thing this console can be asked
+    to do, and it was reachable only as a side effect of starting a build -
+    where it happened before the first line of output.
+    """
+    marked = book.phones.marked()
+    lines: list = []
+    for row in marked:
+        done = row["state"] == book.phones.DONE
+        lines.append(Text(f"   phone {row['serial'] or row['phone_id'][:8]}  ",
+                          style="") + Text(row["state"],
+                                           style=OK if done else WARN))
+        lines.append(Text("      delete the phone and drop its row", style=DIM))
+        if row["gmail"]:
+            lines.append(Text(f"      {row['gmail']} - retired, never used "
+                              f"again", style=DIM))
+        if row["app_account"]:
+            what = ("delivered with the phone" if done else
+                    "freed, to try on another phone")
+            lines.append(Text(f"      {row['app_account']} - {what}", style=DIM))
+    return marked, lines
 
 
 
@@ -679,48 +817,32 @@ def phones_table(settings: Settings) -> Table:
     return table
 
 
-def plan_panel(settings: Settings) -> Panel:
-    client = build_client(settings)
-    # Through the cache, like the dashboard: asking twice inside a minute is
-    # what the endpoint refuses, and the menu redraws constantly.
-    info = cached_plan(client)
-    used = len(phones.listing(client))
-    total = info.get("profiles") or 0
-    free = info.get("availableProfiles") or 0
-
-    table = Table.grid(padding=(0, 3))
-    table.add_column(style=DIM, justify="right")
-    table.add_column()
-    table.add_row("plan", "Pro" if info.get("plan") == 1 else "Base")
-    table.add_row("monthly", f"${info.get('monthlyFee')}")
-    table.add_row("expires", time.strftime(
-        "%Y-%m-%d", time.localtime(info.get("expirationTime", 0))))
-    table.add_row("slots", f"{total} total, "
-                           f"[{OK if free else BAD}]{free} free[/]")
-    table.add_row("", f"{used} are cloud phones")
-    other = total - free - used
-    if other > 0:
-        table.add_row("", f"[{WARN}]{other} held by something else - browser "
-                          f"profiles share this pool[/]")
-    table.add_row("parallel", str(info.get("parallels"))
-                  + (f"  [{WARN}](concurrent phones beyond this may cost extra)[/]"
-                     if not info.get("parallels") else ""))
-    return Panel(table, title="subscription", border_style=DIM, padding=(1, 2))
-
-
 # ------------------------------------------------------------------- menu
-ACTIONS = [
-    ("1", "Build phones from pools",
+# Split by what a choice costs, because that is the distinction that matters
+# when you are about to press one: the first group changes something in the
+# world - phones, billing, the sheet - and the second only reads.
+#
+# The flat list of seven mixed them, and two of the seven were the same idea
+# twice: `Stop everything` and `Reap` both exist to end billing, one of them
+# selectively. They are one choice with a question now. `Subscription` is gone
+# as a destination - its two useful numbers are already on the dashboard, and
+# the rest of them belong beside the pools they compete with.
+DOING = [
+    ("1", "Build phones",
      "take a proxy, sign in a Gmail, install, sign in ChatGPT - the main job"),
-    ("2", "Finish phones waiting on an app account",
-     "reuses phones that are one step short - no new phone, Gmail or proxy"),
-    ("3", "Resource pools", "what the Gmails/Proxy/Gpt tabs hold; free stuck rows"),
-    ("4", "Phones", "what exists, and what is billing"),
-    ("5", "Stop everything", "ends all billing now"),
-    ("6", "Reap", "stop phones nothing is accountable for"),
-    ("7", "Subscription", "slots, free slots, parallel limit"),
-    ("q", "Quit", ""),
+    ("2", "Finish waiting phones",
+     "phones one step short - no new phone, Gmail or proxy is spent"),
+    ("3", "Apply what I marked",
+     "carry out the Phones tab's State column - shows what it will do first"),
+    ("4", "Stop running phones", "ends billing"),
 ]
+LOOKING = [
+    ("5", "Needs attention",
+     "what a run set aside, and what to do about each - start here"),
+    ("6", "What I have to work with", "the pool tabs, plan slots, anything stuck"),
+    ("7", "Phones", "what exists, and what is billing"),
+]
+ACTIONS = DOING + LOOKING + [("q", "Quit", "")]
 
 
 def menu() -> Table:
@@ -728,8 +850,12 @@ def menu() -> Table:
     table.add_column(style="bold cyan", justify="right")
     table.add_column()
     table.add_column(style=DIM)
-    for key, label, hint in ACTIONS:
-        table.add_row(key, label, hint)
+    for heading, group in (("do", DOING), ("look", LOOKING)):
+        table.add_row("", f"[{DIM}]{heading}[/]", "")
+        for key, label, hint in group:
+            table.add_row(key, label, hint)
+        table.add_row("", "", "")
+    table.add_row("q", "Quit", "")
     return table
 
 
@@ -885,6 +1011,15 @@ def run_console(settings: Settings) -> int:
                     console.print(build_summary_panel(builds))
 
             elif choice == "3":
+                apply_marks(settings)
+
+            elif choice == "4":
+                stop_phones(settings)
+
+            elif choice == "5":
+                console.print(attention_view(settings))
+
+            elif choice == "6":
                 console.print(pools_view(settings))
                 if snap.pools_stuck and Confirm.ask(
                         f"release {snap.pools_stuck} row(s) stuck as in_use - "
@@ -892,17 +1027,8 @@ def run_console(settings: Settings) -> int:
                     freed = Book.open(settings).release_stuck()
                     console.print(f"[{OK}]released {freed}[/]")
 
-            elif choice == "4":
-                console.print(phones_table(settings))
-
-            elif choice == "5":
-                stop_all(settings)
-
-            elif choice == "6":
-                reap(settings)
-
             elif choice == "7":
-                console.print(plan_panel(settings))
+                console.print(phones_table(settings))
 
         except (ApiError, TransportError, SheetError) as exc:
             console.print(f"[{BAD}]{exc}[/]")
@@ -913,6 +1039,8 @@ def run_console(settings: Settings) -> int:
 
 
 def stop_all(settings: Settings) -> None:
+    """Stop every running phone. Kept as its own function because quitting
+    with something still billing offers exactly this and nothing else."""
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
     targets = [p["id"] for p in phones.listing(client)
@@ -922,19 +1050,69 @@ def stop_all(settings: Settings) -> None:
         return
     for phone_id in targets:
         phones.stop(client, phone_id)
-        ledger.release(phone_id, note="stopped from the console")
+        ledger.release(phone_id, note="Stopped from the console.")
         console.print(f"[{OK}]stopped {phone_id}[/]")
 
 
-def reap(settings: Settings) -> None:
+def stop_phones(settings: Settings) -> None:
+    """One choice where there were two.
+
+    `Stop everything` and `Reap` were separate menu entries for one intention,
+    and which one you wanted depended on a distinction - whether a run is
+    accountable for a phone - that the menu never showed you. So show it, then
+    ask.
+    """
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
-    verdicts = phones.reapable(client, ledger)
-    if not verdicts:
-        console.print(f"[{OK}]nothing to reap[/]")
+    running = [p for p in phones.listing(client)
+               if p.get("status") in (phones.RUNNING, phones.STARTING)]
+    if not running:
+        console.print(f"[{OK}]nothing is running; nothing is billing[/]")
         return
-    for phone_id, reason in verdicts:
-        console.print(f"  {phone_id}  [{DIM}]{reason}[/]")
-    if Confirm.ask(f"stop {len(verdicts)} phone(s)", default=True):
-        phones.reap(client, ledger, verdicts=verdicts)
-        console.print(f"[{OK}]stopped {len(verdicts)}; billing ended[/]")
+
+    loose = {phone_id for phone_id, _ in phones.reapable(client, ledger)}
+    for item in running:
+        entry = ledger.get(item.get("id"))
+        who = (f"[{DIM}]{entry.label}[/]" if entry and item["id"] not in loose
+               else f"[{WARN}]nothing is accountable for it[/]")
+        console.print(f"  phone {item.get('serialNo', '?')}  {who}")
+
+    if not loose:
+        console.print(f"\n[{DIM}]a run is accountable for all of them; it "
+                      f"stops them itself when it ends[/]")
+    choice = Prompt.ask(
+        f"\nstop [a]ll {len(running)}"
+        + (f", just the [u]naccounted {len(loose)}" if loose else "")
+        + ", or [n]othing",
+        choices=["a", "u", "n"] if loose else ["a", "n"], default="n")
+    if choice == "a":
+        stop_all(settings)
+    elif choice == "u":
+        phones.reap(client, ledger)
+        console.print(f"[{OK}]stopped {len(loose)}; billing ended[/]")
+
+
+def apply_marks(settings: Settings) -> None:
+    """Carry out the Phones tab's State column, after saying what that means.
+
+    This ran only at the start of a build, before its first line of output -
+    so the one irreversible thing here, deleting a phone, happened where
+    nobody was looking for it.
+    """
+    book = Book.open(settings)
+    marked, lines = marks_preview(book)
+    if not marked:
+        console.print(f"[{DIM}]no phone is marked done or failed in the "
+                      f"State column[/]")
+        return
+    console.print(Panel(Group(*lines), title="what this will do",
+                        border_style=DIM, padding=(1, 2)))
+    console.print(f"[{WARN}]Deleting a phone cannot be undone.[/]")
+    if not Confirm.ask(f"apply {len(marked)} mark(s)", default=False):
+        return
+    outcome = builder.apply_phone_states(
+        build_client(settings), book, Ledger.load(settings.state_dir))
+    for label, items in outcome.items():
+        if items:
+            style = WARN if label == "running" else OK
+            console.print(f"[{style}]{label}: {', '.join(items)}[/]")

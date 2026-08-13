@@ -874,6 +874,26 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
                       pool.tab, resource.label, exc)
 
 
+def outcome_of(build: Build) -> str:
+    """Why this phone ended where it did, as one lowercase clause.
+
+    Shared with the console, which lays the same facts out over several lines
+    rather than in one sentence. Two renderings of one build used to be two
+    descriptions of it: the tab said what happened and the console printed
+    `no_usable_gpt`, which is the token this file spent a day removing from
+    everywhere else.
+    """
+    if build.ok:
+        return "signed into Google, and into ChatGPT in the app"
+    return build.detail or failures.situation(build.status)
+
+
+def attempts_of(build: Build) -> list[str]:
+    """Every credential this build gave up on, one readable line each."""
+    return [f"{email} - {failures.verdict(reason).seen}"
+            for email, reason in build.tried]
+
+
 def _phone_note(build: Build) -> str:
     """What the Phones tab says about this build, in sentences.
 
@@ -887,16 +907,14 @@ def _phone_note(build: Build) -> str:
     the output of `pm list packages`. The reason tokens are still exact in the
     terminal summary and the logs, which is where you want to grep them.
     """
-    if build.ok:
-        opening = "Ready - signed into Google, and into ChatGPT in the app."
-    else:
-        opening = f"Stopped short: {build.detail or failures.situation(build.status)}."
+    opening = (f"Ready - {outcome_of(build)}." if build.ok
+               else f"Stopped short: {outcome_of(build)}.")
     if not build.tried:
         return opening
     # Everything it gave up on before getting here. On a ready phone these are
     # the false starts; on one that stopped short they are the whole story.
-    attempts = "; ".join(f"{email} ({failures.verdict(reason).seen})"
-                         for email, reason in build.tried)
+    attempts = "; ".join(line.replace(" - ", " (", 1) + ")"
+                         for line in attempts_of(build))
     lead = "Also tried" if build.ok else "Tried"
     return f"{opening} {lead}: {attempts}."
 
