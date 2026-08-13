@@ -61,6 +61,11 @@ class Snapshot:
     gmails_free: int = 0
     apps_free: int = 0
     pools_stuck: int = 0
+    #: Rows the pools refuse to hand out - a duplicate of an earlier row, a
+    #: 2FA secret that will not decode. They are why a count can be lower than
+    #: the number of blank Status cells you can see in the tab, and without
+    #: them on this screen that difference looks like the tool miscounting.
+    pools_broken: int = 0
     # Phones with a Gmail and no app account: built, one step short, and
     # cheaper to finish than to replace.
     phones_unfinished: int = 0
@@ -139,6 +144,8 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.apps_free = len(book.apps.available)
             snap.pools_stuck = sum(len(p.stuck) for p in
                                    (book.proxies, book.gmails, book.apps))
+            snap.pools_broken = sum(len(p.broken) for p in
+                                    (book.proxies, book.gmails, book.apps))
             snap.phones_unfinished = len(book.phones.unfinished())
         except SheetError as exc:
             snap.error = snap.error or str(exc).splitlines()[0]
@@ -161,7 +168,12 @@ def dashboard(snap: Snapshot) -> Panel:
                                 tint(snap.apps_free, "gpt")))
         if snap.pools_stuck:
             pool_bits += f"   [{WARN}]{snap.pools_stuck} stuck in_use[/]"
+        if snap.pools_broken:
+            pool_bits += (f"   [{BAD}]{snap.pools_broken} unusable[/]")
         table.add_row("pools", pool_bits)
+        if snap.pools_broken:
+            table.add_row("", f"[{DIM}]those rows are in the tab and cannot be "
+                              f"handed out - 'Needs attention' says why[/]")
 
     # Said, not shouted. Which phones are up is worth knowing; what it costs
     # is the operator's business and they have said so, so this stopped being

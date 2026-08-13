@@ -252,3 +252,27 @@ def test_the_dashboard_states_what_is_running_without_pricing_it():
 
     assert "2 running" in text
     assert "billing" not in text.lower()
+
+
+def test_the_dashboard_says_when_rows_are_being_refused():
+    """`2 gpt` beside four blank Status cells reads as the tool miscounting.
+    Two of them were duplicates of earlier rows, which the pools refuse so one
+    account cannot be signed into two phones at once - true, and invisible on
+    the first screen anyone looks at."""
+    from geelark_farm.ui import Snapshot
+
+    text = rendered(ui.dashboard(Snapshot(proxies_free=16, gmails_free=18,
+                                          apps_free=2, pools_broken=2)))
+
+    assert "2 gpt" in text
+    assert "2 unusable" in text
+    assert "Needs attention" in text
+
+
+def test_a_clean_dashboard_says_nothing_about_refused_rows():
+    from geelark_farm.ui import Snapshot
+
+    text = rendered(ui.dashboard(Snapshot(proxies_free=16, gmails_free=18,
+                                          apps_free=2)))
+
+    assert "unusable" not in text
