@@ -142,3 +142,36 @@ def test_the_reasons_a_build_raises_itself_can_also_be_said():
     assert not missing, (
         f"these stop a build and land in the Phones tab with no way to say "
         f"them in words: {missing}. Add each to SITUATIONS in failures.py.")
+
+
+def test_the_date_a_note_carries_needs_no_platform_branch():
+    """Dropping a leading zero is a strftime flag, and it is not the same flag
+    everywhere: `%-d` on BSD and glibc, `%#d` on Windows, each raising
+    ValueError on the other. This was the only line in the package that
+    branched on the platform - a poor thing to find out from a traceback
+    inside a sheet write on a machine you are not sitting at."""
+    import time
+
+    for stamp, expected in (("2026-08-03", "3 Aug 2026"),
+                            ("2026-08-13", "13 Aug 2026"),
+                            ("2026-12-01", "1 Dec 2026")):
+        parsed = time.strptime(stamp, "%Y-%m-%d")
+        assert time.strftime("%d %b %Y", parsed).lstrip("0") == expected
+
+    assert failures.today()          # and it runs here, whatever here is
+    assert not failures.today().startswith("0")
+
+
+def test_nothing_in_the_package_branches_on_the_operating_system():
+    import pathlib
+
+    src = pathlib.Path(failures.__file__).parent
+    offenders = [f"{p.name}:{n}" for p in src.rglob("*.py")
+                 for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+                 if ("os.name" in line or "sys.platform" in line
+                     or "platform.system" in line)]
+
+    assert not offenders, (
+        f"{offenders} behave differently per platform. This runs on Windows "
+        f"and on a Mac, and the difference should be in the standard library "
+        f"rather than here.")

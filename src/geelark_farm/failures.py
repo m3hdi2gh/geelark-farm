@@ -26,7 +26,6 @@ build without someone deciding what it means.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 
@@ -327,5 +326,12 @@ def today() -> str:
     Notes used to carry ISO dates because that is what `strftime('%Y-%m-%d')`
     gives you for free. Nobody writes to another person in ISO, and these
     columns are read by a person.
+
+    The leading zero is stripped rather than asked for. Dropping it is a
+    strftime flag and the flag is not the same one everywhere - `%-d` on BSD
+    and glibc, `%#d` on Windows, and each raises ValueError on the other. This
+    was the only line in the package that branched on the platform, which is a
+    poor thing to discover from a traceback inside a sheet write on someone
+    else's machine.
     """
-    return time.strftime("%-d %b %Y" if os.name != "nt" else "%#d %b %Y")
+    return time.strftime("%d %b %Y").lstrip("0")
