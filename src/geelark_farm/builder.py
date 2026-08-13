@@ -1066,6 +1066,142 @@ def apply_phone_states(client: Client, book: Book,
     return outcome
 
 
+def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
+               apply_marks: bool = True,
+               check_proxies: bool = True) -> dict[str, list[str]]:
+    """Bring all four tabs back into agreement with the world. Every run.
+
+    The pieces existed and were called in a different combination from each of
+    three places - `build` did three of them, `finish` did two, the console did
+    one - so what a tab said depended on which door you came in by. This is the
+    one door.
+
+    The order is not arrangeable:
+
+    1. **Gmails, then Gpt Info, then Phones.** Acting on the State column
+       deletes phones, and the credentials a phone carried are named on its
+       row - so they have to be settled while the row still exists. A Gmail is
+       retired either way, since it signed into that phone whatever became of
+       it. An app account is `delivered` if the phone was marked done and freed
+       if it was marked failed, because a failed phone never gave it a fair
+       device. That is `apply_phone_states`, and its internal order is this.
+    2. **Reload.** The rows moved.
+    3. **Proxy.** After the deletions, so the exits those phones held are seen
+       to be free rather than freed a run later.
+    4. **Test what is free.** Last, because steps 1-3 are what decide which
+       proxies are free to test.
+
+    Two switches, for the two halves that are not alike:
+
+    `apply_marks` is the half that deletes phones. It is the only irreversible
+    thing here, so a caller has to ask for it. `geelark pools` does not - it is
+    a report, and a report that deletes six phones because a column said so is
+    not one. A run does, and the console does after showing what it will do.
+
+    `check_proxies` is the part that costs real time - a live connection per
+    free proxy - so a caller that only wants the tabs tidied can leave it out.
+    """
+    outcome = apply_phone_states(client, book, ledger) if apply_marks else {}
+    book.reload()
+    outcome.update(sync_proxies(client, book))
+    outcome["repointed"] = sync_phone_proxies(client, book)
+    if check_proxies:
+        outcome["dead"] = [r.label for r in check_free_proxies(client, book)]
+    return {key: items for key, items in outcome.items() if items}
+
+
+def _live_exits(client: Client) -> dict[str, dict]:
+    """What GeeLark says is behind each exit: `host:port` -> the phone on it.
+
+    The only authority on this. The Proxy tab records what a run believed when
+    it wrote the row, and the two come apart every time a phone is deleted from
+    the panel or moved onto another exit mid-run.
+    """
+    found: dict[str, dict] = {}
+    for phone in phones.listing(client):
+        config = phone.get("proxy") or {}
+        if config.get("server"):
+            found[f"{config['server']}:{config.get('port')}"] = phone
+    return found
+
+
+def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
+    """Make the Proxy tab say what is actually behind each exit.
+
+    Three ways the tab drifts, and it only ever fixed one of them:
+
+    - a phone is deleted from the panel and its proxy stays `on a phone`
+      forever. Thirteen of twenty-two were locked to phones that had been gone
+      for days, and a run failed with no_usable_proxy while they sat there
+      (2026-08-11). This is what `reclaim` was written for.
+    - a phone is moved onto another exit mid-run and the old row keeps its
+      serial, so one phone holds two proxies (2026-08-13, SX5 and SX18).
+    - a row says `free`, or `dead`, with a live phone behind it. Nothing ever
+      corrected that direction at all, and the second one is a contradiction:
+      the phone is the side of it that demonstrably works.
+
+    `claimed` rows are left alone. That word means a run holds it right now,
+    and a second run tidying it away is how two phones end up on one exit.
+    """
+    live = _live_exits(client)
+    changed: dict[str, list[str]] = {"attached": [], "released": []}
+
+    for resource in book.proxies._rows:
+        if resource.error or not resource.proxy:
+            continue
+        status = book.proxies.status_of(resource)
+        if status == book.proxies.claimed_status:
+            continue
+        phone = live.get(f"{resource.proxy.host}:{resource.proxy.port}")
+        if phone is not None:
+            serial = str(phone.get("serialNo") or phone.get("id") or "")
+            already = (resource.values.get(book.proxies.serial_column) or "")
+            if status != book.proxies.spent_status or already.strip() != serial:
+                book.proxies.attach(resource, serial)
+                changed["attached"].append(f"{resource.label} -> phone {serial}")
+        elif status == book.proxies.spent_status:
+            book.proxies.release(resource, note=(
+                "Free again - no phone is behind this exit any more."))
+            book.proxies._set(resource, {book.proxies.serial_column: ""})
+            changed["released"].append(resource.label)
+
+    for label, items in changed.items():
+        if items:
+            log.info("proxies %s: %d", label, len(items))
+    return changed
+
+
+def sync_phone_proxies(client: Client, book: Book) -> list[str]:
+    """Correct the Phones tab's Proxy column from the phone itself.
+
+    A phone that swapped exits mid-run has its row rewritten by the build that
+    moved it - but only if that build got as far as recording. One that was
+    repointed by hand in the panel, or by a run that died, keeps the string it
+    was created with, and that cell is what someone reads to answer "which
+    exit is this phone on".
+    """
+    live = {phone.get("id"): phone for phone in phones.listing(client)}
+    corrected = []
+    for row in book.phones.rows():
+        phone = live.get(row.get("Phone ID"))
+        if phone is None:
+            continue
+        config = phone.get("proxy") or {}
+        if not config.get("server"):
+            continue
+        actual = str(proxy_mod.Proxy(
+            scheme=config.get("type") or "socks5", host=config["server"],
+            port=int(config.get("port") or 0),
+            username=config.get("username", ""),
+            password=config.get("password", "")))
+        if (row.get("Proxy") or "").strip() != actual:
+            book.phones.finish(row["sheet_row"], Proxy=actual)
+            corrected.append(f"phone {row.get('Serial')}")
+    if corrected:
+        log.info("corrected the exit recorded for %d phone(s)", len(corrected))
+    return corrected
+
+
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
     """Put back every proxy whose phone has been deleted.
 
@@ -1258,14 +1394,7 @@ def run(client: Client, settings: Settings, *, count: int,
     """
     book = Book.open(settings)
     if not dry_run:
-        # Order matters. Acting on the State column deletes phones, which is
-        # what frees their proxies for the reclaim below and their app accounts
-        # for the build that follows. Then find out which free proxies still
-        # answer, so the numbers printed are the ones a run will meet.
-        apply_phone_states(client, book, Ledger.load(settings.state_dir))
-        book.reload()
-        reclaim_proxies(client, book)
-        check_free_proxies(client, book)
+        sync_sheet(client, book, Ledger.load(settings.state_dir))
 
     waiting: list[dict] = []
     gone: list[dict] = []
@@ -1328,9 +1457,10 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
     """Complete every phone that is one step short, and build nothing."""
     book = Book.open(settings)
     if not dry_run:
-        apply_phone_states(client, book, Ledger.load(settings.state_dir))
-        book.reload()
-        reclaim_proxies(client, book)
+        # A finish reuses the phone's own exit and only takes a free one if
+        # it has to swap, so the pool check is worth its seconds here too -
+        # that is the run that discovers a swap has nowhere to go.
+        sync_sheet(client, book, Ledger.load(settings.state_dir))
     pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]

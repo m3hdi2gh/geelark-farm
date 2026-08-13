@@ -433,6 +433,22 @@ class ProxyPool(Pool):
         if exit_ip:
             self._set(resource, {"Last Exit IP": exit_ip})
 
+    def attach(self, resource: Resource, serials: str) -> None:
+        """Say which phone is behind this exit, replacing whatever was there.
+
+        Not `spend`, which appends: that is right while a run is working,
+        because a swap has to name both the exit it left and the one it took.
+        This is the other direction - the answer read back off GeeLark, which
+        is the only thing that actually knows - so it replaces.
+
+        It also un-marks a proxy someone had written off. A row saying `dead`
+        with a live phone behind it is a contradiction, and the phone is the
+        side of it that is demonstrably working.
+        """
+        self._set(resource, {self.status_column: self.spent_status,
+                             self.serial_column: serials,
+                             self.note_column: f"On phone {serials}."})
+
     def reclaim(self, in_use: set[str]) -> list[Resource]:
         """Free proxies held by a phone that no longer exists.
 
@@ -636,6 +652,26 @@ class PhoneLog:
             for n in sorted(sheet_rows, reverse=True)]
         with self._lock:
             self._ws.spreadsheet.batch_update({"requests": requests})
+
+    def rows(self) -> list[dict]:
+        """Every phone this tab records, as it stands.
+
+        `unfinished` and `marked` each read the whole tab to answer one
+        question about it. This answers "what does the tab say", so a caller
+        with a third question - which proxy does it think each phone is on -
+        does not need a fourth reader.
+        """
+        with self._lock:
+            raw = self._ws.get_all_values()
+        found = []
+        for offset, line in enumerate(raw[1:], start=2):
+            if not any(line):
+                continue
+            row = {name: (line[i].strip() if i < len(line) else "")
+                   for name, i in self._index.items()}
+            row["sheet_row"] = offset
+            found.append(row)
+        return found
 
     def finish(self, sheet_row: int, **fields: str) -> None:
         payload = []

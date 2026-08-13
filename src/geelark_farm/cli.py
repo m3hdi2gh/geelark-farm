@@ -81,6 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_pools.add_argument("--release-stuck", action="store_true",
                          help="free rows a dead run left claimed as in_use. "
                               "Only when no other run is in progress")
+    p_pools.add_argument("--no-sync", action="store_true",
+                         help="report the tabs as they stand, without first "
+                              "bringing them into agreement with the panel")
 
     # ------------------------------------------------------------- input
     # ------------------------------------------------------ diagnostics
@@ -639,19 +642,18 @@ def cmd_pools(settings: Settings, args) -> int:
         return 0
 
     # Corrected before it is reported, so the numbers below are what a run
-    # would actually find rather than what the sheet last recorded.
+    # would actually find rather than what the sheet last recorded - and by
+    # the same call a run makes, so the two cannot answer differently.
     client = build_client(settings)
-    reclaimed = builder.reclaim_proxies(client, book)
-    if reclaimed:
-        print(f"freed {len(reclaimed)} proxy(s) held by phones that no longer "
-              f"exist:")
-        for resource in reclaimed:
-            print(f"  {resource.label}")
-    dead = builder.check_free_proxies(client, book)
-    if dead:
-        print(f"{len(dead)} proxy(s) no longer answer and are marked dead:")
-        for resource in dead:
-            print(f"  {resource.label}")
+    if args.no_sync:
+        print("(reporting the tabs as they stand; --no-sync)\n")
+    for label, items in ({} if args.no_sync else builder.sync_sheet(
+            client, book, Ledger.load(settings.state_dir),
+            # A report does not delete phones. `geelark build` carries out the
+            # State column, and the console does after showing what it will do.
+            apply_marks=False)).items():
+        print(f"{label}: {', '.join(items)}")
+    book.reload()
 
     for pool in (book.proxies, book.gmails, book.apps):
         print(f"\n{pool.tab}")

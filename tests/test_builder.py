@@ -477,8 +477,7 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
                {"sheet_row": 3, "phone_id": "P2", "serial": "670",
                 "gmail": "b@example.com", "proxy": "", "status": "no_usable_gpt"}]
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
-    monkeypatch.setattr(builder, "reclaim_proxies", lambda c, b: [])
-    monkeypatch.setattr(builder, "check_free_proxies", lambda c, b: [])
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
 
@@ -502,8 +501,7 @@ def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
                 "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}
                for r in (2, 3, 4)]
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
-    monkeypatch.setattr(builder, "reclaim_proxies", lambda c, b: [])
-    monkeypatch.setattr(builder, "check_free_proxies", lambda c, b: [])
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
 

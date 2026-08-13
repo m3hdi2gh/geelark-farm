@@ -841,8 +841,8 @@ DOING = [
      "take a proxy, sign in a Gmail, install, sign in ChatGPT - the main job"),
     ("2", "Finish waiting phones",
      "phones one step short - no new phone, Gmail or proxy is spent"),
-    ("3", "Apply what I marked",
-     "carry out the Phones tab's State column - shows what it will do first"),
+    ("3", "Update the sheet",
+     "make all four tabs agree with the panel, and carry out the State column"),
     ("4", "Stop running phones", "ends billing"),
 ]
 LOOKING = [
@@ -1101,27 +1101,62 @@ def stop_phones(settings: Settings) -> None:
         console.print(f"[{OK}]stopped {len(loose)}; billing ended[/]")
 
 
-def apply_marks(settings: Settings) -> None:
-    """Carry out the Phones tab's State column, after saying what that means.
+#: What each key of a sync report means, in the order a person would want to
+#: read it: what was decided about the credentials, then what happened to the
+#: phones, then the exits.
+SYNC_LABELS = [
+    ("retired", "Gmails retired - they had been on a phone that is now gone"),
+    ("delivered", "app accounts delivered with a phone marked done"),
+    ("freed", "app accounts freed - their phone was marked failed"),
+    ("deleted", "phones deleted, from GeeLark and from the tab"),
+    ("running", "marked, but running - left exactly as they are"),
+    ("attached", "proxies now recorded against the phone actually on them"),
+    ("released", "proxies freed - nothing is behind them"),
+    ("repointed", "phones whose recorded exit was out of date"),
+    ("dead", "free proxies that no longer answer"),
+]
 
-    This ran only at the start of a build, before its first line of output -
-    so the one irreversible thing here, deleting a phone, happened where
-    nobody was looking for it.
+
+def show_sync(outcome: dict[str, list[str]]) -> None:
+    if not outcome:
+        console.print(f"[{OK}]every tab already agreed with the panel[/]")
+        return
+    for key, meaning in SYNC_LABELS:
+        items = outcome.get(key)
+        if not items:
+            continue
+        style = WARN if key in ("running", "dead") else OK
+        console.print(f"[{style}]{len(items)} {meaning}[/]")
+        for item in items:
+            console.print(f"   [{DIM}]{item}[/]")
+
+
+def apply_marks(settings: Settings) -> None:
+    """Bring every tab back into agreement with the panel.
+
+    Two things at once, because they are one job and doing half of it is what
+    left a tab disagreeing with the other three. The half that deletes phones
+    is the only irreversible thing this console does, and it used to happen
+    only at the start of a build, before its first line of output - so it is
+    previewed here and nothing else waits on the answer.
     """
     book = Book.open(settings)
     marked, lines = marks_preview(book)
-    if not marked:
-        console.print(f"[{DIM}]no phone is marked done or failed in the "
-                      f"State column[/]")
-        return
-    console.print(Panel(Group(*lines), title="what this will do",
-                        border_style=DIM, padding=(1, 2)))
-    console.print(f"[{WARN}]Deleting a phone cannot be undone.[/]")
-    if not Confirm.ask(f"apply {len(marked)} mark(s)", default=False):
-        return
-    outcome = builder.apply_phone_states(
-        build_client(settings), book, Ledger.load(settings.state_dir))
-    for label, items in outcome.items():
-        if items:
-            style = WARN if label == "running" else OK
-            console.print(f"[{style}]{label}: {', '.join(items)}[/]")
+    apply = False
+    if marked:
+        console.print(Panel(Group(*lines), title="what the State column asks for",
+                            border_style=DIM, padding=(1, 2)))
+        console.print(f"[{WARN}]Deleting a phone cannot be undone.[/]")
+        apply = Confirm.ask(f"apply {len(marked)} mark(s) and sync",
+                            default=False)
+        if not apply and not Confirm.ask(
+                "sync the other tabs anyway - nothing in that half deletes "
+                "anything", default=True):
+            return
+    else:
+        console.print(f"[{DIM}]no phone is marked done or failed; syncing the "
+                      f"tabs against the panel[/]")
+
+    show_sync(builder.sync_sheet(build_client(settings), book,
+                                 Ledger.load(settings.state_dir),
+                                 apply_marks=apply))

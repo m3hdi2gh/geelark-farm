@@ -184,3 +184,34 @@ def test_the_summary_does_not_claim_a_phone_has_stopped_billing():
 
     assert "nothing is billing" not in text
     assert "told to stop" in text
+
+
+def test_a_report_does_not_delete_phones():
+    """`geelark pools` reads. It ran the whole sync for one commit, and the
+    first time it was run it deleted six phones because the State column said
+    so - which is the right thing for a build to do and not for a report."""
+    from geelark_farm import cli
+
+    tree = ast.parse(pathlib.Path(cli.__file__).read_text(encoding="utf-8"))
+    pools = next(node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef) and node.name == "cmd_pools")
+    calls = [node for node in ast.walk(pools)
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "sync_sheet"]
+
+    assert calls, "cmd_pools no longer syncs at all"
+    for call in calls:
+        passed = {kw.arg: kw.value for kw in call.keywords}
+        assert "apply_marks" in passed, "pools must say so either way"
+        assert passed["apply_marks"].value is False
+
+
+def test_the_console_asks_before_carrying_out_the_state_column():
+    source = SRC.read_text(encoding="utf-8")
+    body = source[source.index("def apply_marks"):]
+
+    assert "Confirm.ask" in body
+    assert "apply_marks=apply" in body
+    # declining the deletions still syncs the rest, which deletes nothing
+    assert "sync the other tabs anyway" in body
