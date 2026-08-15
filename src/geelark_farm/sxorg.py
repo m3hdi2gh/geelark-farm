@@ -11,10 +11,36 @@ error worth crashing a build over; it just means the next proxy.
 
 Only the proxies in sx.org's *port* product can be refreshed this way, because
 `portId` is what identifies them and it comes from `/v2/proxy/ports`. The
-"Unlimited proxies" product does not appear in that listing at all (measured
-2026-08-11: `countProxies 0` under every filter, while the panel showed them),
-so a Proxy tab row with no `Port ID` simply cannot be refreshed. That is why
-`refresh()` is asked for permission rather than assumed to work.
+"Unlimited proxies" product does not appear in that listing at all, so a Proxy
+tab row with no `Port ID` simply cannot be refreshed. That is why `refresh()`
+is asked for permission rather than assumed to work.
+
+## The whole API, so nobody derives it twice
+
+Nineteen endpoints, read off docs.sx.org and each one called against the live
+key (2026-08-14). All are GET, all take the key as `?apiKey=`:
+
+    /v2/user/balance              /v2/proxy/ports          /v2/dir/countries
+    /v2/plan/info                 /v2/proxy/port-info      /v2/dir/states
+    /v2/proxy/search              /v2/proxy/create-port    /v2/dir/cities
+    /v2/proxy/refresh/{portId}    /v2/proxy/delete-port    /v2/dir/asns
+    /v2/proxy/total-spent-traffic /v2/proxy/archive-port
+    /v2/proxy-template            /v2/proxy/change-name
+    /v2/proxy-template/create-template, /update-template, /delete-template
+
+There is no `/v1` of any of them, and no endpoint anywhere returns the
+Unlimited proxies - not `ports` under any filter including `archived`, not
+`search`, not `plan/info`. That is now known by exhausting the surface rather
+than by inference.
+
+What `plan/info` does return is `urls.all`, `urls.residential` and
+`urls.mobile`: download links, on an `/api/v1/proxy-list/<token>.txt` path,
+holding the rotating pool this account can reach - 460,669 entries, one
+gateway, a UUID per line as the username. Those work (checked through GeeLark:
+three at random, three different exit addresses) and they are billed by
+traffic, which is a different bargain from the flat-fee proxies in the tab.
+Note the shape: one host:port, many usernames - which is why `Pool._identity`
+counts the username.
 """
 
 from __future__ import annotations
