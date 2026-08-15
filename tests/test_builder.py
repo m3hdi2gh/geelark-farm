@@ -1198,3 +1198,67 @@ def test_a_dead_proxy_that_still_does_not_answer_is_left_as_it_was(monkeypatch):
 
     assert dead == [] and revived == []
     assert buried.values["Note"] == "Did not answer: the first reason."
+
+
+# --------------------------------------------- the call every session starts with
+@pytest.fixture
+def world(monkeypatch):
+    """A panel with two phones on it, and a record of what was done to it."""
+    live = [{"id": "P729", "serialNo": "729", "status": 2,
+             "proxy": {"type": "socks5", "server": "10.0.0.0", "port": 9999,
+                       "username": "u", "password": "p"}},
+            {"id": "P730", "serialNo": "730", "status": 2,
+             "proxy": {"type": "socks5", "server": "10.0.0.1", "port": 9999,
+                       "username": "u", "password": "p"}}]
+    done = {"deleted": []}
+
+    def delete(client, ids, ledger=None):
+        done["deleted"].extend(ids)
+        live[:] = [p for p in live if p["id"] not in ids]
+
+    monkeypatch.setattr(builder.phones, "listing", lambda c: list(live))
+    monkeypatch.setattr(builder.phones, "delete", delete)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda c, p: {"outboundIP": "8.8.8.8"})
+    done["live"] = live
+    return done
+
+
+def test_the_sync_every_session_starts_with_actually_runs(world, monkeypatch):
+    """It had no test at all - everything that reaches it patches it out - so a
+    rename inside it broke the first line of every console session and the
+    suite stayed green. `'bool' object is not callable` (2026-08-14).
+    """
+    book = make_book(gmails=2, proxies=2, apps=2)
+    book.phones = FakePhoneLog([
+        {"sheet_row": 2, "state": "done", "serial": "729",
+         "gmail": "g0@example.com", "app_account": "a0@example.com"}])
+    book.phones.rows = lambda: []
+    book.reload = lambda: None
+
+    outcome = builder.sync_sheet(None, book, FakeLedger())
+
+    # the marked phone went, with its credentials settled either way
+    assert world["deleted"] == ["P729"]
+    assert outcome["deleted"] == ["729"]
+    assert outcome["delivered"] == ["a0@example.com"]
+    assert outcome["retired"] == ["g0@example.com"]
+    # the proxy it was on is free again, and the one still behind a phone is not
+    assert book.proxies._rows[0].values["Status"] == "free"
+    assert book.proxies._rows[1].values["Used By"] == "730"
+
+
+def test_the_sync_can_be_asked_to_skip_the_part_that_costs_time(world):
+    """A live connection per free proxy is the only slow half, and the switch
+    that turns it off is the one that shadowed the function it turns on."""
+    asked = []
+    book = make_book(gmails=1, proxies=2, apps=1)
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: []
+    book.reload = lambda: None
+
+    builder.sync_sheet(None, book, FakeLedger(), probe_proxies=False)
+
+    assert asked == []
+    assert "dead" not in builder.sync_sheet(None, book, FakeLedger(),
+                                            probe_proxies=False)

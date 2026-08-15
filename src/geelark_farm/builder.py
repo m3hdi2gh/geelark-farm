@@ -1144,7 +1144,7 @@ def apply_phone_states(client: Client, book: Book,
 
 def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
                apply_marks: bool = True,
-               check_proxies: bool = True) -> dict[str, list[str]]:
+               probe_proxies: bool = True) -> dict[str, list[str]]:
     """Bring all four tabs back into agreement with the world. Every run.
 
     The pieces existed and were called in a different combination from each of
@@ -1174,14 +1174,18 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     a report, and a report that deletes six phones because a column said so is
     not one. A run does, and the console does after showing what it will do.
 
-    `check_proxies` is the part that costs real time - a live connection per
+    `probe_proxies` is the part that costs real time - a live connection per
     free proxy - so a caller that only wants the tabs tidied can leave it out.
+    Named for the switch rather than the function it turns on, because those
+    were the same word for one commit: the parameter shadowed `check_proxies`
+    inside this body, and calling it raised `'bool' object is not callable` on
+    the first line of every console session (2026-08-14).
     """
     outcome = apply_phone_states(client, book, ledger) if apply_marks else {}
     book.reload()
     outcome.update(sync_proxies(client, book))
     outcome["repointed"] = sync_phone_proxies(client, book)
-    if check_proxies:
+    if probe_proxies:
         gone, back = check_proxies(client, book)
         outcome["dead"] = [r.label for r in gone]
         outcome["revived"] = [r.label for r in back]
