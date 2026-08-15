@@ -40,20 +40,46 @@ SECRET = "JBSWY3DPEHPK3PXP"
 class FakeWorksheet:
     """Enough gspread to answer a read and record the writes."""
 
+    #: gspread exposes the sheet's numeric id, which `delete_rows` addresses
+    #: the tab by. Anything will do here; it only has to exist.
+    id = 1
+
     def __init__(self, headers: list[str], rows: list[list[str]]):
         self.headers = headers
         self.rows = [list(r) + [""] * (len(headers) - len(r)) for r in rows]
         self.writes: list[dict] = []
+        self.deleted_rows: list[int] = []
 
     def get_all_values(self):
         return [self.headers, *self.rows]
+
+    #: gspread reaches the workbook through the worksheet, and `delete_rows`
+    #: goes that way. One object answers both here.
+    @property
+    def spreadsheet(self):
+        return self
 
     def row_values(self, _index):
         return self.headers
 
     def batch_update(self, payload):
-        # gspread applies the write; so does this, or a second read would
-        # disagree with the sheet the caller believes it just changed.
+        """Both shapes gspread calls this with.
+
+        A list of cell ranges is a worksheet write; a dict of `requests` is the
+        workbook-level API, which is how a row is deleted. They arrive at the
+        same method name, so this dispatches on the payload.
+
+        gspread applies the write; so does this, or a second read would
+        disagree with the sheet the caller believes it just changed.
+        """
+        if isinstance(payload, dict):
+            for request in payload.get("requests", []):
+                span = request["deleteDimension"]["range"]
+                index = span["startIndex"]           # 0-based, header included
+                self.deleted_rows.append(index + 1)
+                if 0 <= index - 1 < len(self.rows):
+                    del self.rows[index - 1]
+            return None
         for item in payload:
             self.writes.append(item)
             cell = item["range"].split(":")[0]
@@ -63,6 +89,7 @@ class FakeWorksheet:
                 self.rows.append([""] * len(self.headers))
             values = item["values"][0]
             self.rows[index][column:column + len(values)] = values
+        return None
 
 
 def gmail_pool(rows) -> GmailPool:

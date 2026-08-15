@@ -1157,6 +1157,7 @@ SYNC_LABELS = [
     ("released", "proxies freed - nothing is behind them"),
     ("repointed", "phones whose recorded exit was out of date"),
     ("dead", "free proxies that no longer answer"),
+    ("revived", "proxies marked dead that are answering again"),
 ]
 
 

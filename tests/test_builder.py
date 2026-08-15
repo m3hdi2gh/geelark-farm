@@ -8,7 +8,9 @@ behind one proxy. None of them raises.
 
 from __future__ import annotations
 
+import itertools
 import threading
+import time
 
 import pytest
 
@@ -414,7 +416,7 @@ def test_a_proxy_that_died_since_the_last_run_is_marked_before_anything_starts(
         return {"outboundIP": "8.8.8.8"}
 
     monkeypatch.setattr(builder.proxy_mod, "check", check)
-    dead = builder.check_free_proxies(None, book)
+    dead, revived = builder.check_proxies(None, book)
 
     assert [r.proxy.host for r in dead] == ["10.0.0.1"]
     assert [r.proxy.host for r in book.proxies.available] == ["10.0.0.0",
@@ -433,7 +435,7 @@ def test_checking_leaves_proxies_that_are_already_on_a_phone_alone(
     monkeypatch.setattr(builder.proxy_mod, "check",
                         lambda c, p: asked.append(p.host) or {"outboundIP": "1.1.1.1"})
 
-    builder.check_free_proxies(None, book)
+    builder.check_proxies(None, book)
 
     assert asked == ["10.0.0.1"]
 
@@ -646,13 +648,17 @@ def test_an_untried_app_account_goes_back_as_stock(device, settings, drive):
 
 
 # ------------------------------------------------------ running out of stock
-def test_an_empty_gmail_tab_is_named_as_such(device, settings, drive):
+def test_an_empty_gmail_tab_costs_no_phone_at_all(device, settings, drive):
+    """The phone used to come first and the tab be asked afterwards, so a run
+    that had run out of addresses still paid for a device - and two of them sat
+    in the tab as `incomplete` with an empty Gmail column (2026-08-14)."""
     book = make_book(gmails=0)
     build = drive(book, settings, google=[])
 
     assert build.status == "no_usable_gmail"
-    assert device.created == 1                 # the phone still gets stopped
-    assert device.stops == 1
+    assert device.created == 0                 # nothing was made to stop
+    assert device.stops == 0
+    assert book.phones._ws.rows == []          # and nothing was recorded
 
 
 def test_no_proxy_means_no_phone_is_created(device, settings, drive):
@@ -686,8 +692,10 @@ def test_a_dead_proxy_is_skipped_and_marked(device, settings, drive, monkeypatch
 
 # ----------------------------------------------------------- the Phones tab
 def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, drive):
-    book = make_book(gmails=0)
-    drive(book, settings, google=[])
+    """One Gmail, and it is refused - so the phone exists, is signed into
+    nothing, and there is no second address to try."""
+    book = make_book(gmails=1)
+    drive(book, settings, google=[Outcome("fatal", "wrong_password")])
 
     written = book.phones._ws.rows[0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
@@ -696,7 +704,7 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
     # and the note says why in words. The token is in the Status column's
     # vocabulary and in the terminal summary; this cell is prose.
     note = written[PHONE_HEADERS.index("Note")]
-    assert note == ("Stopped short: the Gmails tab has no unused address left.")
+    assert note.startswith("Stopped short: the Gmails tab had no other address")
 
 
 # ------------------------------------- acting on what the operator marked
@@ -1027,3 +1035,166 @@ def test_a_phone_is_found_by_its_serial_now_that_the_id_is_not_stored(
     # 999 is in the tab and not on the account, so it is skipped rather than
     # driven against an id that does not exist
     assert [p["serial"] for p in gone] == ["999"]
+
+
+# ------------------------------- a phone is not made without something to sign in
+def test_a_phone_with_nothing_signed_into_it_is_deleted(device, settings,
+                                                        monkeypatch, drive):
+    """One address, refused, and no second to try - so the phone exists with no
+    Google account on it. `finish` refuses such a phone by name, so leaving it
+    costs a plan slot and puts a row in the tab that reads `incomplete` with an
+    empty Gmail column. Two of those prompted this (2026-08-14)."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = make_book(gmails=1)
+
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "wrong_password")])
+
+    assert not build.ok
+    assert deleted == ["PHONE1"]
+    assert device.stops == 0                  # deleting ends it; stopping is moot
+    assert book.phones._ws.rows == []         # and no row is left behind
+    # the exit it was created on goes back too
+    assert len(book.proxies.available) == 2
+
+
+def test_a_phone_that_got_a_gmail_is_kept_even_when_the_build_fails(
+        device, settings, monkeypatch, drive):
+    """The rule is about what is *on* the phone, not whether the build won.
+    A phone signed into Google with the app installed is most of the work, and
+    `finish` picks it up."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = make_book(apps=0)
+
+    build = drive(book, settings, google=[SIGNED_IN])
+
+    assert not build.ok and build.status == "no_usable_gpt"
+    assert deleted == []
+    assert book.phones._ws.rows[0][PHONE_HEADERS.index("Gmail")] == \
+           "g0@example.com"
+
+
+def test_a_phone_that_cannot_be_deleted_is_recorded_the_ordinary_way(
+        device, settings, monkeypatch, drive):
+    """Half-deleting it - row dropped, device still there - is the one outcome
+    worse than keeping it."""
+    def refuse(*a, **k):
+        raise RuntimeError("GeeLark said no")
+    monkeypatch.setattr(builder.phones, "delete", refuse)
+    book = make_book(gmails=1)
+
+    drive(book, settings, google=[Outcome("fatal", "wrong_password")])
+
+    assert len(book.phones._ws.rows) == 1
+    assert device.stops == 1
+
+
+# ------------------------------------------- the order they come out in
+def test_addresses_and_serials_come_out_in_the_same_order(settings,
+                                                          monkeypatch):
+    """GeeLark numbers a phone when it is created, so whoever creates first
+    gets the lower serial. With the claim and the create apart, two workers
+    interleaved and the second address landed on the first phone.
+
+    The interleave is forced rather than raced for: whoever claims first is
+    made to spend the longest inside `create`, so with the two steps apart the
+    creates finish in the opposite order to the claims and the pairing is
+    inverted every time. Under one lock the delay cannot reorder anything,
+    because the next thread has not claimed yet.
+    """
+    book = make_book(gmails=4, proxies=4, apps=4)
+    made: list[tuple[str, str]] = []
+    claimed = itertools.count()
+    serials = itertools.count(700)
+    order = threading.local()
+
+    real_claim = book.gmails.claim
+
+    def claim():
+        row = real_claim()
+        order.position = next(claimed)
+        return row
+
+    def create(*a, **k):
+        # The delay comes first: GeeLark assigns the number when the phone is
+        # made, so a delay after it would reorder nothing and the test would
+        # pass with the lock removed - which is exactly what it did.
+        time.sleep(0.05 * (4 - getattr(order, "position", 0)))
+
+        class Entry:
+            phone_id = f"P{next(serials)}"
+            serial = str(next(serials))
+        return Entry()
+
+    monkeypatch.setattr(book.gmails, "claim", claim)
+    monkeypatch.setattr(builder.phones, "create", create)
+    monkeypatch.setattr(builder.phones, "info", lambda *a, **k: {})
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "1.1.1.1"})
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda *a, **k: INSTALLED)
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+
+    def one(index):
+        build = builder.build_one(None, settings, book, FakeLedger(), index)
+        made.append((int(build.serial), build.gmail))
+
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(1, 5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    made.sort()
+    assert len(made) == 4
+    assert [address for _, address in made] == sorted(a for _, a in made), (
+        f"phone {made} - the serials do not run in the same order as the "
+        f"addresses")
+
+
+# ------------------------------------------------- a renewed proxy comes back
+def test_a_dead_proxy_that_answers_again_goes_back_in_the_pool(monkeypatch):
+    """These are rented and renewed on the same address, so one that stopped
+    answering yesterday is often answering today. Nothing ever looked, so a
+    renewed proxy stayed out of the pool until someone blanked the cell."""
+    book = make_book(proxies=2)
+    buried = book.proxies._rows[0]
+    book.proxies.fail(buried, "dead", note="Did not answer.")
+    assert len(book.proxies.available) == 1
+
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda c, p: {"outboundIP": "8.8.8.8"})
+    dead, revived = builder.check_proxies(None, book)
+
+    assert dead == []
+    assert [r.proxy.host for r in revived] == ["10.0.0.0"]
+    assert len(book.proxies.available) == 2
+    assert buried.values["Last Exit IP"] == "8.8.8.8"
+    assert "Answering again" in buried.values["Note"]
+
+
+def test_a_dead_proxy_that_still_does_not_answer_is_left_as_it_was(monkeypatch):
+    """Re-checking must not rewrite the row every run with the same news."""
+    from geelark_farm.proxy import ProxyError
+
+    book = make_book(proxies=1)
+    buried = book.proxies._rows[0]
+    book.proxies.fail(buried, "dead", note="Did not answer: the first reason.")
+
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda c, p: (_ for _ in ()).throw(ProxyError("no")))
+    dead, revived = builder.check_proxies(None, book)
+
+    assert dead == [] and revived == []
+    assert buried.values["Note"] == "Did not answer: the first reason."

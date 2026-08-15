@@ -408,6 +408,12 @@ class ProxyPool(Pool):
     tab = PROXY_TAB
     serial_column = "Used By"
 
+    #: A proxy GeeLark could not reach. Not a verdict for good: these are
+    #: rented by the month and renewed on the same address, so one that stopped
+    #: answering yesterday is often answering again today. Re-tested every run
+    #: alongside the free ones - see builder.check_proxies.
+    dead_status = "dead"
+
     # A proxy is not spent by being used - it keeps working, and the column
     # says where it is rather than whether it is gone.
     #
@@ -472,6 +478,21 @@ class ProxyPool(Pool):
         self._set(resource, {self.status_column: self.spent_status,
                              self.serial_column: serials,
                              self.note_column: f"On phone {serials}."})
+
+    def find_proxy(self, address: str) -> Resource | None:
+        """The row for this exit, matched on host and port.
+
+        The rest of the string is not compared: the caller has `socks5://user:
+        ***@host:port`, with the password already masked for logging, and the
+        pair that identifies a row is the endpoint anyway.
+        """
+        endpoint = (address or "").rpartition("@")[2] or (address or "")
+        host, _, port = endpoint.partition(":")
+        if not host or not port:
+            return None
+        return next((r for r in self._rows if r.proxy
+                     and r.proxy.host == host and str(r.proxy.port) == port),
+                    None)
 
     def reclaim(self, in_use: set[str]) -> list[Resource]:
         """Free proxies held by a phone that no longer exists.
@@ -809,7 +830,8 @@ class Book:
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
-                               ProxyPool.spent_status, "dead"],
+                               ProxyPool.spent_status,
+                               ProxyPool.dead_status],
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.
             "Phone Statuses": builder.possible_statuses(),

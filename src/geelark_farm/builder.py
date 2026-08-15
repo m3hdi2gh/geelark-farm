@@ -137,6 +137,11 @@ SPEND = "spend"
 RELEASE = "release"
 SET_ASIDE = "set aside"
 
+# Held across "claim an address, take an exit, create the phone". See build_one:
+# it is what stops a phone being created with nothing to sign in, and what makes
+# the serials come out in the order the addresses were taken.
+_starting = threading.Lock()
+
 
 @dataclass
 class Build:
@@ -453,12 +458,34 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         return build
 
     try:
-        proxy_row = _fresh_proxy(client, book)
-        build.proxy = str(proxy_row.proxy)
-        build.proxy_name = proxy_row.name
+        # Claiming the Gmail, taking the exit and creating the phone happen
+        # under one lock, and in that order, for two reasons.
+        #
+        # **A phone is not created without an address to sign in.** It used to
+        # be: the phone came first and the tab was asked afterwards, so a run
+        # that had run out of Gmails still paid for a phone, and two of them sat
+        # in the tab as `incomplete` with an empty Gmail column - devices with
+        # nothing on them, which `finish` then refuses because there is no
+        # Google account to build on (2026-08-14).
+        #
+        # **The serials come out in the same order as the addresses.** GeeLark
+        # numbers a phone when it is created, so whoever creates first gets the
+        # lower serial. With the claim and the create apart, two workers
+        # interleaved and phone 701 got the second address while 702 got the
+        # first. Holding both together costs a few seconds of serial creation
+        # at the start of a batch and nothing after it.
+        with _starting:
+            gmail_row = book.gmails.claim()
+            if gmail_row is None:
+                return finish("no_usable_gmail",
+                              "the Gmails tab has no unused address left, so "
+                              "no phone was created")
+            proxy_row = _fresh_proxy(client, book)
+            build.proxy = str(proxy_row.proxy)
+            build.proxy_name = proxy_row.name
 
-        entry = phones.create(client, settings, proxy_row.proxy, ledger=ledger,
-                              label=f"build {index}")
+            entry = phones.create(client, settings, proxy_row.proxy,
+                                  ledger=ledger, label=f"build {index}")
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
@@ -488,10 +515,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 return finish("budget_exhausted",
                               "ran out of budget before a Gmail signed in")
             if gmail_row is None:
+                # The first was claimed before the phone existed; this is the
+                # next one, after that address was refused on this device.
                 gmail_row = book.gmails.claim()
                 if gmail_row is None:
                     return finish("no_usable_gmail",
-                                  "the Gmails tab has no unused address left")
+                                  "the Gmails tab had no other address to try "
+                                  "on this phone")
             account = Account(
                 email=gmail_row.credentials.email,
                 password=gmail_row.credentials.password,
@@ -588,9 +618,22 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held)
-        if log_row is not None:
+        # A phone with no Google account on it is not a phone. Nothing can be
+        # done with it - `finish` refuses it by name, since there is nothing to
+        # build on - so it is deleted rather than left occupying a plan slot and
+        # a row that reads `incomplete` with an empty Gmail column. Its exit
+        # goes back with it, which is why this runs before the row is written.
+        #
+        # Not while the run is shutting down: an interrupt is not a verdict on
+        # the phone, and the next run's sync sees it either way.
+        discarded = (phone_id and not gmail_signed_in
+                     and build.status != "interrupted"
+                     and _discard(client, book, ledger, build))
+        if log_row is not None and not discarded:
             _record(book, log_row, build)
-        if phone_id:
+        elif log_row is not None:
+            book.phones.delete_rows([log_row])
+        if phone_id and not discarded:
             try:
                 phones.stop(client, phone_id)
                 log.info("stopped %s", phone_id)
@@ -599,6 +642,32 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
                           phone_id, exc)
             ledger.release(phone_id, note=build.status)
+
+
+def _discard(client: Client, book: Book, ledger: Ledger,
+             build: Build) -> bool:
+    """Delete a phone nothing was ever signed into, and free its exit.
+
+    Returns whether it went. A delete that fails leaves the phone to be stopped
+    and recorded the ordinary way - half-deleting it, with its row dropped and
+    the device still there, is the one outcome worse than keeping it.
+    """
+    try:
+        phones.delete(client, [build.phone_id], ledger=ledger)
+    except Exception as exc:                                      # noqa: BLE001
+        log.error("phone %s has no Google account on it and could not be "
+                  "deleted (%s); it is recorded and left alone",
+                  build.serial or build.phone_id, exc)
+        return False
+    log.info("deleted phone %s - nothing was ever signed into it (%s)",
+             build.serial or build.phone_id, outcome_of(build))
+    resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
+    if resource is not None:
+        book.proxies.release(resource, note=(
+            "Free again - the phone taken on it had nothing signed in and was "
+            "deleted."))
+    build.phone_id = ""
+    return True
 
 
 def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
@@ -1113,7 +1182,9 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     outcome.update(sync_proxies(client, book))
     outcome["repointed"] = sync_phone_proxies(client, book)
     if check_proxies:
-        outcome["dead"] = [r.label for r in check_free_proxies(client, book)]
+        gone, back = check_proxies(client, book)
+        outcome["dead"] = [r.label for r in gone]
+        outcome["revived"] = [r.label for r in back]
     return {key: items for key, items in outcome.items() if items}
 
 
@@ -1229,8 +1300,9 @@ def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
     return freed
 
 
-def check_free_proxies(client: Client, book: Book) -> list[Resource]:
-    """Test every free proxy before a run, and mark the ones that have died.
+def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
+                                                       list[Resource]]:
+    """Test the proxies a run could take, and correct the tab both ways.
 
     A dead proxy used to be discovered by claiming it: the build spent an
     attempt, marked it, and took the next one. That is fine for one, and it was
@@ -1238,14 +1310,25 @@ def check_free_proxies(client: Client, book: Book) -> list[Resource]:
     began against a pool a third of which no longer answered, and the count the
     operator had just been shown was fiction (2026-08-11).
 
-    Only the free ones. A proxy already behind a phone is not a candidate for
-    this run, and checking it would cost a call to learn something that changes
-    nothing. Checked in parallel because they are independent and each takes a
-    few seconds; the rate limiter in api.py keeps the burst honest.
+    `dead` is tested too, and that is the half this was missing. These proxies
+    are rented and renewed on the same address, so one that stopped answering
+    yesterday is often answering again today - and nothing ever looked, so a
+    renewed proxy stayed out of the pool until someone noticed and blanked the
+    cell by hand. The check costs one call either way; the only difference is
+    whether the answer can put a row back.
+
+    A proxy already behind a phone is not tested: it is not a candidate for
+    this run, and the call would learn something that changes nothing. Checked
+    in parallel because they are independent and each takes a few seconds; the
+    rate limiter in api.py keeps the burst honest.
+
+    Returns (newly dead, revived).
     """
-    free = book.proxies.available
+    buried = [r for r in book.proxies._rows if not r.error and r.proxy
+              and book.proxies.status_of(r) == book.proxies.dead_status]
+    free = book.proxies.available + buried
     if not free:
-        return []
+        return [], []
 
     def test(resource: Resource) -> tuple[Resource, str | None, str]:
         try:
@@ -1254,21 +1337,33 @@ def check_free_proxies(client: Client, book: Book) -> list[Resource]:
             return resource, None, str(exc)[:200]
         return resource, str(result.get("outboundIP") or ""), ""
 
-    dead = []
+    dead, revived = [], []
+    was_dead = {id(r) for r in buried}
     with ThreadPoolExecutor(max_workers=min(8, len(free)),
                             thread_name_prefix="proxy-check") as pool:
         for resource, exit_ip, error in pool.map(test, free):
             if exit_ip is None:
+                if id(resource) in was_dead:
+                    continue                      # still dead, still says so
                 log.warning("proxy %s is dead: %s", resource.label, error)
-                book.proxies.fail(resource, "dead", note=(
+                book.proxies.fail(resource, book.proxies.dead_status, note=(
                     f"Did not answer when the pool was checked: {error}"))
                 dead.append(resource)
+            elif id(resource) in was_dead:
+                log.info("proxy %s answers again; back in the pool",
+                         resource.label)
+                book.proxies.release(resource, note=(
+                    f"Answering again as of {failures.today()}, so it is back "
+                    f"in the pool. It had been marked dead."))
+                book.proxies.record_exit(resource, exit_ip)
+                revived.append(resource)
             else:
                 book.proxies.record_exit(resource, exit_ip)
     if dead:
-        log.info("%d of %d free proxies had died since the last run",
-                 len(dead), len(free))
-    return dead
+        log.info("%d proxy(s) had died since the last run", len(dead))
+    if revived:
+        log.info("%d proxy(s) marked dead are answering again", len(revived))
+    return dead, revived
 
 
 def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
