@@ -1216,11 +1216,22 @@ def world(monkeypatch):
         done["deleted"].extend(ids)
         live[:] = [p for p in live if p["id"] not in ids]
 
+    class FakeClient:
+        """Only what the sync asks of it: the saved-proxy listing."""
+
+        def data(self, path, payload=None):
+            assert path == "/v1/proxy/list", path
+            return {"list": [{"server": "10.0.0.0", "port": 9999,
+                              "username": "u", "password": "p"},
+                             {"server": "9.9.9.9", "port": 1080,
+                              "username": "someone-else", "password": "x"}]}
+
     monkeypatch.setattr(builder.phones, "listing", lambda c: list(live))
     monkeypatch.setattr(builder.phones, "delete", delete)
     monkeypatch.setattr(builder.proxy_mod, "check",
                         lambda c, p: {"outboundIP": "8.8.8.8"})
     done["live"] = live
+    done["client"] = FakeClient()
     return done
 
 
@@ -1236,7 +1247,7 @@ def test_the_sync_every_session_starts_with_actually_runs(world, monkeypatch):
     book.phones.rows = lambda: []
     book.reload = lambda: None
 
-    outcome = builder.sync_sheet(None, book, FakeLedger())
+    outcome = builder.sync_sheet(world["client"], book, FakeLedger())
 
     # the marked phone went, with its credentials settled either way
     assert world["deleted"] == ["P729"]
@@ -1246,6 +1257,10 @@ def test_the_sync_every_session_starts_with_actually_runs(world, monkeypatch):
     # the proxy it was on is free again, and the one still behind a phone is not
     assert book.proxies._rows[0].values["Status"] == "free"
     assert book.proxies._rows[1].values["Used By"] == "730"
+    # and the one GeeLark holds that the tab has never heard of is reported,
+    # not added - which of them belong here is the operator's call
+    assert outcome["unlisted"] == ["9.9.9.9:1080 (someone-else)"]
+    assert len(book.proxies._rows) == 2
 
 
 def test_the_sync_can_be_asked_to_skip_the_part_that_costs_time(world):
@@ -1257,8 +1272,9 @@ def test_the_sync_can_be_asked_to_skip_the_part_that_costs_time(world):
     book.phones.rows = lambda: []
     book.reload = lambda: None
 
-    builder.sync_sheet(None, book, FakeLedger(), probe_proxies=False)
+    builder.sync_sheet(world["client"], book, FakeLedger(),
+                       probe_proxies=False)
 
     assert asked == []
-    assert "dead" not in builder.sync_sheet(None, book, FakeLedger(),
-                                            probe_proxies=False)
+    assert "dead" not in builder.sync_sheet(world["client"], book,
+                                            FakeLedger(), probe_proxies=False)

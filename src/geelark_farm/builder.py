@@ -63,7 +63,7 @@ from typing import Protocol
 from . import failures, phones, shell, sxorg
 from . import proxy as proxy_mod
 from .accounts import Account
-from .api import ApiError, Client
+from .api import ApiError, Client, TransportError
 from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
@@ -1226,7 +1226,27 @@ def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
     and a second run tidying it away is how two phones end up on one exit.
     """
     live = _live_exits(client)
-    changed: dict[str, list[str]] = {"attached": [], "released": []}
+    changed: dict[str, list[str]] = {"attached": [], "released": [],
+                                     "unlisted": []}
+
+    # What GeeLark has been given but the tab has never heard of. Reported, not
+    # added: the last time this was asked, twelve of the twenty-three unknown
+    # ones were expired sx.org proxies and ten were a second vendor's - so
+    # adding them would have filled the pool with rows a build then has to
+    # discover are dead. Which of them belong here is the operator's call, and
+    # this is what tells them there is one to make.
+    known = {f"{r.proxy.host}:{r.proxy.port}:{r.proxy.username}"
+             for r in book.proxies._rows if r.proxy}
+    try:
+        held = (client.data("/v1/proxy/list", {"page": 1, "pageSize": 100})
+                or {}).get("list") or []
+    except (ApiError, TransportError):
+        held = []                       # a report, never worth failing a sync
+    changed["unlisted"] = [
+        f"{item['server']}:{item['port']} ({item.get('username', '')})"
+        for item in held
+        if f"{item['server']}:{item['port']}:{item.get('username', '')}"
+        not in known]
 
     for resource in book.proxies._rows:
         if resource.error or not resource.proxy:

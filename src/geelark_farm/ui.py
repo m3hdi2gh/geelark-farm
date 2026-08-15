@@ -1158,6 +1158,8 @@ SYNC_LABELS = [
     ("repointed", "phones whose recorded exit was out of date"),
     ("dead", "free proxies that no longer answer"),
     ("revived", "proxies marked dead that are answering again"),
+    ("unlisted", "proxies GeeLark holds that the Proxy tab has never heard of "
+                 "- add the ones you want a build to use"),
 ]
 
 
@@ -1169,7 +1171,7 @@ def show_sync(outcome: dict[str, list[str]]) -> None:
         items = outcome.get(key)
         if not items:
             continue
-        style = WARN if key in ("running", "dead") else OK
+        style = WARN if key in ("running", "dead", "unlisted") else OK
         console.print(f"[{style}]{len(items)} {meaning}[/]")
         for item in items:
             console.print(f"   [{DIM}]{item}[/]")

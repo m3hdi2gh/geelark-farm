@@ -338,11 +338,26 @@ def test_the_same_address_twice_is_only_handed_out_once():
 
 
 def test_the_same_proxy_twice_would_put_two_phones_on_one_exit():
+    """Identical rows - the case this check exists for."""
     pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p"),
-                       proxy_row("1.2.3.4:9999:other:pass")])
+                       proxy_row("1.2.3.4:9999:u:p")])
 
     assert len(pool.available) == 1
     assert "duplicate of row 2" in pool._rows[1].error
+
+
+def test_two_credentials_on_one_gateway_are_two_proxies():
+    """This test used to assert the opposite, and it was wrong. Measured on
+    the live account: ten usernames on `79.127.168.43:50101` returned ten
+    different outbound addresses - 138.36.95.62, 209.101.201.161,
+    185.228.193.23 and so on (2026-08-14). Reading them as one proxy and nine
+    duplicates would refuse nine working exits.
+    """
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p"),
+                       proxy_row("1.2.3.4:9999:other:pass")])
+
+    assert len(pool.available) == 2
+    assert pool.broken == []
 
 
 def test_a_row_that_was_already_unusable_keeps_its_own_error():
@@ -389,3 +404,20 @@ def test_a_proxy_let_go_stops_naming_its_phone_too():
 
     assert row.values["Used By"] == ""
     assert pool.status_of(row) == "free"
+
+
+def test_one_gateway_can_carry_more_than_one_proxy():
+    """Host and port alone looked right while every proxy was its own gateway.
+    A vendor that multiplexes on the username breaks it: ten live proxies on
+    one endpoint would be read as one row and nine duplicates, and the tab
+    would refuse nine working exits (2026-08-14)."""
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, [
+        proxy_row("79.127.168.43:50101:user_1:pw"),
+        proxy_row("79.127.168.43:50101:user_2:pw"),
+        proxy_row("79.127.168.43:50101:user_3:pw"),
+    ]), PROXY_HEADERS, threading.Lock())
+    pool.load()
+
+    assert pool.broken == []
+    assert len(pool.available) == 3
+

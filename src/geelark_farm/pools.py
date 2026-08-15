@@ -165,11 +165,20 @@ class Pool:
         self._flag_duplicates()
 
     def _identity(self, resource: Resource) -> str:
-        """What makes two rows the same resource rather than two of them."""
+        """What makes two rows the same resource rather than two of them.
+
+        A proxy is its endpoint *and* its username. Host and port alone looked
+        right while every proxy was its own gateway, and it is wrong for a
+        vendor that multiplexes: ten live proxies on one `79.127.168.43:50101`,
+        told apart only by the username, would have been read as one row and
+        nine duplicates (2026-08-14). Two rows that agree on all three really
+        are the same proxy, which is the case this exists to catch.
+        """
         if resource.credentials:
             return resource.credentials.email.strip().lower()
         if resource.proxy:
-            return f"{resource.proxy.host}:{resource.proxy.port}"
+            return (f"{resource.proxy.host}:{resource.proxy.port}"
+                    f":{resource.proxy.username}")
         return ""
 
     def _flag_duplicates(self) -> None:
