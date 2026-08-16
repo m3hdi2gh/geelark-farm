@@ -484,9 +484,14 @@ class ProxyPool(Pool):
         with a live phone behind it is a contradiction, and the phone is the
         side of it that is demonstrably working.
         """
-        self._set(resource, {self.status_column: self.spent_status,
-                             self.serial_column: serials,
-                             self.note_column: f"On phone {serials}."})
+        shared = "," in serials
+        self._set(resource, {
+            self.status_column: self.spent_status,
+            self.serial_column: serials,
+            self.note_column: (
+                f"Shared by phones {serials} - a build ran out of free exits "
+                f"and took this one. Both accounts reach the services from "
+                f"this address." if shared else f"On phone {serials}.")})
 
     def find_proxy(self, address: str) -> Resource | None:
         """The row for this exit, matched on host and port.

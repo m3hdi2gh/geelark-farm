@@ -164,6 +164,10 @@ class Build:
     # True when this build's phone could not be confirmed stopped. The summary
     # must never claim nothing is billing while this is set.
     still_running: bool = False
+    #: Whether this phone ended up on an exit another phone is also using. The
+    #: pool ran dry and the build borrowed rather than stopping; the note says
+    #: so, because two accounts arriving from one address is a thing to know.
+    shared_exit: bool = False
     #: Every credential this build gave up on, as (address, reason). Kept as a
     #: pair rather than a formatted string because the two readers want
     #: different words for it: the terminal summary wants the reason token,
@@ -280,6 +284,23 @@ class _Session:
     # Proxies tried and moved on from, with what was seen through each. Held
     # claimed for the rest of the run so a swap cannot hand one back.
     refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
+    #: Exits taken from under another phone once the pool ran dry. Not claimed
+    #: - they belong to that phone - so they are remembered here instead.
+    borrowed: set[str] = field(default_factory=set)
+
+    def exits_seen(self) -> set[str]:
+        """Every exit address this phone has been through, refused or current.
+
+        What bounds the swap loop. A borrowed exit is not claimed - another
+        phone owns it - so it leaves no trace in `refused_exits`, and without
+        this the build would take the same shared exit back every time.
+        """
+        seen = {f"{r.proxy.host}:{r.proxy.port}"
+                for r, _ in self.refused_exits if r.proxy}
+        seen |= self.borrowed
+        if self.proxy_row is not None and self.proxy_row.proxy:
+            seen.add(f"{self.proxy_row.proxy.host}:{self.proxy_row.proxy.port}")
+        return seen
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -342,10 +363,19 @@ def _sign_into_app(session: _Session) -> Build | None:
             # _new_exit says which. The account goes back as stock, never
             # judged.
             previous = s.proxy_row
+            before = s.exits_seen()
             s.proxy_row = _new_exit(s.client, s.settings, s.book, s.build,
                                     s.phone_id, s.proxy_row, outcome.reason,
                                     s.remaining(), swaps=s.exits,
+                                    avoid=s.exits_seen(),
                                     cancelled=s.cancelled)
+            taken = s.proxy_row
+            if taken is not None and taken.proxy:
+                where = f"{taken.proxy.host}:{taken.proxy.port}"
+                if where not in before and s.build.shared_exit:
+                    # Borrowed rather than claimed, so nothing else records it.
+                    s.borrowed.add(where)
+                    s.proxy_row = previous   # keep holding what we do own
             if previous is not None and previous is not s.proxy_row:
                 # Held, not freed - see _new_exit. Released at the end.
                 s.refused_exits.append((previous, outcome.reason))
@@ -842,9 +872,41 @@ def _refreshed(client: Client, settings: Settings, book: Book,
     return True
 
 
+def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
+    """An exit already behind another phone, when nothing is free.
+
+    This breaks the rule the rest of the module keeps: one phone per exit. It
+    is deliberate and it is a last resort, reached only once the pool has
+    nothing free at all, because the alternative is what happened to phone 762
+    - everything done right, one ordinary refusal, and no second exit to answer
+    it with.
+
+    What it costs is worth stating plainly. Two phones behind one address means
+    Google and OpenAI can see the two accounts arriving from the same place, so
+    a run that shares exits is linking the accounts it builds. That is the
+    operator's trade to make and they have made it; the sharing is written into
+    both the phone's note and the proxy's, so it is never a surprise later.
+
+    `avoid` is every exit this build has already been through. Without it the
+    loop has no bound: a phone refused twice would take back the exit that
+    refused it first and go round for as long as its budget lasted, which is
+    exactly what holding refused proxies claimed was written to stop
+    (2026-08-11, phone 658, forty-nine minutes).
+    """
+    for resource in book.proxies._rows:
+        if resource.error or not resource.proxy:
+            continue
+        if book.proxies.status_of(resource) != book.proxies.spent_status:
+            continue                      # free, dead or claimed - not shared
+        if f"{resource.proxy.host}:{resource.proxy.port}" in avoid:
+            continue
+        return resource
+    return None
+
+
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
-              swaps: int = 0,
+              swaps: int = 0, avoid: set[str] | None = None,
               cancelled: Callable[[], bool] | None = None) -> Resource | None:
     """Get the phone onto a different exit address, the cheapest way first.
 
@@ -882,8 +944,16 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # proxy to move to, which is what happens when a run is given as many
         # phones as it has proxies. Phone 762 was told "every exit in the pool
         # was refused in turn" after being refused exactly once (2026-08-16).
-        raise Aborted("all_exits_refused" if swaps
-                      else "no_exit_to_move_to") from None
+        # Nothing free. Rather than stop here, take one that another phone is
+        # already on - see _borrow_exit for what that costs.
+        replacement = _borrow_exit(book, avoid or set())
+        if replacement is None:
+            raise Aborted("all_exits_refused" if swaps
+                          else "no_exit_to_move_to") from None
+        build.shared_exit = True
+        log.warning("no free proxy left; sharing %s, which %s is already on",
+                    replacement.label,
+                    (replacement.values.get("Used By") or "another phone"))
     try:
         phones.set_proxy(client, phone_id, replacement.proxy)
     except ApiError as exc:
@@ -1025,6 +1095,12 @@ def _phone_note(build: Build) -> str:
     """
     opening = (f"Ready - {outcome_of(build)}." if build.ok
                else f"Stopped short: {outcome_of(build)}.")
+    if build.shared_exit:
+        # Said on the phone's own row, because whoever reads it later is
+        # deciding whether these accounts can be treated as unrelated.
+        opening += (" The pool had nothing free when an exit refused this "
+                    "phone, so it shares one with another - both accounts "
+                    "reach the services from the same address.")
     if not build.tried:
         return opening
     # Everything it gave up on before getting here. On a ready phone these are
@@ -1224,18 +1300,23 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     return {key: items for key, items in outcome.items() if items}
 
 
-def _live_exits(client: Client) -> dict[str, dict]:
-    """What GeeLark says is behind each exit: `host:port` -> the phone on it.
+def _live_exits(client: Client) -> dict[str, list[dict]]:
+    """What GeeLark says is behind each exit: `host:port` -> the phones on it.
 
     The only authority on this. The Proxy tab records what a run believed when
     it wrote the row, and the two come apart every time a phone is deleted from
     the panel or moved onto another exit mid-run.
+
+    A list rather than one phone, because an exit can carry more than one since
+    a build ran dry and borrowed - and keeping the last one seen would have the
+    sync quietly rewrite the tab to name whichever came back second.
     """
-    found: dict[str, dict] = {}
+    found: dict[str, list[dict]] = {}
     for phone in phones.listing(client):
         config = phone.get("proxy") or {}
         if config.get("server"):
-            found[f"{config['server']}:{config.get('port')}"] = phone
+            found.setdefault(f"{config['server']}:{config.get('port')}",
+                             []).append(phone)
     return found
 
 
@@ -1353,9 +1434,10 @@ def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
         status = book.proxies.status_of(resource)
         if status == book.proxies.claimed_status:
             continue
-        phone = live.get(f"{resource.proxy.host}:{resource.proxy.port}")
-        if phone is not None:
-            serial = str(phone.get("serialNo") or phone.get("id") or "")
+        behind = live.get(f"{resource.proxy.host}:{resource.proxy.port}") or []
+        if behind:
+            serial = ", ".join(sorted(
+                str(p.get("serialNo") or p.get("id") or "") for p in behind))
             already = (resource.values.get(book.proxies.serial_column) or "")
             if status != book.proxies.spent_status or already.strip() != serial:
                 book.proxies.attach(resource, serial)

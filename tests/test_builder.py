@@ -1456,3 +1456,59 @@ def test_a_result_lands_on_its_own_row_when_a_sibling_deletes_one(
     assert written == {"759": "building", "760": "ready"}, (
         f"760's result landed on the wrong row: {written}")
 
+
+
+# --------------------------------------- sharing an exit when nothing is free
+def test_an_exhausted_pool_borrows_an_exit_rather_than_stopping(
+        device, settings, drive, monkeypatch):
+    """Phone 762 did everything right, met one ordinary refusal, and stopped
+    because the run had been given as many phones as it had proxies. With
+    nothing free it takes one another phone is already on."""
+    book = make_book(proxies=2, apps=1)
+    # The second proxy is already behind a phone, so nothing is free once this
+    # build takes the first.
+    book.proxies.spend(book.proxies._rows[1], serial="900", note="On phone 900.")
+
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[Outcome("fatal", "network_ssl_rejected"), SIGNED_IN])
+
+    assert build.ok, build.status
+    assert build.shared_exit
+    assert device.proxies_set == ["10.0.0.1"]        # it moved onto the shared one
+    # and the phone's row says so, because that is what someone reading it later
+    # is deciding on
+    assert "shares one with another" in builder._phone_note(build)
+
+
+def test_a_borrowed_exit_is_not_taken_from_the_phone_that_owns_it(
+        device, settings, drive):
+    """It is not claimed and not released: another phone owns it, and handing
+    it back to the pool at the end would offer it as free stock."""
+    book = make_book(proxies=2, apps=1)
+    owned = book.proxies._rows[1]
+    book.proxies.spend(owned, serial="900", note="On phone 900.")
+
+    drive(book, settings, google=[SIGNED_IN],
+          app=[Outcome("fatal", "network_ssl_rejected"), SIGNED_IN])
+
+    assert book.proxies.status_of(owned) == book.proxies.spent_status
+    assert owned.values["Used By"] == "900"
+    assert book.proxies.available == []
+
+
+def test_a_borrowed_exit_is_not_taken_twice_by_the_same_build(
+        device, settings, drive):
+    """Without that bound the loop never ends: a phone refused twice takes back
+    the exit that refused it first and goes round for as long as its budget
+    lasts - which is what holding refused proxies claimed was written to stop
+    (2026-08-11, phone 658, forty-nine minutes)."""
+    book = make_book(proxies=2, apps=1)
+    book.proxies.spend(book.proxies._rows[1], serial="900", note="On phone 900.")
+    refused = Outcome("fatal", "network_ssl_rejected")
+
+    build = drive(book, settings, google=[SIGNED_IN], app=[refused] * 6)
+
+    assert not build.ok
+    assert build.status == "all_exits_refused"
+    # one swap onto the shared exit, and then there is genuinely nothing left
+    assert device.proxies_set == ["10.0.0.1"]
