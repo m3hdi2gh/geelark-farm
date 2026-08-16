@@ -1150,6 +1150,39 @@ def _this_module():
     return sys.modules[__name__]
 
 
+def _settle_before_deleting(client: Client, phone_id: str, serial: str,
+                            timeout: float = 90) -> bool:
+    """Stop a phone and wait for it to say so. False if it will not.
+
+    GeeLark will not delete a running phone, and `stop` only posts the request -
+    the phone goes on reporting as running while it shuts down. Deleting into
+    that window fails, so this waits for the state to settle rather than
+    guessing at a sleep.
+
+    A phone that will not stop keeps its row: the next sync finds it again, and
+    a row still there is a better outcome than a delete that half worked.
+    """
+    log.info("phone %s is marked done and still running; stopping it so it "
+             "can be deleted", serial)
+    try:
+        phones.stop(client, phone_id)
+    except Exception as exc:                                      # noqa: BLE001
+        log.error("could not stop phone %s (%s); its row is kept", serial, exc)
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if phones.status(client, phone_id) == phones.STOPPED:
+                return True
+        except Exception as exc:                                  # noqa: BLE001
+            log.error("phone %s stopped answering (%s)", serial, exc)
+            return False
+        time.sleep(5)
+    log.warning("phone %s has not reported stopped within %.0fs; its row is "
+                "kept for the next run", serial, timeout)
+    return False
+
+
 def apply_phone_states(client: Client, book: Book,
                        ledger: Ledger) -> dict[str, list[str]]:
     """Carry out what the operator wrote in the Phones tab's `State` column.
@@ -1185,17 +1218,27 @@ def apply_phone_states(client: Client, book: Book,
     alive = {str(p.get("serialNo")): p for p in phones.listing(client)}
     outcome: dict[str, list[str]] = {"deleted": [], "freed": [],
                                      "delivered": [], "retired": [],
-                                     "running": []}
+                                     "held": [], "running": []}
     finished_rows: list[int] = []
 
     for row in marked:
         serial = row["serial"]
         present = alive.get(str(serial))
-        if present and present.get("status") in (phones.RUNNING, phones.STARTING):
-            # Left exactly as it is, and said out loud: a phone deleted while
-            # running is not a documented way to stop it billing.
-            outcome["running"].append(serial)
+        held = present and ledger.get(present["id"])
+        if held is not None and held.is_claimed and not held.is_stale:
+            # A run is working on it. That is the only reason to refuse: the
+            # power state is not, because a phone left up by a browser tab is
+            # nobody's, and `done` on it still means delete.
+            outcome["held"].append(serial)
             continue
+        if present and present.get("status") in (phones.RUNNING, phones.STARTING):
+            # Stopped first, because a running phone cannot be deleted - and
+            # this used to stop there and report it, which left `done` half
+            # carried out and the row sitting in the tab until someone noticed,
+            # closed the viewer and ran the sync again (2026-08-16, 749 and 751).
+            if not _settle_before_deleting(client, present["id"], serial):
+                outcome["running"].append(serial)
+                continue
 
         failed = row["state"] == book.phones.FAILED
 

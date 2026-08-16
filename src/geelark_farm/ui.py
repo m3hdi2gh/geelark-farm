@@ -1160,7 +1160,8 @@ SYNC_LABELS = [
     ("delivered", "app accounts delivered with a phone marked done"),
     ("freed", "app accounts freed - their phone was marked failed"),
     ("deleted", "phones deleted, from GeeLark and from the tab"),
-    ("running", "marked, but running - left exactly as they are"),
+    ("held", "marked, but a run is working on them - left exactly as they are"),
+    ("running", "marked, but they would not stop, so they are still there"),
     ("abandoned", "phones a killed run left mid-build - finishable, Google is "
                   "already on them"),
     ("discarded", "phones a killed run left with nothing signed into them"),

@@ -1512,3 +1512,74 @@ def test_a_borrowed_exit_is_not_taken_twice_by_the_same_build(
     assert build.status == "all_exits_refused"
     # one swap onto the shared exit, and then there is genuinely nothing left
     assert device.proxies_set == ["10.0.0.1"]
+
+
+def test_a_done_phone_that_is_running_is_stopped_and_then_deleted(monkeypatch):
+    """`done` means finished with it - delete it. This used to report the
+    phone and stop there, so the mark was half carried out and the row sat in
+    the tab until someone noticed, closed the viewer and synced again
+    (2026-08-16, phones 749 and 751)."""
+    stopped, deleted, state = [], [], {"P1": builder.phones.RUNNING}
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650",
+                                    "status": state["P1"]}])
+    monkeypatch.setattr(builder.phones, "stop",
+                        lambda c, pid: (stopped.append(pid),
+                                        state.__setitem__(pid,
+                                                          builder.phones.STOPPED)))
+    monkeypatch.setattr(builder.phones, "status", lambda c, pid: state[pid])
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    monkeypatch.setattr(builder.time, "sleep", lambda *a: None)
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "g@example.com", "app_account": "a0@example.com"}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert stopped == ["P1"] and deleted == ["P1"]
+    assert out["deleted"] == ["650"] and not out["running"]
+    assert book.phones.deleted_rows == [5]
+
+
+def test_a_phone_a_run_is_working_on_is_still_refused(monkeypatch):
+    """The one reason to leave a marked phone alone. The power state is not:
+    a phone left up by a browser tab is nobody's, and `done` on it means
+    delete."""
+    stopped, deleted = [], []
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650",
+                                    "status": builder.phones.RUNNING}])
+    monkeypatch.setattr(builder.phones, "stop", lambda c, pid: stopped.append(pid))
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "", "app_account": ""}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger({"P1": FakeClaim()}))
+
+    assert stopped == [] and deleted == []
+    assert out["held"] == ["650"]
+    assert book.phones.deleted_rows == []
+
+
+def test_a_phone_that_will_not_stop_keeps_its_row(monkeypatch):
+    """A row still there is a better outcome than a delete that half worked."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650",
+                                    "status": builder.phones.RUNNING}])
+    monkeypatch.setattr(builder.phones, "stop", lambda c, pid: None)
+    monkeypatch.setattr(builder.phones, "status",
+                        lambda c, pid: builder.phones.RUNNING)   # never settles
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: pytest.fail("deleted a "
+                                                                "running phone"))
+    monkeypatch.setattr(builder.time, "sleep", lambda *a: None)
+    clock = itertools.count(0, 30)          # walks past the timeout instantly
+    monkeypatch.setattr(builder.time, "time", lambda: next(clock))
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "", "app_account": ""}])
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["running"] == ["650"]
+    assert book.phones.deleted_rows == []
