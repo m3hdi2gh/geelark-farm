@@ -705,6 +705,11 @@ def _discard(client: Client, book: Book, ledger: Ledger,
         return False
     log.info("deleted phone %s - nothing was ever signed into it (%s)",
              build.serial or build.phone_id, outcome_of(build))
+    book.record_history(
+        Serial=build.serial, Event="discarded",
+        Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
+        Note=(f"Deleted rather than kept - nothing was ever signed into it. "
+              f"{outcome_of(build).capitalize()}."))
     resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
     if resource is not None:
         book.proxies.release(resource, note=(
@@ -1130,6 +1135,14 @@ def _record(book: Book, build: Build) -> None:
                       build.serial)
     except SheetError as exc:
         log.error("could not record phone %s (%s)", build.serial, exc)
+    # The Phones tab is current state - a row marked done is deleted, and with
+    # it every answer to "what did we build on Tuesday". History keeps the
+    # outcome, appended, whichever machine produced it.
+    book.record_history(
+        Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
+        Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
+        Gmail=build.gmail, Note=note[:500],
+        **{"GPT Account": build.app_account})
 
 
 def possible_statuses() -> list[str]:
@@ -1284,6 +1297,13 @@ def apply_phone_states(client: Client, book: Book,
                           serial, exc)
                 continue
         finished_rows.append(row["sheet_row"])
+        book.record_history(
+            Serial=serial, Event=row["state"], Gmail=row["gmail"],
+            Note=("Marked done and deleted; its app account was delivered "
+                  "with it." if not failed else
+                  "Marked failed and deleted; its app account went back to "
+                  "the pool for another phone."),
+            **{"GPT Account": row["app_account"]})
 
     # Only now, and bottom up: the row numbers were read before any moved.
     book.phones.delete_rows(finished_rows)
@@ -1436,6 +1456,10 @@ def settle_abandoned(client: Client, book: Book,
                 continue
         dropped.append(row["sheet_row"])
         outcome["discarded"].append(str(serial))
+        book.record_history(
+            Serial=str(serial), Event="discarded",
+            Note="A killed run left it mid-build with nothing signed in; "
+                 "deleted at the next sync.")
 
     book.phones.delete_rows(dropped)
     for label, items in outcome.items():

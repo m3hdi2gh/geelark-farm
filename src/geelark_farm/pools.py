@@ -45,7 +45,7 @@ import time
 from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
-from .config import Settings
+from .config import Settings, machine
 from .gsheet import SCOPES, SheetError, a1_column, batch_write
 from .proxy import Proxy, ProxyError
 from .proxy import parse as parse_proxy
@@ -57,6 +57,7 @@ PROXY_TAB = "Proxy"
 APPS_TAB = "Gpt Info"
 PHONES_TAB = "Phones"
 LISTS_TAB = "Lists"
+HISTORY_TAB = "History"
 
 # The default vocabulary a tab's Status column speaks. A pool can override any
 # of it - the Proxy tab does, because a proxy is not consumed the way a
@@ -808,6 +809,38 @@ class PhoneLog:
                         what=f"{self.tab} row {sheet_row}")
 
 
+class HistoryLog:
+    """The append-only record of what happened, visible from every machine.
+
+    Two gaps this closes at once. The Phones tab is a *current-state* table:
+    a row marked `done` is deleted, so "what did we build on Tuesday and why
+    did two of them fail" had no answer anywhere. And the run summary was
+    printed to a terminal and died with it - on the other machine it was
+    never visible at all.
+
+    One row per event, appended, never edited or deleted. `Machine` says which
+    device wrote it, which is what makes a problem hit on the Mac readable
+    from Windows. Columns are fixed and written by position, because this tab
+    is machine-written; reordering them by hand would scramble later rows.
+
+    `append_row` rather than the find-a-row-then-write dance `PhoneLog.start`
+    does: the Sheets append API places the row server-side, so two workers
+    appending at once cannot land on the same line.
+    """
+
+    HEADERS = ["When", "Machine", "Serial", "Event", "Seconds", "Proxy",
+               "Gmail", "GPT Account", "Note"]
+
+    def __init__(self, worksheet, lock: threading.Lock):
+        self._ws = worksheet
+        self._lock = lock
+
+    def append(self, **fields: str) -> None:
+        row = [str(fields.get(name, "")) for name in self.HEADERS]
+        with self._lock:
+            self._ws.append_row(row, value_input_option="RAW")
+
+
 class Book:
     """The workbook and its four tabs, sharing one lock.
 
@@ -817,14 +850,33 @@ class Book:
     """
 
     def __init__(self, gmails: GmailPool, proxies: ProxyPool, apps: AppPool,
-                 phones: PhoneLog, lists=None, lock: threading.Lock | None = None):
+                 phones: PhoneLog, lists=None, history: HistoryLog | None = None,
+                 lock: threading.Lock | None = None):
         self.gmails = gmails
         self.proxies = proxies
         self.apps = apps
         self.phones = phones
         # Only sync_lists needs these, and only when a real workbook is open.
         self._lists = lists
+        self.history = history
         self._lock = lock or threading.Lock()
+
+    def record_history(self, **fields: str) -> None:
+        """Append one event to the History tab, if this workbook has one.
+
+        When and Machine are filled here so no caller can forget them - they
+        are the two columns the tab exists for. Never raises: history is a
+        record of the work, not part of it, and a build must not fail because
+        its footnote could not be written.
+        """
+        if self.history is None:
+            return
+        fields.setdefault("When", time.strftime("%Y-%m-%d %H:%M"))
+        fields.setdefault("Machine", machine())
+        try:
+            self.history.append(**fields)
+        except Exception as exc:                                  # noqa: BLE001
+            log.error("the History row was not written (%s): %s", exc, fields)
 
     @classmethod
     def open(cls, settings: Settings) -> Book:
@@ -858,12 +910,30 @@ class Book:
         def headers(name: str) -> list[str]:
             return [h.strip() for h in tabs[name].row_values(1)]
 
+        # The one tab this tool creates for itself. The four above are stock
+        # someone fills in, so a missing one is an error worth stopping on;
+        # History is machine-written, and demanding the operator make it by
+        # hand would just mean every workbook is missing it until the day
+        # somebody needs what it would have held.
+        history = None
+        try:
+            if HISTORY_TAB in tabs:
+                sheet = tabs[HISTORY_TAB]
+            else:
+                sheet = book.add_worksheet(
+                    HISTORY_TAB, rows=2000, cols=len(HistoryLog.HEADERS))
+                sheet.append_row(HistoryLog.HEADERS)
+                log.info("created the %s tab", HISTORY_TAB)
+            history = HistoryLog(sheet, lock)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("no History tab this session (%s)", exc)
+
         pools = cls(
             gmails=GmailPool(tabs[GMAILS_TAB], headers(GMAILS_TAB), lock),
             proxies=ProxyPool(tabs[PROXY_TAB], headers(PROXY_TAB), lock),
             apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),
             phones=PhoneLog(tabs[PHONES_TAB], headers(PHONES_TAB), lock),
-            lists=tabs.get(LISTS_TAB), lock=lock,
+            lists=tabs.get(LISTS_TAB), history=history, lock=lock,
         )
         for pool in (pools.gmails, pools.proxies, pools.apps):
             pool.load()

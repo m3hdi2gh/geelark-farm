@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
+from geelark_farm.pools import AppPool, GmailPool, HistoryLog, PhoneLog, ProxyPool
 
 # The tabs as they are. Columns are located by header name, so these are the
 # real shapes rather than a superset - a test that passes against columns the
@@ -61,6 +61,11 @@ class FakeWorksheet:
 
     def row_values(self, _index):
         return self.headers
+
+    def append_row(self, values, **_kwargs):
+        # The Sheets append API places the row server-side; here the end of
+        # the list is the same thing.
+        self.rows.append(list(values) + [""] * (len(self.headers) - len(values)))
 
     def batch_update(self, payload):
         """Both shapes gspread calls this with.
@@ -474,3 +479,52 @@ def test_dropdowns_that_already_agree_are_not_rewritten():
     book.sync_lists()
 
     assert tab.writes == []
+
+
+# ------------------------------------------------------------- the History tab
+def history_book():
+    from geelark_farm.pools import Book
+    tab = FakeWorksheet(HistoryLog.HEADERS, [])
+    book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
+                apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                             threading.Lock()),
+                phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                                threading.Lock()),
+                history=HistoryLog(tab, threading.Lock()))
+    return book, tab
+
+
+def test_a_history_row_carries_when_and_which_machine():
+    """The two columns the tab exists for: two machines share one spreadsheet
+    and nothing else, so a row that does not say who wrote it answers half the
+    question it was kept for."""
+    book, tab = history_book()
+
+    book.record_history(Serial="762", Event="ready", Gmail="g@example.com")
+
+    row = dict(zip(HistoryLog.HEADERS, tab.rows[0], strict=True))
+    assert row["Serial"] == "762" and row["Event"] == "ready"
+    assert row["When"] and row["Machine"]
+
+
+def test_a_workbook_without_a_history_tab_still_works():
+    """History is a record of the work, not part of it - a build must not fail
+    because its footnote could not be written."""
+    from geelark_farm.pools import Book
+    book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
+                apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                             threading.Lock()),
+                phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                                threading.Lock()))
+
+    book.record_history(Serial="1", Event="ready")     # simply nothing happens
+
+
+def test_a_history_append_that_fails_does_not_raise():
+    book, tab = history_book()
+
+    def refuse(*a, **k):
+        raise ConnectionError("mid-write reset")
+    tab.append_row = refuse
+
+    book.record_history(Serial="1", Event="ready")     # logged, not raised

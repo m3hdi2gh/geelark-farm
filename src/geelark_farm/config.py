@@ -106,6 +106,7 @@ class Settings:
     # Local output.
     state_dir: Path
     artifact_dir: Path
+    log_dir: Path
     log_level: str
 
     _sheets_checked: bool = field(default=False, repr=False, compare=False)
@@ -135,6 +136,7 @@ class Settings:
             api_requests_per_minute=_int("API_REQUESTS_PER_MINUTE", 120),
             state_dir=_path("STATE_DIR", "./state"),
             artifact_dir=_path("ARTIFACT_DIR", "./artifacts"),
+            log_dir=_path("LOG_DIR", "./logs"),
             log_level=_str("LOG_LEVEL", "INFO").upper(),
         )
 
@@ -154,3 +156,18 @@ class Settings:
     def ensure_dirs(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+
+
+def machine() -> str:
+    """This device's name, the way logs and History rows say it.
+
+    Two machines share one spreadsheet and nothing else, so every durable
+    record has to say which of them wrote it - "the Mac hit this at 04:20" is
+    the whole reason the log file and the History tab exist. Sanitised because
+    hostnames arrive with dots and spaces, and this ends up in filenames.
+    """
+    import platform
+    import re
+
+    name = platform.node() or "unknown"
+    return re.sub(r"[^A-Za-z0-9-]+", "-", name).strip("-").lower() or "unknown"

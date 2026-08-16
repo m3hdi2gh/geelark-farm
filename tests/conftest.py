@@ -30,7 +30,7 @@ def _settings(**overrides) -> Settings:
         login_budget_seconds=900, install_budget_seconds=600,
         app_login_budget_seconds=600,
         api_requests_per_minute=120, state_dir="/tmp", artifact_dir="/tmp",
-        log_level="INFO",
+        log_dir="/tmp", log_level="INFO",
     )
     base.update(overrides)
     return Settings(**base)

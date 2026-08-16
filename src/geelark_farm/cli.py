@@ -750,6 +750,57 @@ def cmd_ping(settings: Settings, args) -> int:
     return 0
 
 
+def _configure_logging(settings: Settings):
+    """Console as before, plus a file that keeps everything.
+
+    Until now the log went to the console and died with the terminal. A
+    problem hit on one machine was undebuggable from the other - and even on
+    the same one, closing the window destroyed the only record. The file gets
+    DEBUG whatever LOG_LEVEL says: the console is for watching a run, the file
+    is for finding out what happened after the fact, and those want different
+    volumes.
+
+    One file per day per machine, appended, with a banner per invocation - so
+    "what happened on the Mac yesterday" is one file, not a dig through forty.
+
+    Never fatal: a machine where the directory cannot be written gets console
+    logging and a warning, not a dead CLI.
+    """
+    from .config import machine
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    console = logging.StreamHandler()
+    console.setLevel(getattr(logging, settings.log_level, logging.INFO))
+    console.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root.addHandler(console)
+
+    # Third parties narrate every connection at DEBUG. That is their debugging,
+    # not ours, and it would bury a day of real events in socket chatter.
+    for noisy in ("urllib3", "google", "googleapiclient", "requests"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    try:
+        settings.log_dir.mkdir(parents=True, exist_ok=True)
+        path = settings.log_dir / f"{time.strftime('%Y%m%d')}-{machine()}.log"
+        file = logging.FileHandler(path, encoding="utf-8")
+    except OSError as exc:
+        print(f"warning: no log file ({exc}); console only", file=sys.stderr)
+        return None
+    file.setLevel(logging.DEBUG)
+    # The build-context filter is attached here, at creation, so
+    # install_build_logging leaves this handler's format alone - it skips
+    # handlers that already carry the filter. Without that it would replace
+    # this formatter with the console's, and the file would lose its
+    # timestamps, which are the point of a file.
+    from .builder import BuildContextFilter
+    file.addFilter(BuildContextFilter())
+    file.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [%(row)s] %(name)s: %(message)s"))
+    root.addHandler(file)
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -766,10 +817,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config: {exc}", file=sys.stderr)
         return 2
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level, logging.INFO),
-        format="%(levelname)s %(name)s: %(message)s",
-    )
+    log_path = _configure_logging(settings)
+    if log_path is not None:
+        logging.getLogger(__name__).info(
+            "geelark %s `%s` - logging to %s", __version__,
+            args.command or "", log_path)
 
     handlers = {
         "ping": cmd_ping,

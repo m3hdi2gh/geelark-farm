@@ -16,7 +16,7 @@ import pytest
 
 from geelark_farm import builder, failures
 from geelark_farm.flows.router import Outcome
-from geelark_farm.pools import AppPool, Book, GmailPool, PhoneLog, ProxyPool
+from geelark_farm.pools import AppPool, Book, GmailPool, HistoryLog, PhoneLog, ProxyPool
 from tests.test_pools import (
     APP_HEADERS,
     GMAIL_HEADERS,
@@ -52,7 +52,8 @@ def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
         APP_HEADERS, lock)
     phone_log = PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS, lock)
     book = Book(gmails=gmail_pool, proxies=proxy_pool, apps=app_pool,
-                phones=phone_log)
+                phones=phone_log,
+                history=HistoryLog(FakeWorksheet(HistoryLog.HEADERS, []), lock))
     for pool in (book.gmails, book.proxies, book.apps):
         pool.load()
     return book
@@ -1637,3 +1638,58 @@ def test_a_claim_with_no_phone_behind_it_is_left_for_release_stuck(world):
     builder.sync_proxies(world["client"], book, FakeLedger())
 
     assert book.proxies.status_of(lonely) == book.proxies.claimed_status
+
+
+# ---------------------------------------------------- the record that survives
+def history_rows(book):
+    return [dict(zip(HistoryLog.HEADERS, r, strict=True))
+            for r in book.history._ws.rows]
+
+
+def test_every_finished_phone_leaves_a_history_row(device, settings, drive):
+    """The Phones tab is current state - a row marked done is deleted, and
+    with it every answer to "what did we build on Tuesday". This is the row
+    that stays."""
+    book = make_book()
+    drive(book, settings, google=[SIGNED_IN])
+
+    rows = history_rows(book)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["Event"] == "ready" and row["Serial"] == "622"
+    assert row["Gmail"] == "g0@example.com"
+    assert row["GPT Account"] == "a0@example.com"
+    assert row["When"] and row["Machine"]
+    assert row["Note"].startswith("Ready")
+
+
+def test_a_discarded_phone_is_history_too(device, settings, monkeypatch, drive):
+    """A phone created and thrown away cost real minutes; without a row it
+    never happened, and 'why is the bill bigger than the tab' has no answer."""
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = make_book(gmails=1)
+
+    drive(book, settings, google=[Outcome("fatal", "wrong_password")])
+
+    rows = history_rows(book)
+    assert [r["Event"] for r in rows] == ["discarded"]
+    assert "nothing was ever signed into it" in rows[0]["Note"]
+
+
+def test_applying_a_mark_is_history(monkeypatch):
+    """Delivery is the event the whole pipeline exists for, and it is also the
+    moment the Phones row vanishes - so it is exactly what History must hold."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    # state_book swaps in a FakePhoneLog but keeps make_book's real History.
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "g@example.com", "app_account": "a0@example.com"}])
+
+    builder.apply_phone_states(None, book, FakeLedger())
+
+    rows = [dict(zip(HistoryLog.HEADERS, r, strict=True))
+            for r in book.history._ws.rows]
+    assert [r["Event"] for r in rows] == ["done"]
+    assert rows[0]["GPT Account"] == "a0@example.com"
+    assert "delivered" in rows[0]["Note"]

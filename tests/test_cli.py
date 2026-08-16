@@ -455,3 +455,60 @@ def test_a_builds_account_column_fills_from_its_own_log():
     assert reporter.rows[1]["email"] == "second@example.com"
     reporter.note(1, "signing into the app as gpt@example.com")
     assert reporter.rows[1]["email"] == "gpt@example.com"
+
+
+# ------------------------------------------------------------- the log file
+def test_every_invocation_leaves_a_debug_file_whatever_the_console_shows(
+        tmp_path, make_settings):
+    """The log used to go to the console and die with the terminal - a problem
+    hit on one machine was undebuggable from the other, and even on the same
+    one, closing the window destroyed the only record."""
+    import logging
+
+    settings = make_settings(log_dir=tmp_path, log_level="WARNING")
+    root = logging.getLogger()
+    before = list(root.handlers)
+    path = cli._configure_logging(settings)
+    added = [h for h in root.handlers if h not in before]
+    try:
+        assert path is not None and path.parent == tmp_path
+        log = logging.getLogger("geelark_farm.test")
+        log.debug("a detail nobody watches live")
+        log.warning("a thing worth seeing")
+        for handler in added:
+            handler.flush()
+        text = path.read_text(encoding="utf-8")
+        # DEBUG reaches the file even though the console is at WARNING...
+        assert "a detail nobody watches live" in text
+        assert "a thing worth seeing" in text
+        # ...and each line says when, which is what a file is for.
+        assert text.splitlines()[0][:2] == "20"
+        console = next(h for h in added
+                       if not isinstance(h, logging.FileHandler))
+        assert console.level == logging.WARNING
+    finally:
+        for handler in added:
+            root.removeHandler(handler)
+            handler.close()
+
+
+def test_a_log_directory_that_cannot_be_made_does_not_kill_the_cli(
+        tmp_path, make_settings):
+    """A machine where the directory cannot be written gets console logging
+    and a warning, not a dead CLI."""
+    import logging
+
+    blocker = tmp_path / "taken"
+    blocker.write_text("a file where the directory should go")
+    settings = make_settings(log_dir=blocker / "logs")
+    root = logging.getLogger()
+    before = list(root.handlers)
+    path = cli._configure_logging(settings)
+    added = [h for h in root.handlers if h not in before]
+    try:
+        assert path is None
+        assert added, "console logging must still be configured"
+    finally:
+        for handler in added:
+            root.removeHandler(handler)
+            handler.close()
