@@ -1348,7 +1348,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     # frees a row the last run died holding.
     outcome.update(settle_abandoned(client, book, ledger))
     book.reload()
-    outcome.update(sync_proxies(client, book))
+    outcome.update(sync_proxies(client, book, ledger))
     outcome["repointed"] = sync_phone_proxies(client, book)
     if probe_proxies:
         gone, back = check_proxies(client, book)
@@ -1444,7 +1444,8 @@ def settle_abandoned(client: Client, book: Book,
     return outcome
 
 
-def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
+def sync_proxies(client: Client, book: Book,
+                 ledger: Ledger | None = None) -> dict[str, list[str]]:
     """Make the Proxy tab say what is actually behind each exit.
 
     Three ways the tab drifts, and it only ever fixed one of them:
@@ -1489,9 +1490,24 @@ def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:
         if resource.error or not resource.proxy:
             continue
         status = book.proxies.status_of(resource)
-        if status == book.proxies.claimed_status:
-            continue
         behind = live.get(f"{resource.proxy.host}:{resource.proxy.port}") or []
+        if status == book.proxies.claimed_status:
+            # `claimed` means a run is holding it, and this used to stop there
+            # because the power state cannot tell a live run from a dead one.
+            # The ledger can. A phone sitting on this exit whose claim was
+            # released is a build that finished and never wrote the row back,
+            # and SX16 and SX17 sat like that through a whole run - claimed,
+            # with the note from the release before it, and a ready phone on
+            # each (2026-08-16).
+            #
+            # With nothing behind it there is no phone to ask about, and a run
+            # between its claim and its create looks the same, so those are
+            # left for `--release-stuck` rather than guessed at.
+            if not behind or ledger is None:
+                continue
+            if any((held := ledger.get(p["id"])) is not None
+                   and held.is_claimed and not held.is_stale for p in behind):
+                continue
         if behind:
             serial = ", ".join(sorted(
                 str(p.get("serialNo") or p.get("id") or "") for p in behind))

@@ -1591,3 +1591,49 @@ def test_a_phone_that_will_not_stop_keeps_its_row(monkeypatch):
 
     assert out["running"] == ["650"]
     assert book.phones.deleted_rows == []
+
+
+def test_a_claim_a_finished_build_never_wrote_back_is_corrected(world):
+    """`claimed` means a run is holding it, and the sync stopped there because
+    the power state cannot tell a live run from a dead one. The ledger can: a
+    phone on this exit whose claim was released is a build that finished and
+    never wrote the row back. SX16 and SX17 sat like that through a whole run,
+    each with a ready phone on it (2026-08-16)."""
+    book = make_book(proxies=2)
+    stale = book.proxies._rows[0]
+    book.proxies.claim()                       # as a build that died left it
+    assert book.proxies.status_of(stale) == book.proxies.claimed_status
+
+    changed = builder.sync_proxies(world["client"], book, FakeLedger())
+
+    assert book.proxies.status_of(stale) == book.proxies.spent_status
+    assert stale.values["Used By"] == "729"
+    assert any("729" in line for line in changed["attached"])
+
+
+def test_a_claim_a_live_run_still_holds_is_left_alone(world):
+    """The one reason to leave it: a build is working on that phone now."""
+    book = make_book(proxies=2)
+    stale = book.proxies._rows[0]
+    book.proxies.claim()
+    ledger = FakeLedger({"P729": FakeClaim()})
+
+    builder.sync_proxies(world["client"], book, ledger)
+
+    assert book.proxies.status_of(stale) == book.proxies.claimed_status
+
+
+def test_a_claim_with_no_phone_behind_it_is_left_for_release_stuck(world):
+    """There is no phone to ask about, and a run between its claim and its
+    create looks exactly the same - so this is not guessed at."""
+    # The fixture's two phones sit on 10.0.0.0 and 10.0.0.1, so the third
+    # proxy is the one with nothing behind it.
+    book = make_book(proxies=3)
+    lonely = book.proxies._rows[2]
+    book.proxies._set(lonely, {"Status": book.proxies.claimed_status})
+    book.proxies.load()
+    lonely = book.proxies._rows[2]
+
+    builder.sync_proxies(world["client"], book, FakeLedger())
+
+    assert book.proxies.status_of(lonely) == book.proxies.claimed_status
