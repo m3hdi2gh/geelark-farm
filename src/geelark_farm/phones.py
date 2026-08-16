@@ -29,6 +29,14 @@ STATUS_NAMES = {RUNNING: "running", STARTING: "starting",
 # process-wide budget and a two-hour ban is the penalty for exhausting it.
 POLL_SECONDS = 10
 
+#: How long a phone gets to come up before it is called stuck. A GeeLark phone
+#: boots in well under a minute; ten is generous. It is a cap and not a budget:
+#: every caller has a much larger deadline of its own and used to hand the whole
+#: of it over, so a phone GeeLark kept reporting as `starting` was polled for
+#: another thirty-eight minutes while a worker and a plan slot sat on it
+#: (2026-08-14, phone 750).
+BOOT_SECONDS = 600
+
 
 class PhoneError(Exception):
     """A phone is not in a usable state."""
@@ -212,7 +220,7 @@ def stop(client: Client, phone_id: str) -> None:
 
 
 def wait_until_running(client: Client, phone_id: str, *,
-                       timeout: float = 600, settle: float = 30,
+                       timeout: float = BOOT_SECONDS, settle: float = 30,
                        cancelled: Callable[[], bool] | None = None) -> None:
     """Block until the phone reports running, then let Play Services settle.
 
@@ -244,7 +252,7 @@ def wait_until_running(client: Client, phone_id: str, *,
 
 
 def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
-                   timeout: float = 600,
+                   timeout: float = BOOT_SECONDS,
                    on_url: Callable[[str], None] | None = None,
                    cancelled: Callable[[], bool] | None = None) -> str | None:
     """Start the phone if needed. Returns the live-view URL when it started

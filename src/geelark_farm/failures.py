@@ -238,6 +238,11 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "the app refused without saying why",
         "A refusal was detected but not identified. The archived "
         "screen says which."),
+    "phone_would_not_start": Verdict(
+        DEVICE, "GeeLark never brought the phone up",
+        "GeeLark kept reporting the phone as starting and it never came up. "
+        "Nothing about the credentials; the device is the problem. It is "
+        "deleted rather than kept, since nothing was signed into it."),
     "budget_exhausted": Verdict(
         DEVICE, "the step ran out of time",
         "The step ran out of time. Raise its budget, or find out what "

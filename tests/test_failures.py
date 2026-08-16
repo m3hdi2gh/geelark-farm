@@ -125,7 +125,8 @@ def test_every_reason_can_be_said_out_loud():
             f"{reason}'s description names a token: {verdict.seen!r}")
         # Lowercase, unless it opens on the name of whoever refused.
         first = re.match(r"[A-Za-z]+", verdict.seen).group()
-        assert first[0].islower() or first in ("Google", "OpenAI", "Cloudflare"), (
+        assert first[0].islower() or first in ("Google", "OpenAI", "Cloudflare",
+                                           "GeeLark"), (
             f"{reason}'s description is not a clause: {verdict.seen!r}")
 
 

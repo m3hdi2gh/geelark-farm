@@ -503,7 +503,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-build{index}"
 
-        phones.ensure_running(client, phone_id, timeout=remaining(),
+        phones.ensure_running(client, phone_id,
+                              timeout=min(phones.BOOT_SECONDS, remaining()),
                               cancelled=cancelled)
         if on_ready:
             on_ready(phone_id)
@@ -594,6 +595,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
     except Aborted as exc:
         return finish(str(exc), failures.situation(str(exc)))
+    except phones.PhoneError as exc:
+        # Expected, and named. It used to reach the catch-all below and be
+        # reported as "an error nobody planned for", which is the wrong thing
+        # to tell someone about a phone that simply did not boot.
+        return finish("phone_would_not_start", str(exc))
     except Exception as exc:                                      # noqa: BLE001
         # Deliberately broad. Whatever went wrong, the resources this build is
         # holding must go back and the phone must be stopped - an exception
@@ -707,7 +713,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-finish{build.serial}"
-        phones.ensure_running(client, phone_id, timeout=deadline - time.monotonic(),
+        phones.ensure_running(client, phone_id,
+                              timeout=min(phones.BOOT_SECONDS,
+                                          deadline - time.monotonic()),
                               cancelled=cancelled)
 
         # The device is the only truth. A row can say anything; what decides
@@ -842,7 +850,8 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     if current is not None and _refreshed(client, settings, book, current):
         # Same credentials, different address: nothing on the phone changes.
         time.sleep(5)
-        phones.ensure_running(client, phone_id, timeout=budget,
+        phones.ensure_running(client, phone_id,
+                              timeout=min(phones.BOOT_SECONDS, budget),
                               cancelled=cancelled)
         return current
 
@@ -881,7 +890,9 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     build.proxy = str(replacement.proxy)
     build.proxy_name = replacement.name
     time.sleep(5)
-    phones.ensure_running(client, phone_id, timeout=budget, cancelled=cancelled)
+    phones.ensure_running(client, phone_id,
+                          timeout=min(phones.BOOT_SECONDS, budget),
+                          cancelled=cancelled)
     return replacement
 
 
@@ -1182,6 +1193,9 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     the first line of every console session (2026-08-14).
     """
     outcome = apply_phone_states(client, book, ledger) if apply_marks else {}
+    # Before the reload, because both read the Phones tab and this one is what
+    # frees a row the last run died holding.
+    outcome.update(settle_abandoned(client, book, ledger))
     book.reload()
     outcome.update(sync_proxies(client, book))
     outcome["repointed"] = sync_phone_proxies(client, book)
@@ -1205,6 +1219,63 @@ def _live_exits(client: Client) -> dict[str, dict]:
         if config.get("server"):
             found[f"{config['server']}:{config.get('port')}"] = phone
     return found
+
+
+def settle_abandoned(client: Client, book: Book,
+                    ledger: Ledger) -> dict[str, list[str]]:
+    """Close out rows a run was holding when it died.
+
+    `building` means "a run has this right now", which is why every other
+    reader skips it - and nothing ever un-set it. A run killed mid-build leaves
+    the row saying `building` forever: `unfinished` will not offer it to a
+    finish, `marked` only sees the State column, and the phone sits in the
+    panel behind a row nobody acts on (2026-08-14, phone 750, left there when a
+    stuck boot was interrupted).
+
+    A phone that is actually running is left alone. That is the one signal that
+    separates a live run from a dead one, and a build keeps its phone up from
+    the moment it exists until it stops it.
+
+    What the row becomes follows the rule a build would have applied itself: a
+    phone with a Gmail on it is `incomplete` and can be finished; one with
+    nothing signed in is deleted, because that is not a phone.
+    """
+    live = {str(p.get("serialNo")): p for p in phones.listing(client)}
+    outcome: dict[str, list[str]] = {"abandoned": [], "discarded": []}
+    dropped: list[int] = []
+
+    for row in book.phones.rows():
+        if (row.get("Status") or "").strip() != book.phones.BUILDING:
+            continue
+        serial = row.get("Serial") or ""
+        present = live.get(str(serial))
+        if present and present.get("status") in (phones.RUNNING, phones.STARTING):
+            continue                       # someone is working on it right now
+
+        if row.get("Gmail"):
+            book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=(
+                "Stopped short: the run holding this phone ended before it "
+                "could say why. Google is signed in, so finishing it costs "
+                "only an app account."))
+            outcome["abandoned"].append(str(serial))
+            continue
+
+        # Nothing was ever signed into it - the same rule build_one applies.
+        if present:
+            try:
+                phones.delete(client, [present["id"]], ledger=ledger)
+            except Exception as exc:                              # noqa: BLE001
+                log.error("phone %s was abandoned with nothing on it and "
+                          "could not be deleted (%s)", serial, exc)
+                continue
+        dropped.append(row["sheet_row"])
+        outcome["discarded"].append(str(serial))
+
+    book.phones.delete_rows(dropped)
+    for label, items in outcome.items():
+        if items:
+            log.info("%s: %s", label, ", ".join(items))
+    return outcome
 
 
 def sync_proxies(client: Client, book: Book) -> dict[str, list[str]]:

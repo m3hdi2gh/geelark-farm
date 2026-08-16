@@ -712,6 +712,7 @@ class FakePhoneLog:
     """A Phones tab that answers `marked` and records what was deleted."""
 
     DONE, FAILED, UNUSED = "done", "failed", "unused"
+    BUILDING, READY, INCOMPLETE = "building", "ready", "incomplete"
 
     def __init__(self, rows):
         self._rows = rows
@@ -1278,3 +1279,96 @@ def test_the_sync_can_be_asked_to_skip_the_part_that_costs_time(world):
     assert asked == []
     assert "dead" not in builder.sync_sheet(world["client"], book,
                                             FakeLedger(), probe_proxies=False)
+
+
+# ------------------------------------ rows a run was holding when it died
+def test_a_row_left_building_with_a_gmail_becomes_finishable(world):
+    """`building` means "a run has this right now", which is why every other
+    reader skips it - and nothing ever un-set it. A killed run left phone 750
+    saying `building` forever: no finish would offer it, and the phone sat in
+    the panel behind a row nobody acts on (2026-08-14)."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "730", "Status": "building",
+         "Gmail": "g@example.com", "GPT Account": ""}]
+    written = {}
+    book.phones.finish = lambda row, **fields: written.update({row: fields})
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert outcome["abandoned"] == ["730"]
+    assert written[4]["Status"] == "incomplete"
+    assert "Google is signed in" in written[4]["Note"]
+    assert world["deleted"] == []          # it is worth finishing, not deleting
+
+
+def test_a_row_left_building_with_nothing_on_it_is_deleted(world):
+    """Same rule a build applies to itself: a phone with no Google account is
+    not a phone."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "730", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert outcome["discarded"] == ["730"]
+    assert world["deleted"] == ["P730"]
+    assert book.phones.deleted_rows == [4]
+
+
+def test_a_phone_still_running_is_left_to_the_run_that_has_it(world):
+    """The one signal that separates a live run from a dead one."""
+    world["live"][0]["status"] = 0                       # 729 is running
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "729", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert outcome == {"abandoned": [], "discarded": []}
+    assert world["deleted"] == []
+
+
+def test_a_boot_that_never_finishes_is_named_rather_than_called_unplanned(
+        device, settings, monkeypatch, drive):
+    """It reached the catch-all and was reported as "an error nobody planned
+    for", which is the wrong thing to say about a phone that did not boot."""
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    monkeypatch.setattr(
+        builder.phones, "ensure_running",
+        lambda *a, **k: (_ for _ in ()).throw(
+            builder.phones.PhoneError("phone P1 did not start within 600s")))
+
+    build = drive(make_book(), settings, google=[SIGNED_IN])
+
+    assert build.status == "phone_would_not_start"
+    assert "nobody planned for" not in builder.outcome_of(build)
+    assert failures.verdict(build.status).stops_the_phone
+
+
+def test_the_boot_wait_is_capped_rather_than_given_the_whole_budget():
+    """A phone GeeLark kept reporting as `starting` was polled for another
+    thirty-eight minutes, because every caller handed over its own deadline."""
+    import ast
+    import pathlib
+
+    source = pathlib.Path(builder.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute)
+             and node.func.attr == "ensure_running"]
+
+    assert calls, "no boot waits found - the scan has broken"
+    for call in calls:
+        timeout = next((kw.value for kw in call.keywords if kw.arg == "timeout"),
+                       None)
+        assert timeout is not None, f"line {call.lineno} takes the default"
+        assert isinstance(timeout, ast.Call) and timeout.func.id == "min", (
+            f"builder.py:{call.lineno} hands ensure_running a deadline instead "
+            f"of capping it at phones.BOOT_SECONDS")
