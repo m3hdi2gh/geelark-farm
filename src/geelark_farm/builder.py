@@ -598,8 +598,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     except phones.PhoneError as exc:
         # Expected, and named. It used to reach the catch-all below and be
         # reported as "an error nobody planned for", which is the wrong thing
-        # to tell someone about a phone that simply did not boot.
-        return finish("phone_would_not_start", str(exc))
+        # to tell someone about a phone that simply did not boot - or about one
+        # that was deleted underneath the build, which is a different sentence
+        # and points at a different culprit.
+        vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
+        return finish("phone_is_gone" if vanished else "phone_would_not_start",
+                      str(exc))
     except Exception as exc:                                      # noqa: BLE001
         # Deliberately broad. Whatever went wrong, the resources this build is
         # holding must go back and the phone must be stopped - an exception
@@ -1232,9 +1236,14 @@ def settle_abandoned(client: Client, book: Book,
     panel behind a row nobody acts on (2026-08-14, phone 750, left there when a
     stuck boot was interrupted).
 
-    A phone that is actually running is left alone. That is the one signal that
-    separates a live run from a dead one, and a build keeps its phone up from
-    the moment it exists until it stops it.
+    Two things protect a run that is still working, and one of them was not
+    enough. The phone being up is the obvious signal - and a phone stuck in
+    `starting` reports as `stopped`, so a build patiently waiting for one to
+    boot looked exactly like a dead run. This deleted phone 750 out from under
+    a live build, which then failed with `env not found` twenty minutes later
+    (2026-08-14). The ledger is the other: `claim` is written the moment a
+    build takes a phone and cleared when it lets go, so an unreleased claim
+    means a process believes it owns this. Both are checked.
 
     What the row becomes follows the rule a build would have applied itself: a
     phone with a Gmail on it is `incomplete` and can be finished; one with
@@ -1251,6 +1260,11 @@ def settle_abandoned(client: Client, book: Book,
         present = live.get(str(serial))
         if present and present.get("status") in (phones.RUNNING, phones.STARTING):
             continue                       # someone is working on it right now
+        held = present and ledger.get(present["id"])
+        if held is not None and held.is_claimed and not held.is_stale:
+            log.info("phone %s is stopped but a run still claims it (%s); "
+                     "leaving it alone", serial, held.label)
+            continue
 
         if row.get("Gmail"):
             book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=(

@@ -238,6 +238,12 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "the app refused without saying why",
         "A refusal was detected but not identified. The archived "
         "screen says which."),
+    "phone_is_gone": Verdict(
+        DEVICE, "the phone was deleted while the build was working on it",
+        "GeeLark answered `env not found`, so the phone this build was driving "
+        "no longer exists. Something else removed it mid-run - a second "
+        "process, or a hand in the panel. Nothing is wrong with the "
+        "credentials; they go back to the pool untouched."),
     "phone_would_not_start": Verdict(
         DEVICE, "GeeLark never brought the phone up",
         "GeeLark kept reporting the phone as starting and it never came up. "

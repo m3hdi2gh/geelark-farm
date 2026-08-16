@@ -59,8 +59,23 @@ def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
 
 
 class FakeLedger:
+    """No phone is claimed unless a test says so."""
+
+    def __init__(self, claims=None):
+        self.claims = claims or {}
+
     def claim(self, *a, **k): pass
     def release(self, *a, **k): pass
+
+    def get(self, phone_id):
+        return self.claims.get(phone_id)
+
+
+class FakeClaim:
+    """What the ledger says about a phone a run took."""
+
+    def __init__(self, *, is_claimed=True, is_stale=False, label="build 3"):
+        self.is_claimed, self.is_stale, self.label = is_claimed, is_stale, label
 
 
 class Recorder:
@@ -1372,3 +1387,39 @@ def test_the_boot_wait_is_capped_rather_than_given_the_whole_budget():
         assert isinstance(timeout, ast.Call) and timeout.func.id == "min", (
             f"builder.py:{call.lineno} hands ensure_running a deadline instead "
             f"of capping it at phones.BOOT_SECONDS")
+
+
+def test_a_phone_a_run_still_claims_is_left_alone_even_when_it_reads_stopped(
+        world):
+    """The power state alone was not enough. A phone stuck in `starting`
+    reports as `stopped`, so a build patiently waiting for one to boot looked
+    exactly like a dead run - and this deleted phone 750 out from under a live
+    build, which failed with `env not found` twenty minutes later
+    (2026-08-14)."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "730", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+    ledger = FakeLedger({"P730": FakeClaim()})
+
+    outcome = builder.settle_abandoned(None, book, ledger)
+
+    assert outcome == {"abandoned": [], "discarded": []}
+    assert world["deleted"] == []
+
+
+def test_a_claim_old_enough_to_be_stale_does_not_protect_it(world):
+    """Otherwise a run killed without releasing its claim protects the row for
+    good, which is the state this function exists to clear."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "730", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+    ledger = FakeLedger({"P730": FakeClaim(is_stale=True)})
+
+    outcome = builder.settle_abandoned(None, book, ledger)
+
+    assert outcome["discarded"] == ["730"]
+    assert world["deleted"] == ["P730"]
