@@ -639,10 +639,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         discarded = (phone_id and not gmail_signed_in
                      and build.status != "interrupted"
                      and _discard(client, book, ledger, build))
+        # By serial, not by the row number `start` handed back ten minutes ago.
+        # Any sibling discarding its phone deletes a row, and every row below it
+        # moves up - so that number can have come to mean a different phone.
         if log_row is not None and not discarded:
-            _record(book, log_row, build)
+            _record(book, build)
         elif log_row is not None:
-            book.phones.delete_rows([log_row])
+            book.phones.drop(build.serial)
         if phone_id and not discarded:
             try:
                 phones.stop(client, phone_id)
@@ -776,7 +779,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # A proxy swapped in during finishing belongs to this phone now.
         _release(book, build,
                  _session_holds(book, session, proxy_spent=True))
-        _record(book, phone["sheet_row"], build)
+        _record(book, build)
         try:
             phones.stop(client, phone_id)
             log.info("stopped %s", phone_id)
@@ -1025,18 +1028,22 @@ def _phone_note(build: Build) -> str:
     return f"{opening} {lead}: {attempts}."
 
 
-def _record(book: Book, sheet_row: int, build: Build) -> None:
+def _record(book: Book, build: Build) -> None:
     """Write the finished phone to the Phones tab. Also in a finally."""
     note = _phone_note(build)
     try:
-        book.phones.finish(
-            sheet_row, Status=READY if build.ok else INCOMPLETE,
+        wrote = book.phones.write(
+            build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
             Gmail=build.gmail, Note=note[:500],
             **{"GPT Account": build.app_account},
         )
+        if not wrote:
+            log.error("phone %s has no row in the Phones tab to record on; "
+                      "its result is in the summary above and nowhere else",
+                      build.serial)
     except SheetError as exc:
-        log.error("could not record phone %s (%s)", build.phone_id, exc)
+        log.error("could not record phone %s (%s)", build.serial, exc)
 
 
 def possible_statuses() -> list[str]:

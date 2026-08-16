@@ -1423,3 +1423,36 @@ def test_a_claim_old_enough_to_be_stale_does_not_protect_it(world):
 
     assert outcome["discarded"] == ["730"]
     assert world["deleted"] == ["P730"]
+
+
+def test_a_result_lands_on_its_own_row_when_a_sibling_deletes_one(
+        device, settings, monkeypatch):
+    """`start` hands back a row number and a build holds it for ten minutes.
+    Any sibling discarding its phone deletes a row, and every row below it
+    moves up - so that number comes to mean a different phone, and writing
+    through it puts one build's result on another's row and loses both
+    (2026-08-14, phone 751 gone from a tab that recorded it).
+    """
+    book = make_book(gmails=3, proxies=3, apps=3)
+    tab = book.phones._ws
+
+    # Three rows, as three builds would have appended them.
+    for serial in ("758", "759", "760"):
+        book.phones.start(Serial=serial, Proxy="SX1")
+    assert [r[PHONE_HEADERS.index("Serial")] for r in tab.rows] == \
+           ["758", "759", "760"]
+
+    # 758 discards mid-run. Everything below it shifts up by one.
+    book.phones.drop("758")
+    assert [r[PHONE_HEADERS.index("Serial")] for r in tab.rows] == \
+           ["759", "760"]
+
+    # 760 now finishes, holding the row number it was given at the start.
+    builder._record(book, builder.Build(index=3, ok=True, status="ready",
+                                        serial="760", gmail="g@example.com"))
+
+    written = {r[PHONE_HEADERS.index("Serial")]:
+               r[PHONE_HEADERS.index("Status")] for r in tab.rows}
+    assert written == {"759": "building", "760": "ready"}, (
+        f"760's result landed on the wrong row: {written}")
+

@@ -725,6 +725,48 @@ class PhoneLog:
             found.append(row)
         return found
 
+    def locate(self, serial: str) -> int | None:
+        """The row this phone is on *now*.
+
+        A row number is not a durable handle to a phone. `start` hands one back
+        and a build holds it for ten minutes while its siblings work, and any
+        one of them deleting its own row shifts every row below it up - so the
+        number a build remembers can come to mean a different phone. Writing
+        through it then puts one build's result on another's row and loses
+        both (2026-08-14, phone 751).
+
+        The serial is durable, so everything that writes after a build has been
+        running looks the row up again by it.
+        """
+        wanted = str(serial).strip()
+        if not wanted:
+            return None
+        index = self._index.get("Serial")
+        if index is None:
+            return None
+        with self._lock:
+            raw = self._ws.get_all_values()
+        for offset, line in enumerate(raw[1:], start=2):
+            if index < len(line) and line[index].strip() == wanted:
+                return offset
+        return None
+
+    def write(self, serial: str, **fields: str) -> bool:
+        """Write to the row this phone is on now. False if it has none."""
+        sheet_row = self.locate(serial)
+        if sheet_row is None:
+            return False
+        self.finish(sheet_row, **fields)
+        return True
+
+    def drop(self, serial: str) -> bool:
+        """Remove this phone's row, wherever it has moved to."""
+        sheet_row = self.locate(serial)
+        if sheet_row is None:
+            return False
+        self.delete_rows([sheet_row])
+        return True
+
     def finish(self, sheet_row: int, **fields: str) -> None:
         payload = []
         for name, value in fields.items():
