@@ -917,11 +917,23 @@ class Book:
         with self._lock:
             grid = self._lists.get_all_values()
         head = grid[0]
+
+        def column_now(letter_index: int) -> list[str]:
+            return [row[letter_index].strip() if letter_index < len(row) else ""
+                    for row in grid[1:]]
+
         payload = []
         for column, values in wanted.items():
             if column not in head:
                 continue
-            letter = a1_column(head.index(column) + 1)
+            index = head.index(column)
+            # Compared before writing, so a run that changes nothing sends
+            # nothing. This is called every session now, and a write per
+            # session against a tab that has not moved is an API call spent to
+            # learn what a read already said.
+            if [v for v in column_now(index) if v] == list(values):
+                continue
+            letter = a1_column(index + 1)
             # Cleared to the bottom first: a shorter list must not leave the
             # tail of the old one behind, still selectable.
             for offset in range(max(len(grid) - 1, len(values))):

@@ -1332,6 +1332,17 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     inside this body, and calling it raised `'bool' object is not callable` on
     the first line of every console session (2026-08-14).
     """
+    # The dropdowns come from the same table the build consults, so they cannot
+    # be right by accident and cannot stay right on their own: a flow grew
+    # `wrong_2fa_code` and the Gpt Info column went on refusing it - "Input
+    # must fall within specified range" against a status a run had just
+    # written (2026-08-16). Regenerated every session, and it writes only when
+    # something actually moved.
+    try:
+        book.sync_lists()
+    except SheetError as exc:
+        log.warning("could not refresh the Status dropdowns: %s", exc)
+
     outcome = apply_phone_states(client, book, ledger) if apply_marks else {}
     # Before the reload, because both read the Phones tab and this one is what
     # frees a row the last run died holding.

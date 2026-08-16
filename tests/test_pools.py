@@ -421,3 +421,56 @@ def test_one_gateway_can_carry_more_than_one_proxy():
     assert pool.broken == []
     assert len(pool.available) == 3
 
+
+
+# --------------------------------------------------- keeping the dropdowns honest
+class FakeBookLists:
+    """A Lists tab and the three pools sync_lists reads the vocabulary from."""
+
+    def __init__(self, existing):
+        headers = ["Gmail Statuses", "GPT Statuses", "Proxy Statuses",
+                   "Phone Statuses"]
+        rows = [[existing[h][i] if i < len(existing[h]) else ""
+                 for h in headers] for i in range(12)]
+        self.sheet = FakeWorksheet(headers, rows)
+
+
+def lists_book(existing):
+    from geelark_farm.pools import Book
+    tab = FakeBookLists(existing).sheet
+    book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
+                apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                             threading.Lock()),
+                phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                                threading.Lock()),
+                lists=tab)
+    return book, tab
+
+
+def test_a_reason_a_flow_grew_reaches_the_dropdown():
+    """The column went on refusing `wrong_2fa_code` after the flow grew it -
+    "Input must fall within specified range" against a status a run had just
+    written (2026-08-16)."""
+    book, tab = lists_book({"Gmail Statuses": [], "GPT Statuses": [],
+                            "Proxy Statuses": [], "Phone Statuses": []})
+
+    wanted = book.sync_lists()
+
+    assert "wrong_2fa_code" in wanted["GPT Statuses"]
+    assert "change ip" in wanted["Proxy Statuses"]
+    written = {w["values"][0][0] for w in tab.writes}
+    assert "wrong_2fa_code" in written
+
+
+def test_dropdowns_that_already_agree_are_not_rewritten():
+    """Called every session now, so a run that changes nothing must send
+    nothing - a write against a tab that has not moved is an API call spent to
+    learn what the read already said."""
+    book, tab = lists_book({"Gmail Statuses": [], "GPT Statuses": [],
+                            "Proxy Statuses": [], "Phone Statuses": []})
+    book.sync_lists()
+    tab.writes.clear()
+
+    book.sync_lists()
+
+    assert tab.writes == []
