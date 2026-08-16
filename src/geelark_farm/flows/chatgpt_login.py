@@ -27,9 +27,13 @@ applies. That is conservative on purpose. A phone genuinely signed in by an
 earlier run gets signed in again rather than assumed, and a wasted login is
 worth far more than a phone handed over as ready with nobody in it.
 
-It is still the weakest check in the pipeline. The honest fix is to read the
-account's address out of the app's own menu, and that needs a capture of that
-menu to write. `verified_on_device()` is the only place that would change.
+The composer check decides when the *login* is done. What closes the gap is
+`verify_account`, which runs after it: the flow walks chat -> Menu -> Account
+settings and reads the Email line back, which is the app itself naming its
+session - the same standard `dumpsys account` sets for Google. A walk that
+cannot reach the page is a failure, not a pass, and an address that is not
+the one just typed is its own reason. Built from captures of a live phone
+(2026-08-17), like every other screen here.
 
 ## The path
 
@@ -55,6 +59,7 @@ silently timing out would be worse.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -336,6 +341,83 @@ def verified_on_device(ctx: Context) -> bool:
     own menu, which needs a capture of that menu to write.
     """
     return ctx.submitted_password and composer_on_screen(ctx)
+
+
+# ------------------------------------------------- reading the account back
+#: The path from the chat screen to the page that names the account, each
+#: step a content-desc observed on a live phone (2026-08-17, phone 805):
+#: `Menu` opens the sidebar, `Account settings` opens the page whose Email
+#: section shows the address as a plain TextView.
+MENU_LABELS = ("Menu",)
+ACCOUNT_SETTINGS_LABELS = ("Account settings",)
+
+EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
+
+
+def account_email_on(elements: list[screen.Element]) -> str | None:
+    """The address the settings page names, or None if none is on it."""
+    for element in elements:
+        text = element.label.strip()
+        if EMAIL_TEXT.fullmatch(text):
+            return text
+    return None
+
+
+def verify_account(ctx: Context) -> Outcome | None:
+    """Read the signed-in address out of the app's own settings.
+
+    The composer check above proves a chat screen; it cannot prove whose. This
+    walks chat -> Menu -> Account settings and reads the Email line, which is
+    the app itself naming its session - the same standard `dumpsys account`
+    sets for Google. It closes the weakest check in the pipeline, flagged in
+    this module's docstring since the day it was written.
+
+    Runs only after a login the router already called successful, so the phone
+    is on the chat screen. Returns None when the address matches, or the fatal
+    Outcome to report instead. Failing to *reach* the page is its own reason,
+    not a pass: on 2026-08-08 a phone was handed over ready with nobody in the
+    app, and "could not check" must never again count as "checked".
+
+    The phone is stopped right after a build, so nothing navigates back.
+    """
+    for labels, name in ((MENU_LABELS, "sidebar"),
+                         (ACCOUNT_SETTINGS_LABELS, "account settings")):
+        found = None
+        for _ in range(6):
+            ctx.refresh()
+            found = screen.find_first(ctx.elements, labels)
+            if found is not None:
+                break
+            time.sleep(3)
+        if found is None or not screen.tap_element(ctx.client, ctx.phone_id,
+                                                   found):
+            path = ctx.save("verify-lost")
+            return Outcome("fatal", "session_unverified",
+                           f"the {name} control never appeared, so the "
+                           f"session could not be read back",
+                           artifacts=[path] if path else [])
+        time.sleep(2)
+
+    named = None
+    for _ in range(6):
+        ctx.refresh()
+        named = account_email_on(ctx.elements)
+        if named is not None:
+            break
+        time.sleep(3)
+    if named is None:
+        path = ctx.save("verify-no-address")
+        return Outcome("fatal", "session_unverified",
+                       "the settings page showed no address to read",
+                       artifacts=[path] if path else [])
+    if named.casefold() != ctx.creds.email.casefold():
+        path = ctx.save("verify-wrong-account")
+        return Outcome("fatal", "app_wrong_account",
+                       f"the app's settings name {named}, not "
+                       f"{ctx.creds.email}",
+                       artifacts=[path] if path else [])
+    log.info("the app's own settings name %s", named)
+    return None
 
 
 # ------------------------------------------------------------------ screens
@@ -690,8 +772,17 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
                            f"{creds.email}: the composer is on screen")
         return None
 
-    return router.drive(ctx, SCREENS, is_done=logged_in,
-                        budget_seconds=budget_seconds, logger=log)
+    out = router.drive(ctx, SCREENS, is_done=logged_in,
+                       budget_seconds=budget_seconds, logger=log)
+    if not out.ok:
+        return out
+    # The router proved a chat screen. This proves whose it is.
+    failed = verify_account(ctx)
+    if failed is not None:
+        return failed
+    return Outcome("success", "logged_in",
+                   f"the app's own settings name {creds.email}",
+                   artifacts=out.artifacts)
 
 
 def sign_in_on_phone(client: Client, phone_id: str, creds: Credentials,

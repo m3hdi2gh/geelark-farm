@@ -152,6 +152,20 @@ VERDICTS: dict[str, Verdict] = {
         "Status to offer it again. Nothing retries it on its own, because "
         "that is what had every run spending five minutes on the same two "
         "accounts."),
+    "session_unverified": Verdict(
+        DEVICE, "the signed-in session could not be read back from the app",
+        "The login looked complete but the walk to the app's own settings - "
+        "where the address is read back - never got there. The phone is not "
+        "handed over on looks alone: that is how one was delivered with "
+        "nobody in the app. The archived screen shows where the walk "
+        "stopped; if OpenAI moved its menus, the walk in the ChatGPT login "
+        "flow is what to update."),
+    "app_wrong_account": Verdict(
+        DEVICE, "the app's own settings name a different account",
+        "The app is signed in, but as someone else - a session from an "
+        "earlier run survived where a fresh login was expected. Nothing is "
+        "wrong with the credentials. Rebuild the phone, or clear the app "
+        "and finish it again."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account",
         "OpenAI has deactivated the account."),

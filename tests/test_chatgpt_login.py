@@ -132,3 +132,105 @@ def _reason(blob: str) -> str | None:
                                 package="com.openai.chatgpt")
     ctx.blob = blob
     return chatgpt_login._fatal_reason(ctx)
+
+
+# ----------------------------------------- reading the account back
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def elements_of(fixture: str):
+    return screen.parse((FIXTURES / fixture).read_text(encoding="utf-8",
+                                                       errors="replace"))
+
+
+def test_the_settings_page_names_the_account():
+    """Against the page as it was actually captured (2026-08-17): the Email
+    section shows the address as a plain TextView, no WebView involved."""
+    named = chatgpt_login.account_email_on(
+        elements_of("chatgpt-account-settings.xml"))
+
+    assert named == "mizikilak240@gmail.com"
+
+
+@pytest.mark.parametrize("fixture", ["chatgpt-chat-signed-in.xml",
+                                     "chatgpt-account-menu.xml"])
+def test_the_other_screens_name_no_account(fixture):
+    """The chat screen and the sidebar hold no address, so a verifier that
+    stopped early would read nothing rather than the wrong thing."""
+    assert chatgpt_login.account_email_on(elements_of(fixture)) is None
+
+
+def test_the_walk_to_the_settings_page_exists_on_the_real_screens():
+    """Each step of verify_account's path, against the captured screens: Menu
+    is on the chat screen, Account settings is in the sidebar."""
+    chat = elements_of("chatgpt-chat-signed-in.xml")
+    drawer = elements_of("chatgpt-account-menu.xml")
+
+    assert screen.find_first(chat, chatgpt_login.MENU_LABELS) is not None
+    assert screen.find_first(drawer,
+                             chatgpt_login.ACCOUNT_SETTINGS_LABELS) is not None
+    # and neither control appears on the other screen, so a tap cannot land
+    # on the wrong page's element
+    assert screen.find_first(drawer, chatgpt_login.MENU_LABELS) is None
+
+
+class ScriptedPhone:
+    """A phone that answers each capture from a script and records taps."""
+
+    def __init__(self, monkeypatch, screens):
+        self.screens = list(screens)
+        self.tapped = []
+        monkeypatch.setattr(chatgpt_login.screen, "capture",
+                            lambda c, p: (FIXTURES / self.screens[0]).read_text(
+                                encoding="utf-8", errors="replace"))
+        monkeypatch.setattr(chatgpt_login.screen, "tap_element",
+                            self._tap)
+        monkeypatch.setattr(chatgpt_login.time, "sleep", lambda *a: None)
+
+    def _tap(self, client, phone_id, element):
+        self.tapped.append(element.label)
+        if len(self.screens) > 1:
+            self.screens.pop(0)
+        return True
+
+
+def verify_ctx(email="mizikilak240@gmail.com"):
+    ctx = chatgpt_login.Context(
+        client=None, phone_id="P1", package="com.openai.chatgpt",
+        creds=Credentials(email=email, password="x",
+                          totp_secret="JBSWY3DPEHPK3PXP"))
+    return ctx
+
+
+def test_verify_account_walks_the_real_screens(monkeypatch):
+    """chat -> Menu -> sidebar -> Account settings -> the page that names the
+    address. Every screen in the walk is a capture from a live phone."""
+    phone = ScriptedPhone(monkeypatch, ["chatgpt-chat-signed-in.xml",
+                                        "chatgpt-account-menu.xml",
+                                        "chatgpt-account-settings.xml"])
+
+    assert chatgpt_login.verify_account(verify_ctx()) is None
+    assert phone.tapped == ["Menu", "Account settings"]
+
+
+def test_a_different_account_in_the_app_is_fatal(monkeypatch):
+    """The catastrophic case the whole verifier exists for: the app is signed
+    in, but as someone else."""
+    ScriptedPhone(monkeypatch, ["chatgpt-chat-signed-in.xml",
+                                "chatgpt-account-menu.xml",
+                                "chatgpt-account-settings.xml"])
+
+    out = chatgpt_login.verify_account(verify_ctx(email="other@example.com"))
+
+    assert out is not None and out.reason == "app_wrong_account"
+    assert "mizikilak240@gmail.com" in out.detail
+
+
+def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):
+    """On 2026-08-08 a phone was handed over ready with nobody in the app -
+    'could not check' must never again count as 'checked'."""
+    ScriptedPhone(monkeypatch, ["chatgpt-account-menu.xml"])   # no Menu here
+
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "session_unverified"
