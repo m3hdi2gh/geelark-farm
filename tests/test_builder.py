@@ -281,22 +281,28 @@ def test_a_captcha_costs_the_gmail_not_the_proxy(device, settings, drive):
 
 
 # -------------------------------------------------- the exit address's fault
-def test_a_swapped_out_proxy_goes_back_to_the_pool_not_condemned(device, settings,
-                                                                 drive):
-    """Measured across twelve attempts: every gateway produced both successes
-    and these refusals. Condemning one for a single refusal is wrong."""
+def test_a_refused_exit_waits_for_its_address_to_be_changed(device, settings,
+                                                            drive):
+    """This used to go straight back to the pool, on the measurement that a
+    refusal is per-session rather than per-proxy - which is still true about
+    the proxy. It misses the address: these rows carry no `Port ID`, so nothing
+    here can ask sx.org for a new one, and freeing the row hands the next build
+    the same address to be refused through again.
+
+    Not `dead` and not a failure reason: the proxy is not condemned, it is
+    waiting for a hand in the vendor's panel.
+    """
     book = make_book()
     drive(book, settings, google=[SIGNED_IN],
           app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
 
     first = book.proxies._rows[0]
-    assert first.values["Status"] == "free"
-    # said in words, and said to be about the attempt rather than the proxy -
-    # this row is the one someone reads when deciding whether to keep buying
-    # from this vendor
+    assert first.values["Status"] == ProxyPool.needs_new_ip
+    assert first not in book.proxies.available
     note = first.values["Note"]
     assert failures.verdict("request_rejected").seen in note
-    assert "not about this proxy" in note
+    assert "the exit address is the thing that was turned down" in note
+    assert "set this cell to `free`" in note
 
 
 # The exit refusals are OpenAI's, so they only ever arrive in the app phase -
@@ -409,8 +415,10 @@ def test_a_refused_exit_is_not_handed_back_to_the_same_build(device, settings,
     # one proxy created the phone, the other three were swapped in - each once
     assert device.proxies_set == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
     assert len(device.proxies_set) == len(set(device.proxies_set))
-    # and they all come back to the pool afterwards, with what was seen
-    assert len(book.proxies.available) == 3
+    # and none of them is offered again until its address has been changed
+    assert book.proxies.available == []
+    assert all(book.proxies.status_of(r) == ProxyPool.needs_new_ip
+               for r in book.proxies._rows[:3])
     assert (failures.verdict("network_ssl_rejected").seen
             in book.proxies._rows[0].values["Note"])
 

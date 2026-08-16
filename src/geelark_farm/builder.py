@@ -1001,12 +1001,15 @@ def _session_holds(book: Book, session: _Session | None, *,
     if session.proxy_row is not None:
         held.append((book.proxies, session.proxy_row,
                      SPEND if proxy_spent else RELEASE, ""))
-    # Exits this phone tried and moved on from: back on the shelf, not
-    # condemned - the refusals were measured to be per-session.
-    held += [(book.proxies, resource, RELEASE,
-              f"On {today} {failures.verdict(why).seen}, so the phone moved to "
-              f"another exit. Free again - that refusal was about the attempt, "
-              f"not about this proxy.")
+    # Exits a service refused this phone through. Held back rather than freed:
+    # the proxy is not condemned - a refusal is per-session, which is measured -
+    # but its *address* has just been turned down, and nothing here can change
+    # one, because these rows carry no `Port ID` for sx.org to refresh. Freeing
+    # it hands the next build the same address to be refused through again.
+    held += [(book.proxies, resource, SET_ASIDE,
+              f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
+              f"the exit address is the thing that was turned down. Change it "
+              f"in the vendor's panel, then set this cell to `free`.")
              for resource, why in session.refused_exits]
     # Accounts the service asked something of rather than judged. Its own verb,
     # because neither of the other two is true: it was not spent, and releasing

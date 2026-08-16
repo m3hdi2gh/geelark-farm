@@ -417,6 +417,22 @@ class ProxyPool(Pool):
     tab = PROXY_TAB
     serial_column = "Used By"
 
+    #: What an exit gets when a service refused the connection through it.
+    #:
+    #: This reverses what the module used to do, deliberately and on the
+    #: operator's instruction. A refusal was measured to be per-session rather
+    #: than per-proxy - across twelve attempts every gateway produced both
+    #: successes and rejections (2026-08-09) - so a refused exit went straight
+    #: back to the pool. That is still true about the *proxy*. What it misses
+    #: is the *address*: these rows carry no `Port ID`, so nothing here can ask
+    #: sx.org for a new exit address, and the only thing that changes one is a
+    #: hand in the vendor's panel. Sending the row back unmarked hands the next
+    #: build the same address to be refused through again.
+    #:
+    #: Not in `available_statuses`, so it waits. Blank the cell - or write
+    #: `free` - once the address has been changed.
+    needs_new_ip = "change ip"
+
     #: A proxy GeeLark could not reach. Not a verdict for good: these are
     #: rented by the month and renewed on the same address, so one that stopped
     #: answering yesterday is often answering again today. Re-tested every run
@@ -452,6 +468,10 @@ class ProxyPool(Pool):
         # `free` rather than blank: this column is also the record of whether a
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
+
+    def set_aside(self, resource: Resource, *, note: str = "") -> None:
+        """Hold an exit back until its address has been changed by hand."""
+        self._set(resource, self._off_a_phone(self.needs_new_ip, note))
 
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:
@@ -887,6 +907,7 @@ class Book:
             # go, never judged - so they come from the pool, not the taxonomy.
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
                                ProxyPool.spent_status,
+                               ProxyPool.needs_new_ip,
                                ProxyPool.dead_status],
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.
