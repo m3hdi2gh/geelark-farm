@@ -276,3 +276,14 @@ def test_a_clean_dashboard_says_nothing_about_refused_rows():
                                           apps_free=2)))
 
     assert "unusable" not in text
+
+
+def test_taking_every_proxy_is_flagged_before_the_run_starts():
+    """An exit refusing a login is ordinary, and answering it costs a second
+    proxy. A run given as many phones as it has proxies has none to move to -
+    which is how phone 762 stopped after doing everything right."""
+    source = SRC.read_text(encoding="utf-8")
+    body = source[source.index("def confirm_build"):source.index("def confirm_finish")]
+
+    assert "creating >= snap.proxies_free" in body
+    assert "none to move to" in body

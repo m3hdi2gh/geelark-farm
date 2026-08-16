@@ -933,8 +933,16 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     if snap.parallels and workers > snap.parallels:
         console.print(f"[{WARN}]the plan's parallel limit is {snap.parallels}; "
                       f"more may cost extra[/]")
-    # Only the ones actually created need a slot; the finished ones have theirs.
+    # A phone per proxy is the arithmetic, and it is not the whole story: an
+    # exit refusing a login is ordinary - it happened in each of the last three
+    # runs - and answering it costs a second proxy. Take every proxy for a phone
+    # and the first refusal has nowhere to go. Phone 762 got that far and
+    # stopped, having done everything right (2026-08-16).
     creating = max(0, count - snap.phones_unfinished)
+    if snap.has_pools and creating >= snap.proxies_free > 0:
+        console.print(f"[{WARN}]that takes every free proxy, so a phone whose "
+                      f"exit gets refused will have none to move to. "
+                      f"{creating - 1} would leave one spare.[/]")
     if creating > snap.slots_free:
         console.print(f"[{WARN}]only {snap.slots_free} plan slot(s) are free "
                       f"and {creating} phone(s) would be created; the rest "

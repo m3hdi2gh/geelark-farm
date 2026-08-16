@@ -264,6 +264,9 @@ VERDICTS: dict[str, Verdict] = {
 #: clauses with no full stop, like `Verdict.seen`.
 SITUATIONS: dict[str, str] = {
     "all_exits_refused": "every exit in the pool was refused in turn",
+    "no_exit_to_move_to": (
+        "an exit refused it and the Proxy tab had no free one to move to - "
+        "a run given as many phones as it has proxies keeps none spare"),
     "no_usable_proxy": "the Proxy tab had no free proxy to give it",
     "no_working_proxy": "none of the free proxies answered when tested",
     "proxy_change_refused": "GeeLark would not move the phone to another exit",

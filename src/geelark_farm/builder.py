@@ -344,7 +344,8 @@ def _sign_into_app(session: _Session) -> Build | None:
             previous = s.proxy_row
             s.proxy_row = _new_exit(s.client, s.settings, s.book, s.build,
                                     s.phone_id, s.proxy_row, outcome.reason,
-                                    s.remaining(), cancelled=s.cancelled)
+                                    s.remaining(), swaps=s.exits,
+                                    cancelled=s.cancelled)
             if previous is not None and previous is not s.proxy_row:
                 # Held, not freed - see _new_exit. Released at the end.
                 s.refused_exits.append((previous, outcome.reason))
@@ -843,6 +844,7 @@ def _refreshed(client: Client, settings: Settings, book: Book,
 
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
+              swaps: int = 0,
               cancelled: Callable[[], bool] | None = None) -> Resource | None:
     """Get the phone onto a different exit address, the cheapest way first.
 
@@ -872,11 +874,16 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
             # which met three dead proxies from an expired batch and was
             # recorded as though the service had judged it).
             raise
-        # Every proxy this build could claim has now been tried and refused.
-        # Named apart from a build that never got one at all: this phone has
-        # been through the pool, and that is a fact about the pool or the
-        # service, not about the account it is carrying.
-        raise Aborted("all_exits_refused") from None
+        # An empty pool means two different things, and saying the wrong one
+        # sends the reader to the wrong place. A build that has already worked
+        # through several exits emptied the pool itself - it holds each refused
+        # one claimed - and that is a fact about the pool or the service. A
+        # build on its first swap emptied nothing: there was simply no free
+        # proxy to move to, which is what happens when a run is given as many
+        # phones as it has proxies. Phone 762 was told "every exit in the pool
+        # was refused in turn" after being refused exactly once (2026-08-16).
+        raise Aborted("all_exits_refused" if swaps
+                      else "no_exit_to_move_to") from None
     try:
         phones.set_proxy(client, phone_id, replacement.proxy)
     except ApiError as exc:
