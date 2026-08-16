@@ -97,3 +97,38 @@ def test_the_screens_that_were_cleared_all_had_a_way_in(capture, phone):
 
     assert phone["tapped"] == ["Log in"]
     assert phone["cleared"] == []
+
+
+def test_a_rejected_authenticator_code_is_the_accounts_fault_not_the_pages():
+    """Against the page phone 778 was standing on. `google_login` grew this on
+    2026-08-10 after four wrong codes went to a real account; this flow was
+    never given the equivalent, and OpenAI words it differently - so the code
+    was retyped from the same wrong secret until the visits ran out and the
+    phone was reported stuck on the page (2026-08-16).
+    """
+    blob = screen.normalize(
+        "Check your authenticator app "
+        "Enter the 6-digit code from your authenticator app "
+        "Code Incorrect code. Please try again. Continue "
+        "Verify another way").casefold()
+
+    assert _reason(blob) == "wrong_2fa_code"
+
+
+def test_an_emailed_code_still_outranks_it():
+    """Both pages say something about a code. The emailed one is checked first
+    and must stay first: an account with no authenticator gets a mailed code,
+    and reading that as a wrong secret would condemn a good account."""
+    blob = screen.normalize(
+        "Check your inbox Enter the code we sent to a@b.com "
+        "Incorrect code. Please try again.").casefold()
+
+    assert _reason(blob) == "email_code_required"
+
+
+def _reason(blob: str) -> str | None:
+    """`_fatal_reason` reads a Context; these tests supply the page text."""
+    ctx = chatgpt_login.Context(client=None, phone_id="P1", creds=CREDS,
+                                package="com.openai.chatgpt")
+    ctx.blob = blob
+    return chatgpt_login._fatal_reason(ctx)

@@ -44,12 +44,43 @@ def test_the_flows_actually_report_something():
 
 
 def test_every_reported_reason_has_a_verdict():
+    """Asked of the taxonomy, not of the table. The table stopped being the
+    only source of a verdict when the `stuck_on_` family got a rule, and
+    `reason in VERDICTS` is what this asked while twenty-one of them went
+    unclassified and one reached a build (2026-08-16, phone 778)."""
     reasons = reported_reasons() - failures.SUCCESSES
-    missing = sorted(r for r in reasons if r not in failures.VERDICTS)
+    missing = sorted(r for r in reasons if not failures.knows(r))
     assert not missing, (
         f"these reasons reach a build with nothing said about them: {missing}. "
         f"Add each to VERDICTS in failures.py, deciding whether it is the "
         f"credential's fault, the exit's, or the device's.")
+
+
+def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
+    """`Outcome("unknown", f"stuck_on_{matched.name}")` is a JoinedStr, so it
+    is never a literal to be found - which is how a whole family stayed
+    invisible to the check written to catch exactly this."""
+    reported = reported_reasons()
+
+    assert "stuck_on_totp_entry" in reported          # the one that reached 778
+    assert "stuck_on_email_entry" in reported
+    # Seventeen distinct across the flows, not twenty-one: the two login flows
+    # both register `fatal`, `loading`, `email_entry` and `password_entry`, and
+    # a screen of that name is the same reason wherever it is handled.
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 17
+
+
+@pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])
+def test_a_stuck_screen_is_the_devices_problem_and_names_the_page(screen):
+    """One rule rather than one entry per screen: they all mean the page kept
+    coming back and the action was not moving it, whichever page it was."""
+    found = failures.verdict(f"stuck_on_{screen}")
+
+    assert found.stops_the_phone
+    assert not found.costs_the_credential
+    assert screen.replace("_", " ") in found.seen
+    assert "artifacts/" in found.advice
+    assert "no name for" not in found.seen
 
 
 @pytest.mark.parametrize("reason,blame", [

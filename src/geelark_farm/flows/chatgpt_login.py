@@ -97,6 +97,20 @@ FATAL_TEXTS = {
         "account has been deactivated", "account is deactivated",
         "account has been suspended",
     ),
+    # OpenAI rejecting the authenticator code. `google_login` grew this on
+    # 2026-08-10 after four wrong codes went to a real account, and this flow
+    # was never given the equivalent - OpenAI words it differently, so nothing
+    # here matched. Phone 778 typed a fresh code from the same wrong secret
+    # over and over against `Incorrect code. Please try again.` and was
+    # reported as stuck on the page it was standing on (2026-08-16).
+    #
+    # A fresh code from a wrong secret is wrong every time, so this stops
+    # rather than retrying, and the account is marked so the phone can try the
+    # next one.
+    "wrong_2fa_code": (
+        "incorrect code", "invalid code", "code is incorrect",
+        "that code didn't work",
+    ),
     "rate_limited": ("too many attempts", "try again later"),
     # OpenAI inspecting the TLS chain and refusing it, which is the proxy's
     # doing rather than the account's. Distinct from a CAPTCHA: it is not a
@@ -108,6 +122,10 @@ FATAL_TEXTS = {
 }
 
 FATAL_ADVICE = {
+    "wrong_2fa_code":
+        "OpenAI rejected the authenticator code, so the 2FA secret in the "
+        "sheet is not this account's. A fresh code from a wrong secret is "
+        "wrong every time, which is why this stops rather than retrying",
     "captcha_shown":
         "OpenAI is challenging this exit IP, the same way Google does; a "
         "cleaner proxy is the fix and no code change helps",

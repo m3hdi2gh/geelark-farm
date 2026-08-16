@@ -295,6 +295,15 @@ def reasons_reported_by(module) -> set[str]:
 
     found: set[str] = set()
     source = inspect.getsource(module)
+    # The router reports one reason per screen, built from the screen's name -
+    # `Outcome("unknown", f"stuck_on_{matched.name}")` - so it is a JoinedStr
+    # and never a literal to be found below. Enumerated from the registry
+    # instead, which is the only place those names exist.
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "Screen" and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            found.add(f"{STUCK_PREFIX}{node.args[0].value}")
     for node in ast.walk(ast.parse(source)):
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
@@ -310,6 +319,43 @@ def reasons_reported_by(module) -> set[str]:
     return found - SUCCESSES
 
 
+#: The router's own reason, one per screen: `stuck_on_totp_entry`. Built from
+#: the screen's name, so it is never a literal anywhere - which is how
+#: twenty-one of them reached a build without a verdict between them, and why
+#: phone 778 was told "something happened that this tool has no name for"
+#: about the most ordinary thing a flow does (2026-08-16).
+#:
+#: One rule rather than twenty-one entries, because they all mean the same
+#: thing: the page kept coming back and the action was not moving it. That is
+#: the device's problem whichever page it was, and the page belongs in the
+#: words rather than in the table.
+STUCK_PREFIX = "stuck_on_"
+
+
+def _stuck(reason: str) -> Verdict:
+    page = reason[len(STUCK_PREFIX):].replace("_", " ")
+    return Verdict(
+        DEVICE, f"the app kept returning to the {page} page",
+        f"The flow handled the {page} page over and over and it never moved "
+        f"on, so whatever the action does there is not having the effect it "
+        f"assumes. The capture is under artifacts/ as `stuck-"
+        f"{reason[len(STUCK_PREFIX):]}` - that page is what a fix is written "
+        f"from.")
+
+
+def knows(reason: str) -> bool:
+    """Whether the taxonomy has a verdict for this, rather than a fallback.
+
+    The table is no longer the only source of one - the `stuck_on_` family is
+    answered by a rule - so asking `reason in VERDICTS` is asking the wrong
+    question, and it is the question the test asked while twenty-one reasons
+    went unclassified.
+    """
+    return (reason in VERDICTS
+            or (reason.startswith(STUCK_PREFIX)
+                and len(reason) > len(STUCK_PREFIX)))
+
+
 def verdict(reason: str) -> Verdict:
     """What `reason` means.
 
@@ -318,6 +364,8 @@ def verdict(reason: str) -> Verdict:
     the pool into something nobody has classified. The test suite exists so
     this never happens in practice.
     """
+    if reason.startswith(STUCK_PREFIX) and len(reason) > len(STUCK_PREFIX):
+        return _stuck(reason)
     return VERDICTS.get(reason, Verdict(
         DEVICE, f"something happened that this tool has no name for ({reason})",
         f"{reason} has no entry in failures.py, so nothing is known "
