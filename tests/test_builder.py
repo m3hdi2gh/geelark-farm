@@ -904,18 +904,21 @@ def test_each_app_attempt_after_the_first_starts_from_a_cleared_app(
 def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
         device, settings, drive):
     """OpenAI emailing a code says nothing about the account - three addresses
-    it retired had already signed in fine on earlier phones. So it is not
-    marked with the reason, which is what `fail` would do and would mean the
-    account is bad. It gets its own word instead."""
+    it retired had already signed in fine on earlier phones. The status is the
+    *reason*, because that is the word every other surface uses for the event;
+    the first design wrote `challenged` and the operator had to ask what it
+    meant (2026-08-17). What says "not condemned" is the Note, which reads
+    asked-not-judged, and the blame in failures.py."""
     book = make_book(apps=2)
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[Outcome("fatal", "email_code_required"), SIGNED_IN])
 
     assert build.ok and build.app_account == "a1@example.com"
     challenged = book.apps._rows[0]
-    assert challenged.values["Status"] == AppPool.challenged_status
-    assert challenged.values["Status"] != "email_code_required"
-    assert "Challenged" in challenged.values["Note"]
+    assert challenged.values["Status"] == "email_code_required"
+    assert "asked, not judged" in challenged.values["Note"]
+    assert (failures.verdict("email_code_required").seen
+            in challenged.values["Note"])
 
 
 def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
@@ -934,7 +937,7 @@ def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
     # minutes each (2026-08-13)
     assert book.apps.available == []
     assert ([r.values["Status"] for r in book.apps._rows]
-            == [AppPool.challenged_status] * 2)
+            == ["email_code_required"] * 2)
 
 
 def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
@@ -958,10 +961,10 @@ def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
          "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
 
     assert not build.ok and build.status == "no_usable_gpt"
-    # both were challenged, neither judged - so neither carries a reason, and
-    # neither is left claimed, which was the bug this test was written for
+    # both carry what they were asked for, and neither is left claimed, which
+    # was the bug this test was written for
     assert ([r.values["Status"] for r in book.apps._rows]
-            == [AppPool.challenged_status] * 2)
+            == ["email_code_required"] * 2)
     assert book.apps.stuck == []
 
 

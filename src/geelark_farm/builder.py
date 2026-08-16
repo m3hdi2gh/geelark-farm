@@ -278,9 +278,10 @@ class _Session:
     #: freshly installed app; every one after it has to clear what the last
     #: attempt left on screen.
     attempted: int = 0
-    #: Accounts the service challenged rather than judged - held so this build
-    #: does not take them again, and released as available at the end.
-    set_aside: list[Resource] = field(default_factory=list)
+    #: Accounts the service challenged rather than judged, with what it asked
+    #: for - held so this build does not take them again, and put back at the
+    #: end carrying the reason as their status.
+    set_aside: list[tuple[Resource, str]] = field(default_factory=list)
     # Proxies tried and moved on from, with what was seen through each. Held
     # claimed for the rest of the run so a swap cannot hand one back.
     refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
@@ -387,7 +388,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             # account is held rather than marked, and goes back on the shelf
             # as available when the build ends. Held rather than released now,
             # so this build does not immediately claim it again.
-            s.set_aside.append(s.app_row)
+            s.set_aside.append((s.app_row, outcome.reason))
             s.app_row = None
             continue
         if failures.verdict(outcome.reason).stops_the_phone:
@@ -652,10 +653,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # keeps it until someone deletes the phone, and handing it on would put
         # two devices on one exit address.
         held = [(book.gmails, gmail_row,
-                 SPEND if gmail_signed_in else RELEASE, "")]
+                 SPEND if gmail_signed_in else RELEASE, "", "")]
         if session is None:
             held.append((book.proxies, proxy_row,
-                         SPEND if phone_id else RELEASE, ""))
+                         SPEND if phone_id else RELEASE, "", ""))
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held)
@@ -1002,10 +1003,10 @@ def _session_holds(book: Book, session: _Session | None, *,
         return []
     today = failures.today()
     held: list[tuple] = [(book.apps, session.app_row,
-                          SPEND if session.app_signed_in else RELEASE, "")]
+                          SPEND if session.app_signed_in else RELEASE, "", "")]
     if session.proxy_row is not None:
         held.append((book.proxies, session.proxy_row,
-                     SPEND if proxy_spent else RELEASE, ""))
+                     SPEND if proxy_spent else RELEASE, "", ""))
     # Exits a service refused this phone through. Held back rather than freed:
     # the proxy is not condemned - a refusal is per-session, which is measured -
     # but its *address* has just been turned down, and nothing here can change
@@ -1014,17 +1015,19 @@ def _session_holds(book: Book, session: _Session | None, *,
     held += [(book.proxies, resource, SET_ASIDE,
               f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
               f"the exit address is the thing that was turned down. Change it "
-              f"in the vendor's panel, then set this cell to `free`.")
+              f"in the vendor's panel, then set this cell to `free`.", why)
              for resource, why in session.refused_exits]
     # Accounts the service asked something of rather than judged. Its own verb,
     # because neither of the other two is true: it was not spent, and releasing
     # it put it back blank - indistinguishable from a row nobody had tried, so
-    # the next run picked the same one and met the same challenge.
+    # the next run picked the same one and met the same challenge. The reason
+    # travels too: it becomes the row's status, so the cell says what was
+    # asked rather than a word that needs a glossary.
     held += [(book.apps, resource, SET_ASIDE,
-              f"Challenged on {today} rather than judged, so nothing is known "
-              f"against it. Blank this status to offer it again - and see the "
-              f"Note on why it may keep happening.")
-             for resource in session.set_aside]
+              f"On {today} {failures.verdict(why).seen}. The account was "
+              f"asked, not judged - nothing is known against it. Fix what it "
+              f"was asked for, then blank this status to offer it again.", why)
+             for resource, why in session.set_aside]
     return held
 
 
@@ -1042,12 +1045,12 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
     the build's real result with a network complaint, and the resources would
     stay claimed either way.
     """
-    for pool, resource, action, note in held:
+    for pool, resource, action, note, reason in held:
         if resource is None:
             continue
         try:
             if action == SET_ASIDE:
-                pool.set_aside(resource, note=note)
+                pool.set_aside(resource, reason=reason, note=note)
             elif action == SPEND:
                 pool.spend(resource, serial=build.serial, note=(
                     f"On phone {build.serial}."

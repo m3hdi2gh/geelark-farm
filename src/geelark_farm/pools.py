@@ -311,7 +311,8 @@ class Pool:
         """
         self._set(resource, self._off_a_phone("", note))
 
-    def set_aside(self, resource: Resource, *, note: str = "") -> None:
+    def set_aside(self, resource: Resource, *, reason: str = "",
+                  note: str = "") -> None:
         """Put a row back after the service asked for something rather than
         judging it. For most pools that is the same as releasing it."""
         self.release(resource, note=note)
@@ -384,24 +385,25 @@ class AppPool(Pool):
     # FAILED is freed instead - it never got a fair device.
     retired_status = "delivered"
 
-    #: What an account gets when OpenAI asks for something no unattended run
-    #: can supply - a code in an inbox. Not a judgement on the account, which
-    #: is why it is not one of the failure reasons, and not blank either.
+    #: The fallback only. A set-aside account normally gets the *reason* as
+    #: its status - `email_code_required` - because that is the word every
+    #: other surface already uses for the same event: the terminal summary,
+    #: the logs, the History note. The first design wrote `challenged` here,
+    #: and the operator had to ask what it meant (2026-08-17); a status that
+    #: needs a glossary is not doing its one job.
     #:
-    #: It was blank. A challenged account went back indistinguishable from a
-    #: row nobody had ever tried, so every run picked the same two again and
-    #: spent five minutes each proving the same thing - three runs running, and
-    #: the tab showed nothing at all against them (2026-08-13). "The sheet has
-    #: not updated" was the right reading of it: the only record was a Note.
-    #:
-    #: Deliberately not in `available_statuses`, so it waits for a person. That
-    #: is not the same as condemning it - `fail()` would put the reason in this
-    #: column and mean the account is bad, and nothing here says that. Blank
-    #: the cell and the next run takes it again.
+    #: What has NOT changed since the word was introduced (2026-08-13, when a
+    #: set-aside row went back blank and three runs re-proved the same two
+    #: accounts): the row still waits for a person. None of these words is in
+    #: `available_statuses`, so nothing claims the account until the status is
+    #: blanked - and the Note still says it was asked rather than judged,
+    #: which is the difference between this and `fail()`.
     challenged_status = "challenged"
 
-    def set_aside(self, resource: Resource, *, note: str = "") -> None:
-        self._set(resource, self._off_a_phone(self.challenged_status, note))
+    def set_aside(self, resource: Resource, *, reason: str = "",
+                  note: str = "") -> None:
+        self._set(resource, self._off_a_phone(reason or self.challenged_status,
+                                              note))
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
@@ -470,8 +472,13 @@ class ProxyPool(Pool):
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
 
-    def set_aside(self, resource: Resource, *, note: str = "") -> None:
-        """Hold an exit back until its address has been changed by hand."""
+    def set_aside(self, resource: Resource, *, reason: str = "",
+                  note: str = "") -> None:
+        """Hold an exit back until its address has been changed by hand.
+
+        The reason is not written: whichever refusal it was, the remedy on
+        this tab is the same one - `change ip` - and that is what the column
+        answers."""
         self._set(resource, self._off_a_phone(self.needs_new_ip, note))
 
     def spend(self, resource: Resource, *, serial: str = "",
@@ -959,8 +966,12 @@ class Book:
         from .flows import chatgpt_login, google_login
 
         def credential_reasons(module) -> list[str]:
+            # Set-aside reasons are offered too: a set-aside row carries its
+            # reason as the status now, so the dropdown has to know the word
+            # or the sheet flags the very value a run just wrote.
             return sorted(r for r in failures.reasons_reported_by(module)
-                          if failures.verdict(r).costs_the_credential)
+                          if failures.verdict(r).costs_the_credential
+                          or failures.verdict(r).sets_aside)
 
         wanted = {
             "Gmail Statuses": [GmailPool.claimed_status, GmailPool.spent_status,
@@ -968,10 +979,6 @@ class Book:
                                *credential_reasons(google_login)],
             "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
                              AppPool.retired_status,
-                             # Not a failure reason - the account was asked
-                             # something, not judged - so the taxonomy does not
-                             # supply it and it has to be named here.
-                             AppPool.challenged_status,
                              *credential_reasons(chatgpt_login)],
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.
