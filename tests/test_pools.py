@@ -549,3 +549,96 @@ def test_an_unchanged_exit_is_not_rewritten():
 
     pool.record_exit(resource, "9.9.9.9")            # a new exit: written again
     assert pool._ws.writes
+
+
+# --------------------------------------------- taking the exits in turn
+PROXY_HEADERS_ROTATION = [*PROXY_HEADERS, "Times Used", "Last Used"]
+
+
+def rotating_pool(rows):
+    return proxy_pool(rows, headers=PROXY_HEADERS_ROTATION)
+
+
+def rotation_row(string, uses="", status="free"):
+    row = proxy_row(string, status=status, headers=PROXY_HEADERS_ROTATION)
+    row[PROXY_HEADERS_ROTATION.index("Times Used")] = uses
+    return row
+
+
+def test_a_never_used_exit_is_preferred_to_any_used_one():
+    """A blank count reads as zero, so a fresh proxy goes out before one that
+    has already carried a phone - which is what makes the first round cover
+    the whole tab."""
+    pool = rotating_pool([
+        rotation_row("10.0.0.1:9999:u:p", "3"),
+        rotation_row("10.0.0.2:9999:u:p", ""),
+        rotation_row("10.0.0.3:9999:u:p", "1"),
+    ])
+
+    assert [r.proxy.host for r in pool.available] == [
+        "10.0.0.2", "10.0.0.3", "10.0.0.1"]
+
+
+def test_the_least_used_exit_goes_out_next():
+    """The top of the tab used to carry every build while the bottom sat idle,
+    so a handful of addresses did all the work and collected all the
+    suspicion (2026-08-17)."""
+    pool = rotating_pool([
+        rotation_row("10.0.0.1:9999:u:p", "7"),
+        rotation_row("10.0.0.2:9999:u:p", "2"),
+        rotation_row("10.0.0.3:9999:u:p", "4"),
+    ])
+
+    assert pool.claim().proxy.host == "10.0.0.2"
+
+
+def test_claiming_counts_the_use_and_notes_the_time():
+    pool = rotating_pool([rotation_row("10.0.0.1:9999:u:p", "4"),
+                          rotation_row("10.0.0.2:9999:u:p", "9")])
+
+    first = pool.claim()
+
+    assert first.values["Times Used"] == "5"         # counted, so it goes last
+    assert first.values["Last Used"]                 # written, not blank
+    assert pool.status_of(first) == pool.claimed_status
+
+
+def test_a_whole_round_is_used_before_any_repeat():
+    """The operator's words: one round over every proxy, then the next round
+    starts repeating. Claim, release, claim again - and nothing comes back
+    until everything else has been out.
+
+    This is the test a timestamp could not pass: eight claims land inside the
+    same second, every stamp came out equal, and the top row went out all
+    eight times.
+    """
+    pool = rotating_pool(
+        [rotation_row(f"10.0.0.{i}:9999:u:p") for i in range(4)])
+    taken = []
+
+    for _ in range(8):                     # two full rounds of four
+        resource = pool.claim()
+        taken.append(resource.proxy.host)
+        pool.release(resource, note="back")
+
+    assert sorted(taken[:4]) == ["10.0.0.0", "10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    assert sorted(taken[4:]) == sorted(taken[:4])
+    assert taken[:4] == taken[4:]          # and the rounds keep the same order
+
+
+def test_a_count_nobody_can_read_does_not_stop_the_run():
+    """The column is in the operator's sheet, so it can hold anything a hand
+    types into it. An unreadable count reads as never used."""
+    pool = rotating_pool([rotation_row("10.0.0.1:9999:u:p", "2"),
+                          rotation_row("10.0.0.2:9999:u:p", "lots")])
+
+    assert pool.claim().proxy.host == "10.0.0.2"
+
+
+def test_a_tab_without_the_column_behaves_as_it_always_did():
+    """Every row reads blank, so the order is sheet order - which is what the
+    pool did before the column existed."""
+    pool = proxy_pool([proxy_row(f"10.0.0.{i}:9999:u:p") for i in range(3)])
+
+    assert [r.proxy.host for r in pool.available] == [
+        "10.0.0.0", "10.0.0.1", "10.0.0.2"]

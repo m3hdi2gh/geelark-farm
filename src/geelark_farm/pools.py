@@ -259,14 +259,16 @@ class Pool:
         available and both take it.
         """
         with self._claim_lock:
-            for resource in self._rows:
-                if (resource.error
-                        or self.status_of(resource) not in self.available_statuses):
-                    continue
-                self._set(resource, {self.status_column: self.claimed_status})
+            for resource in self.available:
+                self._set(resource, self._claim_fields(resource))
                 log.info("claimed %s from %s", resource.label, self.tab)
                 return resource
         return None
+
+    def _claim_fields(self, resource: Resource) -> dict[str, str]:
+        """What claiming writes. The status, and whatever else a pool needs
+        recorded at the moment a row leaves it."""
+        return {self.status_column: self.claimed_status}
 
     def _off_a_phone(self, status: str, note: str) -> dict[str, str]:
         """The fields for any row leaving a device, whatever it leaves for.
@@ -493,6 +495,53 @@ class ProxyPool(Pool):
                 existing.append(str(serial))
             fields[self.serial_column] = ", ".join(existing)
         self._set(resource, fields)
+
+    #: When this exit was last handed to a phone - for the operator to read,
+    #: not for the code to sort by. Created automatically if the tab lacks it.
+    last_used_column = "Last Used"
+
+    #: How many phones this exit has carried. This is what the ordering below
+    #: actually sorts on.
+    uses_column = "Times Used"
+
+    @property
+    def available(self) -> list[Resource]:
+        """Free exits, least used first.
+
+        The base pool hands out the first usable row, which for credentials is
+        the contract - "the first one you see in the tab". For exits it is the
+        wrong shape: the top of the tab carried every build while the bottom
+        sat idle, so a handful of addresses did all the work and collected all
+        the suspicion, which is the opposite of what having twenty is for.
+
+        A count, not a timestamp. The operator asked for one full round over
+        every proxy before any repeat, and least-used-first *is* that round,
+        exactly, with no dependence on how fast the claims arrive: after one
+        round every count is 1, the tie falls to sheet order, and the second
+        round walks the tab again from the top. A timestamp could not promise
+        it - a batch claims its exits inside the same second, every stamp came
+        out equal, and the top row went out over and over.
+
+        An unused proxy counts 0, so it is preferred to one used at all, and a
+        tab where nobody has filled the column in behaves as it did before.
+        """
+        free = super().available
+        return sorted(free, key=lambda r: (self._uses(r), r.sheet_row))
+
+    def _uses(self, resource: Resource) -> int:
+        raw = (resource.values.get(self.uses_column) or "").strip()
+        try:
+            return int(raw)
+        except ValueError:
+            # Anything the column cannot be read as a number - a note someone
+            # typed, a stray character - counts as never used rather than
+            # stopping the run.
+            return 0
+
+    def _claim_fields(self, resource: Resource) -> dict[str, str]:
+        return {self.status_column: self.claimed_status,
+                self.uses_column: str(self._uses(resource) + 1),
+                self.last_used_column: time.strftime("%Y-%m-%d %H:%M:%S")}
 
     def record_exit(self, resource: Resource, exit_ip: str) -> None:
         """The address the proxy actually came out of, which is the one Google
@@ -923,6 +972,28 @@ class Book:
         def headers(name: str) -> list[str]:
             return [h.strip() for h in tabs[name].row_values(1)]
 
+        def ensure_columns(name: str, *columns: str) -> list[str]:
+            """Add columns this tool writes but the operator never fills in.
+
+            `_set` skips a column the tab does not have, silently and by
+            design - which is right for the optional ones and wrong for a
+            column something now depends on: the exit rotation counts uses to
+            order the pool, and without the column every row would read as
+            never used and the order would never change.
+            """
+            found = headers(name)
+            for column in columns:
+                if column in found:
+                    continue
+                try:
+                    tabs[name].update_cell(1, len(found) + 1, column)
+                    log.info("added the %r column to %s", column, name)
+                    found = found + [column]
+                except Exception as exc:                          # noqa: BLE001
+                    log.warning("could not add %r to %s (%s)",
+                                column, name, exc)
+            return found
+
         # The one tab this tool creates for itself. The four above are stock
         # someone fills in, so a missing one is an error worth stopping on;
         # History is machine-written, and demanding the operator make it by
@@ -943,7 +1014,10 @@ class Book:
 
         pools = cls(
             gmails=GmailPool(tabs[GMAILS_TAB], headers(GMAILS_TAB), lock),
-            proxies=ProxyPool(tabs[PROXY_TAB], headers(PROXY_TAB), lock),
+            proxies=ProxyPool(tabs[PROXY_TAB],
+                              ensure_columns(PROXY_TAB,
+                                             ProxyPool.uses_column,
+                                             ProxyPool.last_used_column), lock),
             apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),
             phones=PhoneLog(tabs[PHONES_TAB], headers(PHONES_TAB), lock),
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,

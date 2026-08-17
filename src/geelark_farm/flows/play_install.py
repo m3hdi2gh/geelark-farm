@@ -199,23 +199,30 @@ def _server_error(blob: str) -> bool:
     return any(n in blob for n in SERVER_ERROR_TEXTS)
 
 
-def _restart_download(client: Client, phone_id: str, package: str,
-                      elements: list[screen.Element]) -> None:
-    """Cancel a parked download and ask for it again.
+def _restart_download(client: Client, phone_id: str, package: str) -> bool:
+    """Cancel a parked download and ask for it again. True if it was asked.
 
-    Best effort by design: if any step of it does not land, the polling loop
-    simply carries on and may try again, which is better than giving up on a
-    download that is one tap from starting.
+    The answer matters, and it used to be thrown away. A restart that cannot
+    find Install afterwards has left the phone on a page that is neither
+    downloading nor stalled - so the stall clock never fires again, the
+    remaining restarts are never spent, and the loop polls "still installing"
+    until the budget ends. Phone 823 did that for seventeen minutes on one
+    failed restart out of an allowance of three (2026-08-17).
+
+    Reads the screen rather than being handed it, because the caller retries
+    this straight away and the page it captured is a cancel out of date.
     """
-    if screen.tap_label(client, phone_id, elements, "Cancel"):
+    if screen.tap_label(client, phone_id,
+                        screen.read_screen(client, phone_id), "Cancel"):
         time.sleep(5)
     open_package_page(client, phone_id, package)
     fresh = screen.read_screen(client, phone_id)
     button = screen.find(fresh, "Install")
     if button and screen.tap_element(client, phone_id, button):
         log.info("asked for the download again")
-    else:
-        log.warning("could not find Install after cancelling; will keep polling")
+        return True
+    log.warning("could not find Install after cancelling")
+    return False
 
 
 def still_loading(elements: list[screen.Element]) -> bool:
@@ -311,7 +318,7 @@ def install(client: Client, phone_id: str, package: str, *,
             log.warning("a parked download is holding the page (%d/%d); "
                         "cancelling and starting again", restarts,
                         MAX_DOWNLOAD_RESTARTS)
-            _restart_download(client, phone_id, package, elements)
+            _restart_download(client, phone_id, package)
             continue
 
         if _server_error(screen.texts(elements)):
@@ -413,19 +420,34 @@ def install(client: Client, phone_id: str, package: str, *,
                            "the Play Store stopped being able to install",
                            artifacts=saved)
 
-        if (stall.held_for(_download_stalled(blob)) >= STALLED_SECONDS
-                and restarts < MAX_DOWNLOAD_RESTARTS):
+        if stall.held_for(_download_stalled(blob)) >= STALLED_SECONDS:
             # Play has parked the download rather than failed it, and left it
             # parked: row 5 sat on "Waiting for connection..." for its whole
             # budget and installed nothing (2026-08-07). Cancelling and asking
             # again is what shifts it, and Play offers Cancel on that same page.
-            restarts += 1
-            archive(f"download-stalled-{restarts}", xml or "")
-            log.warning("the download has not moved for %.0fs (%d/%d); "
-                        "cancelling and starting it again", STALLED_SECONDS,
-                        restarts, MAX_DOWNLOAD_RESTARTS)
-            _restart_download(client, phone_id, package, elements)
-            stall.reset()
+            # The allowance is spent here, in one go, rather than one restart
+            # per firing of the clock. A restart that cannot find Install
+            # afterwards leaves the phone on a page that is neither
+            # downloading nor stalled, and the clock is cleared by any such
+            # page - so waiting for it to fire again spends nothing. Phone 823
+            # polled seventeen minutes that way on a single failed restart out
+            # of three (2026-08-17).
+            while restarts < MAX_DOWNLOAD_RESTARTS:
+                restarts += 1
+                archive(f"download-stalled-{restarts}", xml or "")
+                log.warning("the download has not moved for %.0fs (%d/%d); "
+                            "cancelling and starting it again",
+                            STALLED_SECONDS, restarts, MAX_DOWNLOAD_RESTARTS)
+                if _restart_download(client, phone_id, package):
+                    stall.reset()
+                    break
+                log.warning("the restart did not take; asking again")
+            else:
+                archive("download-stalled-final", xml or "")
+                return Outcome("fatal", "download_stalled",
+                               f"the download would not move after "
+                               f"{MAX_DOWNLOAD_RESTARTS} restarts",
+                               artifacts=saved)
             continue
 
         tapped = screen.tap_first_present(client, phone_id, elements,

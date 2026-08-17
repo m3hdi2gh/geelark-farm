@@ -158,9 +158,89 @@ def test_restarts_are_bounded():
     """A page that stays parked however often it is asked has something else
     wrong with it, and the budget should report that rather than be spent
     cancelling."""
-    from geelark_farm.flows import play_install
-
     assert 1 <= play_install.MAX_DOWNLOAD_RESTARTS <= 5
+
+
+def stalled_install(monkeypatch, *, restart_takes: bool):
+    """Drive `install` against a page that shows the package, then parks the
+    download and never moves again.
+
+    A failed restart leaves the phone back on the package page - `open_package
+    _page` put it there - which is neither downloading nor stalled. That is
+    the state phone 823 was left in, and the state that clears the stall
+    clock, so the harness reproduces it rather than holding the parked page.
+
+    Returns (outcome, elapsed, restarts).
+    """
+    from geelark_farm import shell
+
+    page = (FIXTURES / "play-package-page.xml").read_text(encoding="utf-8")
+    parked = (FIXTURES / "play-download-stalled.xml").read_text(encoding="utf-8")
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(play_install.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(play_install.time, "sleep",
+                        lambda s: clock.__setitem__("now", clock["now"] + s))
+    monkeypatch.setattr(shell, "package_installed", lambda *a, **k: False)
+    monkeypatch.setattr(play_install, "open_package_page", lambda *a, **k: None)
+
+    state = {"first": True, "settled": False}
+
+    def capture(*a, **k):
+        if state["first"]:                 # the package page, to tap Install
+            state["first"] = False
+            return page
+        return page if state["settled"] else parked
+
+    monkeypatch.setattr(play_install.screen, "capture", capture)
+    # What the restart finds when it goes looking for Install again.
+    monkeypatch.setattr(play_install.screen, "read_screen",
+                        lambda *a, **k: screen.parse(page if restart_takes
+                                                     else parked))
+
+    restarts = []
+    real_restart = play_install._restart_download
+
+    def counted(*args, **kwargs):
+        restarts.append(1)
+        asked = real_restart(*args, **kwargs)
+        state["settled"] = not asked      # left on a page that looks idle
+        return asked
+    monkeypatch.setattr(play_install, "_restart_download", counted)
+    monkeypatch.setattr(play_install.screen, "tap_element", lambda *a, **k: True)
+    monkeypatch.setattr(play_install.screen, "tap_label", lambda *a, **k: True)
+    monkeypatch.setattr(play_install.screen, "tap_first_present",
+                        lambda *a, **k: None)
+
+    outcome = play_install.install(object(), "1", "com.openai.chatgpt",
+                                   budget_seconds=3600)
+    return outcome, clock["now"], len(restarts)
+
+
+def test_a_restart_that_did_not_take_still_spends_a_restart(monkeypatch):
+    """Phone 823 stalled, the restart could not find Install afterwards, and
+    the page it was left on looked neither downloading nor stalled - so the
+    clock never fired again, two of its three restarts were never spent, and
+    it polled for seventeen minutes before the budget ran out (2026-08-17).
+
+    All three restarts must be spent, and the answer must be the stall.
+    """
+    outcome, elapsed, restarts = stalled_install(monkeypatch,
+                                                 restart_takes=False)
+
+    assert outcome.reason == "download_stalled"
+    assert restarts == play_install.MAX_DOWNLOAD_RESTARTS
+    assert elapsed < 3600           # reported, not waited out
+
+
+def test_a_restart_that_took_gets_the_clock_back(monkeypatch):
+    """The other half of the same rule: a restart that did find Install has
+    genuinely asked again, so the phone deserves a fresh stall window rather
+    than being charged for the seconds it was parked."""
+    outcome, _, restarts = stalled_install(monkeypatch, restart_takes=True)
+
+    assert outcome.reason == "download_stalled"      # it never does install
+    assert restarts == play_install.MAX_DOWNLOAD_RESTARTS
 
 
 def test_a_parked_download_is_not_reported_as_a_missing_button():
