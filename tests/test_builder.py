@@ -1356,9 +1356,55 @@ def test_a_row_left_building_with_nothing_on_it_is_deleted(world):
     assert book.phones.deleted_rows == [4]
 
 
-def test_a_phone_still_running_is_left_to_the_run_that_has_it(world):
-    """The one signal that separates a live run from a dead one."""
+def test_a_running_phone_a_run_claims_is_left_to_that_run(world):
+    """What separates a live run from a dead one is the claim, not the power
+    state - a phone being up says only that nobody stopped it."""
     world["live"][0]["status"] = 0                       # 729 is running
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "729", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+
+    outcome = builder.settle_abandoned(None, book,
+                                       FakeLedger({"P729": FakeClaim()}))
+
+    assert outcome == {"abandoned": [], "discarded": []}
+    assert world["deleted"] == []
+
+
+def test_a_running_phone_nothing_claims_is_stopped_and_then_settled(
+        world, monkeypatch):
+    """A run that lost its network died without stopping its phones, so they
+    stayed up with nothing accountable for them - and a running phone is
+    settled by nothing, offered to `finish` by nothing and deleted by nothing.
+    Two rows sat on `building` for good (2026-08-17, phones 838 and 839)."""
+    world["live"][0]["status"] = 0                       # 729 is running
+    stopped = []
+    monkeypatch.setattr(builder.phones, "stop",
+                        lambda c, phone_id: stopped.append(phone_id))
+    monkeypatch.setattr(builder.phones, "wait_until_stopped",
+                        lambda *a, **k: True)
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "729", "Status": "building",
+         "Gmail": "", "GPT Account": ""}]
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert stopped == ["P729"]               # stopped so it can be settled
+    assert outcome["discarded"] == ["729"]   # nothing on it, so not a phone
+    assert world["deleted"] == ["P729"]
+
+
+def test_a_running_phone_that_will_not_stop_keeps_its_row(world, monkeypatch):
+    """Better a row that says `building` than one dropped for a phone still
+    sitting in the panel."""
+    world["live"][0]["status"] = 0
+    monkeypatch.setattr(builder.phones, "stop",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError("GeeLark said no")))
     book = make_book()
     book.phones = FakePhoneLog([])
     book.phones.rows = lambda: [
@@ -1369,6 +1415,29 @@ def test_a_phone_still_running_is_left_to_the_run_that_has_it(world):
 
     assert outcome == {"abandoned": [], "discarded": []}
     assert world["deleted"] == []
+
+
+def test_a_running_phone_with_a_gmail_is_stopped_and_made_finishable(
+        world, monkeypatch):
+    """The rule is unchanged by the stopping: what is on the phone decides
+    what the row becomes."""
+    world["live"][0]["status"] = 0
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "wait_until_stopped",
+                        lambda *a, **k: True)
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "729", "Status": "building",
+         "Gmail": "g0@example.com", "GPT Account": ""}]
+    written = {}
+    book.phones.finish = lambda row, **fields: written.update({row: fields})
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert outcome["abandoned"] == ["729"]
+    assert written[4]["Status"] == "incomplete"
+    assert world["deleted"] == []          # worth finishing, not deleting
 
 
 def test_a_boot_that_never_finishes_is_named_rather_than_called_unplanned(

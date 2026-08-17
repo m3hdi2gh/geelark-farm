@@ -1521,7 +1521,14 @@ def settle_abandoned(client: Client, book: Book,
     a live build, which then failed with `env not found` twenty minutes later
     (2026-08-14). The ledger is the other: `claim` is written the moment a
     build takes a phone and cleared when it lets go, so an unreleased claim
-    means a process believes it owns this. Both are checked.
+    means a process believes it owns this.
+
+    The ledger is the one that answers the question. Being up was treated as
+    an answer too, and it is not: a run that lost its network died without
+    stopping its phones, so they stayed running with nothing accountable for
+    them - and a running phone is settled by nothing, offered to `finish` by
+    nothing and deleted by nothing, so the rows sat on `building` for good.
+    One that nothing claims is stopped here and then settled like any other.
 
     What the row becomes follows the rule a build would have applied itself: a
     phone with a Gmail on it is `incomplete` and can be finished; one with
@@ -1536,13 +1543,34 @@ def settle_abandoned(client: Client, book: Book,
             continue
         serial = row.get("Serial") or ""
         present = live.get(str(serial))
-        if present and present.get("status") in (phones.RUNNING, phones.STARTING):
-            continue                       # someone is working on it right now
         held = present and ledger.get(present["id"])
         if held is not None and held.is_claimed and not held.is_stale:
-            log.info("phone %s is stopped but a run still claims it (%s); "
-                     "leaving it alone", serial, held.label)
+            log.info("a run still claims phone %s (%s); leaving it alone",
+                     serial, held.label)
             continue
+
+        if present and present.get("status") in (phones.RUNNING,
+                                                 phones.STARTING):
+            # Running, and nothing is accountable for it. That used to be an
+            # unconditional skip, which read as "someone is working on it" -
+            # but the ledger above is what answers that, and it has already
+            # said no. A run that died without its network never got to stop
+            # its phones, so they stayed up; and a phone that is up is settled
+            # by nothing, offered by nothing, and deleted by nothing, so its
+            # row sat on `building` for good (2026-08-17, phones 838 and 839).
+            #
+            # Stopping is not housekeeping about cost here - it is the only
+            # way the row can be settled at all, since GeeLark will not delete
+            # a phone that is still running.
+            log.info("phone %s is still running with nothing accountable for "
+                     "it; stopping it so its row can be settled", serial)
+            try:
+                phones.stop(client, present["id"])
+                phones.wait_until_stopped(client, present["id"])
+            except Exception as exc:                              # noqa: BLE001
+                log.error("could not stop abandoned phone %s (%s); its row "
+                          "stays `building` until it comes down", serial, exc)
+                continue
 
         if row.get("Gmail"):
             book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=(
