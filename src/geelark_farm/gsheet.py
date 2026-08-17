@@ -13,11 +13,19 @@ import random
 import threading
 import time
 
+from gspread.exceptions import APIError
 from requests.exceptions import RequestException
 
 log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+#: gspread's own API error, re-exported so callers catch a
+#: quota or transport failure without importing gspread. A 429
+#: is turned into SheetError inside batch_write; this is for the
+#: rarer errors that reach a caller some other way.
+GSpreadError = APIError
 
 
 class SheetError(Exception):
@@ -35,8 +43,12 @@ def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
     reported a network fault where a diagnosis should have been, and the reason
     the login actually failed was lost.
 
-    Only the network is retried. An APIError means Google understood and
-    refused - a bad range, a revoked key - and repeating it changes nothing.
+    The network is retried, and so is one APIError: 429, quota exceeded.
+    Google allows sixty writes a minute per user, and a big sync - a dozen
+    phones settled, twenty-one proxies checked - can cross that (2026-08-17).
+    Unlike a bad range or a revoked key, a 429 is a wait, not a no: the same
+    request succeeds a minute later. It gets a longer backoff than a network
+    blip, because the window it is waiting out is measured in a minute.
 
     Each attempt sends its own copy of the payload, because gspread rewrites
     the one it is given: batch_update prefixes every range with the worksheet
@@ -54,6 +66,20 @@ def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
             with lock:
                 worksheet.batch_update(fresh)
             return
+        except APIError as exc:
+            if getattr(exc.response, "status_code", None) != 429:
+                raise                         # a real refusal, not a wait
+            if attempt == attempts:
+                raise SheetError(
+                    f"{what}: the sheet's write quota stayed exhausted after "
+                    f"{attempt} attempts ({exc})"
+                ) from exc
+            # The quota is per minute, so the wait is measured in that: back
+            # off toward a full window rather than the seconds a blip needs.
+            delay = min(15 * attempt, 60) + random.uniform(0, 2)
+            log.warning("%s: sheet write quota exceeded; waiting %.0fs",
+                        what, delay)
+            time.sleep(delay)
         except (OSError, RequestException) as exc:
             if attempt == attempts:
                 raise SheetError(

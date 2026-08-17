@@ -1696,3 +1696,30 @@ def test_applying_a_mark_is_history(monkeypatch):
     assert [r["Event"] for r in rows] == ["done"]
     assert rows[0]["GPT Account"] == "a0@example.com"
     assert "delivered" in rows[0]["Note"]
+
+
+def test_a_sync_step_that_fails_does_not_discard_the_ones_before_it(
+        world, monkeypatch):
+    """The write quota exhausted partway through a sync must not unwind the
+    whole thing: by the time the proxy check writes, the phones are deleted and
+    the credentials settled, and crashing out would leave the console unable to
+    open while reporting none of it (2026-08-17)."""
+    from geelark_farm.gsheet import SheetError
+
+    book = make_book(proxies=2)
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: []
+    book.reload = lambda: None
+    # The proxy check is the step that crashed live; make it raise.
+    monkeypatch.setattr(builder, "check_proxies",
+                        lambda c, b: (_ for _ in ()).throw(
+                            SheetError("row 5: the sheet's write quota stayed "
+                                       "exhausted")))
+    # An earlier step that does real work, so we can prove it survived.
+    monkeypatch.setattr(builder, "sync_proxies",
+                        lambda c, b, ledger: {"released": ["SX9"]})
+
+    outcome = builder.sync_sheet(world["client"], book, FakeLedger())
+
+    assert outcome["released"] == ["SX9"]          # the earlier step is kept
+    assert outcome["incomplete"] == ["checked"]    # and the failure is named

@@ -1366,17 +1366,38 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     except SheetError as exc:
         log.warning("could not refresh the Status dropdowns: %s", exc)
 
-    outcome = apply_phone_states(client, book, ledger) if apply_marks else {}
+    # Each step guarded on its own. A sheet error partway through - the write
+    # quota exhausted by a big sync is the one seen in practice - must not
+    # discard the steps that already ran: by the time the proxy check writes,
+    # the phones are already deleted and the credentials already settled, and
+    # unwinding out of the whole sync would leave the console unable to open
+    # while reporting none of what it did (2026-08-17).
+    def step(name: str, work) -> None:
+        try:
+            result = work()
+            if isinstance(result, dict):
+                outcome.update(result)
+            elif result is not None:
+                outcome[name] = result
+        except SheetError as exc:
+            log.error("sync step %r stopped short: %s", name, exc)
+            outcome.setdefault("incomplete", []).append(name)
+
+    outcome: dict[str, list[str]] = {}
+    if apply_marks:
+        step("marks", lambda: apply_phone_states(client, book, ledger))
     # Before the reload, because both read the Phones tab and this one is what
     # frees a row the last run died holding.
-    outcome.update(settle_abandoned(client, book, ledger))
+    step("abandoned", lambda: settle_abandoned(client, book, ledger))
     book.reload()
-    outcome.update(sync_proxies(client, book, ledger))
-    outcome["repointed"] = sync_phone_proxies(client, book)
+    step("proxies", lambda: sync_proxies(client, book, ledger))
+    step("repointed", lambda: sync_phone_proxies(client, book))
     if probe_proxies:
-        gone, back = check_proxies(client, book)
-        outcome["dead"] = [r.label for r in gone]
-        outcome["revived"] = [r.label for r in back]
+        def check():
+            gone, back = check_proxies(client, book)
+            return {"dead": [r.label for r in gone],
+                    "revived": [r.label for r in back]}
+        step("checked", check)
     return {key: items for key, items in outcome.items() if items}
 
 

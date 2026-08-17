@@ -496,8 +496,14 @@ class ProxyPool(Pool):
 
     def record_exit(self, resource: Resource, exit_ip: str) -> None:
         """The address the proxy actually came out of, which is the one Google
-        and OpenAI judge - never the gateway host in the credentials."""
-        if exit_ip:
+        and OpenAI judge - never the gateway host in the credentials.
+
+        Only when it changed. This is called for every free proxy every sync,
+        and these exits are mostly stable between runs - writing an unchanged
+        value spent one of the sixty writes-per-minute Google allows to say
+        nothing, and a sync of twenty-one proxies did exactly that until it hit
+        the quota (2026-08-17)."""
+        if exit_ip and exit_ip != (resource.values.get("Last Exit IP") or "").strip():
             self._set(resource, {"Last Exit IP": exit_ip})
 
     def attach(self, resource: Resource, serials: str) -> None:

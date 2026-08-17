@@ -37,7 +37,7 @@ from . import builder, failures, phones
 from .api import ApiError, TransportError, build_client
 from .builder import Build
 from .config import Settings
-from .gsheet import SheetError
+from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
 from .pools import Book
 
@@ -1016,7 +1016,10 @@ def sync_on_startup(settings: Settings) -> None:
             outcome = builder.sync_sheet(build_client(settings),
                                          Book.open(settings),
                                          Ledger.load(settings.state_dir))
-    except (ApiError, TransportError, SheetError) as exc:
+    except (ApiError, TransportError, SheetError, GSpreadError) as exc:
+        # GSpreadError included because a sheet quota (429) can surface from a
+        # read - Book.open, a reload - that does not pass through batch_write's
+        # 429 handling, and "never fatal" has to mean it (2026-08-17).
         console.print(f"[{WARN}]could not update the sheet first: {exc}[/]")
         return
     show_sync(outcome)

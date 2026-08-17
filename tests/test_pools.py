@@ -528,3 +528,24 @@ def test_a_history_append_that_fails_does_not_raise():
     tab.append_row = refuse
 
     book.record_history(Serial="1", Event="ready")     # logged, not raised
+
+
+# ------------------------------------------ not spending writes to say nothing
+def test_an_unchanged_exit_is_not_rewritten():
+    """`record_exit` is called for every free proxy every sync, and these
+    exits are mostly stable - writing an unchanged value spent one of the
+    sixty writes a minute Google allows to say nothing, and a sync of twenty-one
+    proxies hit the quota doing it (2026-08-17)."""
+    row = proxy_row("1.2.3.4:9999:u:p")
+    pool = proxy_pool([row])
+    resource = pool._rows[0]
+    pool.record_exit(resource, "5.6.7.8")            # first time: a real change
+    pool._ws.writes.clear()
+
+    pool.record_exit(resource, "5.6.7.8")            # same value: no write
+
+    assert pool._ws.writes == []
+    assert resource.values["Last Exit IP"] == "5.6.7.8"
+
+    pool.record_exit(resource, "9.9.9.9")            # a new exit: written again
+    assert pool._ws.writes
