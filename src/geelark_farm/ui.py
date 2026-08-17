@@ -5,7 +5,7 @@ and a batch draws a live table instead of a wall of interleaved log lines.
 
 This is a layer over the same functions the plain commands call. The
 non-interactive CLI stays exactly as it was, because that is what cron, CI and
-a piped `geelark run` depend on - a menu that prompts is useless to them.
+a piped `geelark build` depend on - a menu that prompts is useless to them.
 
 Two things the menu is for beyond convenience:
 

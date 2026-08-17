@@ -512,3 +512,51 @@ def test_a_log_directory_that_cannot_be_made_does_not_kill_the_cli(
         for handler in added:
             root.removeHandler(handler)
             handler.close()
+
+
+# ------------------------------------------- the commands the code talks about
+def test_every_command_the_code_names_is_a_command_that_exists():
+    """`geelark run` was named in three places, one of them the error a
+    newcomer gets when a tab is missing - so the message that fires exactly
+    when someone is lost sent them to a command that has never existed, along
+    with a GOOGLE_SHEET_TAB setting nothing reads (2026-08-17).
+
+    Commands get renamed and dropped; the prose that mentions them does not
+    move with them. This is the sweep that notices.
+    """
+    import re
+    from pathlib import Path
+
+    from geelark_farm.cli import build_parser
+
+    actions = next(a for a in build_parser()._actions
+                   if getattr(a, "choices", None) and a.dest == "command")
+    real = set(actions.choices) | {"--help"}
+
+    named: dict[str, list[str]] = {}
+    src = Path(__file__).parent.parent / "src"
+    for path in sorted(src.rglob("*.py")):
+        for found in re.findall(r"geelark ([a-z][a-z-]*)",
+                                path.read_text(encoding="utf-8")):
+            named.setdefault(found, []).append(path.name)
+
+    unknown = {name: sorted(set(where))
+               for name, where in named.items() if name not in real}
+    assert not unknown, f"named in the code but not a command: {unknown}"
+
+
+def test_the_missing_tab_message_says_what_to_do_about_it():
+    """The one error a first run is most likely to hit. It has to name the
+    tabs that are required, and say which ones it makes itself - otherwise
+    someone creates all six by hand and wonders why two look wrong."""
+    import inspect
+
+    from geelark_farm import pools
+
+    source = inspect.getsource(pools.Book.open)
+    message = source[source.index("has no tab(s) named"):]
+    message = message[:message.index("wrong spreadsheet")]
+
+    assert "GOOGLE_SHEET_ID" in message      # the usual real cause
+    assert "LISTS_TAB" in message and "HISTORY_TAB" in message
+    assert "automatically" in message

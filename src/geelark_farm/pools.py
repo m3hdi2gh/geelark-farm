@@ -999,8 +999,12 @@ class Book:
             raise SheetError(
                 f"the spreadsheet has no tab(s) named: {', '.join(missing)}\n"
                 f"found: {', '.join(sorted(tabs))}\n"
-                f"`geelark build` reads the resource tabs; `geelark run` reads "
-                f"the single-row sheet named by GOOGLE_SHEET_TAB."
+                f"{GMAILS_TAB}, {PROXY_TAB} and {APPS_TAB} are stock you "
+                f"fill in and {PHONES_TAB} is where a build writes what it "
+                f"produced, so all four have to exist before a run. "
+                f"{LISTS_TAB} and {HISTORY_TAB} are made automatically.\n"
+                f"If none of the names above look familiar, GOOGLE_SHEET_ID "
+                f"is pointing at the wrong spreadsheet."
             )
 
         def headers(name: str) -> list[str]:

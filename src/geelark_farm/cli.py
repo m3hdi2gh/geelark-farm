@@ -336,7 +336,8 @@ def cmd_ui(settings: Settings, args) -> int:
     """The interactive console.
 
     Imported here rather than at module load so the plain commands never pay
-    for rich, and a broken terminal cannot stop `geelark run` from working.
+    for rich, and a broken terminal cannot stop the plain commands from
+    working.
     """
     from .ui import run_console
     return run_console(settings)
