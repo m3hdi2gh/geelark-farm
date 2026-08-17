@@ -222,3 +222,40 @@ def test_a_bare_404_is_translated(said, expected, monkeypatch):
 
     assert expected in detail(checks, "spreadsheet")
     assert "Editor" in detail(checks, "spreadsheet")
+
+
+# ------------------------------------------------------------------- sx.org
+def sxorg_settings(key="k"):
+    return type("S", (), {"sxorg_api_key": key})()
+
+
+def test_a_key_without_the_column_it_needs_is_a_warning_not_a_pass():
+    """Having one of the two is worse than having neither, because it reads
+    like it is set up: sx.org is addressed by port id, and against a Proxy tab
+    with no Port ID column `_new_exit` takes the expensive fallback every
+    single time while verify reported it as working (2026-08-17)."""
+    tabs = {"Proxy": FakeTab(["Name", "Proxy String", "Status"])}
+    checks = []
+
+    verify._sxorg(sxorg_settings(), tabs, checks)
+
+    assert states(checks)["sx.org"] == WARN
+    assert "Port ID" in detail(checks, "sx.org")
+
+
+def test_both_halves_present_passes():
+    tabs = {"Proxy": FakeTab(["Name", "Proxy String", "Port ID"])}
+    checks = []
+
+    verify._sxorg(sxorg_settings(), tabs, checks)
+
+    assert states(checks)["sx.org"] == OK
+
+
+def test_no_key_is_a_fact_not_a_problem():
+    """The tool works without it; it just always takes the next proxy."""
+    checks = []
+
+    verify._sxorg(sxorg_settings(""), {}, checks)
+
+    assert states(checks)["sx.org"] == verify.INFO

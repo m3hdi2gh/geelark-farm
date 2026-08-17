@@ -231,6 +231,38 @@ def _stock(settings: Settings, checks: list[Check]) -> None:
     checks.append(Check("stock", OK, said))
 
 
+#: The Proxy column the cheap retry needs. Not in REQUIRED_COLUMNS, because a
+#: tab without it works - it just always takes the expensive path.
+PORT_ID_COLUMN = "Port ID"
+
+
+def _sxorg(settings: Settings, tabs: dict, checks: list[Check]) -> None:
+    """Whether the cheap way out of a refused exit can actually happen.
+
+    It needs two things, and having one of them is worse than having neither,
+    because it reads like it is set up. The key alone was reported as working
+    against a Proxy tab with no Port ID column, where `_new_exit` takes the
+    fallback every single time (2026-08-17).
+    """
+    if not settings.sxorg_api_key:
+        checks.append(Check("sx.org", INFO,
+                            "SXORG_API_KEY not set - a refused exit takes "
+                            "another proxy instead, which is the more "
+                            "expensive of the two"))
+        return
+
+    proxy = tabs.get("Proxy")
+    headers = {h.strip() for h in proxy.row_values(1)} if proxy else set()
+    if PORT_ID_COLUMN not in headers:
+        checks.append(Check("sx.org", WARN, "\n".join([
+            f"the key is set but the Proxy tab has no {PORT_ID_COLUMN} column",
+            "sx.org is addressed by port id, so without it a refused exit "
+            "still takes another proxy - the key achieves nothing."])))
+        return
+    checks.append(Check("sx.org", OK,
+                        "a refused exit gets a new address on the same proxy"))
+
+
 def run_checks(settings: Settings) -> list[Check]:
     """Every check, in dependency order. Never raises."""
     checks: list[Check] = []
@@ -262,12 +294,7 @@ def run_checks(settings: Settings) -> list[Check]:
     _tabs_and_columns(tabs, checks)
     _stock(settings, checks)
 
-    checks.append(Check(
-        "sx.org", OK if settings.sxorg_api_key else INFO,
-        "a refused exit gets a new address on the same proxy"
-        if settings.sxorg_api_key else
-        "SXORG_API_KEY not set - a refused exit takes another proxy instead, "
-        "which is the more expensive of the two"))
+    _sxorg(settings, tabs, checks)
     return checks
 
 

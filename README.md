@@ -8,50 +8,325 @@ the target app installed and signed in, so the manual work that follows starts
 from a ready device.
 
 ```
-take a proxy ──► create phone behind it ──► boot
-             ──► first usable Gmail ──► sign in  ──► verify on device
-             ──► install the app                 ──► verify on device
-             ──► first usable app account ──► sign in
-             ──► stop the phone ──► record it in the Phones tab
+take a proxy ──► create the phone behind it ──► boot
+             ──► first usable Gmail  ──► sign in  ──► verify on the device
+             ──► install the app                 ──► verify on the device
+             ──► first usable app account ──► sign in ──► verify in the app
+             ──► stop the phone ──► write the row
 ```
+
+About six minutes per phone, unattended.
 
 Nothing is spent in advance. A credential the service rejects costs that
 credential — the next one is tried on the same phone, which is already booted.
 A refusal aimed at the network costs an exit address instead, and the
 credential is kept. Which is which is decided in one place,
-[failures.py](src/geelark_farm/failures.py).
-
-```
-$ geelark build --count 3 --workers 3
-  build    account                             phone   state    time
-      1    FrozenStorm658294@… + fuyironoxu…   650     ready    403s
-      2    QuantumKnight472186@… + gijozuka…   651     ready    461s
-      3    EchoWolf915320@… + dehilixihat83…   652     ready    426s
-
- 3/3 phones ready. All phones are stopped; nothing is billing.
-```
-
-About six minutes per phone, unattended.
+[`failures.py`](src/geelark_farm/failures.py).
 
 ---
 
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Configure](#configure)
+- [The spreadsheet](#the-spreadsheet)
+- [Check the setup](#check-the-setup)
+- [Use](#use)
+- [What a failure costs](#what-a-failure-costs)
+- [Why it is built this way](#why-it-is-built-this-way)
+- [Project layout](#project-layout)
+- [Development](#development)
+
+---
+
+## Requirements
+
+- Python 3.10 or newer
+- A GeeLark account with API credentials and free profile slots
+- A Google Cloud service account, and a spreadsheet shared with it as an
+  **Editor**
+- Proxies, Gmail accounts and app accounts to put in the tabs
+
+No Android SDK, no `adb`, nothing native. Every device command goes through
+GeeLark's API, so the tool runs the same on Windows, macOS and Linux.
+
+## Install
+
+```bash
+git clone <this repo> && cd geelark-farm
+python -m venv .venv
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.example .env
+```
+
+**The editable install (`-e`) is required.** Settings, `logs/`, `artifacts/`
+and `state/` are resolved relative to the repository root, which the package
+finds from its own location. Installed non-editable it lands in
+`site-packages`, `.env` is never found, and the working directories are
+created in the wrong place. With `-e` you can run `geelark` from anywhere.
+
+## Configure
+
+`.env` holds everything. Every field is documented in
+[`.env.example`](.env.example); these are the ones without a working default:
+
+| setting | what it is |
+|---|---|
+| `GEELARK_APP_ID`, `GEELARK_API_KEY` | GeeLark dashboard → API settings → open API credentials |
+| `GOOGLE_SHEET_ID` | the id in the spreadsheet's URL |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | path to the service account's JSON key (default `./secrets/service-account.json`) |
+
+The rest have defaults worth knowing about:
+
+| setting | default | effect |
+|---|---|---|
+| `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once |
+| `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
+| `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |
+| `TARGET_PACKAGE` | `com.openai.chatgpt` | deep-linked by package id, so no Play Store search and no clones |
+| `SXORG_API_KEY` | unset | see [exits](#exits) |
+| `LOG_LEVEL` | `INFO` | the console only — the file log is always DEBUG |
+
+Every invocation appends to `logs/<date>-<machine>.log` at DEBUG whatever
+`LOG_LEVEL` says. The console is for watching a run; the file is for finding
+out afterwards what happened.
+
+## The spreadsheet
+
+Six tabs. **Four you create**, two the tool creates for itself.
+
+Column order does not matter anywhere — columns are found by header name — so
+you can rearrange them, and adding your own is safe.
+
+### Gmails — Google accounts to sign in
+
+| you fill in | the tool writes |
+|---|---|
+| `Address`, `Password`, `2FA Secret` | `Used Date`, `Phone Serial`, `Status`, `Note` |
+
+`Purchase Date` and `Seller` are ignored by the tool and yours to use.
+
+### Proxy — the exits
+
+| you fill in | the tool writes |
+|---|---|
+| `Name`, `Proxy String` | `Last Exit IP`, `Used By`, `Status`, `Note`, `Times Used`, `Last Used` |
+
+`Proxy String` takes `socks5://user:pass@host:port` or
+`host:port:user:pass`. `Name` is what the proxy is called in the vendor's
+panel — `SX4` — and it is what every other tab and every log line calls it,
+because "proxy SX4 is dead" is something you can act on where a host and port
+sends you comparing strings across two windows.
+
+Exits go out **least used first**, so one full round covers every proxy before
+any of them is taken twice. `Times Used` and `Last Used` are added
+automatically the first time the tool opens the tab.
+
+### Gpt Info — accounts for the app itself
+
+| you fill in | the tool writes |
+|---|---|
+| `Address`, `Password`, `2FA Secret` | `Phone Serial`, `Status`, `Note` |
+
+### Phones — what the runs produced
+
+Written by the tool, one row per phone, except for `State` which is yours.
+
+`Created`, `Serial`, `State`, `Proxy`, `Gmail`, `GPT Account`, `Status`, `Note`
+
+### Lists and History — created automatically
+
+`Lists` holds the dropdown values for every `Status` and `State` column,
+regenerated each session from `failures.py` so the dropdown can always offer
+what a run can actually write. `History` is an append-only record of what
+happened, one row per event, stamped with the machine that wrote it.
+
+### Status: what a run concluded
+
+A row is available while its `Status` is one the tool treats as free. The
+words differ per tab, because what they describe differs.
+
+| tab | available | taken | finished with |
+|---|---|---|---|
+| Gmails, Gpt Info | *(blank)* | `in_use` | `ready`, then `used` / `delivered` |
+| Proxy | *(blank)*, `free`, `unused` | `claimed` | `on a phone` |
+
+A proxy is never *spent* — it keeps working, and the column says where it is
+rather than whether it is gone. Two proxy statuses take a row out of the pool
+until you put it back:
+
+- **`change ip`** — a service refused the connection through this exit. These
+  rows carry no port id, so nothing here can ask for a new address; change it
+  in the vendor's panel and set the status back to `free`.
+- **`dead`** — GeeLark could not reach it. Retested every run, because these
+  are rented monthly and one that stopped answering yesterday is often
+  answering again today.
+
+Anything else in a `Status` column is a verdict from
+[`failures.py`](src/geelark_farm/failures.py) — `wrong_password`,
+`captcha_shown`, `email_code_required` — and the `Note` beside it says in
+plain words what was seen and what to do.
+
+### State: an instruction back to the tool
+
+`Status` is what a run concluded. `State`, in the Phones tab, is the other
+direction — written by hand between runs and carried out at the start of the
+next one:
+
+| you write | what happens |
+|---|---|
+| `unused` | the default. Nothing. |
+| `done` | finished with it. The phone is deleted, the row dropped, its app account marked `delivered`. |
+| `failed` | something is wrong with it. The phone is deleted, the row dropped, its app account **freed** for another phone. |
+
+Either way the Gmail is retired as `used`: it signed into that phone, and that
+is the credit it had to spend. A running phone is never touched, only reported.
+
+## Check the setup
+
+```bash
+geelark verify
+```
+
+One command for the whole chain, in the order the pieces depend on each other,
+and each line says what to do rather than only what is wrong:
+
+```
+  ok    .env             /home/you/geelark-farm/.env
+  ok    geelark api      appId YJI9O5..., 9 phone(s) visible
+  ok    plan             30 slot(s), 21 free
+  ok    service account  geelark-farm-bot@example.iam.gserviceaccount.com
+  ok    spreadsheet      Cloud Phones Automation Sheet
+  ok    write access     the key can write (tested without changing anything)
+  ok    tabs             Gmails, Gpt Info, Proxy, Phones (+ Lists, History)
+  ok    columns          every column the code writes exists
+  warn  stock            18 gmails, 13 proxies, 0 app accounts
+                         A run stops at whichever runs out first; app accounts
+                         would stop it immediately.
+```
+
+The service-account address it prints is the one to share the spreadsheet
+with. Write access is tested by writing a header cell back to the value it
+already holds — a real write that changes nothing, because reading proves
+nothing about the role the book was shared with. Warnings are a setup that
+works and will not get far; only a failure exits non-zero.
+
+## Use
+
+```bash
+geelark ui
+```
+
+The console is the whole tool on one screen. It opens on a dashboard — stock,
+phones, free plan slots — then a menu split by what a choice costs: four
+things that **do** something, four that only **look**. A batch draws one line
+per phone, updated live, instead of several workers' logs interleaved. Ctrl+C
+asks the run to stop and waits while each phone is stopped and its rows
+released.
+
+Every action is also a command, which is what cron and CI need:
+
+```bash
+geelark build --count 5          # end up with 5 ready phones
+geelark build --dry-run          # ...show what that would take, spend nothing
+geelark finish                   # only the phones one step short of ready
+geelark pools                    # what the tabs hold, and what is stuck
+geelark verify                   # check the setup
+```
+
+`build` finishes before it builds: a phone that already has its Gmail and the
+app costs one app account, where a new one costs a phone, a Gmail and a proxy
+to reach the same place.
+
+One account at a time, with `--watch` to print a live-view link and wait so
+you can follow along:
+
+```bash
+geelark login --row 1 --keep --watch
+geelark install --watch
+```
+
+Phones and the account:
+
+```bash
+geelark ping                                   # credentials work, phones visible
+geelark plan                                   # slots, free slots, parallel limit
+geelark phones --ledger                        # what exists, and who owns it
+geelark proxy "socks5://user:pass@host:port"   # test a proxy, spend nothing
+geelark create --proxy "..." --label "row 4"
+geelark start / geelark stop --all / geelark delete --phone ID
+geelark reap                                   # stop phones nothing is accountable for
+```
+
+Device diagnostics, for when a flow does something unexpected. Each resolves
+the phone from `--phone`, else the only running one, and starts it if needed:
+
+```bash
+geelark dump                    # every element on screen, with tap targets
+geelark dump --save f.xml       # ...and keep it as a test fixture
+geelark tap Install
+geelark type "some text"
+geelark shell "pm list packages"
+geelark screenshot
+```
+
+### Naming
+
+A phone is called `832 - NovaEclipse738465` in GeeLark's own list: the serial
+first, because that is the key everything else is filed under — the Phones
+tab is addressed by it, History records it, a failed build's artifacts are
+named for it — then the address, because that is the half a person thinks in.
+Phones that already exist are renamed to match on every run.
+
+### Exits
+
+When a service refuses the connection rather than the account, the build keeps
+the credential and changes the exit. The cheap way first: sx.org will hand a
+proxy a different exit address three times a day while keeping its host, port
+and credentials, so nothing on the phone changes. That needs **both**
+`SXORG_API_KEY` **and** a `Port ID` column in the Proxy tab holding each
+proxy's port id; with either missing the build takes the next proxy instead,
+and `geelark verify` says so.
+
+## What a failure costs
+
+Every failure is classified in one table,
+[`failures.py`](src/geelark_farm/failures.py), and nothing else classifies
+one. Each verdict names who is to blame, which decides what the failure costs:
+
+| blame | example | what it costs |
+|---|---|---|
+| `credential` | `wrong_password`, `captcha_shown`, `email_not_found` | that credential. The next one is tried on the same phone, which is already booted. |
+| `exit` | `network_ssl_rejected`, `request_rejected` | an exit address. The credential is kept and tried again. |
+| `device` | `download_stalled`, `app_would_not_start`, `unknown_screen` | the phone. Nothing about the credentials was learned. |
+| `challenged` | `email_code_required` | nothing yet — the account is set aside with what it is waiting for, for a human to answer. |
+
+The verdict is written to the credential's own tab, and the `Note` beside it
+is a sentence, not a token: what was seen, and what to do about it.
+
+Anything the flows do not recognise is archived as XML under `artifacts/` and
+reported as `unknown_screen` — a task, not a mystery.
+
 ## Why it is built this way
 
-GeeLark ships prebuilt RPA tasks for Google login and Play Store installs. Both
-were tried first, and both **reported success while having done nothing** — one
-left the device stranded on a verification screen, the other never installed the
-app. Their selectors cannot be corrected from outside.
+GeeLark ships prebuilt RPA tasks for Google login and Play Store installs.
+Both were tried first, and both **reported success while having done
+nothing** — one left the device stranded on a verification screen, the other
+never installed the app. Their selectors cannot be corrected from outside.
 
-So this drives the device itself, on three rules that every part of the code
-follows:
+So this drives the device itself, on three rules every part of the code
+follows.
 
 **The device is the only truth.** Success is `dumpsys account` showing the
-address, or `pm list packages` returning the package. Nothing a screen says and
-no task status counts as evidence.
+address, `pm list packages` returning the package, or the app's own settings
+page naming the account that is signed in. No screen and no task status counts
+as evidence.
 
-**Screens are observed, not assumed.** Every flow reads the live view hierarchy
-and acts on what is actually there. Google does not present its login screens in
-a fixed order, so the flows are loops over observed state, not scripts:
+**Screens are observed, not assumed.** Google does not present its login
+screens in a fixed order, so the flows are loops over observed state, not
+scripts:
 
 ```python
 while not outcome:
@@ -61,205 +336,59 @@ while not outcome:
 ```
 
 Supporting a screen Google has just started showing means adding one entry to
-that registry. Anything unrecognised is archived as XML under `artifacts/` and
-reported as `unknown_screen` — a task, not a mystery.
-
-**A running phone costs money every minute.** `BUILD_BUDGET_SECONDS` bounds
-what one phone can spend and every step is capped by what is left of it; every
-path that starts a phone stops it in a `finally`; and `geelark reap` is the
-backstop for when that cannot run.
+that registry.
 
 **Nothing retries a fixed number of times.** Caps were tried and each one cost
 something real: three Gmails while eleven sat unused, five dead proxies while
 four live ones waited. What bounds a phone is the stock and the budget, and
 whichever runs out is what gets reported.
 
-## Layout
+## Project layout
 
-Dependencies point downward only, so the layer that knows what a Google password
-screen looks like never also knows how to sign an HTTP request.
+Dependencies point downward only, so the layer that knows what a Google
+password screen looks like never also knows how to sign an HTTP request.
 
 | | |
 |---|---|
 | `cli.py`, `ui.py` | what to ask for, and how it is shown |
+| `verify.py` | whether the setup can work at all |
 | `builder.py` | what to do with a phone, and what a failure costs |
 | `failures.py` | whose fault each failure is — one table, nothing else decides |
 | `flows/router.py` | the screen loop every flow runs on |
-| `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | multi-screen procedures |
+| `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | the multi-screen procedures |
 | `screen.py`, `shell.py` | see the device / act on the device |
 | `phones.py`, `pools.py`, `ledger.py` | phone lifecycle, the stock tabs, local record |
-| `api.py`, `gsheet.py`, `config.py` | signed transport, sheet transport, settings |
+| `api.py`, `gsheet.py`, `sxorg.py`, `config.py` | signed transport, sheet transport, exit refresh, settings |
 
-`tests/fixtures/` holds real view hierarchies captured from live runs. They are
-the record of how each screen actually looks, and why each selector is written
-the way it is.
+`state/ledger.json` is this machine's record of which phone belongs to which
+run. It is what `geelark reap` consults to decide that nothing is accountable
+for a running phone, so it is per-machine and not shared.
 
-## Install
+Further reading: [`docs/geelark-api.md`](docs/geelark-api.md) for the API's
+undocumented corners, [`docs/runbook.md`](docs/runbook.md) for what to do when
+a run goes wrong.
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate          # Windows; source .venv/bin/activate elsewhere
-pip install -e ".[dev]"
-cp .env.example .env            # then fill it in
-```
-
-## Configure
-
-`.env` holds the GeeLark credentials, the spreadsheet id, the path to a Google
-service-account key, and the budgets. Every field is documented in
-[.env.example](.env.example).
-
-### The tabs
-
-One spreadsheet, four tabs. Three are stock you fill in; the fourth is what the
-tool produced. Share it with the service account's email address as an
-**Editor**.
-
-| tab | you fill in | the tool writes back |
-|---|---|---|
-| `Gmails` | Address, Password, 2FA Secret | Used Date, Phone Serial, Status, Note |
-| `Proxy` | Proxy String (or Host/Port/Username/Password) | Last Exit IP, Used By, Status, Note |
-| `Gpt Info` | Address, Password, 2FA Secret | Phone Serial, Status, Note |
-| `Phones` | — | one row per phone built, ready or not |
-
-A resource is available while its `Status` is blank — or `unused` on the Proxy
-tab, where that column doubles as the record of whether the proxy still works.
-Claiming writes `in_use` before the row is handed out, so nothing takes it
-twice; `geelark pools --release-stuck` frees what a dead run left behind.
-
-What a failure costs is decided by [failures.py](src/geelark_farm/failures.py),
-which is the only place that classifies one. A bad Gmail — wrong password, a
-CAPTCHA, a locked account — is marked in its own tab and the **next one is
-tried on the same phone**, which is already booted.
-
-OpenAI's two network refusals are the exception: they arrive before any account
-is examined, so they are a verdict on the exit address rather than on the
-credential. Those get a **new exit on the phone that already exists**, and the
-same credential is tried again. The cheapest form first — sx.org will hand a
-proxy a different exit three times a day while keeping its host, port and
-credentials, so nothing on the phone changes. Only when that allowance is spent
-does the build take another proxy (`/phone/detail/update`). Fill the Proxy
-tab's `Port ID` and set `SXORG_API_KEY` to enable the refresh; without either,
-it goes straight to the next proxy.
-
-A proxy left behind goes back to the pool as `unused`, not condemned: those
-refusals were measured to be per-session, not per-proxy.
-
-## Use
+## Development
 
 ```bash
-geelark ui                      # interactive console - everything, one screen
+pytest
+ruff check src tests
 ```
 
-It opens on a dashboard - stock, phones, free slots - and a menu, and it
-defaults the count to what the stock can actually produce. A batch drawn there
-is one line per phone, updated live, instead of several workers' logs
-interleaved. Ctrl+C asks the run to stop and waits while each phone is stopped
-and its rows released.
+`tests/fixtures/` holds real view hierarchies captured from live runs. They
+are the record of how each screen actually looks, and why each selector is
+written the way it is — a new screen means a new fixture, taken from the
+device with `geelark dump --save`.
 
-Everything below is the same set of actions without prompts, which is what cron
-and CI need:
+Tests are written where a failure would be expensive to find any other way,
+and each says in its docstring what went wrong and when. Several are sweeps
+over the source rather than unit tests: every note the code can write must be
+a sentence, every `geelark <command>` named in the code must exist, and every
+step of the sheet sync must have something to say about itself.
 
-```bash
-geelark build --count 5         # end up with 5 ready phones
-geelark build --dry-run         # ...show what that would take, spend nothing
-geelark finish                  # only the phones one step short of ready
-geelark pools                   # what the tabs hold; frees stranded proxies
-geelark reap                    # stop anything left running
-```
+### Secrets
 
-`build` finishes before it builds: a phone that already has its Gmail and the
-app costs one app account, where a new one costs a phone, a Gmail and a proxy
-to reach the same place.
-
-One account at a time, with `--watch` to print a live-view link and wait so you
-can follow along:
-
-```bash
-geelark login --row 1 --keep --watch
-geelark install --watch
-geelark stop --all
-```
-
-Phone management:
-
-```bash
-geelark plan                                   # slots, free slots, parallel limit
-geelark proxy "socks5://user:pass@host:port"   # test a proxy, spend nothing
-geelark phones --ledger                        # what exists, and who owns it
-geelark create --proxy "..." --label "row 4"
-geelark start / geelark stop --all / geelark delete --phone ID
-```
-
-Device diagnostics, for when a flow does something unexpected. Each resolves the
-phone from `--phone`, else the only running one, and starts it if needed:
-
-```bash
-geelark dump                    # every element on screen, with tap targets
-geelark dump --save f.xml       # ...and keep it as a test fixture
-geelark tap Install
-geelark type "secret"
-geelark shell "pm list packages -3"
-geelark screenshot
-```
-
-## When something goes wrong
-
-**[docs/runbook.md](docs/runbook.md)** — every failure mode seen so far, what it
-means, and what to do. Start there.
-
-**[docs/geelark-api.md](docs/geelark-api.md)** — the vendor API's sharp edges:
-the signing scheme, the rate limit that bans a key for two hours, response
-envelopes that differ per endpoint, and what `/proxy/check` does and does not
-tell you.
-
-Every phone reaches the `Phones` tab whether it worked or not, with what it
-tried and why it stopped, and keeps its archived screens under `artifacts/`.
-Nothing is thrown away for failing: a phone that got as far as its Gmail and
-the app is one `geelark finish` from ready once the app tab is topped up.
-
-Each `Status` in the tabs is a reason from
-[failures.py](src/geelark_farm/failures.py), and that file says what to do
-about it in plain words — it is the first place to look, not the code.
-
-## Cost
-
-**Phones bill per running minute.** Check after any interrupted run:
-
-```bash
-geelark reap --dry-run
-```
-
-Running rows in parallel shortens the wall clock, not the bill: three phones for
-five minutes costs the same as three phones one after another.
-
-## Contributing
-
-`ruff check .` and `pytest` run on every push. The whole suite is offline - no
-credentials, no spreadsheet, no phone - so it can never spend money, and
-`geelark --help` is checked to work on a machine with no `.env` at all.
-
-Anything that touches a real device is verified by running the tool and reading
-what came back, never by a test asserting that it should have worked. When a
-screen surprises a flow, its hierarchy is archived under `artifacts/`; the fix
-is to add a fixture from that capture and a selector that matches it.
-
-**Anonymise a capture before committing it.** Archived screens come from real
-runs and carry the account's address in plain text. `artifacts/` is gitignored,
-but `tests/fixtures/` is not — replace addresses with `something@example.com` on
-the way in. The fixture's value is the structure of the screen, never whose
-account it was.
-
-## Caveats
-
-- Automating Google account sign-in is contrary to Google's terms of service,
-  and accounts may be locked. This reports such outcomes accurately; it cannot
-  prevent them.
-- Proxy IP reputation sets the ceiling on success. A datacenter or freshly
-  allocated exit address draws CAPTCHAs and phone-verification demands that no UI
-  automation resolves — and with a backconnect proxy the exit is not the host you
-  dialled. `geelark proxy <url>` prints both.
-- An account whose only history is on someone else's device and IP is the
-  hardest case there is.
-- Secrets never belong in the repository. `.env`, the service-account JSON, and
-  `state/` are gitignored; keep it that way.
+`.env` and `secrets/` are gitignored, and must stay that way. `.env` holds
+Google passwords, TOTP secrets and proxy credentials; the service-account JSON
+grants write access to the spreadsheet. The GeeLark API key is the account —
+anyone holding it can create and delete phones on it.
