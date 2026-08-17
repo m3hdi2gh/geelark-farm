@@ -88,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------- input
     # ------------------------------------------------------ diagnostics
     sub.add_parser("ping", help="verify API credentials and list phones")
+    sub.add_parser("verify",
+                   help="check the whole setup and say what is missing")
 
     p_dump = sub.add_parser("dump", help="print every element on screen")
     p_dump.add_argument("--phone", metavar="ID",
@@ -751,6 +753,45 @@ def cmd_ping(settings: Settings, args) -> int:
     return 0
 
 
+MARKS = {"ok": "ok", "fatal": "FAIL", "warn": "warn",
+         "info": "--", "skip": "--"}
+
+
+def cmd_verify(settings: Settings, args) -> int:
+    """Check every part of the setup, in the order they depend on each other.
+
+    Written for someone running this for the first time, or on a new machine.
+    Each piece used to fail in its own place at its own time - and two of them,
+    a spreadsheet shared as a Viewer and a tab missing a column, only surface
+    partway through a build that has already paid for a phone.
+    """
+    from . import verify
+
+    checks = verify.run_checks(settings)
+    width = max(len(c.name) for c in checks)
+    for check in checks:
+        head, *rest = check.detail.split("\n")
+        print(f"  {MARKS.get(check.state, check.state):<5} "
+              f"{check.name:<{width}}  {head}")
+        # What to do about it, under the line it is about. Indented here
+        # rather than in each message, so a detail that carries a newline of
+        # its own - an API error usually does - lines up like the rest.
+        for line in rest:
+            print(f"  {'':<5} {'':<{width}}  {line.strip()}")
+
+    bad = verify.failed(checks)
+    if bad:
+        print(f"\n{len(bad)} thing(s) to fix: "
+              f"{', '.join(c.name for c in bad)}")
+        return 1
+    if any(c.state == verify.WARN for c in checks):
+        print("\nUsable. The warnings above are things a run would stop on, "
+              "not things that are broken.")
+        return 0
+    print("\nEverything checks out.")
+    return 0
+
+
 def _configure_logging(settings: Settings):
     """Console as before, plus a file that keeps everything.
 
@@ -826,6 +867,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "ping": cmd_ping,
+        "verify": cmd_verify,
         "phones": cmd_phones,
         "create": cmd_create,
         "delete": cmd_delete,

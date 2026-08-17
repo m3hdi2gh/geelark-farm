@@ -1,0 +1,224 @@
+"""`geelark verify` - the one command that says what a setup is missing.
+
+Its whole value is in the failure paths, so those are what is tested: a check
+that cannot run must say so rather than report a second, misleading failure,
+and every fatal one must say what to do about it.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from geelark_farm import verify
+from geelark_farm.verify import FATAL, OK, SKIP, WARN, Check
+
+
+def states(checks):
+    return {check.name: check.state for check in checks}
+
+
+def detail(checks, name):
+    return next(c.detail for c in checks if c.name == name)
+
+
+# ------------------------------------------------------------------- columns
+class FakeTab:
+    def __init__(self, headers):
+        self._headers = headers
+        self.written = []
+
+    def row_values(self, row):
+        return list(self._headers)
+
+    def acell(self, ref):
+        return type("Cell", (), {"value": self._headers[0]})()
+
+    def update_acell(self, ref, value):
+        self.written.append((ref, value))
+
+
+def full_tabs(**overrides):
+    tabs = {name: FakeTab(list(columns))
+            for name, columns in verify.REQUIRED_COLUMNS.items()}
+    tabs.update(overrides)
+    return tabs
+
+
+def test_a_complete_set_of_tabs_and_columns_passes():
+    checks = []
+    verify._tabs_and_columns(full_tabs(), checks)
+
+    assert states(checks) == {"tabs": OK, "columns": OK}
+
+
+def test_a_missing_column_is_fatal_and_says_why_it_matters():
+    """The quietest failure in the project: `_set` skips a column the tab does
+    not have, on purpose, so a tab without Status claims rows and records
+    nothing while the run looks fine."""
+    tabs = full_tabs(Gmails=FakeTab(["Address", "Password", "Note",
+                                     "Phone Serial"]))
+    checks = []
+
+    verify._tabs_and_columns(tabs, checks)
+
+    assert states(checks)["columns"] == FATAL
+    said = detail(checks, "columns")
+    assert "Gmails.Status" in said
+    assert "silently" in said            # why an absent column is not obvious
+
+
+def test_missing_tabs_skip_the_column_check_rather_than_fail_it_too():
+    """One cause, one failure. Reporting every column of a tab that is not
+    there buries the thing that is actually wrong."""
+    checks = []
+    tabs = full_tabs()
+    del tabs["Proxy"]
+
+    verify._tabs_and_columns(tabs, checks)
+
+    assert states(checks) == {"tabs": FATAL, "columns": SKIP}
+    assert "Proxy" in detail(checks, "tabs")
+
+
+def test_the_tabs_message_separates_what_it_makes_from_what_you_make():
+    """Someone told four tabs are missing creates six by hand and wonders why
+    two of them look wrong."""
+    checks = []
+    tabs = full_tabs()
+    del tabs["Phones"]
+
+    verify._tabs_and_columns(tabs, checks)
+
+    assert "made automatically" in detail(checks, "tabs")
+
+
+# -------------------------------------------------------------- write access
+def test_write_access_is_tested_without_changing_anything():
+    """Shared as a Viewer, every read works and the first write fails - in the
+    middle of a build, after a phone has been paid for."""
+    tabs = full_tabs()
+    checks = []
+
+    verify._writable(tabs, checks)
+
+    phones = tabs["Phones"]
+    assert states(checks)["write access"] == OK
+    # The value written back is the one that was already there.
+    assert phones.written == [("A1", phones.row_values(1)[0])]
+
+
+def test_a_read_only_key_is_fatal_and_names_the_role_it_needs():
+    tabs = full_tabs()
+
+    def refuse(ref, value):
+        raise PermissionError("caller does not have permission")
+    tabs["Phones"].update_acell = refuse
+    checks = []
+
+    verify._writable(tabs, checks)
+
+    assert states(checks)["write access"] == FATAL
+    assert "Editor" in detail(checks, "write access")
+
+
+# -------------------------------------------------------------------- stock
+class FakePool:
+    def __init__(self, n):
+        self.available = list(range(n))
+
+
+class FakeBook:
+    def __init__(self, gmails, proxies, apps):
+        self.gmails = FakePool(gmails)
+        self.proxies = FakePool(proxies)
+        self.apps = FakePool(apps)
+
+
+def test_stock_that_would_stop_a_run_is_a_warning_not_a_failure(monkeypatch):
+    """Nothing is broken - there is simply nothing to build with, and saying
+    so is the difference between "fix your setup" and "top up the tabs"."""
+    from geelark_farm import pools
+    monkeypatch.setattr(pools.Book, "open",
+                        classmethod(lambda cls, s: FakeBook(18, 13, 0)))
+    checks = []
+
+    verify._stock(object(), checks)
+
+    assert states(checks)["stock"] == WARN
+    assert "app accounts would stop it" in detail(checks, "stock")
+
+
+def test_stock_that_can_build_passes(monkeypatch):
+    from geelark_farm import pools
+    monkeypatch.setattr(pools.Book, "open",
+                        classmethod(lambda cls, s: FakeBook(5, 5, 5)))
+    checks = []
+
+    verify._stock(object(), checks)
+
+    assert states(checks)["stock"] == OK
+
+
+# ------------------------------------------------------------ the whole run
+def test_a_missing_geelark_key_stops_before_anything_else_is_tried(
+        monkeypatch):
+    """Each check needs the one before it. Reporting a spreadsheet failure to
+    someone whose API key is wrong sends them to the wrong problem."""
+    monkeypatch.setattr(verify, "_geelark",
+                        lambda s, checks: checks.append(
+                            Check("geelark api", FATAL, "bad key")) or False)
+    settings = type("S", (), {"sheet_id": "x"})()
+
+    checks = verify.run_checks(settings)
+
+    assert [c.name for c in checks] == [".env", "geelark api"]
+    assert verify.failed(checks)
+
+
+def test_an_unset_sheet_id_is_reported_as_the_sheet_check(monkeypatch):
+    monkeypatch.setattr(verify, "_geelark", lambda s, checks: True)
+    settings = type("S", (), {"sheet_id": ""})()
+
+    checks = verify.run_checks(settings)
+
+    assert states(checks)["spreadsheet"] == FATAL
+    assert "GOOGLE_SHEET_ID" in detail(checks, "spreadsheet")
+
+
+def test_every_fatal_check_says_what_to_do_about_it():
+    """A checklist that only says what is wrong leaves someone exactly where
+    they were. Each of these is the message a first run actually meets."""
+    import inspect
+
+    source = inspect.getsource(verify)
+    for fragment in ("come from the GeeLark panel",       # bad API key
+                     "download its JSON key",             # no service account
+                     "shared with",                       # sheet not shared
+                     "needs Editor",                      # shared read-only
+                     "made automatically",                # missing tabs
+                     "record nothing"):                   # missing columns
+        assert fragment in source, fragment
+
+
+@pytest.mark.parametrize("said, expected", [
+    ("<Response [404]>", "no spreadsheet with that id"),
+    ("some other failure", "some other failure"),
+])
+def test_a_bare_404_is_translated(said, expected, monkeypatch):
+    """Both a wrong id and an unshared book come back as `<Response [404]>`,
+    which tells whoever is reading it nothing at all."""
+    import gspread
+    from google.oauth2 import service_account
+    monkeypatch.setattr(service_account.Credentials,
+                        "from_service_account_file",
+                        classmethod(lambda cls, path, scopes=None: object()))
+    monkeypatch.setattr(gspread, "authorize",
+                        lambda creds: (_ for _ in ()).throw(RuntimeError(said)))
+    settings = type("S", (), {"service_account_json": "k.json",
+                              "sheet_id": "x"})()
+    checks = []
+
+    verify._spreadsheet(settings, "bot@x.iam.gserviceaccount.com", checks)
+
+    assert expected in detail(checks, "spreadsheet")
+    assert "Editor" in detail(checks, "spreadsheet")

@@ -533,10 +533,14 @@ def test_every_command_the_code_names_is_a_command_that_exists():
                    if getattr(a, "choices", None) and a.dest == "command")
     real = set(actions.choices) | {"--help"}
 
+    # Quoted with a backtick or an apostrophe, which is how every one of them
+    # is written and what tells a command apart from the same words used as
+    # prose - `geelark verify`'s own checklist has a row labelled "geelark
+    # api", which is not a command and should not be read as one.
     named: dict[str, list[str]] = {}
     src = Path(__file__).parent.parent / "src"
     for path in sorted(src.rglob("*.py")):
-        for found in re.findall(r"geelark ([a-z][a-z-]*)",
+        for found in re.findall(r"[`']geelark ([a-z][a-z-]*)",
                                 path.read_text(encoding="utf-8")):
             named.setdefault(found, []).append(path.name)
 

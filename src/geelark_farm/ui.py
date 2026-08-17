@@ -814,6 +814,33 @@ def marks_preview(book: Book) -> tuple[list[dict], list]:
 
 
 
+def setup_view(settings: Settings) -> Table:
+    """The `geelark verify` checklist, in the console's colours.
+
+    Here because the console is what someone opens on a machine they have just
+    set the tool up on, and the checks are most wanted exactly then - not
+    after a build has failed for a reason that turns out to be a tab shared
+    read-only.
+    """
+    from . import verify
+
+    styles = {verify.OK: (OK, "ok"), verify.FATAL: (BAD, "FAIL"),
+              verify.WARN: (WARN, "warn"), verify.INFO: (DIM, "--"),
+              verify.SKIP: (DIM, "--")}
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column(justify="right")
+    table.add_column(style="bold")
+    table.add_column()
+    for check in verify.run_checks(settings):
+        style, mark = styles.get(check.state, (DIM, check.state))
+        head, *rest = check.detail.split("\n")
+        table.add_row(f"[{style}]{mark}[/]", check.name, head)
+        for line in rest:
+            table.add_row("", "", f"[{DIM}]{line.strip()}[/]")
+    return table
+
+
 def phones_table(settings: Settings) -> Table:
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
@@ -864,6 +891,8 @@ LOOKING = [
      "what a run set aside, and what to do about each - start here"),
     ("6", "What I have to work with", "the pool tabs, plan slots, anything stuck"),
     ("7", "Phones", "what exists, and what is running"),
+    ("8", "Check the setup",
+     "credentials, the sheet, the tabs and columns - what is missing"),
 ]
 ACTIONS = DOING + LOOKING + [("q", "Quit", "")]
 
@@ -1093,6 +1122,9 @@ def run_console(settings: Settings) -> int:
 
             elif choice == "7":
                 console.print(phones_table(settings))
+
+            elif choice == "8":
+                console.print(setup_view(settings))
 
         except (ApiError, TransportError, SheetError) as exc:
             console.print(f"[{BAD}]{exc}[/]")
