@@ -1864,3 +1864,62 @@ def test_every_step_has_something_to_say_about_itself():
 
     assert keys, "no step calls found - the sweep is looking in the wrong place"
     assert keys <= set(builder.STEP_NAMES), keys - set(builder.STEP_NAMES)
+
+
+# --------------------------------------------- the network going away mid-run
+def test_a_lost_connection_is_a_named_outcome_not_an_unhandled_error(
+        device, settings, monkeypatch):
+    """DNS stopped resolving for GeeLark, Sheets and Google's token endpoint
+    at once - the machine's network, not any of them - and all three builds
+    were reported as "an error nobody planned for" over two hundred lines of
+    urllib3 traceback in a live table (2026-08-17)."""
+    from geelark_farm.api import TransportError
+
+    book = make_book()
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TransportError("/v1/shell/execute failed after 3 "
+                                           "attempt(s): getaddrinfo failed")))
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    assert build.status == "network_unreachable"
+    assert not build.ok
+    assert "lost its connection" in build.detail
+    assert "urllib3" not in build.detail and "Traceback" not in build.detail
+
+
+def test_nothing_is_spent_when_the_connection_drops(device, settings,
+                                                    monkeypatch):
+    """Nothing was judged, so no credential may be marked and no exit
+    condemned - the run is repeatable once the network is back."""
+    from geelark_farm.api import TransportError
+
+    book = make_book()
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TransportError("getaddrinfo failed")))
+
+    builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    found = failures.verdict("network_unreachable")
+    assert found.blame == failures.NOBODY
+    assert not found.costs_the_credential
+    assert not found.needs_a_new_exit
+    # The address goes back to the pool unmarked, not condemned with a reason.
+    assert book.gmails._rows[0].values["Status"] in ("", "free")
+
+
+def test_a_sheet_that_will_not_take_the_row_does_not_lose_the_build(
+        device, settings, drive, monkeypatch):
+    """`_record` runs in a `finally`, where an exception does not merely fail -
+    it replaces the value the function was about to return. Three finished
+    Builds were thrown away that way, and the summary reported the same
+    urllib3 error three times in place of what each phone had reached."""
+    def unreachable(*a, **k):
+        raise ConnectionError("Failed to resolve 'sheets.googleapis.com'")
+    monkeypatch.setattr(builder, "_record", unreachable)
+
+    build = drive(make_book(), settings, google=[SIGNED_IN])
+
+    assert build.ok and build.status == "ready"      # what it actually reached

@@ -312,6 +312,14 @@ VERDICTS: dict[str, Verdict] = {
         "GeeLark refused the swap, so the phone kept the exit it had and the "
         "build stopped rather than go on through an address that had already "
         "refused it. Nothing is wrong with the credentials."),
+    "network_unreachable": Verdict(
+        NOBODY, "this machine lost its connection",
+        "The network went away mid-build - GeeLark, Google Sheets and Google's "
+        "own token endpoint all stopped resolving at once, which is this "
+        "machine and not any of them. Nothing was judged and nothing was "
+        "spent. Check the connection, run `geelark verify`, and if the run "
+        "died holding rows they are freed with `geelark pools "
+        "--release-stuck`."),
     "interrupted": Verdict(
         NOBODY, "the run was stopped by hand",
         "You stopped the run. The phone was stopped and every row it held "

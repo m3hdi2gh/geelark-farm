@@ -638,6 +638,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
     except Aborted as exc:
         return finish(str(exc), failures.situation(str(exc)))
+    except TransportError as exc:
+        # The machine lost its network, which is not an error nobody planned
+        # for - it is a named thing that costs nothing. Reported as such, with
+        # the traceback left in the log file rather than dumped over a live
+        # table: two hundred lines of urllib3 to say the connection went away
+        # (2026-08-17).
+        log.error("the network went away: %s", exc)
+        return finish("network_unreachable",
+                      failures.situation("network_unreachable"))
     except phones.PhoneError as exc:
         # Expected, and named. It used to reach the catch-all below and be
         # reported as "an error nobody planned for", which is the wrong thing
@@ -685,10 +694,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # By serial, not by the row number `start` handed back ten minutes ago.
         # Any sibling discarding its phone deletes a row, and every row below it
         # moves up - so that number can have come to mean a different phone.
-        if log_row is not None and not discarded:
-            _record(book, build)
-        elif log_row is not None:
-            book.phones.drop(build.serial)
+        if log_row is not None:
+            _write_row(book, build, drop=discarded)
         if phone_id and not discarded:
             try:
                 phones.stop(client, phone_id)
@@ -821,6 +828,15 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
     except Aborted as exc:
         return finish(str(exc), failures.situation(str(exc)))
+    except TransportError as exc:
+        # The machine lost its network, which is not an error nobody planned
+        # for - it is a named thing that costs nothing. Reported as such, with
+        # the traceback left in the log file rather than dumped over a live
+        # table: two hundred lines of urllib3 to say the connection went away
+        # (2026-08-17).
+        log.error("the network went away: %s", exc)
+        return finish("network_unreachable",
+                      failures.situation("network_unreachable"))
     except Exception as exc:                                      # noqa: BLE001
         log.exception("finishing %s failed with an unhandled error", build.serial)
         return finish("error", str(exc))
@@ -828,7 +844,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # A proxy swapped in during finishing belongs to this phone now.
         _release(book, build,
                  _session_holds(book, session, proxy_spent=True))
-        _record(book, build)
+        _write_row(book, build)
         try:
             phones.stop(client, phone_id)
             log.info("stopped %s", phone_id)
@@ -1132,6 +1148,28 @@ def _phone_note(build: Build) -> str:
                          for line in attempts_of(build))
     lead = "Also tried" if build.ok else "Tried"
     return f"{opening} {lead}: {attempts}."
+
+
+def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:
+    """Put this build in the Phones tab, and never raise doing it.
+
+    Both callers are in a `finally`, where an exception does not merely fail -
+    it replaces the value the function was about to return. A sheet that went
+    unreachable mid-run therefore threw away three finished Builds and left the
+    summary reporting the same urllib3 error three times, in place of what each
+    phone had actually reached (2026-08-17).
+
+    The row can be rebuilt from the log and from History. The outcome, once the
+    Build carrying it is gone, cannot.
+    """
+    try:
+        if drop:
+            book.phones.drop(build.serial)
+        else:
+            _record(book, build)
+    except Exception as exc:                                      # noqa: BLE001
+        log.error("could not write %s to the Phones tab (%s) - the run's own "
+                  "summary and the log still have it", build.name, exc)
 
 
 def _record(book: Book, build: Build) -> None:
