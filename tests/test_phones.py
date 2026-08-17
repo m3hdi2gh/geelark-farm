@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from geelark_farm import phones
 
 
@@ -139,3 +141,86 @@ def test_a_link_with_nothing_to_fix_is_returned_unchanged():
     assert phones.tidy_url(plain) == plain
     assert phones.tidy_url("https://example.com/no-query") == \
         "https://example.com/no-query"
+
+
+# ------------------------------------------------- a delete that did not happen
+class DeleteClient:
+    """Answers the way GeeLark does: `code: 0` whatever became of the phones,
+    with the refusals underneath."""
+
+    def __init__(self, refused=()):
+        self.refused = {str(one) for one in refused}
+        self.posts = []
+
+    def post(self, path, payload=None):
+        self.posts.append((path, payload))
+        ids = (payload or {}).get("ids") or []
+        fail = [{"code": 42001, "id": one, "msg": "env not found"}
+                for one in ids if str(one) in self.refused]
+        return {"code": 0, "msg": "success",
+                "data": {"totalAmount": len(ids),
+                         "successAmount": len(ids) - len(fail),
+                         "failAmount": len(fail), "failDetails": fail}}
+
+
+class ForgetfulLedger:
+    def __init__(self):
+        self.forgotten = []
+
+    def forget(self, phone_id):
+        self.forgotten.append(phone_id)
+
+
+def test_a_refused_delete_is_not_reported_as_a_deletion():
+    """`/phone/delete` returns `code: 0` at the envelope whatever happens to
+    the phones inside it. Not reading failDetails meant two running phones
+    were recorded as discarded, had their rows dropped and their exits freed,
+    and are still in the panel with nothing in the sheet that knows about
+    them (2026-08-17, phones 840 and 841)."""
+    client = DeleteClient(refused=["P1"])
+    ledger = ForgetfulLedger()
+
+    with pytest.raises(phones.PhoneError) as caught:
+        phones.delete(client, ["P1"], ledger=ledger)
+
+    assert "42001" in str(caught.value)
+    assert ledger.forgotten == []          # and it is still ours to account for
+
+
+def test_a_delete_that_worked_is_forgotten_from_the_ledger():
+    client = DeleteClient()
+    ledger = ForgetfulLedger()
+
+    phones.delete(client, ["P1"], ledger=ledger)
+
+    assert ledger.forgotten == ["P1"]
+
+
+def test_a_partial_delete_keeps_what_went_and_reports_what_did_not():
+    """Whatever did go is forgotten first, so a partial delete leaves no
+    ghosts on either side of the line."""
+    client = DeleteClient(refused=["P2"])
+    ledger = ForgetfulLedger()
+
+    with pytest.raises(phones.PhoneError):
+        phones.delete(client, ["P1", "P2"], ledger=ledger)
+
+    assert ledger.forgotten == ["P1"]
+
+
+def test_waiting_for_a_stop_gives_up_rather_than_blocking_a_run(monkeypatch):
+    """`stop` posts the request and returns; GeeLark goes on reporting the
+    phone as running while it shuts down, and refuses to delete one that is
+    still up."""
+    monkeypatch.setattr(phones, "status", lambda *a, **k: phones.RUNNING)
+    monkeypatch.setattr(phones.time, "sleep", lambda *a: None)
+    clock = iter([0, 1, 2, 999])
+    monkeypatch.setattr(phones.time, "time", lambda: next(clock))
+
+    assert phones.wait_until_stopped(object(), "P1", timeout=60) is False
+
+
+def test_a_phone_that_came_down_is_waited_for_no_longer(monkeypatch):
+    monkeypatch.setattr(phones, "status", lambda *a, **k: phones.STOPPED)
+
+    assert phones.wait_until_stopped(object(), "P1") is True

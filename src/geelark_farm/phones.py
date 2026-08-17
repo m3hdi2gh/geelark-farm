@@ -227,12 +227,34 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
 def delete(client: Client, phone_ids: list[str], *,
            ledger: Ledger | None = None) -> None:
     """Delete phones permanently. Stop them first - deleting a running phone
-    is not a documented way to end billing."""
-    client.post("/v1/phone/delete", {"ids": phone_ids})
+    is not a documented way to end billing.
+
+    The per-item answer is read, and this is the whole point of the function
+    doing anything beyond one POST. `/phone/delete` returns `code: 0` at the
+    envelope whatever happens to the phones inside it, and puts the refusals
+    under `failDetails` - the same shape `/phone/start` has always been read
+    for. Not reading it here meant every refusal was reported as a deletion:
+    two running phones were recorded as discarded, had their rows dropped and
+    their exits freed, and are still in the panel with nothing in the sheet
+    that knows about them (2026-08-17, phones 840 and 841).
+
+    Raises PhoneError naming what would not go. Whatever did go is forgotten
+    from the ledger first, so a partial delete leaves no ghosts either way.
+    """
+    answer = client.post("/v1/phone/delete", {"ids": phone_ids}) or {}
+    data = answer.get("data") or {}
+    refused = {str(item.get("id")): item for item in
+               (data.get("failDetails") or [])}
     for phone_id in phone_ids:
+        if str(phone_id) in refused:
+            continue
         if ledger:
             ledger.forget(phone_id)
         log.info("deleted %s", phone_id)
+    if refused:
+        said = "; ".join(f"{item.get('id')} [{item.get('code')}] "
+                         f"{item.get('msg')}" for item in refused.values())
+        raise PhoneError(f"delete refused: {said}")
 
 
 def status(client: Client, phone_id: str) -> int | None:
@@ -285,6 +307,30 @@ def stop(client: Client, phone_id: str) -> None:
     """End billing. Never strict: stopping an already-stopped phone is a
     success as far as the caller is concerned."""
     client.post("/v1/phone/stop", {"ids": [phone_id]}, strict=False)
+
+
+#: How long to wait for a phone to come down before deleting it anyway.
+#: Short: this is only ever on the way to a delete, and a phone that will not
+#: stop is reported by the delete itself rather than waited out.
+STOP_SECONDS = 60
+
+
+def wait_until_stopped(client: Client, phone_id: str, *,
+                       timeout: float = STOP_SECONDS) -> bool:
+    """Block until the phone is down, or the wait runs out. True if it is down.
+
+    `stop` posts the request and returns; GeeLark goes on reporting the phone
+    as running while it shuts down, and it refuses to delete one that is still
+    up. Asking straight after stopping is therefore refused nearly every time.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = status(client, phone_id)
+        if state in (STOPPED, EXPIRED) or state is None:
+            return True
+        time.sleep(POLL_SECONDS)
+    log.warning("phone %s was still not stopped after %.0fs", phone_id, timeout)
+    return False
 
 
 def wait_until_running(client: Client, phone_id: str, *,

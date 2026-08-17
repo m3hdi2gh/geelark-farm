@@ -105,6 +105,10 @@ def device(monkeypatch):
     monkeypatch.setattr(builder.phones, "stop",
                         lambda *a, **k: setattr(recorder, "stops",
                                                 recorder.stops + 1))
+    # A discard stops the phone and waits for it to come down before asking
+    # for the delete - GeeLark refuses to delete one that is still running.
+    monkeypatch.setattr(builder.phones, "wait_until_stopped",
+                        lambda *a, **k: True)
     monkeypatch.setattr(builder.phones, "prune_ledger", lambda *a, **k: [])
     monkeypatch.setattr(
         builder.phones, "set_proxy",
@@ -1082,7 +1086,10 @@ def test_a_phone_with_nothing_signed_into_it_is_deleted(device, settings,
 
     assert not build.ok
     assert deleted == ["PHONE1"]
-    assert device.stops == 0                  # deleting ends it; stopping is moot
+    # Stopped first. This asserted the opposite - "deleting ends it; stopping
+    # is moot" - which is the assumption that let two running phones be
+    # reported as discarded while GeeLark refused every delete (2026-08-17).
+    assert device.stops == 1
     assert book.phones._ws.rows == []         # and no row is left behind
     # the exit it was created on goes back too
     assert len(book.proxies.available) == 2
@@ -1118,7 +1125,10 @@ def test_a_phone_that_cannot_be_deleted_is_recorded_the_ordinary_way(
     drive(book, settings, google=[Outcome("fatal", "wrong_password")])
 
     assert len(book.phones._ws.rows) == 1
-    assert device.stops == 1
+    # Twice: the discard stops it before asking for the delete, and the
+    # ordinary path stops it again once that was refused. `stop` is non-strict
+    # for exactly this - stopping a stopped phone is a success.
+    assert device.stops == 2
 
 
 # ------------------------------------------- the order they come out in

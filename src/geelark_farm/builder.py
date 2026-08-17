@@ -716,6 +716,13 @@ def _discard(client: Client, book: Book, ledger: Ledger,
     the device still there, is the one outcome worse than keeping it.
     """
     try:
+        # Stopped first, and not as a courtesy: GeeLark refuses to delete a
+        # running phone, and this runs before the stop that the ordinary path
+        # does at the end. Both phones this discarded on 2026-08-17 were still
+        # running when it asked, so both refusals came back under failDetails
+        # while the tool went on to drop their rows.
+        phones.stop(client, build.phone_id)
+        phones.wait_until_stopped(client, build.phone_id)
         phones.delete(client, [build.phone_id], ledger=ledger)
     except Exception as exc:                                      # noqa: BLE001
         log.error("phone %s has no Google account on it and could not be "
