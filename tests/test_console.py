@@ -342,3 +342,61 @@ def test_the_runner_hands_the_console_the_serial_it_already_has():
                 and n.func.attr == "start")
 
     assert {k.arg for k in call.keywords} == {"serial", "gmail"}
+
+
+# ------------------------------------------ what the startup sync shows
+def test_the_startup_sync_holds_back_its_own_narration():
+    """The sync narrates every phone deleted, every proxy's measured exit and
+    every correction at INFO - forty lines of it, interleaved with a spinner
+    drawing on the same terminal, above a summary that says the same things in
+    the operator's words (2026-08-17)."""
+    import logging
+
+    from geelark_farm.ui import quiet_console
+
+    root = logging.getLogger()
+    stream = logging.StreamHandler()
+    stream.setLevel(logging.INFO)
+    root.addHandler(stream)
+    try:
+        with quiet_console():
+            assert stream.level == logging.WARNING   # news still gets through
+        assert stream.level == logging.INFO          # and it is put back
+    finally:
+        root.removeHandler(stream)
+
+
+def test_the_file_log_keeps_everything_regardless(tmp_path):
+    """Nothing is lost by muting the terminal - the file handler is the record
+    a problem is diagnosed from afterwards."""
+    import logging
+
+    from geelark_farm.ui import quiet_console
+
+    root = logging.getLogger()
+    to_file = logging.FileHandler(tmp_path / "x.log", encoding="utf-8")
+    to_file.setLevel(logging.DEBUG)
+    root.addHandler(to_file)
+    try:
+        with quiet_console():
+            assert to_file.level == logging.DEBUG
+    finally:
+        root.removeHandler(to_file)
+        to_file.close()
+
+
+def test_a_handler_already_quiet_is_left_where_it_was():
+    import logging
+
+    from geelark_farm.ui import quiet_console
+
+    root = logging.getLogger()
+    stream = logging.StreamHandler()
+    stream.setLevel(logging.ERROR)
+    root.addHandler(stream)
+    try:
+        with quiet_console():
+            assert stream.level == logging.ERROR
+        assert stream.level == logging.ERROR
+    finally:
+        root.removeHandler(stream)

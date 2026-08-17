@@ -1318,9 +1318,24 @@ def apply_phone_states(client: Client, book: Book,
     return outcome
 
 
+#: What each step is doing, for a caller that shows progress while it waits.
+#: The whole sync takes half a minute or more and used to be one unchanging
+#: line with every INFO record the steps emit scrolling through it.
+STEP_NAMES = {
+    "marks": "carrying out the State column",
+    "abandoned": "settling phones a killed run left behind",
+    "proxies": "matching the Proxy tab to the panel",
+    "repointed": "checking which exit each phone is really on",
+    "renamed": "naming the phones in GeeLark",
+    "checked": "testing every free proxy",
+}
+
+
 def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
                apply_marks: bool = True,
-               probe_proxies: bool = True) -> dict[str, list[str]]:
+               probe_proxies: bool = True,
+               on_step: Callable[[str], None] | None = None,
+               ) -> dict[str, list[str]]:
     """Bring all four tabs back into agreement with the world. Every run.
 
     The pieces existed and were called in a different combination from each of
@@ -1375,6 +1390,8 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     # unwinding out of the whole sync would leave the console unable to open
     # while reporting none of what it did (2026-08-17).
     def step(name: str, work) -> None:
+        if on_step:
+            on_step(STEP_NAMES.get(name, name))
         try:
             result = work()
             if isinstance(result, dict):

@@ -1829,3 +1829,38 @@ def test_a_rename_that_is_refused_does_not_stop_the_others(monkeypatch):
                        {"Serial": "833", "Gmail": "b@gmail.com"}])
 
     assert sync_phone_names(client, book) == ["833 - b"]
+
+
+def test_the_sync_says_what_it_is_doing_while_it_does_it(world):
+    """The whole sync takes half a minute or more behind one unchanging line,
+    with every INFO record its steps emit scrolling through it. A caller that
+    draws a spinner needs to be told which part is running."""
+    book = make_book(gmails=1, proxies=2, apps=1)
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: []
+    book.reload = lambda: None
+    said = []
+
+    builder.sync_sheet(world["client"], book, FakeLedger(),
+                       on_step=said.append)
+
+    assert said[0] == "carrying out the State column"
+    assert "testing every free proxy" in said
+    # Human phrases, not the internal keys the outcome is filed under.
+    assert not any("_" in phrase for phrase in said)
+
+
+def test_every_step_has_something_to_say_about_itself():
+    """A step added without a phrase would show the console its key."""
+    import ast
+    import inspect
+
+    source = inspect.getsource(builder.sync_sheet)
+    keys = {node.args[0].value
+            for node in ast.walk(ast.parse(source.lstrip()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "step"
+            and node.args and isinstance(node.args[0], ast.Constant)}
+
+    assert keys, "no step calls found - the sweep is looking in the wrong place"
+    assert keys <= set(builder.STEP_NAMES), keys - set(builder.STEP_NAMES)

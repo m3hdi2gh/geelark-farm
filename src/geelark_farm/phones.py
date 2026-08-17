@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
+from urllib.parse import quote
 
 from .api import Client
 from .config import Settings
@@ -248,6 +250,23 @@ def status(client: Client, phone_id: str) -> int | None:
     return None
 
 
+def tidy_url(url: str) -> str:
+    """Percent-encode the profile name GeeLark pastes into the live-view link.
+
+    GeeLark builds this URL by dropping the profile name straight into
+    `envName=` without encoding it. That was harmless while every name was
+    `farm-1786928959`; a name with spaces in it - which is now every name this
+    tool writes - ends the URL as far as a terminal is concerned, so the link
+    printed above a batch could only be selected as far as the first space
+    (2026-08-17).
+
+    Only that one value is touched. The token further along the query is
+    signed, and re-encoding the whole URL risks changing it.
+    """
+    return re.sub(r"(?<=envName=)[^&]*",
+                  lambda found: quote(found.group(0), safe=""), url)
+
+
 def start(client: Client, phone_id: str) -> str | None:
     """Begin billing. Returns the live-view URL, which is the fastest way to
     see what a flow is actually doing."""
@@ -256,7 +275,7 @@ def start(client: Client, phone_id: str) -> str | None:
         raise PhoneError(f"start failed [{item.get('code')}] {item.get('msg')}")
     url = None
     for item in data.get("successDetails") or []:
-        url = item.get("url") or url
+        url = tidy_url(item["url"]) if item.get("url") else url
         if item.get("chargingMethod"):
             log.info("billing: %s", item["chargingMethod"])
     return url

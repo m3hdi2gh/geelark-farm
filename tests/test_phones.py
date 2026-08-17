@@ -105,3 +105,37 @@ def test_a_rename_that_fails_does_not_lose_the_phone(monkeypatch):
     client = make(monkeypatch, fail_rename=True)
 
     assert any(p[0].endswith("addNew") for p in client.posts)
+
+
+# ------------------------------------------------------- the live-view link
+LIVE_URL = ("https://phone.geelark.com/index.html?isApi=true&target=SG"
+            "&id=633179652143186328&envName={name}&envNo=835&w=336"
+            "&token=eyJhbGci.OiJIUzI1-NiIs_InR5&lang=en-US&center=true")
+
+
+def test_a_name_with_spaces_does_not_cut_the_link_in_half():
+    """GeeLark pastes the profile name into envName= without encoding it.
+    Harmless while every name was farm-1786928959; with `835 - DuskFury738465`
+    the terminal stopped selecting at the first space, so the link printed
+    above a batch could only be copied in pieces (2026-08-17)."""
+    url = phones.tidy_url(LIVE_URL.format(name="835 - DuskFury738465"))
+
+    assert " " not in url
+    assert "envName=835%20-%20DuskFury738465" in url
+
+
+def test_the_signed_token_is_left_exactly_as_it_came():
+    """Re-encoding the whole query would be the obvious fix and would risk the
+    one value that must not change."""
+    url = phones.tidy_url(LIVE_URL.format(name="835 - DuskFury738465"))
+
+    assert "token=eyJhbGci.OiJIUzI1-NiIs_InR5" in url
+    assert url.endswith("&lang=en-US&center=true")
+
+
+def test_a_link_with_nothing_to_fix_is_returned_unchanged():
+    plain = LIVE_URL.format(name="farm-1786928959")
+
+    assert phones.tidy_url(plain) == plain
+    assert phones.tidy_url("https://example.com/no-query") == \
+        "https://example.com/no-query"

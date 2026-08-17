@@ -18,6 +18,7 @@ Two things the menu is for beyond convenience:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import threading
@@ -1021,6 +1022,34 @@ def confirm_finish(settings: Settings, snap: Snapshot) -> dict | None:
     return {"limit": count, "workers": workers}
 
 
+@contextlib.contextmanager
+def quiet_console():
+    """Hold back INFO logging from the terminal for the duration.
+
+    The startup sync narrates itself at INFO - every phone deleted, every
+    proxy's measured exit address, every correction - and those records went
+    to the terminal while a spinner was drawing on it. The result was forty
+    lines of interleaved detail above a summary that says the same things in
+    the words the operator uses, and the spinner redrawing between each one.
+
+    Warnings and errors still come through: those are news, and the summary
+    does not carry them. Nothing is lost either way - the file handler keeps
+    every record at DEBUG whatever this does.
+    """
+    muted = [handler for handler in logging.getLogger().handlers
+             if isinstance(handler, logging.StreamHandler)
+             and not isinstance(handler, logging.FileHandler)
+             and handler.level < logging.WARNING]
+    levels = [handler.level for handler in muted]
+    for handler in muted:
+        handler.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        for handler, level in zip(muted, levels, strict=True):
+            handler.setLevel(level)
+
+
 def sync_on_startup(settings: Settings) -> None:
     """Bring the tabs up to date before the first screen is drawn.
 
@@ -1041,10 +1070,11 @@ def sync_on_startup(settings: Settings) -> None:
     if not settings.sheet_id:
         return
     try:
-        with console.status("bringing the tabs up to date..."):
-            outcome = builder.sync_sheet(build_client(settings),
-                                         Book.open(settings),
-                                         Ledger.load(settings.state_dir))
+        with quiet_console(), console.status("opening the sheet...") as spinner:
+            outcome = builder.sync_sheet(
+                build_client(settings), Book.open(settings),
+                Ledger.load(settings.state_dir),
+                on_step=lambda doing: spinner.update(f"{doing}..."))
     except (ApiError, TransportError, SheetError, GSpreadError) as exc:
         # GSpreadError included because a sheet quota (429) can surface from a
         # read - Book.open, a reload - that does not pass through batch_write's
