@@ -50,6 +50,17 @@ DEVICE = "device"
 #: wrong (2026-08-13). The challenge follows the device and the exit, not the
 #: account.
 CHALLENGED = "challenged"
+#: Nobody. The build stopped without anything being judged: the pool ran dry,
+#: an exit could not be swapped, a hand stopped the run. Nothing is marked and
+#: nothing is spent - the only thing to record is what ran out, and what to do
+#: so it does not run out again.
+#:
+#: These live in the same table as the rest because they reach the same reader.
+#: They used to sit in a second one holding only a clause, so a row reading
+#: `no_usable_proxy` got a sentence where a row reading `wrong_password` got a
+#: sentence and advice - and the console had to know which table a status came
+#: from before it could say anything about it (2026-08-17).
+NOBODY = "nobody"
 
 
 @dataclass(frozen=True)
@@ -267,25 +278,53 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "the step ran out of time",
         "The step ran out of time. Raise its budget, or find out what "
         "the phone was waiting for."),
+
+    # ------------------------------------------------------------- NOBODY
+    # The builder raises these itself rather than reading them off a screen.
+    # Nothing was judged and nothing is marked, but they reach the same reader
+    # as everything above - and until they were written like everything above,
+    # that reader got a sentence where every other row got a sentence and
+    # something to do about it.
+    "all_exits_refused": Verdict(
+        NOBODY, "every exit in the pool was refused in turn",
+        "Every free proxy was tried and each one was refused before the "
+        "account was ever sent. That is a run out of usable exits, not a bad "
+        "account - the credentials went back untouched. Change the addresses "
+        "of the rows marked `change ip` in the Proxy tab, or add proxies."),
+    "no_exit_to_move_to": Verdict(
+        NOBODY,
+        "an exit refused it and the Proxy tab had no free one to move to",
+        "An exit refused this build and there was nothing free to move it to "
+        "- a run given as many phones as it has proxies keeps none spare. "
+        "Either build fewer at a time than there are proxies, or add some."),
+    "no_usable_proxy": Verdict(
+        NOBODY, "the Proxy tab had no free proxy to give it",
+        "No phone was created, so nothing was spent. The Proxy tab has "
+        "nothing free: rows are `claimed` or `on a phone` from builds that "
+        "still hold them, or `change ip` and `dead` and waiting on you."),
+    "no_working_proxy": Verdict(
+        NOBODY, "none of the free proxies answered when tested",
+        "Every free proxy was tested and none answered, so no phone was "
+        "created. These are rented monthly and often answer again the next "
+        "day; the rows are marked `dead` and retested on the next run."),
+    "proxy_change_refused": Verdict(
+        NOBODY, "GeeLark would not move the phone to another exit",
+        "GeeLark refused the swap, so the phone kept the exit it had and the "
+        "build stopped rather than go on through an address that had already "
+        "refused it. Nothing is wrong with the credentials."),
+    "interrupted": Verdict(
+        NOBODY, "the run was stopped by hand",
+        "You stopped the run. The phone was stopped and every row it held "
+        "went back to its pool, so nothing was lost - the phone is in the tab "
+        "and can be finished."),
 }
 
-#: Why a build stopped, for the reasons the builder raises itself rather than
-#: reads off a screen. These never reach `VERDICTS` - there is no credential to
-#: blame and nothing to mark - but they do reach the Phones tab, and a row
-#: reading `all_exits_refused` tells a person less than a sentence does.
-#:
-#: Written to complete "the build stopped because ...", so they are lowercase
-#: clauses with no full stop, like `Verdict.seen`.
-SITUATIONS: dict[str, str] = {
-    "all_exits_refused": "every exit in the pool was refused in turn",
-    "no_exit_to_move_to": (
-        "an exit refused it and the Proxy tab had no free one to move to - "
-        "a run given as many phones as it has proxies keeps none spare"),
-    "no_usable_proxy": "the Proxy tab had no free proxy to give it",
-    "no_working_proxy": "none of the free proxies answered when tested",
-    "proxy_change_refused": "GeeLark would not move the phone to another exit",
-    "interrupted": "the run was stopped by hand",
-}
+#: The reasons nothing is to blame for. Derived, so it cannot disagree with the
+#: table: it was a second dictionary for most of this project's life and the
+#: two drifted apart in shape, one carrying advice and the other not.
+SITUATIONS: dict[str, str] = {reason: found.seen
+                              for reason, found in VERDICTS.items()
+                              if found.blame == NOBODY}
 
 #: Reasons a flow may return that mean success, so nothing needs a verdict.
 SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
@@ -389,11 +428,13 @@ def verdict(reason: str) -> Verdict:
 def situation(reason: str) -> str:
     """Why a build stopped, as a clause that finishes "the build stopped ...".
 
-    Falls back to the token, because a note that reads oddly is better than one
-    that leaves out the only word that would let someone search the logs for
-    what happened.
+    One lookup now, into the same table as everything else. Falls back to the
+    token, because a note that reads oddly is better than one that leaves out
+    the only word that would let someone search the logs for what happened.
     """
-    return SITUATIONS.get(reason, f"it stopped with {reason}")
+    if not knows(reason):
+        return f"it stopped with {reason}"
+    return verdict(reason).seen
 
 
 def today() -> str:

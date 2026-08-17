@@ -691,7 +691,12 @@ def attention_view(settings: Settings) -> Panel:
             # verdict to look up and asking for one returns the fallback, which
             # tells the reader to go and edit failures.py. The note the run left
             # already says what happened.
-            advice = (failures.verdict(reason).advice if reason in failures.VERDICTS
+            # `knows` rather than `reason in VERDICTS`: the table is no longer
+            # the only source of a verdict - `stuck_on_*` is answered by a rule
+            # - so membership was the wrong question, and a row set aside on
+            # one of those showed its note where it could have shown the page
+            # it got stuck on.
+            advice = (failures.verdict(reason).advice if failures.knows(reason)
                       else (resource.values.get(pool.note_column) or "").strip())
             # Padded rather than indented with spaces, so the second line of a
             # long one lands under the first instead of back at the margin.

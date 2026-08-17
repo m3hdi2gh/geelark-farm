@@ -302,6 +302,7 @@ one. Each verdict names who is to blame, which decides what the failure costs:
 | `exit` | `network_ssl_rejected`, `request_rejected` | an exit address. The credential is kept and tried again. |
 | `device` | `download_stalled`, `app_would_not_start`, `unknown_screen` | the phone. Nothing about the credentials was learned. |
 | `challenged` | `email_code_required` | nothing yet — the account is set aside with what it is waiting for, for a human to answer. |
+| `nobody` | `no_usable_proxy`, `all_exits_refused`, `interrupted` | nothing. The build stopped without judging anything — the stock ran out, or you stopped it. |
 
 The verdict is written to the credential's own tab, and the `Note` beside it
 is a sentence, not a token: what was seen, and what to do about it.

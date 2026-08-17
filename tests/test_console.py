@@ -170,7 +170,12 @@ def test_a_pools_own_status_is_explained_by_its_note_not_by_the_taxonomy():
     source = SRC.read_text(encoding="utf-8")
     view = source[source.index("def attention_view"):
                   source.index("def pools_view")]
-    assert "reason in failures.VERDICTS" in view
+    # `knows`, not membership of the table: it answers the `stuck_on_*` family
+    # by rule as well, so a row set aside on one of those now gets the page it
+    # got stuck on where it used to fall through to its note.
+    assert "failures.knows(reason)" in view
+    assert failures.knows("stuck_on_password_entry")
+    assert not failures.knows("dead")
 
 
 def test_the_summary_does_not_claim_a_phone_has_stopped_billing():

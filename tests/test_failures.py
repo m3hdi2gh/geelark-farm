@@ -207,3 +207,51 @@ def test_nothing_in_the_package_branches_on_the_operating_system():
         f"{offenders} behave differently per platform. This runs on Windows "
         f"and on a Mac, and the difference should be in the standard library "
         f"rather than here.")
+
+
+# ------------------------------------------------ one table, not two
+def test_a_build_that_ran_out_of_stock_has_advice_like_everything_else():
+    """The reasons the builder raises itself lived in a second dictionary
+    holding only a clause, so a row reading `no_usable_proxy` got a sentence
+    where a row reading `wrong_password` got a sentence and something to do
+    about it - and the console had to know which table a status came from
+    before it could say anything (2026-08-17)."""
+    for reason in failures.SITUATIONS:
+        found = failures.verdict(reason)
+
+        assert found.blame == failures.NOBODY, reason
+        assert found.advice, reason
+        assert "failures.py" not in found.advice, reason   # not the fallback
+
+
+def test_nothing_is_spent_when_nobody_is_to_blame():
+    """The whole point of the fourth blame: these stop a build without judging
+    anything, so nothing may be marked, retired or swapped for them."""
+    for reason in failures.SITUATIONS:
+        found = failures.verdict(reason)
+
+        assert not found.costs_the_credential, reason
+        assert not found.needs_a_new_exit, reason
+        assert not found.sets_aside, reason
+
+
+def test_the_situations_are_the_table_rather_than_a_copy_of_it():
+    """Two dictionaries drifted apart in shape once. Derived now, so the only
+    way to add one is to add a verdict."""
+    assert failures.SITUATIONS == {
+        reason: found.seen for reason, found in failures.VERDICTS.items()
+        if found.blame == failures.NOBODY}
+    assert failures.SITUATIONS                     # and it is not empty
+
+
+def test_a_situation_reads_as_the_clause_it_is_dropped_into():
+    """`situation` completes "the build stopped ...", so the words have to
+    survive being merged into the one table."""
+    said = failures.situation("no_usable_proxy")
+
+    assert said == "the Proxy tab had no free proxy to give it"
+    assert said[0].islower() and not said.endswith(".")
+
+
+def test_a_reason_nobody_has_classified_still_names_itself():
+    assert failures.situation("something_new") == "it stopped with something_new"
