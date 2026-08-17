@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from . import artifacts as archive
 from . import failures, phones, shell, sxorg
 from . import proxy as proxy_mod
 from .accounts import Account
@@ -161,6 +162,8 @@ class Build:
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
+    #: Where this build's archived pages went, for the prune to judge.
+    artifact_dir: str = ""
     # True when this build's phone could not be confirmed stopped. The summary
     # must never claim nothing is billing while this is set.
     still_running: bool = False
@@ -535,7 +538,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                     Proxy=build.proxy_name or build.proxy)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        artifacts = settings.artifact_dir / f"{stamp}-build{index}"
+        # By serial, not by batch position: `build3` today and `build3`
+        # three weeks ago are different phones, so a directory could not
+        # be tied to a device and nothing could decide whether its pages
+        # still described anything (2026-08-17).
+        artifacts = (settings.artifact_dir
+                     / f"{stamp}-build{build.serial or index}")
+        build.artifact_dir = str(artifacts)
 
         phones.ensure_running(client, phone_id,
                               timeout=min(phones.BOOT_SECONDS, remaining()),
@@ -759,6 +768,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-finish{build.serial}"
+        build.artifact_dir = str(artifacts)
         phones.ensure_running(client, phone_id,
                               timeout=min(phones.BOOT_SECONDS,
                                           deadline - time.monotonic()),
@@ -1327,6 +1337,7 @@ STEP_NAMES = {
     "proxies": "matching the Proxy tab to the panel",
     "repointed": "checking which exit each phone is really on",
     "renamed": "naming the phones in GeeLark",
+    "pruned": "clearing out archived pages nothing needs",
     "checked": "testing every free proxy",
 }
 
@@ -1335,6 +1346,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
                apply_marks: bool = True,
                probe_proxies: bool = True,
                on_step: Callable[[str], None] | None = None,
+               artifact_dir: Path | None = None,
                ) -> dict[str, list[str]]:
     """Bring all four tabs back into agreement with the world. Every run.
 
@@ -1412,6 +1424,11 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("proxies", lambda: sync_proxies(client, book, ledger))
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
+    if artifact_dir is not None:
+        step("pruned", lambda: archive.prune(
+            artifact_dir,
+            {str(item.get("serialNo") or "")
+             for item in phones.listing(client)}))
     if probe_proxies:
         def check():
             gone, back = check_proxies(client, book)
@@ -1817,6 +1834,12 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
             build = build_one(client, settings, book, ledger, index,
                               on_phone=note_phone, on_ready=on_ready,
                               cancelled=shutting_down.is_set)
+        # Nothing else in the archive says how the build went: a
+        # success's pages and a failure's look alike from outside, and which
+        # it was decides how long they are worth keeping.
+        if build.artifact_dir:
+            archive.record(Path(build.artifact_dir),
+                           ok=build.ok, status=build.status)
         if reporter:
             reporter.finish(build)
         else:
@@ -1896,7 +1919,8 @@ def run(client: Client, settings: Settings, *, count: int,
     """
     book = Book.open(settings)
     if not dry_run:
-        sync_sheet(client, book, Ledger.load(settings.state_dir))
+        sync_sheet(client, book, Ledger.load(settings.state_dir),
+                   artifact_dir=settings.artifact_dir)
 
     waiting: list[dict] = []
     gone: list[dict] = []
@@ -1962,7 +1986,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         # A finish reuses the phone's own exit and only takes a free one if
         # it has to swap, so the pool check is worth its seconds here too -
         # that is the run that discovers a swap has nowhere to go.
-        sync_sheet(client, book, Ledger.load(settings.state_dir))
+        sync_sheet(client, book, Ledger.load(settings.state_dir),
+                   artifact_dir=settings.artifact_dir)
     pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]

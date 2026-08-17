@@ -360,6 +360,10 @@ password screen looks like never also knows how to sign an HTTP request.
 | `phones.py`, `pools.py`, `ledger.py` | phone lifecycle, the stock tabs, local record |
 | `api.py`, `gsheet.py`, `sxorg.py`, `config.py` | signed transport, sheet transport, exit refresh, settings |
 
+`artifacts/` holds the pages every flow went through, which is what makes a
+failure diagnosable. It is pruned on every run: a build that worked keeps its
+pages while its phone exists, a build that failed keeps them for a week.
+
 `state/ledger.json` is this machine's record of which phone belongs to which
 run. It is what `geelark reap` consults to decide that nothing is accountable
 for a running phone, so it is per-machine and not shared.

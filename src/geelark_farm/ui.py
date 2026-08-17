@@ -1074,6 +1074,7 @@ def sync_on_startup(settings: Settings) -> None:
             outcome = builder.sync_sheet(
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir),
+                artifact_dir=settings.artifact_dir,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
     except (ApiError, TransportError, SheetError, GSpreadError) as exc:
         # GSpreadError included because a sheet quota (429) can surface from a
@@ -1233,6 +1234,8 @@ SYNC_LABELS = [
     ("attached", "proxies now recorded against the phone actually on them"),
     ("released", "proxies freed - nothing is behind them"),
     ("repointed", "phones whose recorded exit was out of date"),
+    ("pruned", "archived page dumps removed - their phone is gone, or the "
+               "failure they recorded is a week old"),
     ("renamed", "phones given the name their serial and address say - the "
                 "running ones are left for the next sync"),
     ("dead", "free proxies that no longer answer"),
