@@ -903,6 +903,40 @@ class HistoryLog:
             self._ws.append_row(row, value_input_option="RAW")
 
 
+def ensure_columns(worksheet, *columns: str) -> list[str]:
+    """Add columns this tool writes but the operator never fills in.
+
+    `_set` skips a column the tab does not have, silently and by design -
+    which is right for the optional ones and wrong for a column something now
+    depends on: the exit rotation counts uses to order the pool, and without
+    the column every row reads as never used and the order never changes.
+
+    Returns the headers as they now stand, so a column that could not be added
+    simply leaves the tab behaving as it did before rather than stopping a run.
+    """
+    found = [h.strip() for h in worksheet.row_values(1)]
+    for column in columns:
+        if column in found:
+            continue
+        try:
+            # The grid has to be wide enough before anything can be written
+            # into it. A tab sized to its content stops at the last column
+            # someone typed - the Proxy tab was six wide - and writing past
+            # that is refused as "exceeds grid limits", so the column was
+            # never added and the rotation it feeds read every row as never
+            # used (2026-08-17).
+            short = len(found) + 1 - worksheet.col_count
+            if short > 0:
+                worksheet.add_cols(short)
+            worksheet.update_cell(1, len(found) + 1, column)
+            log.info("added the %r column to %s", column, worksheet.title)
+            found = found + [column]
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not add %r to %s (%s)",
+                        column, worksheet.title, exc)
+    return found
+
+
 class Book:
     """The workbook and its four tabs, sharing one lock.
 
@@ -972,28 +1006,6 @@ class Book:
         def headers(name: str) -> list[str]:
             return [h.strip() for h in tabs[name].row_values(1)]
 
-        def ensure_columns(name: str, *columns: str) -> list[str]:
-            """Add columns this tool writes but the operator never fills in.
-
-            `_set` skips a column the tab does not have, silently and by
-            design - which is right for the optional ones and wrong for a
-            column something now depends on: the exit rotation counts uses to
-            order the pool, and without the column every row would read as
-            never used and the order would never change.
-            """
-            found = headers(name)
-            for column in columns:
-                if column in found:
-                    continue
-                try:
-                    tabs[name].update_cell(1, len(found) + 1, column)
-                    log.info("added the %r column to %s", column, name)
-                    found = found + [column]
-                except Exception as exc:                          # noqa: BLE001
-                    log.warning("could not add %r to %s (%s)",
-                                column, name, exc)
-            return found
-
         # The one tab this tool creates for itself. The four above are stock
         # someone fills in, so a missing one is an error worth stopping on;
         # History is machine-written, and demanding the operator make it by
@@ -1015,7 +1027,7 @@ class Book:
         pools = cls(
             gmails=GmailPool(tabs[GMAILS_TAB], headers(GMAILS_TAB), lock),
             proxies=ProxyPool(tabs[PROXY_TAB],
-                              ensure_columns(PROXY_TAB,
+                              ensure_columns(tabs[PROXY_TAB],
                                              ProxyPool.uses_column,
                                              ProxyPool.last_used_column), lock),
             apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),

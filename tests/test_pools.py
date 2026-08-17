@@ -642,3 +642,69 @@ def test_a_tab_without_the_column_behaves_as_it_always_did():
 
     assert [r.proxy.host for r in pool.available] == [
         "10.0.0.0", "10.0.0.1", "10.0.0.2"]
+
+
+# ------------------------------------------- making room for a column we add
+class NarrowTab:
+    """A tab sized to its content, which is what Sheets gives you when nobody
+    has widened it by hand."""
+
+    def __init__(self, headers, col_count=None):
+        self.title = "Proxy"
+        self._headers = list(headers)
+        self.col_count = col_count if col_count is not None else len(headers)
+        self.added = 0
+
+    def row_values(self, row):
+        return list(self._headers)
+
+    def add_cols(self, n):
+        self.col_count += n
+        self.added += n
+
+    def update_cell(self, row, col, value):
+        if col > self.col_count:
+            raise RuntimeError(
+                f"Range (Proxy!{chr(64 + col)}1) exceeds grid limits. "
+                f"Max columns: {self.col_count}")
+        self._headers = self._headers + [value]
+
+
+def test_a_tab_with_no_spare_columns_is_widened_first():
+    """The Proxy tab was exactly six columns wide, so writing a seventh header
+    was refused as "exceeds grid limits" - the column was never added, and the
+    rotation that reads it saw every proxy as never used (2026-08-17)."""
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Name", "Proxy String", "Last Exit IP", "Used By",
+                     "Status", "Note"])
+
+    headers = ensure_columns(tab, "Times Used", "Last Used")
+
+    assert headers[-2:] == ["Times Used", "Last Used"]
+    assert tab.added == 2                    # room made for each of them
+
+
+def test_a_tab_with_room_to_spare_is_not_widened():
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Name", "Status"], col_count=26)
+
+    assert ensure_columns(tab, "Times Used") == ["Name", "Status", "Times Used"]
+    assert tab.added == 0
+
+
+def test_a_column_already_there_is_left_alone():
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Name", "Times Used"])
+
+    assert ensure_columns(tab, "Times Used") == ["Name", "Times Used"]
+    assert tab.added == 0
+
+
+def test_a_column_that_cannot_be_added_does_not_stop_the_run():
+    """The tab then behaves as it did before the column existed, which is the
+    whole reason `_set` skips unknown columns."""
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Name"])
+    tab.add_cols = lambda n: (_ for _ in ()).throw(RuntimeError("no"))
+
+    assert ensure_columns(tab, "Times Used") == ["Name"]
