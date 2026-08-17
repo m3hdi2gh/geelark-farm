@@ -239,7 +239,8 @@ class Capacity:
 class Reporter(Protocol):
     """Where a run announces its progress - the plain CLI or the console."""
 
-    def start(self, index: int, total: int) -> None: ...
+    def start(self, index: int, total: int, *,
+              serial: str = "", gmail: str = "") -> None: ...
     def finish(self, build: Build) -> None: ...
 
 
@@ -517,7 +518,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             build.proxy_name = proxy_row.name
 
             entry = phones.create(client, settings, proxy_row.proxy,
-                                  ledger=ledger, label=f"build {index}")
+                                  ledger=ledger, label=f"build {index}",
+                                  account=gmail_row.label)
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
@@ -1392,6 +1394,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     book.reload()
     step("proxies", lambda: sync_proxies(client, book, ledger))
     step("repointed", lambda: sync_phone_proxies(client, book))
+    step("renamed", lambda: sync_phone_names(client, book))
     if probe_proxies:
         def check():
             gone, back = check_proxies(client, book)
@@ -1607,6 +1610,41 @@ def sync_phone_proxies(client: Client, book: Book) -> list[str]:
     return corrected
 
 
+def sync_phone_names(client: Client, book: Book) -> list[str]:
+    """Give every phone in GeeLark the name its serial and address say.
+
+    The panel used to list `farm-1786928959` nine rows deep, differing in the
+    last digits of a unix timestamp - the second the phone was made, which is
+    the one fact nobody ever needs. Phones are named properly at creation now;
+    this is for the ones made before that, for any renamed by hand, and for a
+    phone whose Gmail was still blank in the tab when it was created.
+
+    A running phone is left alone. GeeLark's own note about `/phone/detail/
+    update` is that it must not be called against a phone that is coming up,
+    and a tidier list is not worth reaching into a build that is under way -
+    the next sync catches it once it has stopped.
+    """
+    named = {str(row.get("Serial") or "").strip(): (row.get("Gmail") or "").strip()
+             for row in book.phones.rows()}
+    renamed = []
+    for phone in phones.listing(client):
+        if phone.get("status") in (phones.RUNNING, phones.STARTING):
+            continue
+        serial = str(phone.get("serialNo") or "").strip()
+        wanted = phones.display_name(serial, named.get(serial, ""))
+        if not wanted or wanted == (phone.get("serialName") or "").strip():
+            continue
+        try:
+            phones.rename(client, phone["id"], wanted)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not rename phone %s (%s)", serial, exc)
+            continue
+        renamed.append(wanted)
+    if renamed:
+        log.info("renamed %d phone(s) in GeeLark", len(renamed))
+    return renamed
+
+
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
     """Put back every proxy whose phone has been deleted.
 
@@ -1738,7 +1776,16 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     def work(index: int, job: dict) -> Build:
         _context.build = index
         if reporter:
-            reporter.start(index, total)
+            # A finish job knows which phone it is before it touches it. A
+            # build does not - it has no serial until GeeLark answers with one
+            # - and the console used to learn every serial the same way, from
+            # the creation log line, so the three rows finishing existing
+            # phones sat there unnamed while their live links read "#1" with
+            # no phone in them (2026-08-17).
+            known = job["phone"] if job["kind"] == "finish" else {}
+            reporter.start(index, total,
+                           serial=str(known.get("serial") or ""),
+                           gmail=str(known.get("gmail") or ""))
         elif job["kind"] == "finish":
             print(f"\n=== finishing phone {job['phone']['serial']} "
                   f"({index}/{total}) ===", flush=True)

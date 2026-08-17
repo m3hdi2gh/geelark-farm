@@ -117,6 +117,38 @@ def set_proxy(client: Client, phone_id: str, proxy: Proxy) -> None:
     log.info("phone %s now uses %s", phone_id, proxy)
 
 
+#: How a phone is named in GeeLark's own list.
+#:
+#: The list used to read `farm-1786928959`, seven rows deep, differing in the
+#: last three digits of a unix timestamp - which named the second a phone was
+#: made and nothing anyone ever wants to know. The serial leads because it is
+#: the key everything else is filed under: the Phones tab is addressed by it,
+#: History records it, and the artifacts of a failed build are named for it.
+#: The address follows because it is the part a person actually thinks in.
+#:
+#: ASCII only, deliberately. GeeLark stores a name with a non-ASCII separator
+#: as mojibake - `832 - Rapid...` came back with the middle dot replaced by a
+#: replacement character (measured 2026-08-17).
+NAME_SEPARATOR = " - "
+
+
+def display_name(serial: str | int = "", account: str = "") -> str:
+    """`832 - RapidStorm162935`, from whichever halves are known.
+
+    Empty when neither is, so the caller can fall back to something unique -
+    a phone still has to be called something before it has a serial.
+    """
+    local = account.split("@")[0].strip()
+    return NAME_SEPARATOR.join(p for p in (str(serial).strip(), local) if p)
+
+
+def rename(client: Client, phone_id: str, name: str) -> None:
+    """Change what the phone is called in GeeLark. Cosmetic, and never worth
+    failing a build over - callers log and carry on."""
+    client.post("/v1/phone/detail/update", {"id": phone_id, "name": name})
+    log.info("phone %s is now called %r", phone_id, name)
+
+
 def newest(client: Client) -> dict | None:
     """The most recently created phone that has not expired."""
     alive = [p for p in listing(client) if p.get("status") != EXPIRED]
@@ -126,7 +158,8 @@ def newest(client: Client) -> dict | None:
 
 
 def create(client: Client, settings: Settings, proxy: Proxy, *,
-           ledger: Ledger, name: str | None = None, label: str = "") -> Entry:
+           ledger: Ledger, name: str | None = None, label: str = "",
+           account: str = "") -> Entry:
     """Create one phone bound to `proxy`, and record it in the ledger.
 
     The proxy is set at creation so the device never touches the network
@@ -142,7 +175,12 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
         "chargeMode": 0,
         "region": settings.region,
         "data": [{
-            "profileName": name or f"{settings.phone_name_prefix}-{int(time.time())}",
+            # Named twice: once here with what is known before the phone
+            # exists, once below with the serial GeeLark answers with. The
+            # first name is what survives if the second call fails, so it is
+            # the address rather than a timestamp wherever there is one.
+            "profileName": (name or display_name(account=account)
+                            or f"{settings.phone_name_prefix}-{int(time.time())}"),
             "proxyInformation": proxy.url,
             "proxyQueryChannel": 2,
             "mobileLanguage": "default",
@@ -162,6 +200,17 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
     # the ledger is invisible to reap and bills silently.
     entry = ledger.record(phone_id, serial=row.get("envSerialNo"), label=label,
                           proxy=f"{proxy.host}:{proxy.port}")
+
+    if name is None:
+        wanted = display_name(row.get("envSerialNo") or "", account)
+        if wanted:
+            try:
+                rename(client, phone_id, wanted)
+            except Exception as exc:                              # noqa: BLE001
+                # The phone is made, recorded and usable. A list that reads a
+                # little worse is not a reason to throw that away.
+                log.warning("could not rename %s to %r (%s)",
+                            phone_id, wanted, exc)
 
     info = row.get("equipmentInfo") or {}
     log.info("created %s (serial %s): %s %s / %s, %s / %s",

@@ -338,7 +338,6 @@ class _LiveTable:
 
 
 @dataclass
-@dataclass
 class BuildReporter(_LiveTable):
     """A `geelark build` batch, one line per phone being built.
 
@@ -348,11 +347,12 @@ class BuildReporter(_LiveTable):
     stamping provides.
     """
 
-    def start(self, index: int, total: int) -> None:
+    def start(self, index: int, total: int, *,
+              serial: str = "", gmail: str = "") -> None:
         with self.lock:
             self.rows[index] = {
-                "email": "", "state": "working", "step": "starting",
-                "started": time.monotonic(), "seconds": 0.0, "phone": "",
+                "email": gmail, "state": "working", "step": "starting",
+                "started": time.monotonic(), "seconds": 0.0, "phone": serial,
             }
 
     def finish(self, build: Build) -> None:
@@ -1171,6 +1171,8 @@ SYNC_LABELS = [
     ("attached", "proxies now recorded against the phone actually on them"),
     ("released", "proxies freed - nothing is behind them"),
     ("repointed", "phones whose recorded exit was out of date"),
+    ("renamed", "phones given the name their serial and address say - the "
+                "running ones are left for the next sync"),
     ("dead", "free proxies that no longer answer"),
     ("revived", "proxies marked dead that are answering again"),
     ("unlisted", "proxies GeeLark holds that the Proxy tab has never heard of "

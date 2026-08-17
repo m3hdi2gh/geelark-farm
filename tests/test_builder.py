@@ -1723,3 +1723,109 @@ def test_a_sync_step_that_fails_does_not_discard_the_ones_before_it(
 
     assert outcome["released"] == ["SX9"]          # the earlier step is kept
     assert outcome["incomplete"] == ["checked"]    # and the failure is named
+
+
+# ------------------------------------------------ naming the phones in GeeLark
+class NamingClient:
+    def __init__(self, listing):
+        self._listing = listing
+        self.renames: list[tuple[str, str]] = []
+
+    def data(self, path, payload=None):
+        return {"items": self._listing}
+
+    def post(self, path, payload):
+        assert path == "/v1/phone/detail/update"
+        self.renames.append((payload["id"], payload["name"]))
+
+
+class NamingBook:
+    def __init__(self, rows):
+        self.phones = type("P", (), {"rows": lambda _self: rows})()
+
+
+def naming_client(monkeypatch, listing):
+    from geelark_farm import builder, phones
+    client = NamingClient(listing)
+    monkeypatch.setattr(phones, "listing", lambda c: listing)
+    monkeypatch.setattr(builder.phones, "listing", lambda c: listing)
+    return client
+
+
+def test_a_phone_left_with_a_timestamp_name_is_renamed(monkeypatch):
+    """The panel listed `farm-1786928959` nine rows deep. Phones made before
+    the naming existed still carry those, and so does one renamed by hand."""
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1786928959",
+                "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "832", "Gmail": "ThunderWarden465837@gmail.com"}])
+
+    assert sync_phone_names(client, book) == ["832 - ThunderWarden465837"]
+    assert client.renames == [("P1", "832 - ThunderWarden465837")]
+
+
+def test_a_phone_already_named_right_is_not_written_again(monkeypatch):
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "832",
+                "serialName": "832 - ThunderWarden465837", "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "832", "Gmail": "ThunderWarden465837@gmail.com"}])
+
+    assert sync_phone_names(client, book) == []
+    assert client.renames == []
+
+
+def test_a_running_phone_is_left_for_the_next_sync(monkeypatch):
+    """A tidier list is not worth reaching into a build that is under way -
+    GeeLark's own note on detail/update is not to call it against a phone that
+    is coming up."""
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "827", "serialName": "farm-1786928922",
+                "status": ph.RUNNING},
+               {"id": "P2", "serialNo": "829", "serialName": "farm-1786928936",
+                "status": ph.STARTING}]
+    client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "827", "Gmail": "a@gmail.com"},
+                       {"Serial": "829", "Gmail": "b@gmail.com"}])
+
+    assert sync_phone_names(client, book) == []
+    assert client.renames == []
+
+
+def test_a_phone_with_no_gmail_in_the_tab_is_named_by_its_serial_alone(
+        monkeypatch):
+    """Half a name is still the half that matters - the serial is the key
+    everything else is filed under. The next sync completes it once the tab
+    has the address."""
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1786928959",
+                "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+
+    assert sync_phone_names(client, NamingBook([])) == ["832"]
+    assert client.renames == [("P1", "832")]
+
+
+def test_a_rename_that_is_refused_does_not_stop_the_others(monkeypatch):
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1",
+                "status": ph.STOPPED},
+               {"id": "P2", "serialNo": "833", "serialName": "farm-2",
+                "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+
+    def refuse(path, payload):
+        if payload["id"] == "P1":
+            raise RuntimeError("refused")
+        client.renames.append((payload["id"], payload["name"]))
+    client.post = refuse
+    book = NamingBook([{"Serial": "832", "Gmail": "a@gmail.com"},
+                       {"Serial": "833", "Gmail": "b@gmail.com"}])
+
+    assert sync_phone_names(client, book) == ["833 - b"]

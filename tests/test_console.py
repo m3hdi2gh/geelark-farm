@@ -287,3 +287,58 @@ def test_taking_every_proxy_is_flagged_before_the_run_starts():
 
     assert "creating >= snap.proxies_free" in body
     assert "none to move to" in body
+
+
+# --------------------------------------- naming the phone a line is working on
+def test_a_finished_phone_is_named_from_the_moment_it_starts():
+    """The console learned every serial from the "created ... (serial N)" log
+    line, which only a build emits. So the three rows finishing existing
+    phones sat unnamed for their whole run and their live links read "#1" with
+    no phone in them, even though the job had carried the serial all along
+    (2026-08-17)."""
+    from geelark_farm.ui import BuildReporter
+    reporter = BuildReporter()
+
+    reporter.start(1, 3, serial="823", gmail="NovaEclipse738465@gmail.com")
+
+    assert reporter.rows[1]["phone"] == "823"
+    assert reporter.rows[1]["email"] == "NovaEclipse738465@gmail.com"
+
+
+def test_a_new_build_still_starts_unnamed():
+    """A build has no serial until GeeLark answers with one, so the column
+    stays empty rather than showing something invented."""
+    from geelark_farm.ui import BuildReporter
+    reporter = BuildReporter()
+
+    reporter.start(1, 3)
+
+    assert reporter.rows[1]["phone"] == ""
+    assert reporter.rows[1]["email"] == ""
+
+
+def test_the_live_link_of_a_finished_phone_carries_its_serial():
+    from geelark_farm.ui import LIVE_PREFIX, BuildReporter
+    reporter = BuildReporter()
+    reporter.start(1, 1, serial="823")
+
+    reporter.note(1, f"{LIVE_PREFIX} https://phone.geelark.com/x")
+
+    assert reporter.drain_links() == [(1, "823", "https://phone.geelark.com/x")]
+
+
+def test_the_runner_hands_the_console_the_serial_it_already_has():
+    """The seeding is only worth anything if the runner passes it, and the
+    runner is where the two kinds of job are told apart."""
+    import ast
+    import inspect
+
+    from geelark_farm import builder
+
+    source = inspect.getsource(builder._run_jobs)
+    call = next(n for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "start")
+
+    assert {k.arg for k in call.keywords} == {"serial", "gmail"}
