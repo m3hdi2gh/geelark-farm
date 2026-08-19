@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import artifacts as archive
-from . import failures, phones, shell, sxorg
+from . import codes, failures, phones, shell, sxorg
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
@@ -273,6 +273,9 @@ class _Session:
     # every phone that ran out of accounts - several minutes of work reported
     # as none (2026-08-11, phones 668 and 670).
     started: float = 0.0
+    #: Who answers a code OpenAI emails an app account. Nothing by default,
+    #: which is what the tool did before the code page could be answered.
+    codes: codes.CodeSource = field(default_factory=codes.NoSource)
     cancelled: Callable[[], bool] | None = None
     proxy_row: Resource | None = None
     app_row: Resource | None = None
@@ -345,6 +348,9 @@ def _sign_into_app(session: _Session) -> Build | None:
             budget_seconds=min(s.settings.app_login_budget_seconds,
                                s.remaining()),
             artifact_dir=s.artifacts,
+            # Where a code OpenAI emails is answered from. Nothing by
+            # default, which reports the page exactly as it always did.
+            codes=s.codes,
             # Every attempt after the first starts from a cleared app. The
             # previous one left the app wherever it stopped, and the router
             # matches whatever is on screen - so without this, one account's
@@ -455,7 +461,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
               index: int, *,
               on_phone: Callable[[str], None] | None = None,
               on_ready: Callable[[str], None] | None = None,
-              cancelled: Callable[[], bool] | None = None) -> Build:
+              cancelled: Callable[[], bool] | None = None,
+              codes_source: codes.CodeSource | None = None) -> Build:
     """Take pooled resources to one stopped, ready phone.
 
     Returns rather than raises: the caller is a batch, and one bad phone must
@@ -624,6 +631,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            build=build, phone_id=phone_id, artifacts=artifacts,
                            deadline=deadline, started=started,
                            cancelled=cancelled,
+                           codes=codes_source or codes.NoSource(),
                            proxy_row=proxy_row, refused_exits=refused_exits)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
@@ -748,7 +756,8 @@ def _discard(client: Client, book: Book, ledger: Ledger,
 def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                phone: dict, index: int, *,
                on_phone: Callable[[str], None] | None = None,
-               cancelled: Callable[[], bool] | None = None) -> Build:
+               cancelled: Callable[[], bool] | None = None,
+               codes_source: codes.CodeSource | None = None) -> Build:
     """Complete a phone that has everything but its app account.
 
     A phone that ran out of app accounts is not a failure to throw away: it is
@@ -821,6 +830,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         session = _Session(client=client, settings=settings, book=book,
                            build=build, phone_id=phone_id, artifacts=artifacts,
                            deadline=deadline, started=started,
+                           codes=codes_source or codes.NoSource(),
                            cancelled=cancelled)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
@@ -1859,7 +1869,8 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
               jobs: list[dict], *, workers: int | None,
               reporter: Reporter | None,
               on_ready: Callable[[str], None] | None,
-              cancel: threading.Event | None) -> list[Build]:
+              cancel: threading.Event | None,
+              codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Run a mixed list of build and finish jobs, up to `workers` at a time.
 
     One runner for both, because they are the same thing to everyone watching:
@@ -1902,11 +1913,13 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         if job["kind"] == "finish":
             build = finish_one(client, settings, book, ledger, job["phone"],
                                index, on_phone=note_phone,
-                               cancelled=shutting_down.is_set)
+                               cancelled=shutting_down.is_set,
+                               codes_source=codes_source)
         else:
             build = build_one(client, settings, book, ledger, index,
                               on_phone=note_phone, on_ready=on_ready,
-                              cancelled=shutting_down.is_set)
+                              cancelled=shutting_down.is_set,
+                              codes_source=codes_source)
         # Nothing else in the archive says how the build went: a
         # success's pages and a failure's look alike from outside, and which
         # it was decides how long they are worth keeping.
@@ -1971,7 +1984,8 @@ def run(client: Client, settings: Settings, *, count: int,
         reporter: Reporter | None = None,
         on_ready: Callable[[str], None] | None = None,
         cancel: threading.Event | None = None,
-        finish_first: bool = True) -> list[Build]:
+        finish_first: bool = True,
+        codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Produce `count` ready phones, finishing before building.
 
     `count` is how many phones are worked on, not how many new ones are made.
@@ -2046,13 +2060,15 @@ def run(client: Client, settings: Settings, *, count: int,
     if not jobs:
         return []
     return _run_jobs(client, settings, book, jobs, workers=workers,
-                     reporter=reporter, on_ready=on_ready, cancel=cancel)
+                     reporter=reporter, on_ready=on_ready, cancel=cancel,
+                     codes_source=codes_source)
 
 
 def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
                workers: int | None = None, dry_run: bool = False,
                reporter: Reporter | None = None,
-               cancel: threading.Event | None = None) -> list[Build]:
+               cancel: threading.Event | None = None,
+               codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Complete every phone that is one step short, and build nothing."""
     book = Book.open(settings)
     if not dry_run:
@@ -2083,7 +2099,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         return []
     jobs = [{"kind": "finish", "phone": p} for p in pending]
     return _run_jobs(client, settings, book, jobs, workers=workers,
-                     reporter=reporter, on_ready=None, cancel=cancel)
+                     reporter=reporter, on_ready=None, cancel=cancel,
+                     codes_source=codes_source)
 
 
 def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:

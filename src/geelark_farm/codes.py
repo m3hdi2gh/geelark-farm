@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
@@ -78,3 +81,89 @@ class NoSource:
         log.info("no mailbox is configured, so the code emailed to %s "
                  "cannot be read", address)
         return None
+
+
+@dataclass
+class Request:
+    """One build, stopped on the code page, waiting for someone to answer.
+
+    Identified by the address it is signing in, which is what the batch table
+    already shows per line - so the answerer can say which row is asking
+    without this module knowing anything about batches.
+    """
+
+    address: str
+    asked_at: float
+    deadline: float
+    answered: threading.Event = field(default_factory=threading.Event)
+    code: str | None = None
+
+    @property
+    def seconds_left(self) -> float:
+        return max(0.0, self.deadline - time.time())
+
+
+class Pending:
+    """A source answered by a person rather than by a mailbox.
+
+    The build stops on the code page and waits; whoever is running the console
+    reads the code out of the inbox - or is handed it by the person signing up
+    - and types it in. No mail credentials anywhere, and nothing to set up per
+    account, which is what makes it the cheapest way to handle an account with
+    no authenticator on it.
+
+    Deliberately not tied to the console. This holds requests and hands back
+    answers; who does the answering is the caller's business, so the same
+    source serves a terminal prompt today and a web form later without the
+    login flow knowing either exists.
+
+    Every method is safe to call from any thread: the builds run in a pool and
+    the answering happens on whichever thread is driving the display.
+    """
+
+    def __init__(self) -> None:
+        self._waiting: list[Request] = []
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------- the flow's side
+    def code_for(self, address: str, *, since: float,
+                 timeout: float = WAIT_SECONDS) -> str | None:
+        """Block until someone answers, or the wait runs out."""
+        request = Request(address=address, asked_at=since,
+                          deadline=time.time() + timeout)
+        with self._lock:
+            self._waiting.append(request)
+        log.info("waiting up to %.0fs for someone to supply the code sent "
+                 "to %s", timeout, address)
+        request.answered.wait(timeout)
+        with self._lock:
+            if request in self._waiting:
+                self._waiting.remove(request)
+        if request.code is None:
+            log.warning("nobody supplied the code for %s", address)
+        return request.code
+
+    # ---------------------------------------------------- the answerer's side
+    def waiting(self) -> list[Request]:
+        """Requests still unanswered, oldest first. A copy, so the caller can
+        walk it while a build adds another."""
+        with self._lock:
+            return [r for r in self._waiting if not r.answered.is_set()]
+
+    def answer(self, request: Request, code: str) -> bool:
+        """Give a waiting build its code. False if it is not six digits.
+
+        Checked here rather than at the prompt so every answerer gets the same
+        rule: a mistyped code costs the account an attempt, and OpenAI counts
+        those.
+        """
+        digits = (code or "").strip()
+        if not CODE.fullmatch(digits):
+            return False
+        request.code = digits
+        request.answered.set()
+        return True
+
+    def give_up(self, request: Request) -> None:
+        """Stop waiting - the code never came, or nobody is there to type it."""
+        request.answered.set()

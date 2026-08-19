@@ -827,7 +827,8 @@ def reset(client: Client, phone_id: str, package: str) -> None:
 def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             package: str, budget_seconds: float = 600,
             artifact_dir: Path | None = None,
-            fresh: bool = False) -> Outcome:
+            fresh: bool = False,
+            codes: codes_mod.CodeSource | None = None) -> Outcome:
     """Drive the app login to a named outcome.
 
     `fresh` clears the app first. A caller trying a second account on one phone
@@ -848,7 +849,8 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
                        f"{package} did not come to the front after "
                        f"{LAUNCH_ATTEMPTS} attempts")
     ctx = Context(client=client, phone_id=phone_id, creds=creds,
-                  package=package, artifact_dir=artifact_dir)
+                  package=package, artifact_dir=artifact_dir,
+                  codes=codes or codes_mod.NoSource())
 
     def logged_in() -> Outcome | None:
         # Unlike the other two steps this reads the screen, because the app's

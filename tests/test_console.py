@@ -405,3 +405,121 @@ def test_a_handler_already_quiet_is_left_where_it_was():
         assert stream.level == logging.ERROR
     finally:
         root.removeHandler(stream)
+
+
+# --------------------------------------- answering a code from the console
+class FakeLive:
+    def __init__(self):
+        self.stops, self.starts = 0, 0
+
+    def stop(self):
+        self.stops += 1
+
+    def start(self):
+        self.starts += 1
+
+
+def waiting_source(address="a@b.com", timeout=5):
+    import threading
+    import time
+
+    from geelark_farm import codes
+    source = codes.Pending()
+    worker = threading.Thread(
+        target=lambda: source.code_for(address, since=time.time(),
+                                       timeout=timeout),
+        daemon=True)
+    worker.start()
+    deadline = time.time() + 2
+    while not source.waiting() and time.time() < deadline:
+        time.sleep(0.01)
+    return source, worker
+
+
+def test_the_prompt_stops_the_live_table_while_it_reads(monkeypatch):
+    """Reading a line while Live is drawing puts the typing underneath the
+    table, four times a second."""
+    from geelark_farm import ui
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "481920"))
+    source, worker = waiting_source()
+    live = FakeLive()
+
+    ui.ask_for_codes(live, source)
+
+    assert live.stops == 1 and live.starts == 1
+    worker.join(2)
+    assert source.waiting() == []
+
+
+def test_an_empty_answer_gives_up_on_that_build(monkeypatch):
+    """Pressing Enter alone is how you say "nobody is going to answer this" -
+    the account is set aside, not marked."""
+    from geelark_farm import ui
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: ""))
+    source, worker = waiting_source()
+
+    ui.ask_for_codes(FakeLive(), source)
+
+    worker.join(2)
+    assert not worker.is_alive()
+    assert source.waiting() == []
+
+
+def test_a_mistyped_code_is_asked_for_again(monkeypatch):
+    from geelark_farm import ui
+    answers = iter(["48192", "481920"])
+    monkeypatch.setattr(ui.Prompt, "ask",
+                        staticmethod(lambda *a, **k: next(answers)))
+    source, worker = waiting_source()
+
+    ui.ask_for_codes(FakeLive(), source)
+
+    worker.join(2)
+    assert source.waiting() == []
+    assert next(answers, "used both") == "used both"
+
+
+def test_nothing_waiting_means_nothing_is_asked_and_the_table_keeps_drawing():
+    """The common case, four times a second - it must not touch Live."""
+    from geelark_farm import codes, ui
+    live = FakeLive()
+
+    ui.ask_for_codes(live, codes.Pending())
+
+    assert live.stops == 0 and live.starts == 0
+
+
+def test_the_live_table_is_restarted_even_if_the_prompt_is_interrupted(
+        monkeypatch):
+    """Ctrl+C at the prompt must not leave the display stopped for the rest of
+    the batch."""
+    from geelark_farm import ui
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(interrupted))
+    source, worker = waiting_source()
+    live = FakeLive()
+
+    ui.ask_for_codes(live, source)
+
+    assert live.starts == live.stops == 1
+    worker.join(2)
+    assert not worker.is_alive()
+
+
+def test_the_batch_hands_its_builds_a_source_a_person_can_answer():
+    """The wiring: without it the flow gets NoSource and every account with no
+    authenticator is set aside exactly as before."""
+    import ast
+    import inspect
+
+    from geelark_farm import ui
+
+    for name in ("build_with_live_table", "finish_with_live_table"):
+        source = inspect.getsource(getattr(ui, name))
+        tree = ast.parse(source.lstrip())
+        assert "codes.Pending()" in source, name
+        passed = {k.arg for node in ast.walk(tree)
+                  if isinstance(node, ast.Call) for k in node.keywords}
+        assert "codes_source" in passed, name

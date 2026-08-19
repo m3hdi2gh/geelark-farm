@@ -34,7 +34,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import builder, failures, phones
+from . import builder, codes, failures, phones
 from .api import ApiError, TransportError, build_client
 from .builder import Build
 from .config import Settings
@@ -463,6 +463,52 @@ def print_new_links(live: Live, reporter: _LiveTable) -> None:
     live.console.print()
 
 
+def ask_for_codes(live: Live, pending) -> None:
+    """Answer any build stopped on the "check your inbox" page.
+
+    Only reached by accounts with no authenticator on them, where OpenAI
+    emails a one-time code instead of asking for one. There is no mailbox to
+    read here and deliberately so: whoever is running this is with the person
+    signing up, or has the inbox open, and typing six digits is cheaper than
+    every other way of getting them.
+
+    Live is stopped for the prompt and started again after, the same as a
+    resize does. Reading a line while it is drawing puts the typing underneath
+    the table, four times a second.
+
+    The wait belongs to the build, not to this prompt: each request carries
+    its own deadline, so walking away simply lets it lapse and the build
+    reports that nobody answered.
+    """
+    for request in pending.waiting():
+        live.stop()
+        try:
+            console.print(
+                f"[{WARN}]OpenAI emailed a code to {request.address}[/] "
+                f"[{DIM}]- it has no authenticator, so the sign-in cannot go "
+                f"on without it[/]")
+            console.print(f"[{DIM}]  about {request.seconds_left:.0f}s left; "
+                          f"press Enter alone to give up on this one[/]")
+            while request.seconds_left > 0:
+                typed = Prompt.ask("  code", default="", show_default=False)
+                if not typed.strip():
+                    pending.give_up(request)
+                    console.print(f"[{DIM}]  left unanswered - the account is "
+                                  f"set aside, not marked[/]")
+                    break
+                if pending.answer(request, typed):
+                    console.print(f"[{OK}]  thanks - carrying on[/]")
+                    break
+                console.print(f"[{BAD}]  that is not a six-digit code[/]")
+            else:
+                pending.give_up(request)
+        except (KeyboardInterrupt, EOFError):
+            pending.give_up(request)
+            console.print(f"\n[{DIM}]  left unanswered[/]")
+        finally:
+            live.start()
+
+
 def _restart_after_resize(live: Live, width: int) -> int:
     """Re-anchor the live display when the terminal changes width.
 
@@ -487,7 +533,7 @@ def _restart_after_resize(live: Live, width: int) -> int:
 
 
 def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
-                      work, cancel: threading.Event) -> None:
+                      work, cancel: threading.Event, pending=None) -> None:
     """Run `work()` in a thread while drawing `reporter.render()` live.
 
     The context filter goes on the reporter's own handler, not on the stream
@@ -538,6 +584,12 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
                     width = _restart_after_resize(live, width)
                     print_new_notices(live, reporter)
                     print_new_links(live, reporter)
+                    if pending is not None:
+                        # Before the redraw: a build stopped on the code page
+                        # is not going anywhere until someone answers it, and
+                        # the table below would go on saying "entering the
+                        # code" with nothing behind it.
+                        ask_for_codes(live, pending)
                     live.update(reporter.render())
                     time.sleep(0.25)
                 except KeyboardInterrupt:
@@ -581,12 +633,18 @@ def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     builds: list[Build] = []
     cancel = threading.Event()
 
+    # An app account with no authenticator is emailed a code instead of
+    # being asked for one, and the only person who can supply it is whoever
+    # is sitting here. The build waits; the loop below notices and asks.
+    pending = codes.Pending()
+
     def work() -> None:
         nonlocal builds
         builds = builder.run(client, settings, reporter=reporter,
-                             cancel=cancel, **kwargs)
+                             cancel=cancel, codes_source=pending, **kwargs)
 
-    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel)
+    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel,
+                      pending)
     return builds
 
 
@@ -601,12 +659,16 @@ def finish_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     builds: list[Build] = []
     cancel = threading.Event()
 
+    pending = codes.Pending()
+
     def work() -> None:
         nonlocal builds
         builds = builder.finish_run(client, settings, reporter=reporter,
-                                    cancel=cancel, **kwargs)
+                                    cancel=cancel, codes_source=pending,
+                                    **kwargs)
 
-    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel)
+    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel,
+                      pending)
     return builds
 
 
