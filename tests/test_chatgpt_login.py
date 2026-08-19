@@ -115,15 +115,47 @@ def test_a_rejected_authenticator_code_is_the_accounts_fault_not_the_pages():
     assert _reason(blob) == "wrong_2fa_code"
 
 
-def test_an_emailed_code_still_outranks_it():
-    """Both pages say something about a code. The emailed one is checked first
-    and must stay first: an account with no authenticator gets a mailed code,
-    and reading that as a wrong secret would condemn a good account."""
+def test_a_refused_emailed_code_is_not_read_as_a_wrong_secret():
+    """Both pages show "Incorrect code" when a code is refused. On the
+    authenticator page that means the secret in the sheet is not the
+    account's, and marks the credential; on this one it means the emailed code
+    was wrong or expired, which says nothing about the account. Reading one as
+    the other condemns an account that has done nothing wrong.
+
+    The page is not terminal at all any more - it is a screen the flow acts on
+    - so what matters is that nothing here calls it a verdict."""
     blob = screen.normalize(
         "Check your inbox Enter the code we sent to a@b.com "
         "Incorrect code. Please try again.").casefold()
 
-    assert _reason(blob) == "email_code_required"
+    assert _reason(blob) != "wrong_2fa_code"
+    assert _reason(blob) is None
+
+
+def test_the_emailed_code_page_is_still_told_apart_from_the_authenticator():
+    """The two boxes are identical; only the sentence about the inbox
+    separates them, and matching on "verification code" alone sent TOTP codes
+    into this one three times over (2026-08-07, row 4)."""
+    from geelark_farm.flows.chatgpt_login import EMAIL_CODE_TEXTS
+
+    emailed = screen.normalize(
+        "Check your inbox Enter the code we sent to a@b.com").casefold()
+    authenticator = screen.normalize(
+        "Enter the 6-digit verification code from your authenticator "
+        "app").casefold()
+
+    assert any(n in emailed for n in EMAIL_CODE_TEXTS)
+    assert not any(n in authenticator for n in EMAIL_CODE_TEXTS)
+
+
+def test_a_genuinely_dead_account_is_still_fatal_on_that_page():
+    """Only the wrong-code reading is withheld. A page that says the account
+    is gone means what it says wherever it appears."""
+    blob = screen.normalize(
+        "Check your inbox Enter the code we sent "
+        "This account has been deactivated").casefold()
+
+    assert _reason(blob) == "account_deactivated"
 
 
 def _reason(blob: str) -> str | None:
@@ -234,3 +266,121 @@ def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):
     out = chatgpt_login.verify_account(verify_ctx())
 
     assert out is not None and out.reason == "session_unverified"
+
+
+# ------------------------------------------ answering a code OpenAI emailed
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def code_context(source=None, fixture="chatgpt-email-code.xml"):
+    """The real capture of the page, with a code source behind it."""
+    from geelark_farm import codes
+    from geelark_farm.flows import chatgpt_login
+
+    xml = (FIXTURES / fixture).read_text(encoding="utf-8")
+    ctx = chatgpt_login.Context(
+        client=None, phone_id="P",
+        creds=Credentials(email="a@b.com", password="p", totp_secret=""),
+        codes=source or codes.NoSource())
+    ctx.elements = screen.parse(xml)
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+class Mailbox:
+    """A source that hands over one code, and remembers what it was asked."""
+
+    def __init__(self, code="481920"):
+        self.code, self.asked = code, []
+
+    def code_for(self, address, *, since, timeout=180):
+        self.asked.append((address, since))
+        return self.code
+
+
+class SilentMailbox:
+    def code_for(self, address, *, since, timeout=180):
+        return None
+
+
+def test_a_code_that_arrives_is_typed_in(monkeypatch):
+    """The counterpart of act_totp: same box, same submit, and the only
+    difference is where the digits came from."""
+    from geelark_farm.flows import chatgpt_login
+
+    typed = []
+    monkeypatch.setattr(chatgpt_login, "fill",
+                        lambda ctx, field, text: typed.append(text))
+    monkeypatch.setattr(chatgpt_login, "submit", lambda ctx: None)
+    monkeypatch.setattr(chatgpt_login.time, "sleep", lambda *a: None)
+    mailbox = Mailbox()
+
+    outcome = chatgpt_login.act_email_code(code_context(mailbox))
+
+    assert typed == ["481920"]
+    assert outcome is None                   # the router carries on
+
+
+def test_the_code_is_asked_for_by_the_account_being_signed_in(monkeypatch):
+    from geelark_farm.flows import chatgpt_login
+
+    monkeypatch.setattr(chatgpt_login, "fill", lambda *a: None)
+    monkeypatch.setattr(chatgpt_login, "submit", lambda ctx: None)
+    monkeypatch.setattr(chatgpt_login.time, "sleep", lambda *a: None)
+    mailbox = Mailbox()
+
+    chatgpt_login.act_email_code(code_context(mailbox))
+
+    address, since = mailbox.asked[0]
+    assert address == "a@b.com"
+    assert since > 0          # only mail newer than this attempt counts
+
+
+def test_the_same_attempt_keeps_asking_from_the_same_moment(monkeypatch):
+    """Otherwise each visit moves the line forward and a code that arrived
+    while the page was painting is never seen."""
+    from geelark_farm.flows import chatgpt_login
+
+    monkeypatch.setattr(chatgpt_login, "fill", lambda *a: None)
+    monkeypatch.setattr(chatgpt_login, "submit", lambda ctx: None)
+    monkeypatch.setattr(chatgpt_login.time, "sleep", lambda *a: None)
+    mailbox = Mailbox()
+    ctx = code_context(mailbox)
+
+    chatgpt_login.act_email_code(ctx)
+    chatgpt_login.act_email_code(ctx)
+
+    assert mailbox.asked[0][1] == mailbox.asked[1][1]
+
+
+def test_no_mailbox_reports_exactly_what_it_always_did():
+    """The default. This can be merged and nothing changes until a source is
+    configured: the page is reported, the account set aside for a human."""
+    from geelark_farm.flows import chatgpt_login
+
+    outcome = chatgpt_login.act_email_code(code_context())
+
+    assert outcome.kind == "fatal"
+    assert outcome.reason == "email_code_required"
+
+
+def test_a_mailbox_that_produced_nothing_is_a_different_sentence():
+    """"We never looked" and "we looked and waited" are not the same thing to
+    whoever reads the row - the second one points at the mailbox."""
+    from geelark_farm.flows import chatgpt_login
+
+    outcome = chatgpt_login.act_email_code(code_context(SilentMailbox()))
+
+    assert outcome.kind == "fatal"
+    assert outcome.reason == "email_code_never_arrived"
+
+
+def test_neither_outcome_blames_the_account():
+    """OpenAI judged nothing about it - it asked for a code and never got an
+    answer - so the row keeps its place in the pool either way."""
+    from geelark_farm import failures
+
+    for reason in ("email_code_required", "email_code_never_arrived"):
+        verdict = failures.verdict(reason)
+        assert verdict.sets_aside, reason
+        assert not verdict.costs_the_credential, reason

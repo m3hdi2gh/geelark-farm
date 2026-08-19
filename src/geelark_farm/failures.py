@@ -177,6 +177,15 @@ VERDICTS: dict[str, Verdict] = {
         "earlier run survived where a fresh login was expected. Nothing is "
         "wrong with the credentials. Rebuild the phone, or clear the app "
         "and finish it again."),
+    "email_code_never_arrived": Verdict(
+        CHALLENGED,
+        "OpenAI emailed a one-time code and none arrived in the time allowed",
+        "OpenAI emailed a code rather than asking the authenticator, and the "
+        "mailbox produced nothing within the wait. Nothing was judged about "
+        "the account - it is set aside rather than marked, and keeps its "
+        "place in the pool. Check the mailbox is reachable and the message is "
+        "not held up, then blank the status to try it again; the phone is "
+        "reused, so a retry costs nothing but the attempt."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account",
         "OpenAI has deactivated the account."),

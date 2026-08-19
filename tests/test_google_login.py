@@ -429,20 +429,19 @@ def test_the_notification_card_is_dismissed_although_nothing_is_clickable():
                              chatgpt_login.DISMISS_LABELS).label == "Maybe later"
 
 
-def test_an_emailed_code_is_named_not_answered_with_a_totp():
+def test_an_emailed_code_is_answered_on_its_own_screen_not_with_a_totp():
     """This account had no authenticator, so OpenAI emailed a code. The page
     says "verification code", which is what the authenticator page says too, so
     totp_entry claimed it and typed TOTP codes into it three times - each
     answered "Incorrect code", each burning an attempt (2026-08-07, row 4).
 
-    Fatal is checked first, which is what makes naming it sufficient.
+    The page used to be named and given up on. It is answered now, and against
+    the real capture the thing that matters is unchanged and stronger: the
+    screen that claims it is its own, and never the authenticator's.
     """
-    from geelark_farm.flows import chatgpt_login
-
     ctx = app_context("chatgpt-email-code.xml")
 
-    assert chatgpt_login._fatal_reason(ctx) == "email_code_required"
-    assert app_screen(ctx).name == "fatal"
+    assert app_screen(ctx).name == "email_code_entry"
 
 
 def test_the_advice_for_an_emailed_code_says_the_phone_is_fine():

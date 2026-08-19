@@ -61,9 +61,10 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import codes as codes_mod
 from .. import phones, screen, shell
 from ..accounts import Credentials
 from ..api import Client
@@ -93,11 +94,6 @@ FATAL_TEXTS = {
     # codes into it three times, each answered "Incorrect code" (2026-08-07,
     # row 4). Being fatal, and checked first, is what keeps that from
     # happening: the needles below are what the page actually said.
-    "email_code_required": (
-        "check your inbox", "resend email", "we just sent to",
-        "check your email for a code", "enter the code we sent",
-        "we sent a code to your email",
-    ),
     "account_deactivated": (
         "account has been deactivated", "account is deactivated",
         "account has been suspended",
@@ -126,6 +122,23 @@ FATAL_TEXTS = {
     ),
 }
 
+#: The page that says a code has been emailed rather than asked of an
+#: authenticator. These used to sit in FATAL_TEXTS, which is matched first and
+#: ends the attempt - so the moment this page appeared the account was set
+#: aside and the phone moved on. It is a screen with an action now; whether
+#: anything can be done on it depends on whether a mailbox is reachable.
+#:
+#: The needles stay this specific for the reason they were written: the page
+#: says "verification code", and so does the authenticator page, so matching
+#: on that alone sent TOTP codes into this box three times over (2026-08-07,
+#: row 4). What separates them is the sentence about the inbox.
+EMAIL_CODE_TEXTS = (
+    "check your inbox", "resend email", "we just sent to",
+    "check your email for a code", "enter the code we sent",
+    "we sent a code to your email",
+)
+
+
 FATAL_ADVICE = {
     "wrong_2fa_code":
         "OpenAI rejected the authenticator code, so the 2FA secret in the "
@@ -134,6 +147,11 @@ FATAL_ADVICE = {
     "captcha_shown":
         "OpenAI is challenging this exit IP, the same way Google does; a "
         "cleaner proxy is the fix and no code change helps",
+    "email_code_never_arrived":
+        "this app account has no authenticator, so OpenAI emailed a one-time "
+        "code - and none arrived in the time allowed. The account was not "
+        "judged and is untouched: check the mailbox is reachable and that the "
+        "message is not held up, then retry. The phone is reused",
     "email_code_required":
         "this app account has no authenticator, so OpenAI emails a one-time "
         "code instead. The phone is fine: Google is signed in and the app is "
@@ -258,6 +276,13 @@ class Context(router.Context):
     # See verified_on_device: a composer on screen is not evidence of a
     # session, because the app has a logged-out mode that has one too.
     submitted_password: bool = False
+    #: Where a code emailed to this account is read from. The default reads
+    #: nothing, which is what the tool did before this screen existed.
+    codes: codes_mod.CodeSource = field(default_factory=codes_mod.NoSource)
+    #: When this attempt reached the page. Mail older than that belongs to an
+    #: earlier attempt, and its code is expired - typing it would have OpenAI
+    #: refuse a perfectly good account.
+    code_since: float = 0.0
 
 
 LAUNCH_ATTEMPTS = 3
@@ -422,7 +447,21 @@ def verify_account(ctx: Context) -> Outcome | None:
 
 # ------------------------------------------------------------------ screens
 def _fatal_reason(ctx: Context) -> str | None:
+    """The terminal reason this page carries, if any.
+
+    `wrong_2fa_code` is withheld on the emailed-code page, and that exception
+    is the whole reason this is a function rather than a loop. Both pages show
+    "Incorrect code" when a code is refused, and on the authenticator page
+    that means the secret in the sheet is not the account's - a verdict that
+    marks the credential. On this page it means the emailed code was wrong or
+    expired, which says nothing about the account at all. Reading one as the
+    other condemns an account that has done nothing wrong, which is what this
+    ordering has always existed to prevent (2026-08-07, row 4).
+    """
+    on_email_code = ctx.has(*EMAIL_CODE_TEXTS)
     for reason, needles in FATAL_TEXTS.items():
+        if reason == "wrong_2fa_code" and on_email_code:
+            continue
         if ctx.has(*needles):
             return reason
     return None
@@ -575,6 +614,44 @@ def act_totp(ctx: Context) -> Outcome | None:
     return None
 
 
+def act_email_code(ctx: Context) -> Outcome | None:
+    """Answer a code OpenAI emailed, if the inbox can be reached.
+
+    The counterpart of `act_totp`, and the difference is only where the digits
+    come from: an authenticator has them already, a mailbox has to be waited
+    on. Everything after that - type, submit, let the page settle - is the
+    same, because from the page's point of view it is the same box.
+
+    Three ways out, and each is a different thing to tell the operator:
+
+    - a code arrives and is typed, and the router carries on;
+    - no mailbox is configured, so nothing here could ever answer this page.
+      That is `email_code_required`, exactly as before this screen existed;
+    - a mailbox is configured and nothing came within the wait. The account
+      is untouched either way - OpenAI judged nothing about it - but "we
+      never looked" and "we looked and waited" are not the same sentence.
+    """
+    field = screen.find_input(ctx.elements)
+    if not field:
+        return None                       # still painting; the router retries
+
+    since = ctx.code_since or time.time()
+    ctx.code_since = since
+    code = ctx.codes.code_for(ctx.creds.email, since=since)
+    if code is None:
+        reason = ("email_code_required" if isinstance(ctx.codes, codes_mod.NoSource)
+                  else "email_code_never_arrived")
+        path = ctx.save(reason)
+        return Outcome("fatal", reason, FATAL_ADVICE.get(reason, ""),
+                       artifacts=[path] if path else [])
+
+    log.info("entering the code emailed to %s", ctx.creds.email)
+    fill(ctx, field, code)
+    submit(ctx)
+    time.sleep(6)
+    return None
+
+
 def act_reset_app(ctx: Context) -> Outcome | None:
     """Get off a chat screen this run did not sign in to.
 
@@ -656,6 +733,16 @@ SCREENS: list[Screen] = [
     # painting than a native screen does, so this matters more here than it
     # does in the Google flow, where it was still worth a whole login.
     Screen("loading", still_loading, act_wait, max_visits=25),
+
+    # Above totp_entry, and that ordering is the whole point of it. Both pages
+    # ask for a "verification code" in an identical box; only this one says a
+    # code was emailed. Matched the other way round, the authenticator screen
+    # claims this page and types TOTP codes into it until it runs out of
+    # visits (2026-08-07, row 4).
+    Screen("email_code_entry",
+           lambda c: (c.has(*EMAIL_CODE_TEXTS)
+                      and screen.find_input(c.elements) is not None),
+           act_email_code, max_visits=3),
 
     # The code box outranks the password box: once a code is being asked for,
     # the password has already been accepted.
