@@ -116,11 +116,16 @@ def test_no_note_the_code_can_write_names_a_reason_token(where, line, note):
 def test_the_advice_a_failure_carries_is_also_a_sentence():
     """`advice` is written straight into a credential's Note when a build
     condemns it, so it is held to the same standard as the notes above."""
-    for reason, verdict in failures.VERDICTS.items():
+    for reason in failures.VERDICTS:
+        # Rendered, because three of these open on `{service}` - the name of
+        # whoever refused, which is not known until a row is being written.
+        verdict = failures.verdict(reason, "OpenAI")
         assert verdict.advice[0].isupper(), reason
         assert verdict.advice.rstrip().endswith("."), reason
         assert not TOKEN.findall(verdict.advice), (
             f"{reason}'s advice names a token: {verdict.advice!r}")
+        assert "{" not in verdict.advice, (
+            f"{reason} left a placeholder unfilled: {verdict.advice!r}")
 
 
 def test_the_phone_note_never_carries_a_flow_s_own_words():
@@ -186,7 +191,8 @@ def test_every_way_a_build_can_end_reads_as_a_sentence(line, status, detail):
 
     note = builder._phone_note(builder.Build(
         index=0, ok=status == builder.READY, status=status, detail=detail,
-        serial="700", tried=[("someone@example.com", "captcha_shown")]))
+        serial="700",
+        tried=[("someone@example.com", "captcha_shown", "Google")]))
 
     assert note[0].isupper(), f"builder.py:{line}: {note!r}"
     assert note.rstrip().endswith("."), f"builder.py:{line}: {note!r}"

@@ -15,7 +15,10 @@ take a proxy ──► create the phone behind it ──► boot
              ──► stop the phone ──► write the row
 ```
 
-About six minutes per phone, unattended.
+About twelve minutes per phone, unattended — the median over 93 phones
+that reached ready, four minutes at the fastest and half an hour at the
+slowest. A phone that works through several credentials takes longer, which is
+the point of it doing so.
 
 Nothing is spent in advance. A credential the service rejects costs that
 credential — the next one is tried on the same phone, which is already booted.

@@ -192,7 +192,7 @@ def test_a_captcha_note_does_not_tell_you_to_change_the_proxy(device, settings,
     assert "proxy is the fix" not in note
     # the sheet carries the taxonomy's advice, which is written for whoever
     # reads that row later rather than for whoever is debugging the flow
-    assert note == failures.verdict("captcha_shown").advice
+    assert note == failures.verdict("captcha_shown", "Google").advice
     assert failures.verdict("captcha_shown").costs_the_credential
 
 
@@ -2002,3 +2002,70 @@ def test_a_sheet_that_will_not_take_the_row_does_not_lose_the_build(
     build = drive(make_book(), settings, google=[SIGNED_IN])
 
     assert build.ok and build.status == "ready"      # what it actually reached
+
+
+# ------------------------------------ what a settled phone leaves in History
+class RecordingBook:
+    """A book that remembers what was written to the History tab."""
+
+    def __init__(self, book):
+        self._book = book
+        self.history = []
+
+    def __getattr__(self, name):
+        return getattr(self._book, name)
+
+    def record_history(self, **fields):
+        self.history.append(fields)
+
+
+def settled(world, monkeypatch, row):
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "wait_until_stopped",
+                        lambda *a, **k: True)
+    book = RecordingBook(make_book())
+    book._book.phones = FakePhoneLog([])
+    book._book.phones.rows = lambda: [row]
+    book._book.phones.finish = lambda r, **f: None
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+    return outcome, book.history
+
+
+def test_a_rescued_phone_is_recorded_like_any_other(world, monkeypatch):
+    """This wrote nothing to History at all, so a phone rescued from a killed
+    run left no trace of having been rescued: the tab said `incomplete` and
+    how it got there was missing (2026-08-20)."""
+    outcome, history = settled(world, monkeypatch, {
+        "sheet_row": 4, "Serial": "730", "Status": "building",
+        "Proxy": "SX7", "Gmail": "g@example.com", "GPT Account": ""})
+
+    assert outcome["abandoned"] == ["730"]
+    assert len(history) == 1
+    written = history[0]
+    assert written["Serial"] == "730"
+    assert written["Event"] == "incomplete"
+    assert written["Proxy"] == "SX7"           # the row knew it all along
+    assert written["Gmail"] == "g@example.com"
+    assert "Google is signed in" in written["Note"]
+
+
+def test_a_discarded_phone_records_the_exit_it_was_on(world, monkeypatch):
+    """Two of these had no Proxy where the fifteen written by a build did -
+    one event, two writers, different completeness."""
+    _, history = settled(world, monkeypatch, {
+        "sheet_row": 4, "Serial": "730", "Status": "building",
+        "Proxy": "SX7", "Gmail": "", "GPT Account": ""})
+
+    assert history[0]["Event"] == "discarded"
+    assert history[0]["Proxy"] == "SX7"
+
+
+def test_neither_invents_a_duration_it_does_not_have(world, monkeypatch):
+    """The run that did the work died without reporting. A nought would read
+    as "took no time" rather than "nobody knows"."""
+    for gmail in ("g@example.com", ""):
+        _, history = settled(world, monkeypatch, {
+            "sheet_row": 4, "Serial": "730", "Status": "building",
+            "Proxy": "SX7", "Gmail": gmail, "GPT Account": ""})
+
+        assert "Seconds" not in history[0], history[0]
