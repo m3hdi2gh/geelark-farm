@@ -1587,12 +1587,26 @@ def settle_abandoned(client: Client, book: Book,
                           "stays `building` until it comes down", serial, exc)
                 continue
 
+        # What History is told, either way. Seconds is deliberately left out:
+        # the run that did the work died without reporting, and this sync has
+        # no duration to offer - a nought there would read as "took no time"
+        # rather than "nobody knows". Everything else is on the row.
+        recorded = {"Serial": str(serial),
+                    "Proxy": (row.get("Proxy") or "").strip(),
+                    "Gmail": (row.get("Gmail") or "").strip(),
+                    "GPT Account": (row.get("GPT Account") or "").strip()}
+
         if row.get("Gmail"):
-            book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=(
-                "Stopped short: the run holding this phone ended before it "
-                "could say why. Google is signed in, so finishing it costs "
-                "only an app account."))
+            note = ("Stopped short: the run holding this phone ended before "
+                    "it could say why. Google is signed in, so finishing it "
+                    "costs only an app account.")
+            book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=note)
             outcome["abandoned"].append(str(serial))
+            # This wrote nothing to History at all, so a phone rescued from a
+            # killed run left no trace of having been rescued - the tab said
+            # `incomplete` and the record of how it got there was missing
+            # (2026-08-20).
+            book.record_history(Event=INCOMPLETE, Note=note, **recorded)
             continue
 
         # Nothing was ever signed into it - the same rule build_one applies.
@@ -1606,9 +1620,9 @@ def settle_abandoned(client: Client, book: Book,
         dropped.append(row["sheet_row"])
         outcome["discarded"].append(str(serial))
         book.record_history(
-            Serial=str(serial), Event="discarded",
+            Event="discarded",
             Note="A killed run left it mid-build with nothing signed in; "
-                 "deleted at the next sync.")
+                 "deleted at the next sync.", **recorded)
 
     book.phones.delete_rows(dropped)
     for label, items in outcome.items():
