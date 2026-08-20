@@ -75,7 +75,7 @@ def test_a_failed_phone_is_summarised_in_the_words_the_sheet_uses():
     build = builder.Build(
         index=1, ok=False, status="no_usable_gpt", serial="691",
         detail="the Gpt Info tab has no unused account left",
-        tried=[("a@example.com", "email_code_required")])
+        tried=[("a@example.com", "email_code_required", "OpenAI")])
 
     text = rendered(ui.build_summary_panel([build]))
 
@@ -151,7 +151,10 @@ def test_the_advice_a_reason_carries_is_what_the_attention_view_shows():
     view = source[source.index("def attention_view"):
                   source.index("def pools_view")]
 
-    assert "failures.verdict(reason).advice" in view
+    # ...and named for whichever service judged the row, which is the tab it
+    # is in: three reasons are reported by both flows and their wording says
+    # who refused.
+    assert "failures.verdict(reason, pool.service).advice" in view
     # the pools' own words for their four routine states are not decisions
     assert re.search(r"pool\.flagged", view)
 

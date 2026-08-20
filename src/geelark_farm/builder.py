@@ -171,11 +171,18 @@ class Build:
     #: pool ran dry and the build borrowed rather than stopping; the note says
     #: so, because two accounts arriving from one address is a thing to know.
     shared_exit: bool = False
-    #: Every credential this build gave up on, as (address, reason). Kept as a
-    #: pair rather than a formatted string because the two readers want
-    #: different words for it: the terminal summary wants the reason token,
-    #: which is what you grep the logs for, and the sheet wants the sentence.
-    tried: list[tuple[str, str]] = field(default_factory=list)
+    #: Every credential this build gave up on, as (address, reason, service).
+    #: Kept as parts rather than a formatted string because the two readers
+    #: want different words for it: the terminal summary wants the reason
+    #: token, which is what you grep the logs for, and the sheet wants the
+    #: sentence.
+    #:
+    #: The service is carried because this list holds both kinds - the Gmails
+    #: the Google phase worked through and the app accounts the ChatGPT phase
+    #: did - and three of the reasons can come from either. Without it every
+    #: one of them was rendered as Google's doing, so an app account OpenAI
+    #: refused was reported to the operator as a Google refusal (2026-08-20).
+    tried: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -356,7 +363,8 @@ def _sign_into_app(session: _Session) -> Build | None:
             s.build.app_account = s.app_row.credentials.email
             s.app_signed_in = True
             return None
-        s.build.tried.append((s.app_row.credentials.email, outcome.reason))
+        s.build.tried.append((s.app_row.credentials.email, outcome.reason,
+                              s.book.apps.service))
 
         if failures.verdict(outcome.reason).needs_a_new_exit:
             # Refused before the account was looked at, so it is the exit's
@@ -403,11 +411,13 @@ def _sign_into_app(session: _Session) -> Build | None:
             # "app_app_would_not_start" helps nobody.
             named = (outcome.reason if outcome.reason.startswith("app")
                      else f"app_{outcome.reason}")
+            said = failures.verdict(outcome.reason, s.book.apps.service)
             return s.finish(named,
                             f"the app login could not go on with this phone - "
-                            f"{failures.verdict(outcome.reason).seen}")
+                            f"{said.seen}")
         s.book.apps.fail(s.app_row, outcome.reason,
-                         note=failures.verdict(outcome.reason).advice)
+                         note=failures.verdict(outcome.reason,
+                                              s.book.apps.service).advice)
         s.app_row = None
     return None
 
@@ -587,21 +597,25 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # address's history, not the IP (the network refusals that ARE the
             # exit's fault come only from the app, in the loop below). So the
             # Gmail is marked and the next one is tried on the same phone.
-            build.tried.append((account.email, outcome.reason))
+            build.tried.append((account.email, outcome.reason,
+                                book.gmails.service))
             if failures.verdict(outcome.reason).stops_the_phone:
                 # Nothing was decided about this address, so it keeps its place
                 # in the pool - _release puts it back as stock. Trying the next
                 # one would only meet the same wall.
+                said = failures.verdict(outcome.reason,
+                                        book.gmails.service)
                 return finish(outcome.reason,
                               f"the Google sign-in could not go on with this "
-                              f"phone - {failures.verdict(outcome.reason).seen}")
+                              f"phone - {said.seen}")
             # The tab gets the taxonomy's advice, not the flow's. A flow
             # writes for whoever is debugging it; the sheet is read a day
             # later by someone deciding what to do with that row - and for a
             # CAPTCHA the two say opposite things, since the flow suggests a
             # cleaner proxy and the build has just set the address aside.
             book.gmails.fail(gmail_row, outcome.reason,
-                             note=failures.verdict(outcome.reason).advice)
+                             note=failures.verdict(outcome.reason,
+                                                  book.gmails.service).advice)
             gmail_row = None
             tried_gmails += 1
 
@@ -1059,7 +1073,8 @@ def _session_holds(book: Book, session: _Session | None, *,
     # travels too: it becomes the row's status, so the cell says what was
     # asked rather than a word that needs a glossary.
     held += [(book.apps, resource, SET_ASIDE,
-              f"On {today} {failures.verdict(why).seen}. The account was "
+              f"On {today} {failures.verdict(why, book.apps.service).seen}. "
+              f"The account was "
               f"asked, not judged - nothing is known against it. Fix what it "
               f"was asked for, then blank this status to offer it again.", why)
              for resource, why in session.set_aside]
@@ -1122,8 +1137,8 @@ def outcome_of(build: Build) -> str:
 
 def attempts_of(build: Build) -> list[str]:
     """Every credential this build gave up on, one readable line each."""
-    return [f"{email} - {failures.verdict(reason).seen}"
-            for email, reason in build.tried]
+    return [f"{email} - {failures.verdict(reason, service).seen}"
+            for email, reason, service in build.tried]
 
 
 def _phone_note(build: Build) -> str:
@@ -2114,7 +2129,7 @@ def summarise(builds: list[Build]) -> str:
             lines.append(f"          via {b.proxy}")
         # The token, not the sentence: this is the copy you grep the logs and
         # the artifacts with. The sheet gets the sentence.
-        for email, reason in b.tried:
+        for email, reason, _service in b.tried:
             lines.append(f"          tried {email}: {reason}")
 
     ready = sum(1 for b in builds if b.ok)

@@ -122,6 +122,10 @@ class Pool:
     """
 
     tab = ""
+    #: Who judges the credentials in this tab. Three reasons are reported by
+    #: both login flows, and their wording names the service - so a row's own
+    #: tab is what says whether it was Google or OpenAI that refused.
+    service = "the service"
     # Where the outcome goes. Named per tab because the columns differ.
     status_column = "Status"
     note_column = "Note"
@@ -354,6 +358,7 @@ class Pool:
 
 class GmailPool(Pool):
     tab = GMAILS_TAB
+    service = "Google"
     serial_column = "Phone Serial"
     # An address that has signed into a phone has spent whatever first-use
     # credit it had, whether that phone went on to work or not. `used` retires
@@ -381,6 +386,7 @@ class GmailPool(Pool):
 
 class AppPool(Pool):
     tab = APPS_TAB
+    service = "OpenAI"
     serial_column = "Phone Serial"
     # `delivered` rather than `used`: this account went out on a phone the
     # operator finished with, which is the product. An account on a phone that

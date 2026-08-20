@@ -192,7 +192,7 @@ def test_a_captcha_note_does_not_tell_you_to_change_the_proxy(device, settings,
     assert "proxy is the fix" not in note
     # the sheet carries the taxonomy's advice, which is written for whoever
     # reads that row later rather than for whoever is debugging the flow
-    assert note == failures.verdict("captcha_shown").advice
+    assert note == failures.verdict("captcha_shown", "Google").advice
     assert failures.verdict("captcha_shown").costs_the_credential
 
 

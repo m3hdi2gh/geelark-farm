@@ -696,7 +696,8 @@ def attention_view(settings: Settings) -> Panel:
             # - so membership was the wrong question, and a row set aside on
             # one of those showed its note where it could have shown the page
             # it got stuck on.
-            advice = (failures.verdict(reason).advice if failures.knows(reason)
+            advice = (failures.verdict(reason, pool.service).advice
+                      if failures.knows(reason)
                       else (resource.values.get(pool.note_column) or "").strip())
             # Padded rather than indented with spaces, so the second line of a
             # long one lands under the first instead of back at the margin.

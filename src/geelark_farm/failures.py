@@ -81,6 +81,16 @@ class Verdict:
     #: someone reading the tab a day later with no memory of the run.
     advice: str
 
+    #: Both texts may carry `{service}`, filled in by `verdict()`.
+    #:
+    #: Three reasons are reported by both login flows - a CAPTCHA, a refused
+    #: password, a refused 2FA code - and each was worded as though only
+    #: Google could produce it. So an app account OpenAI turned down was
+    #: written into the Gpt Info tab as "Google turned down the 2FA code",
+    #: sending whoever read it to the wrong service and the wrong tab. Five
+    #: rows in History said exactly that (2026-08-20, phones 926, 932, 938,
+    #: 939 and 941).
+
     @property
     def costs_the_credential(self) -> bool:
         """Whether the credential is spent - marked, and the next one tried."""
@@ -111,12 +121,13 @@ class Verdict:
 VERDICTS: dict[str, Verdict] = {
     # -------------------------------------------------- google_login.py
     "captcha_shown": Verdict(
-        CREDENTIAL, "Google showed a CAPTCHA",
-        "Google challenged this address. It follows the account, not the IP - "
+        CREDENTIAL, "{service} showed a CAPTCHA",
+        "{service} challenged this address. It follows the account, not the "
+        "IP - "
         "the same exit signs the next one in. Blank the status to try it again "
         "later, ideally on a residential exit."),
     "wrong_password": Verdict(
-        CREDENTIAL, "Google would not take the password",
+        CREDENTIAL, "{service} would not take the password",
         "The password in the sheet is not the account's. Correct "
         "it and blank the status."),
     "password_changed": Verdict(
@@ -140,9 +151,9 @@ VERDICTS: dict[str, Verdict] = {
         CREDENTIAL, "Google did not recognise the address",
         "Google does not know this address. Check it for typos."),
     "wrong_2fa_code": Verdict(
-        CREDENTIAL, "Google turned down the 2FA code",
-        "The code was rejected. Usually the wrong 2FA secret in "
-        "the sheet - check the column."),
+        CREDENTIAL, "{service} turned down the 2FA code",
+        "The code was rejected. Usually the wrong 2FA secret in this row - "
+        "check the column beside it."),
     "no_authenticator": Verdict(
         CREDENTIAL, "Google asked for a 2FA code and the row has no secret",
         "Google asked for a code and the row has no 2FA secret. "
@@ -417,8 +428,18 @@ def knows(reason: str) -> bool:
                 and len(reason) > len(STUCK_PREFIX)))
 
 
-def verdict(reason: str) -> Verdict:
-    """What `reason` means.
+#: What to call the refusing service when the caller does not say. Every call
+#: site that writes to the sheet passes one; this is what a bare lookup gets.
+UNNAMED_SERVICE = "the service"
+
+
+def verdict(reason: str, service: str = UNNAMED_SERVICE) -> Verdict:
+    """What `reason` means, in the words of whoever refused it.
+
+    `service` is the name of the service that judged it - Google for the
+    device's own account, OpenAI for the account inside the app. It only
+    changes the three reasons both flows can report; every other verdict is
+    produced by one flow and says so already.
 
     An unlisted reason is treated as the device's problem, which is the safe
     default in the only way that matters: it stops the phone instead of feeding
@@ -427,6 +448,12 @@ def verdict(reason: str) -> Verdict:
     """
     if reason.startswith(STUCK_PREFIX) and len(reason) > len(STUCK_PREFIX):
         return _stuck(reason)
+    found = VERDICTS.get(reason)
+    if found is not None:
+        # replace rather than format: these are prose and may grow a brace.
+        return Verdict(found.blame,
+                       found.seen.replace("{service}", service),
+                       found.advice.replace("{service}", service))
     return VERDICTS.get(reason, Verdict(
         DEVICE, f"something happened that this tool has no name for ({reason})",
         f"{reason} has no entry in failures.py, so nothing is known "

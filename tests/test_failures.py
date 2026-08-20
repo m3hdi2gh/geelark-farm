@@ -149,11 +149,16 @@ def test_every_reason_can_be_said_out_loud():
     sentence - `a@b.com (Google showed a CAPTCHA)` - so a trailing full stop or
     a leading capital reads as a seam.
     """
-    for reason, verdict in failures.VERDICTS.items():
+    for reason in failures.VERDICTS:
+        # Rendered, not the raw table: three of these carry `{service}`, and
+        # what has to read as a sentence is what the operator is shown.
+        verdict = failures.verdict(reason, "OpenAI")
         assert verdict.seen, f"{reason} has no plain-language description"
         assert not verdict.seen.endswith("."), reason
         assert "_" not in verdict.seen, (
             f"{reason}'s description names a token: {verdict.seen!r}")
+        assert "{" not in verdict.seen and "}" not in verdict.seen, (
+            f"{reason} left a placeholder unfilled: {verdict.seen!r}")
         # Lowercase, unless it opens on the name of whoever refused.
         first = re.match(r"[A-Za-z]+", verdict.seen).group()
         assert first[0].islower() or first in ("Google", "OpenAI", "Cloudflare",
@@ -255,3 +260,53 @@ def test_a_situation_reads_as_the_clause_it_is_dropped_into():
 
 def test_a_reason_nobody_has_classified_still_names_itself():
     assert failures.situation("something_new") == "it stopped with something_new"
+
+
+# --------------------------------- a verdict that two flows share names neither
+SERVICES = ("Google", "OpenAI", "Cloudflare", "Play Store")
+
+
+def test_a_reason_two_flows_share_does_not_hardcode_one_of_them():
+    """Three reasons - a CAPTCHA, a refused password, a refused 2FA code - are
+    reported by both login flows, and all three were worded as though only
+    Google could produce them. So an app account OpenAI turned down was
+    written into the Gpt Info tab as "Google turned down the 2FA code", which
+    sends the reader to the wrong service and the wrong tab. Five rows in
+    History said exactly that (2026-08-20, phones 926, 932, 938, 939, 941).
+    """
+    from geelark_farm.flows import chatgpt_login, google_login
+
+    shared = (failures.reasons_reported_by(google_login)
+              & failures.reasons_reported_by(chatgpt_login))
+    assert shared, "the scan found no shared reasons - it is looking wrong"
+
+    for reason in sorted(shared & set(failures.VERDICTS)):
+        raw = failures.VERDICTS[reason]
+        for word in SERVICES:
+            assert word not in raw.seen, (
+                f"{reason} is reported by both flows but its description says "
+                f"{word!r} - use {{service}}")
+            assert word not in raw.advice, (
+                f"{reason} is reported by both flows but its advice says "
+                f"{word!r} - use {{service}}")
+
+
+def test_the_shared_reasons_name_whoever_actually_refused():
+    for reason in ("captcha_shown", "wrong_password", "wrong_2fa_code"):
+        assert "OpenAI" in failures.verdict(reason, "OpenAI").seen, reason
+        assert "Google" in failures.verdict(reason, "Google").seen, reason
+
+
+def test_a_reason_only_one_flow_reports_may_name_it():
+    """`no_authenticator_option` is Google's page and nothing else's, so
+    spelling that out is the clearer thing to do, not a bug."""
+    assert "Google" in failures.VERDICTS["no_authenticator_option"].seen
+
+
+def test_the_tab_a_row_is_in_is_what_names_the_service():
+    """Nothing has to be threaded to the console: a row's own pool knows who
+    judges its credentials."""
+    from geelark_farm.pools import AppPool, GmailPool
+
+    assert GmailPool.service == "Google"
+    assert AppPool.service == "OpenAI"
