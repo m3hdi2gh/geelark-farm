@@ -79,24 +79,16 @@ def test_a_chat_screen_with_no_way_in_is_still_cleared(phone):
     assert phone["tapped"] == []
 
 
-@pytest.mark.parametrize("capture", [
-    "20260813-050927-finish695/051252-logged_out_chat.xml",
-    "20260813-050927-finish695/051322-logged-out-chat.xml",
-    "20260813-050927-finish691/051102-logged_out_chat.xml",
-])
-def test_the_screens_that_were_cleared_all_had_a_way_in(capture, phone):
-    """Against the hierarchies the run actually archived, not a hand-written
-    one. Skipped rather than failed where the artifacts have been cleaned out -
-    they are a working directory, not a fixture set."""
-    path = ARTIFACTS / capture
-    if not path.exists():
-        pytest.skip(f"{capture} is no longer under artifacts/")
-
-    chatgpt_login.act_reset_app(
-        context_for(path.read_text(encoding="utf-8", errors="replace")))
-
-    assert phone["tapped"] == ["Log in"]
-    assert phone["cleared"] == []
+# Three real captures from phones 691 and 695 used to be replayed here, read
+# straight out of `artifacts/`. The prune that keeps that directory to a week
+# removed them (2026-08-21), and they cannot come back - it is a working
+# directory, not a fixture set, which the test said itself.
+#
+# Deleted rather than left skipping: a test that can never run again reads as
+# coverage that is not there. The behaviour it guarded is held by the two
+# tests above, against hierarchies written out in full. The lesson is the one
+# worth keeping: a capture worth testing against belongs in tests/fixtures/,
+# copied there deliberately, not referenced where it happens to have landed.
 
 
 def test_a_rejected_authenticator_code_is_the_accounts_fault_not_the_pages():

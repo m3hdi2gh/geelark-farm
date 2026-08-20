@@ -1397,6 +1397,7 @@ STEP_NAMES = {
     "proxies": "matching the Proxy tab to the panel",
     "repointed": "checking which exit each phone is really on",
     "renamed": "naming the phones in GeeLark",
+    "stranded": "looking for phones and accounts that lost each other",
     "pruned": "clearing out archived pages nothing needs",
     "checked": "testing every free proxy",
 }
@@ -1484,6 +1485,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("proxies", lambda: sync_proxies(client, book, ledger))
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
+    step("stranded", lambda: strand_check(client, book))
     if artifact_dir is not None:
         step("pruned", lambda: archive.prune(
             artifact_dir,
@@ -1779,6 +1781,64 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
     if renamed:
         log.info("renamed %d phone(s) in GeeLark", len(renamed))
     return renamed
+
+
+def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
+    """Two ways the sheet and the panel come apart, both of which cost stock.
+
+    **A phone GeeLark has that the tab has never heard of.** Every settling
+    path here reads the Phones tab and acts on rows, so a phone with no row is
+    touched by nothing: not the State column, not the abandoned sweep, not the
+    renaming. Phone 964 sat running for a day that way after an older version
+    recorded it as discarded when the delete had actually been refused - the
+    row went, the phone did not (2026-08-20). Reported rather than deleted,
+    for the same reason an unlisted proxy is: which of them belong here is the
+    operator's call, and a report that deletes phones is not a report.
+
+    **A credential still held against a phone that is gone.** `reclaim_proxies`
+    has done this for exits since a stale serial held thirteen of them out of
+    the pool for days; nothing did it for credentials, so two app accounts and
+    a Gmail sat `ready` against phones deleted days earlier, out of the pool
+    and waiting for nobody.
+
+    A Gmail is retired outright, because the rule about it is not in doubt: it
+    signed into a phone, and that is the credit it had to spend, whatever
+    became of the phone. An app account is only reported - `delivered` and
+    `freed` are a judgement about whether it ever got a fair device, and
+    guessing wrong either retires an account that was never used or frees one
+    that is with a customer.
+    """
+    alive = {str(p.get("serialNo") or "") for p in phones.listing(client)}
+    known = {str(row.get("Serial") or "").strip() for row in book.phones.rows()}
+    outcome: dict[str, list[str]] = {}
+
+    unknown = sorted(s for s in alive if s and s not in known)
+    if unknown:
+        outcome["unknown_phones"] = unknown
+        log.warning("%d phone(s) exist that the Phones tab has never heard "
+                    "of: %s", len(unknown), ", ".join(unknown))
+
+    retired, waiting = [], []
+    for pool, held in ((book.gmails, retired), (book.apps, waiting)):
+        for resource in pool._rows:
+            serial = (resource.values.get(pool.serial_column) or "").strip()
+            if not serial or serial in alive:
+                continue
+            if pool.status_of(resource) != pool.spent_status:
+                continue                  # already settled, or never handed out
+            held.append(f"{resource.label} (was on phone {serial})")
+            if pool is book.gmails:
+                pool.retire(resource, note=(
+                    f"Phone {serial} no longer exists. An address that has "
+                    f"signed into a phone is spent whatever became of it, so "
+                    f"this retires rather than going back on the shelf."))
+    if retired:
+        outcome["stranded_retired"] = retired
+    if waiting:
+        outcome["stranded_waiting"] = waiting
+        log.warning("%d app account(s) are held against a phone that is gone: "
+                    "%s", len(waiting), ", ".join(waiting))
+    return outcome
 
 
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:

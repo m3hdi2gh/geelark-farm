@@ -2069,3 +2069,106 @@ def test_neither_invents_a_duration_it_does_not_have(world, monkeypatch):
             "Proxy": "SX7", "Gmail": gmail, "GPT Account": ""})
 
         assert "Seconds" not in history[0], history[0]
+
+
+# ------------------------------- phones and credentials that lost each other
+class StrandBook:
+    def __init__(self, book, rows):
+        self._book = book
+        self._rows = rows
+
+    def __getattr__(self, name):
+        return getattr(self._book, name)
+
+    @property
+    def phones(self):
+        log = FakePhoneLog([])
+        log.rows = lambda: self._rows
+        return log
+
+
+def stranded(monkeypatch, *, live, phone_rows, gmail_serial=None,
+             app_serial=None):
+    listing = [{"id": f"P{s}", "serialNo": s} for s in live]
+    monkeypatch.setattr(builder.phones, "listing", lambda c: listing)
+    book = make_book(gmails=1, proxies=1, apps=1)
+    if gmail_serial is not None:
+        book.gmails.spend(book.gmails._rows[0], serial=gmail_serial)
+    if app_serial is not None:
+        book.apps.spend(book.apps._rows[0], serial=app_serial)
+    wrapped = StrandBook(book, phone_rows)
+    return book, builder.strand_check(None, wrapped)
+
+
+def test_a_phone_the_tab_has_never_heard_of_is_reported(monkeypatch):
+    """Every settling path reads the Phones tab and acts on rows, so a phone
+    with no row is touched by nothing. Phone 964 ran for a day that way after
+    an older version recorded it as discarded when the delete had actually
+    been refused (2026-08-20)."""
+    _, outcome = stranded(monkeypatch, live=["964"], phone_rows=[])
+
+    assert outcome["unknown_phones"] == ["964"]
+
+
+def test_a_phone_with_a_row_is_not_reported(monkeypatch):
+    _, outcome = stranded(monkeypatch, live=["964"],
+                          phone_rows=[{"Serial": "964"}])
+
+    assert "unknown_phones" not in outcome
+
+
+def test_it_reports_rather_than_deletes(monkeypatch):
+    """Which of them belong here is the operator's call, and a report that
+    deletes phones is not a report - `geelark pools` learned that once."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda *a, **k: deleted.append(a))
+
+    stranded(monkeypatch, live=["964"], phone_rows=[])
+
+    assert deleted == []
+
+
+def test_a_gmail_whose_phone_is_gone_is_retired(monkeypatch):
+    """The rule about it is not in doubt: it signed into a phone, and that is
+    the credit it had to spend, whatever became of the phone."""
+    book, outcome = stranded(monkeypatch, live=[], phone_rows=[],
+                             gmail_serial="968")
+
+    assert outcome["stranded_retired"]
+    assert book.gmails.status_of(book.gmails._rows[0]) == \
+        book.gmails.retired_status
+
+
+def test_a_gmail_whose_phone_still_exists_is_left_alone(monkeypatch):
+    book, outcome = stranded(monkeypatch, live=["968"],
+                             phone_rows=[{"Serial": "968"}],
+                             gmail_serial="968")
+
+    assert "stranded_retired" not in outcome
+    assert book.gmails.status_of(book.gmails._rows[0]) == \
+        book.gmails.spent_status
+
+
+def test_an_app_account_is_reported_and_not_touched(monkeypatch):
+    """`delivered` and `freed` are a judgement about whether it ever got a
+    fair device. Guessing wrong either retires an account that was never used
+    or frees one that is with a customer."""
+    book, outcome = stranded(monkeypatch, live=[], phone_rows=[],
+                             app_serial="965")
+
+    assert outcome["stranded_waiting"]
+    assert book.apps.status_of(book.apps._rows[0]) == book.apps.spent_status
+
+
+def test_a_credential_already_settled_is_not_touched_again(monkeypatch):
+    """Only rows still held against a phone count - a row already retired has
+    had its decision made."""
+    book = make_book(gmails=1, proxies=1, apps=1)
+    book.gmails.retire(book.gmails._rows[0])
+    monkeypatch.setattr(builder.phones, "listing", lambda c: [])
+    wrapped = StrandBook(book, [])
+
+    outcome = builder.strand_check(None, wrapped)
+
+    assert "stranded_retired" not in outcome
