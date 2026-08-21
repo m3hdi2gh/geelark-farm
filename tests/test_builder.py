@@ -2172,3 +2172,43 @@ def test_a_credential_already_settled_is_not_touched_again(monkeypatch):
     outcome = builder.strand_check(None, wrapped)
 
     assert "stranded_retired" not in outcome
+
+
+def test_a_crossed_out_gmail_does_not_name_a_phone(monkeypatch):
+    """`sync_phone_names` builds the name from the tab's Gmail. A cross read
+    as an address renames the phone `983 - X` in the panel."""
+    from geelark_farm import phones as ph
+    from geelark_farm.pools import PhoneLog
+    listing = [{"id": "P1", "serialNo": "983", "serialName": "farm-1",
+                "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "983", "Gmail": PhoneLog.said(PhoneLog.NO)}])
+
+    renamed = builder.sync_phone_names(client, book)
+
+    assert renamed == ["983"]
+    assert client.renames == [("P1", "983")]
+
+
+def test_a_phone_whose_gmail_is_crossed_out_is_not_kept_as_finishable(
+        world, monkeypatch):
+    """`settle_abandoned` asks `if row["Gmail"]`. A cross is truthy, so a
+    phone with nothing signed into it would be marked `incomplete` and offered
+    to `finish` for ever instead of being discarded."""
+    from geelark_farm.pools import PhoneLog
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "wait_until_stopped",
+                        lambda *a, **k: True)
+    book = RecordingBook(make_book())
+    book._book.phones = FakePhoneLog([])
+    # as rows() hands it over, after the mark has been undone
+    book._book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "730", "Status": "building",
+         "Proxy": "SX7", "Gmail": PhoneLog.said(PhoneLog.NO),
+         "GPT Account": PhoneLog.said(PhoneLog.NO)}]
+    book._book.phones.finish = lambda r, **f: None
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger())
+
+    assert outcome["discarded"] == ["730"]     # not kept, not finishable
+    assert outcome["abandoned"] == []

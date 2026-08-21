@@ -813,3 +813,19 @@ def test_a_crossed_out_account_is_not_settled_as_if_it_were_one():
 
     assert marked[0]["gmail"] == "g@example.com"
     assert marked[0]["app_account"] == ""
+
+
+def test_rows_hands_out_the_blank_and_not_the_cross():
+    """`rows` feeds settle_abandoned and sync_phone_names, and both ask "is
+    there a Gmail here" the way every reader did before the mark existed. A
+    cross is truthy, so a leak here would name a phone `983 - X` and keep a
+    phone with no Google account on it as finishable."""
+    log = phone_log([phone_row("983", gmail=PhoneLog.NO, app=PhoneLog.NO,
+                               account=PhoneLog.NO)])
+
+    row = log.rows()[0]
+
+    assert row["Gmail"] == ""
+    assert row["GPT Account"] == ""
+    assert row[PhoneLog.APP_COLUMN] == ""
+    assert row["Serial"] == "983"          # and the rest is untouched
