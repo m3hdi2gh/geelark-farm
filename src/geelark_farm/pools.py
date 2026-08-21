@@ -141,6 +141,20 @@ class Pool:
     #: available_statuses, so nothing claims it again - which is the point.
     retired_status = "used"
 
+    #: The column stamped with the time a row was claimed, so a run that dies
+    #: holding it can be told from one that is using it right now. Without it
+    #: `in_use` says only "somebody took this", and the only way back was a
+    #: hand on the console - which left three Gmails and three exits out of
+    #: the pool for a day each time a run died (2026-08-21, 2026-08-22).
+    #:
+    #: Named per tab because the Proxy tab already stamps one for the exit
+    #: rotation, and a second column holding the same value would be noise.
+    claimed_at_column = ""
+
+    #: How the stamp is written. Sortable and readable, and the same format
+    #: the Proxy tab has been using since the rotation landed.
+    CLAIM_FORMAT = "%Y-%m-%d %H:%M:%S"
+
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
         self._lock = lock
@@ -272,7 +286,35 @@ class Pool:
     def _claim_fields(self, resource: Resource) -> dict[str, str]:
         """What claiming writes. The status, and whatever else a pool needs
         recorded at the moment a row leaves it."""
-        return {self.status_column: self.claimed_status}
+        fields = {self.status_column: self.claimed_status}
+        if self.claimed_at_column:
+            fields[self.claimed_at_column] = time.strftime(self.CLAIM_FORMAT)
+        return fields
+
+    def abandoned(self, older_than: float) -> list[Resource]:
+        """Rows still claimed longer ago than any run could legitimately hold.
+
+        `older_than` is the build budget: nothing may keep a credential past
+        the outer bound on the phone it was claimed for, so a stamp older than
+        that is proof the run that wrote it is gone. A row with no stamp - one
+        claimed before the column existed - is left alone, because "no time
+        recorded" is not "a long time ago".
+        """
+        if not self.claimed_at_column:
+            return []
+        cutoff = time.time() - older_than
+        found = []
+        for resource in self.stuck:
+            stamp = (resource.values.get(self.claimed_at_column) or "").strip()
+            if not stamp:
+                continue
+            try:
+                when = time.mktime(time.strptime(stamp, self.CLAIM_FORMAT))
+            except ValueError:
+                continue                  # a hand typed something else in
+            if when < cutoff:
+                found.append(resource)
+        return found
 
     def _off_a_phone(self, status: str, note: str) -> dict[str, str]:
         """The fields for any row leaving a device, whatever it leaves for.
@@ -359,6 +401,7 @@ class Pool:
 class GmailPool(Pool):
     tab = GMAILS_TAB
     service = "Google"
+    claimed_at_column = "Claimed"
     serial_column = "Phone Serial"
     # An address that has signed into a phone has spent whatever first-use
     # credit it had, whether that phone went on to work or not. `used` retires
@@ -387,6 +430,7 @@ class GmailPool(Pool):
 class AppPool(Pool):
     tab = APPS_TAB
     service = "OpenAI"
+    claimed_at_column = "Claimed"
     serial_column = "Phone Serial"
     # `delivered` rather than `used`: this account went out on a phone the
     # operator finished with, which is the product. An account on a phone that
@@ -505,6 +549,7 @@ class ProxyPool(Pool):
     #: When this exit was last handed to a phone - for the operator to read,
     #: not for the code to sort by. Created automatically if the tab lacks it.
     last_used_column = "Last Used"
+    claimed_at_column = last_used_column
 
     #: How many phones this exit has carried. This is what the ordering below
     #: actually sorts on.
@@ -545,9 +590,9 @@ class ProxyPool(Pool):
             return 0
 
     def _claim_fields(self, resource: Resource) -> dict[str, str]:
-        return {self.status_column: self.claimed_status,
-                self.uses_column: str(self._uses(resource) + 1),
-                self.last_used_column: time.strftime("%Y-%m-%d %H:%M:%S")}
+        fields = super()._claim_fields(resource)
+        fields[self.uses_column] = str(self._uses(resource) + 1)
+        return fields
 
     def record_exit(self, resource: Resource, exit_ip: str) -> None:
         """The address the proxy actually came out of, which is the one Google
@@ -1084,12 +1129,16 @@ class Book:
             log.warning("no History tab this session (%s)", exc)
 
         pools = cls(
-            gmails=GmailPool(tabs[GMAILS_TAB], headers(GMAILS_TAB), lock),
+            gmails=GmailPool(tabs[GMAILS_TAB],
+                             ensure_columns(tabs[GMAILS_TAB],
+                                            GmailPool.claimed_at_column), lock),
             proxies=ProxyPool(tabs[PROXY_TAB],
                               ensure_columns(tabs[PROXY_TAB],
                                              ProxyPool.uses_column,
                                              ProxyPool.last_used_column), lock),
-            apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),
+            apps=AppPool(tabs[APPS_TAB],
+                         ensure_columns(tabs[APPS_TAB],
+                                        AppPool.claimed_at_column), lock),
             phones=PhoneLog(tabs[PHONES_TAB],
                             ensure_columns(tabs[PHONES_TAB],
                                            PhoneLog.APP_COLUMN), lock),

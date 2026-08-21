@@ -1423,6 +1423,7 @@ STEP_NAMES = {
     "repointed": "checking which exit each phone is really on",
     "renamed": "naming the phones in GeeLark",
     "stranded": "looking for phones and accounts that lost each other",
+    "unclaimed": "putting back what a dead run was holding",
     "pruned": "clearing out archived pages nothing needs",
     "checked": "testing every free proxy",
 }
@@ -1433,6 +1434,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
                probe_proxies: bool = True,
                on_step: Callable[[str], None] | None = None,
                artifact_dir: Path | None = None,
+               stale_claim_seconds: float | None = None,
                ) -> dict[str, list[str]]:
     """Bring all four tabs back into agreement with the world. Every run.
 
@@ -1511,6 +1513,9 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
     step("stranded", lambda: strand_check(client, book))
+    if stale_claim_seconds:
+        step("unclaimed", lambda: free_abandoned_claims(book,
+                                                        stale_claim_seconds))
     if artifact_dir is not None:
         step("pruned", lambda: archive.prune(
             artifact_dir,
@@ -1806,6 +1811,34 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
     if renamed:
         log.info("renamed %d phone(s) in GeeLark", len(renamed))
     return renamed
+
+
+def free_abandoned_claims(book: Book, older_than: float) -> list[str]:
+    """Put back every credential a dead run left claimed.
+
+    The manual release exists because the tool could not tell a run that died
+    holding a row from one using it right now - and handing the same Gmail to
+    two phones is worse than leaving one out of the pool. So it reported them
+    and waited for a hand on the console, which meant three Gmails and three
+    exits sat out for a day, twice in three days.
+
+    A claim time settles it, the same way the ledger's does for phones. The
+    threshold is the build budget: nothing may keep a credential past the
+    outer bound on the phone it was claimed for, so a stamp older than that is
+    proof the run that wrote it is gone. Anything newer is left alone, and the
+    console still offers to release those by hand.
+    """
+    freed = []
+    for pool in (book.gmails, book.proxies, book.apps):
+        for resource in pool.abandoned(older_than):
+            pool.release(resource, note=(
+                f"Claimed and never released. No run can hold one past its "
+                f"own budget, so the run that took this is gone. Freed "
+                f"automatically on {failures.today()}."))
+            freed.append(f"{pool.tab}: {resource.label}")
+    if freed:
+        log.info("freed %d row(s) a dead run left claimed", len(freed))
+    return freed
 
 
 def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
@@ -2107,7 +2140,8 @@ def run(client: Client, settings: Settings, *, count: int,
     book = Book.open(settings)
     if not dry_run:
         sync_sheet(client, book, Ledger.load(settings.state_dir),
-                   artifact_dir=settings.artifact_dir)
+                   artifact_dir=settings.artifact_dir,
+                   stale_claim_seconds=settings.build_budget_seconds)
 
     waiting: list[dict] = []
     gone: list[dict] = []
@@ -2174,7 +2208,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         # it has to swap, so the pool check is worth its seconds here too -
         # that is the run that discovers a swap has nowhere to go.
         sync_sheet(client, book, Ledger.load(settings.state_dir),
-                   artifact_dir=settings.artifact_dir)
+                   artifact_dir=settings.artifact_dir,
+                   stale_claim_seconds=settings.build_budget_seconds)
     pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]

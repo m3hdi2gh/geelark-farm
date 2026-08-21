@@ -9,6 +9,7 @@ one run later. Neither raises - both just quietly spend the stock.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -914,3 +915,85 @@ def test_a_dropdown_longer_than_its_tab_is_written_anyway():
     assert tab.added_rows > 0
     written = {w["values"][0][0] for w in tab.writes}
     assert set(wanted["Proxy Statuses"]) <= written
+
+
+# ------------------------------ credentials a dead run was still holding
+CLAIMED_HEADERS = ["Address", "Password", "2FA Secret", "Claimed",
+                   "Phone Serial", "Status", "Note"]
+
+
+def claimed_row(address, *, when="", status="in_use"):
+    line = [""] * len(CLAIMED_HEADERS)
+    for name, value in (("Address", address), ("Password", "pw"),
+                        ("Claimed", when), ("Status", status)):
+        line[CLAIMED_HEADERS.index(name)] = value
+    return line
+
+
+def claimed_pool(rows):
+    pool = GmailPool(FakeWorksheet(CLAIMED_HEADERS, rows), CLAIMED_HEADERS,
+                     threading.Lock())
+    pool.load()
+    return pool
+
+
+def stamp(seconds_ago):
+    return time.strftime(GmailPool.CLAIM_FORMAT,
+                         time.localtime(time.time() - seconds_ago))
+
+
+def test_claiming_records_when():
+    """Without it `in_use` says only "somebody took this", and the only way
+    back was a hand on the console."""
+    pool = claimed_pool([claimed_row("a@b.com", status="")])
+
+    taken = pool.claim()
+
+    assert taken.values["Claimed"]
+    assert pool.status_of(taken) == pool.claimed_status
+
+
+def test_a_claim_older_than_any_budget_is_abandoned():
+    """Nothing may keep a credential past the outer bound on the phone it was
+    claimed for, so a stamp older than that is proof the run is gone."""
+    pool = claimed_pool([claimed_row("old@b.com", when=stamp(7200)),
+                         claimed_row("fresh@b.com", when=stamp(60))])
+
+    assert [r.label for r in pool.abandoned(3600)] == ["old@b.com"]
+
+
+def test_a_claim_inside_the_budget_is_left_to_the_run_that_has_it():
+    """Handing the same Gmail to two phones is worse than leaving one out of
+    the pool, which is why this waits rather than guesses."""
+    pool = claimed_pool([claimed_row("a@b.com", when=stamp(60))])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_a_row_with_no_stamp_is_left_alone():
+    """One claimed before the column existed. "No time recorded" is not "a
+    long time ago"."""
+    pool = claimed_pool([claimed_row("a@b.com", when="")])
+
+    assert pool.abandoned(3600) == []
+    assert pool.stuck                      # still reported for the hand route
+
+
+def test_something_a_hand_typed_into_the_column_is_not_read_as_a_time():
+    pool = claimed_pool([claimed_row("a@b.com", when="yesterday-ish")])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_a_row_that_is_not_claimed_is_never_abandoned():
+    pool = claimed_pool([claimed_row("a@b.com", when=stamp(7200),
+                                     status="ready")])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_the_proxy_tab_reuses_the_stamp_it_already_writes():
+    """It has recorded one since the exit rotation landed, and a second column
+    holding the same value would be noise."""
+    assert ProxyPool.claimed_at_column == ProxyPool.last_used_column
+    assert GmailPool.claimed_at_column not in (ProxyPool.last_used_column, "")

@@ -1081,6 +1081,7 @@ def sync_on_startup(settings: Settings) -> None:
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir),
                 artifact_dir=settings.artifact_dir,
+                stale_claim_seconds=settings.build_budget_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
     except (ApiError, TransportError, SheetError, GSpreadError) as exc:
         # GSpreadError included because a sheet quota (429) can surface from a
@@ -1249,6 +1250,8 @@ SYNC_LABELS = [
     ("unknown_phones", "phones GeeLark holds that the Phones tab has never "
                        "heard of - nothing here will ever settle them, so "
                        "delete them or add a row by hand"),
+    ("unclaimed", "rows put back - the run holding them is gone, and no run "
+                  "may hold one past its own budget"),
     ("stranded_retired", "Gmails retired - the phone they were on is gone"),
     ("stranded_waiting", "app accounts held against a phone that no longer "
                          "exists - deliver them or free them by hand, since "
