@@ -163,17 +163,33 @@ VERDICTS: dict[str, Verdict] = {
         "Google offered no authenticator choice on this account."),
 
     # ------------------------------------------------- chatgpt_login.py
+    #: The emailed-code page, after a password was accepted.
+    #:
+    #: This used to mean only "the page appeared", and it covered two accounts
+    #: that need opposite things. One kind can hold a password and an
+    #: authenticator; if OpenAI takes the password and then emails a code
+    #: anyway, the 2FA on it is not set up, and fetching the code would sign it
+    #: in once and leave the next build in the same place. The other kind is
+    #: never offered a password box at all - see `no_code_source`.
+    #:
+    #: What tells them apart is not the page but what came before it, which the
+    #: flow already tracks (2026-08-21).
     "email_code_required": Verdict(
         CHALLENGED,
-        "OpenAI emailed a one-time code instead of taking the authenticator",
-        "OpenAI emailed a one-time code instead of accepting the "
-        "authenticator, which no unattended run can read. It says nothing "
-        "about the account - the same addresses have signed in fine on other "
-        "phones - so it is set aside rather than marked bad. It waits for you: "
-        "give the account an authenticator OpenAI accepts, then blank its "
-        "Status to offer it again. Nothing retries it on its own, because "
-        "that is what had every run spending five minutes on the same two "
-        "accounts."),
+        "OpenAI took the password and then asked for an emailed code",
+        "OpenAI accepted this account's password and then asked for a code it "
+        "emailed rather than one from an authenticator, which means the 2FA on "
+        "the account is not set up. Set it up, then blank this status - "
+        "answering the code instead would sign it in once and leave the next "
+        "build exactly here."),
+    "no_code_source": Verdict(
+        CHALLENGED,
+        "an emailed code was the only way in and nothing could supply one",
+        "This account was never offered a password box, so it is one that "
+        "cannot hold a password or an authenticator - an emailed code is the "
+        "only way in. Nothing was connected that could supply it. Connect the "
+        "bot, or retry while whoever can read the code is there. Nothing is "
+        "known against the account; it keeps its place in the pool."),
     "session_unverified": Verdict(
         DEVICE, "the signed-in session could not be read back from the app",
         "The login looked complete but the walk to the app's own settings - "

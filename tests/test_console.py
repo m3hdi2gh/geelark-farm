@@ -83,7 +83,7 @@ def test_a_failed_phone_is_summarised_in_the_words_the_sheet_uses():
     assert "the Gpt Info tab has no unused account left" in text
     # and what it tried, which the panel did not show at all
     assert "a@example.com" in text
-    assert "OpenAI emailed a one-time code" in text
+    assert "OpenAI took the password and then asked for an emailed code" in text
 
 
 def test_a_stop_the_builder_raises_is_summarised_too():

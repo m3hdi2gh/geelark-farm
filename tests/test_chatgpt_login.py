@@ -345,15 +345,47 @@ def test_the_same_attempt_keeps_asking_from_the_same_moment(monkeypatch):
     assert mailbox.asked[0][1] == mailbox.asked[1][1]
 
 
-def test_no_mailbox_reports_exactly_what_it_always_did():
-    """The default. This can be merged and nothing changes until a source is
-    configured: the page is reported, the account set aside for a human."""
+def test_a_password_that_was_taken_means_the_2fa_is_not_set_up():
+    """The page after a password is a different thing from the page instead of
+    one. This account can hold an authenticator - OpenAI took its password and
+    then emailed a code anyway - so the answer is to set the 2FA up. Fetching
+    the code would sign it in once and leave the next build exactly here.
+    """
     from geelark_farm.flows import chatgpt_login
 
-    outcome = chatgpt_login.act_email_code(code_context())
+    ctx = code_context(Mailbox())          # a source is available...
+    ctx.submitted_password = True
+
+    outcome = chatgpt_login.act_email_code(ctx)
+
+    assert outcome.reason == "email_code_required"
+    assert "2FA" in outcome.detail or "authenticator" in outcome.detail
+
+
+def test_a_password_never_asked_for_means_the_code_is_the_only_way_in():
+    """...and then a source that produces nothing is a different report again:
+    this account cannot hold a password, so nothing here could ever answer it.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    outcome = chatgpt_login.act_email_code(code_context())   # NoSource
 
     assert outcome.kind == "fatal"
-    assert outcome.reason == "email_code_required"
+    assert outcome.reason == "no_code_source"
+
+
+def test_the_source_is_not_even_asked_when_a_password_went_in():
+    """Not merely that the reason differs - the mailbox must not be read at
+    all, or a user is asked for a code that should never have been wanted."""
+    from geelark_farm.flows import chatgpt_login
+
+    mailbox = Mailbox()
+    ctx = code_context(mailbox)
+    ctx.submitted_password = True
+
+    chatgpt_login.act_email_code(ctx)
+
+    assert mailbox.asked == []
 
 
 def test_a_mailbox_that_produced_nothing_is_a_different_sentence():

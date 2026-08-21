@@ -147,11 +147,16 @@ FATAL_ADVICE = {
     "captcha_shown":
         "OpenAI is challenging this exit IP, the same way Google does; a "
         "cleaner proxy is the fix and no code change helps",
+    "no_code_source":
+        "this app account was never asked for a password, so it is one that "
+        "cannot hold one - an emailed code is the only way in, and nothing "
+        "was connected that could supply it. Connect the bot, or retry while "
+        "whoever can read the code is there. The phone is reused",
     "email_code_never_arrived":
-        "this app account has no authenticator, so OpenAI emailed a one-time "
-        "code - and none arrived in the time allowed. The account was not "
-        "judged and is untouched: check the mailbox is reachable and that the "
-        "message is not held up, then retry. The phone is reused",
+        "OpenAI emailed a one-time code for this app account and none arrived "
+        "in the time allowed. The account was not judged and is untouched: "
+        "check the mailbox is reachable and that the message is not held up, "
+        "then retry. The phone is reused",
     "email_code_required":
         "this app account has no authenticator, so OpenAI emails a one-time "
         "code instead. The phone is fine: Google is signed in and the app is "
@@ -635,11 +640,30 @@ def act_email_code(ctx: Context) -> Outcome | None:
     if not field:
         return None                       # still painting; the router retries
 
+    # What this page means depends entirely on whether a password went in
+    # before it, and the flow already knows: `submitted_password` is set the
+    # moment one is typed.
+    #
+    # After a password, the account is one that *can* hold an authenticator -
+    # OpenAI took the password and then asked for an emailed code instead,
+    # which says the 2FA on it is not set up. The answer is to set it up, not
+    # to fetch the code: fetching it signs the account in once and leaves the
+    # next build in exactly the same place.
+    #
+    # Without one, the account was never offered a password box at all. Those
+    # cannot hold a password or an authenticator, so an emailed code is the
+    # only way in and fetching it is the whole point.
+    if ctx.submitted_password:
+        path = ctx.save("email_code_required")
+        return Outcome("fatal", "email_code_required",
+                       FATAL_ADVICE["email_code_required"],
+                       artifacts=[path] if path else [])
+
     since = ctx.code_since or time.time()
     ctx.code_since = since
     code = ctx.codes.code_for(ctx.creds.email, since=since)
     if code is None:
-        reason = ("email_code_required" if isinstance(ctx.codes, codes_mod.NoSource)
+        reason = ("no_code_source" if isinstance(ctx.codes, codes_mod.NoSource)
                   else "email_code_never_arrived")
         path = ctx.save(reason)
         return Outcome("fatal", reason, FATAL_ADVICE.get(reason, ""),
