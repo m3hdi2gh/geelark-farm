@@ -1206,15 +1206,27 @@ def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:
 
 
 def _record(book: Book, build: Build) -> None:
-    """Write the finished phone to the Phones tab. Also in a finally."""
+    """Write the finished phone to the Phones tab. Also in a finally.
+
+    The three step columns read left to right in the order the steps happen:
+    Google, then the app, then the app account. Each says the address that
+    signed in where there is one to show, and a cross where the step did not
+    happen - so `incomplete` beside three crosses and `incomplete` beside two
+    addresses are told apart without reading the note.
+    """
     note = _phone_note(build)
+    cross = book.phones.NO
+
+    def said(value: str) -> str:
+        return value or cross
+
     try:
         wrote = book.phones.write(
             build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
-            Gmail=build.gmail, Note=note[:500],
-            **{"GPT Account": build.app_account,
-               "App": book.phones.INSTALLED if build.app_installed else ""},
+            Gmail=said(build.gmail), Note=note[:500],
+            **{"GPT Account": said(build.app_account),
+               "App": book.phones.YES if build.app_installed else cross},
         )
         if not wrote:
             log.error("phone %s has no row in the Phones tab to record on; "

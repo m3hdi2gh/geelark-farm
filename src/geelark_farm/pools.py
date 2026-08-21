@@ -675,7 +675,26 @@ class PhoneLog:
     #: without this `incomplete` covered "waiting on an app account" and "the
     #: app never installed" with one word (2026-08-21).
     APP_COLUMN = "App"
-    INSTALLED = "installed"
+
+    #: How the three step columns read at a glance. `Gmail` and `GPT Account`
+    #: hold the address that signed in, because the address is the useful
+    #: fact; `App` has no address to show, so it gets the tick. All three say
+    #: `NO` when the step did not happen.
+    #:
+    #: The mark is a display convention and stops at the edge of this class.
+    #: Everything downstream was written when a blank meant "did not happen",
+    #: and `not cell("Gmail")` reads a cross as an address - so `said()` turns
+    #: it back into the blank the rest of the code expects, and every reader
+    #: here goes through it.
+    YES = "✓"
+    NO = "✗"
+    INSTALLED = YES
+
+    @classmethod
+    def said(cls, value: str) -> str:
+        """The address a cell holds, or "" if it says the step never happened."""
+        value = (value or "").strip()
+        return "" if value == cls.NO else value
 
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
@@ -743,7 +762,7 @@ class PhoneLog:
             # exactly the same test as the ones that say `incomplete`.
             if cell("Status") in (self.BUILDING, self.READY) or not cell("Serial"):
                 continue
-            if not cell("Gmail") or cell("GPT Account"):
+            if not self.said(cell("Gmail")) or self.said(cell("GPT Account")):
                 continue
             # The reason is the head of the note now, not the status - which
             # says only whether the phone is usable. Whoever is deciding what
@@ -756,8 +775,10 @@ class PhoneLog:
             reason = cell("Note").split(". ")[0].strip() or cell("Status")
             reason = reason.removeprefix("Stopped short: ").rstrip(".")
             found.append({"sheet_row": offset, "serial": cell("Serial"),
-                          "gmail": cell("Gmail"), "proxy": cell("Proxy"),
-                          "app": cell(self.APP_COLUMN), "status": reason})
+                          "gmail": self.said(cell("Gmail")),
+                          "proxy": cell("Proxy"),
+                          "app": self.said(cell(self.APP_COLUMN)),
+                          "status": reason})
         # The ones that already have the app come first. Both cost the same
         # app account - the scarce thing - but one of them also needs the
         # install, three or four minutes of a budget that could have gone to
@@ -794,8 +815,8 @@ class PhoneLog:
             if state in (self.DONE, self.FAILED):
                 found.append({"sheet_row": offset, "state": state,
                               "serial": cell("Serial"),
-                              "gmail": cell("Gmail"),
-                              "app_account": cell("GPT Account")})
+                              "gmail": self.said(cell("Gmail")),
+                              "app_account": self.said(cell("GPT Account"))})
         return found
 
     def delete_rows(self, sheet_rows: list[int]) -> None:
@@ -827,7 +848,7 @@ class PhoneLog:
         for offset, line in enumerate(raw[1:], start=2):
             if not any(line):
                 continue
-            row = {name: (line[i].strip() if i < len(line) else "")
+            row = {name: self.said(line[i] if i < len(line) else "")
                    for name, i in self._index.items()}
             row["sheet_row"] = offset
             found.append(row)
