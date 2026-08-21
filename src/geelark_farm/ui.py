@@ -1308,6 +1308,13 @@ SYNC_LABELS = [
                 "running ones are left for the next sync"),
     ("dead", "free proxies that no longer answer"),
     ("revived", "proxies marked dead that are answering again"),
+    ("unknown_phones", "phones GeeLark holds that the Phones tab has never "
+                       "heard of - nothing here will ever settle them, so "
+                       "delete them or add a row by hand"),
+    ("stranded_retired", "Gmails retired - the phone they were on is gone"),
+    ("stranded_waiting", "app accounts held against a phone that no longer "
+                         "exists - deliver them or free them by hand, since "
+                         "only you know which"),
     ("unlisted", "proxies GeeLark holds that the Proxy tab has never heard of "
                  "- add the ones you want a build to use"),
 ]
@@ -1321,7 +1328,8 @@ def show_sync(outcome: dict[str, list[str]]) -> None:
         items = outcome.get(key)
         if not items:
             continue
-        style = WARN if key in ("running", "dead", "unlisted") else OK
+        style = WARN if key in ("running", "dead", "unlisted",
+                                "unknown_phones", "stranded_waiting") else OK
         console.print(f"[{style}]{len(items)} {meaning}[/]")
         for item in items:
             console.print(f"   [{DIM}]{item}[/]")

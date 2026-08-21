@@ -159,6 +159,13 @@ class Build:
     #: with, and the address is already one column away in the Proxy tab.
     proxy_name: str = ""
     gmail: str = ""
+    #: Whether the target app is on the device. The row already said whether
+    #: Google was signed in (the Gmail column) and whether the app account
+    #: was (GPT Account); this was the one step of the three that nothing
+    #: recorded, so `incomplete` covered "waiting on an app account" and "the
+    #: app never installed" with the same word and no way to tell them apart
+    #: (2026-08-21).
+    app_installed: bool = False
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
@@ -639,6 +646,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("install_failed",
                           f"the app could not be installed - "
                           f"{failures.verdict(installed.reason).seen}")
+        build.app_installed = True
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,
@@ -837,6 +845,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 return finish("install_failed",
                               f"the app could not be installed - "
                               f"{failures.verdict(installed.reason).seen}")
+        # Either it was already there or it is now. Read off the device, which
+        # is the only thing that settles it - the row may say anything.
+        build.app_installed = True
 
         # The proxy this phone already has. It is not claimed from the pool -
         # the phone owns it - so a swap must not release it back as stock,
@@ -1205,14 +1216,27 @@ def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:
 
 
 def _record(book: Book, build: Build) -> None:
-    """Write the finished phone to the Phones tab. Also in a finally."""
+    """Write the finished phone to the Phones tab. Also in a finally.
+
+    The three step columns read left to right in the order the steps happen:
+    Google, then the app, then the app account. Each says the address that
+    signed in where there is one to show, and a cross where the step did not
+    happen - so `incomplete` beside three crosses and `incomplete` beside two
+    addresses are told apart without reading the note.
+    """
     note = _phone_note(build)
+    cross = book.phones.NO
+
+    def said(value: str) -> str:
+        return value or cross
+
     try:
         wrote = book.phones.write(
             build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
-            Gmail=build.gmail, Note=note[:500],
-            **{"GPT Account": build.app_account},
+            Gmail=said(build.gmail), Note=note[:500],
+            **{"GPT Account": said(build.app_account),
+               "App": book.phones.YES if build.app_installed else cross},
         )
         if not wrote:
             log.error("phone %s has no row in the Phones tab to record on; "
@@ -1227,7 +1251,8 @@ def _record(book: Book, build: Build) -> None:
         Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
         Gmail=build.gmail, Note=note[:500],
-        **{"GPT Account": build.app_account})
+        **{"GPT Account": build.app_account,
+           "App": book.phones.INSTALLED if build.app_installed else ""})
 
 
 def possible_statuses() -> list[str]:
@@ -1407,6 +1432,7 @@ STEP_NAMES = {
     "proxies": "matching the Proxy tab to the panel",
     "repointed": "checking which exit each phone is really on",
     "renamed": "naming the phones in GeeLark",
+    "stranded": "looking for phones and accounts that lost each other",
     "pruned": "clearing out archived pages nothing needs",
     "checked": "testing every free proxy",
 }
@@ -1494,6 +1520,7 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("proxies", lambda: sync_proxies(client, book, ledger))
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
+    step("stranded", lambda: strand_check(client, book))
     if artifact_dir is not None:
         step("pruned", lambda: archive.prune(
             artifact_dir,
@@ -1789,6 +1816,64 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
     if renamed:
         log.info("renamed %d phone(s) in GeeLark", len(renamed))
     return renamed
+
+
+def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
+    """Two ways the sheet and the panel come apart, both of which cost stock.
+
+    **A phone GeeLark has that the tab has never heard of.** Every settling
+    path here reads the Phones tab and acts on rows, so a phone with no row is
+    touched by nothing: not the State column, not the abandoned sweep, not the
+    renaming. Phone 964 sat running for a day that way after an older version
+    recorded it as discarded when the delete had actually been refused - the
+    row went, the phone did not (2026-08-20). Reported rather than deleted,
+    for the same reason an unlisted proxy is: which of them belong here is the
+    operator's call, and a report that deletes phones is not a report.
+
+    **A credential still held against a phone that is gone.** `reclaim_proxies`
+    has done this for exits since a stale serial held thirteen of them out of
+    the pool for days; nothing did it for credentials, so two app accounts and
+    a Gmail sat `ready` against phones deleted days earlier, out of the pool
+    and waiting for nobody.
+
+    A Gmail is retired outright, because the rule about it is not in doubt: it
+    signed into a phone, and that is the credit it had to spend, whatever
+    became of the phone. An app account is only reported - `delivered` and
+    `freed` are a judgement about whether it ever got a fair device, and
+    guessing wrong either retires an account that was never used or frees one
+    that is with a customer.
+    """
+    alive = {str(p.get("serialNo") or "") for p in phones.listing(client)}
+    known = {str(row.get("Serial") or "").strip() for row in book.phones.rows()}
+    outcome: dict[str, list[str]] = {}
+
+    unknown = sorted(s for s in alive if s and s not in known)
+    if unknown:
+        outcome["unknown_phones"] = unknown
+        log.warning("%d phone(s) exist that the Phones tab has never heard "
+                    "of: %s", len(unknown), ", ".join(unknown))
+
+    retired, waiting = [], []
+    for pool, held in ((book.gmails, retired), (book.apps, waiting)):
+        for resource in pool._rows:
+            serial = (resource.values.get(pool.serial_column) or "").strip()
+            if not serial or serial in alive:
+                continue
+            if pool.status_of(resource) != pool.spent_status:
+                continue                  # already settled, or never handed out
+            held.append(f"{resource.label} (was on phone {serial})")
+            if pool is book.gmails:
+                pool.retire(resource, note=(
+                    f"Phone {serial} no longer exists. An address that has "
+                    f"signed into a phone is spent whatever became of it, so "
+                    f"this retires rather than going back on the shelf."))
+    if retired:
+        outcome["stranded_retired"] = retired
+    if waiting:
+        outcome["stranded_waiting"] = waiting
+        log.warning("%d app account(s) are held against a phone that is gone: "
+                    "%s", len(waiting), ", ".join(waiting))
+    return outcome
 
 
 def reclaim_proxies(client: Client, book: Book) -> list[Resource]:

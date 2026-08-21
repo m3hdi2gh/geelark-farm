@@ -708,3 +708,124 @@ def test_a_column_that_cannot_be_added_does_not_stop_the_run():
     tab.add_cols = lambda n: (_ for _ in ()).throw(RuntimeError("no"))
 
     assert ensure_columns(tab, "Times Used") == ["Name"]
+
+
+# ------------------------------------ how far a phone actually got
+PHONE_APP_HEADERS = [*PHONE_HEADERS, "App"]
+
+
+def phone_log(rows, headers=None):
+    headers = headers or PHONE_APP_HEADERS
+    return PhoneLog(FakeWorksheet(headers, rows), headers, threading.Lock())
+
+
+def phone_row(serial, *, gmail="g@example.com", app="", account="",
+              status="incomplete", headers=None):
+    headers = headers or PHONE_APP_HEADERS
+    line = [""] * len(headers)
+    for name, value in (("Serial", serial), ("Gmail", gmail), ("App", app),
+                        ("GPT Account", account), ("Status", status),
+                        ("Note", "Stopped short: something.")):
+        if name in headers:              # a tab from before the column existed
+            line[headers.index(name)] = value
+    return line
+
+
+def test_the_row_says_which_of_the_three_steps_a_phone_reached():
+    """`Gmail` said Google was in and `GPT Account` said the app account was.
+    Nothing recorded the step between them, so `incomplete` covered "waiting
+    on an app account" and "the app never installed" with one word and no way
+    to tell them apart (2026-08-21)."""
+    log = phone_log([
+        phone_row("991", app=PhoneLog.YES),     # waiting on an account
+        phone_row("992", app=PhoneLog.NO),      # the app never installed
+    ])
+
+    reached = {row["serial"]: row["app"] for row in log.unfinished()}
+
+    # The cross is a display convention; downstream sees the blank it always
+    # saw, so nothing that reads "did this happen" had to learn a new word.
+    assert reached == {"991": PhoneLog.YES, "992": ""}
+
+
+def test_the_phone_that_only_needs_an_account_is_offered_first():
+    """Both cost the same app account - the scarce thing - but one of them
+    also needs the install. In this order the same handful of accounts turns
+    into ready phones sooner."""
+    log = phone_log([
+        phone_row("990", app=PhoneLog.NO),
+        phone_row("991", app=PhoneLog.YES),
+        phone_row("992", app=PhoneLog.NO),
+        phone_row("993", app=PhoneLog.YES),
+    ])
+
+    assert [row["serial"] for row in log.unfinished()][:2] == ["991", "993"]
+
+
+def test_a_tab_without_the_column_still_offers_everything():
+    """Rows written before the column existed read as blank, which is the
+    truthful answer - nobody recorded it - and they are still finishable."""
+    log = phone_log([phone_row("991", headers=PHONE_HEADERS),
+                     phone_row("992", headers=PHONE_HEADERS)],
+                    headers=PHONE_HEADERS)
+
+    offered = log.unfinished()
+
+    assert [row["serial"] for row in offered] == ["991", "992"]
+    assert all(row["app"] == "" for row in offered)
+
+
+def test_a_finished_phone_is_not_offered_whatever_the_app_column_says():
+    log = phone_log([phone_row("991", app=PhoneLog.YES,
+                               account="a@example.com", status="ready")])
+
+    assert log.unfinished() == []
+
+
+def test_a_cross_reads_as_the_step_never_happening():
+    """`not cell("Gmail")` reads a cross as an address, so every reader here
+    goes through `said()` and the mark stops at the edge of the class."""
+    log = phone_log([
+        phone_row("991", gmail=PhoneLog.NO, app=PhoneLog.NO),
+        phone_row("992", gmail="g@example.com", app=PhoneLog.YES,
+                  account=PhoneLog.NO),
+    ])
+
+    offered = {row["serial"]: row for row in log.unfinished()}
+
+    # 991 has no Google account on it, so there is nothing to finish
+    assert "991" not in offered
+    # 992 has one, and its crossed-out account reads as absent, not as taken
+    assert offered["992"]["gmail"] == "g@example.com"
+
+
+def test_a_crossed_out_account_is_not_settled_as_if_it_were_one():
+    """`marked` feeds apply_phone_states, which looks the address up in the
+    Gpt Info tab. A cross would send it looking for an account called it."""
+    headers = PHONE_APP_HEADERS
+    line = [""] * len(headers)
+    for name, value in (("Serial", "991"), ("State", "done"),
+                        ("Gmail", "g@example.com"),
+                        ("GPT Account", PhoneLog.NO)):
+        line[headers.index(name)] = value
+
+    marked = phone_log([line]).marked()
+
+    assert marked[0]["gmail"] == "g@example.com"
+    assert marked[0]["app_account"] == ""
+
+
+def test_rows_hands_out_the_blank_and_not_the_cross():
+    """`rows` feeds settle_abandoned and sync_phone_names, and both ask "is
+    there a Gmail here" the way every reader did before the mark existed. A
+    cross is truthy, so a leak here would name a phone `983 - X` and keep a
+    phone with no Google account on it as finishable."""
+    log = phone_log([phone_row("983", gmail=PhoneLog.NO, app=PhoneLog.NO,
+                               account=PhoneLog.NO)])
+
+    row = log.rows()[0]
+
+    assert row["Gmail"] == ""
+    assert row["GPT Account"] == ""
+    assert row[PhoneLog.APP_COLUMN] == ""
+    assert row["Serial"] == "983"          # and the rest is untouched
