@@ -724,6 +724,20 @@ class PhoneLog:
         with self._append_lock:
             with self._lock:
                 used = len(self._ws.get_all_values())
+                # The grid has to reach the row before anything can be written
+                # into it. `delete_rows` removes rows from the grid itself, so
+                # a sync that clears out finished phones shrinks the tab to
+                # what is left - and the next build appends past the end and
+                # is refused with "exceeds grid limits". Every phone in that
+                # batch then dies on its first sheet write, having already
+                # been created: 28 phones on two separate days, each made and
+                # destroyed inside a minute (2026-08-18 and 2026-08-21).
+                #
+                # Under the same lock as the count, or two appends race for
+                # the room one of them made.
+                short = (used + 1) - self._ws.row_count
+                if short > 0:
+                    self._ws.add_rows(short)
             sheet_row = used + 1
             batch_write(self._ws, self._lock,
                         [{"range": f"A{sheet_row}:"
@@ -1157,6 +1171,16 @@ class Book:
                 payload.append({"range": f"{letter}{offset + 2}",
                                 "values": [[value]]})
         if payload:
+            with self._lock:
+                # Same grid rule as appending a phone row: a dropdown longer
+                # than the tab is refused with "exceeds grid limits", and a
+                # flow growing one new reason is all it takes. The Phones tab
+                # lost 28 phones to the row version of this before anything
+                # noticed (2026-08-21).
+                deepest = max(int(item["range"][1:]) for item in payload)
+                short = deepest - self._lists.row_count
+                if short > 0:
+                    self._lists.add_rows(short)
             batch_write(self._lists, self._lock, payload, what="Lists")
         return wanted
 
