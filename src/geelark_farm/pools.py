@@ -669,6 +669,14 @@ class PhoneLog:
 
     #: What a run writes here. Three, because three is how many the reader acts
     #: on differently - see builder.possible_statuses.
+    #: What the App column says when the target app is on the device. The
+    #: third step of three, and the only one the row did not record: `Gmail`
+    #: says Google is signed in and `GPT Account` says the app account is, so
+    #: without this `incomplete` covered "waiting on an app account" and "the
+    #: app never installed" with one word (2026-08-21).
+    APP_COLUMN = "App"
+    INSTALLED = "installed"
+
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
     INCOMPLETE = "incomplete"  # anything else; the Note says what happened
@@ -749,7 +757,13 @@ class PhoneLog:
             reason = reason.removeprefix("Stopped short: ").rstrip(".")
             found.append({"sheet_row": offset, "serial": cell("Serial"),
                           "gmail": cell("Gmail"), "proxy": cell("Proxy"),
-                          "status": reason})
+                          "app": cell(self.APP_COLUMN), "status": reason})
+        # The ones that already have the app come first. Both cost the same
+        # app account - the scarce thing - but one of them also needs the
+        # install, three or four minutes of a budget that could have gone to
+        # the next phone. Offering them in this order turns the same handful
+        # of accounts into ready phones sooner.
+        found.sort(key=lambda row: row["app"] != self.INSTALLED)
         return found
 
     #: What the operator writes in `State` to say what should happen next.
@@ -1041,7 +1055,9 @@ class Book:
                                              ProxyPool.uses_column,
                                              ProxyPool.last_used_column), lock),
             apps=AppPool(tabs[APPS_TAB], headers(APPS_TAB), lock),
-            phones=PhoneLog(tabs[PHONES_TAB], headers(PHONES_TAB), lock),
+            phones=PhoneLog(tabs[PHONES_TAB],
+                            ensure_columns(tabs[PHONES_TAB],
+                                           PhoneLog.APP_COLUMN), lock),
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,
         )
         for pool in (pools.gmails, pools.proxies, pools.apps):

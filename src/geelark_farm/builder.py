@@ -159,6 +159,13 @@ class Build:
     #: with, and the address is already one column away in the Proxy tab.
     proxy_name: str = ""
     gmail: str = ""
+    #: Whether the target app is on the device. The row already said whether
+    #: Google was signed in (the Gmail column) and whether the app account
+    #: was (GPT Account); this was the one step of the three that nothing
+    #: recorded, so `incomplete` covered "waiting on an app account" and "the
+    #: app never installed" with the same word and no way to tell them apart
+    #: (2026-08-21).
+    app_installed: bool = False
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
@@ -632,6 +639,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("install_failed",
                           f"the app could not be installed - "
                           f"{failures.verdict(installed.reason).seen}")
+        build.app_installed = True
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,
@@ -828,6 +836,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 return finish("install_failed",
                               f"the app could not be installed - "
                               f"{failures.verdict(installed.reason).seen}")
+        # Either it was already there or it is now. Read off the device, which
+        # is the only thing that settles it - the row may say anything.
+        build.app_installed = True
 
         # The proxy this phone already has. It is not claimed from the pool -
         # the phone owns it - so a swap must not release it back as stock,
@@ -1202,7 +1213,8 @@ def _record(book: Book, build: Build) -> None:
             build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
             Gmail=build.gmail, Note=note[:500],
-            **{"GPT Account": build.app_account},
+            **{"GPT Account": build.app_account,
+               "App": book.phones.INSTALLED if build.app_installed else ""},
         )
         if not wrote:
             log.error("phone %s has no row in the Phones tab to record on; "
@@ -1217,7 +1229,8 @@ def _record(book: Book, build: Build) -> None:
         Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
         Gmail=build.gmail, Note=note[:500],
-        **{"GPT Account": build.app_account})
+        **{"GPT Account": build.app_account,
+           "App": book.phones.INSTALLED if build.app_installed else ""})
 
 
 def possible_statuses() -> list[str]:

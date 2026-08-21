@@ -708,3 +708,73 @@ def test_a_column_that_cannot_be_added_does_not_stop_the_run():
     tab.add_cols = lambda n: (_ for _ in ()).throw(RuntimeError("no"))
 
     assert ensure_columns(tab, "Times Used") == ["Name"]
+
+
+# ------------------------------------ how far a phone actually got
+PHONE_APP_HEADERS = [*PHONE_HEADERS, "App"]
+
+
+def phone_log(rows, headers=None):
+    headers = headers or PHONE_APP_HEADERS
+    return PhoneLog(FakeWorksheet(headers, rows), headers, threading.Lock())
+
+
+def phone_row(serial, *, gmail="g@example.com", app="", account="",
+              status="incomplete", headers=None):
+    headers = headers or PHONE_APP_HEADERS
+    line = [""] * len(headers)
+    for name, value in (("Serial", serial), ("Gmail", gmail), ("App", app),
+                        ("GPT Account", account), ("Status", status),
+                        ("Note", "Stopped short: something.")):
+        if name in headers:              # a tab from before the column existed
+            line[headers.index(name)] = value
+    return line
+
+
+def test_the_row_says_which_of_the_three_steps_a_phone_reached():
+    """`Gmail` said Google was in and `GPT Account` said the app account was.
+    Nothing recorded the step between them, so `incomplete` covered "waiting
+    on an app account" and "the app never installed" with one word and no way
+    to tell them apart (2026-08-21)."""
+    log = phone_log([
+        phone_row("991", app="installed"),      # waiting on an account
+        phone_row("992", app=""),               # the app never installed
+    ])
+
+    reached = {row["serial"]: row["app"] for row in log.unfinished()}
+
+    assert reached == {"991": "installed", "992": ""}
+
+
+def test_the_phone_that_only_needs_an_account_is_offered_first():
+    """Both cost the same app account - the scarce thing - but one of them
+    also needs the install. In this order the same handful of accounts turns
+    into ready phones sooner."""
+    log = phone_log([
+        phone_row("990", app=""),
+        phone_row("991", app="installed"),
+        phone_row("992", app=""),
+        phone_row("993", app="installed"),
+    ])
+
+    assert [row["serial"] for row in log.unfinished()][:2] == ["991", "993"]
+
+
+def test_a_tab_without_the_column_still_offers_everything():
+    """Rows written before the column existed read as blank, which is the
+    truthful answer - nobody recorded it - and they are still finishable."""
+    log = phone_log([phone_row("991", headers=PHONE_HEADERS),
+                     phone_row("992", headers=PHONE_HEADERS)],
+                    headers=PHONE_HEADERS)
+
+    offered = log.unfinished()
+
+    assert [row["serial"] for row in offered] == ["991", "992"]
+    assert all(row["app"] == "" for row in offered)
+
+
+def test_a_finished_phone_is_not_offered_whatever_the_app_column_says():
+    log = phone_log([phone_row("991", app="installed",
+                               account="a@example.com", status="ready")])
+
+    assert log.unfinished() == []
