@@ -27,10 +27,25 @@ class AccountError(ValueError):
 BASE32_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 
 
+#: Characters that occupy a cell and say nothing. A secret pasted out of a
+#: browser or a chat window arrives padded with these, and they are invisible
+#: in the sheet - so the row looks perfectly ordinary and is refused for
+#: containing a character nobody can see. Two Gpt Info rows sat unusable that
+#: way, each holding a valid key behind two U+3164 fillers (2026-08-22).
+#:
+#: Only the ones that carry no information. Stripping anything outside base32
+#: would turn a password or an address pasted into the wrong column into
+#: something that decodes, and rejecting those is what this validation is for
+#: (2026-08-09, a cell holding `fifa19.900t@pAss`).
+INVISIBLE = "​‌‍⁠﻿ ㅤ⠀᠎"
+
+
 def normalize_totp_secret(raw: str) -> str:
     """Google shows the key lowercase in groups of four; base32 wants
     uppercase, unspaced and unpadded."""
-    return (raw or "").replace(" ", "").replace("-", "").upper().rstrip("=")
+    stripped = "".join(c for c in (raw or "")
+                       if not c.isspace() and c not in INVISIBLE)
+    return stripped.replace("-", "").upper().rstrip("=")
 
 
 def check_totp_secret(secret: str) -> None:
