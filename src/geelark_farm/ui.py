@@ -42,7 +42,13 @@ from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
 from .pools import Book
 
-console = Console()
+# `highlight=False` because rich's default highlighter takes any plain string
+# it prints and colours the pieces it recognises - numbers, IP addresses, the
+# parts of a URL. On a warning naming a proxy that means one address arrives in
+# four colours with no meaning attached to any of them, next to a palette where
+# green, yellow and red each mean something. Every colour in this console is
+# chosen below; nothing here wants a second opinion about it.
+console = Console(highlight=False)
 
 OK = "green"
 WARN = "yellow"
@@ -408,8 +414,11 @@ class ReporterLogHandler(logging.Handler):
     def __init__(self, reporter: _LiveTable):
         super().__init__(level=logging.INFO)
         self.reporter = reporter
-        self.setFormatter(
-            logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        # No logger name. `geelark_farm.flows.chatgpt_login:` is eleven words
+        # of import path in front of the sentence that matters, and it answers
+        # a question nobody reading a live table is asking - the file log keeps
+        # it, stamped and timestamped, for when someone is.
+        self.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         row = getattr(record, "row", "-")
