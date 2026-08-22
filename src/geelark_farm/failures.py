@@ -182,6 +182,21 @@ VERDICTS: dict[str, Verdict] = {
         "the account is not set up. Set it up, then blank this status - "
         "answering the code instead would sign it in once and leave the next "
         "build exactly here."),
+    #: The row's claim and the device's behaviour contradicting each other.
+    #:
+    #: A ticked row says the account has no password. If OpenAI asks it for
+    #: one, the tick is wrong - or the password exists and is not in the sheet.
+    #: Either way the empty cell must not be typed into the box and submitted,
+    #: which is what happened before this reason existed: the refusal that came
+    #: back was recorded against an account that had never really been tried.
+    "unexpected_password_prompt": Verdict(
+        CREDENTIAL,
+        "the row says this account has no password and {service} asked for one",
+        "This row is ticked as one that signs in with an emailed code, and "
+        "{service} asked it for a password. One of the two is wrong: either "
+        "the tick does not belong on this row, or the account does have a "
+        "password and it is not in the sheet. Fix whichever it is, then blank "
+        "this status. Nothing was typed and nothing was spent."),
     "no_code_source": Verdict(
         CHALLENGED,
         "an emailed code was the only way in and nothing could supply one",

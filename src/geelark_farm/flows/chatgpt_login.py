@@ -147,6 +147,11 @@ FATAL_ADVICE = {
     "captcha_shown":
         "OpenAI is challenging this exit IP, the same way Google does; a "
         "cleaner proxy is the fix and no code change helps",
+    "unexpected_password_prompt":
+        "this row is ticked as one that signs in with an emailed code, and "
+        "OpenAI asked it for a password. One of the two is wrong: either the "
+        "tick does not belong on this row, or the account has a password that "
+        "is not in the sheet",
     "no_code_source":
         "this app account was never asked for a password, so it is one that "
         "cannot hold one - an emailed code is the only way in, and nothing "
@@ -597,6 +602,18 @@ def act_password(ctx: Context) -> Outcome | None:
     field = screen.find_input(ctx.elements, password=True)
     if not field:
         return None
+    if ctx.creds.email_code_only:
+        # The row declared this account has no password, and OpenAI has just
+        # asked for one. Without this the empty cell would be typed into the
+        # box and submitted, and the refusal that follows would be reported
+        # against an account that was never really tried.
+        #
+        # The device is the truth and the row is a claim; where they disagree,
+        # it is the claim that is wrong.
+        path = ctx.save("unexpected_password_prompt")
+        return Outcome("fatal", "unexpected_password_prompt",
+                       FATAL_ADVICE["unexpected_password_prompt"],
+                       artifacts=[path] if path else [])
     log.info("entering the app account's password")
     fill(ctx, field, ctx.creds.password)
     submit(ctx)

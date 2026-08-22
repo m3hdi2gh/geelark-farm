@@ -264,6 +264,50 @@ def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+PASSWORD_PAGE = ('<hierarchy>'
+                 '<node text="" class="android.widget.EditText" password="true"'
+                 ' bounds="[40,300][680,380]"/></hierarchy>')
+
+
+def test_a_ticked_row_asked_for_a_password_stops_instead_of_typing_nothing():
+    """The tick and the screen contradicting each other.
+
+    Before this, the empty password cell went into the box and was submitted.
+    OpenAI refused it, and the refusal was written against an account nobody
+    had actually tried - so the row was spent on a run that never happened.
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = chatgpt_login.Context(
+        client=None, phone_id="P",
+        creds=Credentials(email="coded@example.com", password="",
+                          totp_secret="", email_code_only=True))
+    ctx.elements = screen.parse(PASSWORD_PAGE)
+
+    outcome = chatgpt_login.act_password(ctx)
+    assert outcome.reason == "unexpected_password_prompt"
+    # And nothing was submitted, which is what keeps the account unspent.
+    assert not ctx.submitted_password
+
+
+def test_an_ordinary_row_still_has_its_password_typed(phone, monkeypatch):
+    """The guard is narrow on purpose: it is the tick that turns it on, not
+    an empty cell, and every row that is not ticked behaves as it always has."""
+    from geelark_farm.flows import chatgpt_login
+
+    typed = []
+    monkeypatch.setattr(chatgpt_login, "fill",
+                        lambda c, f, text: typed.append(text))
+    monkeypatch.setattr(chatgpt_login, "submit", lambda c: None)
+
+    ctx = chatgpt_login.Context(client=None, phone_id="P", creds=CREDS)
+    ctx.elements = screen.parse(PASSWORD_PAGE)
+
+    assert chatgpt_login.act_password(ctx) is None
+    assert typed == [CREDS.password]
+    assert ctx.submitted_password
+
+
 def code_context(source=None, fixture="chatgpt-email-code.xml"):
     """The real capture of the page, with a code source behind it."""
     from geelark_farm import codes

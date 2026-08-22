@@ -151,6 +151,11 @@ class Pool:
     #: rotation, and a second column holding the same value would be noise.
     claimed_at_column = ""
 
+    #: Columns rendered as checkboxes. Held here rather than deduced, because
+    #: what needs knowing is which columns Sheets fills in on its own - see
+    #: `_has_content`.
+    checkbox_columns: frozenset[str] = frozenset()
+
     #: How the stamp is written. Sortable and readable, and the same format
     #: the Proxy tab has been using since the rotation landed.
     CLAIM_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -173,7 +178,7 @@ class Pool:
                 name: (line[i].strip() if i < len(line) else "")
                 for name, i in self._index.items()
             }
-            if not any(values.values()):
+            if not self._has_content(values):
                 continue                       # a blank spacer row, not a gap
             resource = Resource(sheet_row=offset, values=values)
             try:
@@ -182,6 +187,23 @@ class Pool:
                 resource.error = str(exc)
             self._rows.append(resource)
         self._flag_duplicates()
+
+    def _has_content(self, values: dict[str, str]) -> bool:
+        """Whether this is a row someone typed, or grid below the data.
+
+        An untouched checkbox is not blank: putting the boxes on a column
+        writes `FALSE` into every row of the grid, including the hundreds
+        nobody has filled in. Counting that as content turned 29 empty rows
+        of the `Gpt Info` tab into 29 rows refused for having no address the
+        first time the column went up (2026-08-22).
+
+        A box that is *ticked* on an otherwise empty row does count. Somebody
+        did that on purpose, and a row that says "this account signs in with
+        an emailed code" without naming the account should be told about.
+        """
+        return any(value for name, value in values.items()
+                   if name not in self.checkbox_columns
+                   or value.strip().upper() == "TRUE")
 
     def _identity(self, resource: Resource) -> str:
         """What makes two rows the same resource rather than two of them.
@@ -452,6 +474,18 @@ class AppPool(Pool):
     #: which is the difference between this and `fail()`.
     challenged_status = "challenged"
 
+    #: Ticked when the account has no password and no authenticator, and the
+    #: only way in is a code the service emails. A checkbox rather than a word
+    #: because it is a fact about the account with two states and no shades.
+    #:
+    #: It is declared rather than inferred for a reason: a blank password cell
+    #: means "this account cannot hold one" just as often as it means "nobody
+    #: has filled it in yet", and reading the second as the first is how a row
+    #: that could never work costs a phone. Untouched, the column is empty and
+    #: every row means exactly what it meant before it existed.
+    EMAIL_CODE_COLUMN = "Email code"
+    checkbox_columns = frozenset({EMAIL_CODE_COLUMN})
+
     def set_aside(self, resource: Resource, *, reason: str = "",
                   note: str = "") -> None:
         self._set(resource, self._off_a_phone(reason or self.challenged_status,
@@ -463,6 +497,10 @@ class AppPool(Pool):
             email=values.get("Address", ""),
             password=values.get("Password", ""),
             totp_secret=normalize_totp_secret(values.get("2FA Secret", "")),
+            # Sheets writes a checkbox as the literal TRUE or FALSE, and a
+            # column nobody has ticked yet reads back as an empty string.
+            email_code_only=(values.get(self.EMAIL_CODE_COLUMN) or "")
+                            .strip().upper() == "TRUE",
         )
         credentials.validate(what="app account:")
         resource.credentials = credentials
@@ -1003,7 +1041,29 @@ class HistoryLog:
             self._ws.append_row(row, value_input_option="RAW")
 
 
-def ensure_columns(worksheet, *columns: str) -> list[str]:
+def _make_checkbox(worksheet, position: int) -> None:
+    """Turn a freshly added column into real checkboxes.
+
+    Without this the column is text, and a column of the words TRUE and FALSE
+    is a column you can typo into. A checkbox has two states and no third, so
+    the only thing a hand can do to it is the thing it is for.
+
+    The header row is left out and no end row is given, so the rule covers the
+    column to the bottom of the grid - a row pasted in next week gets its box
+    without anyone remembering this.
+    """
+    worksheet.spreadsheet.batch_update({"requests": [{
+        "setDataValidation": {
+            "range": {"sheetId": worksheet.id, "startRowIndex": 1,
+                      "startColumnIndex": position,
+                      "endColumnIndex": position + 1},
+            "rule": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True},
+        },
+    }]})
+
+
+def ensure_columns(worksheet, *columns: str,
+                   checkboxes: tuple[str, ...] = ()) -> list[str]:
     """Add columns this tool writes but the operator never fills in.
 
     `_set` skips a column the tab does not have, silently and by design -
@@ -1029,6 +1089,8 @@ def ensure_columns(worksheet, *columns: str) -> list[str]:
             if short > 0:
                 worksheet.add_cols(short)
             worksheet.update_cell(1, len(found) + 1, column)
+            if column in checkboxes:
+                _make_checkbox(worksheet, len(found))
             log.info("added the %r column to %s", column, worksheet.title)
             found = found + [column]
         except Exception as exc:                                  # noqa: BLE001
@@ -1137,8 +1199,10 @@ class Book:
                                              ProxyPool.uses_column,
                                              ProxyPool.last_used_column), lock),
             apps=AppPool(tabs[APPS_TAB],
-                         ensure_columns(tabs[APPS_TAB],
-                                        AppPool.claimed_at_column), lock),
+                         ensure_columns(
+                             tabs[APPS_TAB], AppPool.claimed_at_column,
+                             AppPool.EMAIL_CODE_COLUMN,
+                             checkboxes=(AppPool.EMAIL_CODE_COLUMN,)), lock),
             phones=PhoneLog(tabs[PHONES_TAB],
                             ensure_columns(tabs[PHONES_TAB],
                                            PhoneLog.APP_COLUMN), lock),

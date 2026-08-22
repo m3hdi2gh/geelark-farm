@@ -326,6 +326,80 @@ def test_the_app_pool_reads_the_same_three_columns():
     assert claimed.credentials.totp_secret == SECRET
 
 
+def test_a_ticked_row_is_read_as_one_that_signs_in_with_an_emailed_code():
+    """The tick is what makes an empty password mean something.
+
+    Without a column saying so, a blank password cell means either "this
+    account cannot hold one" or "nobody has filled it in yet", and reading the
+    second as the first hands out a row that cannot work.
+    """
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["coded@example.com", "", "", "", "", "", "TRUE"],
+        ["normal@example.com", "pw", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+    first = pool.claim().credentials
+    assert first.signs_in_with_an_emailed_code
+    # And the row that is not ticked keeps today's meaning: a password is
+    # still required of it, blank cell or not.
+    assert not pool.claim().credentials.signs_in_with_an_emailed_code
+
+
+def test_the_empty_grid_below_the_data_is_not_read_as_rows():
+    """Putting the boxes on a column writes FALSE into every row of the grid.
+
+    The first run after the column went up read 29 untouched rows of the
+    `Gpt Info` tab as rows with content in them, and refused all 29 for having
+    no address (2026-08-22).
+    """
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["real@example.com", "pw", SECRET, "", "", "", "FALSE"],
+        ["", "", "", "", "", "", "FALSE"],
+        ["", "", "", "", "", "", "FALSE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert [r.values["Address"] for r in pool._rows] == ["real@example.com"]
+
+
+def test_a_box_ticked_on_a_row_with_nothing_else_is_not_ignored():
+    """The other half: somebody did that on purpose, and a row claiming to
+    sign in with an emailed code without naming the account is worth saying."""
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["", "", "", "", "", "", "TRUE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert "not an email address" in pool.broken[0].error
+
+
+def test_a_ticked_row_survives_having_no_password_and_no_secret():
+    """`validate` is what stands between the sheet and a wasted phone, and on
+    a row like this the two things it checks for are correctly absent."""
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["coded@example.com", "", "", "", "", "", "TRUE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    pool.claim().credentials.validate()  # does not raise
+
+
+def test_an_unticked_row_with_no_password_is_still_refused():
+    """The safe half of the pair, and the reason the tick has to be explicit.
+
+    An unticked row with an empty password is a half-filled row, not an
+    account of the other kind, and it is never handed to a phone.
+    """
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["blank@example.com", "", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert pool.claim() is None
+    assert "no password" in pool.broken[0].error
+
+
 # ---------------------------------------------------------- the Phones tab
 def test_a_phone_is_recorded_before_it_is_finished():
     """An interrupted run still has to leave something naming the phone in
@@ -678,6 +752,7 @@ class NarrowTab:
         self._headers = list(headers)
         self.col_count = col_count if col_count is not None else len(headers)
         self.added = 0
+        self.rules = []
 
     def row_values(self, row):
         return list(self._headers)
@@ -692,6 +767,20 @@ class NarrowTab:
                 f"Range (Proxy!{chr(64 + col)}1) exceeds grid limits. "
                 f"Max columns: {self.col_count}")
         self._headers = self._headers + [value]
+
+    #: The two gspread attributes `_make_checkbox` addresses the tab by.
+    id = 7
+
+    @property
+    def spreadsheet(self):
+        tab = self
+
+        class Book:
+            @staticmethod
+            def batch_update(body):
+                tab.rules.append(body["requests"][0]["setDataValidation"])
+
+        return Book
 
 
 def test_a_tab_with_no_spare_columns_is_widened_first():
@@ -722,6 +811,36 @@ def test_a_column_already_there_is_left_alone():
 
     assert ensure_columns(tab, "Times Used") == ["Name", "Times Used"]
     assert tab.added == 0
+
+
+def test_a_column_asked_for_as_a_checkbox_gets_the_boxes():
+    """A column of the words TRUE and FALSE is a column you can typo into.
+
+    The rule starts below the header and names no last row, so it covers the
+    column to the bottom of the grid - a row pasted in later gets its box
+    without anyone remembering to come back here.
+    """
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Address", "Password"])
+
+    ensure_columns(tab, "Email code", checkboxes=("Email code",))
+
+    rule, = tab.rules
+    assert rule["rule"]["condition"]["type"] == "BOOLEAN"
+    assert rule["range"]["startColumnIndex"] == 2       # the column just added
+    assert rule["range"]["startRowIndex"] == 1          # not the header
+    assert "endRowIndex" not in rule["range"]
+
+
+def test_a_checkbox_column_already_there_is_not_re_ruled():
+    """Startup runs this every time, and re-sending the rule on every run
+    would spend an API call to change nothing."""
+    from geelark_farm.pools import ensure_columns
+    tab = NarrowTab(["Address", "Email code"])
+
+    ensure_columns(tab, "Email code", checkboxes=("Email code",))
+
+    assert tab.rules == []
 
 
 def test_a_column_that_cannot_be_added_does_not_stop_the_run():

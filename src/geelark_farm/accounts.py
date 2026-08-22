@@ -90,6 +90,12 @@ class Credentials:
     email: str
     password: str
     totp_secret: str
+    #: This account has no password and no authenticator, and is signed in
+    #: with a code the service emails instead. Declared by the row rather than
+    #: guessed from an empty cell: a blank password means either "this kind of
+    #: account" or "somebody has not filled it in yet", and reading the second
+    #: as the first is how a row that could not work costs a phone.
+    email_code_only: bool = False
 
     @property
     def has_authenticator(self) -> bool:
@@ -102,6 +108,16 @@ class Credentials:
         dead end rather than a step.
         """
         return bool(self.totp_secret)
+
+    @property
+    def signs_in_with_an_emailed_code(self) -> bool:
+        """Whether the only way into this account is a code it is sent.
+
+        Not the same as lacking an authenticator. An account can hold a
+        password and simply have no 2FA on it - those sign in on the shorter
+        path. These are never offered a password box at all.
+        """
+        return self.email_code_only
 
     def validate(self, *, what: str = "") -> None:
         """Everything checkable offline. Called before a phone is created,
@@ -119,6 +135,10 @@ class Credentials:
                 f"{where}{self.email!r} is not an email address - it needs a "
                 f"name, an @ and a domain with a dot in it"
             )
+        if self.email_code_only:
+            # Nothing else to check. The address is the whole credential, and
+            # what gets it in is a code that does not exist yet.
+            return
         if not self.password:
             raise AccountError(f"{where}{self.email}: no password")
         for field, value in (("password", self.password), ("email", self.email)):
