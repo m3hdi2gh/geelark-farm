@@ -513,7 +513,20 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
     # print goes straight to the terminal, underneath rich, and lands in the
     # middle of whatever the table was drawing. Warnings are not lost - the
     # handler queues them to be printed above the table instead.
-    previous = [(h, h.level) for h in root.handlers]
+    #
+    # The file handler is explicitly not one of them, and saying so takes two
+    # checks rather than one: `FileHandler` is a subclass of `StreamHandler`,
+    # so asking only the first question silences the file along with the
+    # terminal. It did. Every build run from the menu wrote nothing to the log
+    # at all - a ten-minute build of phone 1079 left the file untouched from
+    # before it started to after it failed, so the only account of what the
+    # phone did was a table that had already been redrawn over (2026-08-22).
+    #
+    # That is exactly backwards: the terminal is quiet here because rich owns
+    # it, and the file is the thing that should be recording while it does.
+    previous = [(h, h.level) for h in root.handlers
+                if isinstance(h, logging.StreamHandler)
+                and not isinstance(h, logging.FileHandler)]
     for existing, _ in previous:
         existing.setLevel(logging.CRITICAL + 1)
     root.addHandler(handler)

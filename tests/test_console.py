@@ -505,3 +505,60 @@ def test_the_startup_shows_it_after_the_summary():
     assert "show_sync(outcome)" in source
     assert "show_needs_you(needs_you(" in source
     assert source.index("show_sync(outcome)") < source.index("show_needs_you")
+
+
+# ------------------------------------ what a build leaves behind to read
+def test_the_log_file_keeps_recording_while_the_table_draws(tmp_path):
+    """The terminal is quiet during a build because rich owns it. The file is
+    the thing that should be writing while it does.
+
+    It was not. `FileHandler` is a subclass of `StreamHandler`, so silencing
+    "the stream handlers" silenced the file with them, and every build run
+    from the menu recorded nothing at all - a ten-minute build of phone 1079
+    left the log untouched from before it started to after it failed
+    (2026-08-22).
+    """
+    import logging
+    import threading
+
+    path = tmp_path / "run.log"
+    file = logging.FileHandler(path, encoding="utf-8")
+    file.setLevel(logging.DEBUG)
+    stream = logging.StreamHandler()
+    stream.setLevel(logging.INFO)
+
+    root = logging.getLogger()
+    was = root.level
+    root.setLevel(logging.DEBUG)          # what `geelark` sets it to for real
+    root.addHandler(file)
+    root.addHandler(stream)
+    try:
+        def work():
+            logging.getLogger("geelark_farm.flows.test").info(
+                "entering the app account's password")
+
+        ui._drive_live_table(_QuietTable(), logging.Filter(), work,
+                             threading.Event())
+    finally:
+        root.removeHandler(file)
+        root.removeHandler(stream)
+        root.setLevel(was)
+        file.close()
+
+    assert "entering the app account's password" in path.read_text(encoding="utf-8")
+    # And the terminal handler was still silenced, and put back afterwards.
+    assert stream.level == logging.INFO
+
+
+class _QuietTable:
+    """Enough of the reporter for the drive loop to draw nothing."""
+
+    def render(self):
+        from rich.text import Text
+        return Text("")
+
+    def drain_notices(self):
+        return []
+
+    def drain_links(self):
+        return []
