@@ -20,8 +20,9 @@ composer, the same text box, the same controls as a signed-in session. On
 2026-08-08 a phone opened straight into it and the row was reported ready with
 nobody in the app. It was found by someone opening the phone by hand.
 
-The composer therefore only counts once this run has submitted the password
-(`Context.submitted_password`), and a chat screen without that is not believed:
+The composer therefore only counts once this run has put a credential in -
+a password, or a code the service emailed (`Context.signed_something_in`) -
+and a chat screen without that is not believed:
 `pm clear` puts the app back at its welcome screen, where the ordinary path
 applies. That is conservative on purpose. A phone genuinely signed in by an
 earlier run gets signed in again rather than assumed, and a wasted login is
@@ -49,11 +50,12 @@ position within the page.
 addresses it does not like, exactly as Google does, and no UI automation
 answers it. It is a named fatal reason so the row says so.
 
-**Read a code out of an inbox.** If OpenAI emails a one-time code instead of
-accepting the authenticator, the run stops with `email_code_required`. The
-device is signed into that Gmail account, so reading it on the phone is
-possible in principle - it is simply not built, and pretending otherwise by
-silently timing out would be worse.
+**Read a code out of an inbox by itself.** An account that can hold an
+authenticator and is emailed a code anyway has its 2FA misconfigured, and the
+run stops with `email_code_required` rather than papering over it. An account
+that was never offered a password box is the other kind: a code is the only
+way in, and one is asked for from whatever `Context.codes` is - which is a
+person at the console today.
 """
 
 from __future__ import annotations
@@ -293,6 +295,27 @@ class Context(router.Context):
     #: earlier attempt, and its code is expired - typing it would have OpenAI
     #: refuse a perfectly good account.
     code_since: float = 0.0
+    #: Set when this run has put an emailed code into the form. Kept apart
+    #: from `submitted_password` because the two answer different questions:
+    #: that one says which kind of account this is, and this one does not.
+    submitted_code: bool = False
+
+    @property
+    def signed_something_in(self) -> bool:
+        """Whether this run has put a credential of any kind into the app.
+
+        What `verified_on_device` and `logged_out_chat` actually need to know,
+        and for a while `submitted_password` was the only way to ask it. That
+        worked while a password was the only way in.
+
+        It stopped working the moment an account signed in with an emailed
+        code. Nothing ever set the flag, so a *successful* login landed on the
+        chat screen and was read as the app's logged-out mode - and
+        `act_reset_app` did what that screen deserves: `pm clear`, wiping the
+        session that had just been earned. Twice on phone 1079, which then
+        reported `app_stuck_on_welcome` (2026-08-22).
+        """
+        return self.submitted_password or self.submitted_code
 
 
 LAUNCH_ATTEMPTS = 3
@@ -375,7 +398,7 @@ def verified_on_device(ctx: Context) -> bool:
     pipeline. The honest fix is to read the account's address out of the app's
     own menu, which needs a capture of that menu to write.
     """
-    return ctx.submitted_password and composer_on_screen(ctx)
+    return ctx.signed_something_in and composer_on_screen(ctx)
 
 
 # ------------------------------------------------- reading the account back
@@ -689,6 +712,10 @@ def act_email_code(ctx: Context) -> Outcome | None:
     log.info("entering the code emailed to %s", ctx.creds.email)
     fill(ctx, field, code)
     submit(ctx)
+    # The same record `act_password` keeps, for the same reason: what comes
+    # next is a chat screen, and whether to believe it turns entirely on
+    # whether this run is what put the account there.
+    ctx.submitted_code = True
     time.sleep(6)
     return None
 
@@ -832,7 +859,7 @@ SCREENS: list[Screen] = [
     # The chat screen with nobody signed in. Above onboarding, because a card
     # on that screen is not the thing that matters about it.
     Screen("logged_out_chat",
-           lambda c: composer_on_screen(c) and not c.submitted_password,
+           lambda c: composer_on_screen(c) and not c.signed_something_in,
            act_reset_app, max_visits=2),
 
     # Not clickable_only. Nothing in this app reports clickable=true - every

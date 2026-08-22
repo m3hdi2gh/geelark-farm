@@ -339,6 +339,50 @@ class SilentMailbox:
         return None
 
 
+def test_a_login_made_with_a_code_is_not_wiped_by_the_reset(monkeypatch):
+    """The most expensive thing this branch got wrong.
+
+    A composer only counts when this run put the account there - the app has a
+    logged-out mode with the same chat screen, and one was handed over empty
+    once. `submitted_password` was how that was asked, and an account signing
+    in with an emailed code never sets it. So a login that had just succeeded
+    was read as the logged-out mode and `pm clear` wiped it. Twice on phone
+    1079, which then reported `app_stuck_on_welcome` (2026-08-22).
+    """
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = code_context(Mailbox("410473"))
+    monkeypatch.setattr(chatgpt_login, "fill", lambda *a: None)
+    monkeypatch.setattr(chatgpt_login, "submit", lambda c: None)
+    monkeypatch.setattr(chatgpt_login.time, "sleep", lambda *a: None)
+    chatgpt_login.act_email_code(ctx)
+
+    # The chat screen it lands on next is this run's doing, and is believed.
+    ctx.elements = screen.parse(
+        (FIXTURES / "chatgpt-chat-signed-in.xml").read_text(encoding="utf-8"))
+    assert chatgpt_login.verified_on_device(ctx)
+
+    # And the entry that would have cleared the app no longer matches it.
+    logged_out, = [s for s in chatgpt_login.SCREENS
+                   if s.name == "logged_out_chat"]
+    assert not logged_out.match(ctx)
+
+
+def test_a_chat_screen_this_run_did_not_earn_is_still_not_believed():
+    """The other half, and the reason the check exists at all: a phone was
+    handed over as ready with nobody in the app (2026-08-08)."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = code_context()
+    ctx.elements = screen.parse(
+        (FIXTURES / "chatgpt-chat-signed-in.xml").read_text(encoding="utf-8"))
+
+    assert not chatgpt_login.verified_on_device(ctx)
+    logged_out, = [s for s in chatgpt_login.SCREENS
+                   if s.name == "logged_out_chat"]
+    assert logged_out.match(ctx)
+
+
 def test_a_code_that_arrives_is_typed_in(monkeypatch):
     """The counterpart of act_totp: same box, same submit, and the only
     difference is where the digits came from."""
