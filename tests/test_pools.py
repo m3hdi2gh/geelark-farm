@@ -9,6 +9,7 @@ one run later. Neither raises - both just quietly spend the stock.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -44,11 +45,23 @@ class FakeWorksheet:
     #: the tab by. Anything will do here; it only has to exist.
     id = 1
 
-    def __init__(self, headers: list[str], rows: list[list[str]]):
+    def __init__(self, headers: list[str], rows: list[list[str]],
+                 row_count: int | None = None):
         self.headers = headers
         self.rows = [list(r) + [""] * (len(headers) - len(r)) for r in rows]
         self.writes: list[dict] = []
         self.deleted_rows: list[int] = []
+        #: The grid, which the real thing has and this did not - so a write
+        #: past the end was accepted here and refused by Sheets. That is how
+        #: 28 phones were created and destroyed inside a minute without a
+        #: single test noticing (2026-08-18 and 2026-08-21).
+        self.row_count = (len(self.rows) + 1) if row_count is None else row_count
+        self.col_count = len(headers)
+        self.added_rows = 0
+
+    def add_rows(self, count: int) -> None:
+        self.row_count += count
+        self.added_rows += count
 
     def get_all_values(self):
         return [self.headers, *self.rows]
@@ -84,12 +97,23 @@ class FakeWorksheet:
                 self.deleted_rows.append(index + 1)
                 if 0 <= index - 1 < len(self.rows):
                     del self.rows[index - 1]
+                # Sheets removes the row from the grid, not just its contents,
+                # so the tab shrinks as rows are deleted. That is what left
+                # the grid too small for the next append.
+                self.row_count = max(1, self.row_count - 1)
             return None
         for item in payload:
-            self.writes.append(item)
             cell = item["range"].split(":")[0]
             column = ord(cell[0]) - 65
             index = int(cell[1:]) - 2          # data rows start at sheet row 2
+            if index + 2 > self.row_count:
+                # Word for word what Sheets answers, because the caller is
+                # meant to grow the grid before writing into it.
+                raise RuntimeError(
+                    f"APIError: [400]: Invalid data[0]: Range "
+                    f"({item['range']}) exceeds grid limits. Max rows: "
+                    f"{self.row_count}, max columns: {self.col_count}.")
+            self.writes.append(item)
             while len(self.rows) <= index:
                 self.rows.append([""] * len(self.headers))
             values = item["values"][0]
@@ -829,3 +853,147 @@ def test_rows_hands_out_the_blank_and_not_the_cross():
     assert row["GPT Account"] == ""
     assert row[PhoneLog.APP_COLUMN] == ""
     assert row["Serial"] == "983"          # and the rest is untouched
+
+
+# -------------------------------- writing past the end of the grid
+def test_a_row_is_appended_into_a_tab_that_had_no_room_for_it():
+    """Sheets removes rows from the grid, so a sync that clears out finished
+    phones shrinks the tab to what is left. The next append lands past the end
+    and is refused - and every phone in that batch dies on its first sheet
+    write, having already been created. 28 phones went that way on two
+    separate days (2026-08-18 and 2026-08-21)."""
+    tab = FakeWorksheet(PHONE_APP_HEADERS, [], row_count=1)   # header only
+    log = PhoneLog(tab, PHONE_APP_HEADERS, threading.Lock())
+
+    row = log.start(Serial="1002", Proxy="SX11")
+
+    assert row == 2
+    assert tab.added_rows == 1
+    assert tab.get_all_values()[1][PHONE_APP_HEADERS.index("Serial")] == "1002"
+
+
+def test_appending_into_a_tab_with_room_adds_nothing():
+    tab = FakeWorksheet(PHONE_APP_HEADERS, [], row_count=50)
+    log = PhoneLog(tab, PHONE_APP_HEADERS, threading.Lock())
+
+    log.start(Serial="1002")
+
+    assert tab.added_rows == 0
+
+
+def test_the_grid_shrinks_as_rows_are_deleted_and_the_next_append_still_works():
+    """The whole cycle in one test: build, clear out, build again."""
+    tab = FakeWorksheet(PHONE_APP_HEADERS, [], row_count=1)
+    log = PhoneLog(tab, PHONE_APP_HEADERS, threading.Lock())
+
+    rows = [log.start(Serial=str(900 + n)) for n in range(3)]
+    assert rows == [2, 3, 4]
+
+    log.delete_rows(rows)                       # the sync clears them out
+    assert tab.row_count == 1                   # ...and the grid comes with it
+
+    assert log.start(Serial="1002") == 2        # the next build still lands
+    assert tab.get_all_values()[1][PHONE_APP_HEADERS.index("Serial")] == "1002"
+
+
+def test_a_dropdown_longer_than_its_tab_is_written_anyway():
+    """The same rule for the Lists tab - a flow growing one new reason is all
+    it takes for the column to outrun the grid."""
+    from geelark_farm.pools import Book
+    columns = ["Gmail Statuses", "Proxy Statuses", "GPT Statuses",
+               "Phone Statuses", "Phone States"]
+    tab = FakeWorksheet(columns, [], row_count=1)
+    book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
+                apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                             threading.Lock()),
+                phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                                threading.Lock()),
+                lists=tab, lock=threading.Lock())
+
+    wanted = book.sync_lists()
+
+    assert tab.added_rows > 0
+    written = {w["values"][0][0] for w in tab.writes}
+    assert set(wanted["Proxy Statuses"]) <= written
+
+
+# ------------------------------ credentials a dead run was still holding
+CLAIMED_HEADERS = ["Address", "Password", "2FA Secret", "Claimed",
+                   "Phone Serial", "Status", "Note"]
+
+
+def claimed_row(address, *, when="", status="in_use"):
+    line = [""] * len(CLAIMED_HEADERS)
+    for name, value in (("Address", address), ("Password", "pw"),
+                        ("Claimed", when), ("Status", status)):
+        line[CLAIMED_HEADERS.index(name)] = value
+    return line
+
+
+def claimed_pool(rows):
+    pool = GmailPool(FakeWorksheet(CLAIMED_HEADERS, rows), CLAIMED_HEADERS,
+                     threading.Lock())
+    pool.load()
+    return pool
+
+
+def stamp(seconds_ago):
+    return time.strftime(GmailPool.CLAIM_FORMAT,
+                         time.localtime(time.time() - seconds_ago))
+
+
+def test_claiming_records_when():
+    """Without it `in_use` says only "somebody took this", and the only way
+    back was a hand on the console."""
+    pool = claimed_pool([claimed_row("a@b.com", status="")])
+
+    taken = pool.claim()
+
+    assert taken.values["Claimed"]
+    assert pool.status_of(taken) == pool.claimed_status
+
+
+def test_a_claim_older_than_any_budget_is_abandoned():
+    """Nothing may keep a credential past the outer bound on the phone it was
+    claimed for, so a stamp older than that is proof the run is gone."""
+    pool = claimed_pool([claimed_row("old@b.com", when=stamp(7200)),
+                         claimed_row("fresh@b.com", when=stamp(60))])
+
+    assert [r.label for r in pool.abandoned(3600)] == ["old@b.com"]
+
+
+def test_a_claim_inside_the_budget_is_left_to_the_run_that_has_it():
+    """Handing the same Gmail to two phones is worse than leaving one out of
+    the pool, which is why this waits rather than guesses."""
+    pool = claimed_pool([claimed_row("a@b.com", when=stamp(60))])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_a_row_with_no_stamp_is_left_alone():
+    """One claimed before the column existed. "No time recorded" is not "a
+    long time ago"."""
+    pool = claimed_pool([claimed_row("a@b.com", when="")])
+
+    assert pool.abandoned(3600) == []
+    assert pool.stuck                      # still reported for the hand route
+
+
+def test_something_a_hand_typed_into_the_column_is_not_read_as_a_time():
+    pool = claimed_pool([claimed_row("a@b.com", when="yesterday-ish")])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_a_row_that_is_not_claimed_is_never_abandoned():
+    pool = claimed_pool([claimed_row("a@b.com", when=stamp(7200),
+                                     status="ready")])
+
+    assert pool.abandoned(3600) == []
+
+
+def test_the_proxy_tab_reuses_the_stamp_it_already_writes():
+    """It has recorded one since the exit rotation landed, and a second column
+    holding the same value would be noise."""
+    assert ProxyPool.claimed_at_column == ProxyPool.last_used_column
+    assert GmailPool.claimed_at_column not in (ProxyPool.last_used_column, "")

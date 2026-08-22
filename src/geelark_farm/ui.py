@@ -1143,6 +1143,7 @@ def sync_on_startup(settings: Settings) -> None:
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir),
                 artifact_dir=settings.artifact_dir,
+                stale_claim_seconds=settings.build_budget_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
     except (ApiError, TransportError, SheetError, GSpreadError) as exc:
         # GSpreadError included because a sheet quota (429) can surface from a
@@ -1151,6 +1152,14 @@ def sync_on_startup(settings: Settings) -> None:
         console.print(f"[{WARN}]could not update the sheet first: {exc}[/]")
         return
     show_sync(outcome)
+    # And what it could not do, which is the half you actually have to act on.
+    # Reading the sheet again rather than working from `outcome`: most of this
+    # is what the tabs hold rather than what this run changed, and the sync has
+    # just moved several of them.
+    try:
+        show_needs_you(needs_you(Book.open(settings), outcome))
+    except (SheetError, GSpreadError) as exc:
+        console.print(f"[{DIM}]could not list what still needs you: {exc}[/]")
     if outcome:
         console.print()
 
@@ -1311,6 +1320,8 @@ SYNC_LABELS = [
     ("unknown_phones", "phones GeeLark holds that the Phones tab has never "
                        "heard of - nothing here will ever settle them, so "
                        "delete them or add a row by hand"),
+    ("unclaimed", "rows put back - the run holding them is gone, and no run "
+                  "may hold one past its own budget"),
     ("stranded_retired", "Gmails retired - the phone they were on is gone"),
     ("stranded_waiting", "app accounts held against a phone that no longer "
                          "exists - deliver them or free them by hand, since "
@@ -1333,6 +1344,55 @@ def show_sync(outcome: dict[str, list[str]]) -> None:
         console.print(f"[{style}]{len(items)} {meaning}[/]")
         for item in items:
             console.print(f"   [{DIM}]{item}[/]")
+
+
+def needs_you(book: Book, outcome: dict[str, list[str]]) -> list[tuple]:
+    """What the sync could not do for you, as (count, what, where to look).
+
+    The line is not "what went wrong" - it is "what cannot go further without
+    you". A Gmail that will not sign in, an account that repeats one already
+    in the tab, a row holding something unreadable: all of those need a
+    correct label and nothing else. The label is what a refund is claimed on,
+    and the row is out of the pool either way, so putting it in front of
+    somebody every single run is asking them to acknowledge a thing they have
+    already dealt with - which is how a block like this stops being read.
+
+    What is left is genuinely blocked: an exit only the vendor's panel can
+    change, and two questions the sync deliberately refuses to answer because
+    the answer is a judgement.
+    """
+    items: list[tuple[int, str, str]] = []
+
+    waiting = [r for r in book.proxies.flagged
+               if book.proxies.status_of(r) == book.proxies.needs_new_ip]
+    if waiting:
+        items.append((len(waiting), "proxies waiting on a new exit address",
+                      "change each in the vendor's panel, then set its cell "
+                      "to `free`"))
+
+    # These two the sync found and left alone on purpose: which way each goes
+    # is a judgement, and History is where the answer is.
+    if outcome.get("stranded_waiting"):
+        items.append((len(outcome["stranded_waiting"]),
+                      "app accounts held against a phone that is gone",
+                      "History says how that phone ended - then deliver or "
+                      "free the account by hand"))
+    if outcome.get("unknown_phones"):
+        items.append((len(outcome["unknown_phones"]),
+                      "phones GeeLark has that the Phones tab never knew",
+                      "nothing here will ever settle them: delete them, or "
+                      "add a row"))
+    return items
+
+
+def show_needs_you(items: list[tuple]) -> None:
+    if not items:
+        return
+    console.print(f"\n[bold {WARN}]needs you[/] "
+                  f"[{DIM}]- the sync did everything it could on its own[/]")
+    for count, what, where in items:
+        console.print(f"   [{WARN}]{count:>3}[/] {what}")
+        console.print(f"       [{DIM}]{where}[/]")
 
 
 def apply_marks(settings: Settings) -> None:

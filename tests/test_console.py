@@ -526,3 +526,98 @@ def test_the_batch_hands_its_builds_a_source_a_person_can_answer():
         passed = {k.arg for node in ast.walk(tree)
                   if isinstance(node, ast.Call) for k in node.keywords}
         assert "codes_source" in passed, name
+# ------------------------------------------- what the sync could not do for you
+class Pretend:
+    """A pool holding whatever the test wants it to hold."""
+
+    def __init__(self, tab, flagged=(), needs_new_ip="change ip"):
+        self.tab = tab
+        self.flagged = list(flagged)
+        self.needs_new_ip = needs_new_ip
+
+    def status_of(self, resource):
+        return resource
+
+
+class Tabs:
+    def __init__(self, gmails=(), apps=(), proxies=(), waiting=0):
+        self.gmails = Pretend("Gmails", gmails)
+        self.apps = Pretend("Gpt Info", apps)
+        self.proxies = Pretend("Proxy", proxies)
+        self.phones = type("P", (), {
+            "unfinished": lambda _self: list(range(waiting))})()
+
+
+def rendered_needs(items):
+    console = Console(width=100, no_color=True, record=True)
+    real, ui.console = ui.console, console
+    try:
+        ui.show_needs_you(items)
+    finally:
+        ui.console = real
+    return console.export_text().strip()
+
+
+def test_a_credential_that_only_needs_labelling_is_not_raised():
+    """A Gmail that will not sign in is the seller's problem, not yours: the
+    status is what a refund is claimed on, and the row is out of the pool
+    either way. Putting it up every run asks you to acknowledge something you
+    have already dealt with, which is how a block like this stops being read."""
+    book = Tabs(gmails=["captcha_shown", "password_changed", "wrong_2fa_code"],
+                apps=["email_code_required"])
+
+    assert ui.needs_you(book, {}) == []
+
+
+def test_a_duplicate_is_not_raised_either():
+    """Labelled and never handed out is the whole of what it needs."""
+    book = Tabs(gmails=["duplicate"], apps=["duplicate"])
+
+    assert ui.needs_you(book, {}) == []
+
+
+def test_an_exit_only_the_vendor_can_change_is_raised():
+    """Nothing here can give a proxy a new address - these rows carry no port
+    id - so this one really does stop until a hand moves."""
+    book = Tabs(proxies=["change ip", "dead", "change ip"])
+
+    items = ui.needs_you(book, {})
+    text = rendered_needs(items)
+
+    assert [count for count, _, _ in items] == [2]     # `dead` is retested
+    assert "vendor" in text
+
+
+def test_the_two_judgements_the_sync_refuses_are_raised():
+    """`strand_check` finds these and does not act: which way each goes is a
+    judgement, and the alert has to say where the answer is."""
+    outcome = {"stranded_waiting": ["a@b.com (was on phone 950)"],
+               "unknown_phones": ["1099"]}
+
+    text = rendered_needs(ui.needs_you(Tabs(), outcome))
+
+    assert "History" in text                 # where to look for the first
+    assert "never knew" in text
+
+
+def test_a_clean_sheet_says_nothing_at_all():
+    """It runs every startup. A block that appears when there is nothing to do
+    teaches you to skip the block."""
+    assert ui.needs_you(Tabs(), {}) == []
+    assert rendered_needs([]) == ""
+
+
+def test_a_phone_waiting_on_an_account_is_not_called_a_problem():
+    """It is work you can do from the menu, and the dashboard says so already."""
+    assert ui.needs_you(Tabs(waiting=6), {}) == []
+
+
+def test_the_startup_shows_it_after_the_summary():
+    """The wiring: without it the block exists and nobody ever sees it."""
+    import inspect
+
+    source = inspect.getsource(ui.sync_on_startup)
+
+    assert "show_sync(outcome)" in source
+    assert "show_needs_you(needs_you(" in source
+    assert source.index("show_sync(outcome)") < source.index("show_needs_you")

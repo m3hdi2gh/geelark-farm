@@ -2212,3 +2212,52 @@ def test_a_phone_whose_gmail_is_crossed_out_is_not_kept_as_finishable(
 
     assert outcome["discarded"] == ["730"]     # not kept, not finishable
     assert outcome["abandoned"] == []
+
+
+def test_a_dead_runs_claims_are_put_back_on_the_next_sync():
+    """Three Gmails and three exits sat out of the pool for a day, twice in
+    three days, because the only way back was a hand on the console
+    (2026-08-21, 2026-08-22)."""
+    import threading
+
+    from geelark_farm.pools import GmailPool
+    from tests.test_pools import CLAIMED_HEADERS, FakeWorksheet, claimed_row
+
+    def stamped(seconds_ago):
+        return time.strftime(GmailPool.CLAIM_FORMAT,
+                             time.localtime(time.time() - seconds_ago))
+
+    pool = GmailPool(
+        FakeWorksheet(CLAIMED_HEADERS,
+                      [claimed_row("old@b.com", when=stamped(7200)),
+                       claimed_row("fresh@b.com", when=stamped(60))]),
+        CLAIMED_HEADERS, threading.Lock())
+    pool.load()
+    book = type("Book", (), {"gmails": pool, "proxies": pool.__class__(
+        FakeWorksheet(CLAIMED_HEADERS, []), CLAIMED_HEADERS, threading.Lock()),
+        "apps": pool.__class__(FakeWorksheet(CLAIMED_HEADERS, []),
+                               CLAIMED_HEADERS, threading.Lock())})()
+    book.proxies.load()
+    book.apps.load()
+
+    freed = builder.free_abandoned_claims(book, 3600)
+
+    assert len(freed) == 1 and "old@b.com" in freed[0]
+    assert pool.status_of(pool._rows[0]) in pool.available_statuses
+    assert pool.status_of(pool._rows[1]) == pool.claimed_status
+
+
+def test_the_budget_is_what_the_sync_measures_against(monkeypatch):
+    """Not a number of its own: the build budget is the outer bound on the
+    phone a credential was claimed for, so nothing can legitimately hold one
+    past it."""
+    import ast
+    import inspect
+
+    source = inspect.getsource(builder.run)
+    call = next(n for n in ast.walk(ast.parse(source.lstrip()))
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "id", "") == "sync_sheet")
+    passed = {k.arg: ast.unparse(k.value) for k in call.keywords}
+
+    assert passed["stale_claim_seconds"] == "settings.build_budget_seconds"

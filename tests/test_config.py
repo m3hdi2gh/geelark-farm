@@ -42,3 +42,59 @@ def test_load_env_strips_quotes(monkeypatch, tmp_path):
     import os
 
     assert os.environ["GEELARK_API_KEY"] == "quoted-value"
+
+
+# ------------------------------ a key padded with characters nobody can see
+def test_a_secret_padded_with_invisible_characters_is_still_a_key():
+    """A secret pasted out of a browser or a chat window arrives padded with
+    fillers that render as nothing, so the row looks perfectly ordinary and is
+    refused for holding a character nobody can see. Two Gpt Info rows sat
+    unusable that way, each with a valid key behind two U+3164 (2026-08-22)."""
+    from geelark_farm.accounts import check_totp_secret, normalize_totp_secret
+
+    real = "ㅤㅤ BI4ZAPC7QRFZDYDULON5KWNGP7F33WWO"
+
+    cleaned = normalize_totp_secret(real)
+
+    assert cleaned == "BI4ZAPC7QRFZDYDULON5KWNGP7F33WWO"
+    check_totp_secret(cleaned)             # and it produces codes
+
+
+def test_dropping_any_named_character_cannot_change_a_key():
+    """The list is a promise, and this is the half of it a machine can check:
+    none of these is part of a base32 key, so removing one can never turn a
+    valid secret into a different valid secret.
+
+    That they are also invisible is a human judgement - Unicode files them
+    under four different categories, and the braille blank is a symbol - so
+    the reason each earns its place is written beside the list, not asserted
+    here."""
+    from geelark_farm.accounts import BASE32_ALPHABET, INVISIBLE
+
+    for char in INVISIBLE:
+        assert char not in BASE32_ALPHABET, repr(char)
+    assert len(set(INVISIBLE)) == len(INVISIBLE)      # and none listed twice
+
+    # Not `isalnum`, which is true of the character that prompted all this:
+    # Unicode files the Hangul filler as a letter. Being outside the alphabet
+    # is the whole of the guarantee.
+    assert "ㅤ".isalnum()
+
+
+def test_something_pasted_into_the_wrong_column_is_still_refused():
+    """The reason this strips only the invisible ones. A cell holding
+    `fifa19.900t@pAss` - a password that had drifted a column - came back as a
+    padding complaint and sent the reader to the wrong thing entirely
+    (2026-08-09). Stripping anything outside base32 would make it decode."""
+    import pytest
+
+    from geelark_farm.accounts import (
+        AccountError,
+        check_totp_secret,
+        normalize_totp_secret,
+    )
+
+    with pytest.raises(AccountError) as caught:
+        check_totp_secret(normalize_totp_secret("fifa19.900t@pAss"))
+
+    assert "." in str(caught.value) or "@" in str(caught.value)
