@@ -151,6 +151,11 @@ class Pool:
     #: rotation, and a second column holding the same value would be noise.
     claimed_at_column = ""
 
+    #: Columns rendered as checkboxes. Held here rather than deduced, because
+    #: what needs knowing is which columns Sheets fills in on its own - see
+    #: `_has_content`.
+    checkbox_columns: frozenset[str] = frozenset()
+
     #: How the stamp is written. Sortable and readable, and the same format
     #: the Proxy tab has been using since the rotation landed.
     CLAIM_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -173,7 +178,7 @@ class Pool:
                 name: (line[i].strip() if i < len(line) else "")
                 for name, i in self._index.items()
             }
-            if not any(values.values()):
+            if not self._has_content(values):
                 continue                       # a blank spacer row, not a gap
             resource = Resource(sheet_row=offset, values=values)
             try:
@@ -182,6 +187,23 @@ class Pool:
                 resource.error = str(exc)
             self._rows.append(resource)
         self._flag_duplicates()
+
+    def _has_content(self, values: dict[str, str]) -> bool:
+        """Whether this is a row someone typed, or grid below the data.
+
+        An untouched checkbox is not blank: putting the boxes on a column
+        writes `FALSE` into every row of the grid, including the hundreds
+        nobody has filled in. Counting that as content turned 29 empty rows
+        of the `Gpt Info` tab into 29 rows refused for having no address the
+        first time the column went up (2026-08-22).
+
+        A box that is *ticked* on an otherwise empty row does count. Somebody
+        did that on purpose, and a row that says "this account signs in with
+        an emailed code" without naming the account should be told about.
+        """
+        return any(value for name, value in values.items()
+                   if name not in self.checkbox_columns
+                   or value.strip().upper() == "TRUE")
 
     def _identity(self, resource: Resource) -> str:
         """What makes two rows the same resource rather than two of them.
@@ -451,6 +473,17 @@ class AppPool(Pool):
     #: blanked - and the Note still says it was asked rather than judged,
     #: which is the difference between this and `fail()`.
     challenged_status = "challenged"
+
+    #: The tab carries this column, and this branch does nothing with it.
+    #:
+    #: Ticked, it says the account has no password and no authenticator and is
+    #: signed in with a code the service emails - which is a thing only the
+    #: other branch can do. Named here anyway, because Sheets writes `FALSE`
+    #: into every row of a checkbox column and `_has_content` has to know to
+    #: ignore that. A ticked row reaching this branch has no password, so it
+    #: is refused at load and never handed to a phone: nothing is spent.
+    EMAIL_CODE_COLUMN = "Email code"
+    checkbox_columns = frozenset({EMAIL_CODE_COLUMN})
 
     def set_aside(self, resource: Resource, *, reason: str = "",
                   note: str = "") -> None:

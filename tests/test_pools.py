@@ -326,6 +326,47 @@ def test_the_app_pool_reads_the_same_three_columns():
     assert claimed.credentials.totp_secret == SECRET
 
 
+def test_the_empty_grid_below_the_data_is_not_read_as_rows():
+    """Putting checkboxes on a column writes FALSE into every row of the grid.
+
+    The `Gpt Info` tab grew such a column, and the first run after it went up
+    read 29 untouched rows as rows with content in them - refusing all 29 for
+    having no address (2026-08-22).
+    """
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["real@example.com", "pw", SECRET, "", "", "", "FALSE"],
+        ["", "", "", "", "", "", "FALSE"],
+        ["", "", "", "", "", "", "FALSE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert [r.values["Address"] for r in pool._rows] == ["real@example.com"]
+
+
+def test_a_box_ticked_on_a_row_with_nothing_else_is_not_ignored():
+    """The other half: somebody did that on purpose, and a row claiming to
+    sign in with an emailed code without naming the account is worth saying."""
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["", "", "", "", "", "", "TRUE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert "not an email address" in pool.broken[0].error
+
+
+def test_a_ticked_row_is_refused_here_rather_than_half_tried():
+    """This branch cannot sign such an account in, and the right way to not do
+    that is the way it already handles a row with no password: refuse it at
+    load, hand it to no phone, and spend nothing."""
+    headers = APP_HEADERS + [AppPool.EMAIL_CODE_COLUMN]
+    pool = AppPool(FakeWorksheet(headers, [
+        ["coded@example.com", "", "", "", "", "", "TRUE"],
+    ]), headers, threading.Lock())
+    pool.load()
+    assert pool.claim() is None
+    assert "no password" in pool.broken[0].error
+
+
 # ---------------------------------------------------------- the Phones tab
 def test_a_phone_is_recorded_before_it_is_finished():
     """An interrupted run still has to leave something naming the phone in
