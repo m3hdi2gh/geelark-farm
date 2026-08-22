@@ -562,3 +562,58 @@ class _QuietTable:
 
     def drain_links(self):
         return []
+
+
+# ------------------------------------------------ what the console looks like
+def test_the_console_leaves_the_colour_of_what_it_prints_alone():
+    """rich colours what it recognises unless told not to.
+
+    A warning naming a proxy came out with the host in bright green and the
+    port in cyan - four colours on one address, none of them meaning anything,
+    beside a palette where green, yellow and red each mean something exact.
+    """
+    import io
+
+    from rich.console import Console
+
+    # Built the way ui.console is, and forced to a terminal so the escapes
+    # would show if there were any.
+    same = Console(file=io.StringIO(), force_terminal=True, width=120,
+                   highlight=ui.console._highlight)
+    with same.capture() as cap:
+        same.print("proxy SX39 is dead: socks5://u:p@82.38.66.153:10615")
+
+    assert "[" not in cap.get()
+
+
+def test_a_warning_above_the_table_does_not_lead_with_an_import_path():
+    """`geelark_farm.flows.chatgpt_login:` is eleven words in front of the
+    sentence that matters, answering a question nobody at a live table is
+    asking. The file log keeps it for when someone is."""
+    import logging
+
+    handler = ui.ReporterLogHandler(_QuietTable())
+    record = logging.LogRecord("geelark_farm.builder", logging.WARNING, "", 0,
+                               "proxy SX39 is dead", None, None)
+
+    line = handler.format(record)
+
+    assert line == "WARNING: proxy SX39 is dead"
+
+
+def test_a_dead_proxy_is_named_once_not_twice():
+    """`Resource.label` carries the whole address and so does the error after
+    it, so the line printed one credential-bearing URL twice and wrapped over
+    two rows to do it. The name is what finds the exit in the vendor's panel;
+    what failed and why is the error's job."""
+    import inspect
+    import re
+
+    from geelark_farm import builder
+
+    flat = " ".join(inspect.getsource(builder).split())
+    named = re.findall(r'"proxy %s is dead: %s", ([\w. ]+?),', flat)
+
+    assert named, "the warning moved - update this test with it"
+    # The name first. `resource.label` alone is what said it twice.
+    assert all(arg.startswith("resource.name") for arg in named), named

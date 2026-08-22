@@ -458,7 +458,13 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
         try:
             result = proxy_mod.check(client, resource.proxy)
         except (proxy_mod.ProxyError, ApiError) as exc:
-            log.warning("proxy %s is dead: %s", resource.label, exc)
+            # The name, not the label: the label carries the whole address,
+            # and so does the error after it, so the line printed one
+            # credential-bearing URL twice and wrapped over two rows to do it.
+            # What the name is for is finding the exit in the vendor's panel;
+            # what failed and why is the error's job.
+            log.warning("proxy %s is dead: %s", resource.name or resource.label,
+                        exc)
             book.proxies.fail(resource, "dead", note=(
                 f"GeeLark could not reach it when a phone was put behind it: "
                 f"{exc}")[:200])
@@ -1963,7 +1969,11 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
             if exit_ip is None:
                 if id(resource) in was_dead:
                     continue                      # still dead, still says so
-                log.warning("proxy %s is dead: %s", resource.label, error)
+                # The name, not the label, for the reason given where the
+                # build reports the same thing: the error already carries the
+                # address, and the label carries it again.
+                log.warning("proxy %s is dead: %s",
+                            resource.name or resource.label, error)
                 book.proxies.fail(resource, book.proxies.dead_status, note=(
                     f"Did not answer when the pool was checked: {error}"))
                 dead.append(resource)
