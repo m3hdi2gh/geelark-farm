@@ -1287,43 +1287,29 @@ def show_sync(outcome: dict[str, list[str]]) -> None:
 def needs_you(book: Book, outcome: dict[str, list[str]]) -> list[tuple]:
     """What the sync could not do for you, as (count, what, where to look).
 
-    The startup summary lists every single thing the sync *did* - fourteen
-    Gmails retired, fourteen phones deleted, fourteen proxies freed - and gives
-    the half that is actually your work as a number on the dashboard. That is
-    backwards for whoever is sitting there: the handled half is enumerated and
-    the unhandled half is summarised.
+    The line is not "what went wrong" - it is "what cannot go further without
+    you". A Gmail that will not sign in, an account that repeats one already
+    in the tab, a row holding something unreadable: all of those need a
+    correct label and nothing else. The label is what a refund is claimed on,
+    and the row is out of the pool either way, so putting it in front of
+    somebody every single run is asking them to acknowledge a thing they have
+    already dealt with - which is how a block like this stops being read.
 
-    Counts and kinds only, not the rows. Twenty-eight set-aside Gmails printed
-    in full would bury the two proxies that need an exit changing, and the
-    reason on each is one keypress away in 'Needs attention'.
-
-    Only things that need a decision or a hand outside this tool. A phone
-    waiting on an app account is work you can do from the menu, not a problem
-    to look into, and it is on the dashboard already.
+    What is left is genuinely blocked: an exit only the vendor's panel can
+    change, and two questions the sync deliberately refuses to answer because
+    the answer is a judgement.
     """
     items: list[tuple[int, str, str]] = []
 
-    for pool in (book.gmails, book.apps, book.proxies):
-        if pool.flagged:
-            items.append((len(pool.flagged),
-                          f"{pool.tab} rows a run set aside",
-                          "'Needs attention' says what each is waiting for"))
+    waiting = [r for r in book.proxies.flagged
+               if book.proxies.status_of(r) == book.proxies.needs_new_ip]
+    if waiting:
+        items.append((len(waiting), "proxies waiting on a new exit address",
+                      "change each in the vendor's panel, then set its cell "
+                      "to `free`"))
 
-    broken = sum(len(pool.broken)
-                 for pool in (book.gmails, book.apps, book.proxies))
-    if broken:
-        items.append((broken, "rows this tool cannot read at all",
-                      "a duplicate, or a cell holding something unexpected"))
-
-    stuck = sum(len(pool.stuck)
-                for pool in (book.gmails, book.apps, book.proxies))
-    if stuck:
-        items.append((stuck, "rows still claimed by a run that has gone",
-                      "freed automatically once older than a build's budget, "
-                      "or now from 'What I have to work with'"))
-
-    # These two the sync found and deliberately did not act on: which way each
-    # goes is a judgement, and History is where the answer is.
+    # These two the sync found and left alone on purpose: which way each goes
+    # is a judgement, and History is where the answer is.
     if outcome.get("stranded_waiting"):
         items.append((len(outcome["stranded_waiting"]),
                       "app accounts held against a phone that is gone",

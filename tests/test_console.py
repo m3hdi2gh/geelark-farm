@@ -411,30 +411,25 @@ def test_a_handler_already_quiet_is_left_where_it_was():
 
 
 # ------------------------------------------- what the sync could not do for you
-class Flagged:
+class Pretend:
     """A pool holding whatever the test wants it to hold."""
 
-    def __init__(self, tab, flagged=0, stuck=0, broken=0):
+    def __init__(self, tab, flagged=(), needs_new_ip="change ip"):
         self.tab = tab
-        self.flagged = list(range(flagged))
-        self.stuck = list(range(stuck))
-        self.broken = list(range(broken))
+        self.flagged = list(flagged)
+        self.needs_new_ip = needs_new_ip
+
+    def status_of(self, resource):
+        return resource
 
 
 class Tabs:
-    def __init__(self, gmails, apps, proxies, waiting=0):
-        self.gmails, self.apps, self.proxies = gmails, apps, proxies
+    def __init__(self, gmails=(), apps=(), proxies=(), waiting=0):
+        self.gmails = Pretend("Gmails", gmails)
+        self.apps = Pretend("Gpt Info", apps)
+        self.proxies = Pretend("Proxy", proxies)
         self.phones = type("P", (), {
             "unfinished": lambda _self: list(range(waiting))})()
-
-
-def test_a_clean_sheet_says_nothing_at_all():
-    """It runs every startup. A block that appears when there is nothing to do
-    teaches you to skip the block."""
-    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"))
-
-    assert ui.needs_you(book, {}) == []
-    assert rendered_needs(ui.needs_you(book, {})) == ""
 
 
 def rendered_needs(items):
@@ -447,52 +442,58 @@ def rendered_needs(items):
     return console.export_text().strip()
 
 
-def test_each_kind_is_counted_once_with_somewhere_to_look():
-    book = Tabs(Flagged("Gmails", flagged=28), Flagged("Gpt Info", broken=2),
-                Flagged("Proxy", stuck=3))
+def test_a_credential_that_only_needs_labelling_is_not_raised():
+    """A Gmail that will not sign in is the seller's problem, not yours: the
+    status is what a refund is claimed on, and the row is out of the pool
+    either way. Putting it up every run asks you to acknowledge something you
+    have already dealt with, which is how a block like this stops being read."""
+    book = Tabs(gmails=["captcha_shown", "password_changed", "wrong_2fa_code"],
+                apps=["email_code_required"])
+
+    assert ui.needs_you(book, {}) == []
+
+
+def test_a_duplicate_is_not_raised_either():
+    """Labelled and never handed out is the whole of what it needs."""
+    book = Tabs(gmails=["duplicate"], apps=["duplicate"])
+
+    assert ui.needs_you(book, {}) == []
+
+
+def test_an_exit_only_the_vendor_can_change_is_raised():
+    """Nothing here can give a proxy a new address - these rows carry no port
+    id - so this one really does stop until a hand moves."""
+    book = Tabs(proxies=["change ip", "dead", "change ip"])
 
     items = ui.needs_you(book, {})
     text = rendered_needs(items)
 
-    assert [count for count, _, _ in items] == [28, 2, 3]
-    assert "28" in text and "Gmails" in text
-    assert "cannot read" in text
-    assert "claimed by a run that has gone" in text
-    # every line says where to go, or the count is just a complaint
-    assert all(where for _, _, where in items)
+    assert [count for count, _, _ in items] == [2]     # `dead` is retested
+    assert "vendor" in text
 
 
-def test_the_rows_themselves_are_not_printed():
-    """Twenty-eight set-aside Gmails in full would bury the two proxies that
-    need an exit changing. The reason on each is one keypress away."""
-    book = Tabs(Flagged("Gmails", flagged=28), Flagged("Gpt Info"),
-                Flagged("Proxy"))
-
-    text = rendered_needs(ui.needs_you(book, {}))
-
-    assert len(text.splitlines()) <= 4       # heading, the count, where to look
-
-
-def test_the_two_the_sync_deliberately_left_alone_are_named():
+def test_the_two_judgements_the_sync_refuses_are_raised():
     """`strand_check` finds these and does not act: which way each goes is a
     judgement, and the alert has to say where the answer is."""
-    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"))
     outcome = {"stranded_waiting": ["a@b.com (was on phone 950)"],
                "unknown_phones": ["1099"]}
 
-    text = rendered_needs(ui.needs_you(book, outcome))
+    text = rendered_needs(ui.needs_you(Tabs(), outcome))
 
     assert "History" in text                 # where to look for the first
-    assert "1" in text and "never knew" in text
+    assert "never knew" in text
+
+
+def test_a_clean_sheet_says_nothing_at_all():
+    """It runs every startup. A block that appears when there is nothing to do
+    teaches you to skip the block."""
+    assert ui.needs_you(Tabs(), {}) == []
+    assert rendered_needs([]) == ""
 
 
 def test_a_phone_waiting_on_an_account_is_not_called_a_problem():
-    """It is work you can do from the menu, and the dashboard says so already.
-    Listing it here would put a line in the block on every single run."""
-    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"),
-                waiting=6)
-
-    assert ui.needs_you(book, {}) == []
+    """It is work you can do from the menu, and the dashboard says so already."""
+    assert ui.needs_you(Tabs(waiting=6), {}) == []
 
 
 def test_the_startup_shows_it_after_the_summary():
