@@ -305,6 +305,24 @@ class _LiveTable:
             if entry["state"] == "working":
                 entry["step"] = message
 
+    def waiting_for_code(self, address: str) -> None:
+        """Say on the row that this build is waiting on a person.
+
+        The step column shows the last thing that was logged, and nothing is
+        logged while a build sits on the code page - so the row went on saying
+        "entering the app account's email address" for as long as it took
+        somebody to read an inbox. That is the frame frozen above the prompt,
+        which made the table and the question under it disagree about what was
+        happening (2026-08-23).
+
+        Matched on the address because that is already the link between the
+        two: the request carries it and the row records it.
+        """
+        with self.lock:
+            for entry in self.rows.values():
+                if entry.get("email") == address and entry["state"] == "working":
+                    entry["step"] = "waiting for the code you were emailed"
+
     def _render(self, first_heading: str) -> Table:
         """One line per worker, coloured by state.
 
@@ -472,7 +490,7 @@ def print_new_links(live: Live, reporter: _LiveTable) -> None:
     live.console.print()
 
 
-def ask_for_codes(live: Live, pending) -> None:
+def ask_for_codes(live: Live, reporter: _LiveTable, pending) -> None:
     """Answer any build stopped on the "check your inbox" page.
 
     Only reached by accounts with no authenticator on them, where OpenAI
@@ -490,16 +508,24 @@ def ask_for_codes(live: Live, pending) -> None:
     reports that nobody answered.
     """
     for request in pending.waiting():
+        # Before the table is frozen, not after: the frame left on screen is
+        # the one the question is asked underneath, and it should say what the
+        # build is doing rather than the last thing it did.
+        reporter.waiting_for_code(request.address)
+        live.update(reporter.render())
         live.stop()
         try:
-            console.print(
-                f"[{WARN}]OpenAI emailed a code to {request.address}[/] "
-                f"[{DIM}]- it has no authenticator, so the sign-in cannot go "
-                f"on without it[/]")
-            console.print(f"[{DIM}]  about {request.seconds_left:.0f}s left; "
-                          f"press Enter alone to give up on this one[/]")
+            # One line. It carried three, and two of them said the same thing
+            # the row above now says - plus a sentence explaining why an
+            # account with no authenticator is emailed a code, printed in full
+            # every single time it happened. The address stays, because it is
+            # the one thing here the table cannot show: it truncates at the
+            # column width, and this is the mailbox to go and open.
             while request.seconds_left > 0:
-                typed = Prompt.ask("  code", default="", show_default=False)
+                typed = Prompt.ask(
+                    f"  [{WARN}]code emailed to {request.address}[/] "
+                    f"[{DIM}]({request.seconds_left:.0f}s, Enter to skip)[/]",
+                    default="", show_default=False)
                 if not typed.strip():
                     pending.give_up(request)
                     console.print(f"[{DIM}]  left unanswered - the account is "
@@ -611,7 +637,7 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
                         # is not going anywhere until someone answers it, and
                         # the table below would go on saying "entering the
                         # code" with nothing behind it.
-                        ask_for_codes(live, pending)
+                        ask_for_codes(live, reporter, pending)
                     live.update(reporter.render())
                     time.sleep(0.25)
                 except KeyboardInterrupt:

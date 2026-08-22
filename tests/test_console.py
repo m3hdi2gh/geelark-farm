@@ -414,12 +414,16 @@ def test_a_handler_already_quiet_is_left_where_it_was():
 class FakeLive:
     def __init__(self):
         self.stops, self.starts = 0, 0
+        self.frames = 0
 
     def stop(self):
         self.stops += 1
 
     def start(self):
         self.starts += 1
+
+    def update(self, _renderable):
+        self.frames += 1
 
 
 def waiting_source(address="a@b.com", timeout=5):
@@ -439,6 +443,75 @@ def waiting_source(address="a@b.com", timeout=5):
     return source, worker
 
 
+def test_the_row_says_it_is_waiting_before_the_question_is_asked(monkeypatch):
+    """The frame frozen above the prompt is the one you read while typing.
+
+    Nothing is logged while a build sits on the code page, and the step column
+    shows the last thing that was - so the row went on saying "entering the
+    app account's email address" for as long as it took to find an inbox. The
+    table and the question under it disagreed about what was happening
+    (2026-08-23).
+    """
+    from geelark_farm import ui
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "481920"))
+
+    reporter = ui.BuildReporter()
+    reporter.start(1, 1)
+    reporter.note(1, "signing into the app as long.address@example.com")
+    reporter.note(1, "entering the app account's email address")
+
+    source, worker = waiting_source("long.address@example.com")
+    live = FakeLive()
+    ui.ask_for_codes(live, reporter, source)
+    worker.join(2)
+
+    assert rendered(reporter.render()).count(
+        "waiting for the code you were emailed") == 1
+    # and it was drawn before the table was frozen, not after
+    assert live.frames == 1
+
+
+def test_only_the_build_that_is_asking_changes_what_its_row_says():
+    """Four builds run at once and one of them stopped. Saying so on all four
+    is how you end up looking at the wrong phone."""
+    from geelark_farm import ui
+
+    reporter = ui.BuildReporter()
+    for index, address in ((1, "one@example.com"), (2, "two@example.com")):
+        reporter.start(index, 2)
+        reporter.note(index, f"signing into the app as {address}")
+        reporter.note(index, "entering the app account's email address")
+
+    reporter.waiting_for_code("two@example.com")
+
+    text = rendered(reporter.render())
+    assert text.count("waiting for the code you were emailed") == 1
+    assert "entering the app account's email address" in text
+
+
+def test_the_question_asks_once_and_names_the_mailbox(monkeypatch):
+    """It carried three lines, two of which said what the row above now says -
+    plus a sentence explaining why an account with no authenticator is emailed
+    a code, printed in full every time it happened.
+
+    The address stays: the table truncates at the column width, and this is
+    the mailbox to go and open."""
+    from geelark_farm import ui
+    asked: list[str] = []
+    monkeypatch.setattr(ui.Prompt, "ask",
+                        staticmethod(lambda prompt, **k: asked.append(prompt)
+                                     or "481920"))
+
+    source, worker = waiting_source("agricultural.chicken.vlek@masked.me")
+    ui.ask_for_codes(FakeLive(), ui.BuildReporter(), source)
+    worker.join(2)
+
+    prompt, = asked
+    assert "agricultural.chicken.vlek@masked.me" in prompt
+    assert "Enter to skip" in prompt
+    assert "no authenticator" not in prompt
+
+
 def test_the_prompt_stops_the_live_table_while_it_reads(monkeypatch):
     """Reading a line while Live is drawing puts the typing underneath the
     table, four times a second."""
@@ -447,7 +520,7 @@ def test_the_prompt_stops_the_live_table_while_it_reads(monkeypatch):
     source, worker = waiting_source()
     live = FakeLive()
 
-    ui.ask_for_codes(live, source)
+    ui.ask_for_codes(live, ui.BuildReporter(), source)
 
     assert live.stops == 1 and live.starts == 1
     worker.join(2)
@@ -461,7 +534,7 @@ def test_an_empty_answer_gives_up_on_that_build(monkeypatch):
     monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: ""))
     source, worker = waiting_source()
 
-    ui.ask_for_codes(FakeLive(), source)
+    ui.ask_for_codes(FakeLive(), ui.BuildReporter(), source)
 
     worker.join(2)
     assert not worker.is_alive()
@@ -475,7 +548,7 @@ def test_a_mistyped_code_is_asked_for_again(monkeypatch):
                         staticmethod(lambda *a, **k: next(answers)))
     source, worker = waiting_source()
 
-    ui.ask_for_codes(FakeLive(), source)
+    ui.ask_for_codes(FakeLive(), ui.BuildReporter(), source)
 
     worker.join(2)
     assert source.waiting() == []
@@ -487,7 +560,7 @@ def test_nothing_waiting_means_nothing_is_asked_and_the_table_keeps_drawing():
     from geelark_farm import codes, ui
     live = FakeLive()
 
-    ui.ask_for_codes(live, codes.Pending())
+    ui.ask_for_codes(live, ui.BuildReporter(), codes.Pending())
 
     assert live.stops == 0 and live.starts == 0
 
@@ -504,7 +577,7 @@ def test_the_live_table_is_restarted_even_if_the_prompt_is_interrupted(
     source, worker = waiting_source()
     live = FakeLive()
 
-    ui.ask_for_codes(live, source)
+    ui.ask_for_codes(live, ui.BuildReporter(), source)
 
     assert live.starts == live.stops == 1
     worker.join(2)
