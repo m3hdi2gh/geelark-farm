@@ -1090,6 +1090,14 @@ def sync_on_startup(settings: Settings) -> None:
         console.print(f"[{WARN}]could not update the sheet first: {exc}[/]")
         return
     show_sync(outcome)
+    # And what it could not do, which is the half you actually have to act on.
+    # Reading the sheet again rather than working from `outcome`: most of this
+    # is what the tabs hold rather than what this run changed, and the sync has
+    # just moved several of them.
+    try:
+        show_needs_you(needs_you(Book.open(settings), outcome))
+    except (SheetError, GSpreadError) as exc:
+        console.print(f"[{DIM}]could not list what still needs you: {exc}[/]")
     if outcome:
         console.print()
 
@@ -1274,6 +1282,69 @@ def show_sync(outcome: dict[str, list[str]]) -> None:
         console.print(f"[{style}]{len(items)} {meaning}[/]")
         for item in items:
             console.print(f"   [{DIM}]{item}[/]")
+
+
+def needs_you(book: Book, outcome: dict[str, list[str]]) -> list[tuple]:
+    """What the sync could not do for you, as (count, what, where to look).
+
+    The startup summary lists every single thing the sync *did* - fourteen
+    Gmails retired, fourteen phones deleted, fourteen proxies freed - and gives
+    the half that is actually your work as a number on the dashboard. That is
+    backwards for whoever is sitting there: the handled half is enumerated and
+    the unhandled half is summarised.
+
+    Counts and kinds only, not the rows. Twenty-eight set-aside Gmails printed
+    in full would bury the two proxies that need an exit changing, and the
+    reason on each is one keypress away in 'Needs attention'.
+
+    Only things that need a decision or a hand outside this tool. A phone
+    waiting on an app account is work you can do from the menu, not a problem
+    to look into, and it is on the dashboard already.
+    """
+    items: list[tuple[int, str, str]] = []
+
+    for pool in (book.gmails, book.apps, book.proxies):
+        if pool.flagged:
+            items.append((len(pool.flagged),
+                          f"{pool.tab} rows a run set aside",
+                          "'Needs attention' says what each is waiting for"))
+
+    broken = sum(len(pool.broken)
+                 for pool in (book.gmails, book.apps, book.proxies))
+    if broken:
+        items.append((broken, "rows this tool cannot read at all",
+                      "a duplicate, or a cell holding something unexpected"))
+
+    stuck = sum(len(pool.stuck)
+                for pool in (book.gmails, book.apps, book.proxies))
+    if stuck:
+        items.append((stuck, "rows still claimed by a run that has gone",
+                      "freed automatically once older than a build's budget, "
+                      "or now from 'What I have to work with'"))
+
+    # These two the sync found and deliberately did not act on: which way each
+    # goes is a judgement, and History is where the answer is.
+    if outcome.get("stranded_waiting"):
+        items.append((len(outcome["stranded_waiting"]),
+                      "app accounts held against a phone that is gone",
+                      "History says how that phone ended - then deliver or "
+                      "free the account by hand"))
+    if outcome.get("unknown_phones"):
+        items.append((len(outcome["unknown_phones"]),
+                      "phones GeeLark has that the Phones tab never knew",
+                      "nothing here will ever settle them: delete them, or "
+                      "add a row"))
+    return items
+
+
+def show_needs_you(items: list[tuple]) -> None:
+    if not items:
+        return
+    console.print(f"\n[bold {WARN}]needs you[/] "
+                  f"[{DIM}]- the sync did everything it could on its own[/]")
+    for count, what, where in items:
+        console.print(f"   [{WARN}]{count:>3}[/] {what}")
+        console.print(f"       [{DIM}]{where}[/]")
 
 
 def apply_marks(settings: Settings) -> None:

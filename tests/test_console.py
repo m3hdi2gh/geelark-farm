@@ -408,3 +408,99 @@ def test_a_handler_already_quiet_is_left_where_it_was():
         assert stream.level == logging.ERROR
     finally:
         root.removeHandler(stream)
+
+
+# ------------------------------------------- what the sync could not do for you
+class Flagged:
+    """A pool holding whatever the test wants it to hold."""
+
+    def __init__(self, tab, flagged=0, stuck=0, broken=0):
+        self.tab = tab
+        self.flagged = list(range(flagged))
+        self.stuck = list(range(stuck))
+        self.broken = list(range(broken))
+
+
+class Tabs:
+    def __init__(self, gmails, apps, proxies, waiting=0):
+        self.gmails, self.apps, self.proxies = gmails, apps, proxies
+        self.phones = type("P", (), {
+            "unfinished": lambda _self: list(range(waiting))})()
+
+
+def test_a_clean_sheet_says_nothing_at_all():
+    """It runs every startup. A block that appears when there is nothing to do
+    teaches you to skip the block."""
+    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"))
+
+    assert ui.needs_you(book, {}) == []
+    assert rendered_needs(ui.needs_you(book, {})) == ""
+
+
+def rendered_needs(items):
+    console = Console(width=100, no_color=True, record=True)
+    real, ui.console = ui.console, console
+    try:
+        ui.show_needs_you(items)
+    finally:
+        ui.console = real
+    return console.export_text().strip()
+
+
+def test_each_kind_is_counted_once_with_somewhere_to_look():
+    book = Tabs(Flagged("Gmails", flagged=28), Flagged("Gpt Info", broken=2),
+                Flagged("Proxy", stuck=3))
+
+    items = ui.needs_you(book, {})
+    text = rendered_needs(items)
+
+    assert [count for count, _, _ in items] == [28, 2, 3]
+    assert "28" in text and "Gmails" in text
+    assert "cannot read" in text
+    assert "claimed by a run that has gone" in text
+    # every line says where to go, or the count is just a complaint
+    assert all(where for _, _, where in items)
+
+
+def test_the_rows_themselves_are_not_printed():
+    """Twenty-eight set-aside Gmails in full would bury the two proxies that
+    need an exit changing. The reason on each is one keypress away."""
+    book = Tabs(Flagged("Gmails", flagged=28), Flagged("Gpt Info"),
+                Flagged("Proxy"))
+
+    text = rendered_needs(ui.needs_you(book, {}))
+
+    assert len(text.splitlines()) <= 4       # heading, the count, where to look
+
+
+def test_the_two_the_sync_deliberately_left_alone_are_named():
+    """`strand_check` finds these and does not act: which way each goes is a
+    judgement, and the alert has to say where the answer is."""
+    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"))
+    outcome = {"stranded_waiting": ["a@b.com (was on phone 950)"],
+               "unknown_phones": ["1099"]}
+
+    text = rendered_needs(ui.needs_you(book, outcome))
+
+    assert "History" in text                 # where to look for the first
+    assert "1" in text and "never knew" in text
+
+
+def test_a_phone_waiting_on_an_account_is_not_called_a_problem():
+    """It is work you can do from the menu, and the dashboard says so already.
+    Listing it here would put a line in the block on every single run."""
+    book = Tabs(Flagged("Gmails"), Flagged("Gpt Info"), Flagged("Proxy"),
+                waiting=6)
+
+    assert ui.needs_you(book, {}) == []
+
+
+def test_the_startup_shows_it_after_the_summary():
+    """The wiring: without it the block exists and nobody ever sees it."""
+    import inspect
+
+    source = inspect.getsource(ui.sync_on_startup)
+
+    assert "show_sync(outcome)" in source
+    assert "show_needs_you(needs_you(" in source
+    assert source.index("show_sync(outcome)") < source.index("show_needs_you")
