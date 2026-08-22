@@ -782,7 +782,7 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
         return failed
     return Outcome("success", "logged_in",
                    f"the app's own settings name {creds.email}",
-                   artifacts=out.artifacts)
+                   artifacts=out.artifacts, trail=out.trail)
 
 
 def sign_in_on_phone(client: Client, phone_id: str, creds: Credentials,
