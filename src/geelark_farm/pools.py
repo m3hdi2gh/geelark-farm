@@ -1028,8 +1028,12 @@ class HistoryLog:
     appending at once cannot land on the same line.
     """
 
+    #: Appended to, never reordered. Rows are written by position, so moving
+    #: a column would scramble every row already written under the old one -
+    #: which is also why `Steps` sits after `Note` rather than beside the
+    #: fields it belongs with.
     HEADERS = ["When", "Machine", "Serial", "Event", "Seconds", "Proxy",
-               "Gmail", "GPT Account", "Note"]
+               "Gmail", "GPT Account", "Note", "Steps"]
 
     def __init__(self, worksheet, lock: threading.Lock):
         self._ws = worksheet
@@ -1185,7 +1189,12 @@ class Book:
                 sheet = book.add_worksheet(
                     HISTORY_TAB, rows=2000, cols=len(HistoryLog.HEADERS))
                 sheet.append_row(HistoryLog.HEADERS)
-                log.info("created the %s tab", HISTORY_TAB)
+            # An existing tab predates whatever was appended to HEADERS since
+            # it was made. Every name is passed, not just the new one: the
+            # list is append-only, so anything a tab is missing is a suffix of
+            # it, and `ensure_columns` appends in the order given - which puts
+            # them exactly where rows are written by position.
+            ensure_columns(sheet, *HistoryLog.HEADERS)
             history = HistoryLog(sheet, lock)
         except Exception as exc:                                  # noqa: BLE001
             log.warning("no History tab this session (%s)", exc)

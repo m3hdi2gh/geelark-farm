@@ -171,6 +171,41 @@ class Build:
     seconds: float = 0.0
     #: Where this build's archived pages went, for the prune to judge.
     artifact_dir: str = ""
+    #: The screens each phase walked, as (phase, [screen, ...]). Written to
+    #: History as one cell, which is the only account of a run that crosses
+    #: machines: the log file is per-day and lives on whichever computer
+    #: produced it, so nothing about a build on the Mac was readable from
+    #: here at all (2026-08-23).
+    #:
+    #: Kept as parts rather than a formatted string for the reason `tried` is:
+    #: what a terminal wants to show and what a sheet cell wants are not the
+    #: same shape, and formatting early throws away the choice.
+    trails: list[tuple[str, list[str]]] = field(default_factory=list)
+
+    @property
+    def steps(self) -> str:
+        """The path this build walked, as one cell.
+
+        Runs of the same screen are collapsed to `name x3`. A screen handled
+        three times without progress is the whole tell that something is
+        looping, and printing it three times spends the width saying it
+        three times.
+        """
+        parts = []
+        for phase, screens in self.trails:
+            if not screens:
+                continue
+            run: list[str] = []
+            last, count = "", 0
+            for name in [*screens, ""]:
+                if name == last:
+                    count += 1
+                    continue
+                if last:
+                    run.append(f"{last} x{count}" if count > 1 else last)
+                last, count = name, 1
+            parts.append(f"{phase}: " + " > ".join(run))
+        return " | ".join(parts)
     # True when this build's phone could not be confirmed stopped. The summary
     # must never claim nothing is billing while this is set.
     still_running: bool = False
@@ -372,6 +407,11 @@ def _sign_into_app(session: _Session) -> Build | None:
             fresh=s.attempted > 0,
         )
         s.attempted += 1
+        # Each attempt appends its own, so a phone that worked through three
+        # accounts leaves three paths rather than one path with the first two
+        # missing - and how far each got is most of what separates a bad batch
+        # of credentials from a phone that cannot sign anyone in.
+        s.build.trails.append(("gpt", outcome.trail))
         if outcome.ok:
             s.build.app_account = s.app_row.credentials.email
             s.app_signed_in = True
@@ -608,6 +648,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
                 artifact_dir=artifacts,
             )
+            build.trails.append(("google", outcome.trail))
             if outcome.ok:
                 build.gmail = account.email
                 gmail_signed_in = True
@@ -648,6 +689,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             budget_seconds=min(settings.install_budget_seconds, remaining()),
             artifact_dir=artifacts,
         )
+        build.trails.append(("install", installed.trail))
         if not installed.ok:
             return finish("install_failed",
                           f"the app could not be installed - "
@@ -770,6 +812,7 @@ def _discard(client: Client, book: Book, ledger: Ledger,
     book.record_history(
         Serial=build.serial, Event="discarded",
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
+        Steps=build.steps[:500],
         Note=(f"Deleted rather than kept - nothing was ever signed into it. "
               f"{outcome_of(build).capitalize()}."))
     resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
@@ -1256,7 +1299,7 @@ def _record(book: Book, build: Build) -> None:
     book.record_history(
         Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Gmail=build.gmail, Note=note[:500],
+        Gmail=build.gmail, Note=note[:500], Steps=build.steps[:500],
         **{"GPT Account": build.app_account,
            "App": book.phones.INSTALLED if build.app_installed else ""})
 

@@ -2261,3 +2261,108 @@ def test_the_budget_is_what_the_sync_measures_against(monkeypatch):
     passed = {k.arg: ast.unparse(k.value) for k in call.keywords}
 
     assert passed["stale_claim_seconds"] == "settings.build_budget_seconds"
+
+
+# --------------------------------------------- the path a build walked
+def test_the_path_a_build_walked_is_one_cell_per_phase():
+    """History is the only account of a run that crosses machines: the log
+    file is per-day and lives on whichever computer produced it, so nothing
+    about a build on the Mac was readable from here at all (2026-08-23)."""
+    build = builder.Build(index=1, trails=[
+        ("google", ["email_entry", "password_entry", "totp_entry"]),
+        ("install", ["search", "app_page", "open"]),
+        ("gpt", ["welcome", "email_entry", "email_code_entry", "onboarding"]),
+    ])
+
+    assert build.steps == (
+        "google: email_entry > password_entry > totp_entry"
+        " | install: search > app_page > open"
+        " | gpt: welcome > email_entry > email_code_entry > onboarding")
+
+
+def test_a_screen_handled_again_and_again_is_counted_not_repeated():
+    """A screen handled three times without progress is the whole tell that
+    something is looping, and printing it three times spends the width saying
+    it three times."""
+    build = builder.Build(index=1, trails=[
+        ("gpt", ["welcome", "email_entry", "email_entry", "email_entry"])])
+
+    assert build.steps == "gpt: welcome > email_entry x3"
+
+
+def test_the_order_is_kept_not_just_the_count():
+    """`Context.seen` counts visits per name, so `A > B > A > B` and
+    `A > A > B > B` are the same dictionary - and telling a loop from a
+    straight run is most of what reading one of these is for."""
+    loop = builder.Build(index=1, trails=[("gpt", ["a", "b", "a", "b"])])
+    straight = builder.Build(index=2, trails=[("gpt", ["a", "a", "b", "b"])])
+
+    assert loop.steps == "gpt: a > b > a > b"
+    assert straight.steps == "gpt: a x2 > b x2"
+    assert loop.steps != straight.steps
+
+
+def test_a_phase_that_never_saw_a_screen_is_left_out():
+    """`app_not_installed` is decided before the loop runs. An empty phase
+    named with nothing after it would read as a step that happened."""
+    build = builder.Build(index=1, trails=[
+        ("google", ["email_entry"]), ("install", []), ("gpt", [])])
+
+    assert build.steps == "google: email_entry"
+
+
+def test_each_account_a_phone_worked_through_leaves_its_own_path():
+    """How far each got is most of what separates a bad batch of credentials
+    from a phone that cannot sign anyone in."""
+    build = builder.Build(index=1, trails=[
+        ("gpt", ["welcome", "email_entry", "password_entry"]),
+        ("gpt", ["welcome", "email_entry", "onboarding"]),
+    ])
+
+    assert build.steps.count("gpt:") == 2
+
+
+def test_a_build_that_never_started_has_nothing_to_say():
+    assert builder.Build(index=1).steps == ""
+
+
+def test_the_router_hands_the_path_back_on_every_outcome():
+    """A wrapper rather than a line before each `return`: the loop has five of
+    them and a sixth would be added one day without it. The path is worth
+    having on a success too - that is the shape a healthy run has, which is
+    what makes a failure's shape readable."""
+    from geelark_farm.flows import router
+
+    class FakeContext(router.Context):
+        def refresh(self):
+            # Anything non-empty: the loop only asks whether a screen was read.
+            self.elements = ["on screen"]
+            self.blob = "on screen"
+
+    seen = []
+    screens = [router.Screen("first", lambda c: len(seen) < 1,
+                             lambda c: seen.append(1)),
+               router.Screen("second", lambda c: True,
+                             lambda c: router.Outcome("fatal", "stopped"))]
+    ctx = FakeContext(client=None, phone_id="P")
+
+    out = router.drive(ctx, screens, is_done=lambda: None, budget_seconds=5)
+
+    assert out.reason == "stopped"
+    assert out.trail == ["first", "second"]
+
+
+def test_a_flow_that_stops_before_the_loop_carries_an_empty_path():
+    """`app_not_installed` never saw a screen, and says so by having none."""
+    from geelark_farm.flows.router import Outcome
+
+    assert Outcome("fatal", "app_not_installed").trail == []
+
+
+def test_history_writes_the_path_beside_the_outcome():
+    """Appended, never reordered: rows are written by position, so moving a
+    column scrambles every row already written under the old one."""
+    from geelark_farm.pools import HistoryLog
+
+    assert HistoryLog.HEADERS[-1] == "Steps"
+    assert HistoryLog.HEADERS.index("Note") < HistoryLog.HEADERS.index("Steps")

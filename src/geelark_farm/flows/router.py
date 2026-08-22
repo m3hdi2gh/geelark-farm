@@ -36,6 +36,11 @@ class Outcome:
     reason: str
     detail: str = ""
     artifacts: list[str] = field(default_factory=list)
+    #: The screens this flow walked, in order, repeats and all. Stamped by
+    #: `drive` on whatever it returns, so every flow carries one without
+    #: having to remember to. Empty on an outcome decided before the loop ran
+    #: - `app_not_installed` never saw a screen, and says so by having none.
+    trail: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -58,6 +63,11 @@ class Context:
     artifact_dir: Path | None = None
     seen: dict[str, int] = field(default_factory=dict)
     saved: list[str] = field(default_factory=list)
+    #: Every screen as it was reached, in order. `seen` cannot answer this:
+    #: it counts visits per name, so `A > B > A > B` and `A > A > B > B` are
+    #: the same dictionary, and telling a loop from a straight run is most of
+    #: what reading one of these is for.
+    trail: list[str] = field(default_factory=list)
 
     def refresh(self) -> None:
         xml = screen.capture(self.client, self.phone_id)
@@ -173,6 +183,23 @@ def drive(ctx: Context, screens: list[Screen], *,
           is_done: Callable[[], Outcome | None],
           budget_seconds: float,
           logger: logging.Logger | None = None) -> Outcome:
+    """`_drive`, with the path it walked attached to whatever comes back.
+
+    A wrapper rather than a line before each `return`: the loop below has five
+    of them and a sixth would be added one day without this. The path is worth
+    having on every one - a success is the shape a healthy run has, which is
+    what makes a failure's shape readable.
+    """
+    outcome = _drive(ctx, screens, is_done=is_done,
+                     budget_seconds=budget_seconds, logger=logger)
+    outcome.trail = list(ctx.trail)
+    return outcome
+
+
+def _drive(ctx: Context, screens: list[Screen], *,
+           is_done: Callable[[], Outcome | None],
+           budget_seconds: float,
+           logger: logging.Logger | None = None) -> Outcome:
     """Run the loop until something conclusive happens.
 
     Returns rather than raises: a batch needs to record why a row failed and
@@ -220,6 +247,7 @@ def drive(ctx: Context, screens: list[Screen], *,
                            f"handled {visits} times without progress",
                            artifacts=[path] if path else [])
 
+        ctx.trail.append(matched.name)
         out.info("screen: %s (visit %d)", matched.name, visits)
         if visits == 1:
             # Archive each page the first time it is seen, so every run leaves
