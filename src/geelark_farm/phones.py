@@ -44,9 +44,35 @@ class PhoneError(Exception):
     """A phone is not in a usable state."""
 
 
+#: A page that comes back short is the last one. The cap is a guard against a
+#: server that keeps answering full pages forever, not an expected limit: at
+#: 100 a page it allows ten thousand phones, and a plan holds tens.
+MAX_PAGES = 100
+
+
 def listing(client: Client, page_size: int = 100) -> list[dict]:
-    data = client.data("/v1/phone/list", {"page": 1, "pageSize": page_size}) or {}
-    return data.get("items") or []
+    """Every phone on the account.
+
+    Every page of them. It asked for page 1 and stopped, which is twenty
+    callers' worth of "what exists" - including the sync that decides which
+    rows have lost their phone. Past a hundred phones the rest would simply
+    not exist as far as any of them could tell: their rows read as stranded
+    and get settled, while the phones themselves stay up and billing.
+
+    Out of reach today at thirty plan slots. Warm stock is what raises that
+    number, and it raises it while nobody is watching.
+    """
+    items: list[dict] = []
+    for page in range(1, MAX_PAGES + 1):
+        data = client.data("/v1/phone/list",
+                           {"page": page, "pageSize": page_size}) or {}
+        batch = data.get("items") or []
+        items.extend(batch)
+        if len(batch) < page_size:
+            return items
+    log.warning("stopped listing phones at %d pages (%d so far); if this is "
+                "real, MAX_PAGES needs raising", MAX_PAGES, len(items))
+    return items
 
 
 def plan(client: Client) -> dict:
@@ -59,24 +85,6 @@ def plan(client: Client) -> dict:
     GeeLark rate-limits this endpoint to one request per minute.
     """
     return client.data("/v1/pay/plan/info") or {}
-
-
-def info(client: Client, phone_id: str) -> dict:
-    """Everything the phone list knows about one phone, or {} if it is gone."""
-    for item in listing(client):
-        if item.get("id") == phone_id:
-            return item
-    return {}
-
-
-def serial_of(client: Client, phone_id: str) -> str:
-    """The human-facing serial for a phone that already exists.
-
-    Creation returns it, but a run that reuses a phone never sees it - and the
-    serial is how a phone is identified in the GeeLark panel, so a row without
-    one is harder to act on than it needs to be.
-    """
-    return str(info(client, phone_id).get("serialNo") or "")
 
 
 # GeeLark's proxy type ids, from the vendor's own CLI reference:
@@ -356,7 +364,18 @@ def wait_until_running(client: Client, phone_id: str, *,
         state = status(client, phone_id)
         if state == RUNNING:
             log.info("phone running; settling for %.0fs", settle)
-            time.sleep(settle)
+            # In pieces, so the settle answers an interrupt too. The loop
+            # around it checks `cancelled` and this did not, so a run being
+            # shut down still owed every worker up to half a minute in a
+            # sleep nothing could reach.
+            waited = 0.0
+            while waited < settle:
+                if cancelled and cancelled():
+                    raise PhoneError(f"stopped waiting for phone {phone_id}: "
+                                     f"the run is shutting down")
+                nap = min(2.0, settle - waited)
+                time.sleep(nap)
+                waited += nap
             return
         if state == EXPIRED:
             raise PhoneError(f"phone {phone_id} has expired")

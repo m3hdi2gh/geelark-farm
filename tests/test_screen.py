@@ -124,3 +124,42 @@ def test_clearing_a_field_deletes_in_both_directions():
     # worked; together they hold whichever fails.
     assert keys.count(str(shell.FORWARD_DELETE)) == 5
     assert keys.index(str(shell.BACKSPACE)) < keys.index(str(shell.FORWARD_DELETE))
+
+
+# ------------------------------------------- the screen it acts on is this one
+def test_a_failed_dump_does_not_hand_back_the_last_screen(monkeypatch):
+    """`uiautomator dump` fails often enough to matter - a screen that is off,
+    a running animation, a busy UI - and `run` only logs it.
+
+    So the previous dump was still on the phone, `cat` returned it, `parse`
+    accepted it, and the router acted on a screen the phone had left. Silently,
+    with a perfectly valid hierarchy to act on (2026-08-23).
+    """
+    from geelark_farm import screen
+
+    device = {"file": "<hierarchy><node text='OLD SCREEN'/></hierarchy>"}
+
+    def fake_run(client, phone_id, cmd, **kwargs):
+        if cmd.startswith("rm -f"):
+            device["file"] = ""          # removed, and the dump then failed
+            return ""
+        return device["file"]
+
+    monkeypatch.setattr(screen, "run", fake_run)
+    monkeypatch.setattr(screen, "read", lambda c, p, cmd: device["file"])
+
+    assert screen.capture(None, "P1") is None
+
+
+def test_the_dump_file_is_removed_before_it_is_written():
+    """The guard itself: without the rm there is nothing to distinguish a
+    fresh dump from the one before it."""
+    import inspect
+
+    from geelark_farm import screen
+
+    source = inspect.getsource(screen.capture)
+    rm = source.index("rm -f")
+    dump = source.index("uiautomator dump")
+
+    assert rm < dump

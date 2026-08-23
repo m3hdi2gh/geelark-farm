@@ -100,7 +100,6 @@ def device(monkeypatch):
         return Entry()
 
     monkeypatch.setattr(builder.phones, "create", create)
-    monkeypatch.setattr(builder.phones, "info", lambda *a, **k: {})
     monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
     monkeypatch.setattr(builder.phones, "stop",
                         lambda *a, **k: setattr(recorder, "stops",
@@ -1170,7 +1169,6 @@ def test_addresses_and_serials_come_out_in_the_same_order(settings,
 
     monkeypatch.setattr(book.gmails, "claim", claim)
     monkeypatch.setattr(builder.phones, "create", create)
-    monkeypatch.setattr(builder.phones, "info", lambda *a, **k: {})
     monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
     monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
     monkeypatch.setattr(builder.proxy_mod, "check",

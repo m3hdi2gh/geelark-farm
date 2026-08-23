@@ -25,29 +25,47 @@ log = logging.getLogger(__name__)
 ACCOUNT_RE = re.compile(r"name=([^\s,}]+@[^\s,}]+)")
 
 
-def run(client: Client, phone_id: str, cmd: str, *, retry: bool = False) -> str:
+class ShellError(Exception):
+    """The device said the command did not run."""
+
+
+def run(client: Client, phone_id: str, cmd: str, *, retry: bool = False,
+        strict: bool = False) -> str:
     """Execute `cmd` on the phone and return stdout.
 
     retry=True is for commands the caller knows are read-only; /shell/execute
     is not retried by default because a repeated `pm uninstall` or `input tap`
     would act twice.
+
+    strict=True raises instead of returning what a failed command produced,
+    which is nothing. Without it "the command did not run" and "the command
+    ran and found nothing" arrive as the same empty string - and for the two
+    questions this module exists to answer, those are opposite answers with
+    the same consequence. A failed `dumpsys account` reads as "nobody is
+    signed in", which is the reading that condemns a Gmail that is fine.
     """
     data = client.data("/v1/shell/execute", {"id": phone_id, "cmd": cmd},
                        retry=retry) or {}
     if not data.get("status"):
+        if strict:
+            raise ShellError(f"the phone would not run {cmd!r}")
         log.warning("shell reported failure for %r", cmd)
     return data.get("output") or ""
 
 
-def read(client: Client, phone_id: str, cmd: str) -> str:
+def read(client: Client, phone_id: str, cmd: str, *,
+         strict: bool = False) -> str:
     """run() for commands with no side effects, so they can be retried."""
-    return run(client, phone_id, cmd, retry=True)
+    return run(client, phone_id, cmd, retry=True, strict=strict)
 
 
 # ------------------------------------------------------------ verification
 def device_accounts(client: Client, phone_id: str) -> list[str]:
     """Google accounts actually present on the device, lowercased."""
-    output = read(client, phone_id, "dumpsys account")
+    # strict, because an empty answer here is a verdict. This is the check
+    # that says whether Google is signed in, and a command that did not run
+    # says "nobody is" just as convincingly as one that ran and found nobody.
+    output = read(client, phone_id, "dumpsys account", strict=True)
     return sorted({m.lower() for m in ACCOUNT_RE.findall(output)})
 
 
@@ -73,7 +91,10 @@ def foreground_package(client: Client, phone_id: str) -> str:
 
 def package_installed(client: Client, phone_id: str, package: str) -> bool:
     """Whether `package` is really installed. The only acceptable proof."""
-    output = read(client, phone_id, f"pm list packages {shlex.quote(package)}")
+    # strict for the same reason as device_accounts: this is proof, and a
+    # command that never ran must not be able to disprove anything.
+    output = read(client, phone_id, f"pm list packages {shlex.quote(package)}",
+                  strict=True)
     return f"package:{package}" in output
 
 

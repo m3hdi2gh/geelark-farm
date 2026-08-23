@@ -100,8 +100,21 @@ def capture(client: Client, phone_id: str) -> str | None:
     uiautomator writes to a file rather than stdout, so this is two commands.
     Returns None when the dump produced nothing usable, which usually means the
     phone is still booting or the screen is off.
+
+    The file is removed first, and that is the whole of the safety here. A
+    dump fails often enough to matter - a screen that is off, a running
+    animation, a busy UI - and `run` only logs when the device reports failure.
+    So the old file was still lying there, `cat` returned it, `parse` accepted
+    it, and the router acted on a screen the phone had left. Silently, and
+    with a perfectly valid hierarchy to act on.
+
+    Deleting first turns that into the answer it should always have been: no
+    file, no hierarchy, None, and the caller waits and looks again. Checked
+    this way rather than by reading the dump command's own success line,
+    because that line is `UI hierchary dumped to: ...` - misspelled in AOSP,
+    and not something to hang a screen router on.
     """
-    run(client, phone_id, f"uiautomator dump {DUMP_PATH}")
+    run(client, phone_id, f"rm -f {DUMP_PATH}; uiautomator dump {DUMP_PATH}")
     raw = read(client, phone_id, f"cat {DUMP_PATH}")
     start = raw.find("<?xml")
     if start == -1:
