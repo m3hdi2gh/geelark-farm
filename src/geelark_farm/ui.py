@@ -35,7 +35,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import builder, codes, failures, phones
-from .api import ApiError, TransportError, build_client
+from .api import PLAN_RATE_LIMITED, ApiError, TransportError, build_client
 from .builder import Build
 from .config import Settings
 from .gsheet import GSpreadError, SheetError
@@ -93,7 +93,6 @@ class Snapshot:
 # answers the question. Plan limits change on the scale of a subscription, so a
 # minute-old value is as good as a fresh one.
 _PLAN_TTL = 55.0
-PLAN_RATE_LIMITED = 40007
 _plan_cache: tuple[float, dict] | None = None
 
 

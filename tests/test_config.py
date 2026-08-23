@@ -162,3 +162,72 @@ def test_the_root_can_be_stated_outright(monkeypatch, tmp_path):
     monkeypatch.setenv("GEELARK_ROOT", str(tmp_path))
 
     assert config._root() == tmp_path.resolve()
+
+
+# ------------------------------------ a setting that parses but means nothing
+@pytest.mark.parametrize("key, value", [
+    ("BUILD_BUDGET_SECONDS", "-1"),
+    ("MAX_CONCURRENT_PHONES", "-3"),
+    ("API_REQUESTS_PER_MINUTE", "0"),
+])
+def test_a_number_that_is_not_a_quantity_is_refused_here(monkeypatch, key, value):
+    """Each of these parsed, and then did something different downstream.
+
+    A negative budget is the one that matters: it puts every deadline in the
+    past, so every build ends at once - and the same number is the staleness
+    window for a claim, so the sync would call every claim abandoned and start
+    freeing rows a live run was holding (2026-08-23).
+    """
+    from geelark_farm.config import ConfigError, Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv(key, value)
+
+    with pytest.raises(ConfigError, match="at least"):
+        Settings.load()
+
+
+def test_the_message_names_the_setting_and_the_floor(monkeypatch):
+    """It is read by someone looking at a compose file, not a traceback."""
+    from geelark_farm.config import ConfigError, Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("LOGIN_BUDGET_SECONDS", "0")
+
+    with pytest.raises(ConfigError) as caught:
+        Settings.load()
+
+    assert "LOGIN_BUDGET_SECONDS" in str(caught.value)
+    assert "at least 1" in str(caught.value)
+
+
+def test_every_directory_settings_names_is_made(tmp_path, monkeypatch):
+    """`log_dir` was not one of them, and only `_configure_logging` making its
+    own kept that from showing."""
+    from geelark_farm.config import Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "s"))
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "a"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "l"))
+
+    settings = Settings.load()
+    settings.ensure_dirs()
+
+    assert settings.state_dir.is_dir()
+    assert settings.artifact_dir.is_dir()
+    assert settings.log_dir.is_dir()
+
+
+def test_the_console_does_not_keep_its_own_copy_of_a_geelark_code():
+    """One number in two layers is the beginning of a third."""
+    import inspect
+
+    from geelark_farm import api, ui
+
+    assert api.PLAN_RATE_LIMITED in api.KNOWN_CODES
+    assert ui.PLAN_RATE_LIMITED is api.PLAN_RATE_LIMITED
+    assert "PLAN_RATE_LIMITED = " not in inspect.getsource(ui)
