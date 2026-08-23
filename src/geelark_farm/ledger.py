@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -107,9 +108,32 @@ class Ledger:
             log.error("ledger at %s is corrupt; treating it as empty. "
                       "Run 'geelark phones' and stop anything unexpected.", path)
             return ledger
+        known = {f.name for f in dataclass_fields(Entry)} - {"phone_id"}
         for phone_id, data in (raw.get("phones") or {}).items():
             data.pop("phone_id", None)
-            ledger.entries[phone_id] = Entry(phone_id=phone_id, **data)
+            # Only the fields this version knows, and one bad entry does not
+            # take the rest with it. `Entry(**data)` raised TypeError on any
+            # key it had not heard of, and nothing caught it - so a file
+            # written by a version with one more field would stop the tool
+            # from starting at all, while the phones it accounts for went on
+            # running (2026-08-23).
+            #
+            # This is the file that says what exists and what is billing.
+            # Loading nine of ten entries is worse than ten and far better
+            # than none.
+            unknown = sorted(set(data) - known)
+            if unknown:
+                log.warning("ledger entry %s has fields this version does not "
+                            "know (%s); reading the rest of it",
+                            phone_id, ", ".join(unknown))
+            try:
+                ledger.entries[phone_id] = Entry(
+                    phone_id=phone_id,
+                    **{k: v for k, v in data.items() if k in known})
+            except TypeError as exc:
+                log.error("ledger entry %s could not be read (%s); it is "
+                          "skipped, so `geelark phones` is the only thing "
+                          "that can account for it", phone_id, exc)
         return ledger
 
     def save(self) -> None:

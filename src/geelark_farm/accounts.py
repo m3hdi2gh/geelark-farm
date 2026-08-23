@@ -180,42 +180,23 @@ class Credentials:
 
 @dataclass(frozen=True)
 class Account(Credentials):
-    """The Google account a phone is built for, and optionally the app account
-    to sign into once the app is installed.
+    """The Google account a phone is built for.
 
-    `app` is optional on purpose: a sheet without those columns, or a row with
-    them blank, is a complete row that simply stops after the install. Making
-    it required would invalidate every existing sheet to add a step that not
-    every row wants.
+    It once carried an `app` credential too, read from `chatgpt_email` and
+    friends - columns from before the resource tabs existed. Nothing ever read
+    it back: it was built, validated, and dropped. The app account comes from
+    the `Gpt Info` tab now, claimed separately, so a phone can work through
+    several of them (2026-08-23).
     """
 
     proxy: str = ""
     row: int | None = None
-    app: Credentials | None = None
 
     @property
     def label(self) -> str:
         """Short identifier for logs and the ledger."""
         where = f"row {self.row} / " if self.row else ""
         return f"{where}{self.email}"
-
-    def validate(self, *, what: str = "") -> None:
-        super().validate(what=what)
-        if self.app is not None:
-            # Named separately in the error, because "the password cannot be
-            # typed" is a different row to fix depending on which one it is.
-            self.app.validate(what="app account:")
-
-
-def app_credentials(row: dict) -> Credentials | None:
-    """The app account from a sheet row, or None if the row has no such columns
-    or leaves them blank."""
-    email = (row.get("chatgpt_email") or "").strip()
-    password = (row.get("chatgpt_password") or "").strip()
-    secret = normalize_totp_secret(row.get("chatgpt_totp") or "")
-    if not any((email, password, secret)):
-        return None
-    return Credentials(email=email, password=password, totp_secret=secret)
 
 
 def parse_row(row: dict, *, number: int | None = None) -> Account:
@@ -225,7 +206,6 @@ def parse_row(row: dict, *, number: int | None = None) -> Account:
         totp_secret=normalize_totp_secret(row.get("totp_secret") or ""),
         proxy=(row.get("proxy") or "").strip(),
         row=number,
-        app=app_credentials(row),
     )
     account.validate()
     return account

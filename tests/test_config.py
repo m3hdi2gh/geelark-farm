@@ -231,3 +231,13 @@ def test_the_console_does_not_keep_its_own_copy_of_a_geelark_code():
     assert api.PLAN_RATE_LIMITED in api.KNOWN_CODES
     assert ui.PLAN_RATE_LIMITED is api.PLAN_RATE_LIMITED
     assert "PLAN_RATE_LIMITED = " not in inspect.getsource(ui)
+
+
+def test_an_account_no_longer_carries_an_app_credential_nothing_read():
+    """It was built from `chatgpt_email` and friends, validated, and dropped -
+    columns from before the resource tabs existed. The app account comes from
+    the `Gpt Info` tab now (2026-08-23)."""
+    from geelark_farm import accounts
+
+    assert not hasattr(accounts, "app_credentials")
+    assert "app" not in accounts.Account.__dataclass_fields__
