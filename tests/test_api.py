@@ -59,3 +59,50 @@ def test_only_read_only_endpoints_retry_by_default():
     for mutating in ("/v1/phone/addNew", "/v1/phone/start", "/v1/phone/stop",
                      "/v1/shell/execute", "/v1/rpa/task/googleLogin"):
         assert mutating not in RETRY_SAFE_PATHS
+
+
+def test_the_signature_is_made_after_the_wait_not_before(monkeypatch,
+                                                        make_settings):
+    """A signature carries the millisecond it was made in, and the limiter
+    blocks - for up to a full window when the budget is spent. Signing first
+    sends a timestamp as stale as the wait was long, which is what [40003]
+    rejects.
+
+    Invisible today: a local cap of 120 against a real 200 means the limiter
+    almost never blocks. A service that never stops is what makes it block.
+    """
+    from geelark_farm import api
+
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr(api.time, "time", lambda: clock["now"])
+
+    class SlowLimiter:
+        def acquire(self):
+            clock["now"] += 45          # a wait long enough to matter
+            return 45.0
+
+    sent = {}
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"code": 0, "data": {}}
+
+    class Session:
+        def post(self, url, headers=None, json=None, timeout=None):
+            sent["ts"] = int(headers["ts"])
+            return Response()
+
+    client = api.Client(make_settings(), limiter=SlowLimiter(),
+                        session=Session())
+    client.post("/v1/phone/list")
+
+    # The timestamp is the moment the request actually left, not the moment
+    # the caller asked for it 45 seconds earlier.
+    assert sent["ts"] == int(clock["now"] * 1000)
