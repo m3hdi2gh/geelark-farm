@@ -163,3 +163,61 @@ def test_the_dump_file_is_removed_before_it_is_written():
     dump = source.index("uiautomator dump")
 
     assert rm < dump
+
+
+# ------------------------------------ which box the read-back looks at
+def test_the_field_that_was_typed_into_is_the_one_read_back(monkeypatch):
+    """`element` was passed in and then ignored: the read-back took whatever
+    `find_input` returned first. On a page with two boxes that compares one
+    field's contents against another's and corrects the one it can see - and
+    this is the check that caught `...@gmail.comcomcom` (2026-08-23)."""
+    from geelark_farm.flows import router
+
+    first = screen.Element(text="wrong box", desc="", cls="EditText",
+                           resource_id="", bounds="[0,100][600,160]",
+                           clickable=True, enabled=True, focused=True,
+                           password=False)
+    second = screen.Element(text="a@b.com", desc="", cls="EditText",
+                            resource_id="", bounds="[0,300][600,360]",
+                            clickable=True, enabled=True, focused=False,
+                            password=False)
+
+    ctx = router.Context(client=None, phone_id="P")
+    monkeypatch.setattr(ctx, "refresh",
+                        lambda: setattr(ctx, "elements", [first, second]))
+
+    assert router._typed_value(ctx, second) == "a@b.com"
+
+
+def test_a_field_that_moved_falls_back_to_the_focused_one(monkeypatch):
+    """Better than nothing, and what this always used."""
+    from geelark_farm.flows import router
+
+    onscreen = screen.Element(text="typed", desc="", cls="EditText",
+                              resource_id="", bounds="[0,999][600,1050]",
+                              clickable=True, enabled=True, focused=True,
+                              password=False)
+    asked_about = screen.Element(text="", desc="", cls="EditText",
+                                 resource_id="", bounds="[0,100][600,160]",
+                                 clickable=True, enabled=True, focused=False,
+                                 password=False)
+
+    ctx = router.Context(client=None, phone_id="P")
+    monkeypatch.setattr(ctx, "refresh",
+                        lambda: setattr(ctx, "elements", [onscreen]))
+
+    assert router._typed_value(ctx, asked_about) == "typed"
+
+
+def test_a_budget_is_measured_on_a_clock_nothing_can_set():
+    """An NTP correction or a host resuming from suspend shortens or extends
+    every budget in the process, and a service that stays up for weeks is
+    where that stops being theoretical."""
+    import inspect
+
+    from geelark_farm.flows import play_install, router
+
+    for fn in (router._drive, play_install.install, play_install.Stall.held_for):
+        source = inspect.getsource(fn)
+        assert "time.time()" not in source
+        assert "time.monotonic()" in source

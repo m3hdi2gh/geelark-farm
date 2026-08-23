@@ -60,12 +60,22 @@ def read(client: Client, phone_id: str, cmd: str, *,
 
 
 # ------------------------------------------------------------ verification
-def device_accounts(client: Client, phone_id: str) -> list[str]:
-    """Google accounts actually present on the device, lowercased."""
-    # strict, because an empty answer here is a verdict. This is the check
-    # that says whether Google is signed in, and a command that did not run
-    # says "nobody is" just as convincingly as one that ran and found nobody.
-    output = read(client, phone_id, "dumpsys account", strict=True)
+def device_accounts(client: Client, phone_id: str, *,
+                    strict: bool = True) -> list[str]:
+    """Google accounts actually present on the device, lowercased.
+
+    Strict by default, because an empty answer here is usually a verdict:
+    this is the check that says whether Google is signed in, and a command
+    that did not run says "nobody is" just as convincingly as one that ran
+    and found nobody. That reading condemns an account that is fine.
+
+    `strict=False` is for the callers polling in a loop, where an empty
+    answer means "not yet" and the next look is a few seconds away. Raising
+    there ends a whole login over one bad poll, which is the opposite of what
+    the strictness is for. The default stays strict so a new caller inherits
+    the safe reading and has to say when it does not want it.
+    """
+    output = read(client, phone_id, "dumpsys account", strict=strict)
     return sorted({m.lower() for m in ACCOUNT_RE.findall(output)})
 
 
@@ -89,12 +99,15 @@ def foreground_package(client: Client, phone_id: str) -> str:
     return found.group(1) if found else ""
 
 
-def package_installed(client: Client, phone_id: str, package: str) -> bool:
-    """Whether `package` is really installed. The only acceptable proof."""
-    # strict for the same reason as device_accounts: this is proof, and a
-    # command that never ran must not be able to disprove anything.
+def package_installed(client: Client, phone_id: str, package: str, *,
+                      strict: bool = True) -> bool:
+    """Whether `package` is really installed. The only acceptable proof.
+
+    Strict and lenient for the same reasons as `device_accounts`: proof by
+    default, `strict=False` where this is a poll waiting for a download.
+    """
     output = read(client, phone_id, f"pm list packages {shlex.quote(package)}",
-                  strict=True)
+                  strict=strict)
     return f"package:{package}" in output
 
 

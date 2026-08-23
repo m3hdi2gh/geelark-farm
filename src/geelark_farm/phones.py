@@ -331,8 +331,8 @@ def wait_until_stopped(client: Client, phone_id: str, *,
     as running while it shuts down, and it refuses to delete one that is still
     up. Asking straight after stopping is therefore refused nearly every time.
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         state = status(client, phone_id)
         if state in (STOPPED, EXPIRED) or state is None:
             return True
@@ -356,8 +356,8 @@ def wait_until_running(client: Client, phone_id: str, *,
     ThreadPoolExecutor's threads are not daemons and Python joins them on the
     way out, so the terminal sat there ignoring further Ctrl+C (2026-08-08).
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if cancelled and cancelled():
             raise PhoneError(f"stopped waiting for phone {phone_id}: "
                              f"the run is shutting down")
@@ -497,8 +497,8 @@ def screenshot(client: Client, phone_id: str, *, timeout: float = 60) -> str | N
     task_id = started.get("taskId")
     if not task_id:
         return None
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         time.sleep(3)
         result = client.data("/v1/phone/screenShot/result", {"taskId": task_id},
                              strict=False) or {}

@@ -63,3 +63,24 @@ def test_an_ordinary_command_still_returns_what_it_produced():
     device = Device(output="", ok=False)
 
     assert shell.run(device, "P1", "input tap 1 2") == ""
+
+
+def test_a_poll_may_ask_without_being_ended_by_one_bad_answer():
+    """Both of these are also called in a loop - the router asking whether
+    Google has landed, the installer asking whether the download finished.
+
+    Strict there ends a whole login over one refused `dumpsys`, which is the
+    opposite of what the strictness is for: an empty answer in a loop means
+    "not yet", and the next look is a few seconds away (2026-08-23).
+    """
+    assert shell.device_accounts(Device(ok=False), "P1", strict=False) == []
+    assert not shell.package_installed(Device(ok=False), "P1", "com.x",
+                                       strict=False)
+
+
+def test_the_safe_reading_is_what_a_new_caller_inherits():
+    """Strict stays the default, so opting out has to be written down."""
+    import inspect
+
+    for fn in (shell.device_accounts, shell.package_installed):
+        assert inspect.signature(fn).parameters["strict"].default is True

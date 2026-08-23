@@ -1334,8 +1334,8 @@ def _settle_before_deleting(client: Client, phone_id: str, serial: str,
     except Exception as exc:                                      # noqa: BLE001
         log.error("could not stop phone %s (%s); its row is kept", serial, exc)
         return False
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         try:
             if phones.status(client, phone_id) == phones.STOPPED:
                 return True

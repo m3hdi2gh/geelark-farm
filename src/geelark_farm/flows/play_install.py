@@ -167,12 +167,18 @@ class Stall:
         self.since: float | None = None
 
     def held_for(self, stalled: bool) -> float:
+        """How long it has looked parked, on the same clock as the deadlines.
+
+        `time.monotonic`, like everything else that measures a duration here:
+        this number is compared against an allowance, and a wall clock a host
+        or an NTP daemon can set would make that comparison lie.
+        """
         if not stalled:
             self.since = None
             return 0.0
         if self.since is None:
-            self.since = time.time()
-        return time.time() - self.since
+            self.since = time.monotonic()
+        return time.monotonic() - self.since
 
     def reset(self) -> None:
         self.since = None
@@ -275,13 +281,13 @@ def install(client: Client, phone_id: str, package: str, *,
     # assuming a fixed number of dialogs.
     elements: list[screen.Element] = []
     stall = Stall()
-    deadline = time.time() + PRE_INSTALL_SECONDS
+    deadline = time.monotonic() + PRE_INSTALL_SECONDS
     dialogs = 0
     restarts = 0
     retries = 0
     reopens = 0
     first = True
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         xml = screen.capture(client, phone_id) or ""
         elements = screen.parse(xml)
         if first:
@@ -402,11 +408,14 @@ def install(client: Client, phone_id: str, package: str, *,
     log.info("tapped Install (%r); waiting for the package to appear",
              button.label)
 
-    deadline = time.time() + budget_seconds
+    deadline = time.monotonic() + budget_seconds
     seen: set[str] = set()
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
-        if shell.package_installed(client, phone_id, package):
+        # Not strict: a poll, where an empty answer means the download has
+        # not finished. Raising over one refused `pm list` would throw away
+        # an install that was working.
+        if shell.package_installed(client, phone_id, package, strict=False):
             return Outcome("success", "installed", package, artifacts=saved)
 
         xml = screen.capture(client, phone_id)
