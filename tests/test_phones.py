@@ -214,8 +214,20 @@ def test_waiting_for_a_stop_gives_up_rather_than_blocking_a_run(monkeypatch):
     still up."""
     monkeypatch.setattr(phones, "status", lambda *a, **k: phones.RUNNING)
     monkeypatch.setattr(phones.time, "sleep", lambda *a: None)
-    clock = iter([0, 1, 2, 999])
-    monkeypatch.setattr(phones.time, "time", lambda: next(clock))
+    # The clock stops rather than running out. `phones.time` is the `time`
+    # module itself, so patching it patches it for everything in the process -
+    # including `logging`, which stamps every record with the current time. On
+    # 3.13 that reads `time.time_ns()` and this list of four was exactly
+    # enough; on 3.12 and below it reads `time.time()`, the warning at the end
+    # of the wait took a fifth value, and the test raised StopIteration
+    # (2026-08-23).
+    #
+    # Holding the last value makes the test say what it means - after this
+    # much time, give up - rather than depending on how many times anything
+    # happens to ask what time it is.
+    ticks = [0, 1, 2, 999]
+    monkeypatch.setattr(phones.time, "time",
+                        lambda: ticks.pop(0) if len(ticks) > 1 else ticks[0])
 
     assert phones.wait_until_stopped(object(), "P1", timeout=60) is False
 
