@@ -236,3 +236,94 @@ def test_a_phone_that_came_down_is_waited_for_no_longer(monkeypatch):
     monkeypatch.setattr(phones, "status", lambda *a, **k: phones.STOPPED)
 
     assert phones.wait_until_stopped(object(), "P1") is True
+
+
+# ------------------------------------------------- every phone, not the first 100
+class PagedClient:
+    """A phone list long enough to need more than one page."""
+
+    def __init__(self, count):
+        self.count = count
+        self.pages_asked = []
+
+    def data(self, path, payload=None, **kwargs):
+        page = payload["page"]
+        size = payload["pageSize"]
+        self.pages_asked.append(page)
+        start = (page - 1) * size
+        return {"items": [{"id": f"P{i}"}
+                          for i in range(start, min(start + size, self.count))]}
+
+
+def test_a_phone_past_the_first_page_still_exists():
+    """Twenty callers ask this what exists, including the sync that decides
+    which rows have lost their phone. Past a hundred, the rest would read as
+    stranded and be settled while the phones stayed up and billing."""
+    client = PagedClient(250)
+
+    items = phones.listing(client, page_size=100)
+
+    assert len(items) == 250
+    assert client.pages_asked == [1, 2, 3]
+
+
+def test_a_short_page_ends_the_listing():
+    """One call when there is one page of phones, which is every day."""
+    client = PagedClient(7)
+
+    assert len(phones.listing(client, page_size=100)) == 7
+    assert client.pages_asked == [1]
+
+
+def test_an_exactly_full_page_asks_once_more():
+    """The only way to know a full page was the last one is to ask."""
+    client = PagedClient(100)
+
+    assert len(phones.listing(client, page_size=100)) == 100
+    assert client.pages_asked == [1, 2]
+
+
+def test_the_settle_wait_answers_an_interrupt(monkeypatch):
+    """The loop around it checked `cancelled` and this did not, so a run being
+    shut down still owed every worker up to half a minute in a sleep nothing
+    could reach.
+
+    Cancelled part-way through rather than at the start, because the outer
+    guard catches that case on its own and would pass either way.
+    """
+    monkeypatch.setattr(phones, "status", lambda *a, **k: phones.RUNNING)
+    slept = []
+    monkeypatch.setattr(phones.time, "sleep", lambda s: slept.append(s))
+
+    # False while the phone is found running, True once the settle is under
+    # way - which is where an interrupt actually lands.
+    asked = {"n": 0}
+
+    def cancelled() -> bool:
+        asked["n"] += 1
+        return asked["n"] > 1
+
+    with pytest.raises(phones.PhoneError, match="shutting down"):
+        phones.wait_until_running(object(), "P1", settle=30,
+                                  cancelled=cancelled)
+
+    # It gave up inside the settle instead of sleeping the whole of it.
+    assert sum(slept) < 30
+
+
+def test_the_settle_still_settles_when_nothing_is_cancelling(monkeypatch):
+    monkeypatch.setattr(phones, "status", lambda *a, **k: phones.RUNNING)
+    slept = []
+    monkeypatch.setattr(phones.time, "sleep", lambda s: slept.append(s))
+
+    phones.wait_until_running(object(), "P1", settle=30)
+
+    assert sum(slept) == 30
+
+
+def test_the_two_functions_nothing_called_are_gone():
+    """`info` and `serial_of` walked the whole phone list to answer about one
+    phone, and no caller ever asked. The only references left were test
+    patches for a function the code under test never reached (2026-08-23)."""
+    assert not hasattr(phones, "info")
+    assert not hasattr(phones, "serial_of")

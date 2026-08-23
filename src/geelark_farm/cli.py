@@ -28,7 +28,7 @@ from .flows import google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
 from .proxy import ProxyError
-from .shell import TypingError
+from .shell import ShellError, TypingError
 
 # Local fallback when no sheet is configured. Same columns as the sheet.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
@@ -912,6 +912,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except phones.PhoneError as exc:
         print(f"phone: {exc}", file=sys.stderr)
+        return 1
+    except ShellError as exc:
+        # A command the device refused to run. Its own line rather than a
+        # traceback, because it says something an operator can act on: the
+        # phone is up but not answering, so start it, or look at it.
+        print(f"device: {exc}", file=sys.stderr)
         return 1
     except ApiError as exc:
         print(f"api: {exc}", file=sys.stderr)
