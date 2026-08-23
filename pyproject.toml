@@ -36,3 +36,14 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repo root, so `tests.test_pools` imports the way `geelark_farm` does.
+#
+# Without it the suite passes locally and cannot even be collected in CI, and
+# for three weeks it was not: `python -m pytest` puts the working directory on
+# sys.path and bare `pytest` does not, so the green run everyone saw and the
+# red one GitHub saw were running different code. Sixty-eight red runs, one
+# missing line (2026-08-23).
+#
+# Here rather than a `tests/__init__.py` because it fixes the cause instead of
+# the one import that happened to expose it.
+pythonpath = ["."]
