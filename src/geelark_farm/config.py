@@ -161,13 +161,21 @@ class Settings:
 def machine() -> str:
     """This device's name, the way logs and History rows say it.
 
-    Two machines share one spreadsheet and nothing else, so every durable
-    record has to say which of them wrote it - "the Mac hit this at 04:20" is
-    the whole reason the log file and the History tab exist. Sanitised because
+    Machines share one spreadsheet and nothing else, so every durable record
+    has to say which of them wrote it - "the Mac hit this at 04:20" is the
+    whole reason the log file and the History tab exist. Sanitised because
     hostnames arrive with dots and spaces, and this ends up in filenames.
+
+    `GEELARK_MACHINE` overrides the hostname, and a container is why. Docker
+    gives one a fresh random hex id for a hostname on every `run`, so the
+    identity that ties a History row to the thing that wrote it would change
+    each restart: the tab would fill with names that mean nothing and the log
+    would start a new file under a new name every time the service came back.
+
+    Nothing else needs it. On a laptop the hostname is already the answer.
     """
     import platform
     import re
 
-    name = platform.node() or "unknown"
+    name = _str("GEELARK_MACHINE") or platform.node() or "unknown"
     return re.sub(r"[^A-Za-z0-9-]+", "-", name).strip("-").lower() or "unknown"
