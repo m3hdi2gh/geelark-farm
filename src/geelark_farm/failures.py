@@ -341,6 +341,11 @@ VERDICTS: dict[str, Verdict] = {
 #: The reasons nothing is to blame for. Derived, so it cannot disagree with the
 #: table: it was a second dictionary for most of this project's life and the
 #: two drifted apart in shape, one carrying advice and the other not.
+#:
+#: Nothing in the package reads it - `verdict()` answers every question the
+#: code asks. It is here for the tests and the README check, which need to
+#: talk about this group by name, and it stays derived so that naming it
+#: can never become a second opinion about which reasons are in it.
 SITUATIONS: dict[str, str] = {reason: found.seen
                               for reason, found in VERDICTS.items()
                               if found.blame == NOBODY}
@@ -348,47 +353,6 @@ SITUATIONS: dict[str, str] = {reason: found.seen
 #: Reasons a flow may return that mean success, so nothing needs a verdict.
 SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
                        "already_installed", "logged_in"})
-
-
-def reasons_reported_by(module) -> set[str]:
-    """Every reason one flow module can hand back.
-
-    Two places to look, because a flow names reasons in two ways: literally, in
-    an `Outcome(...)` call, and as the keys of its own fatal-reason tables,
-    which reach `Outcome` through a variable. Reading only the first missed
-    `captcha_shown` - a reason written to the sheet thirty times.
-
-    Derived rather than listed, so that what the sheet offers and what the code
-    can write cannot drift apart. They had: the Gmail dropdown offered three
-    statuses no build writes and omitted two it does (2026-08-12).
-    """
-    import ast
-    import inspect
-
-    found: set[str] = set()
-    source = inspect.getsource(module)
-    # The router reports one reason per screen, built from the screen's name -
-    # `Outcome("unknown", f"stuck_on_{matched.name}")` - so it is a JoinedStr
-    # and never a literal to be found below. Enumerated from the registry
-    # instead, which is the only place those names exist.
-    for node in ast.walk(ast.parse(source)):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "Screen" and node.args
-                and isinstance(node.args[0], ast.Constant)):
-            found.add(f"{STUCK_PREFIX}{node.args[0].value}")
-    for node in ast.walk(ast.parse(source)):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "Outcome"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)):
-            found.add(node.args[1].value)
-    for attribute in dir(module):
-        value = getattr(module, attribute)
-        if isinstance(value, dict) and attribute.isupper():
-            found.update(k for k in value if isinstance(k, str))
-    return found - SUCCESSES
 
 
 #: The router's own reason, one per screen: `stuck_on_totp_entry`. Built from
@@ -402,6 +366,73 @@ def reasons_reported_by(module) -> set[str]:
 #: the device's problem whichever page it was, and the page belongs in the
 #: words rather than in the table.
 STUCK_PREFIX = "stuck_on_"
+
+
+def reasons_reported_by(module) -> set[str]:
+    """Every reason one flow module can hand back.
+
+    Four places to look, because a flow names a reason in four ways, and every
+    one of them was added after the guard missed something real:
+
+    - **Literally, in an `Outcome(...)` call.** The obvious one.
+    - **As a key of its own `FATAL_*` table**, which reaches `Outcome` through
+      a variable. Reading only the first missed `captcha_shown` - a reason
+      written to the sheet thirty times.
+    - **As a `Screen` name**, because the router builds `stuck_on_<name>` from
+      it with an f-string, so the reason exists as a literal nowhere at all.
+      Twenty-one reached a build unclassified that way (2026-08-16).
+    - **As a string assigned to `reason`.** Both login flows end their fatal
+      path with `reason = _fatal_reason(ctx) or "unknown_fatal"`, and a
+      literal in that position was invisible here - so `unknown_fatal` was
+      never actually checked against the table, and any reason introduced the
+      same way would not have been either (2026-08-23).
+
+    Derived rather than listed, so that what the sheet offers and what the code
+    can write cannot drift apart. They had: the Gmail dropdown offered three
+    statuses no build writes and omitted two it does (2026-08-12).
+    """
+    import ast
+    import inspect
+
+    found: set[str] = set()
+    # One walk. It was two, over separate parses of the same source, to ask
+    # two questions about the same tree.
+    for node in ast.walk(ast.parse(inspect.getsource(module))):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "Screen" and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            found.add(f"{STUCK_PREFIX}{node.args[0].value}")
+        elif (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Outcome"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            found.add(node.args[1].value)
+        elif isinstance(node, ast.Assign) and _assigns_a_reason(node):
+            # Every string anywhere in the value, so `a or "b"`, `a if c else
+            # "b"` and a plain assignment are all read the same way.
+            found.update(part.value for part in ast.walk(node.value)
+                         if isinstance(part, ast.Constant)
+                         and isinstance(part.value, str))
+    for attribute in dir(module):
+        value = getattr(module, attribute)
+        if isinstance(value, dict) and attribute.isupper():
+            found.update(k for k in value if isinstance(k, str))
+    return found - SUCCESSES
+
+
+def _assigns_a_reason(node) -> bool:
+    """Whether this statement puts something into a variable called `reason`.
+
+    Matched by the name rather than by tracing what reaches `Outcome`: following
+    a value through a call is not something a guard should be attempting, and
+    the name is a convention the flows already keep.
+    """
+    import ast
+
+    return any(isinstance(target, ast.Name) and target.id == "reason"
+               for target in node.targets)
 
 
 def _stuck(reason: str) -> Verdict:
@@ -454,10 +485,12 @@ def verdict(reason: str, service: str = UNNAMED_SERVICE) -> Verdict:
         return Verdict(found.blame,
                        found.seen.replace("{service}", service),
                        found.advice.replace("{service}", service))
-    return VERDICTS.get(reason, Verdict(
+    # Not a second VERDICTS.get: three lines above established there is no
+    # entry, so looking again could only ever return its own default.
+    return Verdict(
         DEVICE, f"something happened that this tool has no name for ({reason})",
         f"{reason} has no entry in failures.py, so nothing is known "
-        f"about it. Add one before trusting what a build did here."))
+        f"about it. Add one before trusting what a build did here.")
 
 
 def situation(reason: str) -> str:
