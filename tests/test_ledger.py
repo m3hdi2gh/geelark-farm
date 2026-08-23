@@ -102,3 +102,50 @@ def test_the_password_never_appears_in_the_readable_form():
 def test_unusable_proxies_are_rejected_before_a_phone_is_created(bad):
     with pytest.raises(ProxyError):
         parse(bad)
+
+
+# ------------------------------- a file written by a different version of this
+def test_a_field_this_version_does_not_know_is_read_around(tmp_path, caplog):
+    """`Entry(**data)` raised TypeError on any key it had not heard of, and
+    nothing caught it. A file written by a version with one more field would
+    stop the tool from starting at all, while the phones it accounts for went
+    on running (2026-08-23)."""
+    import json
+
+    (tmp_path / "ledger.json").write_text(json.dumps({"phones": {
+        "P1": {"created_at": 1.0, "serial": "832", "cooled_at": 99.0},
+    }}), encoding="utf-8")
+
+    led = Ledger.load(tmp_path)
+
+    assert led.get("P1").serial == "832"
+    assert "cooled_at" in caplog.text
+
+
+def test_one_unreadable_entry_does_not_take_the_others_with_it(tmp_path):
+    """This is the file that says what exists and what is billing. Nine of ten
+    is worse than ten and far better than none."""
+    import json
+
+    (tmp_path / "ledger.json").write_text(json.dumps({"phones": {
+        "P1": {"created_at": 1.0, "serial": "832"},
+        "P2": {"serial": "833"},                     # no created_at at all
+        "P3": {"created_at": 3.0, "serial": "834"},
+    }}), encoding="utf-8")
+
+    led = Ledger.load(tmp_path)
+
+    assert sorted(led.entries) == ["P1", "P3"]
+
+
+def test_a_ledger_written_by_this_version_still_round_trips(tmp_path):
+    """The guard must not quietly drop fields the code does use."""
+    led = Ledger.load(tmp_path)
+    led.record("P1", serial="832", label="row 4 / a@b.com", proxy="h:1")
+    led.claim("P1")
+
+    again = Ledger.load(tmp_path)
+
+    assert again.get("P1").label == "row 4 / a@b.com"
+    assert again.get("P1").proxy == "h:1"
+    assert again.get("P1").is_claimed

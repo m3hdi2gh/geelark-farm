@@ -399,12 +399,22 @@ class Pool:
         """Record what was wrong with a row, in the vocabulary of the tab's own
         Status list, so the column stays a thing you can filter on."""
         self._set(resource, {self.status_column: reason,
-                             self.note_column: note[:500]})
+                             self.note_column: note})
 
     # ------------------------------------------------------------- writing
+    #: How much of a note is kept. The column is read by a person beside
+    #: three columns that are not prose; past this it stops being readable and
+    #: starts being a wall. `fail` trimmed its own and every other way of
+    #: writing one - retire, release, set_aside, spend - passed the text
+    #: straight through, so the guard held on the path that happened to have
+    #: it and nowhere else. Here instead, where every one of them arrives.
+    NOTE_LIMIT = 500
+
     def _set(self, resource: Resource, fields: dict[str, str]) -> None:
         payload = []
         for name, value in fields.items():
+            if name == self.note_column and len(value) > self.NOTE_LIMIT:
+                value = value[:self.NOTE_LIMIT - 1] + "…"
             index = self._index.get(name)
             if index is None:
                 log.debug("no %r column in %s; skipping", name, self.tab)
@@ -436,7 +446,10 @@ class GmailPool(Pool):
             password=values.get("Password", ""),
             totp_secret=normalize_totp_secret(values.get("2FA Secret", "")),
         )
-        credentials.validate()
+        # Named, like the app account's. Without it a broken row here and a
+        # broken row in `Gpt Info` read identically, and the reader is left
+        # to guess which tab to open.
+        credentials.validate(what="gmail:")
         resource.credentials = credentials
 
     def spend(self, resource: Resource, *, serial: str = "",

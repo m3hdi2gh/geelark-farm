@@ -1038,3 +1038,55 @@ def test_the_proxy_tab_reuses_the_stamp_it_already_writes():
     holding the same value would be noise."""
     assert ProxyPool.claimed_at_column == ProxyPool.last_used_column
     assert GmailPool.claimed_at_column not in (ProxyPool.last_used_column, "")
+
+
+# ------------------------------------------- what a row says when it goes wrong
+def test_a_broken_gmail_row_says_which_tab_it_is_in():
+    """A broken row here and a broken row in `Gpt Info` read identically, and
+    the reader was left to guess which tab to open (2026-08-23)."""
+    gmails = GmailPool(FakeWorksheet(GMAIL_HEADERS, [
+        ["", "", "not-an-address", "pw", SECRET, "", "", "", ""],
+    ]), GMAIL_HEADERS, threading.Lock())
+    apps = AppPool(FakeWorksheet(APP_HEADERS, [
+        ["also-not-one", "pw", SECRET, "", "", ""],
+    ]), APP_HEADERS, threading.Lock())
+    gmails.load()
+    apps.load()
+
+    assert gmails.broken[0].error.startswith("gmail:")
+    assert apps.broken[0].error.startswith("app account:")
+
+
+# ------------------------------------------------------- how long a note may be
+def test_a_note_is_kept_to_a_size_whichever_way_it_is_written():
+    """`fail` trimmed its own and every other way of writing one passed the
+    text straight through, so the guard held on the path that happened to have
+    it and nowhere else."""
+    headers = GMAIL_HEADERS
+    worksheet = FakeWorksheet(headers, [
+        ["", "", "a@b.com", "pw", SECRET, "", "", "", ""],
+    ])
+    pool = GmailPool(worksheet, headers, threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+    long_note = "x" * 4000
+
+    for write in (lambda: pool.retire(row, note=long_note),
+                  lambda: pool.release(row, note=long_note),
+                  lambda: pool.fail(row, "dead", note=long_note),
+                  lambda: pool.spend(row, note=long_note)):
+        write()
+        assert len(row.values["Note"]) == pool.NOTE_LIMIT
+
+
+def test_a_note_that_fits_is_left_exactly_as_it_was():
+    headers = GMAIL_HEADERS
+    pool = GmailPool(FakeWorksheet(headers, [
+        ["", "", "a@b.com", "pw", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+
+    pool.retire(row, note="Signed into phone 832.")
+
+    assert row.values["Note"] == "Signed into phone 832."
