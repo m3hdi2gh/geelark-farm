@@ -313,3 +313,73 @@ def test_the_tab_a_row_is_in_is_what_names_the_service():
 
     assert GmailPool.service == "Google"
     assert AppPool.service == "OpenAI"
+
+
+# ------------------------------------------- what the guard itself can see
+def test_a_reason_named_through_a_variable_is_still_checked():
+    """Both login flows end their fatal path with
+
+        reason = _fatal_reason(ctx) or "unknown_fatal"
+
+    and a literal in that position was invisible to the guard - so
+    `unknown_fatal` was never actually checked against the table, and any
+    reason introduced the same way would not have been either (2026-08-23).
+    """
+    from geelark_farm.flows import chatgpt_login, google_login
+
+    for flow in (chatgpt_login, google_login):
+        assert "unknown_fatal" in failures.reasons_reported_by(flow)
+
+
+def test_the_guard_reads_a_reason_out_of_every_shape_it_is_written_in():
+    """The four ways a flow names one, against a module written to use all
+    four - so the guard is tested rather than the flows that happen to exist.
+    """
+    import ast
+    import types
+
+    module = types.ModuleType("fake_flow")
+    module.FATAL_ADVICE = {"from_a_table": "..."}
+    source = (
+        "def a(ctx):\n"
+        "    return Outcome('fatal', 'from_a_literal')\n"
+        "\n"
+        "def b(ctx):\n"
+        "    reason = look(ctx) or 'from_a_variable'\n"
+        "    return Outcome('fatal', reason)\n"
+        "\n"
+        "SCREENS = [Screen('a_page', match, act)]\n"
+    )
+    module.__source__ = source
+
+    import inspect
+    original = inspect.getsource
+    inspect.getsource = lambda m: source if m is module else original(m)
+    try:
+        found = failures.reasons_reported_by(module)
+    finally:
+        inspect.getsource = original
+
+    assert ast.parse(source)                       # the sample really parses
+    assert found == {"from_a_literal", "from_a_table", "from_a_variable",
+                     "stuck_on_a_page"}
+
+
+def test_an_unclassified_reason_falls_back_without_looking_twice():
+    """The fallback used to be `VERDICTS.get(reason, default)` three lines
+    after establishing there was no entry, which can only return its default.
+    """
+    found = failures.verdict("something_nobody_named")
+
+    assert found.blame == failures.DEVICE
+    assert "something_nobody_named" in found.seen
+    assert "failures.py" in found.advice
+
+
+def test_the_group_nothing_is_to_blame_for_is_derived_not_declared():
+    """It stays derived so that naming it can never become a second opinion
+    about which reasons are in it."""
+    assert failures.SITUATIONS == {
+        reason: found.seen for reason, found in failures.VERDICTS.items()
+        if found.blame == failures.NOBODY}
+    assert failures.SITUATIONS
