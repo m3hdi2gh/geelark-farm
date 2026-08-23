@@ -828,3 +828,60 @@ def test_the_same_prompt_is_answered_when_there_is_a_secret():
     """The counterweight: nothing changes for the accounts that have one."""
     ctx = context_from("google-2fa-code-entry.xml")
     assert ctx.account.has_authenticator
+
+
+# --------------------------------- what the loop costs while it watches
+def test_the_device_is_not_asked_on_every_pass(monkeypatch):
+    """It costs a request each time, out of a budget that is process-wide and
+    bans the key for two hours when it runs out - and four builds at once ask
+    four times (2026-08-23)."""
+    from geelark_farm.flows import google_login
+
+    asked = []
+    monkeypatch.setattr(google_login.shell, "device_accounts",
+                        lambda *a, **k: asked.append(1) or [])
+    monkeypatch.setattr(google_login, "open_add_account", lambda *a, **k: None)
+
+    driven = {}
+
+    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+        driven["is_done"] = is_done
+        return google_login.Outcome("budget", "budget_exhausted")
+
+    monkeypatch.setattr(google_login.router, "drive", fake_drive)
+    google_login.sign_in(None, "P1", _account())
+
+    before = len(asked)
+    for _ in range(20):                       # twenty passes of the loop
+        driven["is_done"]()
+
+    # One, not twenty: the rest fall inside the same window.
+    assert len(asked) - before == 1
+
+
+def test_the_poll_does_not_end_a_login_over_one_refused_command(monkeypatch):
+    """Not strict: an empty answer here means "not yet"."""
+    from geelark_farm.flows import google_login
+
+    seen = {}
+    monkeypatch.setattr(google_login.shell, "device_accounts",
+                        lambda *a, **k: seen.update(k) or [])
+    monkeypatch.setattr(google_login, "open_add_account", lambda *a, **k: None)
+
+    driven = {}
+
+    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+        driven["is_done"] = is_done
+        return google_login.Outcome("budget", "budget_exhausted")
+
+    monkeypatch.setattr(google_login.router, "drive", fake_drive)
+    google_login.sign_in(None, "P1", _account())
+    seen.clear()
+    driven["is_done"]()
+
+    assert seen.get("strict") is False
+
+
+def _account():
+    from geelark_farm.accounts import Account
+    return Account(email="a@b.com", password="pw", totp_secret="")

@@ -45,6 +45,11 @@ from .router import Outcome, Screen, act_wait, fill, still_loading
 
 log = logging.getLogger(__name__)
 
+#: How often the loop asks the device whether the account has landed. Not
+#: every pass: see `sign_in`. Short enough that the answer is never stale by
+#: more than one screen capture.
+ACCOUNT_CHECK_SECONDS = 8
+
 # Consent and marketing pages: the label to press, in preference order. These
 # are handled as one screen because they are interchangeable - each is "some
 # page whose only job is to be dismissed".
@@ -467,8 +472,27 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
     ctx = Context(client=client, phone_id=phone_id, account=account,
                   artifact_dir=artifact_dir)
 
+    # The device is the only truth for this step - the account is either in
+    # `dumpsys account` or it is not - so unlike the app login this cannot be
+    # read off elements already fetched. It costs a request each time it is
+    # asked, out of a budget that is process-wide and bans the key for two
+    # hours when it runs out, and four builds at once ask four times.
+    #
+    # So it is asked on a clock rather than every pass. Google puts the
+    # account on the device at the end of a consent it takes several seconds
+    # to render; noticing that a few seconds late costs nothing, and the loop
+    # is doing a screen capture of its own either way.
+    last_asked = [0.0]
+
     def signed_in() -> Outcome | None:
-        if account.email.lower() in shell.device_accounts(client, phone_id):
+        now = time.monotonic()
+        if now - last_asked[0] < ACCOUNT_CHECK_SECONDS:
+            return None
+        last_asked[0] = now
+        # Not strict: this is a poll, and an empty answer here means "not
+        # yet". Raising over one refused `dumpsys` would end the login.
+        present = shell.device_accounts(client, phone_id, strict=False)
+        if account.email.lower() in present:
             return Outcome("success", "signed_in",
                            f"{account.email} is on the device")
         return None

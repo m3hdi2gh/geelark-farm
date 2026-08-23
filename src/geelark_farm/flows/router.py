@@ -149,8 +149,26 @@ def fill(ctx: Context, element: screen.Element, text: str) -> bool:
 
 
 def _typed_value(ctx: Context, element: screen.Element) -> str | None:
-    """What the field holds now, or None if it cannot be read back."""
+    """What the field just typed into holds now, or None if it cannot be read.
+
+    Matched on bounds, which is what tells one box from another on a page
+    with more than one: a field that was not scrolled is in the same place a
+    second later. `element` was passed in from the start and then ignored -
+    the read-back took whatever `find_input` returned first, which is the
+    focused field and therefore usually right, and usually is not the standard
+    this check exists to hold. It is the check that caught
+    `...@gmail.comcomcom`, so reading the wrong box makes it worse than
+    useless: it compares one field's contents against another's and corrects
+    the one it can see.
+    """
     ctx.refresh()
+    same_box = next((e for e in ctx.elements
+                     if e.is_input and not e.password
+                     and e.bounds and e.bounds == element.bounds), None)
+    if same_box is not None:
+        return same_box.text
+    # Moved, or the page re-rendered it somewhere else. The focused field is
+    # the better guess than nothing, and is what this always used.
     field = screen.find_input(ctx.elements, password=False)
     return field.text if field is not None else None
 
@@ -209,10 +227,15 @@ def _drive(ctx: Context, screens: list[Screen], *,
     if ctx.artifact_dir:
         ctx.artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    deadline = time.time() + budget_seconds
+    # monotonic, not the wall clock: a deadline measured on a clock
+    # something else can set is a deadline that moves. An NTP
+    # correction or a host resuming from suspend shortens or extends
+    # every budget in the process, and a service that stays up for
+    # weeks is where that stops being theoretical.
+    deadline = time.monotonic() + budget_seconds
     unknown_streak = 0
 
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         # Device truth first: the only definition of success.
         finished = is_done()
         if finished:

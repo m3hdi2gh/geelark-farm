@@ -178,7 +178,7 @@ def stalled_install(monkeypatch, *, restart_takes: bool):
     parked = (FIXTURES / "play-download-stalled.xml").read_text(encoding="utf-8")
 
     clock = {"now": 0.0}
-    monkeypatch.setattr(play_install.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(play_install.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(play_install.time, "sleep",
                         lambda s: clock.__setitem__("now", clock["now"] + s))
     monkeypatch.setattr(shell, "package_installed", lambda *a, **k: False)

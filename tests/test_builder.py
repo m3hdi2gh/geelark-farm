@@ -1664,7 +1664,7 @@ def test_a_phone_that_will_not_stop_keeps_its_row(monkeypatch):
                                                                 "running phone"))
     monkeypatch.setattr(builder.time, "sleep", lambda *a: None)
     clock = itertools.count(0, 30)          # walks past the timeout instantly
-    monkeypatch.setattr(builder.time, "time", lambda: next(clock))
+    monkeypatch.setattr(builder.time, "monotonic", lambda: next(clock))
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "", "app_account": ""}])
 
