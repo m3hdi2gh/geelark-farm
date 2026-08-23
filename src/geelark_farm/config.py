@@ -76,14 +76,41 @@ def _str(key: str, default: str | None = None, *, required: bool = False) -> str
     return value or ""
 
 
-def _int(key: str, default: int) -> int:
+def _int(key: str, default: int, *, minimum: int = 1) -> int:
+    """An integer setting, refused here if it cannot mean anything.
+
+    Parsing was the only check, so a value that was a number but not a
+    quantity was carried into the run and did something different in each
+    place it landed:
+
+    - `API_REQUESTS_PER_MINUTE=0` built a Settings happily and then raised a
+      bare ValueError out of RateLimiter - the wrong layer, with a message
+      that does not mention the file to go and fix.
+    - `MAX_CONCURRENT_PHONES=-3` was silently rounded up to 1 by the builder,
+      so whoever set it never learned it had been ignored.
+    - `BUILD_BUDGET_SECONDS=-1` put every deadline in the past. Every build
+      ends at once on budget_exhausted, and the same number is the staleness
+      window for a claim - so the sync would call every claim abandoned and
+      start freeing rows a live run was holding.
+
+    `minimum` defaults to 1 because every setting here is a count or a
+    duration and none of them means anything at zero. A future one that does
+    can say `minimum=0` and be read as deliberate.
+    """
     raw = os.environ.get(key)
     if raw in (None, ""):
         return default
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise ConfigError(f"{key} must be an integer, got {raw!r}") from exc
+    if value < minimum:
+        raise ConfigError(
+            f"{key} must be at least {minimum}, got {value}. "
+            f"A smaller one does not mean 'no limit' - it means the run "
+            f"behaves in a way nothing here is written for."
+        )
+    return value
 
 
 def _path(key: str, default: str) -> Path:
@@ -184,8 +211,15 @@ class Settings:
             )
 
     def ensure_dirs(self) -> None:
+        """Make every directory this object names.
+
+        `log_dir` was not one of them, and only `_configure_logging` making
+        its own kept that from showing - so a caller who asked for the
+        directories got two of the three and no way to know which.
+        """
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
 
 def machine() -> str:

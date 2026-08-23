@@ -34,6 +34,15 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://openapi.geelark.com/open"
 
+#: Some endpoints carry their own limit, separate from the account's 200/min,
+#: and answer this when it is hit. It is a wait rather than a refusal, so a
+#: caller with a recent answer can keep using it - see `ui.cached_plan`.
+#:
+#: Named here because this module owns what GeeLark's codes mean. It was a
+#: bare 40007 in the console as well, which is one number in two layers and
+#: the beginning of a third the moment anything else has to notice it.
+PLAN_RATE_LIMITED = 40007
+
 # Failure codes worth explaining in the exception message. Only codes actually
 # observed are listed - a guessed mapping is worse than none.
 KNOWN_CODES = {
@@ -42,8 +51,9 @@ KNOWN_CODES = {
     20008: "an element was not found, commonly because the phone's UI is not "
            "in English (mobileLanguage must be 'default')",
     40003: "signature rejected - check GEELARK_APP_ID and GEELARK_API_KEY",
-    40007: "too many requests to this endpoint - some, like /pay/plan/info, "
-           "allow only one a minute, separate from the 200/min account limit",
+    PLAN_RATE_LIMITED:
+        "too many requests to this endpoint - some, like /pay/plan/info, "
+        "allow only one a minute, separate from the 200/min account limit",
     44002: "the GeeLark plan is full: no slots left for another phone. "
            "Delete phones you have finished with, or raise the plan. Rows "
            "already done are unaffected; re-run to pick up the rest.",

@@ -13,7 +13,9 @@ the import at all.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -24,13 +26,20 @@ def _settings(**overrides) -> Settings:
     base = dict(
         app_id="APPID", api_key="APIKEY", sxorg_api_key="",
         sheet_id="",
-        service_account_json="/nowhere", region="sgp", android="Android 15",
+        # Paths, not strings: `Settings` declares these as Path and the code
+        # calls Path methods on them. A fake that hands over strings passes
+        # until the day something calls `.mkdir()`, and then fails in a test
+        # that has nothing to do with the change (2026-08-23).
+        service_account_json=Path("/nowhere"), region="sgp",
+        android="Android 15",
         phone_name_prefix="farm", target_package="com.example",
         max_concurrent_phones=1, build_budget_seconds=3600,
         login_budget_seconds=900, install_budget_seconds=600,
         app_login_budget_seconds=600,
-        api_requests_per_minute=120, state_dir="/tmp", artifact_dir="/tmp",
-        log_dir="/tmp", log_level="INFO",
+        api_requests_per_minute=120,
+        state_dir=Path(tempfile.gettempdir()),
+        artifact_dir=Path(tempfile.gettempdir()),
+        log_dir=Path(tempfile.gettempdir()), log_level="INFO",
     )
     base.update(overrides)
     return Settings(**base)
