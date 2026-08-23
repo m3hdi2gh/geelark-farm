@@ -596,6 +596,12 @@ def cmd_build(settings: Settings, args) -> int:
         url = phones.start(client, phone_id)
         if url:
             print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
+        if not sys.stdin.isatty():
+            # Nobody to wait for. Without this the flag turns a build into an
+            # EOFError the moment it runs anywhere without a terminal - a
+            # container, a cron entry, a piped shell - and the phone it had
+            # just started is left up with the run dead underneath it.
+            return
         input("Open it, then press Enter to start this phone... ")
 
     builds = builder.run(client, settings, count=args.count,

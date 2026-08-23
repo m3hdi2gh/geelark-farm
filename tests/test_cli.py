@@ -564,3 +564,18 @@ def test_the_missing_tab_message_says_what_to_do_about_it():
     assert "GOOGLE_SHEET_ID" in message      # the usual real cause
     assert "LISTS_TAB" in message and "HISTORY_TAB" in message
     assert "automatically" in message
+
+
+def test_watching_a_build_does_not_wait_for_a_terminal_that_is_not_there():
+    """`--watch` stops after each phone starts so a person can open the live
+    view. Run without a terminal - a container, a cron entry, a piped shell -
+    that `input()` is an EOFError, and the phone it had just started is left
+    up with the run dead underneath it."""
+    import inspect
+
+    from geelark_farm import cli
+
+    source = inspect.getsource(cli.cmd_build)
+
+    assert "sys.stdin.isatty()" in source
+    assert source.index("isatty") < source.index('input("Open it')

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from geelark_farm.cli import build_parser
-from geelark_farm.config import ConfigError, Settings, load_env
+from geelark_farm.config import ConfigError, Settings, load_env, machine
 
 
 def test_cli_help_builds():
@@ -98,3 +98,25 @@ def test_something_pasted_into_the_wrong_column_is_still_refused():
         check_totp_secret(normalize_totp_secret("fifa19.900t@pAss"))
 
     assert "." in str(caught.value) or "@" in str(caught.value)
+
+
+# ------------------------------------------ who a machine says it is
+def test_a_container_can_declare_a_stable_name(monkeypatch):
+    """Docker hands a container a fresh random hex id for a hostname on every
+    `run`. Without an override the History tab would fill with names that mean
+    nothing and the log would start a new file each time the service came
+    back - and which machine wrote a row is the whole reason both exist."""
+    monkeypatch.setenv("GEELARK_MACHINE", "geelark-server")
+    assert machine() == "geelark-server"
+
+
+def test_the_hostname_is_still_the_answer_without_one(monkeypatch):
+    """Nothing on a laptop needs to set this."""
+    monkeypatch.delenv("GEELARK_MACHINE", raising=False)
+    assert machine()                 # whatever the host is called, not blank
+
+
+def test_a_declared_name_is_sanitised_like_any_other(monkeypatch):
+    """It lands in filenames, the same as a hostname does."""
+    monkeypatch.setenv("GEELARK_MACHINE", "geelark server.01")
+    assert machine() == "geelark-server-01"
