@@ -32,6 +32,64 @@ class SheetError(Exception):
     """The spreadsheet cannot be read or written."""
 
 
+def retrying(call, *, what: str, attempts: int = 4):
+    """Run one sheet call, retrying a 429 or a transient network failure.
+
+    The policy, in one place, because reads and writes want the same one and
+    for the same reasons - see `batch_write` for the incidents that shaped it.
+
+    A 429 is a wait, not a no: Google allows sixty requests a minute per user
+    and the same call succeeds a minute later, so it backs off toward a full
+    window. A network blip is a blip, and backs off in seconds.
+
+    `what` names the thing being read or recorded, because the only reason
+    anyone reads this error is to find out what was lost.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return call()
+        except APIError as exc:
+            if getattr(exc.response, "status_code", None) != 429:
+                raise                         # a real refusal, not a wait
+            if attempt == attempts:
+                raise SheetError(
+                    f"{what}: the sheet's quota stayed exhausted after "
+                    f"{attempt} attempts ({exc})"
+                ) from exc
+            delay = min(15 * attempt, 60) + random.uniform(0, 2)
+            log.warning("%s: sheet quota exceeded; waiting %.0fs", what, delay)
+            time.sleep(delay)
+        except (OSError, RequestException) as exc:
+            if attempt == attempts:
+                raise SheetError(
+                    f"{what}: the sheet could not be reached after "
+                    f"{attempt} attempts ({exc})"
+                ) from exc
+            delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
+            log.warning("%s: sheet call failed (%s); retrying in %.1fs",
+                        what, exc, delay)
+            time.sleep(delay)
+    raise SheetError(f"{what}: exhausted {attempts} attempts")
+
+
+def read_values(worksheet, lock: threading.Lock | None = None, *,
+                what: str, attempts: int = 4) -> list[list[str]]:
+    """Every cell of a tab, with the retry a write has always had.
+
+    Writes were wrapped and reads were not, because a person re-ran the tool
+    when a read failed. A service that polls the tabs every half minute has
+    nobody to do that: one 429 - and the read quota is as finite as the write
+    one - would end the loop (2026-08-23).
+    """
+    def once() -> list[list[str]]:
+        if lock is None:
+            return worksheet.get_all_values()
+        with lock:
+            return worksheet.get_all_values()
+
+    return retrying(once, what=what, attempts=attempts)
+
+
 def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
                 what: str, attempts: int = 4) -> None:
     """Send a batch update, retrying transient network failures.
@@ -60,36 +118,14 @@ def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
     `what` names the thing being recorded - a row, a Gmail, a phone - because
     the only reason anyone reads this error is to find out what was lost.
     """
-    for attempt in range(1, attempts + 1):
+    def once() -> None:
+        # A fresh copy per attempt, for the reason above: gspread rewrites the
+        # list it is given, so retrying the same one sends a doubled range.
         fresh = [dict(item) for item in payload]
-        try:
-            with lock:
-                worksheet.batch_update(fresh)
-            return
-        except APIError as exc:
-            if getattr(exc.response, "status_code", None) != 429:
-                raise                         # a real refusal, not a wait
-            if attempt == attempts:
-                raise SheetError(
-                    f"{what}: the sheet's write quota stayed exhausted after "
-                    f"{attempt} attempts ({exc})"
-                ) from exc
-            # The quota is per minute, so the wait is measured in that: back
-            # off toward a full window rather than the seconds a blip needs.
-            delay = min(15 * attempt, 60) + random.uniform(0, 2)
-            log.warning("%s: sheet write quota exceeded; waiting %.0fs",
-                        what, delay)
-            time.sleep(delay)
-        except (OSError, RequestException) as exc:
-            if attempt == attempts:
-                raise SheetError(
-                    f"{what}: the sheet could not be written after "
-                    f"{attempt} attempts ({exc})"
-                ) from exc
-            delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
-            log.warning("%s: sheet write failed (%s); retrying in %.1fs",
-                        what, exc, delay)
-            time.sleep(delay)
+        with lock:
+            worksheet.batch_update(fresh)
+
+    retrying(once, what=what, attempts=attempts)
 
 
 def a1_column(number: int) -> str:

@@ -195,11 +195,20 @@ class Client:
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
-            headers = self.auth_headers()
-            trace_id = headers["traceId"]
+            # The limiter first, then the signature. A signature carries the
+            # millisecond it was made in, and the limiter blocks - for up to a
+            # full window when the budget is spent. Signing before waiting
+            # therefore sends a timestamp that is as stale as the wait was
+            # long, and a stale one is what [40003] rejects.
+            #
+            # Never seen yet, because a local cap of 120 against a real 200
+            # means this almost never blocks. A service that never stops is
+            # exactly what makes it block.
             waited = self.limiter.acquire()
             if waited > 1:
                 log.info("waited %.1fs for rate limit before %s", waited, path)
+            headers = self.auth_headers()
+            trace_id = headers["traceId"]
 
             try:
                 response = self.session.post(

@@ -46,7 +46,7 @@ from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
 from .config import Settings, machine
-from .gsheet import SCOPES, SheetError, a1_column, batch_write
+from .gsheet import SCOPES, SheetError, a1_column, batch_write, read_values
 from .proxy import Proxy, ProxyError
 from .proxy import parse as parse_proxy
 
@@ -170,8 +170,7 @@ class Pool:
 
     # ------------------------------------------------------------- reading
     def load(self) -> None:
-        with self._lock:
-            raw = self._ws.get_all_values()
+        raw = read_values(self._ws, self._lock, what=f"the {self.tab} tab")
         self._rows = []
         for offset, line in enumerate(raw[1:], start=2):
             values = {
@@ -801,7 +800,7 @@ class PhoneLog:
                 line[index] = value
         with self._append_lock:
             with self._lock:
-                used = len(self._ws.get_all_values())
+                used = len(read_values(self._ws, what="the Phones tab"))
                 # The grid has to reach the row before anything can be written
                 # into it. `delete_rows` removes rows from the grid itself, so
                 # a sync that clears out finished phones shrinks the tab to
@@ -835,8 +834,7 @@ class PhoneLog:
 
         `building` is excluded: a run may be holding it right now.
         """
-        with self._lock:
-            rows = self._ws.get_all_values()
+        rows = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
         for offset, line in enumerate(rows[1:], start=2):
             if not any(line):
@@ -891,8 +889,7 @@ class PhoneLog:
         Read every time rather than cached: the whole point of the column is
         that it is edited by hand between runs.
         """
-        with self._lock:
-            rows = self._ws.get_all_values()
+        rows = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
         for offset, line in enumerate(rows[1:], start=2):
             if not any(line):
@@ -934,8 +931,7 @@ class PhoneLog:
         with a third question - which proxy does it think each phone is on -
         does not need a fourth reader.
         """
-        with self._lock:
-            raw = self._ws.get_all_values()
+        raw = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
         for offset, line in enumerate(raw[1:], start=2):
             if not any(line):
@@ -965,8 +961,7 @@ class PhoneLog:
         index = self._index.get("Serial")
         if index is None:
             return None
-        with self._lock:
-            raw = self._ws.get_all_values()
+        raw = read_values(self._ws, self._lock, what="the Phones tab")
         for offset, line in enumerate(raw[1:], start=2):
             if index < len(line) and line[index].strip() == wanted:
                 return offset
@@ -1235,8 +1230,7 @@ class Book:
             "Phone Statuses": builder.possible_statuses(),
         }
 
-        with self._lock:
-            grid = self._lists.get_all_values()
+        grid = read_values(self._lists, self._lock, what="the Lists tab")
         head = grid[0]
 
         def column_now(letter_index: int) -> list[str]:

@@ -11,7 +11,37 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _root() -> Path:
+    """Where this tool's own files live: `.env`, `state/`, `logs/`, `secrets/`.
+
+    In a source checkout that is the repo, two levels above the package
+    (`<root>/src/geelark_farm/`). That was taken as a fact, and it holds only
+    while the package is installed with `pip install -e .`.
+
+    A plain `pip install .` - which is what an image does - puts the package in
+    `site-packages/geelark_farm/`, so the same arithmetic answers
+    `/usr/local/lib/python3.12`. Every path here would then be resolved inside
+    the installed library: `.env` looked for where it cannot be, and `state/`,
+    `logs/` and `artifacts/` written into the image itself. The ledger would go
+    with them, and a ledger that dies with the container is a ledger that
+    cannot account for the phones a restart interrupted.
+
+    So the arithmetic is checked rather than trusted. `pyproject.toml` next to
+    the candidate means a checkout; anything else means the package is
+    installed and the working directory is what the paths are relative to.
+    `GEELARK_ROOT` settles it outright, which is what a container should set.
+    """
+    explicit = os.environ.get("GEELARK_ROOT")
+    if explicit:
+        return Path(explicit).resolve()
+    candidate = Path(__file__).resolve().parents[2]
+    if (candidate / "pyproject.toml").is_file():
+        return candidate
+    return Path.cwd().resolve()
+
+
+REPO_ROOT = _root()
 ENV_FILE = REPO_ROOT / ".env"
 
 

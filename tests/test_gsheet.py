@@ -73,3 +73,52 @@ def test_a_non_quota_api_error_is_not_retried(monkeypatch):
         batch_write(sheet, threading.Lock(),
                     [{"range": "A1", "values": [["x"]]}], what="row 1")
     assert sheet.calls == 1          # tried once, gave up
+
+
+# --------------------------------------------------- reads, not only writes
+def test_a_read_survives_the_quota_the_way_a_write_does(monkeypatch):
+    """Writes were wrapped and reads were not, because a person re-ran the
+    tool when a read failed. A service polling the tabs every half minute has
+    nobody to do that: one 429 would end the loop (2026-08-23)."""
+    monkeypatch.setattr(gsheet.time, "sleep", lambda *a: None)
+    tries = []
+
+    class Tab:
+        def get_all_values(self):
+            tries.append(1)
+            if len(tries) < 3:
+                raise Quota()
+            return [["Address"], ["a@b.com"]]
+
+    rows = gsheet.read_values(Tab(), threading.Lock(), what="the Gmails tab")
+
+    assert rows == [["Address"], ["a@b.com"]]
+    assert len(tries) == 3
+
+
+def test_a_read_refused_for_a_real_reason_is_not_retried(monkeypatch):
+    """A revoked key or a bad range is a no, not a wait. Retrying it spends
+    four backoffs to be told the same thing."""
+    monkeypatch.setattr(gsheet.time, "sleep", lambda *a: None)
+    tries = []
+
+    class Tab:
+        def get_all_values(self):
+            tries.append(1)
+            raise Forbidden()
+
+    with pytest.raises(gsheet.GSpreadError):
+        gsheet.read_values(Tab(), threading.Lock(), what="the Gmails tab")
+
+    assert len(tries) == 1
+
+
+def test_a_read_that_never_comes_back_says_which_tab_was_lost(monkeypatch):
+    monkeypatch.setattr(gsheet.time, "sleep", lambda *a: None)
+
+    class Tab:
+        def get_all_values(self):
+            raise OSError("connection reset")
+
+    with pytest.raises(gsheet.SheetError, match="the Proxy tab"):
+        gsheet.read_values(Tab(), threading.Lock(), what="the Proxy tab")
