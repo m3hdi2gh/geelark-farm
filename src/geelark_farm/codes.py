@@ -33,11 +33,6 @@ log = logging.getLogger(__name__)
 #: up too early is the whole build - and mail providers are unhurried.
 WAIT_SECONDS = 180
 
-#: How often to look. Not lower: every check is a request to somebody's mail
-#: server, and a code that took a minute to arrive is not made faster by
-#: asking twice a second.
-POLL_SECONDS = 10
-
 #: Six digits, standing alone. `\b` on both sides so a longer number - an
 #: order id, a year in a footer - cannot be read as a code, which is the way
 #: this kind of scraping usually goes wrong.
