@@ -452,3 +452,21 @@ def test_a_state_the_phones_tab_holds_is_not_a_reason():
 
     assert not (failures.BUILD_STATES
                 & failures.reasons_decided_by_the_builder(builder))
+
+
+def test_a_verdict_cannot_be_changed_after_the_table_is_built():
+    """These are shared: one `Verdict` object answers for every build that
+    ever hits that reason. Something that reworded one - a note-formatter
+    tidying a sentence, a caller filling in `{service}` in place - would
+    change it for every reader afterwards, and nothing would say so.
+
+    `frozen=True` is what stops that, and dropping it was a change no test
+    objected to (2026-08-23, found by mutation).
+    """
+    import dataclasses
+
+    found = failures.verdict("wrong_password", "Google")
+
+    assert failures.Verdict.__dataclass_params__.frozen
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        found.advice = "something else"
