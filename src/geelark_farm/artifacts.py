@@ -85,14 +85,24 @@ def prune(root: Path, live_serials: set[str], *,
     if not root.exists():
         return []
     cutoff = (now if now is not None else time.time()) - FAILURE_DAYS * 86400
+    # An unnamed phone puts "" in the set, and `serial_of` answers "" for a
+    # directory whose name it cannot read - so the two would match and the
+    # directory would be kept for ever on the strength of nothing.
+    live_serials = {serial for serial in live_serials if serial}
     removed = []
     for directory in sorted(root.iterdir()):
-        if not directory.is_dir():
+        try:
+            if not directory.is_dir():
+                continue
+            modified = directory.stat().st_mtime
+        except OSError:
+            # Gone between listing and asking, or unreadable. Neither is worth
+            # ending a prune over, and leaving it is the side that keeps.
             continue
         if _succeeded(directory):
             if serial_of(directory) in live_serials:
                 continue                 # its phone is still there
-        elif directory.stat().st_mtime >= cutoff:
+        elif modified >= cutoff:
             continue                     # a failure, still within the week
         if not dry_run:
             try:

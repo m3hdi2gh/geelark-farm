@@ -259,3 +259,36 @@ def test_no_key_is_a_fact_not_a_problem():
     verify._sxorg(sxorg_settings(""), {}, checks)
 
     assert states(checks)["sx.org"] == verify.INFO
+
+
+def test_the_column_a_missing_secret_hides_behind_is_required():
+    """An account without a 2FA secret is usable; a tab without the column
+    makes every row look like one, and each fails at the code page as
+    `no_authenticator` - blaming the row for a missing heading (2026-08-23)."""
+    from geelark_farm.verify import REQUIRED_COLUMNS
+
+    for tab in ("Gmails", "Gpt Info"):
+        assert "2FA Secret" in REQUIRED_COLUMNS[tab]
+
+
+def test_every_column_the_pools_read_is_required_or_optional_on_purpose():
+    """The list is maintained by hand, which is how it lost one. Anything the
+    pools read and this does not demand has to be a column the code works
+    without - the Proxy tab's split-out form, or one `ensure_columns` adds."""
+    import pathlib
+    import re
+
+    from geelark_farm.verify import REQUIRED_COLUMNS
+
+    src = pathlib.Path("src/geelark_farm/pools.py").read_text(encoding="utf-8")
+    read = set(re.findall(r'values\.get\("([^"]+)"', src))
+    required = {c for cols in REQUIRED_COLUMNS.values() for c in cols}
+
+    # Known-optional, each for a reason written where it is used.
+    optional = {"Host", "Port", "Username", "Port ID", "Name", "Last Exit IP",
+                "Last Refresh", "Claimed", "Times Used", "Last Used",
+                "Used Date", "App", "Email code", "Phone ID"}
+
+    assert not (read - required - optional), (
+        f"the pools read {sorted(read - required - optional)} and nothing "
+        f"says whether the tab has to have them")

@@ -6,7 +6,9 @@ nothing raised, the command simply did the wrong thing.
 
 from __future__ import annotations
 
+import pathlib
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -579,3 +581,161 @@ def test_watching_a_build_does_not_wait_for_a_terminal_that_is_not_there():
 
     assert "sys.stdin.isatty()" in source
     assert source.index("isatty") < source.index('input("Open it')
+
+
+# ============================ one door onto a phone, and what it owns
+class FakePhones:
+    """Enough of `phones` to watch a command's effect on a device."""
+
+    RUNNING, STARTING, STOPPED, EXPIRED = 0, 1, 2, 3
+    STATUS_NAMES = {0: "running", 1: "starting", 2: "stopped", 3: "expired"}
+
+    def __init__(self, *, already_running=False):
+        self.already_running = already_running
+        self.started, self.stopped = [], []
+
+    def listing(self, client, page_size=100):
+        return [{"id": "P1", "serialNo": "801",
+                 "status": self.RUNNING if self.already_running
+                 else self.STOPPED}]
+
+    def newest(self, client):
+        return self.listing(client)[0]
+
+    def ensure_running(self, client, phone_id, **kwargs):
+        if self.already_running:
+            return None                      # nothing to hand back
+        self.started.append(phone_id)
+        return "https://watch/me"
+
+    def stop(self, client, phone_id):
+        self.stopped.append(phone_id)
+
+    def screenshot(self, client, phone_id, **kwargs):
+        return "https://shot"
+
+
+def _wire(monkeypatch, fake, *, claimed=False):
+    from geelark_farm import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "phones", fake)
+    monkeypatch.setattr(cli_mod, "build_client", lambda s: object())
+    entry = SimpleNamespace(is_claimed=claimed, is_stale=False, label="a build")
+    monkeypatch.setattr(cli_mod.Ledger, "load", staticmethod(
+        lambda d: SimpleNamespace(get=lambda i: entry if claimed else None,
+                                  release=lambda i, note="": None)))
+    return cli_mod
+
+
+def test_a_diagnostic_stops_the_phone_it_started(monkeypatch, capsys, settings):
+    """`phones.py` says anything that starts a phone owns stopping it. These
+    started one and walked away, leaving it up with nothing in the ledger
+    accounting for it (2026-08-23)."""
+    fake = FakePhones(already_running=False)
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.phones, "screenshot",
+                        lambda c, p, **k: "https://shot")
+
+    cli_mod.cmd_screenshot(settings, SimpleNamespace(phone=None))
+
+    assert fake.started == ["P1"]
+    assert fake.stopped == ["P1"]
+
+
+def test_a_phone_that_was_already_up_is_left_up(monkeypatch, capsys, settings):
+    """It belongs to whatever had it running."""
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+
+    cli_mod.cmd_screenshot(settings, SimpleNamespace(phone=None))
+
+    assert fake.started == []
+    assert fake.stopped == []
+
+
+def test_a_diagnostic_refuses_a_phone_another_run_is_driving(monkeypatch, settings):
+    """`uiautomator dump` cannot run twice at once, and `resolve_phone`
+    prefers the running phone - so a bare `dump` aims at the build."""
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake, claimed=True)
+
+    with pytest.raises(SystemExit, match="in use by another run"):
+        cli_mod.cmd_screenshot(settings, SimpleNamespace(phone=None))
+
+    assert fake.started == []
+
+
+def test_every_command_that_drives_a_phone_goes_through_the_one_door():
+    """The guard existed and only two of seven used it."""
+    import inspect
+
+    from geelark_farm import cli as cli_mod
+
+    for name in ("cmd_dump", "cmd_tap", "cmd_shell", "cmd_type",
+                 "cmd_screenshot"):
+        source = inspect.getsource(getattr(cli_mod, name))
+        assert "with device(" in source, f"{name} drives a phone unguarded"
+
+
+# ============================================ a serial that is not there
+def test_a_phone_with_no_serial_does_not_crash_the_listing(
+        monkeypatch, capsys, settings):
+    """`.get(key, default)` does not apply its default when the key is present
+    and null, and formatting None raises. Every other reader in the package
+    already writes `str(... or "")` (2026-08-23)."""
+    from geelark_farm import cli as cli_mod
+
+    class Unnamed(FakePhones):
+        def listing(self, client, page_size=100):
+            return [{"id": "P1", "serialNo": None, "status": self.STOPPED}]
+
+        def prune_ledger(self, client, ledger):
+            return []
+
+    fake = Unnamed()
+    _wire(monkeypatch, fake)
+
+    cli_mod.cmd_phones(settings, SimpleNamespace(ledger=False))
+
+    assert "serial" in capsys.readouterr().out
+
+
+# ================================================= flags that do nothing
+def test_every_flag_the_parser_offers_is_read_by_its_command():
+    """`--watch` was declared on `login`, helped, and never read - the command
+    took it and drove straight past (2026-08-23)."""
+    import inspect
+    import re
+
+    from geelark_farm import cli as cli_mod
+
+    source = inspect.getsource(cli_mod)
+    unread = []
+    for parser, flag in re.findall(r'p_(\w+)\.add_argument\(\s*"--([a-z-]+)"',
+                                   source):
+        command = getattr(cli_mod, f"cmd_{parser}", None)
+        if command is None:
+            continue
+        if f"args.{flag.replace('-', '_')}" not in inspect.getsource(command):
+            unread.append(f"--{flag} on {parser}")
+    assert not unread, f"declared and never read: {unread}"
+
+
+# ======================================= the list of commands in the docs
+def test_the_module_says_which_commands_exist_and_is_right():
+    """It named `run` and `rows`, which were renamed and removed, and omitted
+    fourteen that exist - while claiming to be the full surface."""
+    import re
+
+    from geelark_farm import cli as cli_mod
+
+    doc = cli_mod.__doc__ or ""
+    grouped = doc.split("Commands are grouped by what they are for:")[-1]
+    named = set(re.findall(r"\b([a-z]+)\b", grouped.split('"""')[0]))
+
+    real = set(re.findall(r'add_parser\(\s*"([a-z-]+)"',
+                          pathlib.Path("src/geelark_farm/cli.py")
+                          .read_text(encoding="utf-8")))
+
+    missing = sorted(real - named)
+    assert not missing, f"the docstring does not mention {missing}"

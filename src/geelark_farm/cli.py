@@ -5,17 +5,24 @@ network, crypto and spreadsheet libraries, and subcommands with a few flags do
 not justify another one.
 
 Commands are grouped by what they are for:
-  running the pipeline   run
-  input inspection       rows
-  device diagnostics     dump, tap, shell, screenshot
-  phone management       phones, stop, reap
 
-Every command is implemented; `geelark --help` is the full surface.
+  producing phones       build, finish
+  the console            ui
+  what the sheet holds   pools
+  setup and credentials  verify, ping, plan, proxy
+  phone lifecycle        phones, create, delete, start, stop, reap
+  device diagnostics     dump, tap, shell, type, screenshot
+  one step at a time     login, install
+
+It named `run` and `rows`, which were renamed and removed, and omitted
+fourteen that exist - while claiming to be the full surface. A test now
+checks this list against the parser rather than against nothing.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import sys
 import time
@@ -23,7 +30,7 @@ import time
 from . import __version__, accounts, phones, proxy, screen, shell
 from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
-from .config import ConfigError, Settings
+from .config import REPO_ROOT, ConfigError, Settings
 from .flows import google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
@@ -85,7 +92,6 @@ def build_parser() -> argparse.ArgumentParser:
                          help="report the tabs as they stand, without first "
                               "bringing them into agreement with the panel")
 
-    # ------------------------------------------------------------- input
     # ------------------------------------------------------ diagnostics
     sub.add_parser("ping", help="verify API credentials and list phones")
     sub.add_parser("verify",
@@ -217,12 +223,41 @@ def resolve_phone(client: Client, requested: str | None) -> str:
     return newest["id"]
 
 
-def with_device(client: Client, requested: str | None) -> str:
-    """Resolve a phone and make sure it is running, because shell commands
-    fail confusingly on a stopped one."""
+@contextlib.contextmanager
+def device(settings: Settings, client: Client, requested: str | None):
+    """A phone to run one diagnostic command against, and afterwards.
+
+    Three things every one of these needs and five of them did none of:
+
+    - **Refuse a phone something else is driving.** `uiautomator dump` cannot
+      run twice at once. `geelark dump` is what you reach for while watching a
+      build go wrong - which is when a build is on that phone - and
+      `resolve_phone` prefers the running one, so a bare `dump` aims at it
+      automatically. The guard existed and only `login` and `install` used it.
+
+    - **Boot it, because shell commands fail confusingly on a stopped phone.**
+      That part was already here.
+
+    - **Stop it again if this command is what started it.** `phones.py` says
+      anything that starts a phone owns stopping it; these started one and
+      walked away, leaving it up with nothing in the ledger accounting for it.
+      A phone that was already running is left running - it belongs to
+      whatever had it.
+
+    `ensure_running` returns a URL when it did the starting and None when the
+    phone was already up, which is exactly the ownership question.
+    """
     phone_id = resolve_phone(client, requested)
-    phones.ensure_running(client, phone_id)
-    return phone_id
+    refuse_if_busy(settings, phone_id)
+    started = phones.ensure_running(client, phone_id)
+    if started:
+        print(f"started {phone_id} - it will be stopped again afterwards")
+    try:
+        yield phone_id
+    finally:
+        if started:
+            phones.stop(client, phone_id)
+            print(f"stopped {phone_id} - billing ended")
 
 
 def refuse_if_busy(settings: Settings, phone_id: str) -> None:
@@ -258,7 +293,12 @@ def cmd_phones(settings: Settings, args) -> int:
         state = item.get("status")
         running += state == phones.RUNNING
         equipment = item.get("equipmentInfo") or {}
-        line = (f"  {item.get('id')}  serial {item.get('serialNo', '?'):>5}  "
+        # `or`, not a `.get` default: the key is present and null on a phone
+        # GeeLark has not numbered yet, so the default never applies and
+        # formatting None raises. Every other reader in the package already
+        # writes it this way (2026-08-23).
+        line = (f"  {item.get('id')}  "
+                f"serial {str(item.get('serialNo') or '?'):>5}  "
                 f"{PHONE_STATUS.get(state, state):8}  "
                 f"{equipment.get('deviceBrand', '?')} "
                 f"{equipment.get('osVersion', '?')}")
@@ -291,7 +331,11 @@ def cmd_create(settings: Settings, args) -> int:
 
     if args.start:
         url = phones.start(client, entry.phone_id)
-        ledger.claim(entry.phone_id, label=args.label)
+        # Not claimed. A claim means "a run is working on this right now", and
+        # `reapable` reads a fresh one as exactly that and leaves the phone
+        # alone - so claiming here started a phone billing and hid it from the
+        # reaper for the two hours it takes a claim to go stale. Nothing is
+        # working on it; `geelark start` does not claim either.
         phones.wait_until_running(client, entry.phone_id)
         print(f"running - watch it live:\n  {url}")
         print("remember: 'geelark stop' ends billing")
@@ -428,61 +472,66 @@ def cmd_stop(settings: Settings, args) -> int:
 
 def cmd_dump(settings: Settings, args) -> int:
     client = build_client(settings)
-    phone_id = with_device(client, args.phone)
-    xml = screen.capture(client, phone_id)
-    if not xml:
-        print("could not read the view hierarchy", file=sys.stderr)
-        return 1
-    elements = screen.parse(xml)
-    print(f"{len(elements)} element(s)   "
-          f"* clickable  ! disabled  > focused  # password\n")
-    for element in elements:
-        print(element)
-    if args.save:
-        saved = screen.save_fixture(xml, args.save)
-        print(f"\nfixture saved: {saved}")
+    with device(settings, client, args.phone) as phone_id:
+        xml = screen.capture(client, phone_id)
+        if not xml:
+            print("could not read the view hierarchy", file=sys.stderr)
+            return 1
+        elements = screen.parse(xml)
+        print(f"{len(elements)} element(s)   "
+              f"* clickable  ! disabled  > focused  # password\n")
+        for element in elements:
+            print(element)
+        if args.save:
+            saved = screen.save_fixture(xml, args.save)
+            print(f"\nfixture saved: {saved}")
     return 0
 
 
 def cmd_tap(settings: Settings, args) -> int:
     client = build_client(settings)
-    phone_id = with_device(client, args.phone)
-    elements = screen.read_screen(client, phone_id)
-    if screen.tap_label(client, phone_id, elements, args.label):
-        return 0
-    print(f"no element matching {args.label!r}. On screen:", file=sys.stderr)
-    for element in elements:
-        print(f"   {element.label or f'(empty {element.cls})'}", file=sys.stderr)
+    with device(settings, client, args.phone) as phone_id:
+        elements = screen.read_screen(client, phone_id)
+        if screen.tap_label(client, phone_id, elements, args.label):
+            return 0
+        print(f"no element matching {args.label!r}. On screen:",
+              file=sys.stderr)
+        for element in elements:
+            print(f"   {element.label or f'(empty {element.cls})'}",
+                  file=sys.stderr)
     return 1
 
 
 def cmd_shell(settings: Settings, args) -> int:
     client = build_client(settings)
-    phone_id = with_device(client, args.phone)
-    print(shell.run(client, phone_id, args.cmd), end="")
+    with device(settings, client, args.phone) as phone_id:
+        # strict: this is a debugging command, and "it printed nothing" and
+        # "it did not run" are the two answers you are actually choosing
+        # between. It reported success for both.
+        print(shell.run(client, phone_id, args.cmd, strict=True), end="")
     return 0
 
 
 def cmd_type(settings: Settings, args) -> int:
     client = build_client(settings)
-    phone_id = with_device(client, args.phone)
-    try:
-        shell.type_text(client, phone_id, args.text)
-    except TypingError as exc:
-        print(f"typing: {exc}", file=sys.stderr)
-        return 1
-    print(f"typed {len(args.text)} character(s) into the focused field")
+    with device(settings, client, args.phone) as phone_id:
+        try:
+            shell.type_text(client, phone_id, args.text)
+        except TypingError as exc:
+            print(f"typing: {exc}", file=sys.stderr)
+            return 1
+        print(f"typed {len(args.text)} character(s) into the focused field")
     return 0
 
 
 def cmd_screenshot(settings: Settings, args) -> int:
     client = build_client(settings)
-    phone_id = with_device(client, args.phone)
-    link = phones.screenshot(client, phone_id)
-    if not link:
-        print("screenshot failed", file=sys.stderr)
-        return 1
-    print(link)
+    with device(settings, client, args.phone) as phone_id:
+        link = phones.screenshot(client, phone_id)
+        if not link:
+            print("screenshot failed", file=sys.stderr)
+            return 1
+        print(link)
     return 0
 
 
@@ -517,7 +566,12 @@ def pick_account(settings: Settings, row: int):
             row=row,
         )
 
-    path = settings.state_dir.parent / DEV_ACCOUNTS
+    # From the project root, not from beside `state/`. The two are the same
+    # by default and stop being so the moment STATE_DIR points anywhere else -
+    # a mounted volume, for one - and then this looks for the file in whatever
+    # directory happens to be the parent of that. The same arithmetic-on-a-
+    # configured-path that sent `.env` into site-packages (2026-08-23).
+    path = REPO_ROOT / DEV_ACCOUNTS
     loaded = accounts.load_dev_accounts(path)
     if not 1 <= row <= len(loaded):
         raise SystemExit(f"--row {row} is out of range (1..{len(loaded)})")
@@ -559,6 +613,16 @@ def cmd_login(settings: Settings, args) -> int:
         url = phones.ensure_running(client, phone_id)
         if url:
             print(f"watch it live:\n  {url}")
+        if args.watch:
+            # The flag was declared, helped, and never read - `geelark login
+            # --watch` took it and drove straight past (2026-08-23). Guarded
+            # the way `build --watch` is: with no terminal there is nobody to
+            # wait for, and the input would be an EOFError over a phone that
+            # is already running.
+            if sys.stdin.isatty():
+                input("Open it, then press Enter to start the login... ")
+            else:
+                print("(nothing to wait for - no terminal)", flush=True)
         outcome = google_login.sign_in(
             client, phone_id, account,
             budget_seconds=settings.login_budget_seconds,
@@ -704,7 +768,14 @@ def cmd_install(settings: Settings, args) -> int:
         url = phones.start(client, phone_id)
         if url:
             print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
-        input("Open it, then press Enter here to start the install... ")
+        if sys.stdin.isatty():
+            input("Open it, then press Enter here to start the install... ")
+        else:
+            # `cmd_build` has guarded this since the flag was added, and says
+            # why: with no terminal the input is an EOFError, and this one is
+            # raised before the `try`, so the `finally` that stops the phone
+            # never runs and it is left up with the command dead under it.
+            print("(nothing to wait for - no terminal)", flush=True)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     artifact_dir = settings.artifact_dir / f"{stamp}-install"
@@ -735,18 +806,22 @@ def cmd_ping(settings: Settings, args) -> int:
     signing, rate limiter, envelope unwrapping - without starting anything.
     """
     client = build_client(settings)
-    data = client.data("/v1/phone/list", {"page": 1, "pageSize": 100})
-    items = data.get("items") or []
+    # Through `listing`, which reads every page. Asking the endpoint directly
+    # returned one page and then printed the account's true total beside it,
+    # so an account with more than a hundred phones was told about all of them
+    # and shown a hundred.
+    items = phones.listing(client)
     print(f"authenticated as appId {settings.app_id[:6]}...  "
-          f"{data.get('total', len(items))} phone(s) visible")
+          f"{len(items)} phone(s) visible")
 
     running = 0
     for item in items:
         status = item.get("status")
-        if status == 0:
+        if status == phones.RUNNING:
             running += 1
         equipment = item.get("equipmentInfo") or {}
-        print(f"  {item.get('id')}  serial {item.get('serialNo', '?'):>5}  "
+        print(f"  {item.get('id')}  "
+              f"serial {str(item.get('serialNo') or '?'):>5}  "
               f"{PHONE_STATUS.get(status, status):8}  "
               f"{equipment.get('deviceBrand', '?')} "
               f"{equipment.get('osVersion', '?')}")

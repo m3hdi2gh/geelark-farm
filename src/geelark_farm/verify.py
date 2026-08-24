@@ -50,9 +50,16 @@ class Check:
 #: column the tab does not have, on purpose, so the optional ones can be
 #: absent - which means a tab without `Status` claims rows and never records
 #: it, and the run looks fine while every row is handed out twice.
+#: `2FA Secret` is here although an account without one is perfectly usable:
+#: what has to exist is the column, not a value in every row. Without it every
+#: row reads as an account with no authenticator, is handed to a phone, and
+#: fails at the code page as `no_authenticator` - which blames the row for a
+#: tab that is missing a heading (2026-08-23).
 REQUIRED_COLUMNS = {
-    "Gmails": ["Address", "Password", "Status", "Note", "Phone Serial"],
-    "Gpt Info": ["Address", "Password", "Status", "Note", "Phone Serial"],
+    "Gmails": ["Address", "Password", "2FA Secret", "Status", "Note",
+               "Phone Serial"],
+    "Gpt Info": ["Address", "Password", "2FA Secret", "Status", "Note",
+                 "Phone Serial"],
     "Proxy": ["Proxy String", "Status", "Note", "Used By"],
     "Phones": ["Created", "Serial", "State", "Proxy", "Gmail", "GPT Account",
                "Status", "Note"],

@@ -8,6 +8,7 @@ success is worth keeping while its phone exists, a failure for a week.
 
 from __future__ import annotations
 
+import pathlib
 import time
 
 from geelark_farm import artifacts
@@ -118,3 +119,43 @@ def test_the_outcome_is_readable_by_a_person(tmp_path):
     said = (directory / artifacts.OUTCOME_FILE).read_text(encoding="utf-8")
 
     assert said.strip() == "failed download_stalled"
+
+
+def test_a_directory_with_no_serial_is_not_kept_by_an_unnamed_phone(tmp_path):
+    """An unnamed phone puts "" in the set and `serial_of` answers "" for a
+    name it cannot read, so the two matched and the directory was kept for
+    ever on the strength of nothing (2026-08-23)."""
+    old = tmp_path / "20260101-000000-something-else"
+    old.mkdir()
+    (old / "outcome.txt").write_text("ok ready\n", encoding="utf-8")
+
+    removed = artifacts.prune(tmp_path, {"", "801"}, now=_now())
+
+    assert removed == [old.name]
+
+
+def test_a_directory_that_vanishes_mid_prune_does_not_stop_it(tmp_path,
+                                                              monkeypatch):
+    """Gone between listing and asking. Neither that nor an unreadable one is
+    worth ending a prune over."""
+    kept = tmp_path / "20260101-000000-build801"
+    kept.mkdir()
+    (kept / "outcome.txt").write_text("ok ready\n", encoding="utf-8")
+    ghost = tmp_path / "20260101-000000-build999"
+    ghost.mkdir()
+
+    real_stat = pathlib.Path.stat
+
+    def stat(self, *a, **k):
+        if self.name.endswith("build999"):
+            raise OSError("it went away")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "stat", stat)
+
+    assert artifacts.prune(tmp_path, {"801"}, now=_now()) == []
+
+
+def _now() -> float:
+    import time
+    return time.time()
