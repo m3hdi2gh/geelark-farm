@@ -32,7 +32,7 @@ from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
 from .config import REPO_ROOT, ConfigError, Settings
 from .flows import google_login, play_install
-from .gsheet import SheetError
+from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
 from .proxy import ProxyError
 from .shell import ShellError, TypingError
@@ -981,6 +981,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except SheetError as exc:
         print(f"sheet: {exc}", file=sys.stderr)
+        return 2
+    except GSpreadError as exc:
+        # A refusal gspread does not turn into a SheetError - a revoked key, a
+        # bad range, a quota surfacing from a read. Named, because the console
+        # names it and this is the same failure arriving at the other door.
+        print(f"sheet: {exc}", file=sys.stderr)
+        return 2
+    except ConfigError as exc:
+        # Settings.load raises this above, and so does `require_sheets` when a
+        # command opens the book - which is most of them.
+        print(f"config: {exc}", file=sys.stderr)
         return 2
     except ProxyError as exc:
         print(f"proxy: {exc}", file=sys.stderr)

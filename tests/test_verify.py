@@ -292,3 +292,90 @@ def test_every_column_the_pools_read_is_required_or_optional_on_purpose():
     assert not (read - required - optional), (
         f"the pools read {sorted(read - required - optional)} and nothing "
         f"says whether the tab has to have them")
+
+
+# ================= a diagnostic survives the thing it exists to diagnose
+class Refusing:
+    """A tab that answers a quota error to every read."""
+
+    title = "Proxy"
+
+    def row_values(self, row):
+        from geelark_farm.gsheet import GSpreadError
+
+        class Response:
+            status_code = 429
+
+            @staticmethod
+            def json():
+                return {"error": {"code": 429, "message": "quota"}}
+
+            text = "quota"
+
+        raise GSpreadError(Response())
+
+
+def test_a_quota_on_a_column_read_is_reported_not_raised():
+    """`run_checks` says it never raises, and three of its reads reached the
+    network without a guard - so a sheet quota, the failure this project
+    handles more carefully than any other, would have ended `geelark verify`
+    in a traceback (2026-08-23)."""
+    checks: list[verify.Check] = []
+    tabs = dict.fromkeys(verify.REQUIRED_COLUMNS, Refusing())
+
+    verify._tabs_and_columns(tabs, checks)
+
+    columns = [c for c in checks if c.name == "columns"]
+    assert columns and columns[0].state == verify.SKIP
+    assert "could not be read" in columns[0].detail
+
+
+def test_a_quota_on_the_sxorg_check_is_reported_not_raised():
+    from geelark_farm.config import Settings
+
+    settings = Settings.__new__(Settings)
+    object.__setattr__(settings, "sxorg_api_key", "a-key")
+    checks: list[verify.Check] = []
+
+    verify._sxorg(settings, {"Proxy": Refusing()}, checks)
+
+    assert checks[0].state == verify.SKIP
+
+
+def test_the_tab_listing_that_fails_stops_with_a_check_not_a_traceback():
+    """`book.worksheets()` is a network call and was the third unguarded one."""
+    import inspect
+
+    source = inspect.getsource(verify.run_checks)
+
+    assert "book.worksheets()" in source
+    assert "except Exception" in source
+
+
+def test_every_read_in_this_module_is_guarded():
+    """The promise is the module's own, and keeping it by inspection is how it
+    stopped being kept."""
+    import ast
+    import inspect
+
+    unguarded = []
+    for node in ast.parse(inspect.getsource(verify)).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        touches = any(isinstance(n, ast.Attribute) and n.attr in
+                      ("row_values", "worksheets", "acell", "update_acell",
+                       "open_by_key", "data", "plan", "listing")
+                      for n in ast.walk(node))
+        if touches and not any(isinstance(n, ast.Try) for n in ast.walk(node)):
+            unguarded.append(node.name)
+    assert not unguarded, f"these reach the network and can raise: {unguarded}"
+
+
+def test_the_phone_count_comes_from_the_one_place_that_knows_how_to_list():
+    """Called raw, this was the third copy of the paging in the package."""
+    import inspect
+
+    source = inspect.getsource(verify._geelark)
+
+    assert "phones.listing(client)" in source
+    assert "pageSize" not in source
