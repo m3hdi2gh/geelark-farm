@@ -110,6 +110,17 @@ class Outcome:
     reason: str
     detail: str = ""
     artifacts: list[str] = field(default_factory=list)
+    #: The screens this phase walked, for the History `Steps` column. Empty
+    #: here: installing is a procedure rather than a screen router, so there
+    #: is no list of matched screens to report yet.
+    #:
+    #: It exists because the builder reads `.trail` off every flow outcome it
+    #: is handed, and this class is not the one the router defines - which is
+    #: what nobody noticed until ten builds died on
+    #: `'Outcome' object has no attribute 'trail'` (2026-08-24). The contract
+    #: is real, so it is written down here rather than guarded at each of the
+    #: builder's two call sites.
+    trail: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
