@@ -383,3 +383,72 @@ def test_the_group_nothing_is_to_blame_for_is_derived_not_declared():
         reason: found.seen for reason, found in failures.VERDICTS.items()
         if found.blame == failures.NOBODY}
     assert failures.SITUATIONS
+
+
+# ------------------------------------- the reasons the build decides itself
+def test_every_status_the_builder_settles_a_phone_with_has_a_verdict():
+    """Not read off a screen: the build decides these - the pool was empty,
+    the install did not take, an exception reached the top. They end up on a
+    Build and are read back through `verdict()` exactly like a flow's, and
+    nothing checked them. Nine had none (2026-08-23)."""
+    from geelark_farm import builder
+
+    decided = failures.reasons_decided_by_the_builder(builder)
+    missing = sorted(r for r in decided if not failures.knows(r))
+
+    assert decided, "the scan found nothing, which cannot be right"
+    assert not missing, (
+        f"the builder can settle a phone with {missing} and failures.py says "
+        f"nothing about them. Add an entry for each.")
+
+
+def test_a_status_written_as_a_choice_of_two_is_still_seen():
+    """`finish("phone_is_gone" if vanished else "phone_would_not_start", ...)`
+    is neither half a bare Constant, and a scanner wanting one sees neither."""
+    from geelark_farm import builder
+
+    decided = failures.reasons_decided_by_the_builder(builder)
+
+    assert {"phone_is_gone", "phone_would_not_start"} <= decided
+
+
+def test_the_other_finish_does_not_contribute_a_row_number():
+    """`book.phones.finish(row["sheet_row"], ...)` is a different `finish`,
+    taking a row rather than a reason."""
+    from geelark_farm import builder
+
+    assert "sheet_row" not in failures.reasons_decided_by_the_builder(builder)
+
+
+# ------------------------------------------------ the app phase's own prefix
+def test_an_app_prefixed_reason_is_answered_by_the_one_underneath_it():
+    """The prefix adds one fact to a reason that already has a verdict: it
+    happened during the app login rather than during Google's."""
+    inner = failures.verdict("rate_limited")
+    outer = failures.verdict("app_rate_limited")
+
+    assert failures.knows("app_rate_limited")
+    assert outer.blame == inner.blame
+    assert inner.seen in outer.seen
+    assert outer.seen.startswith("the app login could not go on")
+
+
+def test_the_table_answers_a_reason_that_begins_with_app_of_its_own():
+    """`app_not_installed` and `app_would_not_start` are the table's, and the
+    builder does not double the prefix on them."""
+    for reason in ("app_not_installed", "app_would_not_start"):
+        assert failures.verdict(reason) is not failures.verdict("nonsense")
+        assert "could not go on" not in failures.verdict(reason).seen
+
+
+def test_a_prefix_over_something_unclassified_is_still_unclassified():
+    """The rule delegates; it does not invent."""
+    assert not failures.knows("app_nonsense")
+
+
+def test_a_state_the_phones_tab_holds_is_not_a_reason():
+    """`ready` is not something that went wrong and wants no verdict."""
+    from geelark_farm import builder
+
+    assert not (failures.BUILD_STATES
+                & failures.reasons_decided_by_the_builder(builder))

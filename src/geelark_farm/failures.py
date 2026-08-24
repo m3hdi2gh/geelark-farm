@@ -371,6 +371,35 @@ VERDICTS: dict[str, Verdict] = {
         "spent. Check the connection, run `geelark verify`, and if the run "
         "died holding rows they are freed with `geelark pools "
         "--release-stuck`."),
+    "no_usable_gmail": Verdict(
+        NOBODY, "the Gmails tab had no unused address to give it",
+        "No address was free, so no phone was created and nothing was spent. "
+        "The rows are either held by a run that is still going, used up by a "
+        "phone that has had them, or set aside with a reason beside them. Add "
+        "addresses, or blank the status of ones that can be tried again."),
+    "no_usable_gpt": Verdict(
+        NOBODY, "the Gpt Info tab had no unused account to give it",
+        "The phone is built, signed into Google and has the app on it - it is "
+        "one account short of ready, and `Finish waiting phones` completes it "
+        "the moment there is one. Nothing was wasted: no new phone, Gmail or "
+        "proxy is spent by finishing."),
+    "no_google_account": Verdict(
+        DEVICE, "the phone had nothing signed into Google to finish",
+        "Finishing builds on the Google account already on the device, and "
+        "this phone has none - so there is nothing to build on. Rebuild it "
+        "rather than finishing it."),
+    "install_failed": Verdict(
+        DEVICE, "the app could not be installed on this phone",
+        "The Play Store step did not put the app on the device, so there was "
+        "nothing to sign into. The reason it gave is in the Note beside this "
+        "and in the log; it is about the phone or its exit, never the "
+        "credentials, and neither the Gmail nor the app account is spent."),
+    "error": Verdict(
+        DEVICE, "something went wrong that nothing here planned for",
+        "An exception reached the top of the build. Whatever it was, the "
+        "phone was stopped and every row it held went back to its pool. The "
+        "traceback is in the log file for this machine and this day - that is "
+        "the only place it exists, and it is what a fix is written from."),
     "interrupted": Verdict(
         NOBODY, "the run was stopped by hand",
         "You stopped the run. The phone was stopped and every row it held "
@@ -393,6 +422,11 @@ SITUATIONS: dict[str, str] = {reason: found.seen
 #: Reasons a flow may return that mean success, so nothing needs a verdict.
 SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
                        "already_installed", "logged_in"})
+
+#: What the Phones tab's Status column holds, which is a different vocabulary
+#: from a reason: `ready` is not something that went wrong and wants no
+#: verdict, and the other two are written beside a note that carries the one.
+BUILD_STATES = frozenset({"ready", "incomplete", "failed"})
 
 
 #: The router's own reason, one per screen: `stuck_on_totp_entry`. Built from
@@ -462,6 +496,46 @@ def reasons_reported_by(module) -> set[str]:
     return found - SUCCESSES
 
 
+def reasons_decided_by_the_builder(module) -> set[str]:
+    """Every status the builder settles a phone with itself.
+
+    Not read off a screen: the build decides these - the pool was empty, the
+    install did not take, an exception reached the top. They end up on a Build
+    and are read back through `verdict()` exactly like a flow's, and until now
+    nothing checked that any of them had one. Nine did not (2026-08-23).
+
+    `finish(...)` and `Aborted(...)` are how they are written, and `status=`
+    is how one is set on a Build directly.
+    """
+    import ast
+    import inspect
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(module))):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+        if name in ("finish", "Aborted") and node.args:
+            # A literal, or either half of a choice between two: the phone
+            # failure is written `finish("phone_is_gone" if vanished else
+            # "phone_would_not_start", ...)` and a scanner wanting a Constant
+            # sees neither half. Only these two shapes, so that
+            # `book.phones.finish(row["sheet_row"])` - a different `finish`,
+            # taking a row number - cannot contribute its subscript.
+            first = node.args[0]
+            halves = ([first] if isinstance(first, ast.Constant)
+                      else [first.body, first.orelse]
+                      if isinstance(first, ast.IfExp) else [])
+            found.update(h.value for h in halves
+                         if isinstance(h, ast.Constant)
+                         and isinstance(h.value, str))
+        for keyword in node.keywords:
+            if keyword.arg == "status" and isinstance(keyword.value,
+                                                      ast.Constant):
+                found.add(keyword.value.value)
+    return {r for r in found if isinstance(r, str)} - SUCCESSES - BUILD_STATES
+
+
 def _assigns_a_reason(node) -> bool:
     """Whether this statement puts something into a variable called `reason`.
 
@@ -473,6 +547,28 @@ def _assigns_a_reason(node) -> bool:
 
     return any(isinstance(target, ast.Name) and target.id == "reason"
                for target in node.targets)
+
+
+#: The build's own prefix for a fatal the app phase hit: `app_unknown_screen`.
+#: Made with an f-string in `_sign_into_app`, so like `stuck_on_` it is a
+#: literal nowhere, and the guard that reads the flows never sees the builder
+#: at all - nine of these reached a Build unclassified (2026-08-23).
+#:
+#: A rule rather than nine entries, because the prefix adds one fact to a
+#: reason that already has a verdict: it happened during the app login rather
+#: than during Google's. The inner reason answers the rest.
+#:
+#: Reasons that already begin with `app_` are left alone - the builder does
+#: not double the prefix, and `app_not_installed` is the table's own.
+APP_PREFIX = "app_"
+
+
+def _app(reason: str) -> Verdict:
+    inner = verdict(reason[len(APP_PREFIX):], UNNAMED_SERVICE)
+    return Verdict(
+        inner.blame,
+        f"the app login could not go on with this phone - {inner.seen}",
+        inner.advice)
 
 
 def _stuck(reason: str) -> Verdict:
@@ -494,9 +590,12 @@ def knows(reason: str) -> bool:
     question, and it is the question the test asked while twenty-one reasons
     went unclassified.
     """
-    return (reason in VERDICTS
-            or (reason.startswith(STUCK_PREFIX)
-                and len(reason) > len(STUCK_PREFIX)))
+    if reason in VERDICTS:
+        return True
+    if reason.startswith(STUCK_PREFIX) and len(reason) > len(STUCK_PREFIX):
+        return True
+    return (reason.startswith(APP_PREFIX)
+            and knows(reason[len(APP_PREFIX):]))
 
 
 #: What to call the refusing service when the caller does not say. Every call
@@ -519,6 +618,11 @@ def verdict(reason: str, service: str = UNNAMED_SERVICE) -> Verdict:
     """
     if reason.startswith(STUCK_PREFIX) and len(reason) > len(STUCK_PREFIX):
         return _stuck(reason)
+    # After the table, so `app_not_installed` and `app_would_not_start` -
+    # which are the table's own - are answered by it rather than by the rule.
+    if (reason not in VERDICTS and reason.startswith(APP_PREFIX)
+            and knows(reason[len(APP_PREFIX):])):
+        return _app(reason)
     found = VERDICTS.get(reason)
     if found is not None:
         # replace rather than format: these are prose and may grow a brace.
