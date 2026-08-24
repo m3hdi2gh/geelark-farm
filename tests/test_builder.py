@@ -2258,6 +2258,37 @@ def test_a_dead_runs_claims_are_put_back_on_the_next_sync():
     assert pool.status_of(pool._rows[1]) == pool.claimed_status
 
 
+def test_the_note_says_why_the_row_was_taken_back():
+    """The Note cell is the operator's only account of what happened to a row
+    they did not touch. It said "no run can hold one past its own budget",
+    which stopped being the reason the moment a run began refreshing its own
+    claims - and would read as plainly false with the window set to ten
+    minutes and the budget still an hour (2026-08-25).
+    """
+    from tests.test_pools import CLAIMED_HEADERS, FakeWorksheet, claimed_row
+
+    def empty():
+        return GmailPool(FakeWorksheet(CLAIMED_HEADERS, []), CLAIMED_HEADERS,
+                         threading.Lock())
+
+    pool = GmailPool(
+        FakeWorksheet(CLAIMED_HEADERS,
+                      [claimed_row("old@b.com", when="2020-01-01 00:00:00")]),
+        CLAIMED_HEADERS, threading.Lock())
+    pool.load()
+    book = type("Book", (), {"gmails": pool, "proxies": empty(),
+                             "apps": empty()})()
+    book.proxies.load()
+    book.apps.load()
+
+    builder.free_abandoned_claims(book, 600)
+
+    note = pool._rows[0].values["Note"]
+    assert "refresh" in note, "it does not say what actually decided this"
+    assert "10 minutes" in note, "the window it was measured against is the fact"
+    assert "budget" not in note
+
+
 def test_the_sync_measures_against_the_window_not_the_budget(monkeypatch):
     """It WAS the build budget, and had to be: with no way to tell a live
     claim from an abandoned one, the only safe answer was "longer than any run

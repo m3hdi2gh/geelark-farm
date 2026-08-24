@@ -1360,8 +1360,8 @@ SYNC_LABELS = [
     ("unknown_phones", "phones GeeLark holds that the Phones tab has never "
                        "heard of - nothing here will ever settle them, so "
                        "delete them or add a row by hand"),
-    ("unclaimed", "rows put back - the run holding them is gone, and no run "
-                  "may hold one past its own budget"),
+    ("unclaimed", "rows put back - a run refreshes what it is holding, and "
+                  "nothing refreshed these, so whatever took them is gone"),
     ("stranded_retired", "Gmails retired - the phone they were on is gone"),
     ("stranded_waiting", "app accounts held against a phone that no longer "
                          "exists - deliver them or free them by hand, since "
