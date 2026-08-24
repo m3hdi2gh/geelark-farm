@@ -229,7 +229,26 @@ def sxorg_settings(key="k"):
     return type("S", (), {"sxorg_api_key": key})()
 
 
-def test_a_key_without_the_column_it_needs_is_a_warning_not_a_pass():
+@pytest.fixture(autouse=True)
+def vendor(monkeypatch):
+    """What sx.org answers about this account.
+
+    Autouse and answering by default, because the check now asks the vendor
+    before it looks at the sheet - and a test that forgot to say so would
+    reach the real network, which nothing else in this suite does.
+    """
+    box = type("Vendor", (), {"ports": 3, "raises": None})()
+
+    def port_count(key):
+        if box.raises:
+            raise box.raises
+        return box.ports
+
+    monkeypatch.setattr(verify, "port_count", port_count)
+    return box
+
+
+def test_a_key_without_the_column_it_needs_is_a_warning_not_a_pass(vendor):
     """Having one of the two is worse than having neither, because it reads
     like it is set up: sx.org is addressed by port id, and against a Proxy tab
     with no Port ID column `_new_exit` takes the expensive fallback every
@@ -243,13 +262,68 @@ def test_a_key_without_the_column_it_needs_is_a_warning_not_a_pass():
     assert "Port ID" in detail(checks, "sx.org")
 
 
-def test_both_halves_present_passes():
+def test_both_halves_present_passes(vendor):
     tabs = {"Proxy": FakeTab(["Name", "Proxy String", "Port ID"])}
     checks = []
 
     verify._sxorg(sxorg_settings(), tabs, checks)
 
     assert states(checks)["sx.org"] == OK
+
+
+def test_an_account_with_nothing_refreshable_is_not_asked_for_a_column(vendor):
+    """The advice this used to give could not be taken. Only the vendor's
+    `port` product can be given a new exit; the Unlimited proxies cannot, and
+    do not appear in its listing at all - so an account holding only those was
+    told to add a Port ID column it would have nothing to put in
+    (measured against the live account, 2026-08-25: countProxies 0).
+    """
+    vendor.ports = 0
+    tabs = {"Proxy": FakeTab(["Name", "Proxy String", "Status"])}
+    checks = []
+
+    verify._sxorg(sxorg_settings(), tabs, checks)
+
+    said = detail(checks, "sx.org")
+    assert states(checks)["sx.org"] == WARN
+    assert "no refreshable proxies" in said
+    assert "Nothing to fix in the sheet" in said
+
+
+def test_the_sheet_is_not_even_read_when_nothing_is_refreshable(vendor):
+    """A check that cannot pass should not spend a network call finding out
+    which way it fails."""
+    vendor.ports = 0
+
+    class Loud:
+        def row_values(self, _index):
+            raise AssertionError("the Proxy tab was read for nothing")
+
+    verify._sxorg(sxorg_settings(), {"Proxy": Loud()}, [])
+
+
+def test_a_vendor_that_will_not_answer_is_a_warning_not_a_pass(vendor):
+    """`run_checks` never raises, and a key that cannot be checked is not a
+    key that works."""
+    vendor.raises = verify.SxError("could not reach sx.org: no route to host")
+    checks = []
+
+    verify._sxorg(sxorg_settings(), {}, checks)
+
+    assert states(checks)["sx.org"] == WARN
+    assert "would not answer" in detail(checks, "sx.org")
+
+
+def test_the_count_is_said_so_the_number_can_be_argued_with(vendor):
+    """A bare OK invites nobody to notice it is counting one proxy out of
+    forty."""
+    vendor.ports = 7
+    tabs = {"Proxy": FakeTab(["Name", "Proxy String", "Port ID"])}
+    checks = []
+
+    verify._sxorg(sxorg_settings(), tabs, checks)
+
+    assert "7" in detail(checks, "sx.org")
 
 
 def test_no_key_is_a_fact_not_a_problem():
@@ -330,7 +404,9 @@ def test_a_quota_on_a_column_read_is_reported_not_raised():
     assert "could not be read" in columns[0].detail
 
 
-def test_a_quota_on_the_sxorg_check_is_reported_not_raised():
+def test_a_quota_on_the_sxorg_check_is_reported_not_raised(vendor):
+    """The Proxy tab is still read, once the vendor has said there is
+    something to read it for."""
     from geelark_farm.config import Settings
 
     settings = Settings.__new__(Settings)

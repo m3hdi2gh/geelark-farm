@@ -172,6 +172,83 @@ def test_the_key_is_never_in_what_gets_reported(asked, failure):
     assert "***" in str(caught.value)
 
 
+# ------------------------------------- how many of these can be refreshed
+def _listing(count=0, total=None):
+    """The vendor's own shape: on success the payload sits under `message`,
+    which is a plain string when something failed."""
+    return Answer({"success": True, "message": {
+        "countProxies": count,
+        "pagination": {"page": 1, "pageCount": 1, "pageSize": 50,
+                       "totalCount": count if total is None else total},
+        "proxies": [],
+    }})
+
+
+def test_an_account_with_no_ports_reports_none_rather_than_failing(asked):
+    """Zero is the answer, not an error. The Unlimited product does not appear
+    in this listing at all, so an account holding only those reports none -
+    which is what the live account does (measured 2026-08-25)."""
+    asked.reply = _listing(0)
+
+    assert sxorg.port_count(KEY) == 0
+
+
+def test_the_ports_an_account_does_have_are_counted(asked):
+    asked.reply = _listing(7)
+
+    assert sxorg.port_count(KEY) == 7
+
+
+def test_the_larger_of_the_two_counts_the_vendor_offers_is_taken(asked):
+    """It offers `countProxies` and a pagination total, and on an empty
+    account both read zero - so there is no way to tell which is the page and
+    which the whole. Only "are there any" is ever asked of this."""
+    asked.reply = _listing(50, total=120)
+
+    assert sxorg.port_count(KEY) == 120
+
+
+def test_a_listing_with_no_pagination_still_counts_none_as_none(asked):
+    """The fallback for a missing pagination block must be zero, not one. An
+    account with nothing refreshable reported as having one sends the sx.org
+    check straight back to the advice that cannot be taken."""
+    asked.reply = Answer({"success": True, "message": {"countProxies": 0}})
+
+    assert sxorg.port_count(KEY) == 0
+
+    asked.reply = Answer({"success": True,
+                          "message": {"countProxies": 0, "pagination": None}})
+
+    assert sxorg.port_count(KEY) == 0
+
+
+def test_a_listing_that_is_not_one_says_so(asked):
+    """`message` is a string when this vendor is reporting a problem, and
+    calling `.get` on a string is an AttributeError three layers from
+    anything that explains it."""
+    asked.reply = Answer({"success": True, "message": "come back later"})
+
+    with pytest.raises(sxorg.SxError, match="not a listing"):
+        sxorg.port_count(KEY)
+
+
+def test_a_count_that_is_not_a_number_says_so(asked):
+    asked.reply = Answer({"success": True,
+                          "message": {"countProxies": "lots"}})
+
+    with pytest.raises(sxorg.SxError, match="nothing can read"):
+        sxorg.port_count(KEY)
+
+
+def test_the_listing_is_refused_without_a_key_too(asked):
+    """Both endpoints go through the same door, so neither can be the one that
+    forgets to check."""
+    with pytest.raises(sxorg.SxError, match="SXORG_API_KEY"):
+        sxorg.port_count("")
+
+    assert asked.calls == []
+
+
 def test_the_key_is_not_in_the_chained_cause_either(asked):
     """`raise ... from exc` keeps the original, and its text still has the URL
     in it - so a traceback printed anywhere would show the key under "the

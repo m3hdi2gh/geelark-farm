@@ -81,18 +81,17 @@ def _scrubbed(text: str, api_key: str) -> str:
     return text.replace(api_key, "***") if api_key else text
 
 
-def refresh(api_key: str, port_id: str | int) -> None:
-    """Give one proxy a new exit address, keeping its host and credentials.
+def _get(path: str, api_key: str) -> dict:
+    """One GET, and the four ways it can fail to be an answer.
 
-    Raises rather than returning a flag: every caller has a different fallback,
-    and a silent False here would be indistinguishable from "refreshed, but the
-    address did not change" - which is a different situation with a different
-    answer.
+    Shared, because every endpoint here is a GET with the key as `?apiKey=`
+    and they all fail the same four ways - and the scrubbing above has to
+    happen on every one of them, not on whichever was written first.
     """
     if not api_key:
         raise SxError("no sx.org API key is configured (SXORG_API_KEY)")
     try:
-        response = requests.get(f"{BASE}/v2/proxy/refresh/{port_id}",
+        response = requests.get(f"{BASE}{path}",
                                 params={"apiKey": api_key}, timeout=TIMEOUT)
     except requests.RequestException as exc:
         # Not `from exc`: the cause carries the same unscrubbed URL, and a
@@ -110,5 +109,46 @@ def refresh(api_key: str, port_id: str | int) -> None:
         # "proxy not found" is the one worth recognising: it means this port id
         # is not on this account, which is what happens when the proxy came
         # from the Unlimited product rather than the port product.
-        raise SxError(str(data.get("message") or data)[:200])
+        raise SxError(_scrubbed(str(data.get("message") or data)[:200], api_key))
+    return data
+
+
+def refresh(api_key: str, port_id: str | int) -> None:
+    """Give one proxy a new exit address, keeping its host and credentials.
+
+    Raises rather than returning a flag: every caller has a different fallback,
+    and a silent False here would be indistinguishable from "refreshed, but the
+    address did not change" - which is a different situation with a different
+    answer.
+    """
+    _get(f"/v2/proxy/refresh/{port_id}", api_key)
     log.info("sx.org refreshed the exit address of port %s", port_id)
+
+
+def port_count(api_key: str) -> int:
+    """How many proxies on this account can be refreshed at all.
+
+    Zero is the answer that matters, and it is not a failure: the Unlimited
+    product does not appear in this listing, so an account holding only those
+    reports none. That is the difference between "the tab is missing a column"
+    - which someone can fix - and "these proxies are not the refreshable kind"
+    - which no column will change (2026-08-25).
+
+    On success this vendor puts the payload under `message`, which is a string
+    on failure and a dict here. Both counts it offers read zero on an empty
+    account, so there is no way to tell which is the page and which the total;
+    the larger is taken, because the only question asked of this is whether
+    there are any.
+    """
+    payload = _get("/v2/proxy/ports", api_key).get("message")
+    if not isinstance(payload, dict):
+        raise SxError(f"sx.org answered the port listing with "
+                      f"{type(payload).__name__}, not a listing")
+    pagination = payload.get("pagination")
+    total = (pagination or {}).get("totalCount") if \
+        isinstance(pagination, dict) else 0
+    try:
+        return max(int(payload.get("countProxies") or 0), int(total or 0))
+    except (TypeError, ValueError) as exc:
+        raise SxError(f"sx.org answered the port listing with a count "
+                      f"nothing can read ({exc})") from None
