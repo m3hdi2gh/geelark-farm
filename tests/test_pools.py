@@ -1118,3 +1118,126 @@ def test_two_rows_with_one_name_answer_nothing():
     assert pool.find_by_name("SX4") is None
     assert pool.find_by_name("") is None
     assert pool.find_by_name("nothing like it") is None
+
+
+# ============================ what the Phones tab keeps, and how it reads
+def test_the_phones_tab_keeps_a_note_to_a_size_itself():
+    """`Pool._set` does this for a resource row and nobody did it here, so the
+    guard lived at one call site in the builder and every other way of writing
+    a note went past it (2026-08-23)."""
+    from geelark_farm.pools import NOTE_LIMIT
+
+    worksheet = FakeWorksheet(PHONE_HEADERS, [
+        ["2026-08-23", "801", "unused", "", "", "", "", "", ""]])
+    log = PhoneLog(worksheet, PHONE_HEADERS, threading.Lock())
+
+    log.finish(2, Note="x" * 4000)
+
+    written = worksheet.writes[-1]["values"][0][0]
+    assert len(written) == NOTE_LIMIT
+    assert written.endswith("\u2026")
+
+
+def test_history_keeps_its_prose_columns_to_a_size_too():
+    from geelark_farm.pools import NOTE_LIMIT, HistoryLog
+
+    worksheet = FakeWorksheet(HistoryLog.HEADERS, [])
+    history = HistoryLog(worksheet, threading.Lock())
+
+    history.append(Serial="801", Note="n" * 4000, Steps="s" * 4000)
+
+    row = worksheet.rows[-1]
+    assert len(row[HistoryLog.HEADERS.index("Note")]) == NOTE_LIMIT
+    assert len(row[HistoryLog.HEADERS.index("Steps")]) == NOTE_LIMIT
+
+
+def test_a_cross_outside_the_step_columns_is_left_alone():
+    """`said` is a display convention, and the class that owns it says it
+    stops there. Applied to every cell, a cross typed into Status read as an
+    empty one."""
+    headers = PHONE_HEADERS
+    log = PhoneLog(FakeWorksheet(headers, [
+        ["2026-08-23", "801", "unused", "", "", PhoneLog.NO, PhoneLog.NO,
+         PhoneLog.NO, "a note"],
+    ]), headers, threading.Lock())
+
+    row = log.rows()[0]
+
+    assert row["Gmail"] == ""              # a step that did not happen
+    assert row["Status"] == PhoneLog.NO    # not a step column, left as typed
+
+
+def test_the_three_readers_agree_about_what_a_row_is():
+    """Each walked the whole tab with its own copy of the rule, so the
+    checkbox rule `Pool` learned in August was remembered in none of them."""
+    import inspect
+
+    source = inspect.getsource(PhoneLog)
+
+    assert source.count("_typed_rows(") == 4      # one definition, three users
+    assert "if not any(line)" not in source
+
+
+def test_an_untouched_checkbox_does_not_make_a_phone_row():
+    """The same rule as `Pool._has_content`, so the first tick added to this
+    tab does not have to rediscover it."""
+    headers = [*PHONE_HEADERS, "Delivered"]
+
+    class Ticked(PhoneLog):
+        checkbox_columns = frozenset({"Delivered"})
+
+    log = Ticked(FakeWorksheet(headers, [
+        ["2026-08-23", "801", "unused", "", "", "", "", "", "", "FALSE"],
+        ["", "", "", "", "", "", "", "", "", "FALSE"],
+    ]), headers, threading.Lock())
+
+    assert [r["Serial"] for r in log.rows()] == ["801"]
+
+
+# ================================= an instruction is not un-marked by a sync
+def test_an_exit_waiting_on_a_new_address_keeps_saying_so():
+    """Un-marking is meant for `dead`, where a live phone behind the exit
+    contradicts the row outright. This one is an instruction waiting for
+    somebody to change an address in the vendor's panel, and a phone being on
+    it does not make that done (2026-08-23)."""
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, [
+        ["SX4", "socks5://u:p@1.2.3.4:1080", "", "",
+         "", ProxyPool.needs_new_ip, ""],
+    ]), PROXY_HEADERS, threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+
+    pool.attach(row, "801")
+
+    assert row.values["Status"] == ProxyPool.needs_new_ip
+    assert row.values["Used By"] == "801"      # and it says which phone
+
+
+def test_an_exit_written_off_as_dead_is_un_marked_by_a_live_phone():
+    """The case un-marking exists for: the phone is the side of the
+    contradiction that is demonstrably working."""
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, [
+        ["SX4", "socks5://u:p@1.2.3.4:1080", "", "",
+         "", ProxyPool.dead_status, ""],
+    ]), PROXY_HEADERS, threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+
+    pool.attach(row, "801")
+
+    assert row.values["Status"] == ProxyPool.spent_status
+
+
+# ================================================ the dropdowns' own grid
+def test_the_lists_grid_is_sized_from_the_rows_it_is_writing():
+    """`int("A2"[1:])` reads 2 and `int("AA2"[1:])` raises, so re-deriving a
+    number the loop was holding would fail on the twenty-seventh column of a
+    tab this one is free to grow."""
+    import inspect
+
+    from geelark_farm.pools import Book
+
+    source = inspect.getsource(Book.sync_lists)
+
+    assert 'int(item["range"]' not in source
+    assert "deepest = max(deepest, offset + 2)" in source

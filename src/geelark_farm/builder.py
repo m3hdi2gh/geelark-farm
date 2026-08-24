@@ -69,11 +69,7 @@ from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
-from .pools import Book, Pool, Resource, clip
-
-#: What a cell this module writes is shortened to. The pools' own limit, so
-#: the Phones tab and a resource row cut at the same place.
-NOTE_LIMIT = Pool.NOTE_LIMIT
+from .pools import Book, Resource
 
 log = logging.getLogger(__name__)
 
@@ -512,7 +508,7 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
                         exc)
             book.proxies.fail(resource, "dead", note=(
                 f"GeeLark could not reach it when a phone was put behind it: "
-                f"{exc}")[:200])
+                f"{exc}"))
             skipped += 1
             continue
         book.proxies.record_exit(resource, str(result.get("outboundIP") or ""))
@@ -809,7 +805,7 @@ def _discard(client: Client, book: Book, ledger: Ledger,
     book.record_history(
         Serial=build.serial, Event="discarded",
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Steps=clip(build.steps, NOTE_LIMIT),
+        Steps=build.steps,
         Note=(f"Deleted rather than kept - nothing was ever signed into it. "
               f"{outcome_of(build).capitalize()}."))
     resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
@@ -1310,7 +1306,7 @@ def _record(book: Book, build: Build) -> None:
         wrote = book.phones.write(
             build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
-            Gmail=said(build.gmail), Note=clip(note, NOTE_LIMIT),
+            Gmail=said(build.gmail), Note=note,
             **{"GPT Account": said(build.app_account),
                "App": book.phones.YES if build.app_installed else cross},
         )
@@ -1326,8 +1322,7 @@ def _record(book: Book, build: Build) -> None:
     book.record_history(
         Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Gmail=build.gmail, Note=clip(note, NOTE_LIMIT),
-        Steps=clip(build.steps, NOTE_LIMIT),
+        Gmail=build.gmail, Note=note, Steps=build.steps,
         **{"GPT Account": build.app_account,
            "App": book.phones.INSTALLED if build.app_installed else ""})
 
