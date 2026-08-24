@@ -885,3 +885,26 @@ def test_the_poll_does_not_end_a_login_over_one_refused_command(monkeypatch):
 def _account():
     from geelark_farm.accounts import Account
     return Account(email="a@b.com", password="pw", totp_secret="")
+
+
+# ============================== a label list is matched case-insensitively
+def test_no_label_list_carries_a_spelling_it_can_never_reach():
+    """`screen.find` casefolds both sides, so one spelling of a word is every
+    spelling of it. Three entries in DISMISS_LABELS and one in `submit` were
+    second looks for labels the first had already matched - and an example
+    for whoever adds the next one (2026-08-23)."""
+    import ast
+    import pathlib
+
+    offenders = []
+    for path in pathlib.Path("src/geelark_farm").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, (ast.Tuple, ast.List)):
+                continue
+            values = [e.value for e in node.elts
+                      if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                      and e.value.strip()]
+            folded = [v.casefold() for v in values]
+            if len(folded) != len(set(folded)):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, f"unreachable spellings in {offenders}"

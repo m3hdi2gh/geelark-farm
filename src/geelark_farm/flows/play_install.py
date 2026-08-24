@@ -314,17 +314,37 @@ def install(client: Client, phone_id: str, package: str, *,
                 log.info("the download says it is pending; giving it a moment")
                 time.sleep(POLL_SECONDS)
                 continue
-            if restarts >= MAX_DOWNLOAD_RESTARTS:
+            # The allowance spent here, in one go, and the clock cleared by
+            # a restart that took - the same shape as the download phase
+            # below, which this branch never got.
+            #
+            # Two things were wrong with doing it one restart per pass. The
+            # answer was thrown away, and `_restart_download` says why that
+            # matters: a restart that cannot find Install afterwards leaves
+            # the phone on a page that is neither downloading nor stalled, so
+            # the clock never fires again and the remaining attempts are
+            # never spent (2026-08-17, phone 823, seventeen minutes).
+            #
+            # And the clock was not reset, so the next pass read the same
+            # `since` - already past the allowance - and fired again at once.
+            # Three restarts inside a few seconds, spent on the state this
+            # had just created, which is the incident STALLED_SECONDS exists
+            # to prevent (2026-08-09, row 13).
+            while restarts < MAX_DOWNLOAD_RESTARTS:
+                restarts += 1
+                archive(f"download-stalled-{restarts}", xml)
+                log.warning("a parked download is holding the page (%d/%d); "
+                            "cancelling and starting again", restarts,
+                            MAX_DOWNLOAD_RESTARTS)
+                if _restart_download(client, phone_id, package):
+                    stall.reset()
+                    break
+                log.warning("the restart did not take; asking again")
+            else:
                 archive("download-stalled-final", xml)
                 return Outcome("fatal", "download_stalled",
                                "Play parked the download and would not restart "
                                "it", artifacts=saved)
-            restarts += 1
-            archive(f"download-stalled-{restarts}", xml)
-            log.warning("a parked download is holding the page (%d/%d); "
-                        "cancelling and starting again", restarts,
-                        MAX_DOWNLOAD_RESTARTS)
-            _restart_download(client, phone_id, package)
             continue
 
         if _server_error(screen.texts(elements)):

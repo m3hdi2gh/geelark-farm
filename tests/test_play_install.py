@@ -443,3 +443,73 @@ def test_no_install_button_keeps_the_page_it_is_about():
     source = inspect.getsource(play_install.install)
     where = source.index('"no_install_button"')
     assert 'archive("no-install-button"' in source[:where]
+
+
+# ================== the phase before Install, and the parked download
+def _stalled_run(monkeypatch, *, restart_finds_install):
+    """The pre-install loop meeting a download Play has already parked."""
+    from geelark_farm import shell
+    from geelark_farm.flows import play_install as flow
+
+    parked = (FIXTURES / "play-download-stalled.xml").read_text(encoding="utf-8")
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(flow.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(flow.time, "sleep",
+                        lambda s: clock.__setitem__("now", clock["now"] + s))
+    monkeypatch.setattr(shell, "package_installed", lambda *a, **k: False)
+    monkeypatch.setattr(flow, "open_package_page", lambda *a, **k: None)
+    monkeypatch.setattr(flow.screen, "capture", lambda *a, **k: parked)
+
+    restarts = []
+
+    def restart(client, phone_id, package):
+        restarts.append(clock["now"])
+        return restart_finds_install
+
+    monkeypatch.setattr(flow, "_restart_download", restart)
+    outcome = flow.install(None, "P1", "com.example", budget_seconds=1)
+    return outcome, restarts
+
+
+def test_a_restart_that_did_not_take_spends_the_next_attempt_at_once(
+        monkeypatch):
+    """The answer was thrown away, and `_restart_download` says why that
+    matters: a restart that cannot find Install leaves the phone on a page
+    that is neither downloading nor stalled, so the clock never fires again
+    and the remaining attempts are never spent (2026-08-17, phone 823)."""
+    from geelark_farm.flows import play_install as flow
+
+    outcome, restarts = _stalled_run(monkeypatch, restart_finds_install=False)
+
+    assert len(restarts) == flow.MAX_DOWNLOAD_RESTARTS
+    assert outcome.reason == "download_stalled"
+
+
+def test_a_restart_that_took_clears_the_clock_before_the_next_look(
+        monkeypatch):
+    """Without the reset the next pass reads the same `since` - already past
+    the allowance - and fires again at once. Three restarts inside a few
+    seconds, spent on the state this had just created (2026-08-09, row 13)."""
+    from geelark_farm.flows import play_install as flow
+
+    _outcome, restarts = _stalled_run(monkeypatch, restart_finds_install=True)
+
+    # A page that never recovers is still restarted the full allowance - what
+    # changed is the spacing. Each one waits out the clock again instead of
+    # reading a `since` the last restart left behind.
+    gaps = [b - a for a, b in zip(restarts, restarts[1:], strict=False)]
+    assert gaps, "only one restart, so the spacing was never tested"
+    assert all(gap >= flow.STALLED_SECONDS for gap in gaps), gaps
+
+
+def test_the_two_phases_handle_a_parked_download_the_same_way():
+    """One of them learned both lessons and the other learned neither."""
+    import inspect
+
+    from geelark_farm.flows import play_install as flow
+
+    source = inspect.getsource(flow.install)
+
+    assert source.count("if _restart_download(client, phone_id, package):") == 2
+    assert source.count("stall.reset()") == 2

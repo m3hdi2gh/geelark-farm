@@ -53,9 +53,13 @@ ACCOUNT_CHECK_SECONDS = 8
 # Consent and marketing pages: the label to press, in preference order. These
 # are handled as one screen because they are interchangeable - each is "some
 # page whose only job is to be dismissed".
+#: Matched case-insensitively - `screen.find` casefolds both sides - so one
+#: spelling of a word is every spelling of it. This carried `I AGREE`,
+#: `ACCEPT` and `DON'T TURN ON` beside their lowercase twins, three entries
+#: that could never be reached and an example for whoever adds the next one.
 DISMISS_LABELS = (
-    "I agree", "I AGREE", "Agree", "Accept", "ACCEPT", "I understand",
-    "Turn off", "Don't turn on", "DON'T TURN ON", "No thanks", "Not now",
+    "I agree", "Agree", "Accept", "I understand",
+    "Turn off", "Don't turn on", "No thanks", "Not now",
     "Skip", "Maybe later", "More", "Next", "Done", "Continue",
 )
 
@@ -142,7 +146,9 @@ def submit(ctx: Context) -> None:
     """Advance the form. Google labels the button Next, but the on-screen
     keyboard's enter key works when the button is scrolled out of view."""
     ctx.refresh()
-    for label in ("Next", "NEXT", "Continue", "Sign in", "Verify", "Done"):
+    # One spelling each: `screen.find` casefolds, so `NEXT` after `Next` was
+    # a second look for a label the first had already matched.
+    for label in ("Next", "Continue", "Sign in", "Verify", "Done"):
         if ctx.tap(label):
             return
     shell.keyevent(ctx.client, ctx.phone_id, 66)      # ENTER

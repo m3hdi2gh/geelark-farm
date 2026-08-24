@@ -808,7 +808,7 @@ def submit(ctx: Context) -> None:
     """Advance the form. The web view's button labels vary, and the keyboard's
     enter key works when the button is below the fold."""
     ctx.refresh()
-    for label in ("Continue", "CONTINUE", "Next", "Log in", "Submit", "Verify"):
+    for label in ("Continue", "Next", "Log in", "Submit", "Verify"):
         if ctx.tap(label):
             return
     shell.keyevent(ctx.client, ctx.phone_id, 66)      # ENTER
