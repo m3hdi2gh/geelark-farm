@@ -14,7 +14,14 @@ import time
 
 import pytest
 
-from geelark_farm.pools import AppPool, GmailPool, HistoryLog, PhoneLog, ProxyPool
+from geelark_farm.pools import (
+    AppPool,
+    Book,
+    GmailPool,
+    HistoryLog,
+    PhoneLog,
+    ProxyPool,
+)
 
 # The tabs as they are. Columns are located by header name, so these are the
 # real shapes rather than a superset - a test that passes against columns the
@@ -507,7 +514,6 @@ class FakeBookLists:
 
 
 def lists_book(existing):
-    from geelark_farm.pools import Book
     tab = FakeBookLists(existing).sheet
     book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
                 apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
@@ -549,7 +555,6 @@ def test_dropdowns_that_already_agree_are_not_rewritten():
 
 # ------------------------------------------------------------- the History tab
 def history_book():
-    from geelark_farm.pools import Book
     tab = FakeWorksheet(HistoryLog.HEADERS, [])
     book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
                 apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
@@ -576,7 +581,6 @@ def test_a_history_row_carries_when_and_which_machine():
 def test_a_workbook_without_a_history_tab_still_works():
     """History is a record of the work, not part of it - a build must not fail
     because its footnote could not be written."""
-    from geelark_farm.pools import Book
     book = Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
                 apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
                              threading.Lock()),
@@ -949,7 +953,6 @@ def test_the_grid_shrinks_as_rows_are_deleted_and_the_next_append_still_works():
 def test_a_dropdown_longer_than_its_tab_is_written_anyway():
     """The same rule for the Lists tab - a flow growing one new reason is all
     it takes for the column to outrun the grid."""
-    from geelark_farm.pools import Book
     columns = ["Gmail Statuses", "Proxy Statuses", "GPT Statuses",
                "Phone Statuses", "Phone States"]
     tab = FakeWorksheet(columns, [], row_count=1)
@@ -965,6 +968,37 @@ def test_a_dropdown_longer_than_its_tab_is_written_anyway():
     assert tab.added_rows > 0
     written = {w["values"][0][0] for w in tab.writes}
     assert set(wanted["Proxy Statuses"]) <= written
+
+
+def _lists_book(tab):
+    return Book(gmails=gmail_pool([]), proxies=proxy_pool([]),
+                apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                             threading.Lock()),
+                phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                                threading.Lock()),
+                lists=tab, lock=threading.Lock())
+
+
+def test_a_tab_one_row_short_is_still_grown():
+    """The existing test starts the tab at one row, so the shortfall is large
+    and `short > 0` reading as `short > 1` survives it. One row short is the
+    case that actually happens - a flow grows a single new reason - and it is
+    the shape that took 28 phones on the row version of this rule.
+    """
+    columns = ["Gmail Statuses", "Proxy Statuses", "GPT Statuses",
+               "Phone Statuses", "Phone States"]
+
+    # What the tab has to reach, learned rather than guessed: the lists come
+    # from failures.py and grow whenever a flow does.
+    roomy = FakeWorksheet(columns, [], row_count=500)
+    _lists_book(roomy).sync_lists()
+    deepest = max(int(w["range"][1:]) for w in roomy.writes)
+
+    tab = FakeWorksheet(columns, [], row_count=deepest - 1)
+    _lists_book(tab).sync_lists()
+
+    assert tab.added_rows == 1
+    assert tab.row_count >= deepest
 
 
 # ------------------------------ credentials a dead run was still holding
@@ -1244,9 +1278,243 @@ def test_the_lists_grid_is_sized_from_the_rows_it_is_writing():
     tab this one is free to grow."""
     import inspect
 
-    from geelark_farm.pools import Book
 
     source = inspect.getsource(Book.sync_lists)
 
     assert 'int(item["range"]' not in source
     assert "deepest = max(deepest, offset + 2)" in source
+
+
+# ==================================================================
+# What mutation found nothing was holding (2026-08-23). Each of these
+# is a change to pools.py that the suite did not object to.
+# ==================================================================
+
+# ------------------------------------------------ which row is this exit
+def _exits(*addresses) -> ProxyPool:
+    rows = [[f"SX{i}", a, "", "", "", "", ""]
+            for i, a in enumerate(addresses, start=1)]
+    return proxy_pool(rows)
+
+
+def test_an_exit_is_found_by_its_own_endpoint_and_not_the_first_row():
+    """`r.proxy and host == ... and port == ...` with `or` in place of `and`
+    returns whichever row has a proxy at all - so `_discard` frees somebody
+    else's exit. `find_proxy` was mentioned nowhere in this suite."""
+    pool = _exits("socks5://u:p@1.2.3.4:1080", "socks5://u:p@5.6.7.8:2080")
+    pool.load()
+
+    assert pool.find_proxy("5.6.7.8:2080").sheet_row == 3
+    assert pool.find_proxy("1.2.3.4:1080").sheet_row == 2
+
+
+def test_an_exit_nothing_matches_is_not_answered_with_the_first_one():
+    pool = _exits("socks5://u:p@1.2.3.4:1080")
+    pool.load()
+
+    assert pool.find_proxy("9.9.9.9:1080") is None
+    assert pool.find_proxy("1.2.3.4:9999") is None
+
+
+def test_an_address_carrying_credentials_still_finds_its_row():
+    """What callers actually hold is `socks5://user:***@host:port`, with the
+    password already masked for logging."""
+    pool = _exits("socks5://u:p@1.2.3.4:1080")
+    pool.load()
+
+    assert pool.find_proxy("socks5://u:***@1.2.3.4:1080") is not None
+
+
+def test_an_address_that_is_not_one_answers_nothing():
+    pool = _exits("socks5://u:p@1.2.3.4:1080")
+    pool.load()
+
+    assert pool.find_proxy("") is None
+    assert pool.find_proxy("nonsense") is None
+
+
+# --------------------------------------- a phone a run is holding right now
+def test_a_phone_a_run_is_building_is_not_offered_as_one_to_finish():
+    """`building` means a run holds it. Offering it hands a second run the
+    phone the first is driving - and `or` reading as `and` is all it takes."""
+    headers = PHONE_HEADERS
+    log = PhoneLog(FakeWorksheet(headers, [
+        ["2026-08-23", "801", "unused", "", "SX1", "a@b.com", "", "building", ""],
+        ["2026-08-23", "802", "unused", "", "SX2", "c@d.com", "", "incomplete",
+         "Stopped short: no account."],
+    ]), headers, threading.Lock())
+
+    assert [row["serial"] for row in log.unfinished()] == ["802"]
+
+
+def test_a_row_with_no_serial_is_not_offered_either():
+    """Nothing can be finished without the number everything is filed under."""
+    headers = PHONE_HEADERS
+    log = PhoneLog(FakeWorksheet(headers, [
+        ["2026-08-23", "", "unused", "", "SX1", "a@b.com", "", "incomplete", ""],
+    ]), headers, threading.Lock())
+
+    assert log.unfinished() == []
+
+
+# --------------------------------------------- where a header goes and comes
+def test_a_column_is_read_from_and_written_to_the_first_row():
+    """Off by one either way and the header lands on the first row of data,
+    or every column reads as absent and is added again."""
+    from geelark_farm.pools import ensure_columns
+
+    tab = NarrowTab(["Address", "Password"], col_count=26)
+    tab.asked, tab.wrote = [], []
+    real_values, real_cell = tab.row_values, tab.update_cell
+
+    def row_values(row):
+        tab.asked.append(row)
+        return real_values(row)
+
+    def update_cell(row, col, value):
+        tab.wrote.append((row, col, value))
+        return real_cell(row, col, value)
+
+    tab.row_values, tab.update_cell = row_values, update_cell
+    ensure_columns(tab, "Claimed")
+
+    assert tab.asked == [1]
+    assert tab.wrote == [(1, 3, "Claimed")]
+
+
+# ------------------------------------------------- a row that is already bad
+def test_a_row_that_is_already_broken_keeps_the_reason_it_has():
+    """Overwriting it with `duplicate of row N` hides the real one - and a
+    row with no key at all would become the duplicate every later keyless row
+    is measured against."""
+    headers = GMAIL_HEADERS
+    pool = GmailPool(FakeWorksheet(headers, [
+        ["", "", "not-an-address", "pw", SECRET, "", "", "", ""],
+        ["", "", "also-not-one", "pw", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+
+    for row in pool.broken:
+        assert "not an email address" in row.error
+        assert "duplicate" not in row.error
+
+
+def test_the_second_row_naming_one_address_is_the_one_refused():
+    headers = GMAIL_HEADERS
+    pool = GmailPool(FakeWorksheet(headers, [
+        ["", "", "a@b.com", "pw", SECRET, "", "", "", ""],
+        ["", "", "a@b.com", "pw", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+
+    assert len(pool.broken) == 1
+    assert pool.broken[0].sheet_row == 3
+    assert "duplicate of row 2" in pool.broken[0].error
+
+
+# ------------------------------------------- what "needs attention" contains
+def test_only_a_row_set_aside_with_a_reason_is_flagged():
+    """This drives the console's `Needs attention`. Reading the test the
+    other way round lists every healthy row as one that needs a decision."""
+    headers = GMAIL_HEADERS
+    pool = GmailPool(FakeWorksheet(headers, [
+        ["", "", "free@b.com", "pw", SECRET, "", "", "", ""],
+        ["", "", "busy@b.com", "pw", SECRET, "", "", "in_use", ""],
+        ["", "", "done@b.com", "pw", SECRET, "", "", "used", ""],
+        ["", "", "bad@b.com", "pw", SECRET, "", "", "wrong_password", ""],
+        ["", "", "broken", "pw", SECRET, "", "", "", ""],
+    ]), headers, threading.Lock())
+    pool.load()
+
+    assert [r.credentials.email for r in pool.flagged] == ["bad@b.com"]
+
+
+# ---------------------------------------------- what a note says about sharing
+def test_an_exit_carrying_two_phones_says_so_and_one_does_not():
+    """Backwards, it tells the operator two accounts share an address when
+    they do not - and says nothing when they do."""
+    pool = _exits("socks5://u:p@1.2.3.4:1080")
+    pool.load()
+    row = pool._rows[0]
+
+    pool.attach(row, "801")
+    assert "On phone 801." == row.values["Note"]
+
+    pool.attach(row, "801, 802")
+    assert "Shared by phones" in row.values["Note"]
+
+
+# ------------------------------------------- whether the row was there to write
+def test_writing_to_a_phone_with_no_row_says_it_had_none():
+    """`_record` logs "has no row in the Phones tab to record on" off this,
+    and the warning dies with the answer."""
+    headers = PHONE_HEADERS
+    log = PhoneLog(FakeWorksheet(headers, [
+        ["2026-08-23", "801", "unused", "", "", "", "", "", ""],
+    ]), headers, threading.Lock())
+
+    assert log.write("801", Status="ready") is True
+    assert log.write("999", Status="ready") is False
+
+
+def test_dropping_a_phone_with_no_row_says_it_had_none():
+    headers = PHONE_HEADERS
+    worksheet = FakeWorksheet(headers, [
+        ["2026-08-23", "801", "unused", "", "", "", "", "", ""],
+    ])
+    log = PhoneLog(worksheet, headers, threading.Lock())
+
+    assert log.drop("999") is False
+    assert log.drop("801") is True
+
+
+# ------------------------------------------------- how many were put back
+def test_release_stuck_counts_what_it_freed():
+    """"released 0" beside three freed rows is a report nobody can act on."""
+    book = Book(gmails=gmail_pool([
+        ["", "", "a@b.com", "pw", SECRET, "", "", "in_use", ""],
+        ["", "", "c@d.com", "pw", SECRET, "", "", "in_use", ""],
+        ["", "", "e@f.com", "pw", SECRET, "", "", "", ""],
+    ]), proxies=proxy_pool([]),
+        apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                     threading.Lock()),
+        phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                        threading.Lock()))
+    book.apps.load()
+
+    assert book.release_stuck() == 2
+
+
+def test_release_stuck_counts_nothing_when_nothing_is_stuck():
+    book = Book(gmails=gmail_pool([
+        ["", "", "a@b.com", "pw", SECRET, "", "", "", ""],
+    ]), proxies=proxy_pool([]),
+        apps=AppPool(FakeWorksheet(APP_HEADERS, []), APP_HEADERS,
+                     threading.Lock()),
+        phones=PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS,
+                        threading.Lock()))
+    book.apps.load()
+
+    assert book.release_stuck() == 0
+
+
+# ------------------------------------------------ the four tabs a run needs
+def test_the_tabs_a_run_cannot_start_without_are_named_when_absent():
+    """Inline in `Book.open`, reaching this meant building a whole fake
+    gspread client, so nobody did - and inverting it, which makes every
+    workbook look broken, was a change no test objected to."""
+    from geelark_farm.pools import missing_tabs
+
+    assert missing_tabs({"Gmails": 1, "Proxy": 1, "Gpt Info": 1,
+                         "Phones": 1}) == []
+    assert missing_tabs({"Gmails": 1, "Phones": 1}) == ["Proxy", "Gpt Info"]
+    assert missing_tabs({}) == ["Gmails", "Proxy", "Gpt Info", "Phones"]
+
+
+def test_the_tabs_made_automatically_are_not_demanded():
+    """`Lists` and `History` are this tool's own; asking the operator to make
+    them by hand would mean every workbook is missing one."""
+    from geelark_farm.pools import missing_tabs
+
+    assert missing_tabs({"Gmails": 1, "Proxy": 1, "Gpt Info": 1,
+                         "Phones": 1, "Lists": 1, "History": 1}) == []

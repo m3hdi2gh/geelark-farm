@@ -1172,6 +1172,18 @@ def ensure_columns(worksheet, *columns: str) -> list[str]:
     return found
 
 
+def missing_tabs(tabs) -> list[str]:
+    """Which of the four a run cannot start without are absent.
+
+    Its own function so it can be asked directly. Inline in `Book.open`, the
+    only way to reach it was to build a whole fake gspread client, so nobody
+    did - and inverting the test, which makes every workbook look broken, was
+    a change no test objected to (2026-08-23).
+    """
+    return [name for name in (GMAILS_TAB, PROXY_TAB, APPS_TAB, PHONES_TAB)
+            if name not in tabs]
+
+
 class Book:
     """The workbook and its four tabs, sharing one lock.
 
@@ -1228,8 +1240,7 @@ class Book:
 
         lock = threading.Lock()
         tabs = {ws.title: ws for ws in book.worksheets()}
-        missing = [name for name in (GMAILS_TAB, PROXY_TAB, APPS_TAB, PHONES_TAB)
-                   if name not in tabs]
+        missing = missing_tabs(tabs)
         if missing:
             raise SheetError(
                 f"the spreadsheet has no tab(s) named: {', '.join(missing)}\n"
@@ -1241,9 +1252,6 @@ class Book:
                 f"If none of the names above look familiar, GOOGLE_SHEET_ID "
                 f"is pointing at the wrong spreadsheet."
             )
-
-        def headers(name: str) -> list[str]:
-            return [h.strip() for h in tabs[name].row_values(1)]
 
         # The one tab this tool creates for itself. The four above are stock
         # someone fills in, so a missing one is an error worth stopping on;
