@@ -69,7 +69,7 @@ from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
-from .pools import Book, Resource
+from .pools import Book, Pool, Resource
 
 log = logging.getLogger(__name__)
 
@@ -2211,14 +2211,52 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                   f"({build.seconds:.0f}s)", flush=True)
         return build
 
+    stop_beating = _start_heartbeat(book)
     try:
         return _drive_jobs(client, settings, jobs, work=work, workers=workers,
                            started=started, ledger=ledger, total=total,
                            on_ready=on_ready, shutting_down=shutting_down)
     finally:
+        stop_beating()
         # The console outlives a build and several of them, so the format the
         # build installed must not outlive this one.
         restore_logging()
+
+
+def _start_heartbeat(book: Book) -> Callable[[], None]:
+    """Restamp what this run is holding, for as long as it is holding it.
+
+    Returns the way to stop. A daemon thread so an interpreter on its way out
+    is never held open by it, and a stop that waits, so the last beat cannot
+    land after the run has released everything and re-stamp a row somebody
+    else has since taken.
+
+    Every failure is logged and the beat goes on. A beat that gives up
+    silently is the dangerous one: the run keeps working, the stamps stop
+    moving, and the next sync anywhere frees the rows out from under it.
+    """
+    stop = threading.Event()
+
+    def beating() -> None:
+        while not stop.wait(Pool.HEARTBEAT_SECONDS):
+            try:
+                held = book.beat()
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not refresh the claims this run is "
+                            "holding (%s); it will try again in %ds", exc,
+                            Pool.HEARTBEAT_SECONDS)
+                continue
+            if held:
+                log.debug("refreshed %d claim(s)", held)
+
+    thread = threading.Thread(target=beating, name="claims", daemon=True)
+    thread.start()
+
+    def done() -> None:
+        stop.set()
+        thread.join(timeout=Pool.HEARTBEAT_SECONDS)
+
+    return done
 
 
 def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
@@ -2304,7 +2342,7 @@ def run(client: Client, settings: Settings, *, count: int,
     if not dry_run:
         sync_sheet(client, book, Ledger.load(settings.state_dir),
                    artifact_dir=settings.artifact_dir,
-                   stale_claim_seconds=settings.build_budget_seconds)
+                   stale_claim_seconds=settings.stale_claim_seconds)
 
     waiting: list[dict] = []
     gone: list[dict] = []
@@ -2374,7 +2412,7 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         # that is the run that discovers a swap has nowhere to go.
         sync_sheet(client, book, Ledger.load(settings.state_dir),
                    artifact_dir=settings.artifact_dir,
-                   stale_claim_seconds=settings.build_budget_seconds)
+                   stale_claim_seconds=settings.stale_claim_seconds)
     pending, gone = _unfinished(client, book)
     if limit:
         pending = pending[:limit]

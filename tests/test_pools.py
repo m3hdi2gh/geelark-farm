@@ -1596,3 +1596,155 @@ def test_the_tabs_made_automatically_are_not_demanded():
 
     assert missing_tabs({"Gmails": 1, "Proxy": 1, "Gpt Info": 1,
                          "Phones": 1, "Lists": 1, "History": 1}) == []
+
+
+# ================================================================
+# The claim heartbeat (2026-08-25). A live run says "still mine"
+# about what it holds, so a stamp that stopped moving is proof the
+# holder is gone - and the wait to reclaim can be minutes instead
+# of a whole build budget.
+# ================================================================
+
+CLAIMED_GMAIL_HEADERS = ["Purchase Date", "Seller", "Address", "Password",
+                         "2FA Secret", "Used Date", "Phone Serial", "Status",
+                         "Note", "Claimed"]
+
+
+def _beating_pool(rows=1):
+    body = [["", "", f"a{i}@b.com", "pw", SECRET, "", "", "", "", ""]
+            for i in range(rows)]
+    pool = GmailPool(FakeWorksheet(CLAIMED_GMAIL_HEADERS, body),
+                     CLAIMED_GMAIL_HEADERS, threading.Lock())
+    pool.load()
+    return pool
+
+
+def _stamp_of(pool, resource):
+    return (resource.values.get(pool.claimed_at_column) or "").strip()
+
+
+def test_a_row_this_run_claimed_is_restamped_by_a_beat(monkeypatch):
+    """The whole point. `abandoned` reads this cell, so moving it forward is
+    how a run in progress keeps its credentials."""
+    pool = _beating_pool()
+    monkeypatch.setattr(time, "strftime",
+                        lambda fmt, *a: "2026-08-25 00:00:00")
+    claimed = pool.claim()
+    assert _stamp_of(pool, claimed) == "2026-08-25 00:00:00"
+
+    monkeypatch.setattr(time, "strftime",
+                        lambda fmt, *a: "2026-08-25 00:01:00")
+
+    assert pool.beat() == 1
+    assert _stamp_of(pool, claimed) == "2026-08-25 00:01:00"
+
+
+def test_a_row_that_was_given_back_is_not_restamped():
+    """Refreshing a row this run no longer holds is how the heartbeat would
+    become the bug it exists to fix: the row reads as claimed-and-alive
+    forever, and nothing ever frees it."""
+    pool = _beating_pool()
+    claimed = pool.claim()
+
+    pool.release(claimed)
+
+    assert pool.beat() == 0
+
+
+def test_every_way_a_claim_ends_stops_the_beat():
+    """Tracked in `_set` rather than in claim/release, because that is the one
+    place all of them pass through - including any added later. A path that
+    ended a claim without being noticed here would leave the row beating."""
+    for finish in ("release", "spend", "fail", "set_aside", "retire"):
+        pool = _beating_pool()
+        claimed = pool.claim()
+        assert pool.beat() == 1, f"{finish}: nothing was held to begin with"
+
+        method = getattr(pool, finish, None)
+        if method is None:
+            continue
+        if finish == "fail":
+            method(claimed, "wrong_password")
+        else:
+            method(claimed)
+
+        assert pool.beat() == 0, f"{finish} left the row beating"
+
+
+def test_a_beat_does_not_make_an_unclaimed_row_look_claimed():
+    """The beat writes only the stamp. If that write were read as a claim,
+    beating would take rows nothing asked for."""
+    pool = _beating_pool(rows=2)
+    claimed = pool.claim()
+    other = next(r for r in pool._rows if r is not claimed)
+
+    pool.beat()
+
+    assert pool.status_of(other) in pool.available_statuses
+    assert pool.beat() == 1, "the beat itself claimed something"
+
+
+def test_the_beat_lands_in_the_claimed_cell_and_nowhere_near_it():
+    """Read off the grid, not off the row object.
+
+    `beat` sets `resource.values` itself, so an in-memory check passes however
+    the range was addressed - and the sheet is the shared state. One column
+    out and the stamp never moves, so a live run's rows go stale underneath
+    it, while whatever column it landed on is quietly overwritten.
+
+    `Claimed` is deliberately not the last column here: at the end of the row
+    an off-by-one writes into empty space and looks harmless.
+    """
+    headers = ["Address", "Password", "2FA Secret", "Phone Serial", "Status",
+               "Claimed", "Note"]
+    pool = AppPool(FakeWorksheet(headers, [["a@b.com", "pw", SECRET, "", "",
+                                            "", "keep me"]]),
+                   headers, threading.Lock())
+    pool.load()
+    pool.claim()
+
+    pool.beat()
+
+    row = pool._ws.rows[0]
+    assert row[headers.index("Claimed")].startswith("20")
+    assert row[headers.index("Note")] == "keep me"
+    assert row[headers.index("Status")] == pool.claimed_status
+
+
+def test_a_pool_with_no_claim_column_beats_nothing():
+    """The Phones tab has no such column and neither did any tab before the
+    stamp existed. Nothing to refresh is not an error."""
+    headers = ["Address", "Password", "2FA Secret", "Phone Serial", "Status",
+               "Note"]
+    pool = AppPool(FakeWorksheet(headers, [["a@b.com", "pw", SECRET,
+                                            "", "", ""]]),
+                   headers, threading.Lock())
+    pool.load()
+    pool.claim()
+
+    assert pool.beat() == 0
+
+
+def test_one_write_covers_every_row_the_pool_is_holding():
+    """A run holds three rows a phone and fifteen phones at a time. Forty-five
+    separate writes a minute is a quota problem rather than a heartbeat."""
+    pool = _beating_pool(rows=3)
+    for _ in range(3):
+        pool.claim()
+
+    # Counted at the API call, not at the cells: the fake records one entry
+    # per range whether they arrived together or one at a time, so the write
+    # log cannot tell the two apart.
+    calls = []
+    real = pool._ws.batch_update
+
+    def batch_update(payload):
+        calls.append(payload)
+        return real(payload)
+
+    pool._ws.batch_update = batch_update
+
+    assert pool.beat() == 3
+
+    assert len(calls) == 1, "one batch, not one call per row"
+    assert len(calls[0]) == 3

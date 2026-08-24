@@ -1211,7 +1211,7 @@ def sync_on_startup(settings: Settings) -> None:
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir),
                 artifact_dir=settings.artifact_dir,
-                stale_claim_seconds=settings.build_budget_seconds,
+                stale_claim_seconds=settings.stale_claim_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
     except ConfigError as exc:
         # `Book.open` asks `require_sheets` first, which raises this when the
@@ -1560,4 +1560,4 @@ def apply_marks(settings: Settings) -> None:
                                  Ledger.load(settings.state_dir),
                                  apply_marks=apply,
                                  artifact_dir=settings.artifact_dir,
-                                 stale_claim_seconds=settings.build_budget_seconds))
+                                 stale_claim_seconds=settings.stale_claim_seconds))
