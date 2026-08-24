@@ -1958,19 +1958,21 @@ def free_abandoned_claims(book: Book, older_than: float) -> list[str]:
     and waited for a hand on the console, which meant three Gmails and three
     exits sat out for a day, twice in three days.
 
-    A claim time settles it, the same way the ledger's does for phones. The
-    threshold is the build budget: nothing may keep a credential past the
-    outer bound on the phone it was claimed for, so a stamp older than that is
-    proof the run that wrote it is gone. Anything newer is left alone, and the
-    console still offers to release those by hand.
+    A claim time settles it, the same way the ledger's does for phones - and
+    a live run keeps its own stamps moving, so a stamp that has stopped is
+    proof the run that wrote it is gone. `older_than` is how long a claim may
+    go unrefreshed; anything newer is left alone, and the console still offers
+    to release those by hand.
     """
     freed = []
     for pool in (book.gmails, book.proxies, book.apps):
         for resource in pool.abandoned(older_than):
             pool.release(resource, note=(
-                f"Claimed and never released. No run can hold one past its "
-                f"own budget, so the run that took this is gone. Freed "
-                f"automatically on {failures.today()}."))
+                f"Claimed and never released. A run refreshes what it is "
+                f"holding every {Pool.HEARTBEAT_SECONDS}s, and nothing "
+                f"refreshed this for {older_than / 60:.0f} minutes, so the "
+                f"run that took it is gone. Freed automatically on "
+                f"{failures.today()}."))
             freed.append(f"{pool.tab}: {resource.label}")
     if freed:
         log.info("freed %d row(s) a dead run left claimed", len(freed))

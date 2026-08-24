@@ -346,13 +346,21 @@ class Pool:
         return fields
 
     def abandoned(self, older_than: float) -> list[Resource]:
-        """Rows still claimed longer ago than any run could legitimately hold.
+        """Rows whose claim has stopped being refreshed.
 
-        `older_than` is the build budget: nothing may keep a credential past
-        the outer bound on the phone it was claimed for, so a stamp older than
-        that is proof the run that wrote it is gone. A row with no stamp - one
-        claimed before the column existed - is left alone, because "no time
-        recorded" is not "a long time ago".
+        `older_than` is the staleness window. A live run restamps what it
+        holds every `HEARTBEAT_SECONDS` - see `beat` - so a stamp that has
+        stopped moving is proof the run that wrote it is gone, and the window
+        only has to outlast a few late beats.
+
+        It was the build budget before the heartbeat, and still defaults to
+        it: with nothing refreshing a claim, the only safe answer was "longer
+        than any run could legitimately hold one". A machine running a version
+        that does not beat is exactly that case, which is why shortening the
+        window is a decision rather than a default.
+
+        A row with no stamp - one claimed before the column existed - is left
+        alone, because "no time recorded" is not "a long time ago".
         """
         if not self.claimed_at_column:
             return []
