@@ -739,3 +739,17 @@ def test_the_module_says_which_commands_exist_and_is_right():
 
     missing = sorted(real - named)
     assert not missing, f"the docstring does not mention {missing}"
+
+
+def test_the_cli_names_the_two_sheet_failures_it_did_not():
+    """A revoked key raises GSpreadError rather than SheetError, and every
+    command that opens the book can raise ConfigError from `require_sheets`.
+    Neither was caught, so both ended in a traceback."""
+    import inspect
+
+    from geelark_farm import cli as cli_mod
+
+    source = inspect.getsource(cli_mod.main)
+
+    assert "except GSpreadError" in source
+    assert source.count("except ConfigError") == 2

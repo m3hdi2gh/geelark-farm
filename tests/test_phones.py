@@ -327,3 +327,18 @@ def test_the_two_functions_nothing_called_are_gone():
     patches for a function the code under test never reached (2026-08-23)."""
     assert not hasattr(phones, "info")
     assert not hasattr(phones, "serial_of")
+
+
+def test_the_reasons_to_reap_are_counted_the_way_they_are_written():
+    """The docstring said three and the code had four - and the fourth is the
+    case `geelark create --start` used to hide from."""
+    doc = phones.reapable.__doc__ or ""
+    # Counted off the stripped lines: 3.13 dedents a docstring and the
+    # versions CI builds do not, so a pattern with leading spaces in it would
+    # pass on one and fail on the other - which is how this suite went red for
+    # three weeks once already.
+    listed = sum(1 for line in doc.splitlines()
+                 if line.strip().startswith("- "))
+
+    assert "Four cases say no" in doc
+    assert listed == 4

@@ -73,10 +73,15 @@ def _one_line(exc: object) -> str:
 
 
 def _geelark(settings: Settings, checks: list[Check]) -> bool:
+    from . import phones
     from .api import Client
     try:
         client = Client(settings)
-        data = client.data("/v1/phone/list", {"page": 1, "pageSize": 100})
+        # Through `listing`, which is the one place that knows the endpoint
+        # and how it pages. Called raw here, this was a third copy of that
+        # knowledge - and listing a phone exercises the same signing, limiter
+        # and envelope a bare call does, which is all this check is for.
+        items = phones.listing(client)
     except Exception as exc:                                  # noqa: BLE001
         checks.append(Check("geelark api", FATAL, "\n".join([
             _one_line(exc),
@@ -84,12 +89,10 @@ def _geelark(settings: Settings, checks: list[Check]) -> bool:
             "under API."])))
         return False
 
-    total = data.get("total", len(data.get("items") or []))
     checks.append(Check("geelark api", OK,
                         f"appId {settings.app_id[:6]}..., "
-                        f"{total} phone(s) visible"))
+                        f"{len(items)} phone(s) visible"))
 
-    from . import phones
     try:
         info = phones.plan(client)
     except Exception as exc:                                  # noqa: BLE001
@@ -202,7 +205,17 @@ def _tabs_and_columns(tabs: dict, checks: list[Check]) -> None:
 
     absent = []
     for name, wanted in REQUIRED_COLUMNS.items():
-        headers = {h.strip() for h in tabs[name].row_values(1)}
+        try:
+            headers = {h.strip() for h in tabs[name].row_values(1)}
+        except Exception as exc:                              # noqa: BLE001
+            # A read that did not happen is not a column that is missing.
+            # `run_checks` says it never raises and this was one of three
+            # places that could - in the command whose whole job is to
+            # explain a problem rather than be one (2026-08-23).
+            checks.append(Check("columns", SKIP,
+                                f"not checked - {name} could not be read "
+                                f"({_one_line(exc)})"))
+            return
         absent += [f"{name}.{column}" for column in wanted
                    if column not in headers]
     if absent:
@@ -259,7 +272,13 @@ def _sxorg(settings: Settings, tabs: dict, checks: list[Check]) -> None:
         return
 
     proxy = tabs.get("Proxy")
-    headers = {h.strip() for h in proxy.row_values(1)} if proxy else set()
+    try:
+        headers = {h.strip() for h in proxy.row_values(1)} if proxy else set()
+    except Exception as exc:                                  # noqa: BLE001
+        checks.append(Check("sx.org", SKIP,
+                            f"not checked - the Proxy tab could not be read "
+                            f"({_one_line(exc)})"))
+        return
     if PORT_ID_COLUMN not in headers:
         checks.append(Check("sx.org", WARN, "\n".join([
             f"the key is set but the Proxy tab has no {PORT_ID_COLUMN} column",
@@ -271,7 +290,14 @@ def _sxorg(settings: Settings, tabs: dict, checks: list[Check]) -> None:
 
 
 def run_checks(settings: Settings) -> list[Check]:
-    """Every check, in dependency order. Never raises."""
+    """Every check, in dependency order. Never raises.
+
+    Which is a promise, not a hope: three of the reads below reached the
+    network without a guard, and a sheet quota - the failure this project
+    handles more carefully than any other - would have ended `geelark verify`
+    in a traceback. A diagnostic that cannot survive the thing it exists to
+    diagnose is worth less than nothing (2026-08-23).
+    """
     checks: list[Check] = []
 
     checks.append(Check(
@@ -296,7 +322,15 @@ def run_checks(settings: Settings) -> list[Check]:
     if book is None:
         return checks
 
-    tabs = {ws.title: ws for ws in book.worksheets()}
+    try:
+        tabs = {ws.title: ws for ws in book.worksheets()}
+    except Exception as exc:                                  # noqa: BLE001
+        checks.append(Check("tabs", FATAL, "\n".join([
+            _one_line(exc),
+            "The book opened but its tabs could not be listed, so nothing "
+            "below this could be checked. A quota is the usual cause and "
+            "clears in a minute."])))
+        return checks
     _writable(tabs, checks)
     _tabs_and_columns(tabs, checks)
     _stock(settings, checks)

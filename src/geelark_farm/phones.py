@@ -438,13 +438,16 @@ def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
     """Which running phones should be stopped, and why.
 
     A phone that is running is spending money, so the question is only ever
-    "does something legitimately need this right now?". Three cases say no:
+    "does something legitimately need this right now?". Four cases say no:
 
     - not in the ledger at all: nothing created it through this tool, or the
       ledger was lost. Either way nothing here is accountable for it.
     - released: a run finished with it and it should already be off.
     - stale claim: a run claimed it hours ago and never came back, so the
       process that owned it is gone.
+    - recorded but never claimed: something made the phone and then nothing
+      took responsibility for it. `geelark create --start` is how that
+      happens, and it is why that command does not claim.
 
     A fresh claim is left alone - that is a run in progress.
     """
