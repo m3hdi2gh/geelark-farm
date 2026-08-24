@@ -8,6 +8,7 @@ one run later. Neither raises - both just quietly spend the stock.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -618,14 +619,22 @@ def test_a_workbook_without_a_history_tab_still_works():
     book.record_history(Serial="1", Event="ready")     # simply nothing happens
 
 
-def test_a_history_append_that_fails_does_not_raise():
+def test_a_history_append_that_fails_is_logged_rather_than_raised(caplog):
+    """Both halves. It asserted only that nothing was raised, so the log line
+    could have become `pass` and a History write failing would have gone
+    silent - against the rule this project keeps everywhere else: a thing that
+    must not stop the run still has to be loud (2026-08-23)."""
     book, tab = history_book()
 
     def refuse(*a, **k):
         raise ConnectionError("mid-write reset")
     tab.append_row = refuse
 
-    book.record_history(Serial="1", Event="ready")     # logged, not raised
+    with caplog.at_level(logging.ERROR):
+        book.record_history(Serial="1", Event="ready")
+
+    assert "mid-write reset" in caplog.text
+    assert "1" in caplog.text          # and which row was lost
 
 
 # ------------------------------------------ not spending writes to say nothing

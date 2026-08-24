@@ -19,6 +19,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    # For auditing the suite rather than for running it. Coverage says which
+    # lines nothing touches; mutmut says which of the lines something touches
+    # are actually held - the only question that matters about a test, and one
+    # this project has answered by hand every time it asked.
+    "pytest-cov>=5.0",
+    "mutmut>=3.0",
 ]
 
 [project.scripts]

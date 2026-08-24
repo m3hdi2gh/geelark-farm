@@ -1828,8 +1828,13 @@ def sync_proxies(client: Client, book: Book,
             held += batch
             if len(batch) < 100:
                 break
-    except (ApiError, TransportError):
-        held = []                       # a report, never worth failing a sync
+    except (ApiError, TransportError) as exc:
+        # Never worth failing a sync over - but `held = []` makes every proxy
+        # look like one the tab already knows, so the report says there is
+        # nothing unlisted when what happened is that it could not look.
+        log.warning("could not list GeeLark's own proxies (%s), so nothing is "
+                    "reported as unlisted this run", exc)
+        held = []
     changed["unlisted"] = [
         f"{item['server']}:{item['port']} ({item.get('username', '')})"
         for item in held
