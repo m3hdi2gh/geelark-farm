@@ -648,7 +648,7 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
     ])
     monkeypatch.setattr(ui_mod.phones, "reapable", reapable)
     monkeypatch.setattr(ui_mod.phones, "reap",
-                        lambda c, l, verdicts=None, dry_run=False:
+                        lambda c, book, verdicts=None, dry_run=False:
                         reaped.setdefault("got", verdicts) or len(verdicts or []))
     monkeypatch.setattr(ui_mod.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
 
@@ -665,7 +665,7 @@ def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
     monkeypatch.setattr(ui_mod.Ledger, "load",
                         staticmethod(lambda d: SimpleNamespace(
                             get=lambda i: None)))
-    monkeypatch.setattr(ui_mod.phones, "reapable", lambda c, l: [])
+    monkeypatch.setattr(ui_mod.phones, "reapable", lambda c, book: [])
     monkeypatch.setattr(ui_mod.phones, "listing", lambda c: [
         {"id": "P1", "serialNo": "801", "status": ui_mod.phones.RUNNING},
     ])
