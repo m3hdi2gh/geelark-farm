@@ -95,9 +95,11 @@ def prune(root: Path, live_serials: set[str], *,
             if not directory.is_dir():
                 continue
             modified = directory.stat().st_mtime
-        except OSError:
+        except OSError as exc:
             # Gone between listing and asking, or unreadable. Neither is worth
-            # ending a prune over, and leaving it is the side that keeps.
+            # ending a prune over, and leaving it is the side that keeps - but
+            # a prune that skipped something should be able to say which.
+            log.debug("skipped %s while pruning (%s)", directory, exc)
             continue
         if _succeeded(directory):
             if serial_of(directory) in live_serials:

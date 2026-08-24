@@ -564,6 +564,10 @@ def _drive_live_table(reporter: _LiveTable, context_filter: logging.Filter,
         try:
             work()
         except Exception as exc:                                  # noqa: BLE001
+            # The traceback here is the only account of it: what reaches the
+            # screen afterwards is `str(exc)`, one line, from a thread that
+            # has already ended.
+            log.exception("the run failed")
             failure["exc"] = exc
 
     worker = threading.Thread(target=runner, daemon=True)

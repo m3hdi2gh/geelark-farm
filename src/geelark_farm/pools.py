@@ -350,7 +350,18 @@ class Pool:
             try:
                 when = time.mktime(time.strptime(stamp, self.CLAIM_FORMAT))
             except ValueError:
-                continue                  # a hand typed something else in
+                # Said, not skipped. A row claimed with a stamp nothing can
+                # read is never old enough to be abandoned, so it stays
+                # `in_use` for good and nothing anywhere says why - which is
+                # one of the ways a row sits stuck with no explanation
+                # (2026-08-23). Naming it is what turns that into something a
+                # person can fix.
+                log.warning("%s row %d is claimed with a date nothing can "
+                            "read (%r), so it will never be freed on its own "
+                            "- correct the %s cell or clear the status",
+                            self.tab, resource.sheet_row, stamp,
+                            self.claimed_at_column)
+                continue
             if when < cutoff:
                 found.append(resource)
         return found

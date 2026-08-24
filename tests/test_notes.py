@@ -212,3 +212,45 @@ def test_a_stop_the_builder_raises_itself_reads_as_a_sentence():
             detail=failures.situation(reason)))
         assert not TOKEN.findall(note), note
         assert note.startswith("Stopped short: "), note
+
+
+# ============================ a failure that is survived is still announced
+#: How a handler can tell somebody. A log line, a printed line, a `Check`
+#: appended to the report, a row added to a table - or a `raise`/`return`,
+#: which tells the caller rather than a person.
+#:
+#: Kept as a list rather than a rule about "does it do anything", because a
+#: handler that does plenty and says nothing is exactly the case this is for.
+SPEAKS = ("attr='error'", "attr='warning'", "attr='info'", "attr='exception'",
+          "attr='debug'", "id='print'", "attr='print'", "attr='append'",
+          "attr='add_row'", "id='Check'")
+
+
+def test_no_failure_is_survived_in_silence():
+    """Twenty-one places in this package log an error and carry on, and each
+    is the same decision: this failed, it must not stop the run, so say so.
+    Four handlers made the first two halves of that decision and not the
+    third (2026-08-23).
+
+    The one that cost something: a row claimed with an unreadable date was
+    skipped without a word, so it was never old enough to be abandoned, never
+    freed, and nothing anywhere said why.
+    """
+    import ast
+    import pathlib
+
+    silent = []
+    for path in sorted(pathlib.Path("src/geelark_farm").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.ExceptHandler):
+                continue
+            body = ast.dump(ast.Module(body=node.body, type_ignores=[]))
+            if "Raise(" in body or "Return(" in body:
+                continue                       # it tells the caller
+            if any(word in body for word in SPEAKS):
+                continue                       # it tells a person
+            silent.append(f"{path.name}:{node.lineno}")
+
+    assert not silent, (
+        f"these catch a failure, carry on, and tell nobody: {silent}. "
+        f"Either say something or let it out.")
