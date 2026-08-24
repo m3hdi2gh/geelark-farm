@@ -16,7 +16,15 @@ import pytest
 
 from geelark_farm import builder, failures
 from geelark_farm.flows.router import Outcome
-from geelark_farm.pools import AppPool, Book, GmailPool, HistoryLog, PhoneLog, ProxyPool
+from geelark_farm.pools import (
+    AppPool,
+    Book,
+    GmailPool,
+    HistoryLog,
+    PhoneLog,
+    ProxyPool,
+    Resource,
+)
 from tests.test_pools import (
     APP_HEADERS,
     GMAIL_HEADERS,
@@ -2364,3 +2372,139 @@ def test_history_writes_the_path_beside_the_outcome():
 
     assert HistoryLog.HEADERS[-1] == "Steps"
     assert HistoryLog.HEADERS.index("Note") < HistoryLog.HEADERS.index("Steps")
+
+
+# ------------------------------------------ an exit we are standing on, not on
+def test_a_borrowed_exit_is_not_handed_back_when_the_swap_is_refused(
+        monkeypatch):
+    """`_borrow_exit` returns an exit another phone is running on, without
+    claiming it. Releasing that blanks its status and wipes the `Used By`
+    naming its real owner - so the next build claims it, a third phone lands
+    on the address, and nothing says whose it was (2026-08-23)."""
+    from geelark_farm.api import ApiError
+
+    book = Book.__new__(Book)
+    released = []
+
+    class Proxies:
+        spent_status = "on a phone"
+        _rows = []
+
+        @staticmethod
+        def status_of(r):
+            return "on a phone"
+
+        @staticmethod
+        def release(resource, *, note=""):
+            released.append(resource)
+
+    object.__setattr__(book, "proxies", Proxies())
+
+    borrowed = Resource(sheet_row=9, values={"Used By": "812"})
+    borrowed.proxy = builder.proxy_mod.parse("socks5://u:p@1.2.3.4:1080")
+    Proxies._rows = [borrowed]
+
+    monkeypatch.setattr(builder, "_fresh_proxy",
+                        lambda *a: (_ for _ in ()).throw(
+                            builder.Aborted("no_usable_proxy")))
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "set_proxy",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            ApiError(45004, "proxy did not answer",
+                                     path="/p", trace_id="T")))
+    build = builder.Build(index=1)
+
+    with pytest.raises(builder.Aborted, match="proxy_change_refused"):
+        builder._new_exit(None, None, book, build, "P1", None, "why", 60)
+
+    assert released == [], "freed an exit another phone is running on"
+
+
+def test_an_exit_this_build_claimed_is_handed_back_when_the_swap_is_refused(
+        monkeypatch):
+    """The other half: one we took is ours to give back, and holding it would
+    keep good stock out of the pool for nothing."""
+    from geelark_farm.api import ApiError
+
+    book = Book.__new__(Book)
+    released = []
+
+    class Proxies:
+        @staticmethod
+        def release(resource, *, note=""):
+            released.append(resource)
+
+    object.__setattr__(book, "proxies", Proxies())
+
+    claimed = Resource(sheet_row=4, values={})
+    claimed.proxy = builder.proxy_mod.parse("socks5://u:p@5.6.7.8:1080")
+
+    monkeypatch.setattr(builder, "_fresh_proxy", lambda *a: claimed)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "set_proxy",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            ApiError(45004, "no", path="/p", trace_id="T")))
+
+    with pytest.raises(builder.Aborted, match="proxy_change_refused"):
+        builder._new_exit(None, None, book, builder.Build(index=1),
+                          "P1", None, "why", 60)
+
+    assert released == [claimed]
+
+
+# --------------------------------------- what must not escape from a finally
+def test_releasing_survives_a_refusal_the_quota_guard_does_not_cover():
+    """`_release` runs in a finally, where an exception does not fail the call
+    - it replaces the value the call was about to return. It caught only
+    `SheetError`, and `batch_write` re-raises every other APIError untouched
+    (2026-08-23)."""
+    book = Book.__new__(Book)
+    freed = []
+
+    class Pool:
+        tab = "Gmails"
+
+        @staticmethod
+        def release(resource, *, note=""):
+            raise RuntimeError("the key was revoked")
+
+        @staticmethod
+        def spend(resource, *, serial="", note=""):
+            freed.append(resource)
+
+    first = Resource(sheet_row=2, values={})
+    second = Resource(sheet_row=3, values={})
+
+    builder._release(book, builder.Build(index=1), [
+        (Pool(), first, builder.RELEASE, "", ""),
+        (Pool(), second, builder.SPEND, "", ""),
+    ])
+
+    # It did not raise, and the one after the failure still had its turn.
+    assert freed == [second]
+
+
+def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
+    """Every step also talks to GeeLark, and ApiError, TransportError and
+    PhoneError are none of them a SheetError - so a hiccup partway through
+    unwound the whole sync, which is what the guard exists to prevent."""
+    from geelark_farm.api import TransportError
+
+    book = Book.__new__(Book)
+    object.__setattr__(book, "sync_lists", lambda: None)
+    object.__setattr__(book, "reload", lambda: None)
+
+    monkeypatch.setattr(builder, "apply_phone_states",
+                        lambda *a, **k: {"deleted": ["1001"]})
+    monkeypatch.setattr(builder, "settle_abandoned",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TransportError("geelark went away")))
+    for name in ("sync_proxies", "sync_phone_proxies", "sync_phone_names",
+                 "strand_check"):
+        monkeypatch.setattr(builder, name, lambda *a, **k: {})
+
+    outcome = builder.sync_sheet(None, book, None, probe_proxies=False)
+
+    # The step that ran is still reported, and the one that died is named.
+    assert outcome["deleted"] == ["1001"]
+    assert outcome["incomplete"] == ["abandoned"]

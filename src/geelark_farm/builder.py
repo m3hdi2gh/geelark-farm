@@ -55,7 +55,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -1041,6 +1041,10 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
                               cancelled=cancelled)
         return current
 
+    # Whether the exit below is one this build took or one it is standing on
+    # beside another phone. They are settled in opposite ways and were told
+    # apart nowhere: see the refusal handler.
+    borrowed = False
     try:
         replacement = _fresh_proxy(client, book)
     except Aborted as exc:
@@ -1065,6 +1069,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         if replacement is None:
             raise Aborted("all_exits_refused" if swaps
                           else "no_exit_to_move_to") from None
+        borrowed = True
         build.shared_exit = True
         log.warning("no free proxy left; sharing %s, which %s is already on",
                     replacement.label,
@@ -1075,8 +1080,18 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # The phone keeps the proxy it had, so nothing is broken - but this
         # build cannot do what it came here to do, and saying "the login
         # failed" would hide that.
-        book.proxies.release(replacement, note=(
-            f"Free again - GeeLark would not move a phone onto it: {exc}"))
+        #
+        # Only if it was ours. A borrowed exit is one another phone is running
+        # on right now - `_borrow_exit` returns it without claiming it - and
+        # releasing that blanks its status and wipes the `Used By` naming its
+        # real owner. The next build then claims it, putting a third phone on
+        # the address and leaving nothing that says whose it was. The path
+        # into this is not exotic: the pool empties, a proxy is borrowed, and
+        # GeeLark refuses to move onto it - which is what [45004] is, and a
+        # borrowed exit is exactly the kind that draws one.
+        if not borrowed:
+            book.proxies.release(replacement, note=(
+                f"Free again - GeeLark would not move a phone onto it: {exc}"))
         raise Aborted("proxy_change_refused") from exc
     # `current` is deliberately NOT released here. Releasing it put it straight
     # back on the shelf as `unused`, where the very next swap could claim it
@@ -1175,7 +1190,14 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
                 pool.release(resource, note=note or (
                     "Free again - a build claimed it but never got as far as "
                     "using it."))
-        except SheetError as exc:
+        except Exception as exc:                                  # noqa: BLE001
+            # Broad, and the docstring above says why: this runs in a finally,
+            # where an exception does not fail the call - it replaces the value
+            # the call was about to return. `SheetError` covered the quota and
+            # the network, and `batch_write` re-raises every other APIError
+            # untouched: a revoked key or a bad range escaped, took the Build
+            # with it, and left the resources after this one in the list still
+            # claimed with nothing coming back to free them.
             log.error("%s: could not release %s (%s) - it stays in_use until "
                       "'geelark pools --release-stuck'",
                       pool.tab, resource.label, exc)
@@ -1547,7 +1569,13 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
                 outcome.update(result)
             elif result is not None:
                 outcome[name] = result
-        except SheetError as exc:
+        except Exception as exc:                                  # noqa: BLE001
+            # Every step here also talks to GeeLark, and `ApiError`,
+            # `TransportError` and `PhoneError` are none of them a
+            # `SheetError`. Catching only that left a GeeLark hiccup partway
+            # through unwinding the whole sync - the console unable to open,
+            # and reporting none of the work that had already been done, which
+            # is the exact outcome this guard was added to prevent.
             log.error("sync step %r stopped short: %s", name, exc)
             outcome.setdefault("incomplete", []).append(name)
 
@@ -2145,7 +2173,12 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                                 thread_name_prefix="phone") as pool:
             futures = {pool.submit(work, i, j): i
                        for i, j in enumerate(jobs, start=1)}
-            wait(futures, return_when=FIRST_EXCEPTION)
+            # Not FIRST_EXCEPTION. `build_one` and `finish_one` catch
+            # everything and return a Build, so a future here practically
+            # never raises - and returning early would change nothing anyway,
+            # because leaving the `with` shuts the pool down and waits for all
+            # of them. It read as a policy the code does not have.
+            wait(futures)
     except KeyboardInterrupt:
         print("\ninterrupted - stopping every phone this run started", flush=True)
         shutting_down.set()
