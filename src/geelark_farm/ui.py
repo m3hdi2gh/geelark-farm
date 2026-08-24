@@ -159,7 +159,11 @@ def take_snapshot(settings: Settings) -> Snapshot:
             snap.pools_broken = sum(len(p.broken) for p in
                                     (book.proxies, book.gmails, book.apps))
             snap.phones_unfinished = len(book.phones.unfinished())
-        except SheetError as exc:
+        except Exception as exc:                                  # noqa: BLE001
+            # The docstring says failures are reported and never raised, and
+            # `SheetError` alone did not mean it: a revoked key raises
+            # GSpreadError and a missing key file raises ConfigError, and the
+            # dashboard is the wrong place to learn either by traceback.
             snap.error = snap.error or str(exc).splitlines()[0]
     return snap
 
@@ -689,7 +693,6 @@ def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     """`build`, drawn as a table instead of a scrolling log."""
     client = build_client(settings)
     settings.ensure_dirs()
-    builder.install_build_logging()
 
     reporter = BuildReporter()
     builds: list[Build] = []
@@ -715,7 +718,6 @@ def finish_with_live_table(settings: Settings, **kwargs) -> list[Build]:
     the operator's side it is the same thing happening to fewer steps."""
     client = build_client(settings)
     settings.ensure_dirs()
-    builder.install_build_logging()
 
     reporter = BuildReporter()
     builds: list[Build] = []
@@ -990,7 +992,7 @@ def phones_table(settings: Settings) -> Table:
         entry = ledger.get(item.get("id"))
         equipment = item.get("equipmentInfo") or {}
         table.add_row(
-            str(item.get("id")), str(item.get("serialNo", "?")),
+            str(item.get("id")), str(item.get("serialNo") or "?"),
             f"[{BAD if running else OK}]{phones.STATUS_NAMES.get(state, state)}[/]",
             f"{equipment.get('deviceBrand', '?')} {equipment.get('osVersion', '?')}",
             (entry.label if entry else "[bright_black]not in ledger[/]"),
@@ -1207,11 +1209,31 @@ def sync_on_startup(settings: Settings) -> None:
                 artifact_dir=settings.artifact_dir,
                 stale_claim_seconds=settings.build_budget_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
+    except ConfigError as exc:
+        # `Book.open` asks `require_sheets` first, which raises this when the
+        # service-account file is not where the settings say. It was not in
+        # the list below and this call is made before the menu loop starts, so
+        # the console died with a traceback rather than opening - and the one
+        # command that explains the problem is the one it could not offer
+        # (2026-08-23).
+        console.print(f"[{BAD}]the sheet cannot be opened: {escape(str(exc))}[/]")
+        console.print(f"[{DIM}]`geelark verify` says what is missing[/]")
+        return
     except (ApiError, TransportError, SheetError, GSpreadError) as exc:
         # GSpreadError included because a sheet quota (429) can surface from a
         # read - Book.open, a reload - that does not pass through batch_write's
         # 429 handling, and "never fatal" has to mean it (2026-08-17).
         console.print(f"[{WARN}]could not update the sheet first: {exc}[/]")
+        return
+    except Exception as exc:                                      # noqa: BLE001
+        # "Never fatal" is the whole contract of this function, and naming the
+        # failures it survives is a list that will always be one short. The
+        # traceback goes to the log; the console opens either way.
+        log.exception("the startup sync failed")
+        console.print(f"[{WARN}]could not update the sheet first: "
+                      f"{escape(str(exc))}[/]")
+        console.print(f"[{DIM}]this one is a bug - the traceback is in "
+                      f"today's log file[/]")
         return
     show_sync(outcome)
     # And what it could not do, which is the half you actually have to act on.
@@ -1220,8 +1242,11 @@ def sync_on_startup(settings: Settings) -> None:
     # just moved several of them.
     try:
         show_needs_you(needs_you(Book.open(settings), outcome))
-    except (SheetError, GSpreadError) as exc:
-        console.print(f"[{DIM}]could not list what still needs you: {exc}[/]")
+    except Exception as exc:                                      # noqa: BLE001
+        # Same rule as above: this is the last line of a startup that has
+        # already done its work, and none of it is worth losing to a list.
+        console.print(f"[{DIM}]could not list what still needs you: "
+                      f"{escape(str(exc))}[/]")
     if outcome:
         console.print()
 

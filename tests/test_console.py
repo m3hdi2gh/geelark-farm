@@ -926,3 +926,109 @@ def test_a_bug_is_reported_without_closing_the_console():
     assert "except Exception" in source
     assert "log.exception" in source
     assert "except EOFError" in source
+
+
+# ======================== the console opens whatever the sheet turns out to be
+def test_a_missing_key_file_does_not_stop_the_console_opening(monkeypatch,
+                                                              capsys):
+    """`Book.open` asks `require_sheets` first, which raises ConfigError when
+    the service-account file is not where the settings say. It was not in the
+    list, and this call is made before the menu loop starts - so the console
+    died with a traceback rather than opening, and the one command that
+    explains the problem is the one it could not offer (2026-08-23)."""
+    from geelark_farm.config import ConfigError
+
+    monkeypatch.setattr(ui, "build_client", lambda s: object())
+    monkeypatch.setattr(ui.Book, "open", staticmethod(
+        lambda s: (_ for _ in ()).throw(ConfigError("no service-account file"))))
+
+    ui.sync_on_startup(SimpleNamespace(sheet_id="abc", state_dir="/nowhere",
+                                       artifact_dir="/nowhere",
+                                       build_budget_seconds=3600))
+
+    printed = capsys.readouterr().out
+    assert "no service-account file" in printed
+    assert "geelark verify" in printed
+
+
+def test_a_failure_nobody_named_still_leaves_the_console_open(monkeypatch,
+                                                              capsys):
+    """"Never fatal" is the whole contract, and naming the failures it
+    survives is a list that will always be one short."""
+    monkeypatch.setattr(ui, "build_client", lambda s: object())
+    monkeypatch.setattr(ui.Book, "open", staticmethod(
+        lambda s: (_ for _ in ()).throw(RuntimeError("something new"))))
+
+    ui.sync_on_startup(SimpleNamespace(sheet_id="abc", state_dir="/nowhere",
+                                       artifact_dir="/nowhere",
+                                       build_budget_seconds=3600))
+
+    assert "something new" in capsys.readouterr().out
+
+
+def test_the_dashboard_reports_a_sheet_failure_rather_than_raising():
+    """Its docstring says failures are reported and never raised, and
+    `SheetError` alone did not mean it."""
+    import inspect
+
+    source = inspect.getsource(ui.take_snapshot)
+
+    assert "except Exception" in source
+
+
+# ======================= the build's log format does not outlive the build
+def test_the_console_format_is_put_back_after_a_build():
+    """It was replaced and never restored, so every console line for the rest
+    of a session carried `[build -]` - a label for a build that is not
+    running (2026-08-23)."""
+    import io
+    import logging
+
+    from geelark_farm import builder as builder_mod
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    was = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    log = logging.getLogger("geelark_farm.pools")
+    try:
+        log.warning("before")
+        restore = builder_mod.install_build_logging()
+        log.warning("during")
+        restore()
+        log.warning("after")
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(was)
+
+    before, during, after = buffer.getvalue().splitlines()
+    assert "[build" in during
+    assert "[build" not in before
+    assert "[build" not in after
+
+
+def test_a_run_puts_the_format_back_however_it_ends():
+    """Including when a job raises, which is when a session is most likely to
+    carry on afterwards."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+
+    source = inspect.getsource(builder_mod._run_jobs)
+
+    assert "restore_logging = install_build_logging()" in source
+    assert "finally:" in source
+    assert "restore_logging()" in source
+
+
+def test_a_phone_with_no_serial_is_shown_as_unknown_not_as_none():
+    """The third place `.get(key, default)` was read as covering a present
+    null. Here `str()` keeps it from raising and prints the word None."""
+    import inspect
+
+    source = inspect.getsource(ui.phones_table)
+
+    assert 'item.get("serialNo") or "?"' in source

@@ -84,15 +84,37 @@ class BuildContextFilter(logging.Filter):
         return True
 
 
-def install_build_logging() -> None:
+def install_build_logging() -> Callable[[], None]:
+    """Stamp the console's lines with the build they came from, for a while.
+
+    Returns what undoes it. The formatter was replaced and never put back, so
+    every console line for the rest of a session carried `[build -]` - a
+    label for a build that is not running - and the console is something a
+    person leaves open across several of them (2026-08-23).
+
+    The file handler is skipped because it already carries the filter, which
+    `_configure_logging` attaches at creation for exactly this reason: its own
+    format has the timestamps, which are the point of a file.
+    """
     root = logging.getLogger()
+    changed: list[tuple[logging.Handler, logging.Formatter | None,
+                        logging.Filter]] = []
     for handler in root.handlers:
         if any(isinstance(f, BuildContextFilter) for f in handler.filters):
             continue
-        handler.addFilter(BuildContextFilter())
+        stamp = BuildContextFilter()
+        changed.append((handler, handler.formatter, stamp))
+        handler.addFilter(stamp)
         handler.setFormatter(
             logging.Formatter("%(levelname)s [build %(row)s] %(name)s: %(message)s")
         )
+
+    def restore() -> None:
+        for handler, formatter, stamp in changed:
+            handler.removeFilter(stamp)
+            handler.setFormatter(formatter)
+
+    return restore
 
 
 # A credential the service judged and rejected costs that credential and nothing
@@ -2130,7 +2152,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     settings.ensure_dirs()
     ledger = Ledger.load(settings.state_dir)
     phones.prune_ledger(client, ledger)
-    install_build_logging()
+    restore_logging = install_build_logging()
 
     total = len(jobs)
     started: set[str] = set()
@@ -2184,6 +2206,20 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                   f"({build.seconds:.0f}s)", flush=True)
         return build
 
+    try:
+        return _drive_jobs(client, settings, jobs, work=work, workers=workers,
+                           started=started, ledger=ledger, total=total,
+                           on_ready=on_ready, shutting_down=shutting_down)
+    finally:
+        # The console outlives a build and several of them, so the format the
+        # build installed must not outlive this one.
+        restore_logging()
+
+
+def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
+                total, on_ready, shutting_down) -> list[Build]:
+    """Run the jobs, one at a time or in a pool. Split out so `_run_jobs` can
+    put the logging back however this returns."""
     parallel = max(1, workers or settings.max_concurrent_phones)
     if on_ready and parallel > 1:
         log.info("--watch works on one phone at a time")
