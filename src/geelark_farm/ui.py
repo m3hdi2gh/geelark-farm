@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
@@ -35,12 +36,15 @@ from rich.table import Table
 from rich.text import Text
 
 from . import builder, codes, failures, phones
+from .accounts import AccountError
 from .api import PLAN_RATE_LIMITED, ApiError, TransportError, build_client
 from .builder import Build
-from .config import Settings
+from .config import ConfigError, Settings
 from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
 from .pools import Book
+from .proxy import ProxyError
+from .shell import ShellError
 
 # `highlight=False` because rich's default highlighter takes any plain string
 # it prints and colours the pieces it recognises - numbers, IP addresses, the
@@ -48,6 +52,8 @@ from .pools import Book
 # four colours with no meaning attached to any of them, next to a palette where
 # green, yellow and red each mean something. Every colour in this console is
 # chosen below; nothing here wants a second opinion about it.
+log = logging.getLogger(__name__)
+
 console = Console(highlight=False)
 
 OK = "green"
@@ -355,9 +361,15 @@ class _LiveTable:
                 else:
                     style, seconds = BAD, e["seconds"]
                     state = e.get("step", "failed")
+                # Escaped: `state` is the last thing a flow logged, and rich
+                # reads square brackets as markup. A stray `[/]` in one raises
+                # MarkupError from inside the draw loop - on the thread holding
+                # the display, while the workers carry on - and a `[dim]` would
+                # be swallowed along with the words around it.
                 table.add_row(str(number), e.get("email", ""),
                               e.get("phone", ""),
-                              f"[{style}]{state}[/]", f"{seconds:.0f}s")
+                              f"[{style}]{escape(state)}[/]",
+                              f"{seconds:.0f}s")
         return table
 
 
@@ -450,7 +462,10 @@ def print_new_notices(live: Live, reporter: _LiveTable) -> None:
     """Put warnings and errors above the table, where they stay readable."""
     for row, message in reporter.drain_notices():
         where = f"#{row}" if isinstance(row, int) else "run"
-        live.console.print(f"[{WARN}]{where}[/]  {message}")
+        # Escaped for the reason the table's state column is: this is a
+        # formatted log record, and an exception message carrying brackets is
+        # exactly the kind that reaches here.
+        live.console.print(f"[{WARN}]{where}[/]  {escape(message)}")
 
 
 def print_new_links(live: Live, reporter: _LiveTable) -> None:
@@ -1281,20 +1296,50 @@ def run_console(settings: Settings) -> int:
             elif choice == "8":
                 console.print(setup_view(settings))
 
-        except (ApiError, TransportError, SheetError) as exc:
-            console.print(f"[{BAD}]{exc}[/]")
+        except (ApiError, TransportError, SheetError, GSpreadError,
+                ShellError, phones.PhoneError, ProxyError, AccountError,
+                ConfigError) as exc:
+            # The same family the CLI names, which is three more than this
+            # caught: a revoked key raises GSpreadError rather than SheetError,
+            # stopping a phone raises PhoneError, and anything that reaches the
+            # device can raise ShellError. Each of them ended the session with
+            # a traceback, and a console is something you leave open for hours.
+            console.print(f"[{BAD}]{escape(str(exc))}[/]")
         except KeyboardInterrupt:
             console.print(f"\n[{DIM}]cancelled[/]")
+        except EOFError:
+            # stdin closed under a prompt inside an action. The menu's own
+            # prompt has guarded this since 2026-08-08; the prompts that
+            # `confirm_build`, `confirm_finish` and `stop_phones` ask did not,
+            # so the same closed stdin the menu handles crashed here instead.
+            # The menu below reads it too and quits, which is the right end.
+            console.print(f"\n[{DIM}]cancelled[/]")
+        except Exception as exc:                                  # noqa: BLE001
+            # Not a failure this tool has a name for, which makes it a bug in
+            # it. Said as one, kept out of the way, and the traceback goes to
+            # the log rather than over the screen - the session stays open,
+            # because losing what is on it helps nobody.
+            log.exception("the console action %r failed", choice)
+            console.print(f"[{BAD}]that did not work: {escape(str(exc))}[/]")
+            console.print(f"[{DIM}]this one is a bug - the traceback is in "
+                          f"today's log file[/]")
 
         console.print()
 
 
-def stop_all(settings: Settings) -> None:
-    """Stop every running phone."""
+def stop_all(settings: Settings, targets: list[str] | None = None) -> None:
+    """Stop every running phone.
+
+    `targets` is for a caller that has already listed them and shown the list
+    to somebody. Looking again would be a second answer to the same question,
+    and the phones stopped would not be the phones approved - which is the
+    reason `phones.reap` takes its verdicts the same way.
+    """
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir)
-    targets = [p["id"] for p in phones.listing(client)
-               if p.get("status") in (phones.RUNNING, phones.STARTING)]
+    if targets is None:
+        targets = [p["id"] for p in phones.listing(client)
+                   if p.get("status") in (phones.RUNNING, phones.STARTING)]
     if not targets:
         console.print(f"[{DIM}]nothing is running[/]")
         return
@@ -1320,7 +1365,14 @@ def stop_phones(settings: Settings) -> None:
         console.print(f"[{OK}]nothing is running[/]")
         return
 
-    loose = {phone_id for phone_id, _ in phones.reapable(client, ledger)}
+    # Kept whole, not reduced to ids. `reap` takes these back so that what it
+    # stops is what was displayed and approved - its docstring says so, and
+    # the CLI passes them; this, the only other caller and the one that
+    # actually shows a list to a person, looked again instead. A run claiming
+    # or releasing a phone in the seconds someone spends reading the question
+    # is all it takes for the two answers to differ (2026-08-23).
+    verdicts = phones.reapable(client, ledger)
+    loose = {phone_id for phone_id, _ in verdicts}
     for item in running:
         entry = ledger.get(item.get("id"))
         who = (f"[{DIM}]{entry.label}[/]" if entry and item["id"] not in loose
@@ -1336,10 +1388,10 @@ def stop_phones(settings: Settings) -> None:
         + ", or [n]othing",
         choices=["a", "u", "n"] if loose else ["a", "n"], default="n")
     if choice == "a":
-        stop_all(settings)
+        stop_all(settings, targets=[item["id"] for item in running])
     elif choice == "u":
-        phones.reap(client, ledger)
-        console.print(f"[{OK}]stopped {len(loose)}[/]")
+        stopped = phones.reap(client, ledger, verdicts=verdicts)
+        console.print(f"[{OK}]stopped {stopped}[/]")
 
 
 #: What each key of a sync report means, in the order a person would want to

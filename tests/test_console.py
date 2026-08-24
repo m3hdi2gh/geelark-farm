@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
+from types import SimpleNamespace
 
 from rich.console import Console, Group
 
@@ -806,3 +807,122 @@ def test_a_dead_proxy_is_named_once_not_twice():
     assert named, "the warning moved - update this test with it"
     # The name first. `resource.label` alone is what said it twice.
     assert all(arg.startswith("resource.name") for arg in named), named
+
+
+# ------------------------------- what is stopped is what was approved
+def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
+    """`reap` takes its verdicts back so that what it stops is what was
+    displayed - its docstring says so, and the CLI passes them. This, the only
+    other caller and the one that actually shows a list to a person, looked
+    again instead. A run claiming or releasing a phone in the seconds someone
+    spends reading the question is all it takes (2026-08-23)."""
+    import geelark_farm.ui as ui_mod
+
+    shown = [("P1", "not in the ledger"), ("P2", "already released")]
+    looks = {"n": 0}
+
+    def reapable(client, ledger):
+        looks["n"] += 1
+        # A second answer, different from the first - which is the whole point.
+        return shown if looks["n"] == 1 else [("P9", "arrived since")]
+
+    reaped = {}
+    monkeypatch.setattr(ui_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(ui_mod.Ledger, "load",
+                        staticmethod(lambda d: SimpleNamespace(
+                            get=lambda i: None)))
+    monkeypatch.setattr(ui_mod.phones, "listing", lambda c: [
+        {"id": "P1", "serialNo": "801", "status": ui_mod.phones.RUNNING},
+        {"id": "P2", "serialNo": "802", "status": ui_mod.phones.RUNNING},
+    ])
+    monkeypatch.setattr(ui_mod.phones, "reapable", reapable)
+    monkeypatch.setattr(ui_mod.phones, "reap",
+                        lambda c, l, verdicts=None, dry_run=False:
+                        reaped.setdefault("got", verdicts) or len(verdicts or []))
+    monkeypatch.setattr(ui_mod.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
+
+    ui_mod.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+
+    assert reaped["got"] == shown
+
+
+def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
+    """Same rule for the other branch: `stop_all` listed a second time."""
+    import geelark_farm.ui as ui_mod
+
+    monkeypatch.setattr(ui_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(ui_mod.Ledger, "load",
+                        staticmethod(lambda d: SimpleNamespace(
+                            get=lambda i: None)))
+    monkeypatch.setattr(ui_mod.phones, "reapable", lambda c, l: [])
+    monkeypatch.setattr(ui_mod.phones, "listing", lambda c: [
+        {"id": "P1", "serialNo": "801", "status": ui_mod.phones.RUNNING},
+    ])
+    monkeypatch.setattr(ui_mod.Prompt, "ask", staticmethod(lambda *a, **k: "a"))
+
+    asked = {}
+    monkeypatch.setattr(ui_mod, "stop_all",
+                        lambda s, targets=None: asked.setdefault("t", targets))
+
+    ui_mod.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+
+    assert asked["t"] == ["P1"]
+
+
+# ------------------------------------------- text from a log line is text
+def test_a_stray_closing_tag_does_not_bring_the_table_down():
+    """`state` is the last thing a flow logged, and rich reads square brackets
+    as markup. A stray `[/]` raises MarkupError from inside the draw loop - on
+    the thread holding the display, while the workers carry on."""
+    reporter = ui.BuildReporter(total=1)
+    reporter.start(1, 1)
+    reporter.note(1, "on screen: [/] and other things")
+
+    rendered = _plain(reporter.render())
+
+    assert "[/]" in rendered
+
+
+def test_a_style_name_in_a_message_is_not_eaten():
+    reporter = ui.BuildReporter(total=1)
+    reporter.start(1, 1)
+    reporter.note(1, "the app said [dim] to nobody")
+
+    assert "[dim]" in _plain(reporter.render())
+
+
+def _plain(renderable) -> str:
+    import io
+
+    from rich.console import Console
+    buffer = io.StringIO()
+    Console(file=buffer, width=200, highlight=False).print(renderable)
+    return buffer.getvalue()
+
+
+# ------------------------------------------------ the session stays open
+def test_every_failure_the_cli_names_is_named_here_too():
+    """A revoked key raises GSpreadError rather than SheetError, stopping a
+    phone raises PhoneError, and anything reaching the device raises
+    ShellError. Each of them ended the session with a traceback, and a console
+    is something you leave open for hours."""
+    import inspect
+
+    source = inspect.getsource(ui.run_console)
+
+    for name in ("GSpreadError", "ShellError", "PhoneError", "ProxyError",
+                 "AccountError", "ConfigError", "ApiError", "TransportError",
+                 "SheetError"):
+        assert name in source, f"{name} still ends the session"
+
+
+def test_a_bug_is_reported_without_closing_the_console():
+    """Not a failure this tool has a name for, which makes it one of its own.
+    Losing what is on the screen helps nobody."""
+    import inspect
+
+    source = inspect.getsource(ui.run_console)
+
+    assert "except Exception" in source
+    assert "log.exception" in source
+    assert "except EOFError" in source
