@@ -307,8 +307,12 @@ def test_the_settle_wait_answers_an_interrupt(monkeypatch):
         phones.wait_until_running(object(), "P1", settle=30,
                                   cancelled=cancelled)
 
-    # It gave up inside the settle instead of sleeping the whole of it.
-    assert sum(slept) < 30
+    # It gave up inside the settle, which is what `asked` twice proves: once
+    # at the top of the loop, once by the settle itself. `sum(slept) < 30` was
+    # here and asserted nothing - the settle never sleeps before its first
+    # check, so it was reading `0 < 30` (2026-08-23).
+    assert asked["n"] == 2
+    assert slept == []
 
 
 def test_the_settle_still_settles_when_nothing_is_cancelling(monkeypatch):
