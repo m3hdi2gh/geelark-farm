@@ -75,6 +75,24 @@ AVAILABLE = frozenset({""})
 # What a resource's Status becomes when the build it served succeeded.
 SPENT = "ready"
 
+#: How much of a note any tab keeps. One number, because the Phones tab, the
+#: History tab and a resource row are read beside each other, and a sentence
+#: should not be cut at three different lengths depending on where it landed.
+NOTE_LIMIT = 500
+
+
+def clip(value: str, limit: int = NOTE_LIMIT) -> str:
+    """Shorten a cell, and say that it was shortened.
+
+    The Phones tab and History are not pools, so `Pool._set` does not reach
+    them; they cut with a plain slice, which ends a note mid-word and a
+    `Steps` cell mid-screen-name with nothing to show for it.
+    """
+    if len(value) <= limit:
+        return value
+    return value[:limit - 1].rstrip() + "…"
+
+
 
 @dataclass
 class Resource:
@@ -408,7 +426,7 @@ class Pool:
     #: writing one - retire, release, set_aside, spend - passed the text
     #: straight through, so the guard held on the path that happened to have
     #: it and nowhere else. Here instead, where every one of them arrives.
-    NOTE_LIMIT = 500
+    NOTE_LIMIT = NOTE_LIMIT
 
     def _set(self, resource: Resource, fields: dict[str, str]) -> None:
         payload = []
@@ -669,8 +687,15 @@ class ProxyPool(Pool):
         side of it that is demonstrably working.
         """
         shared = "," in serials
+        # `change ip` survives. Un-marking is meant for `dead`, where a live
+        # phone behind the exit contradicts the row outright; this one is an
+        # instruction waiting for somebody to change an address in the
+        # vendor's panel, and a phone being on it does not make that done.
+        # The serial is still recorded, so the tab says both true things.
+        keep = self.status_of(resource) == self.needs_new_ip
         self._set(resource, {
-            self.status_column: self.spent_status,
+            self.status_column: (self.needs_new_ip if keep
+                                 else self.spent_status),
             self.serial_column: serials,
             self.note_column: (
                 f"Shared by phones {serials} - a build ran out of free exits "
@@ -779,8 +804,6 @@ class PhoneLog:
 
     tab = PHONES_TAB
 
-    #: What a run writes here. Three, because three is how many the reader acts
-    #: on differently - see builder.possible_statuses.
     #: What the App column says when the target app is on the device. The
     #: third step of three, and the only one the row did not record: `Gmail`
     #: says Google is signed in and `GPT Account` says the app account is, so
@@ -802,12 +825,47 @@ class PhoneLog:
     NO = "✗"
     INSTALLED = YES
 
+    #: The three columns the marks above appear in. `said` is for these and
+    #: only these: it is a display convention, and applying it to every cell
+    #: means a `\u2717` typed into Status or Note reads as an empty one.
+    STEP_COLUMNS = ("Gmail", "GPT Account", APP_COLUMN)
+
+    #: Columns Sheets fills in on its own. Putting checkboxes on one writes
+    #: `FALSE` into every row of the grid, so "is this row blank" has to know
+    #: to ignore an untouched box - see `Pool._has_content`, where the same
+    #: rule already lives and where 29 empty rows became 29 broken ones
+    #: without it (2026-08-22). None here yet; the rule is, so the first tick
+    #: added to this tab does not have to rediscover it.
+    checkbox_columns: frozenset[str] = frozenset()
+
     @classmethod
     def said(cls, value: str) -> str:
         """The address a cell holds, or "" if it says the step never happened."""
         value = (value or "").strip()
         return "" if value == cls.NO else value
 
+    def _cells(self, line: list) -> dict[str, str]:
+        return {name: (line[i].strip() if i < len(line) else "")
+                for name, i in self._index.items()}
+
+    def _typed_rows(self, what: str):
+        """Every row of the tab somebody actually typed, as (row, cells).
+
+        The three readers below each walked the whole tab with their own copy
+        of this, so a rule about what counts as a row had to be remembered
+        three times - and the checkbox rule that `Pool` learned in August was
+        remembered in none of them.
+        """
+        raw = read_values(self._ws, self._lock, what=what)
+        for offset, line in enumerate(raw[1:], start=2):
+            cells = self._cells(line)
+            if any(value for name, value in cells.items()
+                   if name not in self.checkbox_columns
+                   or value.strip().upper() == "TRUE"):
+                yield offset, cells
+
+    #: What a run writes in `Status`. Three, because three is how many the
+    #: reader acts on differently - see builder.possible_statuses.
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
     INCOMPLETE = "incomplete"  # anything else; the Note says what happened
@@ -869,16 +927,10 @@ class PhoneLog:
 
         `building` is excluded: a run may be holding it right now.
         """
-        rows = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
-        for offset, line in enumerate(rows[1:], start=2):
-            if not any(line):
-                continue
-
-            def cell(name: str, line: list = line) -> str:
-                index = self._index.get(name)
-                return (line[index].strip()
-                        if index is not None and index < len(line) else "")
+        for offset, cells in self._typed_rows("the Phones tab"):
+            def cell(name: str, cells: dict = cells) -> str:
+                return cells.get(name, "")
 
             # `building` means a run holds it right now; `ready` means there
             # is nothing left to do. Everything else is a candidate, whatever
@@ -924,16 +976,10 @@ class PhoneLog:
         Read every time rather than cached: the whole point of the column is
         that it is edited by hand between runs.
         """
-        rows = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
-        for offset, line in enumerate(rows[1:], start=2):
-            if not any(line):
-                continue
-
-            def cell(name: str, line: list = line) -> str:
-                index = self._index.get(name)
-                return (line[index].strip()
-                        if index is not None and index < len(line) else "")
+        for offset, cells in self._typed_rows("the Phones tab"):
+            def cell(name: str, cells: dict = cells) -> str:
+                return cells.get(name, "")
 
             state = cell("State").lower()
             if state in (self.DONE, self.FAILED):
@@ -966,13 +1012,14 @@ class PhoneLog:
         with a third question - which proxy does it think each phone is on -
         does not need a fourth reader.
         """
-        raw = read_values(self._ws, self._lock, what="the Phones tab")
         found = []
-        for offset, line in enumerate(raw[1:], start=2):
-            if not any(line):
-                continue
-            row = {name: self.said(line[i] if i < len(line) else "")
-                   for name, i in self._index.items()}
+        for offset, cells in self._typed_rows("the Phones tab"):
+            # `said` on the step columns only. It was applied to every cell,
+            # which is a display convention leaking past the class that says
+            # it stops there - and a cross typed into Status would have read
+            # as an empty one.
+            row = {name: self.said(value) if name in self.STEP_COLUMNS else value
+                   for name, value in cells.items()}
             row["sheet_row"] = offset
             found.append(row)
         return found
@@ -1018,9 +1065,17 @@ class PhoneLog:
         self.delete_rows([sheet_row])
         return True
 
+    #: The column that holds prose. Named so `finish` can keep it to a size,
+    #: which is `Pool._set`'s job on a resource row and was nobody's here -
+    #: so the guard lived at one call site in the builder and every other way
+    #: of writing a note went past it (2026-08-23).
+    note_column = "Note"
+
     def finish(self, sheet_row: int, **fields: str) -> None:
         payload = []
         for name, value in fields.items():
+            if name == self.note_column:
+                value = clip(value)
             index = self._index.get(name)
             if index is None:
                 log.debug("no %r column in %s; skipping", name, self.tab)
@@ -1064,22 +1119,17 @@ class HistoryLog:
         self._ws = worksheet
         self._lock = lock
 
+    #: Prose columns, kept to a size for the reason `PhoneLog` keeps its Note
+    #: to one: a row of this tab is read beside the others, and `Steps` cut
+    #: mid-screen-name says less than one that says it was cut.
+    LONG_COLUMNS = ("Note", "Steps")
+
     def append(self, **fields: str) -> None:
-        row = [str(fields.get(name, "")) for name in self.HEADERS]
+        row = [clip(str(fields.get(name, "")))
+               if name in self.LONG_COLUMNS else str(fields.get(name, ""))
+               for name in self.HEADERS]
         with self._lock:
             self._ws.append_row(row, value_input_option="RAW")
-
-
-#: How a cell that is too long is shortened, everywhere one is.
-#:
-#: The Phones tab and History are not pools, so `_set` does not reach them and
-#: they cut with a plain slice - which ends a note mid-word and a `Steps` cell
-#: mid-screen-name, with nothing to say it was cut. One function, so the two
-#: halves of the same sheet do not shorten a sentence in two different ways.
-def clip(value: str, limit: int) -> str:
-    if len(value) <= limit:
-        return value
-    return value[:limit - 1].rstrip() + "…"
 
 
 def _make_checkbox(worksheet, position: int) -> None:
@@ -1311,6 +1361,7 @@ class Book:
                     for row in grid[1:]]
 
         payload = []
+        deepest = 0
         for column, values in wanted.items():
             if column not in head:
                 continue
@@ -1326,6 +1377,7 @@ class Book:
             # tail of the old one behind, still selectable.
             for offset in range(max(len(grid) - 1, len(values))):
                 value = values[offset] if offset < len(values) else ""
+                deepest = max(deepest, offset + 2)
                 payload.append({"range": f"{letter}{offset + 2}",
                                 "values": [[value]]})
         if payload:
@@ -1335,7 +1387,12 @@ class Book:
                 # flow growing one new reason is all it takes. The Phones tab
                 # lost 28 phones to the row version of this before anything
                 # noticed (2026-08-21).
-                deepest = max(int(item["range"][1:]) for item in payload)
+                #
+                # `deepest` is counted as the ranges are built rather than
+                # parsed back out of them: `int("A2"[1:])` reads 2 and
+                # `int("AA2"[1:])` raises, so re-deriving a number the loop
+                # was holding would fail on the twenty-seventh column of a tab
+                # this one is free to grow.
                 short = deepest - self._lists.row_count
                 if short > 0:
                     self._lists.add_rows(short)
