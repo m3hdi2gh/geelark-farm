@@ -1461,6 +1461,15 @@ def apply_marks(settings: Settings) -> None:
         console.print(f"[{DIM}]no phone is marked done or failed; syncing the "
                       f"tabs against the panel[/]")
 
+    # The same sync the console runs on the way in, and for the same reasons.
+    # This call had neither of these two arguments, so `Update the sheet` did
+    # strictly less than opening the console does: it left behind the rows a
+    # dead run was holding and the page dumps of phones that no longer exist.
+    # Both were reported on the dashboard as things needing a hand - and the
+    # action named "make all four tabs agree with the panel" was the one place
+    # that would not do it (2026-08-25).
     show_sync(builder.sync_sheet(build_client(settings), book,
                                  Ledger.load(settings.state_dir),
-                                 apply_marks=apply))
+                                 apply_marks=apply,
+                                 artifact_dir=settings.artifact_dir,
+                                 stale_claim_seconds=settings.build_budget_seconds))
