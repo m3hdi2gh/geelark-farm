@@ -650,6 +650,96 @@ def test_a_proxy_with_no_port_id_is_never_refreshed(device, settings, drive, sx)
     assert device.proxies_set == ["10.0.0.1"]
 
 
+# ------------------------------------- the halves of a refresh that go wrong
+def _refreshable(exit_ip="9.9.9.9", port_id="100"):
+    """A book whose first proxy row is one sx.org could refresh."""
+    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
+    row = book.proxies._rows[0]
+    book.proxies._set(row, {"Port ID": port_id, "Last Exit IP": exit_ip})
+    return book, row
+
+
+def _keyed(settings, key="KEY"):
+    return settings.__class__(**{**settings.__dict__, "sxorg_api_key": key})
+
+
+def test_without_a_key_the_vendor_is_not_asked(settings, sx):
+    """`_refreshed` is reached before anything checks the key, and sx.org's own
+    refusal for a missing one would still cost a round trip."""
+    book, row = _refreshable()
+
+    assert builder._refreshed(None, _keyed(settings, ""), book, row) is False
+    assert sx == []
+
+
+def test_a_vendor_that_refuses_costs_none_of_the_day_s_allowance(settings,
+                                                                 monkeypatch):
+    """Three a day is the whole allowance. Counting a refresh that never
+    happened spends one of them on nothing, and the third real one of the day
+    is then refused by us rather than by the vendor."""
+    def refuse(key, port_id):
+        raise builder.sxorg.SxError("proxy not found")
+
+    monkeypatch.setattr(builder.sxorg, "refresh", refuse)
+    book, row = _refreshable()
+
+    assert builder._refreshed(None, _keyed(settings), book, row) is False
+    assert not row.values.get("Last Refresh"), "it counted a refresh that failed"
+
+
+def test_a_proxy_that_stops_answering_after_a_refresh_is_not_a_new_exit(
+        settings, sx, monkeypatch):
+    """The address cannot be read, so there is nothing to say it moved.
+    Reporting True here sends the build back through an exit it has no
+    evidence about, on the strength of a call that half worked."""
+    def dead(*a, **k):
+        raise builder.proxy_mod.ProxyError("is unusable: Proxy connection failed")
+
+    monkeypatch.setattr(builder.proxy_mod, "check", dead)
+    book, row = _refreshable()
+
+    assert builder._refreshed(None, _keyed(settings), book, row) is False
+
+
+def test_the_allowance_is_spent_even_when_the_check_afterwards_fails(
+        settings, sx, monkeypatch):
+    """The vendor did the work whatever happened next. A count that tracks only
+    the refreshes we could confirm hands them a fourth request tomorrow
+    morning and is surprised by the refusal."""
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            builder.proxy_mod.ProxyError("no answer")))
+    book, row = _refreshable()
+
+    builder._refreshed(None, _keyed(settings), book, row)
+
+    assert row.values["Last Refresh"].endswith(" x1")
+    assert sx == ["100"]
+
+
+def test_a_refresh_that_moved_the_address_is_a_new_exit(settings, sx,
+                                                        monkeypatch):
+    """The one that returns True, and the reason any of this exists."""
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "8.8.8.8"})
+    book, row = _refreshable(exit_ip="9.9.9.9")
+
+    assert builder._refreshed(None, _keyed(settings), book, row) is True
+    assert row.values["Last Exit IP"] == "8.8.8.8"
+
+
+def test_an_exit_with_no_recorded_address_is_trusted_after_a_refresh(
+        settings, sx, monkeypatch):
+    """Nothing to compare against is not evidence the address is the same. A
+    row that has never been checked would otherwise be refused a refresh it
+    just paid for."""
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda *a, **k: {"outboundIP": "8.8.8.8"})
+    book, row = _refreshable(exit_ip="")
+
+    assert builder._refreshed(None, _keyed(settings), book, row) is True
+
+
 # ------------------------------------------------- what must never go back
 def test_a_signed_in_gmail_is_kept_even_when_the_build_fails(device, settings, drive):
     """It is on that phone whatever happens next. Releasing it would sign one

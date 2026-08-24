@@ -64,6 +64,23 @@ class SxError(Exception):
     """The vendor refused, or could not be reached."""
 
 
+def _scrubbed(text: str, api_key: str) -> str:
+    """Take the key back out of anything about to be reported.
+
+    This vendor wants its key in the query string - every one of its nineteen
+    endpoints does - and `requests` puts the whole URL, query and all, into the
+    text of a connection error:
+
+        Max retries exceeded with url: /v2/proxy/refresh/100?apiKey=<the key>
+
+    `_refreshed` logs that text, so one unreachable-host moment would write
+    SXORG_API_KEY in clear into the day's log file - the file that gets pasted
+    into a chat window when something needs looking at. Nothing had ever hit
+    it, so the key had not leaked yet (checked across every log, 2026-08-25).
+    """
+    return text.replace(api_key, "***") if api_key else text
+
+
 def refresh(api_key: str, port_id: str | int) -> None:
     """Give one proxy a new exit address, keeping its host and credentials.
 
@@ -78,13 +95,16 @@ def refresh(api_key: str, port_id: str | int) -> None:
         response = requests.get(f"{BASE}/v2/proxy/refresh/{port_id}",
                                 params={"apiKey": api_key}, timeout=TIMEOUT)
     except requests.RequestException as exc:
-        raise SxError(f"could not reach sx.org: {exc}") from exc
+        # Not `from exc`: the cause carries the same unscrubbed URL, and a
+        # traceback anywhere would print it under "the direct cause of".
+        raise SxError(
+            f"could not reach sx.org: {_scrubbed(str(exc), api_key)}") from None
 
     try:
         data = response.json()
     except ValueError:
         raise SxError(f"sx.org answered {response.status_code} with "
-                      f"{response.text[:120]!r}") from None
+                      f"{_scrubbed(response.text[:120], api_key)!r}") from None
 
     if not data.get("success"):
         # "proxy not found" is the one worth recognising: it means this port id
