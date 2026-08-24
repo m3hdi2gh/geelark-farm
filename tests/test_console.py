@@ -1032,3 +1032,63 @@ def test_a_phone_with_no_serial_is_shown_as_unknown_not_as_none():
     source = inspect.getsource(ui.phones_table)
 
     assert 'item.get("serialNo") or "?"' in source
+
+
+# ------------------------------------- every sync that acts frees what is stuck
+def _sync_calls(module, function: str):
+    """The `sync_sheet(...)` calls inside one function, as keyword names."""
+    tree = ast.parse(pathlib.Path(module.__file__).read_text(encoding="utf-8"))
+    owner = next(node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef) and node.name == function)
+    def named(call):
+        # `builder.sync_sheet(...)` from ui.py, bare `sync_sheet(...)` inside
+        # builder.py itself - the same call, two node shapes.
+        return getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+
+    return [{kw.arg for kw in node.keywords}
+            for node in ast.walk(owner)
+            if isinstance(node, ast.Call) and named(node) == "sync_sheet"]
+
+
+def test_every_sync_that_acts_puts_back_what_a_dead_run_was_holding():
+    """`stale_claim_seconds` is what frees a credential a killed run left
+    claimed, and it is off unless the caller asks for it.
+
+    Three of the four callers that act asked. `Update the sheet` did not - so
+    the action named "make all four tabs agree with the panel" was the only
+    one that left rows stuck as `in_use`, while the dashboard went on counting
+    them and telling the operator to free them by hand (2026-08-25).
+
+    Named per function rather than swept, because the fourth caller -
+    `geelark pools` - is a report and must NOT act. That one is pinned by
+    test_a_report_does_not_delete_phones.
+    """
+    from geelark_farm import builder as builder_mod
+    from geelark_farm import ui as ui_mod
+
+    acting = [(ui_mod, "sync_on_startup"), (ui_mod, "apply_marks"),
+              (builder_mod, "run"), (builder_mod, "finish_run")]
+
+    for module, function in acting:
+        calls = _sync_calls(module, function)
+        assert calls, f"{function} no longer syncs at all"
+        for passed in calls:
+            assert "stale_claim_seconds" in passed, (
+                f"{module.__name__}.{function} syncs without freeing the rows "
+                f"a dead run left claimed")
+
+
+def test_updating_the_sheet_does_everything_opening_the_console_does():
+    """The two run the same sync, so the menu action cannot quietly do less.
+    It did: no artifact prune and no claim release, both of which the startup
+    had."""
+    from geelark_farm import ui as ui_mod
+
+    # `on_step` drives the startup spinner and says nothing about what the
+    # sync does, so it is not part of the comparison.
+    presentation = {"on_step"}
+    startup = _sync_calls(ui_mod, "sync_on_startup")[0] - presentation
+    menu = _sync_calls(ui_mod, "apply_marks")[0] - presentation
+
+    missing = startup - menu
+    assert not missing, f"`Update the sheet` skips {sorted(missing)}"
