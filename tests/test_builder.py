@@ -2508,3 +2508,66 @@ def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
     # The step that ran is still reported, and the one that died is named.
     assert outcome["deleted"] == ["1001"]
     assert outcome["incomplete"] == ["abandoned"]
+
+
+# --------------------------------- what a finished phone says it walked
+def test_a_finish_that_installs_records_that_it_did():
+    """`build_one` records the install it does and `finish_one` did not, so a
+    phone completed rather than built left no `install:` in its Steps cell
+    (2026-08-23)."""
+    import inspect
+
+    source = inspect.getsource(builder.finish_one)
+
+    assert "play_install.install(" in source
+    assert 'trails.append(("install"' in source
+
+
+def test_a_finish_may_take_the_cheap_exit_when_the_tab_names_one():
+    """`_new_exit` only tries the sx.org refresh when it has a current exit to
+    refresh. With None it always claimed a whole new proxy - while this
+    module's own rule is that a new exit is a refresh before it is a new
+    proxy."""
+    import inspect
+
+    source = inspect.getsource(builder.finish_one)
+
+    assert "find_by_name(build.proxy)" in source
+    assert "proxy_row=own_exit" in source
+
+
+def test_the_proxies_geelark_holds_are_read_past_the_first_page():
+    """The report that says GeeLark has an exit the tab has never heard of
+    silently stopped mentioning them past a hundred - the same cap that was
+    fixed in `phones.listing`, in the other place it was written."""
+    import inspect
+
+    source = inspect.getsource(builder.sync_proxies)
+
+    assert "MAX_PAGES" in source
+    assert '"page": page' in source
+
+
+def test_a_cell_that_is_cut_says_it_was_cut():
+    """The Phones tab and History are not pools, so `_set` does not reach them
+    and they cut with a plain slice - a note ending mid-word and a Steps cell
+    mid-screen-name, with nothing to say it was cut."""
+    from geelark_farm.pools import clip
+
+    assert clip("short", 10) == "short"
+    assert clip("x" * 40, 10).endswith("\u2026")
+    assert len(clip("x" * 40, 10)) == 10
+    # And no trailing space left in front of the mark.
+    assert not clip("word " + "y" * 40, 6).endswith(" \u2026")
+
+
+def test_the_fields_of_a_build_are_declared_in_one_run():
+    """`steps` sat between them, so half the fields came after a method."""
+    import ast
+    import inspect
+
+    body = ast.parse(inspect.getsource(builder.Build).lstrip()).body[0].body
+    kinds = [type(node).__name__ for node in body]
+    first_method = next(i for i, k in enumerate(kinds) if k == "FunctionDef")
+
+    assert "AnnAssign" not in kinds[first_method:]

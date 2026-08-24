@@ -1090,3 +1090,31 @@ def test_a_note_that_fits_is_left_exactly_as_it_was():
     pool.retire(row, note="Signed into phone 832.")
 
     assert row.values["Note"] == "Signed into phone 832."
+
+
+# ------------------------------------------- which exit a phone is on
+def test_a_proxy_is_found_by_the_name_the_panel_uses():
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, [
+        ["SX4", "socks5://u:p@1.2.3.4:1080", "", "", "", "", ""],
+        ["SX9", "socks5://u:p@5.6.7.8:1080", "", "", "", "", ""],
+    ]), PROXY_HEADERS, threading.Lock())
+    pool.load()
+
+    assert pool.find_by_name("SX9").sheet_row == 3
+    assert pool.find_by_name("sx4").sheet_row == 2      # however it is typed
+
+
+def test_two_rows_with_one_name_answer_nothing():
+    """Ambiguity answers None on purpose: the caller uses this to decide which
+    exit a phone is on, and the wrong row means refreshing an address some
+    other phone is using - spending one of its three a day and moving an exit
+    nobody asked to move."""
+    pool = ProxyPool(FakeWorksheet(PROXY_HEADERS, [
+        ["SX4", "socks5://u:p@1.2.3.4:1080", "", "", "", "", ""],
+        ["SX4", "socks5://u:p@5.6.7.8:1080", "", "", "", "", ""],
+    ]), PROXY_HEADERS, threading.Lock())
+    pool.load()
+
+    assert pool.find_by_name("SX4") is None
+    assert pool.find_by_name("") is None
+    assert pool.find_by_name("nothing like it") is None

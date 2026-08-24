@@ -69,7 +69,11 @@ from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
-from .pools import Book, Resource
+from .pools import Book, Pool, Resource, clip
+
+#: What a cell this module writes is shortened to. The pools' own limit, so
+#: the Phones tab and a resource row cut at the same place.
+NOTE_LIMIT = Pool.NOTE_LIMIT
 
 log = logging.getLogger(__name__)
 
@@ -182,6 +186,26 @@ class Build:
     #: same shape, and formatting early throws away the choice.
     trails: list[tuple[str, list[str]]] = field(default_factory=list)
 
+    # True when this build's phone could not be confirmed stopped. The summary
+    # must never claim nothing is billing while this is set.
+    still_running: bool = False
+    #: Whether this phone ended up on an exit another phone is also using. The
+    #: pool ran dry and the build borrowed rather than stopping; the note says
+    #: so, because two accounts arriving from one address is a thing to know.
+    shared_exit: bool = False
+    #: Every credential this build gave up on, as (address, reason, service).
+    #: Kept as parts rather than a formatted string because the two readers
+    #: want different words for it: the terminal summary wants the reason
+    #: token, which is what you grep the logs for, and the sheet wants the
+    #: sentence.
+    #:
+    #: The service is carried because this list holds both kinds - the Gmails
+    #: the Google phase worked through and the app accounts the ChatGPT phase
+    #: did - and three of the reasons can come from either. Without it every
+    #: one of them was rendered as Google's doing, so an app account OpenAI
+    #: refused was reported to the operator as a Google refusal (2026-08-20).
+    tried: list[tuple[str, str, str]] = field(default_factory=list)
+
     @property
     def steps(self) -> str:
         """The path this build walked, as one cell.
@@ -206,25 +230,6 @@ class Build:
                 last, count = name, 1
             parts.append(f"{phase}: " + " > ".join(run))
         return " | ".join(parts)
-    # True when this build's phone could not be confirmed stopped. The summary
-    # must never claim nothing is billing while this is set.
-    still_running: bool = False
-    #: Whether this phone ended up on an exit another phone is also using. The
-    #: pool ran dry and the build borrowed rather than stopping; the note says
-    #: so, because two accounts arriving from one address is a thing to know.
-    shared_exit: bool = False
-    #: Every credential this build gave up on, as (address, reason, service).
-    #: Kept as parts rather than a formatted string because the two readers
-    #: want different words for it: the terminal summary wants the reason
-    #: token, which is what you grep the logs for, and the sheet wants the
-    #: sentence.
-    #:
-    #: The service is carried because this list holds both kinds - the Gmails
-    #: the Google phase worked through and the app accounts the ChatGPT phase
-    #: did - and three of the reasons can come from either. Without it every
-    #: one of them was rendered as Google's doing, so an app account OpenAI
-    #: refused was reported to the operator as a Google refusal (2026-08-20).
-    tried: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -804,7 +809,7 @@ def _discard(client: Client, book: Book, ledger: Ledger,
     book.record_history(
         Serial=build.serial, Event="discarded",
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Steps=build.steps[:500],
+        Steps=clip(build.steps, NOTE_LIMIT),
         Note=(f"Deleted rather than kept - nothing was ever signed into it. "
               f"{outcome_of(build).capitalize()}."))
     resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
@@ -878,6 +883,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                    deadline - time.monotonic()),
                 artifact_dir=artifacts,
             )
+            build.trails.append(("install", installed.trail))
             if not installed.ok:
                 # The taxonomy's words, not the flow's. play_install writes its
                 # detail for whoever is debugging it - "on screen: [Install,
@@ -889,13 +895,22 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # is the only thing that settles it - the row may say anything.
         build.app_installed = True
 
-        # The proxy this phone already has. It is not claimed from the pool -
-        # the phone owns it - so a swap must not release it back as stock,
-        # which is why proxy_row starts as None.
+        # The proxy this phone already has, when the tab names one row and
+        # only one. Not claimed - the phone owns it - and `_session_holds` is
+        # asked with proxy_spent=True, so it is written back as still on this
+        # phone rather than released as stock.
+        #
+        # It was None, which is safe and costs the cheap path: `_new_exit`
+        # only tries the sx.org refresh when it has a current exit to refresh,
+        # so a finish refused at the edge always claimed a whole new proxy -
+        # while this module's own rule is that a new exit is a refresh before
+        # it is a new proxy. Ambiguity still answers None, which is exactly
+        # today's behaviour (2026-08-23).
+        own_exit = book.proxies.find_by_name(build.proxy)
         session = _Session(client=client, settings=settings, book=book,
                            build=build, phone_id=phone_id, artifacts=artifacts,
                            deadline=deadline, started=started,
-                           cancelled=cancelled)
+                           cancelled=cancelled, proxy_row=own_exit)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up
@@ -1295,7 +1310,7 @@ def _record(book: Book, build: Build) -> None:
         wrote = book.phones.write(
             build.serial, Status=READY if build.ok else INCOMPLETE,
             Proxy=build.proxy_name or build.proxy,
-            Gmail=said(build.gmail), Note=note[:500],
+            Gmail=said(build.gmail), Note=clip(note, NOTE_LIMIT),
             **{"GPT Account": said(build.app_account),
                "App": book.phones.YES if build.app_installed else cross},
         )
@@ -1311,7 +1326,8 @@ def _record(book: Book, build: Build) -> None:
     book.record_history(
         Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Gmail=build.gmail, Note=note[:500], Steps=build.steps[:500],
+        Gmail=build.gmail, Note=clip(note, NOTE_LIMIT),
+        Steps=clip(build.steps, NOTE_LIMIT),
         **{"GPT Account": build.app_account,
            "App": book.phones.INSTALLED if build.app_installed else ""})
 
@@ -1772,8 +1788,19 @@ def sync_proxies(client: Client, book: Book,
     known = {f"{r.proxy.host}:{r.proxy.port}:{r.proxy.username}"
              for r in book.proxies._rows if r.proxy}
     try:
-        held = (client.data("/v1/proxy/list", {"page": 1, "pageSize": 100})
-                or {}).get("list") or []
+        # Every page. It asked for the first and stopped, so past a hundred
+        # proxies the rest simply did not exist here and this report - which
+        # is the only thing that says GeeLark holds an exit the tab has never
+        # heard of - silently stopped mentioning them. The same cap that was
+        # fixed in `phones.listing`, in the other place it was written.
+        held = []
+        for page in range(1, phones.MAX_PAGES + 1):
+            batch = (client.data("/v1/proxy/list",
+                                 {"page": page, "pageSize": 100})
+                     or {}).get("list") or []
+            held += batch
+            if len(batch) < 100:
+                break
     except (ApiError, TransportError):
         held = []                       # a report, never worth failing a sync
     changed["unlisted"] = [
