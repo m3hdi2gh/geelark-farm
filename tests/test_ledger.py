@@ -8,6 +8,8 @@ the minutes.
 
 from __future__ import annotations
 
+import logging
+import pathlib
 import time
 
 import pytest
@@ -149,3 +151,79 @@ def test_a_ledger_written_by_this_version_still_round_trips(tmp_path):
     assert again.get("P1").label == "row 4 / a@b.com"
     assert again.get("P1").proxy == "h:1"
     assert again.get("P1").is_claimed
+
+
+# ================== the Windows replace window, which CI can never reach
+#
+# `_read` and `_replace` both retry PermissionError, and both were written for
+# one thing: on Windows, `os.replace` fails while any other handle has the
+# destination open - which is exactly what a second run reading the ledger is.
+# The docstrings credit a concurrency test and none existed; coverage put both
+# loops at zero, and CI cannot reach them either, because Linux does not raise
+# it. So they are driven here, with the failure supplied rather than provoked
+# (2026-08-23).
+def test_a_read_retries_the_window_and_gets_the_file(tmp_path, monkeypatch):
+    """Retrying is the whole fix: the file is either the old one or the new
+    one, never half of either."""
+    path = tmp_path / "ledger.json"
+    path.write_text("{}", encoding="utf-8")
+    tries = []
+    real = pathlib.Path.read_text
+
+    def sometimes(self, *a, **k):
+        tries.append(1)
+        if len(tries) < 3:
+            raise PermissionError("the replace has it open")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", sometimes)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda s: None)
+
+    assert Ledger._read(path) == "{}"
+    assert len(tries) == 3
+
+
+def test_a_read_that_never_gets_in_says_so(tmp_path, monkeypatch):
+    """It raises rather than answering an empty ledger, which would read as
+    "no phones exist" - the one answer that must never be guessed."""
+    path = tmp_path / "ledger.json"
+    path.write_text("{}", encoding="utf-8")
+
+    def never(self, *a, **k):
+        raise PermissionError("still held")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", never)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda s: None)
+
+    with pytest.raises(PermissionError):
+        Ledger._read(path, attempts=3)
+
+
+def test_a_write_that_never_lands_is_loud_and_leaves_no_temp(tmp_path,
+                                                             monkeypatch,
+                                                             caplog):
+    """A phone missing from the ledger is a phone `reap` cannot account for,
+    left billing with nothing tracking it - so this must not pass quietly."""
+    led = Ledger.load(tmp_path)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ledger_mod.os, "replace",
+                        lambda a, b: (_ for _ in ()).throw(
+                            PermissionError("held open")))
+
+    with caplog.at_level(logging.ERROR):
+        led.record("P1", serial="801")
+
+    assert "could not write the ledger" in caplog.text
+    assert "geelark phones" in caplog.text          # and what to do about it
+    # Nothing left behind for the next run to trip over.
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_releasing_a_phone_nothing_recorded_does_nothing(tmp_path):
+    """Not an error: `reap` releases by id and the ledger may have been lost
+    or pruned since."""
+    led = Ledger.load(tmp_path)
+
+    led.release("NEVER-SEEN", note="stopped by hand")
+
+    assert led.entries == {}

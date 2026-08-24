@@ -85,14 +85,20 @@ class Ledger:
         though nothing is wrong. Retrying is the whole fix; the file is either
         the old one or the new one, never half of either.
         """
-        for attempt in range(attempts):
+        # At least one, so the loop cannot fall through. What was here was
+        # `return ""` after it, which is reachable only with attempts=0 and
+        # would have answered an empty file - and an empty ledger reads as
+        # "no phones exist", which is the one answer that must never be
+        # guessed (2026-08-23).
+        for attempt in range(max(1, attempts)):
             try:
                 return path.read_text(encoding="utf-8")
             except PermissionError:
-                if attempt == attempts - 1:
+                if attempt == max(1, attempts) - 1:
                     raise
                 time.sleep(0.02 * (attempt + 1))
-        return ""
+        raise AssertionError(  # pragma: no cover
+            "unreachable: the loop above returns or raises")
 
     @classmethod
     def load(cls, state_dir: str | Path) -> Ledger:
