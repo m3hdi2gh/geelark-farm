@@ -731,7 +731,16 @@ def test_the_module_says_which_commands_exist_and_is_right():
 
     doc = cli_mod.__doc__ or ""
     grouped = doc.split("Commands are grouped by what they are for:")[-1]
-    named = set(re.findall(r"\b([a-z]+)\b", grouped.split('"""')[0]))
+    # Only the lines that are a group - two or more names after a label -
+    # rather than every lowercase word after the marker. Taking the words let
+    # a command mentioned in the prose below the list count as listed, which
+    # is not what the list is for.
+    named: set[str] = set()
+    for line in grouped.splitlines():
+        if not line.startswith("  ") or "  " not in line.strip():
+            continue
+        _label, _, names = line.strip().rpartition("  ")
+        named |= {n.strip() for n in names.split(",")}
 
     real = set(re.findall(r'add_parser\(\s*"([a-z-]+)"',
                           pathlib.Path("src/geelark_farm/cli.py")
