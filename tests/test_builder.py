@@ -15,6 +15,7 @@ import time
 import pytest
 
 from geelark_farm import builder, failures
+from geelark_farm.flows.play_install import Outcome as InstallOutcome
 from geelark_farm.flows.router import Outcome
 from geelark_farm.pools import (
     AppPool,
@@ -38,7 +39,11 @@ from tests.test_pools import (
 )
 
 SIGNED_IN = Outcome("success", "signed_in")
-INSTALLED = Outcome("success", "installed")
+# The install flow returns its OWN Outcome class, not the router's. Faking
+# it with the router's meant every test of the install path asserted
+# against an object the real code never returns - which is how
+# `installed.trail` passed here and killed ten builds live (2026-08-24).
+INSTALLED = InstallOutcome("success", "installed")
 
 
 def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
@@ -2571,3 +2576,59 @@ def test_the_fields_of_a_build_are_declared_in_one_run():
     first_method = next(i for i, k in enumerate(kinds) if k == "FunctionDef")
 
     assert "AnnAssign" not in kinds[first_method:]
+
+
+# ============================================================
+# 'Outcome' object has no attribute 'trail' (2026-08-24).
+# Ten builds died on it live. The suite was green throughout,
+# because the fake install returned a class the real install
+# never returns.
+# ============================================================
+
+def test_every_flow_outcome_carries_what_the_builder_reads_off_it():
+    """The builder reads `.trail`, `.ok`, `.reason` and `.artifacts` off
+    whatever a flow hands back - and the flows do not share one class. The
+    router defines an Outcome for the two sign-ins, and play_install defines
+    its own for the install.
+
+    Nothing tied the two together. Both are called `Outcome`, both have `ok`
+    and `reason`, and only one had `trail` - so the divergence was invisible
+    at every call site and in every test.
+    """
+    from geelark_farm.flows.play_install import Outcome as Install
+    from geelark_farm.flows.router import Outcome as Routed
+
+    for made in (Install("success", "installed"),
+                 Routed("success", "signed_in")):
+        for attribute in ("ok", "reason", "trail", "artifacts"):
+            assert hasattr(made, attribute), (
+                f"{type(made).__module__}.Outcome has no {attribute!r}, and "
+                f"the builder reads it off every flow outcome")
+
+
+def test_the_install_fake_is_the_class_the_real_install_returns():
+    """A fake is worth something only if it is the shape the code will meet.
+
+    This one was the router's Outcome, which has a trail; the real install
+    returns play_install's, which did not. Pinned by identity rather than by
+    duck-typing, because duck-typing is exactly what failed to notice.
+    """
+    from geelark_farm.flows import play_install
+
+    assert type(INSTALLED) is play_install.Outcome
+
+
+def test_an_install_outcome_is_recorded_without_asking_it_for_a_trail_it_lacks():
+    """The end of the story, at the line that crashed: an install outcome goes
+    into `build.trails` and the Steps cell renders without it contributing a
+    phase, because installing walks no screens.
+    """
+    build = builder.Build(index=1)
+    installed = INSTALLED
+
+    build.trails.append(("install", installed.trail))
+    build.trails.append(("google", ["password", "totp"]))
+
+    assert installed.trail == []
+    assert "install" not in build.steps
+    assert "password" in build.steps
