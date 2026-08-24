@@ -412,13 +412,35 @@ ACCOUNT_SETTINGS_LABELS = ("Account settings",)
 EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
 
 
+#: The heading the account's own address sits under on the settings page.
+#: Observed beside it on the live capture: `Parental controls`, `Email`,
+#: `mizikilak240@gmail.com`, `Appearance`.
+EMAIL_HEADING = "email"
+
+
 def account_email_on(elements: list[screen.Element]) -> str | None:
-    """The address the settings page names, or None if none is on it."""
-    for element in elements:
-        text = element.label.strip()
-        if EMAIL_TEXT.fullmatch(text):
-            return text
-    return None
+    """The address the settings page names, or None if none is on it.
+
+    The one under the `Email` heading, and only then the first one anywhere.
+    It took the first, which the docstring already called reading the Email
+    line and was not: today that page carries exactly one address, and the
+    day OpenAI puts another on it - a support link, a workspace, a second
+    section - the first one wins and this reports `app_wrong_account` about a
+    phone that is signed in perfectly correctly (2026-08-23).
+
+    This is the check that closed the weakest link in the pipeline. It should
+    not be the one that decides on whichever address it happens to meet.
+    """
+    labels = [e.label.strip() for e in elements]
+    for index, text in enumerate(labels):
+        if text.casefold() != EMAIL_HEADING:
+            continue
+        for after in labels[index + 1:index + 4]:
+            if EMAIL_TEXT.fullmatch(after):
+                return after
+    # No heading found - an older layout, or one this has not seen. Better
+    # than nothing, and it is what this always did.
+    return next((t for t in labels if EMAIL_TEXT.fullmatch(t)), None)
 
 
 def verify_account(ctx: Context) -> Outcome | None:

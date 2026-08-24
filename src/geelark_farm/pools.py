@@ -413,8 +413,8 @@ class Pool:
     def _set(self, resource: Resource, fields: dict[str, str]) -> None:
         payload = []
         for name, value in fields.items():
-            if name == self.note_column and len(value) > self.NOTE_LIMIT:
-                value = value[:self.NOTE_LIMIT - 1] + "…"
+            if name == self.note_column:
+                value = clip(value, self.NOTE_LIMIT)
             index = self._index.get(name)
             if index is None:
                 log.debug("no %r column in %s; skipping", name, self.tab)
@@ -676,6 +676,23 @@ class ProxyPool(Pool):
                 f"Shared by phones {serials} - a build ran out of free exits "
                 f"and took this one. Both accounts reach the services from "
                 f"this address." if shared else f"On phone {serials}.")})
+
+    def find_by_name(self, name: str) -> Resource | None:
+        """The row the vendor's panel calls `SX4`, or None if that is not one
+        row exactly.
+
+        Ambiguity answers None on purpose. The caller uses this to decide
+        which exit a phone is on, and acting on the wrong row would refresh an
+        address some other phone is using - spending one of its three a day
+        and moving an exit nobody asked to move. Two rows with one name is a
+        sheet to fix, not a guess to make.
+        """
+        wanted = (name or "").strip().lower()
+        if not wanted:
+            return None
+        found = [r for r in self._rows
+                 if r.proxy and r.name.strip().lower() == wanted]
+        return found[0] if len(found) == 1 else None
 
     def find_proxy(self, address: str) -> Resource | None:
         """The row for this exit, matched on host and port.
@@ -1051,6 +1068,18 @@ class HistoryLog:
         row = [str(fields.get(name, "")) for name in self.HEADERS]
         with self._lock:
             self._ws.append_row(row, value_input_option="RAW")
+
+
+#: How a cell that is too long is shortened, everywhere one is.
+#:
+#: The Phones tab and History are not pools, so `_set` does not reach them and
+#: they cut with a plain slice - which ends a note mid-word and a `Steps` cell
+#: mid-screen-name, with nothing to say it was cut. One function, so the two
+#: halves of the same sheet do not shorten a sentence in two different ways.
+def clip(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit - 1].rstrip() + "…"
 
 
 def _make_checkbox(worksheet, position: int) -> None:

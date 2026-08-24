@@ -159,7 +159,6 @@ def _reason(blob: str) -> str | None:
 
 
 # ----------------------------------------- reading the account back
-FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def elements_of(fixture: str):
@@ -496,3 +495,43 @@ def test_neither_outcome_blames_the_account():
         verdict = failures.verdict(reason)
         assert verdict.sets_aside, reason
         assert not verdict.costs_the_credential, reason
+
+# ------------------------------- whose session the settings page names
+def test_the_address_under_the_email_heading_is_the_one_read():
+    """It took the first address anywhere on the page, which the docstring
+    already called reading the Email line and was not. The day OpenAI puts a
+    second one there - a support link, a workspace - the first wins and a
+    phone signed in perfectly correctly is reported as `app_wrong_account`
+    (2026-08-23)."""
+    from geelark_farm.flows import chatgpt_login
+
+    page = _labelled(["Settings", "support@openai.com", "Parental controls",
+                      "Email", "mine@gmail.com", "Appearance"])
+
+    assert chatgpt_login.account_email_on(page) == "mine@gmail.com"
+
+
+def test_the_real_capture_still_reads_the_same_way():
+    """The layout this was written from, so the change cannot have moved it."""
+    from geelark_farm.flows import chatgpt_login
+
+    xml = (FIXTURES / "chatgpt-account-settings.xml").read_text(encoding="utf-8")
+
+    assert chatgpt_login.account_email_on(screen.parse(xml)) is not None
+
+
+def test_a_page_with_no_heading_falls_back_to_the_first_address():
+    """An older layout, or one this has not seen. Better than nothing, and it
+    is what this always did."""
+    from geelark_farm.flows import chatgpt_login
+
+    page = _labelled(["Settings", "someone@example.com", "Appearance"])
+
+    assert chatgpt_login.account_email_on(page) == "someone@example.com"
+
+
+def _labelled(texts):
+    return [screen.Element(text=t, desc="", cls="TextView", resource_id="",
+                           bounds="[0,0][10,10]", clickable=False,
+                           enabled=True, focused=False, password=False)
+            for t in texts]
