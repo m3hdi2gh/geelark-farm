@@ -2258,10 +2258,17 @@ def test_a_dead_runs_claims_are_put_back_on_the_next_sync():
     assert pool.status_of(pool._rows[1]) == pool.claimed_status
 
 
-def test_the_budget_is_what_the_sync_measures_against(monkeypatch):
-    """Not a number of its own: the build budget is the outer bound on the
-    phone a credential was claimed for, so nothing can legitimately hold one
-    past it."""
+def test_the_sync_measures_against_the_window_not_the_budget(monkeypatch):
+    """It WAS the build budget, and had to be: with no way to tell a live
+    claim from an abandoned one, the only safe answer was "longer than any run
+    could legitimately hold a credential".
+
+    A run now restamps what it holds every minute, so a stamp that has stopped
+    moving is proof on its own and the window is a number of its own. It still
+    defaults to the build budget - shortening it is only safe once every
+    machine on this sheet is refreshing - but the sync must read the window,
+    or setting it would change nothing (2026-08-25).
+    """
     import ast
     import inspect
 
@@ -2271,7 +2278,26 @@ def test_the_budget_is_what_the_sync_measures_against(monkeypatch):
                 and getattr(n.func, "id", "") == "sync_sheet")
     passed = {k.arg: ast.unparse(k.value) for k in call.keywords}
 
-    assert passed["stale_claim_seconds"] == "settings.build_budget_seconds"
+    assert passed["stale_claim_seconds"] == "settings.stale_claim_seconds"
+
+
+def test_the_window_still_defaults_to_the_build_budget(monkeypatch):
+    """An older machine on the same sheet holds a row without refreshing it.
+    Defaulting the window to anything shorter would hand that row to somebody
+    else mid-build, so the default has to be the answer that was safe before
+    the heartbeat existed."""
+    from geelark_farm.config import Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "id")
+    monkeypatch.setenv("GEELARK_API_KEY", "key")
+    monkeypatch.setenv("BUILD_BUDGET_SECONDS", "1234")
+    monkeypatch.delenv("STALE_CLAIM_SECONDS", raising=False)
+
+    assert Settings.load().stale_claim_seconds == 1234
+
+    monkeypatch.setenv("STALE_CLAIM_SECONDS", "600")
+    assert Settings.load().stale_claim_seconds == 600
+    assert Settings.load().build_budget_seconds == 1234, "the two are separate"
 
 
 # --------------------------------------------- the path a build walked
@@ -2632,3 +2658,88 @@ def test_an_install_outcome_is_recorded_without_asking_it_for_a_trail_it_lacks()
     assert installed.trail == []
     assert "install" not in build.steps
     assert "password" in build.steps
+
+
+# ------------------------------------------------- the thread that does the beating
+class Beating:
+    """A book that counts beats, and can be told to fail some of them."""
+
+    def __init__(self, fail_first=0):
+        self.beats = 0
+        self.fail_first = fail_first
+        self.started = threading.Event()
+
+    def beat(self):
+        self.beats += 1
+        self.started.set()
+        if self.beats <= self.fail_first:
+            raise RuntimeError("the sheet was unreachable")
+        return 3
+
+
+def test_a_run_refreshes_what_it_is_holding_while_it_works(monkeypatch):
+    """Nothing else moves those stamps. If this thread does not run, a long
+    build's own claims go stale underneath it and the next sync anywhere frees
+    the rows it is still using."""
+    monkeypatch.setattr(builder.Pool, "HEARTBEAT_SECONDS", 0.01)
+    book = Beating()
+
+    stop = builder._start_heartbeat(book)
+    try:
+        assert book.started.wait(timeout=5), "it never beat at all"
+    finally:
+        stop()
+
+    assert book.beats >= 1
+
+
+def test_the_beating_stops_when_the_run_does(monkeypatch):
+    """A beat that lands after the run has released everything would restamp
+    a row somebody else has since claimed."""
+    monkeypatch.setattr(builder.Pool, "HEARTBEAT_SECONDS", 0.01)
+    book = Beating()
+
+    stop = builder._start_heartbeat(book)
+    assert book.started.wait(timeout=5)
+    stop()
+
+    settled = book.beats
+    time.sleep(0.2)
+
+    assert book.beats == settled, "it went on beating after being stopped"
+
+
+def test_a_beat_that_fails_is_retried_rather_than_abandoned(monkeypatch):
+    """The dangerous failure is the quiet one: the run keeps working, the
+    stamps stop moving, and the next sync frees the rows out from under it. A
+    network blip must not do that."""
+    monkeypatch.setattr(builder.Pool, "HEARTBEAT_SECONDS", 0.01)
+    book = Beating(fail_first=2)
+
+    stop = builder._start_heartbeat(book)
+    try:
+        deadline = time.monotonic() + 5
+        while book.beats < 4 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        stop()
+
+    assert book.beats >= 4, "it gave up after the first failure"
+
+
+def test_the_run_starts_and_stops_the_heartbeat_around_the_work():
+    """Pinned at the call site: the thread is started outside the try and
+    stopped in the finally, so no path out of a run leaves it beating."""
+    import ast
+    import inspect
+
+    source = inspect.getsource(builder._run_jobs)
+    body = source[source.index("_start_heartbeat"):]
+
+    assert "stop_beating()" in body
+    # Not cleandoc: that is for docstrings and it reflows the body. A
+    # module-level function's source is already at column zero.
+    tree = ast.parse(source)
+    tries = [n for n in ast.walk(tree) if isinstance(n, ast.Try)]
+    assert any("stop_beating" in ast.unparse(node.finalbody) for node in tries), \
+        "nothing stops the heartbeat on the way out"

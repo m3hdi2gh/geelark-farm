@@ -178,6 +178,13 @@ class Pool:
     #: the Proxy tab has been using since the rotation landed.
     CLAIM_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+    #: How often a live run restamps what it is holding. The staleness window
+    #: has to be a large multiple of this: a beat can be late - a network blip,
+    #: a sheet timeout, a machine that swapped - and being late must not read
+    #: as being dead. Ten beats of margin is the rule of thumb, so a window
+    #: under ten minutes needs this lowered to match.
+    HEARTBEAT_SECONDS = 60
+
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
         self._lock = lock
@@ -185,6 +192,14 @@ class Pool:
         self._index = {name: i for i, name in enumerate(headers)}
         self._rows: list[Resource] = []
         self._claim_lock = threading.Lock()
+        #: The rows THIS process is holding right now, by sheet row. Kept so
+        #: `beat` can restamp them: a claim that is being refreshed is one a
+        #: live run still wants, and that is what tells it apart from a claim
+        #: a dead run left behind. Maintained in `_set` rather than in
+        #: `claim`/`release`, because that is the one place every path that
+        #: starts or ends a claim passes through - including any added later.
+        self._held: dict[int, Resource] = {}
+        self._held_lock = threading.Lock()
 
     # ------------------------------------------------------------- reading
     def load(self) -> None:
@@ -456,6 +471,56 @@ class Pool:
         if payload:
             batch_write(self._ws, self._lock, payload,
                         what=f"{self.tab} row {resource.sheet_row}")
+        self._note_held(resource, fields)
+
+    def _note_held(self, resource: Resource, fields: dict[str, str]) -> None:
+        """Follow the row in and out of this process's keeping.
+
+        A write that sets the status to the claimed one takes it; a write that
+        sets the status to anything else gives it back. A write that does not
+        touch the status column says nothing about either - which is what the
+        heartbeat's own write is, so beating cannot make a row look claimed.
+        """
+        if self.status_column not in fields:
+            return
+        with self._held_lock:
+            if fields[self.status_column] == self.claimed_status:
+                self._held[resource.sheet_row] = resource
+            else:
+                self._held.pop(resource.sheet_row, None)
+
+    # --------------------------------------------------------- the heartbeat
+    def beat(self) -> int:
+        """Restamp every row this process is holding, and say how many.
+
+        The stamp is what `abandoned` reads, so refreshing it is how a live
+        run says "still mine". Without it the only safe staleness window was
+        the whole build budget - an hour - because a claim younger than that
+        might belong to a run in progress. A beat every minute makes a stamp
+        ten minutes old proof that nobody is there.
+
+        One batch write for the whole pool, not one per row: a run holds three
+        rows per phone and fifteen phones at a time, and forty-five separate
+        writes a minute is a quota problem rather than a heartbeat.
+        """
+        column = self._index.get(self.claimed_at_column) if \
+            self.claimed_at_column else None
+        if column is None:
+            return 0
+        now = time.strftime(self.CLAIM_FORMAT)
+        with self._held_lock:
+            held = list(self._held.values())
+        payload = []
+        for resource in held:
+            payload.append({
+                "range": f"{a1_column(column + 1)}{resource.sheet_row}",
+                "values": [[now]],
+            })
+            resource.values[self.claimed_at_column] = now
+        if payload:
+            batch_write(self._ws, self._lock, payload,
+                        what=f"{self.tab} heartbeat")
+        return len(payload)
 
 
 class GmailPool(Pool):
@@ -1396,6 +1461,16 @@ class Book:
         """
         for pool in (self.gmails, self.proxies, self.apps):
             pool.load()
+
+    def beat(self) -> int:
+        """Say "still mine" about every row this process is holding.
+
+        Called on a timer for as long as a run is working. What it buys is the
+        staleness window: a claim nobody is refreshing is a claim nobody is
+        using, whatever the build budget says.
+        """
+        return sum(pool.beat()
+                   for pool in (self.gmails, self.proxies, self.apps))
 
     def release_stuck(self) -> int:
         """Free every row a dead run left claimed. Reported rather than done

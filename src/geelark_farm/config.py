@@ -153,6 +153,20 @@ class Settings:
     # accounts on one phone, which is the point of it, so this has to cover
     # more than one pass of the steps.
     build_budget_seconds: int
+    #: How long a claim on a Gmail, an exit or an app account may go without
+    #: being refreshed before the sync puts it back.
+    #:
+    #: It used to BE `build_budget_seconds`, because without a heartbeat the
+    #: only safe answer was "longer than any run could legitimately hold one".
+    #: A live run now restamps what it holds every `HEARTBEAT_SECONDS`, so a
+    #: stamp that has stopped moving means the holder is gone whatever the
+    #: budget is - and the wait can be minutes instead of an hour.
+    #:
+    #: The default is still the build budget, deliberately. Shortening it is
+    #: only safe once EVERY machine that touches this sheet runs a version
+    #: that beats; an older one holds a row without refreshing it, and a
+    #: shorter window would hand that row to somebody else mid-build.
+    stale_claim_seconds: int
     login_budget_seconds: int
     install_budget_seconds: int
     app_login_budget_seconds: int
@@ -186,7 +200,8 @@ class Settings:
             phone_name_prefix=_str("PHONE_NAME_PREFIX", "farm"),
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
-            build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
+            build_budget_seconds=(budget := _int("BUILD_BUDGET_SECONDS", 3600)),
+            stale_claim_seconds=_int("STALE_CLAIM_SECONDS", budget),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
             app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),

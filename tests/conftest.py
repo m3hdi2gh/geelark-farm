@@ -34,6 +34,9 @@ def _settings(**overrides) -> Settings:
         android="Android 15",
         phone_name_prefix="farm", target_package="com.example",
         max_concurrent_phones=1, build_budget_seconds=3600,
+        # Its own number now: a live run refreshes what it holds, so how long
+        # a claim may go unrefreshed no longer has to be the build budget.
+        stale_claim_seconds=3600,
         login_budget_seconds=900, install_budget_seconds=600,
         app_login_budget_seconds=600,
         api_requests_per_minute=120,
