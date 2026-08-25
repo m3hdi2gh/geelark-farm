@@ -14,6 +14,7 @@ import pytest
 from geelark_farm import screen
 from geelark_farm.accounts import Account
 from geelark_farm.flows import google_login as login
+from geelark_farm.flows.router import Outcome
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -909,3 +910,565 @@ def test_no_label_list_carries_a_spelling_it_can_never_reach():
             if len(folded) != len(set(folded)):
                 offenders.append(f"{path.name}:{node.lineno}")
     assert not offenders, f"unreachable spellings in {offenders}"
+
+
+# =====================================================================
+# The handlers themselves (2026-08-25). Everything above tests which
+# screen is recognised. What the flow then DOES on it - types, taps,
+# goes back, gives up - had no test: 53% of this module, and every
+# line of it a step against a real Google account.
+# =====================================================================
+
+class Phone:
+    """Records what was done to the device, and answers what it is asked."""
+
+    def __init__(self, *, taps_that_work=(), foreground="com.google.android.gms"):
+        self.taps_that_work = set(taps_that_work)
+        self.foreground = foreground
+        self.tapped: list[str] = []
+        self.tried: list[str] = []
+        self.keys: list[int] = []
+        self.filled: list[tuple[str, str]] = []
+        self.commands: list[str] = []
+
+    def install(self, monkeypatch):
+        def tap_label(client, phone_id, elements, label):
+            self.tried.append(label)
+            if label in self.taps_that_work:
+                self.tapped.append(label)
+                return True
+            return False
+
+        def tap_first_present(client, phone_id, elements, labels):
+            for label in labels:
+                self.tried.append(label)
+                if label in self.taps_that_work:
+                    self.tapped.append(label)
+                    return label
+            return None
+
+        def fill(ctx, element, text):
+            self.filled.append((element.cls, text))
+            return True
+
+        monkeypatch.setattr(screen, "tap_label", tap_label)
+        monkeypatch.setattr(screen, "tap_first_present", tap_first_present)
+        monkeypatch.setattr(login, "fill", fill)
+        monkeypatch.setattr(login.shell, "keyevent",
+                            lambda c, p, code: self.keys.append(code))
+        monkeypatch.setattr(login.shell, "foreground_package",
+                            lambda c, p: self.foreground)
+        monkeypatch.setattr(login.shell, "run",
+                            lambda c, p, cmd, **kw: self.commands.append(cmd))
+        monkeypatch.setattr(login.time, "sleep", lambda _s: None)
+        # The test hands the screen over directly, so re-reading the device
+        # would replace it with nothing. `submit` refreshes on purpose - it
+        # wants the buttons as they are now - and here they already are.
+        monkeypatch.setattr(login.Context, "refresh", lambda ctx: None)
+
+
+@pytest.fixture
+def phone(monkeypatch):
+    def make(**kw):
+        made = Phone(**kw)
+        made.install(monkeypatch)
+        return made
+    return make
+
+
+def input_box(*, password=False, bounds="[0,0][200,80]"):
+    return screen.Element(text="", desc="", cls="EditText", resource_id="",
+                          bounds=bounds, clickable=True, enabled=True,
+                          focused=False, password=password)
+
+
+def a_context(*elements, account=ACCOUNT) -> login.Context:
+    ctx = login.Context(client=None, phone_id="P", account=account)
+    ctx.elements = list(elements)
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+# --------------------------------------------------------------- submitting
+def test_the_form_is_advanced_by_whichever_button_this_page_calls_it(phone):
+    """Google labels it Next on one page, Verify on another, Done on the last.
+    One spelling each: `screen.find` casefolds, so `NEXT` after `Next` was a
+    second look for a label the first had already matched."""
+    device = phone(taps_that_work={"Verify"})
+    ctx = a_context()
+
+    login.submit(ctx)
+
+    assert device.tapped == ["Verify"]
+    assert device.keys == [], "it pressed enter as well as the button"
+    assert device.tried[:2] == ["Next", "Continue"], "the order changed"
+
+
+def test_a_button_scrolled_out_of_view_is_answered_with_the_enter_key(phone):
+    """The on-screen keyboard's enter key does the same thing, and a form
+    whose button is below the fold is otherwise a dead end."""
+    device = phone()
+    ctx = a_context()
+
+    login.submit(ctx)
+
+    assert device.tapped == []
+    assert device.keys == [66], "ENTER"
+
+
+# ------------------------------------------------------------ typing a field
+def test_the_address_is_typed_and_the_form_advanced(phone):
+    device = phone(taps_that_work={"Next"})
+    ctx = a_context(input_box())
+
+    assert login.act_email(ctx) is None
+    assert device.filled == [("EditText", ACCOUNT.email)]
+    assert device.tapped == ["Next"]
+
+
+def test_a_page_with_no_box_on_it_yet_is_left_for_the_next_look(phone):
+    """Returning None sends the router round again rather than typing into
+    whatever happens to be focused. The page is usually mid-render."""
+    device = phone()
+    ctx = a_context()
+
+    assert login.act_email(ctx) is None
+    assert device.filled == []
+
+
+def test_the_password_goes_in_the_masked_box_and_not_the_other_one(phone):
+    """Both are EditTexts. Typing a password into the visible one puts it on
+    screen and into the next screenshot."""
+    device = phone(taps_that_work={"Next"})
+    ctx = a_context(input_box(bounds="[0,0][200,80]"),
+                    input_box(password=True, bounds="[0,300][200,380]"))
+
+    login.act_password(ctx)
+
+    assert device.filled == [("EditText", ACCOUNT.password)]
+
+
+# ------------------------------------------------------------ the code screen
+def test_a_fresh_code_is_typed_and_submitted(phone):
+    device = phone(taps_that_work={"Verify"})
+    ctx = a_context(input_box())
+
+    assert login.act_totp(ctx) is None
+
+    typed = device.filled[0][1]
+    assert len(typed) == 6 and typed.isdigit()
+
+
+def test_an_account_with_no_authenticator_says_so_instead_of_crashing(
+        phone, tmp_path):
+    """Accounts sold without 2FA normally never reach this screen. When one
+    does, Google is asking for something the row cannot produce - and an
+    AccountError escaping into the catch-all arrives in the sheet as "error",
+    which is the least useful word available."""
+    phone()
+    no_2fa = Account(email="a@example.com", password="x", totp_secret="")
+    ctx = a_context(input_box(), account=no_2fa)
+    ctx.artifact_dir = tmp_path
+
+    out = login.act_totp(ctx)
+
+    assert out is not None
+    assert out.kind == "fatal"
+    assert out.reason == "no_authenticator"
+    assert out.artifacts, "the page it could not answer was not kept"
+
+
+# ------------------------------------------------------- choosing the factor
+def test_the_whole_sentence_is_tapped_before_the_two_words_inside_it(phone):
+    """"Google Authenticator" alone is an inner span whose centre may miss the
+    row. Most specific first is the whole point of the ordering."""
+    device = phone(taps_that_work={"Google Authenticator"})
+    ctx = a_context()
+
+    assert login.act_choose_authenticator(ctx) is None
+
+    assert device.tried[0].startswith("Get a verification code")
+    assert device.tapped == ["Google Authenticator"]
+
+
+def test_a_second_factor_this_tool_cannot_answer_is_a_named_failure(phone,
+                                                                    tmp_path):
+    """An SMS-only account is not a bug and not a retry: it is a row this
+    tool cannot use, and it should say which."""
+    phone()
+    ctx = a_context()
+    ctx.artifact_dir = tmp_path
+
+    out = login.act_choose_authenticator(ctx)
+
+    assert out.reason == "no_authenticator_option"
+    assert out.kind == "fatal"
+    assert out.artifacts
+
+
+def test_asking_for_another_way_is_one_tap_and_no_verdict(phone):
+    """It asks Google to widen the list. Pressing it while the authenticator
+    is already on screen reads as "I have nothing else" and refuses the
+    sign-in outright with "You didn't provide enough info" (measured
+    2026-07-30, twice) - which is why the guard is in the screen ranking and
+    this handler stays as simple as it looks."""
+    device = phone(taps_that_work={"Try another way"})
+    ctx = a_context()
+
+    assert login.act_try_another_way(ctx) is None
+    assert device.tapped == ["Try another way"]
+
+
+# --------------------------------------------------- backing out of an error
+def test_a_transient_error_is_answered_with_back(phone):
+    device = phone()
+    ctx = a_context()
+
+    assert login.act_go_back(ctx) is None
+    assert device.keys == [4], "BACK"
+
+
+def test_back_that_left_google_altogether_reopens_the_sign_in(phone):
+    """Back does not always return to the previous step - once it closed the
+    sign-in outright and left the phone on its home screen, where nothing
+    matched and the row was reported as unknown_screen with a launcher full of
+    app icons in its archive (2026-08-09, row 1)."""
+    device = phone(foreground="com.android.launcher3")
+    ctx = a_context()
+
+    login.act_go_back(ctx)
+
+    assert any("ADD_ACCOUNT_SETTINGS" in cmd for cmd in device.commands), (
+        "it was left on the home screen")
+
+
+def test_back_that_stayed_inside_google_is_left_alone(phone):
+    """Reopening from a page that is still the sign-in throws away the step
+    the back was for."""
+    device = phone(foreground="com.google.android.gms")
+    ctx = a_context()
+
+    login.act_go_back(ctx)
+
+    assert device.commands == []
+
+
+def test_a_device_that_will_not_say_what_is_in_front_is_not_second_guessed(
+        phone):
+    """`foreground_package` returning nothing is one refused shell call, not
+    evidence that the sign-in is gone - and reopening on that basis restarts a
+    login that was fine."""
+    device = phone(foreground="")
+    ctx = a_context()
+
+    login.act_go_back(ctx)
+
+    assert device.commands == []
+
+
+# ------------------------------------------------------------- getting there
+def test_the_sign_in_is_started_at_androids_own_entry_point(phone):
+    """The intent goes straight there rather than navigating menus whose
+    layout varies by Android skin - and Settings is force-stopped first, so it
+    opens on that page rather than wherever it was left."""
+    device = phone()
+
+    login.open_add_account(None, "P")
+
+    assert "force-stop com.android.settings" in device.commands[0]
+    assert any("ADD_ACCOUNT_SETTINGS" in cmd for cmd in device.commands)
+    assert any("com.google" in cmd for cmd in device.commands)
+
+
+# ----------------------------------------------------------- the catch-all
+def test_a_dismissible_card_is_dismissed(phone):
+    device = phone(taps_that_work={"Not now"})
+    ctx = a_context()
+
+    assert login.act_dismiss(ctx) is None
+    assert device.tapped == ["Not now"]
+
+
+def test_nothing_dismissible_is_not_an_error(phone):
+    """The router will look again; this handler is the catch-all and has no
+    verdict to give."""
+    device = phone()
+    ctx = a_context()
+
+    assert login.act_dismiss(ctx) is None
+    assert device.tapped == []
+
+
+def test_the_type_list_takes_the_google_row(phone):
+    device = phone(taps_that_work={"Google"})
+    ctx = a_context()
+
+    assert login.act_account_picker(ctx) is None
+    assert device.tapped == ["Google"]
+
+
+# ------------------------------------------- the entry point, and device truth
+class Session:
+    """A sign-in run with the device answering a script.
+
+    `accounts` is what `dumpsys account` reports, one answer per call, so
+    "not yet, not yet, there it is" can be written down.
+    """
+
+    def __init__(self, *accounts, **kw):
+        self.answers = list(accounts) or [[]]
+        self.asked = 0
+        self.opened = 0
+        self.driven = None
+        self.booted = []
+        self.kw = kw
+
+    def install(self, monkeypatch, outcome=None):
+        def device_accounts(client, phone_id, strict=True):
+            self.asked += 1
+            return (self.answers.pop(0) if len(self.answers) > 1
+                    else self.answers[0])
+
+        def drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+            self.driven = {"is_done": is_done, "budget": budget_seconds}
+            return outcome or Outcome("fatal", "never_got_there")
+
+        monkeypatch.setattr(login.shell, "device_accounts", device_accounts)
+        monkeypatch.setattr(login, "open_add_account",
+                            lambda c, p: setattr(self, "opened",
+                                                 self.opened + 1))
+        monkeypatch.setattr(login.router, "drive", drive)
+        monkeypatch.setattr(login.phones, "ensure_running",
+                            lambda c, p: self.booted.append(p))
+        monkeypatch.setattr(login.time, "sleep", lambda _s: None)
+        return self
+
+
+@pytest.fixture
+def session(monkeypatch):
+    def make(*accounts, outcome=None):
+        return Session(*accounts).install(monkeypatch, outcome=outcome)
+    return make
+
+
+def test_an_account_already_on_the_device_is_not_signed_in_again(session):
+    """The device is the only truth for this step, and it is asked before
+    anything is opened or spent. Signing in again is a second consent against
+    an account that already passed one."""
+    run = session([ACCOUNT.email.lower()])
+
+    out = login.sign_in(None, "P", ACCOUNT)
+
+    assert out.ok
+    assert out.reason == "already_signed_in"
+    assert run.opened == 0, "it opened the sign-in for an account already on"
+    assert run.driven is None, "it drove a flow with nothing to do"
+
+
+def test_the_address_is_matched_without_regard_to_case(session):
+    """`dumpsys` reports what Google stored, and the sheet holds what somebody
+    typed. Comparing them exactly signs an account in twice."""
+    run = session(["TestAccount001@Example.com".lower()])
+    shouty = Account(email="TESTACCOUNT001@EXAMPLE.COM", password="x",
+                     totp_secret=ACCOUNT.totp_secret)
+
+    assert login.sign_in(None, "P", shouty).reason == "already_signed_in"
+    assert run.opened == 0
+
+
+def test_a_different_account_on_the_device_does_not_stop_the_sign_in(session):
+    """Worth a warning - Play can refuse installs for the wrong account - and
+    not worth refusing: the phone is about to carry both."""
+    run = session([["someone.else@gmail.com"]][0])
+
+    login.sign_in(None, "P", ACCOUNT)
+
+    assert run.opened == 1, "a stranger's account stopped the flow"
+
+
+def test_a_flow_told_the_page_is_already_open_does_not_reopen_it(session):
+    """`--watch` and the app login both arrive with the page in front of them.
+    Reopening restarts from Settings and throws that away."""
+    run = session([])
+
+    login.sign_in(None, "P", ACCOUNT, already_open=True)
+
+    assert run.opened == 0
+
+
+def test_the_artifact_directory_is_made_before_anything_can_fail(session,
+                                                                 tmp_path):
+    """A flow that fails on its first screen still has to be able to keep it."""
+    session([])
+    nested = tmp_path / "artifacts" / "20260825-build1"
+
+    login.sign_in(None, "P", ACCOUNT, artifact_dir=nested)
+
+    assert nested.is_dir()
+
+
+# ---------------------------------------------------- what counts as finished
+def test_success_is_the_account_being_on_the_device(session, monkeypatch):
+    """Never what the screen said. A consent page that looks finished is not
+    an account on the device, and the difference is a phone delivered with
+    nobody signed in."""
+    run = session([], [], [ACCOUNT.email.lower()])
+    clock = [1000.0]
+    monkeypatch.setattr(login.time, "monotonic", lambda: clock[0])
+
+    login.sign_in(None, "P", ACCOUNT)          # spends the first answer
+    is_done = run.driven["is_done"]
+
+    assert is_done() is None, "it called the login finished with nobody on"
+
+    clock[0] += login.ACCOUNT_CHECK_SECONDS + 1
+    out = is_done()
+
+    assert out is not None
+    assert out.ok and out.reason == "signed_in"
+    assert ACCOUNT.email in out.detail
+
+
+def test_the_window_expires_rather_than_closing_the_question(session,
+                                                             monkeypatch):
+    """The other half of the cadence, and the half nothing held: `it asks once
+    in twenty passes` is also true of a check that never asks again. A window
+    that does not expire is a login that can only ever finish on its first
+    poll."""
+    run = session([])
+    clock = [1000.0]
+    monkeypatch.setattr(login.time, "monotonic", lambda: clock[0])
+
+    login.sign_in(None, "P", ACCOUNT)
+    is_done = run.driven["is_done"]
+    is_done()
+    asked_once = run.asked
+
+    clock[0] += login.ACCOUNT_CHECK_SECONDS + 1
+    is_done()
+
+    assert run.asked == asked_once + 1, "the window never reopened"
+
+
+def test_the_phone_is_booted_before_a_login_that_asks_for_it(session):
+    """`sign_in` talks to a device; `sign_in_on_phone` is the one that makes
+    sure there is one."""
+    run = session([ACCOUNT.email.lower()])
+
+    login.sign_in_on_phone(None, "P", ACCOUNT)
+
+    assert run.booted == ["P"]
+
+
+# ------------------------------------------------- the two boxes that had none
+def test_a_password_page_without_its_box_is_left_for_the_next_look(phone):
+    device = phone()
+    ctx = a_context(input_box(password=False))
+
+    assert login.act_password(ctx) is None
+    assert device.filled == []
+
+
+def test_a_code_page_without_its_box_is_left_for_the_next_look(phone):
+    device = phone()
+    ctx = a_context()
+
+    assert login.act_totp(ctx) is None
+    assert device.filled == []
+
+
+# ------------------------------------- what each matcher insists on as well
+def labelled(*labels, inputs=()):
+    """A context whose page carries these labels, plus any input boxes."""
+    elements = [
+        screen.Element(text=label, desc="", cls="TextView", resource_id="",
+                       bounds=f"[0,{i * 100}][200,{i * 100 + 80}]",
+                       clickable=True, enabled=True, focused=False,
+                       password=False)
+        for i, label in enumerate(labels)
+    ]
+    return a_context(*elements, *inputs)
+
+
+def matched(ctx):
+    found = next((s for s in login.SCREENS if s.match(ctx)), None)
+    return found.name if found else None
+
+
+def test_the_email_page_is_the_words_and_a_box_to_type_in():
+    """The words alone are on the confirmation page too, and typing an address
+    into whatever box is on offer is a wrong answer wearing the wrong name."""
+    assert matched(labelled("Enter your email",
+                            inputs=[input_box()])) == "email_entry"
+
+    # Same words, no box - not this screen.
+    assert matched(labelled("Enter your email")) != "email_entry"
+
+
+def test_the_account_type_list_is_the_words_and_a_google_row():
+    """"Add an account" is also the heading of a page that offers no types at
+    all while it loads. Tapping into that lands nowhere."""
+    assert matched(labelled("Add an account", "Google")) == "add_account_picker"
+    assert matched(labelled("Add an account")) != "add_account_picker"
+
+
+def test_the_method_list_is_only_taken_when_no_authenticator_is_offered():
+    """The guard that stops "Try another way" from being pressed while the
+    authenticator is on screen: Google reads that as "I have nothing else" and
+    refuses the sign-in outright with "You didn't provide enough info"
+    (measured 2026-07-30, twice)."""
+    offered = labelled("Choose how you want to sign in",
+                       "Get a verification code from the Google Authenticator app")
+    assert matched(offered) != "2fa_method_list"
+
+    # A list whose other option is neither the authenticator nor a
+    # verdict: an SMS-only list is correctly fatal, which the pair of
+    # tests around `phone_verification_required` already holds.
+    absent = labelled("Choose how you want to sign in",
+                      "Use your security key")
+    assert matched(absent) == "2fa_method_list"
+
+
+def test_a_card_is_only_dismissable_if_its_button_can_be_tapped():
+    """The same words appear as body text on pages that are not cards, and
+    tapping the middle of a paragraph does nothing but spend a visit."""
+    button = screen.Element(text="Not now", desc="", cls="Button",
+                            resource_id="", bounds="[0,0][200,80]",
+                            clickable=True, enabled=True, focused=False,
+                            password=False)
+    prose = screen.Element(text="Not now", desc="", cls="TextView",
+                           resource_id="", bounds="[0,0][200,80]",
+                           clickable=False, enabled=True, focused=False,
+                           password=False)
+
+    assert matched(a_context(button)) == "dismissable"
+    assert matched(a_context(prose)) != "dismissable"
+
+
+def test_a_fatal_page_is_handled_once_and_not_argued_with():
+    """A verdict is a verdict. Handling it a second time is a second attempt
+    against an account Google has already refused."""
+    fatal = next(s for s in login.SCREENS if s.name == "fatal")
+
+    assert fatal.max_visits == 1
+
+
+def test_the_method_list_is_chosen_from_once():
+    """Coming back to it means the choice did not take, and choosing again
+    from a list that did not respond is how a flow loops."""
+    method = next(s for s in login.SCREENS if s.name == "2fa_method_list")
+
+    assert method.max_visits == 1
+
+
+def test_an_artifact_directory_that_is_already_there_is_not_an_error(session,
+                                                                     tmp_path):
+    """The Google sign-in and the app sign-in run against one phone inside the
+    same build, into one directory."""
+    session([])
+    session([])
+
+    login.sign_in(None, "P", ACCOUNT, artifact_dir=tmp_path)
+    login.sign_in(None, "P", ACCOUNT, artifact_dir=tmp_path)   # no raise
+
+    assert tmp_path.is_dir()
