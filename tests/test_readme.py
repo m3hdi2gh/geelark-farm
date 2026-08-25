@@ -134,12 +134,11 @@ def test_it_names_every_tab_the_tool_uses():
 def test_it_names_every_column_the_tool_writes():
     """A column left out of the README is one nobody creates, and `_set` skips
     a column that is not there without saying so."""
-    from geelark_farm.verify import PORT_ID_COLUMN, REQUIRED_COLUMNS
+    from geelark_farm.verify import REQUIRED_COLUMNS
 
     for columns in REQUIRED_COLUMNS.values():
         for column in columns:
             assert f"`{column}`" in README, column
-    assert f"`{PORT_ID_COLUMN}`" in README     # the one that is optional
 
 
 def test_it_says_the_install_has_to_be_editable():

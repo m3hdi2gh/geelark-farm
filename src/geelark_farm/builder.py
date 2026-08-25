@@ -8,8 +8,8 @@
       ──►  first usable app account  ──►  sign in
              │ the account was bad  ──► take the next one, same phone,
              │                          until the pool or the budget runs out
-             │ refused at the edge  ──► new exit (refresh, else new proxy),
-             │                          same account, same "until"
+             │ refused at the edge  ──► another proxy, same account,
+             │                          same "until"
       ──►  record the phone  ──►  stop it
 
 Nothing in that loop stops at a fixed number of tries. A phone gives up only
@@ -34,14 +34,16 @@ a CAPTCHA - follows the account: Google raises one on an address whose history
 it distrusts, while the same exit signs the next account in without a murmur.
 So a CAPTCHA costs that Gmail and the next one is tried, on the same phone.
 
-**A new exit is a refresh before it is a new proxy.** sx.org will give a proxy
-a different exit address three times a day while keeping its host, port and
-credentials, so nothing on the phone has to change. Only when that allowance is
-gone, or the address comes back the same, does the build take another proxy -
-which is possible at all because `/phone/detail/update` can repoint a phone
-that already exists (`phones.set_proxy`). When no new exit can be had at all,
-the build stops and says so; the account it was carrying goes back to the pool
-untouched, because a network that would not carry the request never judged it.
+**A new exit means another proxy.** Which is possible at all because
+`/phone/detail/update` can repoint a phone that already exists
+(`phones.set_proxy`) - it was assumed for most of this project's life that a
+proxy was fixed at creation, and everything built on that assumption was
+wrong. There was a cheaper way before it: the vendor's `port` product can be
+given a new address while keeping its host and credentials, so nothing on the
+phone changes. This account holds none of those, so that branch never ran and
+is gone (2026-08-25). When no new exit can be had at all, the build stops and
+says so; the account it was carrying goes back to the pool untouched, because
+a network that would not carry the request never judged it.
 
 **A proxy is not condemned for one refusal.** It was measured across twelve
 attempts: every gateway produced both successes and rejections (2026-08-09). So
@@ -61,7 +63,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import artifacts as archive
-from . import codes, failures, phones, shell, sxorg
+from . import codes, failures, phones, shell
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
@@ -927,12 +929,11 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # asked with proxy_spent=True, so it is written back as still on this
         # phone rather than released as stock.
         #
-        # It was None, which is safe and costs the cheap path: `_new_exit`
-        # only tries the sx.org refresh when it has a current exit to refresh,
-        # so a finish refused at the edge always claimed a whole new proxy -
-        # while this module's own rule is that a new exit is a refresh before
-        # it is a new proxy. Ambiguity still answers None, which is exactly
-        # today's behaviour (2026-08-23).
+        # It was None, so a finish refused at the edge had no row to
+        # settle: the exit it was actually on went unrecorded, and the one it
+        # took instead was written back as if it had always been there.
+        # Ambiguity still answers None, which is exactly today's behaviour
+        # (2026-08-23).
         own_exit = book.proxies.find_by_name(build.proxy)
         session = _Session(client=client, settings=settings, book=book,
                            build=build, phone_id=phone_id, artifacts=artifacts,
@@ -979,57 +980,6 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         ledger.release(phone_id, note=build.status)
 
 
-def _refreshed(client: Client, settings: Settings, book: Book,
-               current: Resource) -> bool:
-    """Ask sx.org for a new exit on the proxy the phone already has.
-
-    Cheaper than another proxy in every way that matters: the host, port and
-    credentials do not change, so the phone needs no update call - only a
-    restart, which it needs anyway.
-
-    Returns whether the exit actually moved. A refresh that comes back on the
-    same address has spent one of the day's three and achieved nothing, so it
-    must not be reported as a new exit - the caller would retry into the same
-    refusal and call it a second opinion.
-    """
-    port_id = book.proxies.port_id(current)
-    if not port_id:
-        log.info("%s has no Port ID, so sx.org cannot refresh it", current.label)
-        return False
-    if not settings.sxorg_api_key:
-        log.info("SXORG_API_KEY is not set, so no proxy can be refreshed")
-        return False
-    spent = book.proxies.refreshes_today(current)
-    if spent >= sxorg.REFRESHES_PER_DAY:
-        log.info("%s has used all %d refreshes today",
-                 current.label, sxorg.REFRESHES_PER_DAY)
-        return False
-
-    before = (current.values.get("Last Exit IP") or "").strip()
-    try:
-        sxorg.refresh(settings.sxorg_api_key, port_id)
-    except sxorg.SxError as exc:
-        log.warning("sx.org would not refresh %s: %s", current.label, exc)
-        return False
-    # Recorded even if the address turns out unchanged: the allowance was spent
-    # either way, and a count that only tracks the successes will hand the
-    # vendor a fourth request tomorrow morning and be surprised.
-    book.proxies.note_refresh(current)
-
-    try:
-        after = str(proxy_mod.check(client, current.proxy).get("outboundIP") or "")
-    except (proxy_mod.ProxyError, ApiError) as exc:
-        log.warning("%s did not answer after the refresh: %s", current.label, exc)
-        return False
-    book.proxies.record_exit(current, after)
-    if before and after == before:
-        log.warning("%s refreshed to the same address (%s) - taking another "
-                    "proxy instead", current.label, after)
-        return False
-    log.info("%s refreshed: %s -> %s", current.label, before or "?", after)
-    return True
-
-
 def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
     """An exit already behind another phone, when nothing is free.
 
@@ -1066,23 +1016,20 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
               swaps: int = 0, avoid: set[str] | None = None,
               cancelled: Callable[[], bool] | None = None) -> Resource | None:
-    """Get the phone onto a different exit address, the cheapest way first.
+    """Get the phone onto a different exit address: another proxy.
 
-    The phone is stopped before anything, for two reasons that both apply
-    whichever branch is taken: GeeLark's documentation says not to call the
-    update while a phone is starting, and Android reads the proxy when the
-    network comes up - a phone left running would keep the exit just judged.
+    There used to be a cheaper branch first - sx.org can hand a proxy a new
+    address while keeping its host, port and credentials, so nothing on the
+    phone changes. It is gone: only the vendor's `port` product can do that,
+    this account holds none, and buying them is not the plan (2026-08-25).
+
+    The phone is stopped before anything: GeeLark's documentation says not to
+    call the update while a phone is starting, and Android reads the proxy
+    when the network comes up - a phone left running would keep the exit just
+    judged.
     """
     log.warning("%s - getting a different exit address", why)
     phones.stop(client, phone_id)
-
-    if current is not None and _refreshed(client, settings, book, current):
-        # Same credentials, different address: nothing on the phone changes.
-        time.sleep(5)
-        phones.ensure_running(client, phone_id,
-                              timeout=min(phones.BOOT_SECONDS, budget),
-                              cancelled=cancelled)
-        return current
 
     # Whether the exit below is one this build took or one it is standing on
     # beside another phone. They are settled in opposite ways and were told
@@ -1177,8 +1124,8 @@ def _session_holds(book: Book, session: _Session | None, *,
     # Exits a service refused this phone through. Held back rather than freed:
     # the proxy is not condemned - a refusal is per-session, which is measured -
     # but its *address* has just been turned down, and nothing here can change
-    # one, because these rows carry no `Port ID` for sx.org to refresh. Freeing
-    # it hands the next build the same address to be refused through again.
+    # one: the address is the vendor's to rotate, not ours. Freeing it hands
+    # the next build the same address to be refused through again.
     held += [(book.proxies, resource, SET_ASIDE,
               f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
               f"the exit address is the thing that was turned down. Change it "

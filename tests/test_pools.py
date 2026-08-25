@@ -36,12 +36,11 @@ PHONE_HEADERS = ["Created", "Serial", "State", "Phone ID", "Proxy",
                  "Gmail", "GPT Account", "Status", "Note"]
 
 # Columns the code still understands but this sheet no longer carries: the
-# split-out parts, for someone filling the tab by hand, and the sx.org refresh
-# hook, which needs a `Port ID` the Unlimited product does not have. Tests that
-# exercise either build their worksheet from this instead.
+# split-out parts, for someone filling the tab by hand. Tests that exercise
+# them build their worksheet from this instead.
 PROXY_HEADERS_OPTIONAL = ["Name", "Proxy String", "Host", "Port", "Username",
-                          "Password", "Port ID", "Expires", "Last Exit IP",
-                          "Last Refresh", "Used By", "Status", "Note"]
+                          "Password", "Expires", "Last Exit IP",
+                          "Used By", "Status", "Note"]
 
 SECRET = "JBSWY3DPEHPK3PXP"
 
@@ -531,7 +530,6 @@ def test_one_gateway_can_carry_more_than_one_proxy():
 
     assert pool.broken == []
     assert len(pool.available) == 3
-
 
 
 # --------------------------------------------------- keeping the dropdowns honest

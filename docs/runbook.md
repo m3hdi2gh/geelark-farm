@@ -252,12 +252,11 @@ geelark finish               # retries the app login on that phone
 ```
 
 **If it recurs on the same row, change the proxy — and delete the phone.** For
-`geelark build` handles this itself and does not need either step. It asks
-sx.org for a new exit on the proxy the phone already has — three a day per
-proxy, same host and credentials — and only takes a different proxy when that
-allowance is spent or the address comes back unchanged. Both need the Proxy
-tab's `Port ID`; the Unlimited product has none, so those proxies can only be
-replaced, not refreshed.
+`geelark build` handles this itself and does not need either step: it takes
+the next proxy and holds the refused exit back, so the same address is not
+handed to the next build. The address itself can only be changed in the
+vendor's panel — these proxies are the Unlimited product, which cannot be
+rotated through the vendor's API.
 
 Then clear that row's `phone_id` and `serial` and re-run it.
 
