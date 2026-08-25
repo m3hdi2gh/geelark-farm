@@ -93,7 +93,6 @@ def clip(value: str, limit: int = NOTE_LIMIT) -> str:
     return value[:limit - 1].rstrip() + "…"
 
 
-
 @dataclass
 class Resource:
     """One row of a resource tab, and what it turned out to be."""
@@ -626,10 +625,10 @@ class ProxyPool(Pool):
     #: than per-proxy - across twelve attempts every gateway produced both
     #: successes and rejections (2026-08-09) - so a refused exit went straight
     #: back to the pool. That is still true about the *proxy*. What it misses
-    #: is the *address*: these rows carry no `Port ID`, so nothing here can ask
-    #: sx.org for a new exit address, and the only thing that changes one is a
-    #: hand in the vendor's panel. Sending the row back unmarked hands the next
-    #: build the same address to be refused through again.
+    #: is the *address*: nothing here can ask for a new one, and the only
+    #: thing that changes one is a hand in the vendor's panel. Sending the row
+    #: back unmarked hands the next build the same address to be refused
+    #: through again.
     #:
     #: Not in `available_statuses`, so it waits. Blank the cell - or write
     #: `free` - once the address has been changed.
@@ -839,38 +838,6 @@ class ProxyPool(Pool):
                 "Free again - the phone that was behind it no longer exists."))
             freed.append(resource)
         return freed
-
-    @staticmethod
-    def port_id(resource: Resource) -> str:
-        """What sx.org needs to refresh this proxy, or "" if the row has none.
-
-        Empty is the normal case for the Unlimited product, which does not
-        appear in the vendor's port listing at all - so this being blank means
-        "cannot be refreshed", not "not filled in yet".
-        """
-        return (resource.values.get("Port ID") or "").strip()
-
-    def refreshes_today(self, resource: Resource) -> int:
-        """How much of today's allowance this proxy has already spent.
-
-        Kept in the sheet rather than in memory, because the allowance is the
-        vendor's and it does not reset when a run ends. The cell reads
-        `2026-08-11 x2`, which is also legible to whoever is looking at the tab
-        wondering why a proxy stopped being refreshed.
-        """
-        raw = (resource.values.get("Last Refresh") or "").strip()
-        date, _, count = raw.partition(" x")
-        if date.strip() != time.strftime("%Y-%m-%d"):
-            return 0
-        try:
-            return int(count)
-        except ValueError:
-            return 1                       # a date with no count is one refresh
-
-    def note_refresh(self, resource: Resource) -> None:
-        spent = self.refreshes_today(resource) + 1
-        self._set(resource,
-                  {"Last Refresh": f"{time.strftime('%Y-%m-%d')} x{spent}"})
 
 
 class PhoneLog:

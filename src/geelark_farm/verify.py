@@ -22,7 +22,6 @@ import logging
 
 from .config import ENV_FILE, Settings
 from .gsheet import SCOPES
-from .sxorg import SxError, port_count
 
 log = logging.getLogger(__name__)
 
@@ -254,68 +253,6 @@ def _stock(settings: Settings, checks: list[Check]) -> None:
 
 #: The Proxy column the cheap retry needs. Not in REQUIRED_COLUMNS, because a
 #: tab without it works - it just always takes the expensive path.
-PORT_ID_COLUMN = "Port ID"
-
-
-def _sxorg(settings: Settings, tabs: dict, checks: list[Check]) -> None:
-    """Whether the cheap way out of a refused exit can actually happen.
-
-    It needs three things, and having some of them is worse than having none,
-    because it reads like it is set up. The key alone was reported as working
-    against a Proxy tab with no Port ID column, where `_new_exit` takes the
-    fallback every single time (2026-08-17).
-
-    The third is the one this used to infer and now asks about. A missing
-    Port ID column was reported as something to go and add - and on an account
-    holding only Unlimited proxies there is nothing to put in it, because they
-    do not appear in the vendor's port listing at all. That advice sent the
-    operator to do work that cannot succeed, so the count is read from sx.org
-    before the column is mentioned (2026-08-25).
-    """
-    if not settings.sxorg_api_key:
-        checks.append(Check("sx.org", INFO,
-                            "SXORG_API_KEY not set - a refused exit takes "
-                            "another proxy instead, which is the more "
-                            "expensive of the two"))
-        return
-
-    try:
-        ports = port_count(settings.sxorg_api_key)
-    except SxError as exc:
-        checks.append(Check("sx.org", WARN,
-                            f"the key is set but sx.org would not answer "
-                            f"({_one_line(exc)})"))
-        return
-    if not ports:
-        checks.append(Check("sx.org", WARN, "\n".join([
-            "the key works, but this account has no refreshable proxies",
-            "Only the 'port' product can be given a new exit address; the "
-            "Unlimited proxies cannot, and do not appear in the vendor's "
-            "listing at all. A refused exit will always take another proxy.",
-            "Nothing to fix in the sheet - adding a Port ID column would "
-            "leave you with nothing to put in it."])))
-        return
-
-    proxy = tabs.get("Proxy")
-    try:
-        headers = {h.strip() for h in proxy.row_values(1)} if proxy else set()
-    except Exception as exc:                                  # noqa: BLE001
-        checks.append(Check("sx.org", SKIP,
-                            f"not checked - the Proxy tab could not be read "
-                            f"({_one_line(exc)})"))
-        return
-    if PORT_ID_COLUMN not in headers:
-        checks.append(Check("sx.org", WARN, "\n".join([
-            f"{ports} refreshable proxy(s) on the account, but the Proxy tab "
-            f"has no {PORT_ID_COLUMN} column",
-            "sx.org is addressed by port id, so without it a refused exit "
-            "still takes another proxy - the key achieves nothing."])))
-        return
-    checks.append(Check("sx.org", OK,
-                        f"a refused exit gets a new address on the same proxy "
-                        f"({ports} refreshable)"))
-
-
 def run_checks(settings: Settings) -> list[Check]:
     """Every check, in dependency order. Never raises.
 
@@ -362,7 +299,6 @@ def run_checks(settings: Settings) -> list[Check]:
     _tabs_and_columns(tabs, checks)
     _stock(settings, checks)
 
-    _sxorg(settings, tabs, checks)
     return checks
 
 

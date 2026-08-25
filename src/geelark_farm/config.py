@@ -129,7 +129,6 @@ class Settings:
 
     # The proxy vendor's key. Optional: without it a build simply takes the
     # next proxy instead of refreshing the one it has.
-    sxorg_api_key: str
 
     # Google Sheets input: the workbook holding the resource tabs.
     sheet_id: str
@@ -190,7 +189,6 @@ class Settings:
         return cls(
             app_id=_str("GEELARK_APP_ID", required=True),
             api_key=_str("GEELARK_API_KEY", required=True),
-            sxorg_api_key=_str("SXORG_API_KEY"),
             sheet_id=_str("GOOGLE_SHEET_ID"),
             service_account_json=_path(
                 "GOOGLE_SERVICE_ACCOUNT_JSON", "./secrets/service-account.json"

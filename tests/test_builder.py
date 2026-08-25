@@ -302,9 +302,9 @@ def test_a_refused_exit_waits_for_its_address_to_be_changed(device, settings,
                                                             drive):
     """This used to go straight back to the pool, on the measurement that a
     refusal is per-session rather than per-proxy - which is still true about
-    the proxy. It misses the address: these rows carry no `Port ID`, so nothing
-    here can ask sx.org for a new one, and freeing the row hands the next build
-    the same address to be refused through again.
+    the proxy. It misses the address: nothing here can ask for a new one, and
+    freeing the row hands the next build the same address to be refused
+    through again.
 
     Not `dead` and not a failure reason: the proxy is not condemned, it is
     waiting for a hand in the vendor's panel.
@@ -558,186 +558,6 @@ def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
     builder.run(None, settings, count=2, workers=1)
 
     assert jobs == ["finish", "finish"]
-
-
-# ------------------------------------------------------- refreshing an exit
-@pytest.fixture
-def sx(monkeypatch):
-    """sx.org answering, and a record of what it was asked for."""
-    calls: list[str] = []
-    monkeypatch.setattr(builder.sxorg, "refresh",
-                        lambda key, port_id: calls.append(str(port_id)))
-    return calls
-
-
-def with_port_ids(book, exit_ip="9.9.9.9"):
-    """Give every proxy row a Port ID and a known exit, as a refreshable proxy
-    would have. Needs PROXY_HEADERS_OPTIONAL: the live sheet dropped both
-    columns, since the Unlimited product has no Port ID to put in one."""
-    for offset, resource in enumerate(book.proxies._rows):
-        book.proxies._set(resource, {"Port ID": str(100 + offset),
-                                     "Last Exit IP": exit_ip})
-
-
-def test_a_refusal_refreshes_the_proxy_before_taking_another(device, settings,
-                                                             drive, sx,
-                                                             monkeypatch):
-    """The host, port and credentials do not change, so the phone needs no
-    update call - which makes this cheaper than another proxy in every way."""
-    seen = ["9.9.9.9", "8.8.8.8"]         # before the refresh, and after
-    monkeypatch.setattr(builder.proxy_mod, "check",
-                        lambda *a, **k: {"outboundIP": seen.pop(0)})
-    settings = settings.__class__(**{**settings.__dict__,
-                                     "sxorg_api_key": "KEY"})
-    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
-    with_port_ids(book)
-    build = drive(book, settings, google=[SIGNED_IN],
-                  app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
-
-    assert build.ok
-    assert sx == ["100"]                  # the proxy it already had
-    assert device.proxies_set == []       # no second proxy was taken
-    assert book.proxies._rows[0].values["Last Exit IP"] == "8.8.8.8"
-    assert book.proxies._rows[0].values["Last Refresh"].endswith(" x1")
-
-
-def test_a_refresh_that_lands_on_the_same_address_is_not_a_new_exit(
-        device, settings, drive, sx, monkeypatch):
-    """It spent one of the day's three and achieved nothing. Retrying into it
-    would meet the same refusal and call it a second opinion."""
-    monkeypatch.setattr(builder.proxy_mod, "check",
-                        lambda *a, **k: {"outboundIP": "9.9.9.9"})
-    settings = settings.__class__(**{**settings.__dict__,
-                                     "sxorg_api_key": "KEY"})
-    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
-    with_port_ids(book, exit_ip="9.9.9.9")
-    drive(book, settings, google=[SIGNED_IN],
-          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
-
-    assert sx == ["100"]
-    assert device.proxies_set == ["10.0.0.1"]      # fell through to the next
-
-
-def test_the_daily_allowance_is_read_from_the_sheet(device, settings, drive,
-                                                    sx, monkeypatch):
-    """It is the vendor's allowance, and it does not reset when a run ends."""
-    import time as real_time
-
-    settings = settings.__class__(**{**settings.__dict__,
-                                     "sxorg_api_key": "KEY"})
-    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
-    with_port_ids(book)
-    today = real_time.strftime("%Y-%m-%d")
-    book.proxies._set(book.proxies._rows[0],
-                      {"Last Refresh": f"{today} x{builder.sxorg.REFRESHES_PER_DAY}"})
-    drive(book, settings, google=[SIGNED_IN],
-          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
-
-    assert sx == []                                # nothing left to spend
-    assert device.proxies_set == ["10.0.0.1"]
-
-
-def test_a_proxy_with_no_port_id_is_never_refreshed(device, settings, drive, sx):
-    """The Unlimited product does not appear in the vendor's port listing, so a
-    blank Port ID means 'cannot be refreshed', not 'not filled in yet'."""
-    settings = settings.__class__(**{**settings.__dict__,
-                                     "sxorg_api_key": "KEY"})
-    book = make_book()
-    drive(book, settings, google=[SIGNED_IN],
-          app=[Outcome("fatal", "request_rejected"), SIGNED_IN])
-
-    assert sx == []
-    assert device.proxies_set == ["10.0.0.1"]
-
-
-# ------------------------------------- the halves of a refresh that go wrong
-def _refreshable(exit_ip="9.9.9.9", port_id="100"):
-    """A book whose first proxy row is one sx.org could refresh."""
-    book = make_book(proxy_headers=PROXY_HEADERS_OPTIONAL)
-    row = book.proxies._rows[0]
-    book.proxies._set(row, {"Port ID": port_id, "Last Exit IP": exit_ip})
-    return book, row
-
-
-def _keyed(settings, key="KEY"):
-    return settings.__class__(**{**settings.__dict__, "sxorg_api_key": key})
-
-
-def test_without_a_key_the_vendor_is_not_asked(settings, sx):
-    """`_refreshed` is reached before anything checks the key, and sx.org's own
-    refusal for a missing one would still cost a round trip."""
-    book, row = _refreshable()
-
-    assert builder._refreshed(None, _keyed(settings, ""), book, row) is False
-    assert sx == []
-
-
-def test_a_vendor_that_refuses_costs_none_of_the_day_s_allowance(settings,
-                                                                 monkeypatch):
-    """Three a day is the whole allowance. Counting a refresh that never
-    happened spends one of them on nothing, and the third real one of the day
-    is then refused by us rather than by the vendor."""
-    def refuse(key, port_id):
-        raise builder.sxorg.SxError("proxy not found")
-
-    monkeypatch.setattr(builder.sxorg, "refresh", refuse)
-    book, row = _refreshable()
-
-    assert builder._refreshed(None, _keyed(settings), book, row) is False
-    assert not row.values.get("Last Refresh"), "it counted a refresh that failed"
-
-
-def test_a_proxy_that_stops_answering_after_a_refresh_is_not_a_new_exit(
-        settings, sx, monkeypatch):
-    """The address cannot be read, so there is nothing to say it moved.
-    Reporting True here sends the build back through an exit it has no
-    evidence about, on the strength of a call that half worked."""
-    def dead(*a, **k):
-        raise builder.proxy_mod.ProxyError("is unusable: Proxy connection failed")
-
-    monkeypatch.setattr(builder.proxy_mod, "check", dead)
-    book, row = _refreshable()
-
-    assert builder._refreshed(None, _keyed(settings), book, row) is False
-
-
-def test_the_allowance_is_spent_even_when_the_check_afterwards_fails(
-        settings, sx, monkeypatch):
-    """The vendor did the work whatever happened next. A count that tracks only
-    the refreshes we could confirm hands them a fourth request tomorrow
-    morning and is surprised by the refusal."""
-    monkeypatch.setattr(builder.proxy_mod, "check",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            builder.proxy_mod.ProxyError("no answer")))
-    book, row = _refreshable()
-
-    builder._refreshed(None, _keyed(settings), book, row)
-
-    assert row.values["Last Refresh"].endswith(" x1")
-    assert sx == ["100"]
-
-
-def test_a_refresh_that_moved_the_address_is_a_new_exit(settings, sx,
-                                                        monkeypatch):
-    """The one that returns True, and the reason any of this exists."""
-    monkeypatch.setattr(builder.proxy_mod, "check",
-                        lambda *a, **k: {"outboundIP": "8.8.8.8"})
-    book, row = _refreshable(exit_ip="9.9.9.9")
-
-    assert builder._refreshed(None, _keyed(settings), book, row) is True
-    assert row.values["Last Exit IP"] == "8.8.8.8"
-
-
-def test_an_exit_with_no_recorded_address_is_trusted_after_a_refresh(
-        settings, sx, monkeypatch):
-    """Nothing to compare against is not evidence the address is the same. A
-    row that has never been checked would otherwise be refused a refresh it
-    just paid for."""
-    monkeypatch.setattr(builder.proxy_mod, "check",
-                        lambda *a, **k: {"outboundIP": "8.8.8.8"})
-    book, row = _refreshable(exit_ip="")
-
-    assert builder._refreshed(None, _keyed(settings), book, row) is True
 
 
 # ------------------------------------------------- what must never go back
@@ -1647,7 +1467,6 @@ def test_a_result_lands_on_its_own_row_when_a_sibling_deletes_one(
                r[PHONE_HEADERS.index("Status")] for r in tab.rows}
     assert written == {"759": "building", "760": "ready"}, (
         f"760's result landed on the wrong row: {written}")
-
 
 
 # --------------------------------------- sharing an exit when nothing is free
@@ -2675,11 +2494,10 @@ def test_a_finish_that_installs_records_that_it_did():
     assert 'trails.append(("install"' in source
 
 
-def test_a_finish_may_take_the_cheap_exit_when_the_tab_names_one():
-    """`_new_exit` only tries the sx.org refresh when it has a current exit to
-    refresh. With None it always claimed a whole new proxy - while this
-    module's own rule is that a new exit is a refresh before it is a new
-    proxy."""
+def test_a_finish_knows_which_exit_the_phone_is_already_on():
+    """With None it had no row to settle: the exit the phone was actually on
+    went unrecorded, and whatever it took instead was written back as if it had
+    always been there."""
     import inspect
 
     source = inspect.getsource(builder.finish_one)

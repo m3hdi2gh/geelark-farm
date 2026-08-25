@@ -24,7 +24,7 @@ from geelark_farm.config import Settings
 
 def _settings(**overrides) -> Settings:
     base = dict(
-        app_id="APPID", api_key="APIKEY", sxorg_api_key="",
+        app_id="APPID", api_key="APIKEY",
         sheet_id="",
         # Paths, not strings: `Settings` declares these as Path and the code
         # calls Path methods on them. A fake that hands over strings passes

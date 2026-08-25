@@ -89,7 +89,6 @@ The rest have defaults worth knowing about:
 | `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
 | `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |
 | `TARGET_PACKAGE` | `com.openai.chatgpt` | deep-linked by package id, so no Play Store search and no clones |
-| `SXORG_API_KEY` | unset | see [exits](#exits) |
 | `LOG_LEVEL` | `INFO` | the console only — the file log is always DEBUG |
 
 Every invocation appends to `logs/<date>-<machine>.log` at DEBUG whatever
@@ -286,12 +285,17 @@ Phones that already exist are renamed to match on every run.
 ### Exits
 
 When a service refuses the connection rather than the account, the build keeps
-the credential and changes the exit. The cheap way first: sx.org will hand a
-proxy a different exit address three times a day while keeping its host, port
-and credentials, so nothing on the phone changes. That needs **both**
-`SXORG_API_KEY` **and** a `Port ID` column in the Proxy tab holding each
-proxy's port id; with either missing the build takes the next proxy instead,
-and `geelark verify` says so.
+the credential and takes the next proxy. The refusal is per-session rather than
+per-proxy — measured across twelve attempts, every gateway produced both
+successes and rejections — so the proxy is not condemned; but its *address* has
+just been turned down, so the row is held back rather than freed, and the cell
+says to change the address in the vendor's panel before setting it to `free`.
+
+There was a cheaper branch: sx.org can hand a proxy a new exit address while
+keeping its host, port and credentials, so nothing on the phone changes. Only
+the vendor's `port` product can do that. This account holds none — they are all
+the Unlimited product, which does not appear in the vendor's port listing at
+all — so the branch never once ran, and it has been removed (2026-08-25).
 
 ## What a failure costs
 
@@ -362,7 +366,7 @@ password screen looks like never also knows how to sign an HTTP request.
 | `flows/google_login.py`, `flows/play_install.py`, `flows/chatgpt_login.py` | the multi-screen procedures |
 | `screen.py`, `shell.py` | see the device / act on the device |
 | `phones.py`, `pools.py`, `ledger.py` | phone lifecycle, the stock tabs, local record |
-| `api.py`, `gsheet.py`, `sxorg.py`, `config.py` | signed transport, sheet transport, exit refresh, settings |
+| `api.py`, `gsheet.py`, `config.py` | signed transport, sheet transport, settings |
 
 `artifacts/` holds the pages every flow went through, which is what makes a
 failure diagnosable. It is pruned on every run: a build that worked keeps its
