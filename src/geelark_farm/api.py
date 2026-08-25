@@ -200,6 +200,12 @@ class Client:
         whose failure is acceptable (stopping a phone that is already stopped).
         retry defaults to True only for read-only endpoints.
         """
+        if attempts < 1:
+            # Guarded the way RateLimiter guards its own count, and for the
+            # same reason: without it the loop below never runs, and what came
+            # out was `exhausted retries (None)` - a sentence saying the
+            # retries ran out when not one request was made (2026-08-25).
+            raise ValueError("attempts must be >= 1")
         if retry is None:
             retry = path in RETRY_SAFE_PATHS
         last_error: Exception | None = None
@@ -263,7 +269,14 @@ class Client:
                                trace_id=trace_id, data=body.get("data"))
             return body
 
-        raise TransportError(f"{path}: exhausted retries ({last_error})")
+        # Unreachable, now that `attempts` cannot be zero: every branch above
+        # either returns or raises once `attempt == attempts`, so the loop
+        # cannot run out. Kept as a loud assertion rather than deleted,
+        # because what was here read as an ordinary transport failure and
+        # would have hidden a change that let the loop fall through.
+        raise AssertionError(  # pragma: no cover
+            f"unreachable: {path} left the retry loop without an answer "
+            f"({last_error})")
 
     @staticmethod
     def _backoff(attempt: int, path: str, error: Exception) -> None:
