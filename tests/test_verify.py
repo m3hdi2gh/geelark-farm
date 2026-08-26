@@ -330,3 +330,189 @@ def test_the_phone_count_comes_from_the_one_place_that_knows_how_to_list():
 
     assert "phones.listing(client)" in source
     assert "pageSize" not in source
+
+
+# =====================================================================
+# The checks that reach the network, and the order they stop in
+# (2026-08-26). `run_checks` never raises - a promise, not a hope: a
+# sheet quota, the failure this project handles more carefully than any
+# other, would otherwise have ended `geelark verify` in a traceback.
+# =====================================================================
+
+def geelark(monkeypatch, *, listing=None, plan=None, boom=None,
+            plan_boom=None):
+    """GeeLark answering, or refusing, the two calls this check makes."""
+    from geelark_farm import phones
+
+    def listing_(client):
+        if boom:
+            raise boom
+        return listing or []
+
+    def plan_(client):
+        if plan_boom:
+            raise plan_boom
+        return plan or {}
+
+    monkeypatch.setattr(phones, "listing", listing_)
+    monkeypatch.setattr(phones, "plan", plan_)
+    monkeypatch.setattr("geelark_farm.api.Client.__init__",
+                        lambda self, settings, **kw: None)
+
+
+def api_settings(**over):
+    base = {"app_id": "APPID123456", "api_key": "k",
+            "api_requests_per_minute": 120, "sheet_id": "",
+            "sxorg_api_key": ""}
+    base.update(over)
+    return type("S", (), base)()
+
+
+# ------------------------------------------------------ the key, first of all
+def test_a_key_that_works_says_what_it_can_see(monkeypatch):
+    """The count is the useful half: a key that authenticates against an empty
+    account looks identical to one pointed at the wrong account."""
+    geelark(monkeypatch, listing=[{"id": "P1"}, {"id": "P2"}],
+            plan={"profiles": 30, "availableProfiles": 5})
+    checks = []
+
+    assert verify._geelark(api_settings(), checks) is True
+    assert states(checks)["geelark api"] == OK
+    assert "2 phone(s)" in detail(checks, "geelark api")
+
+
+def test_a_key_that_does_not_work_stops_everything_after_it(monkeypatch):
+    """Fatal, and it returns False so the sheet checks below never run. A
+    second failure caused by the first is a second thing to read and nothing
+    to act on."""
+    geelark(monkeypatch, boom=RuntimeError("[40003] signature rejected"))
+    checks = []
+
+    assert verify._geelark(api_settings(), checks) is False
+    assert states(checks)["geelark api"] == FATAL
+    assert "GEELARK_APP_ID" in detail(checks, "geelark api")
+
+
+def test_a_plan_this_check_rate_limited_itself_is_not_a_warning(monkeypatch):
+    """GeeLark allows one call a minute here, separately from the account
+    limit, so running verify twice in a row rate-limits this one check. A
+    diagnostic that cries wolf about itself is worse than one that says
+    plainly it did not look."""
+    geelark(monkeypatch, plan_boom=RuntimeError("Too Many Requests"))
+    checks = []
+
+    assert verify._geelark(api_settings(), checks) is True
+    assert states(checks)["plan"] == verify.INFO
+    assert "try again in a minute" in detail(checks, "plan")
+
+
+def test_a_plan_that_fails_for_a_real_reason_is_a_warning(monkeypatch):
+    """Not fatal - the key works and phones can still be listed - but not
+    silence either."""
+    geelark(monkeypatch, plan_boom=RuntimeError("connection reset"))
+    checks = []
+
+    verify._geelark(api_settings(), checks)
+
+    assert states(checks)["plan"] == WARN
+
+
+def test_a_plan_with_no_free_slots_is_worth_saying_before_a_build(monkeypatch):
+    """Every phone would fail to create, one after another, each spending a
+    Gmail and a proxy on the way."""
+    geelark(monkeypatch, plan={"profiles": 30, "availableProfiles": 0})
+    checks = []
+
+    verify._geelark(api_settings(), checks)
+
+    assert states(checks)["plan"] == WARN
+    assert "none free" in detail(checks, "plan")
+
+
+# ---------------------------------------------------------- the key file
+def test_a_missing_service_account_says_where_it_looked(tmp_path):
+    """The path is the whole of the fix, and it is configurable - so printing
+    the default would send someone to the wrong place."""
+    settings = api_settings(service_account_json=tmp_path / "nowhere.json")
+    checks = []
+
+    assert verify._key_file(settings, checks) == ""
+    assert states(checks)["service account"] == FATAL
+    assert str(tmp_path) in detail(checks, "service account")
+
+
+def test_a_key_file_that_is_not_a_key_says_so_rather_than_crashing(tmp_path):
+    """A downloaded HTML error page saved as .json is the ordinary way this
+    goes wrong."""
+    path = tmp_path / "key.json"
+    path.write_text("<html>Sign in</html>", encoding="utf-8")
+    checks = []
+
+    assert verify._key_file(api_settings(service_account_json=path),
+                            checks) == ""
+    assert states(checks)["service account"] == FATAL
+
+
+def test_a_key_file_missing_its_address_is_not_usable_either(tmp_path):
+    """The address is what the spreadsheet has to be shared with, so a key
+    without one cannot be acted on even though it parses."""
+    path = tmp_path / "key.json"
+    path.write_text('{"type": "service_account"}', encoding="utf-8")
+    checks = []
+
+    assert verify._key_file(api_settings(service_account_json=path),
+                            checks) == ""
+
+
+def test_a_usable_key_hands_back_the_address_to_share_with(tmp_path):
+    path = tmp_path / "key.json"
+    path.write_text('{"client_email": "bot@project.iam.gserviceaccount.com"}',
+                    encoding="utf-8")
+    checks = []
+
+    found = verify._key_file(api_settings(service_account_json=path), checks)
+
+    assert found == "bot@project.iam.gserviceaccount.com"
+    assert states(checks)["service account"] == OK
+
+
+# ------------------------------------------------------- and the order
+def test_a_run_with_no_sheet_configured_stops_before_the_sheet_checks(
+        monkeypatch, tmp_path):
+    """Every check below reads the book. Running them without an id produces
+    four failures that all say the same thing."""
+    geelark(monkeypatch, listing=[], plan={"profiles": 30,
+                                           "availableProfiles": 1})
+    settings = api_settings(sheet_id="",
+                            service_account_json=tmp_path / "key.json")
+
+    checks = verify.run_checks(settings)
+
+    names = [c.name for c in checks]
+    assert "spreadsheet" in names
+    assert "columns" not in names, "it went on reading a book it cannot open"
+    assert states(checks)["spreadsheet"] == FATAL
+
+
+def test_a_key_that_fails_stops_before_the_sheet_is_even_opened(monkeypatch,
+                                                                tmp_path):
+    geelark(monkeypatch, boom=RuntimeError("[40003] signature rejected"))
+    settings = api_settings(sheet_id="abc",
+                            service_account_json=tmp_path / "key.json")
+
+    checks = verify.run_checks(settings)
+
+    assert [c.name for c in checks][-1] == "geelark api"
+
+
+def test_the_checks_never_raise_whatever_the_network_does(monkeypatch,
+                                                           tmp_path):
+    """The promise this function makes. A diagnostic that cannot survive the
+    thing it exists to diagnose is worth less than nothing (2026-08-23)."""
+    geelark(monkeypatch, boom=OSError("no route to host"))
+    settings = api_settings(sheet_id="abc",
+                            service_account_json=tmp_path / "key.json")
+
+    checks = verify.run_checks(settings)          # no raise
+
+    assert any(c.state == FATAL for c in checks)
