@@ -38,6 +38,18 @@ from tests.test_pools import (
     proxy_row,
 )
 
+
+@pytest.fixture(autouse=True)
+def brisk_heartbeat(monkeypatch):
+    """No test here wants a real sixty-second beat.
+
+    `_start_heartbeat` joins its thread for one interval on the way out, so a
+    run that leaves the thread going costs a full minute per test - which
+    turns a broken stop into a suite that hangs instead of one that fails.
+    """
+    monkeypatch.setattr(builder.Pool, "HEARTBEAT_SECONDS", 0.01)
+
+
 SIGNED_IN = Outcome("success", "signed_in")
 # The install flow returns its OWN Outcome class, not the router's. Faking
 # it with the router's meant every test of the install path asserted
@@ -1542,6 +1554,12 @@ def test_a_done_phone_that_is_running_is_stopped_and_then_deleted(monkeypatch):
     monkeypatch.setattr(builder.phones, "delete",
                         lambda c, ids, ledger=None: deleted.extend(ids))
     monkeypatch.setattr(builder.time, "sleep", lambda *a: None)
+    # The clock walks, the way its sibling three tests below already does.
+    # Without it the settle loop polls a no-op sleep against a real deadline,
+    # so a check that stops agreeing the phone is down spins for the whole
+    # ninety seconds - and the suite hangs where it should report.
+    clock = itertools.count(0, 30)
+    monkeypatch.setattr(builder.time, "monotonic", lambda: next(clock))
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "g@example.com", "app_account": "a0@example.com"}])
 

@@ -221,3 +221,229 @@ def test_a_budget_is_measured_on_a_clock_nothing_can_set():
         source = inspect.getsource(fn)
         assert "time.time()" not in source
         assert "time.monotonic()" in source
+
+
+# =====================================================================
+# Acting on the screen, not only reading it (2026-08-26). The selectors
+# were tested against captured pages; what happens after one matches -
+# where the tap lands, and whether it lands at all - was not.
+# =====================================================================
+
+class Finger:
+    """Records every tap the device is asked for."""
+
+    def __init__(self):
+        self.taps: list[tuple[int, int]] = []
+        self.commands: list[str] = []
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(screen, "tap",
+                            lambda c, p, x, y: self.taps.append((x, y)))
+        return self
+
+
+@pytest.fixture
+def finger(monkeypatch):
+    return Finger().install(monkeypatch)
+
+
+def element(label="Continue", *, bounds="[0,100][200,180]", clickable=True,
+            desc="", cls="TextView"):
+    return screen.Element(text=label, desc=desc, cls=cls, resource_id="",
+                          bounds=bounds, clickable=clickable, enabled=True,
+                          focused=False, password=False)
+
+
+# ------------------------------------------------------- where the tap lands
+def test_a_tap_goes_to_the_middle_of_the_element(finger):
+    """Anywhere else and it lands on whatever is beside it. The centre is the
+    only point an element can be relied on to own."""
+    assert screen.tap_element(None, "P", element(bounds="[0,100][200,180]"))
+
+    assert finger.taps == [(100, 140)]
+
+
+def test_an_element_with_bounds_nothing_can_read_is_not_tapped_blind(finger,
+                                                                     caplog):
+    """A tap at a guessed coordinate presses whatever happens to be there -
+    and on a login page that is another account, or a refusal."""
+    with caplog.at_level("WARNING"):
+        assert screen.tap_element(None, "P", element(bounds="")) is False
+
+    assert finger.taps == []
+    assert any("unparseable bounds" in r.message for r in caplog.records)
+
+
+def test_tapping_by_label_finds_it_first(finger):
+    hit = screen.tap_label(None, "P", [element("Cancel", bounds="[0,0][100,50]"),
+                                       element("Continue",
+                                               bounds="[0,200][100,250]")],
+                           "Continue")
+
+    assert hit is True
+    assert finger.taps == [(50, 225)]
+
+
+def test_a_label_that_is_not_there_is_not_a_tap(finger):
+    """False rather than a tap at (0,0), which is the top-left corner and on
+    most pages is the back button."""
+    assert screen.tap_label(None, "P", [element("Cancel")], "Continue") is False
+    assert finger.taps == []
+
+
+# ------------------------------------------------- the first of several labels
+def test_the_first_label_present_is_the_one_taken(finger):
+    """The primitive for clearing a chain of interstitials whose order is not
+    known - so the caller's ordering is the priority, not the page's."""
+    page = [element("Skip", bounds="[0,0][100,50]"),
+            element("Not now", bounds="[0,200][100,250]")]
+
+    taken = screen.tap_first_present(None, "P", page, ("Not now", "Skip"))
+
+    assert taken == "Not now"
+    assert finger.taps == [(50, 225)]
+
+
+def test_nothing_present_is_answered_with_nothing(finger):
+    assert screen.tap_first_present(None, "P", [element("Other")],
+                                    ("Not now", "Skip")) is None
+    assert finger.taps == []
+
+
+def test_a_label_found_but_not_tappable_is_not_reported_as_pressed(finger):
+    """The caller reads the return value as "this got cleared". Saying so
+    about a tap that never landed leaves the page up and the caller moving
+    on."""
+    stuck = element("Not now", bounds="")
+
+    assert screen.tap_first_present(None, "P", [stuck], ("Not now",)) is None
+    assert finger.taps == []
+
+
+def test_body_text_is_not_pressed_unless_the_caller_allows_it(finger):
+    """In Google's and Play's dialogs a clickable button is what a button is,
+    and an unclickable label of the same name is usually body text. Apps that
+    render everything as plain TextViews - the ChatGPT app is one - pass
+    False, and then the caller's label list is the only thing keeping it off
+    the wrong control."""
+    prose = element("Not now", clickable=False)
+
+    assert screen.tap_first_present(None, "P", [prose], ("Not now",)) is None
+
+    assert screen.tap_first_present(None, "P", [prose], ("Not now",),
+                                    clickable_only=False) == "Not now"
+
+
+# ------------------------------------------------------- reading the dump
+def catting(monkeypatch, answer):
+    """A device whose `cat` of the dump file returns `answer`."""
+    monkeypatch.setattr(screen, "run", lambda c, p, cmd: "")
+    monkeypatch.setattr(screen, "read", lambda c, p, cmd: answer)
+
+
+BODY = '<?xml version="1.0"?><hierarchy><node text="A"/></hierarchy>'
+
+
+def test_a_dump_is_read_from_wherever_the_xml_starts(monkeypatch):
+    """The shell prefixes it with whatever it feels like. Found this way
+    rather than by reading the dump command's own success line, because that
+    line is `UI hierchary dumped to: ...` - misspelled in AOSP, and not
+    something to hang a screen router on."""
+    catting(monkeypatch, BODY)
+    assert screen.capture(None, "P") == BODY
+
+    catting(monkeypatch, "UI hierchary dumped to: /sdcard/x.xml\n" + BODY)
+    assert screen.capture(None, "P") == BODY
+
+
+def test_a_hierarchy_with_no_declaration_is_still_found(monkeypatch):
+    """Some builds emit the root without the `<?xml` line at all, and losing
+    the whole screen over a missing preamble reads as "the phone is blank"."""
+    bare = '<hierarchy><node text="A"/></hierarchy>'
+    catting(monkeypatch, "noise\n" + bare)
+
+    assert screen.capture(None, "P") == bare
+
+
+def test_a_dump_with_no_hierarchy_in_it_is_nothing_rather_than_a_guess(
+        monkeypatch):
+    """None, and the caller waits and looks again. Handing the noise back
+    would give the parser something that is not a screen."""
+    catting(monkeypatch, "Killed")
+
+    assert screen.capture(None, "P") is None
+
+
+def test_a_page_that_will_not_parse_is_no_elements_rather_than_a_crash():
+    """One truncated dump must not end a flow."""
+    assert screen.parse("Killed") == []
+    assert screen.parse("") == []
+
+
+# ------------------------------------------------------ matching a whole word
+def test_a_query_matches_a_word_and_not_a_fragment_of_one():
+    """"use or install." matches "install" legitimately, so the boundary is
+    what separates a label from a sentence that happens to contain it."""
+    match = screen._partial_matcher("install")
+
+    assert match("use or install.")
+    assert match("install")
+    assert not match("uninstalled")
+
+
+def test_a_query_that_is_not_a_word_falls_back_to_containment():
+    """A boundary next to punctuation matches nothing, and a query like "..."
+    or "(1)" is still a real thing to look for."""
+    match = screen._partial_matcher("(1)")
+
+    assert match("Step (1) of 3")
+
+
+# ----------------------------------------------------------- what it is
+def test_an_element_cannot_be_changed_after_it_is_parsed():
+    """One page's elements are handed to every matcher and every action in a
+    flow. Editing one edits it for all of them - the same reason `Proxy`,
+    `Settings` and the verdicts in `failures.py` are frozen, and the fourth
+    place this gap turned up (2026-08-26)."""
+    import dataclasses
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        element().text = "something else"
+
+
+def test_an_element_says_enough_to_be_found_in_a_log():
+    """These are printed when a screen is not recognised, and the list is what
+    somebody reads to write the next selector."""
+    said = str(element("Continue", desc="the continue button"))
+
+    assert "Continue" in said
+    assert "the continue button" in said
+
+
+def test_a_disabled_element_is_marked_as_one():
+    """A greyed-out Install button and a missing one are different problems,
+    and the list in an `unknown_screen` report is where the difference shows."""
+    off = screen.Element(text="Install", desc="", cls="Button", resource_id="",
+                         bounds="[0,0][10,10]", clickable=True, enabled=False,
+                         focused=False, password=False)
+
+    assert "!" in str(off)
+    assert "!" not in str(element("Install"))
+
+
+def test_an_element_with_only_a_description_is_still_named():
+    """Icons carry a content-desc and no text, and the back arrow is one."""
+    icon = element("", desc="Navigate up")
+
+    assert "Navigate up" in str(icon)
+
+
+# ------------------------------------------------------------ keeping a page
+def test_a_fixture_is_written_where_it_is_asked_for(tmp_path):
+    """Artifact directories are per build and two levels deep, and a flow that
+    fails on its first screen still has to be able to keep it."""
+    target = tmp_path / "artifacts" / "20260826-build1" / "welcome.xml"
+
+    screen.save_fixture("<hierarchy/>", target)
+
+    assert target.read_text(encoding="utf-8") == "<hierarchy/>"
