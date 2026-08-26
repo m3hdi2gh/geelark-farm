@@ -147,3 +147,36 @@ def test_it_says_the_install_has_to_be_editable():
     and the working directories land in site-packages."""
     assert "-e" in README
     assert "editable" in README.lower()
+
+
+def test_it_names_the_optional_columns_that_change_what_happens():
+    """`REQUIRED_COLUMNS` is what the code cannot run without, and the test
+    above pins those. It does not cover the two that are optional and matter
+    anyway - and both were missing from the tables here until somebody went
+    looking (2026-08-26).
+
+    `Claimed` is written by the tool and decides when a stuck row comes back;
+    `Email code` is one a person has to tick, and an undocumented checkbox is
+    a cell in the sheet that nothing explains.
+    """
+    from geelark_farm.pools import AppPool, GmailPool
+
+    assert f"`{GmailPool.claimed_at_column}`" in README
+    for column in AppPool.checkbox_columns:
+        assert f"`{column}`" in README, column
+
+
+def test_every_setting_the_code_reads_is_in_the_example_file():
+    """The README points at `.env.example` as the complete reference - "every
+    field is documented in" it - so a setting missing from it makes that
+    sentence false. Two were (2026-08-26), one of them added the same day."""
+    root = Path(__file__).parent.parent
+    config = (root / "src" / "geelark_farm" / "config.py").read_text(
+        encoding="utf-8")
+    example = (root / ".env.example").read_text(encoding="utf-8")
+
+    reads = set(re.findall(r'_(?:str|int|path)\("([A-Z_]+)"', config))
+    assert reads, "the pattern stopped matching how settings are read"
+
+    for name in sorted(reads):
+        assert name in example, f"{name} is read but not in .env.example"

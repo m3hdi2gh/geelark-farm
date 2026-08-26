@@ -40,10 +40,29 @@ The envelope is not consistent across endpoints:
 
 - `/phone/addNew` returns per-item results under **`details`** — each item
   carries its own `code`, `msg`, `id`, `envSerialNo`, `equipmentInfo`.
-- `/phone/status`, `/phone/start`, `/phone/stop` return **`successDetails`**
-  and **`failDetails`**.
+- `/phone/status`, `/phone/start`, `/phone/stop`, `/phone/delete` return
+  **`successDetails`** and **`failDetails`**.
 
-Do not assume; check the doc for each endpoint. This cost a debugging cycle.
+Do not assume; check the doc for each endpoint.
+
+**And `code: 0` at the envelope means the call was accepted, not that the work
+was done.** A batch endpoint answers 0 whatever happens to the items inside it,
+so a caller that reads only the envelope reports every refusal as a success.
+`/phone/delete` did exactly that: two running phones were recorded as deleted,
+their rows dropped and their proxies freed, and they stayed in the panel
+billing with nothing in the sheet that knew they existed (2026-08-17, phones
+840 and 841). Read the per-item list on every batch endpoint, always.
+
+## List endpoints are paged
+
+`/phone/list` takes `page` and `pageSize` and answers with exactly one page.
+There is no "give me all of them", and asking once is a cap on every caller
+downstream that is invisible until the account outgrows it.
+
+It points the wrong way, too. Phones past the last page read as *absent*, and
+absent is the state that gets tidied up: the sync would decide those rows had
+lost their phone and settle them, while the phones themselves stayed up and
+billing. Page until a short page comes back.
 
 ## Concurrency
 
