@@ -7,6 +7,7 @@ nothing raised, the command simply did the wrong thing.
 from __future__ import annotations
 
 import pathlib
+import sys
 import time
 from types import SimpleNamespace
 
@@ -14,7 +15,13 @@ import pytest
 
 from geelark_farm import cli
 from geelark_farm import ledger as ledger_mod
+from geelark_farm.accounts import AccountError, Credentials
+from geelark_farm.api import TransportError
+from geelark_farm.config import ConfigError
+from geelark_farm.gsheet import SheetError
 from geelark_farm.ledger import Ledger
+from geelark_farm.proxy import ProxyError
+from geelark_farm.shell import ShellError
 
 
 class Args:
@@ -762,3 +769,229 @@ def test_the_cli_names_the_two_sheet_failures_it_did_not():
 
     assert "except GSpreadError" in source
     assert source.count("except ConfigError") == 2
+
+
+# =====================================================================
+# The parts of the CLI that decide something (2026-08-26). Most of this
+# module is a command building a client, calling one function and
+# printing - which is why 35% coverage is not 35% of the risk. These
+# are the pieces where a wrong answer costs a phone or an account.
+# =====================================================================
+
+class Panel:
+    """GeeLark's phone list, and what was done to it."""
+
+    def __init__(self, *items, newest=None):
+        self.items = list(items)
+        self._newest = newest
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+
+    def install(self, monkeypatch, *, already_running=False):
+        monkeypatch.setattr(cli.phones, "listing", lambda c: self.items)
+        monkeypatch.setattr(cli.phones, "newest", lambda c: self._newest)
+        monkeypatch.setattr(
+            cli.phones, "ensure_running",
+            lambda c, pid, **kw: (None if already_running
+                                  else (self.started.append(pid) or "url")))
+        monkeypatch.setattr(cli.phones, "stop",
+                            lambda c, pid: self.stopped.append(pid))
+        monkeypatch.setattr(cli, "refuse_if_busy", lambda s, pid: None)
+        return self
+
+
+def phone(pid, *, status=None):
+    return {"id": pid, "status": cli.phones.RUNNING if status is None
+            else status}
+
+
+# ------------------------------------------------ which phone a command means
+def test_an_explicit_phone_always_wins(monkeypatch):
+    """It is the one thing the operator said out loud."""
+    Panel(phone("P1")).install(monkeypatch)
+
+    assert cli.resolve_phone(None, "P9") == "P9"
+
+
+def test_the_single_running_phone_is_the_one_being_worked_on(monkeypatch,
+                                                             capsys):
+    """`geelark dump` is what you reach for while watching a build go wrong,
+    which is when a build is on that phone."""
+    Panel(phone("P1"), phone("P2", status=cli.phones.STOPPED)).install(
+        monkeypatch)
+
+    assert cli.resolve_phone(None, None) == "P1"
+    assert "using the running phone" in capsys.readouterr().out
+
+
+def test_several_running_phones_is_refused_rather_than_guessed(monkeypatch):
+    """Picking wrong means typing a password into the wrong device."""
+    Panel(phone("P1"), phone("P2")).install(monkeypatch)
+
+    with pytest.raises(SystemExit) as caught:
+        cli.resolve_phone(None, None)
+
+    said = str(caught.value)
+    assert "P1" in said and "P2" in said, "which ones is the actionable part"
+    assert "--phone" in said
+
+
+def test_with_nothing_running_the_newest_phone_is_taken(monkeypatch):
+    """The one just built is the one a diagnostic is almost always about."""
+    Panel(phone("P1", status=cli.phones.STOPPED),
+          newest={"id": "P7"}).install(monkeypatch)
+
+    assert cli.resolve_phone(None, None) == "P7"
+
+
+def test_with_no_phones_at_all_it_says_so(monkeypatch):
+    Panel(newest=None).install(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        cli.resolve_phone(None, None)
+
+
+# ------------------------------------------- who owns stopping the phone again
+def test_a_phone_this_command_started_is_stopped_afterwards(monkeypatch,
+                                                            capsys):
+    """`phones.py` says anything that starts a phone owns stopping it. Five of
+    these commands started one and walked away, leaving it up with nothing in
+    the ledger accounting for it."""
+    panel = Panel(phone("P1")).install(monkeypatch)
+
+    with cli.device(None, None, "P1") as phone_id:
+        assert phone_id == "P1"
+
+    assert panel.started == ["P1"]
+    assert panel.stopped == ["P1"]
+    assert "billing ended" in capsys.readouterr().out
+
+
+def test_a_phone_that_was_already_up_is_left_alone(monkeypatch):
+    """It belongs to whatever had it - and that is usually a build."""
+    panel = Panel(phone("P1")).install(monkeypatch, already_running=True)
+
+    with cli.device(None, None, "P1"):
+        pass
+
+    assert panel.stopped == [], "it stopped a phone it did not start"
+
+
+def test_a_command_that_fails_still_puts_the_phone_back(monkeypatch):
+    """The whole reason this is a context manager. A diagnostic that raises
+    used to leave the phone running."""
+    panel = Panel(phone("P1")).install(monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        with cli.device(None, None, "P1"):
+            raise RuntimeError("the dump failed")
+
+    assert panel.stopped == ["P1"]
+
+
+def test_a_phone_another_run_is_driving_is_refused(monkeypatch):
+    """`uiautomator dump` cannot run twice at once, so two flows on one phone
+    corrupt each other's screen reads."""
+    Panel(phone("P1")).install(monkeypatch)
+    monkeypatch.setattr(cli, "refuse_if_busy",
+                        lambda s, pid: (_ for _ in ()).throw(
+                            SystemExit("phone P1 is busy")))
+
+    with pytest.raises(SystemExit):
+        with cli.device(None, None, "P1"):
+            pass
+
+
+# --------------------------------------------------- which account to drive
+def test_a_row_outside_the_sheet_is_refused_by_number(monkeypatch,
+                                                       make_settings):
+    """"--row 40" against nine usable Gmails is a typo, and the range is what
+    makes it obvious which."""
+    settings = make_settings(sheet_id="abc")
+
+    class Pool:
+        available = [object(), object()]
+
+    monkeypatch.setattr("geelark_farm.pools.Book.open",
+                        staticmethod(lambda s: type("B", (), {
+                            "gmails": Pool, "proxies": Pool})()))
+
+    with pytest.raises(SystemExit, match="1..2"):
+        cli.pick_account(settings, 40)
+
+
+def test_the_diagnostic_path_reads_stock_without_claiming_it(monkeypatch,
+                                                              make_settings):
+    """A debugging session that quietly consumed stock from under a running
+    build would be its own kind of bug."""
+    settings = make_settings(sheet_id="abc")
+    claimed: list[str] = []
+
+    row = type("Row", (), {
+        "credentials": Credentials(email="a@b.com", password="pw",
+                                   totp_secret="JBSWY3DPEHPK3PXP"),
+        "values": {"Proxy String": "socks5://u:p@1.2.3.4:1080"},
+    })()
+
+    class Pool:
+        available = [row]
+
+        @staticmethod
+        def claim():
+            claimed.append("claimed")
+
+    monkeypatch.setattr("geelark_farm.pools.Book.open",
+                        staticmethod(lambda s: type("B", (), {
+                            "gmails": Pool, "proxies": Pool})()))
+
+    account = cli.pick_account(settings, 1)
+
+    assert account.email == "a@b.com"
+    assert account.proxy == "socks5://u:p@1.2.3.4:1080"
+    assert claimed == [], "the diagnostic path took stock out of the pool"
+
+
+def test_a_sheet_with_no_free_exit_says_which_half_is_missing(monkeypatch,
+                                                               make_settings):
+    settings = make_settings(sheet_id="abc")
+    row = type("Row", (), {
+        "credentials": Credentials(email="a@b.com", password="pw",
+                                   totp_secret=""),
+        "values": {},
+    })()
+
+    monkeypatch.setattr("geelark_farm.pools.Book.open",
+                        staticmethod(lambda s: type("B", (), {
+                            "gmails": type("G", (), {"available": [row]}),
+                            "proxies": type("P", (), {"available": []})})()))
+
+    with pytest.raises(SystemExit, match="no proxy is free"):
+        cli.pick_account(settings, 1)
+
+
+# ------------------------------------------------ what an operator is told
+@pytest.mark.parametrize("error,prefix,code", [
+    (AccountError("row 4 has no password"), "account:", 1),
+    (SheetError("quota"), "sheet:", 2),
+    (ConfigError("GOOGLE_SHEET_ID is not set"), "config:", 2),
+    (ProxyError("SX4 is unusable"), "proxy:", 1),
+    (cli.phones.PhoneError("phone 801 has expired"), "phone:", 1),
+    (ShellError("the phone would not run 'dumpsys'"), "device:", 1),
+    (TransportError("connection reset"), "network:", 1),
+])
+def test_every_failure_an_operator_can_act_on_gets_a_line_not_a_traceback(
+        monkeypatch, capsys, error, prefix, code):
+    """A traceback says the tool broke; these say the setup did, and which
+    part. The exit code separates "fix your configuration" (2) from "that
+    attempt failed" (1), which is what a script around this reads."""
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: object()))
+    monkeypatch.setattr(cli, "_configure_logging", lambda *a, **k: None)
+
+    def boom(settings, args):
+        raise error
+
+    monkeypatch.setitem(cli.main.__globals__, "cmd_plan", boom)
+    monkeypatch.setattr(sys, "argv", ["geelark", "plan"])
+
+    assert cli.main() == code
+    assert capsys.readouterr().err.startswith(prefix)
