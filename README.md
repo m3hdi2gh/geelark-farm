@@ -408,8 +408,30 @@ a run goes wrong.
 
 ```bash
 pytest
-ruff check src tests
+ruff check .
 ```
+
+`.` and not `src tests`: CI lints the whole tree, and the two tools in
+`scripts/` are part of it.
+
+Neither of those commands can tell you whether a test holds anything, so two
+tools in `scripts/` answer the questions they cannot:
+
+```bash
+python scripts/mutate.py src/geelark_farm/pools.py tests/test_pools.py
+python scripts/audit_fakes.py
+```
+
+`mutate.py` changes one thing in the source at a time and reports which
+changes no test objected to — a line that runs under a test nobody wrote an
+assertion for. `audit_fakes.py` checks every fake the suite hands the code
+against the shape of the thing it replaces, which is the one failure neither
+coverage nor mutation can see: ten builds died in August because a fake
+answered with the wrong class and every test was happy.
+
+Both are audits and neither is a gate. They print more than they should, and
+sorting the two findings that matter from the twenty that are a test being
+economical is reading you have to do.
 
 `tests/fixtures/` holds real view hierarchies captured from live runs. They
 are the record of how each screen actually looks, and why each selector is

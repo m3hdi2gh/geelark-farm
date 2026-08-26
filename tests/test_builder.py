@@ -2488,9 +2488,14 @@ def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
     monkeypatch.setattr(builder, "settle_abandoned",
                         lambda *a, **k: (_ for _ in ()).throw(
                             TransportError("geelark went away")))
-    for name in ("sync_proxies", "sync_phone_proxies", "sync_phone_names",
-                 "strand_check"):
+    # Two shapes, not one. `sync_proxies` and `strand_check` answer with a
+    # dict that `step` merges into the report; the other two answer with a
+    # list it files under the step's own name. One lambda for all four sent
+    # half of them down a branch they never take in a real sync.
+    for name in ("sync_proxies", "strand_check"):
         monkeypatch.setattr(builder, name, lambda *a, **k: {})
+    for name in ("sync_phone_proxies", "sync_phone_names"):
+        monkeypatch.setattr(builder, name, lambda *a, **k: [])
 
     outcome = builder.sync_sheet(None, book, None, probe_proxies=False)
 
