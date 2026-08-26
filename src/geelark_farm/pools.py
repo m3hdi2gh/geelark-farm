@@ -1,10 +1,10 @@
 """The resource tabs, as pools something can be claimed from.
 
-`sheets.py` reads a different shape of sheet, where one row *is* one phone: a
-proxy, a Gmail and an app account chosen in advance, and a failure anywhere in
-that row fails the whole row. That works while every resource is good and gets
-expensive when they are not - a bad Gmail costs a phone, and the proxy it was
-paired with is condemned along with it.
+The sheet this replaced had a different shape, where one row *was* one phone:
+a proxy, a Gmail and an app account chosen in advance, and a failure anywhere
+in that row failed the whole row. That works while every resource is good and
+gets expensive when they are not - a bad Gmail costs a phone, and the proxy it
+was paired with is condemned along with it. It was deleted on 2026-08-12.
 
 Here the resources are pools. A build claims a proxy, then the first usable
 Gmail, then the first usable app account, and a bad one costs only itself: the

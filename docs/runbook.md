@@ -178,10 +178,12 @@ Google accepted the address and rejected the password as the old one - the
 archived screen says when it was changed. Nothing on the device fixes this: put
 the current password in the sheet.
 
-The phone is deleted rather than kept, so the slot goes back. That is a choice,
-not a necessity - the phone would work with a corrected sheet. If these
-passwords do turn up in practice, take `password_changed` out of `UNREUSABLE`
-in `builder.py` and the phone will be waiting for `geelark finish`.
+The phone is kept. `password_changed` blames the credential, so it costs that
+Gmail and the build tries the next one on the same phone - the same handling a
+CAPTCHA gets, and for the same reason: nothing about the phone is wrong.
+
+That is decided in `failures.py`, by the `blame` on the verdict. Nothing in
+`builder.py` lists reasons by name any more.
 
 ### `stuck_on_<screen>`
 The flow saw the same screen more times than its allowance and gave up. Read it
@@ -243,22 +245,24 @@ where the request came from. The account and the password were never examined.
 again for a different exit, and tries the login once more before recording
 anything — the same handling the TLS refusal gets, and for the same reason.
 
-So seeing this at all means **both** addresses were refused. The note in the
-sheet opens with `ALREADY RETRIED` when that is what happened, and then the
-answer is the proxy:
+So seeing this at all means **both** addresses were refused, and the answer is
+the proxy. The note does not say which of the two it was: the marker that used
+to open it with `ALREADY RETRIED` lived in the row flow and went with it
+(1a97d7e), and the pool flow never had one. The `Steps` column in History is
+where the second attempt shows, as a second pass through the same screens:
 
 ```bash
 geelark finish               # retries the app login on that phone
 ```
 
-**If it recurs on the same row, change the proxy — and delete the phone.** For
-`geelark build` handles this itself and does not need either step: it takes
+**If it recurs on the same phone, change the proxy — and delete the phone.**
+`geelark build` handles this itself and needs neither step: it takes
 the next proxy and holds the refused exit back, so the same address is not
 handed to the next build. The address itself can only be changed in the
 vendor's panel — these proxies are the Unlimited product, which cannot be
 rotated through the vendor's API.
 
-Then clear that row's `phone_id` and `serial` and re-run it.
+Then mark that phone `failed` in the Phones tab's State column and run the sync. It deletes the phone, retires the Gmail — that address has been on a device, so it does not go back on the shelf — and frees the app account, which never got a fair phone.
 
 The flow submits the address twice and then stops. Not more, deliberately:
 rapid repetition is what a bot-protection layer exists to punish, so hammering
@@ -368,20 +372,25 @@ deep link was not enough - the sequential runs had simply been lucky.
 If it recurs, the page took longer than `PRE_INSTALL_SECONDS` to render; check
 whether that proxy's exit is unusually slow.
 
-### A row stuck on `running`
-Its run died without writing an outcome, so the row is neither done nor
-retryable and no later run will select it - the work is lost, and so is the
-phone it names.
+### A row stuck on `building`
+`building` means "a run has this right now", which is why every other reader
+skips it. A run killed mid-build leaves the row saying that forever: `finish`
+will not offer it, the State column does not see it, and the phone sits in the
+panel behind a row nobody acts on (2026-08-14, phone 750).
+
+Nothing to do by hand — the sync settles these at the start of every run, and
+the console reports them under **abandoned** (a Gmail is on the phone, so it
+is finishable) or **discarded** (nothing was signed in, so the phone is
+deleted). Opening the console is enough:
 
 ```bash
-geelark phones --ledger    # confirm no run is actually holding it
-geelark finish             # picks up phones one step short of ready
+geelark ui                 # the startup sync settles them
+geelark phones --ledger    # or confirm by hand that no run is holding one
 ```
 
-Since 2026-08-01 the builder catches every exception per phone, so this
-should only be reachable after a hard crash or power loss. It happened once
-because a raw `requests` exception escaped the handler; both that and the
-reclaim path are fixed.
+Since 2026-08-01 the builder catches every exception per phone, so a row only
+reaches this after a hard crash, a power loss, or a Ctrl+C that skipped the
+cleanup.
 
 ### `ConnectionResetError(10054)` during a parallel run
 A `requests.Session` shared across threads. Fixed - each thread now gets its

@@ -17,10 +17,11 @@ when the tab has nothing left to hand it, when the budget will not cover
 another attempt, or when the failure says the phone itself is the problem
 rather than the credential (see failures.py).
 
-The difference from `orchestrator.py` is what a failure costs. There a row
-names its proxy, its Gmail and its app account in advance, so a bad Gmail fails
-the row and wastes the phone that was created for it. Here the phone is the
-thing being built and the credentials are stock: a bad one is marked in its own
+What a failure costs is the difference from the row flow this replaced
+(deleted 2026-08-12). There a row named its proxy, its Gmail and its app
+account in advance, so a bad Gmail failed the row and wasted the phone that had
+been created for it. Here the phone is the thing being built and the
+credentials are stock: a bad one is marked in its own
 tab and the next is tried on the same device, which is already booted and
 already signed in as far as it got.
 
