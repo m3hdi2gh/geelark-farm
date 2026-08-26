@@ -754,37 +754,49 @@ def cmd_install(settings: Settings, args) -> int:
     failure would otherwise read as "no Install button".
     """
     client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir)
     package = args.package or settings.target_package
     phone_id = resolve_phone(client, args.phone)
     refuse_if_busy(settings, phone_id)
-    phones.ensure_running(client, phone_id)
-
-    accounts_on_device = shell.device_accounts(client, phone_id)
-    if not accounts_on_device:
-        print(f"phone {phone_id} has no Google account - the Play Store cannot "
-              f"install. Run 'geelark login --row N --phone {phone_id}' first.",
-              file=sys.stderr)
-        return 1
-    print(f"signed in as {accounts_on_device[0]}")
-
-    if args.watch:
-        # Minted here rather than at boot: the live-view token expires within
-        # seconds, so it is only useful immediately before the flow acts.
-        url = phones.start(client, phone_id)
-        if url:
-            print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
-        if sys.stdin.isatty():
-            input("Open it, then press Enter here to start the install... ")
-        else:
-            # `cmd_build` has guarded this since the flag was added, and says
-            # why: with no terminal the input is an EOFError, and this one is
-            # raised before the `try`, so the `finally` that stops the phone
-            # never runs and it is left up with the command dead under it.
-            print("(nothing to wait for - no terminal)", flush=True)
+    # Answer the question the line above asks. That guard only works if
+    # something on the other side sets a claim for it to find, and this drives
+    # the phone for up to `install_budget_seconds` - long enough for a `dump`,
+    # a `tap` or a build to arrive, find nothing holding it, and corrupt both
+    # screen reads. `login` claimed and this did not (2026-08-27).
+    ledger.claim(phone_id, label=f"install {package}")
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     artifact_dir = settings.artifact_dir / f"{stamp}-install"
     try:
+        # Inside the try, because it starts the phone. Above it, a phone
+        # booted here and then turned away at the account check below was
+        # left running with the command already dead underneath it - the same
+        # walking away `device()` was written to stop.
+        phones.ensure_running(client, phone_id)
+
+        accounts_on_device = shell.device_accounts(client, phone_id)
+        if not accounts_on_device:
+            print(f"phone {phone_id} has no Google account - the Play Store "
+                  f"cannot install. Run 'geelark login --row N --phone "
+                  f"{phone_id}' first.", file=sys.stderr)
+            return 1
+        print(f"signed in as {accounts_on_device[0]}")
+
+        if args.watch:
+            # Minted here rather than at boot: the live-view token expires
+            # within seconds, so it is only useful immediately before the
+            # flow acts.
+            url = phones.start(client, phone_id)
+            if url:
+                print(f"\nWATCH IT LIVE:\n  {url}\n", flush=True)
+            if sys.stdin.isatty():
+                input("Open it, then press Enter here to start the install... ")
+            else:
+                # `cmd_build` has guarded this since the flag was added, and
+                # says why: with no terminal the input is an EOFError over a
+                # phone this has just started.
+                print("(nothing to wait for - no terminal)", flush=True)
+
         outcome = play_install.install(
             client, phone_id, package,
             budget_seconds=settings.install_budget_seconds,
@@ -797,6 +809,7 @@ def cmd_install(settings: Settings, args) -> int:
         print(f"  third-party packages on device: {installed}")
         return 0 if outcome.ok else 1
     finally:
+        ledger.release(phone_id, note="install finished")
         if not args.keep:
             phones.stop(client, phone_id)
             print(f"  stopped {phone_id} - billing ended")

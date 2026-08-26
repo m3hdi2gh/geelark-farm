@@ -622,15 +622,37 @@ class FakePhones:
         return "https://shot"
 
 
-def _wire(monkeypatch, fake, *, claimed=False):
+class FakeLedger:
+    """Enough of `Ledger` to see what a command told it.
+
+    `claim` is here because a command that drives a phone for minutes has to
+    say so - `refuse_if_busy` is only a guard if something on the other side
+    ever sets a claim for it to find.
+    """
+
+    def __init__(self, entry=None):
+        self.entry = entry
+        self.claimed: list[tuple[str, str]] = []
+        self.released: list[tuple[str, str]] = []
+
+    def get(self, phone_id):
+        return self.entry
+
+    def claim(self, phone_id, label=""):
+        self.claimed.append((phone_id, label))
+
+    def release(self, phone_id, note=""):
+        self.released.append((phone_id, note))
+
+
+def _wire(monkeypatch, fake, *, claimed=False, ledger=None):
     from geelark_farm import cli as cli_mod
 
     monkeypatch.setattr(cli_mod, "phones", fake)
     monkeypatch.setattr(cli_mod, "build_client", lambda s: object())
     entry = SimpleNamespace(is_claimed=claimed, is_stale=False, label="a build")
-    monkeypatch.setattr(cli_mod.Ledger, "load", staticmethod(
-        lambda d: SimpleNamespace(get=lambda i: entry if claimed else None,
-                                  release=lambda i, note="": None)))
+    book = ledger if ledger is not None else FakeLedger(entry if claimed else None)
+    monkeypatch.setattr(cli_mod.Ledger, "load", staticmethod(lambda d: book))
     return cli_mod
 
 
@@ -995,3 +1017,1120 @@ def test_every_failure_an_operator_can_act_on_gets_a_line_not_a_traceback(
 
     assert cli.main() == code
     assert capsys.readouterr().err.startswith(prefix)
+
+
+# =========================================== the lifecycle commands
+# Seventeen command functions ran their `def` line and nothing else. These
+# are the guards and exit codes inside them: what a script that calls
+# `geelark <command>` and reads `$?` is actually relying on.
+def entry(phone_id="P1", serial="801"):
+    """A real ledger.Entry, not something shaped like one."""
+    from geelark_farm.ledger import Entry
+    return Entry(phone_id=phone_id, created_at=0.0, serial=serial)
+
+
+class Lifecycle(FakePhones):
+    """The calls the lifecycle commands make, and a record of each."""
+
+    class PhoneError(Exception):
+        pass
+
+    def __init__(self, *, state=None, **kw):
+        super().__init__(**kw)
+        self.state = state if state is not None else self.STOPPED
+        self.created, self.deleted, self.waited, self.reaped = [], [], [], []
+        self.plan_info = {"plan": 1, "monthlyFee": 50, "profiles": 30,
+                          "availableProfiles": 4, "parallels": 5,
+                          "expirationTime": 0}
+        self.verdicts: list[tuple[str, str]] = []
+
+    def prune_ledger(self, client, ledger):
+        return []
+
+    def status(self, client, phone_id):
+        return self.state
+
+    def create(self, client, settings, parsed, *, ledger=None, name=None,
+               label=""):
+        self.created.append((parsed, name, label))
+        return entry()
+
+    def start(self, client, phone_id):
+        self.started.append(phone_id)
+        return "https://watch/me"
+
+    def wait_until_running(self, client, phone_id):
+        self.waited.append(phone_id)
+
+    def delete(self, client, phone_ids, *, ledger=None):
+        self.deleted.extend(phone_ids)
+
+    def plan(self, client):
+        return self.plan_info
+
+    def reapable(self, client, ledger):
+        return self.verdicts
+
+    def reap(self, client, ledger, *, verdicts=None, dry_run=False):
+        self.reaped.extend(verdicts or [])
+        return len(verdicts or [])
+
+
+# ------------------------------------------------------------------ delete
+def test_a_running_phone_is_not_deleted_out_from_under_its_billing(
+        monkeypatch, capsys, settings):
+    """Deleting a running phone is the one lifecycle call GeeLark refuses
+    per-item while answering `code: 0` at the envelope, so the refusal is
+    caught here rather than read back out of a batch answer."""
+    fake = Lifecycle(state=Lifecycle.RUNNING)
+    cli_mod = _wire(monkeypatch, fake)
+
+    code = cli_mod.cmd_delete(settings, SimpleNamespace(phone="P1", yes=True))
+
+    assert code == 1
+    assert fake.deleted == []
+    assert "stop it first" in capsys.readouterr().err
+
+
+def test_deleting_a_stopped_phone_needs_saying_yes(monkeypatch, capsys,
+                                                   settings):
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+
+    code = cli_mod.cmd_delete(settings, SimpleNamespace(phone="P1", yes=False))
+
+    assert code == 1 and fake.deleted == []
+    assert "cancelled" in capsys.readouterr().out
+
+
+def test_yes_skips_the_prompt_that_would_block_a_script(monkeypatch, settings):
+    """Without --yes this reads stdin, and a script that pipes nothing in gets
+    an EOFError instead of a deletion."""
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+
+    def refuse(prompt=""):
+        raise AssertionError("--yes still asked")
+
+    monkeypatch.setattr("builtins.input", refuse)
+
+    assert cli_mod.cmd_delete(settings, SimpleNamespace(phone="P1",
+                                                        yes=True)) == 0
+    assert fake.deleted == ["P1"]
+
+
+# -------------------------------------------------------------------- reap
+def test_reaping_nothing_is_success(monkeypatch, capsys, settings):
+    """The normal state of a tidy account, and a non-zero here would make the
+    command unusable from cron."""
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_reap(settings, SimpleNamespace(dry_run=False)) == 0
+    assert "nothing to reap" in capsys.readouterr().out
+
+
+def test_a_dry_run_reap_stops_nothing(monkeypatch, capsys, settings):
+    fake = Lifecycle()
+    fake.verdicts = [("P1", "not in the ledger")]
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_reap(settings, SimpleNamespace(dry_run=True)) == 0
+    assert fake.reaped == []
+    assert "would be stopped" in capsys.readouterr().out
+
+
+def test_a_real_reap_stops_exactly_what_it_listed(monkeypatch, settings):
+    """The verdicts are handed on rather than looked up again: a phone that
+    was claimed or released in the seconds between is a phone this would
+    otherwise stop by surprise."""
+    fake = Lifecycle()
+    fake.verdicts = [("P1", "not in the ledger"), ("P2", "already released")]
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_reap(settings, SimpleNamespace(dry_run=False)) == 0
+    assert fake.reaped == fake.verdicts
+
+
+# ------------------------------------------------------------------ create
+def test_a_proxy_is_checked_before_a_phone_is_paid_for(monkeypatch, capsys,
+                                                       settings):
+    """The order is the point: a phone created behind an exit that does not
+    carry traffic is a slot spent and a row that cannot finish."""
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+    order = []
+    monkeypatch.setattr(cli_mod.proxy, "check",
+                        lambda c, p: order.append("checked") or
+                        {"outboundIP": "1.1.1.1", "country": "US"})
+    monkeypatch.setattr(fake, "create",
+                        lambda *a, **k: order.append("created") or entry())
+
+    code = cli_mod.cmd_create(settings, SimpleNamespace(
+        proxy="socks5://u:p@h:1080", name=None, label="", start=False))
+
+    assert code == 0
+    assert order == ["checked", "created"]
+    assert fake.started == []               # not booted without --start
+
+
+def test_creating_with_start_waits_for_the_phone_before_saying_it_is_up(
+        monkeypatch, capsys, settings):
+    """The live-view link is printed next to "running", and a link handed out
+    before the phone answers opens on nothing."""
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.proxy, "check",
+                        lambda c, p: {"outboundIP": "1.1.1.1", "country": ""})
+
+    assert cli_mod.cmd_create(settings, SimpleNamespace(
+        proxy="socks5://u:p@h:1080", name=None, label="", start=True)) == 0
+    assert fake.started == ["P1"] and fake.waited == ["P1"]
+    assert "unknown country" in capsys.readouterr().out
+
+
+def test_a_phone_created_by_hand_is_not_claimed(monkeypatch, settings):
+    """A claim means "a run is working on this right now", and `reapable`
+    reads a fresh one as exactly that. Claiming here started a phone billing
+    and hid it from the reaper for as long as the claim took to go stale,
+    with nothing working on it."""
+    fake = Lifecycle()
+    book = FakeLedger()
+    cli_mod = _wire(monkeypatch, fake, ledger=book)
+    monkeypatch.setattr(cli_mod.proxy, "check", lambda c, p: {})
+
+    cli_mod.cmd_create(settings, SimpleNamespace(
+        proxy="socks5://u:p@h:1080", name=None, label="", start=True))
+
+    assert book.claimed == []
+
+
+# ------------------------------------------------------------- start / stop
+def test_starting_without_wait_does_not_block(monkeypatch, settings):
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_start(settings, SimpleNamespace(phone="P1",
+                                                       wait=False)) == 0
+    assert fake.started == ["P1"] and fake.waited == []
+
+
+def test_stopping_everything_when_nothing_runs_says_so(monkeypatch, capsys,
+                                                       settings):
+    fake = Lifecycle(already_running=False)
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_stop(settings, SimpleNamespace(phone=None,
+                                                      all=True)) == 0
+    assert fake.stopped == []
+    assert "nothing is running" in capsys.readouterr().out
+
+
+def test_stopping_a_phone_by_hand_releases_its_claim_too(monkeypatch,
+                                                          settings):
+    """Otherwise every later command refuses it as busy until the claim goes
+    stale hours on, and stopping it by hand is a deliberate "I am done"."""
+    fake = Lifecycle(already_running=True)
+    book = FakeLedger()
+    cli_mod = _wire(monkeypatch, fake, ledger=book)
+
+    assert cli_mod.cmd_stop(settings, SimpleNamespace(phone=None,
+                                                      all=True)) == 0
+    assert fake.stopped == ["P1"]
+    assert [p for p, _ in book.released] == ["P1"]
+
+
+# -------------------------------------------------------------------- plan
+def test_a_full_plan_says_the_error_code_the_next_create_will_fail_with(
+        monkeypatch, capsys, settings):
+    """[44002] is the whole answer to "why was my phone refused", and it
+    arrives from GeeLark with nothing else attached."""
+    fake = Lifecycle()
+    fake.plan_info = dict(fake.plan_info, availableProfiles=0)
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_plan(settings, SimpleNamespace()) == 0
+    assert "44002" in capsys.readouterr().out
+
+
+def test_slots_this_api_cannot_list_are_named_rather_than_left_missing(
+        monkeypatch, capsys, settings):
+    """The pool is shared with browser profiles, which live behind the local
+    agent. Without this the numbers simply do not add up and the search is
+    for a phone that does not exist."""
+    fake = Lifecycle()
+    # 30 slots, 4 free, 1 phone: 25 are something else.
+    cli_mod = _wire(monkeypatch, fake)
+
+    cli_mod.cmd_plan(settings, SimpleNamespace())
+
+    assert "browser profiles share this pool" in capsys.readouterr().out
+
+
+def test_a_plan_with_no_expiry_does_not_report_1970(monkeypatch, capsys,
+                                                     settings):
+    """`localtime(0)` renders as 1 Jan 1970, which reads as an expired plan."""
+    fake = Lifecycle()
+    fake.plan_info = dict(fake.plan_info, expirationTime=None)
+    cli_mod = _wire(monkeypatch, fake)
+
+    cli_mod.cmd_plan(settings, SimpleNamespace())
+
+    assert "1970" not in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------- proxy
+def test_a_backconnect_gateway_is_named_because_google_judges_the_exit(
+        monkeypatch, capsys, settings):
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.proxy, "check",
+                        lambda c, p: {"outboundIP": "9.9.9.9", "country": ""})
+
+    assert cli_mod.cmd_proxy(settings,
+                             SimpleNamespace(url="socks5://u:p@h:1080")) == 0
+    out = capsys.readouterr().out
+    assert "gateway" in out
+    # And an empty country is reported as a gap in GeeLark's lookup, never as
+    # a verdict on the address.
+    assert "not reported by GeeLark" in out
+
+
+# ================================================ the diagnostic commands
+# Each of these is reached for while something is going wrong, so what they
+# return matters more than usual: a 0 from a diagnostic that read nothing
+# says the phone is fine.
+def test_a_dump_that_reads_nothing_is_a_failure_not_an_empty_screen(
+        monkeypatch, capsys, settings):
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.screen, "capture", lambda c, p: None)
+
+    code = cli_mod.cmd_dump(settings, SimpleNamespace(phone="P1", save=None))
+
+    assert code == 1
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_a_dump_can_keep_what_it_read_as_a_fixture(monkeypatch, tmp_path,
+                                                   make_settings):
+    """`tests/fixtures/` is the record of how each screen actually looks, and
+    the only way one gets there is this flag."""
+    settings = make_settings(state_dir=tmp_path)
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.screen, "capture",
+                        lambda c, p: "<hierarchy></hierarchy>")
+    saved = tmp_path / "kept.xml"
+
+    code = cli_mod.cmd_dump(settings, SimpleNamespace(phone="P1",
+                                                      save=str(saved)))
+
+    assert code == 0 and saved.read_text(encoding="utf-8")
+
+
+def test_a_tap_that_matched_nothing_lists_what_was_there(monkeypatch, capsys,
+                                                          settings):
+    """Exit 1 and the screen beside it: "no element matching X" on its own
+    sends you back for a dump you could have had here."""
+    from geelark_farm.screen import Element
+
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+    button = Element(text="Cancel", desc="", cls="android.widget.Button",
+                     resource_id="", bounds="[0,0][10,10]", clickable=True,
+                     enabled=True, focused=False, password=False)
+    monkeypatch.setattr(cli_mod.screen, "read_screen", lambda c, p: [button])
+    monkeypatch.setattr(cli_mod.screen, "tap_label",
+                        lambda c, p, e, label: False)
+
+    code = cli_mod.cmd_tap(settings, SimpleNamespace(phone="P1",
+                                                     label="Install"))
+
+    assert code == 1
+    assert "Cancel" in capsys.readouterr().err
+
+
+def test_a_shell_command_is_strict_because_silence_is_an_answer(
+        monkeypatch, capsys, settings):
+    """"It printed nothing" and "it did not run" are the two answers you are
+    choosing between, and this reported success for both."""
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+    asked = {}
+    monkeypatch.setattr(cli_mod.shell, "run",
+                        lambda c, p, cmd, **kw: asked.update(kw) or "output")
+
+    assert cli_mod.cmd_shell(settings, SimpleNamespace(phone="P1",
+                                                       cmd="ls")) == 0
+    assert asked.get("strict") is True
+    assert "output" in capsys.readouterr().out
+
+
+def test_typing_that_the_device_refuses_is_a_failure(monkeypatch, capsys,
+                                                      settings):
+    from geelark_farm.shell import TypingError
+
+    fake = FakePhones(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+
+    def refuse(client, phone_id, text):
+        raise TypingError("no field is focused")
+
+    monkeypatch.setattr(cli_mod.shell, "type_text", refuse)
+
+    code = cli_mod.cmd_type(settings, SimpleNamespace(phone="P1", text="abc"))
+
+    assert code == 1
+    assert "no field is focused" in capsys.readouterr().err
+
+
+def test_a_screenshot_that_did_not_happen_is_a_failure(monkeypatch, capsys,
+                                                        settings):
+    class NoShot(FakePhones):
+        def screenshot(self, client, phone_id, **kwargs):
+            return None
+
+    cli_mod = _wire(monkeypatch, NoShot(already_running=True))
+
+    code = cli_mod.cmd_screenshot(settings, SimpleNamespace(phone="P1"))
+
+    assert code == 1
+    assert "screenshot failed" in capsys.readouterr().err
+
+
+# ==================================================== login and install
+# The two long flows. Each takes a phone for minutes, so the questions are
+# who knows it is taken and who puts it back.
+def install_outcome(ok=True):
+    """The real class the real function answers with."""
+    from geelark_farm.flows.play_install import Outcome
+    return Outcome(kind="success" if ok else "fatal",
+                   reason="installed" if ok else "no_install_button")
+
+
+def _wire_install(monkeypatch, fake, ledger, *, accounts_on=("a@example.com",),
+                  ok=True):
+    cli_mod = _wire(monkeypatch, fake, ledger=ledger)
+    monkeypatch.setattr(cli_mod.shell, "device_accounts",
+                        lambda c, p, **k: list(accounts_on))
+    monkeypatch.setattr(cli_mod.shell, "third_party_packages",
+                        lambda c, p: ["com.openai.chatgpt"])
+    monkeypatch.setattr(cli_mod.play_install, "install",
+                        lambda *a, **k: install_outcome(ok))
+    return cli_mod
+
+
+def install_args(**kw):
+    base = dict(phone="P1", package="com.example", keep=False, watch=False)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_an_install_says_it_is_driving_the_phone_it_drives(
+        monkeypatch, tmp_path, make_settings):
+    """`refuse_if_busy` is only a guard if something on the other side sets a
+    claim for it to find. This asked the question for ten minutes and never
+    answered it, so a `dump` or a build arriving meanwhile found the phone
+    free and corrupted both screen reads (2026-08-27)."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    book = FakeLedger()
+    cli_mod = _wire_install(monkeypatch, Lifecycle(already_running=True), book)
+
+    assert cli_mod.cmd_install(settings, install_args()) == 0
+    assert [p for p, _ in book.claimed] == ["P1"]
+    assert [p for p, _ in book.released] == ["P1"]
+
+
+def test_a_phone_this_install_booted_is_not_left_billing_when_it_turns_away(
+        monkeypatch, tmp_path, make_settings):
+    """The account check is a refusal, not a crash, so it returned before the
+    try that stops the phone - and the phone it had just started stayed up
+    with the command dead underneath it (2026-08-27)."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=False)
+    book = FakeLedger()
+    cli_mod = _wire_install(monkeypatch, fake, book, accounts_on=())
+
+    code = cli_mod.cmd_install(settings, install_args())
+
+    assert code == 1
+    assert fake.started == ["P1"]          # it did boot the phone
+    assert fake.stopped == ["P1"]          # and it put it back
+    assert [p for p, _ in book.released] == ["P1"]
+
+
+def test_an_install_that_failed_still_puts_the_phone_back(
+        monkeypatch, tmp_path, make_settings):
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire_install(monkeypatch, fake, FakeLedger(), ok=False)
+
+    assert cli_mod.cmd_install(settings, install_args()) == 1
+    assert fake.stopped == ["P1"]
+
+
+def test_keep_leaves_the_phone_running_and_says_what_that_costs(
+        monkeypatch, tmp_path, capsys, make_settings):
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire_install(monkeypatch, fake, FakeLedger())
+
+    assert cli_mod.cmd_install(settings, install_args(keep=True)) == 0
+    assert fake.stopped == []
+    assert "LEFT RUNNING" in capsys.readouterr().out
+
+
+def test_an_install_watched_without_a_terminal_does_not_wait_for_nobody(
+        monkeypatch, tmp_path, make_settings):
+    """With no terminal the input is an EOFError, raised over a phone this
+    has just started."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    cli_mod = _wire_install(monkeypatch, Lifecycle(already_running=True),
+                            FakeLedger())
+    monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: False)
+
+    def refuse(prompt=""):
+        raise AssertionError("waited for a terminal that is not there")
+
+    monkeypatch.setattr("builtins.input", refuse)
+
+    assert cli_mod.cmd_install(settings, install_args(watch=True)) == 0
+
+
+# ---------------------------------------------------------------- login
+def account(row=1):
+    from geelark_farm.accounts import Account
+    return Account(email="a@example.com", password="pw", totp_secret="",
+                   proxy="socks5://u:p@h:1080", row=row)
+
+
+def login_outcome(ok=True):
+    """The router's Outcome, which is the class `sign_in` really answers with."""
+    from geelark_farm.flows.router import Outcome
+    return Outcome(kind="success" if ok else "fatal",
+                   reason="signed_in" if ok else "wrong_password")
+
+
+def _wire_login(monkeypatch, fake, book, *, ok=True):
+    cli_mod = _wire(monkeypatch, fake, ledger=book)
+    monkeypatch.setattr(cli_mod, "pick_account", lambda s, row: account(row))
+    monkeypatch.setattr(cli_mod.proxy, "check",
+                        lambda c, p: {"outboundIP": "1.1.1.1"})
+    monkeypatch.setattr(cli_mod.shell, "device_accounts",
+                        lambda c, p, **k: ["a@example.com"])
+    monkeypatch.setattr(cli_mod.google_login, "sign_in",
+                        lambda *a, **k: login_outcome(ok))
+    return cli_mod
+
+
+def login_args(**kw):
+    base = dict(row=1, phone="P1", keep=False, watch=False)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_a_login_releases_the_phone_however_it_ends(monkeypatch, tmp_path,
+                                                     make_settings):
+    """An interrupted experiment that left the claim set made every later
+    command refuse the phone as busy until it went stale."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    book = FakeLedger()
+    cli_mod = _wire_login(monkeypatch, Lifecycle(already_running=True), book,
+                          ok=False)
+
+    assert cli_mod.cmd_login(settings, login_args()) == 1
+    assert [p for p, _ in book.claimed] == ["P1"]
+    assert [p for p, _ in book.released] == ["P1"]
+
+
+def test_a_login_that_created_the_phone_keeps_it_for_inspection(
+        monkeypatch, tmp_path, capsys, make_settings):
+    """It made the phone and the login failed on it, so the phone is the
+    evidence - and it names the command that deletes it."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    cli_mod = _wire_login(monkeypatch, Lifecycle(already_running=True),
+                          FakeLedger(), ok=False)
+
+    assert cli_mod.cmd_login(settings, login_args(phone=None)) == 1
+    out = capsys.readouterr().out
+    assert "kept for inspection" in out and "geelark delete" in out
+
+
+def test_a_login_stops_the_phone_it_was_given_unless_told_to_keep_it(
+        monkeypatch, tmp_path, make_settings):
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire_login(monkeypatch, fake, FakeLedger())
+
+    assert cli_mod.cmd_login(settings, login_args()) == 0
+    assert fake.stopped == ["P1"]
+
+
+# --------------------------------------------------------- pick_account
+def test_a_row_outside_the_dev_file_is_refused_by_number(monkeypatch,
+                                                          make_settings):
+    """"--row 9 is out of range (1..2)" is the whole answer; a traceback out
+    of a list index is not."""
+    from geelark_farm import cli as cli_mod
+
+    settings = make_settings(sheet_id="")
+    monkeypatch.setattr(cli_mod.accounts, "load_dev_accounts",
+                        lambda path: [account(1), account(2)])
+
+    with pytest.raises(SystemExit, match=r"1\.\.2"):
+        cli_mod.pick_account(settings, 9)
+
+
+# ---------------------------------------------------------------- pools
+class FakePool:
+    def __init__(self, tab, available=(), stuck=(), broken=()):
+        self.tab = tab
+        self.available, self.stuck, self.broken = (list(available),
+                                                   list(stuck), list(broken))
+
+
+class FakeBook:
+    def __init__(self):
+        self.reloaded = 0
+        self.proxies = FakePool("Proxy", available=[1])
+        self.gmails = FakePool("Gmails", available=[1, 2])
+        self.apps = FakePool("Gpt Info")
+
+    def sync_lists(self):
+        return {"Status": ["ready", "error"]}
+
+    def release_stuck(self):
+        return 3
+
+    def reload(self):
+        self.reloaded += 1
+
+
+def _wire_pools(monkeypatch):
+    from geelark_farm import cli as cli_mod
+    from geelark_farm.pools import Book
+
+    book = FakeBook()
+    monkeypatch.setattr(Book, "open", staticmethod(lambda s: book))
+    monkeypatch.setattr(cli_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(cli_mod.Ledger, "load",
+                        staticmethod(lambda d: FakeLedger()))
+    return cli_mod, book
+
+
+def pools_args(**kw):
+    base = dict(sync_lists=False, release_stuck=False, no_sync=False)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_rewriting_the_dropdowns_does_not_go_on_to_report_the_tabs(
+        monkeypatch, capsys, settings):
+    """It is a write, asked for on its own. Reporting afterwards would sync
+    the sheet as a side effect of a command that says it only rewrites lists."""
+    cli_mod, book = _wire_pools(monkeypatch)
+
+    assert cli_mod.cmd_pools(settings, pools_args(sync_lists=True)) == 0
+    assert book.reloaded == 0
+    assert "Status: ready, error" in capsys.readouterr().out
+
+
+def test_freeing_stuck_rows_says_how_many_it_freed(monkeypatch, capsys,
+                                                    settings):
+    cli_mod, book = _wire_pools(monkeypatch)
+
+    assert cli_mod.cmd_pools(settings, pools_args(release_stuck=True)) == 0
+    assert "released 3 row(s)" in capsys.readouterr().out
+
+
+def test_no_sync_reports_the_tabs_without_correcting_them_first(
+        monkeypatch, capsys, settings):
+    """The default corrects the sheet before reporting, so the numbers are
+    what a run would find. --no-sync is for seeing what the sheet says."""
+    from geelark_farm import builder as builder_mod
+
+    cli_mod, book = _wire_pools(monkeypatch)
+
+    def refuse(*a, **k):
+        raise AssertionError("--no-sync synced anyway")
+
+    monkeypatch.setattr(builder_mod, "sync_sheet", refuse)
+
+    assert cli_mod.cmd_pools(settings, pools_args(no_sync=True)) == 0
+    out = capsys.readouterr().out
+    assert "--no-sync" in out and "2 available" in out
+
+
+# --------------------------------------------------------------- verify
+def check(name, state, detail="fine"):
+    from geelark_farm.verify import Check
+    return Check(name, state, detail)
+
+
+def cli_mod_verify(monkeypatch, settings):
+    from geelark_farm import cli as cli_mod
+    return cli_mod.cmd_verify(settings, SimpleNamespace())
+
+
+def test_a_setup_with_something_broken_exits_non_zero(monkeypatch, capsys,
+                                                       settings):
+    """This is what a first-run script branches on."""
+    from geelark_farm import verify as verify_mod
+
+    monkeypatch.setattr(verify_mod, "run_checks", lambda s: [
+        check("api key", verify_mod.OK),
+        check("sheet", verify_mod.FATAL, "shared as a Viewer\ngrant Editor"),
+    ])
+
+    code = cli_mod_verify(monkeypatch, settings)
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "1 thing(s) to fix: sheet" in out
+    # The remedy is indented under the line it belongs to, not run together.
+    assert "grant Editor" in out
+
+
+def test_warnings_alone_are_usable_and_say_so(monkeypatch, capsys, settings):
+    """A warning is something a run would stop on, not something broken - and
+    exiting 1 for it would make the check unusable as a gate."""
+    from geelark_farm import verify as verify_mod
+
+    monkeypatch.setattr(verify_mod, "run_checks", lambda s: [
+        check("api key", verify_mod.OK),
+        check("free slots", verify_mod.WARN, "none left"),
+    ])
+
+    assert cli_mod_verify(monkeypatch, settings) == 0
+    assert "Usable." in capsys.readouterr().out
+
+
+def test_a_clean_setup_says_so_without_qualification(monkeypatch, capsys,
+                                                      settings):
+    from geelark_farm import verify as verify_mod
+
+    monkeypatch.setattr(verify_mod, "run_checks", lambda s: [
+        check("api key", verify_mod.OK)])
+
+    assert cli_mod_verify(monkeypatch, settings) == 0
+    assert "Everything checks out." in capsys.readouterr().out
+
+
+# ----------------------------------------------------------------- ping
+def test_ping_counts_what_is_billing_and_says_how_to_stop_it(monkeypatch,
+                                                              capsys, settings):
+    """An informational command, with one thing on it worth saying loudly."""
+    cli_mod = _wire(monkeypatch, Lifecycle(already_running=True))
+
+    assert cli_mod.cmd_ping(settings, SimpleNamespace()) == 0
+    out = capsys.readouterr().out
+    assert "1 phone(s) RUNNING and billing" in out
+    assert "geelark stop --all" in out
+
+
+def test_ping_on_a_quiet_account_says_nothing_about_billing(monkeypatch,
+                                                             capsys, settings):
+    cli_mod = _wire(monkeypatch, Lifecycle(already_running=False))
+
+    assert cli_mod.cmd_ping(settings, SimpleNamespace()) == 0
+    assert "billing" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------- finish
+@pytest.mark.parametrize("builds,expected", [
+    ([], 0),                                        # a finished pool
+    ([build(1, True)], 0),
+    ([build(1, True), build(2, False)], 1),
+])
+def test_finish_exit_code(builds, expected, tmp_path, monkeypatch, capsys,
+                          make_settings):
+    """Same rule as `build`: nothing to finish is the normal state, and a
+    non-zero for it makes the command unusable from cron."""
+    from geelark_farm import builder as builder_mod
+
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    monkeypatch.setattr(cli, "build_client", lambda s: object())
+    monkeypatch.setattr(builder_mod, "finish_run", lambda *a, **k: builds)
+    monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+
+    assert cli.cmd_finish(settings, Args()) == expected
+    if not builds:
+        assert "nothing to finish" in capsys.readouterr().out
+
+
+def test_a_finish_dry_run_reports_nothing_and_succeeds(tmp_path, monkeypatch,
+                                                        make_settings):
+    """--dry-run spends nothing, so there is no summary to print and no
+    failure to inherit an exit code from."""
+    from geelark_farm import builder as builder_mod
+
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    monkeypatch.setattr(cli, "build_client", lambda s: object())
+    monkeypatch.setattr(builder_mod, "finish_run",
+                        lambda *a, **k: [build(1, False)])
+
+    def refuse(builds):
+        raise AssertionError("a dry run summarised anyway")
+
+    monkeypatch.setattr(builder_mod, "summarise", refuse)
+
+    assert cli.cmd_finish(settings, Args(dry_run=True)) == 0
+
+
+# ------------------------------------------- what the listing adds on request
+@pytest.mark.parametrize("entry_for,expected", [
+    (None, "[not in ledger]"),
+    (SimpleNamespace(is_claimed=True, label="build 3"), "[claimed: build 3]"),
+    (SimpleNamespace(is_claimed=False, label="build 3"), "[build 3]"),
+])
+def test_the_ledger_column_says_which_of_three_things_a_phone_is(
+        entry_for, expected, monkeypatch, capsys, settings):
+    """A phone GeeLark shows and the ledger does not know is the one worth
+    finding: nothing local is accountable for it, so nothing will stop it."""
+    fake = Lifecycle(already_running=True)
+    book = FakeLedger(entry_for)
+    cli_mod = _wire(monkeypatch, fake, ledger=book)
+
+    assert cli_mod.cmd_phones(settings, SimpleNamespace(ledger=True)) == 0
+    assert expected in capsys.readouterr().out
+
+
+def test_the_listing_says_what_is_billing_before_anything_else_is_read(
+        monkeypatch, capsys, settings):
+    cli_mod = _wire(monkeypatch, Lifecycle(already_running=True))
+
+    cli_mod.cmd_phones(settings, SimpleNamespace(ledger=False))
+
+    assert "RUNNING and billing" in capsys.readouterr().out
+
+
+# --------------------------------------------- what pools says is wrong
+def test_pools_names_the_rows_that_cannot_be_used_and_why(monkeypatch, capsys,
+                                                           settings):
+    """A broken row is one nobody will notice until a build skips it. The row
+    number and the reason are what turns it into a thing to fix."""
+    from geelark_farm import builder as builder_mod
+
+    cli_mod, book = _wire_pools(monkeypatch)
+    book.gmails.stuck = [1, 2]
+    book.gmails.broken = [SimpleNamespace(sheet_row=7,
+                                          error="2FA secret is not base32")]
+    monkeypatch.setattr(builder_mod, "sync_sheet",
+                        lambda *a, **k: {"retired": ["a@example.com"]})
+
+    assert cli_mod.cmd_pools(settings, pools_args()) == 0
+    out = capsys.readouterr().out
+    assert "retired: a@example.com" in out
+    assert "2 stuck as in_use" in out and "--release-stuck" in out
+    assert "row 7: 2FA secret is not base32" in out
+    assert book.reloaded == 1
+
+
+# ------------------------------------------------- exit codes out of main
+def test_running_with_no_command_prints_help_and_succeeds(capsys):
+    """Bare `geelark` is somebody finding out what it does, not a failure."""
+    assert cli.main([]) == 0
+    assert "usage:" in capsys.readouterr().out.lower()
+
+
+@pytest.mark.parametrize("raised,code,prefix", [
+    (ProxyError("bad url"), 1, "proxy:"),
+    (AccountError("2FA secret is not base32"), 1, "account:"),
+    (ShellError("device did not answer"), 1, "device:"),
+    (TransportError("connection reset"), 1, "network:"),
+    (ConfigError("SHEET_ID is not set"), 2, "config:"),
+    (SheetError("no Status column"), 2, "sheet:"),
+])
+def test_each_failure_leaves_by_its_own_door_with_its_own_code(
+        raised, code, prefix, monkeypatch, capsys, tmp_path, make_settings):
+    """2 is "your setup is wrong", 1 is "this run did not work". A script that
+    retries on 1 and stops on 2 depends on the difference, and every one of
+    these used to arrive as a traceback."""
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: settings))
+
+    def fail(settings, args):
+        raise raised
+
+    monkeypatch.setattr(cli, "cmd_ping", fail)
+
+    assert cli.main(["ping"]) == code
+    # In stderr rather than at the front of it: the logging banner is written
+    # there too, and it is written first.
+    assert f"{prefix} " in capsys.readouterr().err
+
+
+# ------------------------------------------- the other side of each branch
+def test_wait_blocks_until_the_phone_has_actually_settled(monkeypatch,
+                                                           settings):
+    """Without it the command returns while the phone is still booting, and
+    the next thing to touch it fails for a reason that is not its own."""
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_start(settings, SimpleNamespace(phone="P1",
+                                                       wait=True)) == 0
+    assert fake.waited == ["P1"]
+
+
+def test_stopping_one_phone_does_not_touch_the_others(monkeypatch, settings):
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire(monkeypatch, fake)
+
+    assert cli_mod.cmd_stop(settings, SimpleNamespace(phone="P9",
+                                                      all=False)) == 0
+    assert fake.stopped == ["P9"]
+
+
+def test_a_tap_that_landed_says_nothing_and_succeeds(monkeypatch, capsys,
+                                                      settings):
+    cli_mod = _wire(monkeypatch, FakePhones(already_running=True))
+    monkeypatch.setattr(cli_mod.screen, "read_screen", lambda c, p: [])
+    monkeypatch.setattr(cli_mod.screen, "tap_label",
+                        lambda c, p, e, label: True)
+
+    assert cli_mod.cmd_tap(settings, SimpleNamespace(phone="P1",
+                                                     label="Install")) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_typing_that_worked_says_how_much_went_in(monkeypatch, capsys,
+                                                   settings):
+    """The count is the check: a field that silently swallowed half the
+    password looks identical to one that took it."""
+    cli_mod = _wire(monkeypatch, FakePhones(already_running=True))
+    monkeypatch.setattr(cli_mod.shell, "type_text", lambda c, p, text: None)
+
+    assert cli_mod.cmd_type(settings, SimpleNamespace(phone="P1",
+                                                      text="secret")) == 0
+    assert "6 character(s)" in capsys.readouterr().out
+
+
+def test_the_nth_row_of_the_dev_file_is_the_nth_row(monkeypatch,
+                                                     make_settings):
+    """Numbered from 1 as in a spreadsheet body, so `--row 2` means the same
+    thing here as it will once the sheet exists."""
+    from geelark_farm import cli as cli_mod
+
+    settings = make_settings(sheet_id="")
+    monkeypatch.setattr(cli_mod.accounts, "load_dev_accounts",
+                        lambda path: [account(1), account(2)])
+
+    assert cli_mod.pick_account(settings, 2).row == 2
+
+
+def test_a_login_left_running_says_what_that_costs(monkeypatch, tmp_path,
+                                                    capsys, make_settings):
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire_login(monkeypatch, fake, FakeLedger())
+
+    assert cli_mod.cmd_login(settings, login_args(keep=True)) == 0
+    assert fake.stopped == []
+    assert "LEFT RUNNING" in capsys.readouterr().out
+
+
+def test_a_login_watched_without_a_terminal_drives_on(monkeypatch, tmp_path,
+                                                       make_settings):
+    """The flag was declared, helped, and never read - and once it was read,
+    a machine with no terminal would have got an EOFError instead."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    cli_mod = _wire_login(monkeypatch, Lifecycle(already_running=False),
+                          FakeLedger())
+    monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: False)
+
+    def refuse(prompt=""):
+        raise AssertionError("waited for a terminal that is not there")
+
+    monkeypatch.setattr("builtins.input", refuse)
+
+    assert cli_mod.cmd_login(settings, login_args(watch=True)) == 0
+
+
+def test_a_watched_build_mints_its_link_per_phone_and_does_not_block(
+        monkeypatch, tmp_path, make_settings):
+    """The live-view token expires within seconds, so it is minted as each
+    phone comes up rather than once at the start - and with no terminal there
+    is nobody to wait for."""
+    from geelark_farm import builder as builder_mod
+
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle()
+    cli_mod = _wire(monkeypatch, fake)
+    monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt="": pytest.fail("blocked on nobody"))
+    monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+
+    def run(client, settings_, *, count, workers, dry_run, on_ready):
+        on_ready("P7")
+        return [build(1, True)]
+
+    monkeypatch.setattr(builder_mod, "run", run)
+
+    assert cli_mod.cmd_build(settings, Args(watch=True)) == 0
+    assert fake.started == ["P7"]
+
+
+def test_the_console_is_imported_only_when_it_is_asked_for(monkeypatch,
+                                                            settings):
+    """rich is a heavy import, and a broken terminal must not be able to stop
+    the plain commands from working."""
+    import geelark_farm.ui as ui_mod
+
+    monkeypatch.setattr(ui_mod, "run_console", lambda s: 7)
+
+    assert cli.cmd_ui(settings, SimpleNamespace()) == 7
+
+
+def gspread_refusal(message: str):
+    """The exception gspread raises, built the way gspread builds it.
+
+    `GSpreadError` is `gspread.exceptions.APIError`, and it takes the HTTP
+    response rather than a string - it reads the error out of the body itself.
+    """
+    response = SimpleNamespace(
+        text=message, status_code=403,
+        json=lambda: {"error": {"code": 403, "message": message,
+                                "status": "PERMISSION_DENIED"}})
+    return cli.GSpreadError(response)
+
+
+@pytest.mark.parametrize("raised,code,prefix", [
+    (gspread_refusal("the key was revoked"), 2, "sheet:"),
+    (cli.ApiError(44002, "no slots left", path="/phone/addNew",
+                  trace_id="T1"), 1, "api:"),
+])
+def test_the_two_doors_that_arrive_from_further_away(raised, code, prefix,
+                                                     monkeypatch, capsys,
+                                                     tmp_path, make_settings):
+    """A refusal gspread does not turn into a SheetError, and an error GeeLark
+    puts in the envelope. Both used to arrive as a traceback - and the older
+    test for this read the source for an `except` line rather than raising
+    one, which cannot tell a caught exception from a commented-out one."""
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: settings))
+
+    def fail(settings_, args):
+        raise raised
+
+    monkeypatch.setattr(cli, "cmd_ping", fail)
+
+    assert cli.main(["ping"]) == code
+    assert f"{prefix} " in capsys.readouterr().err
+
+
+def test_a_config_that_will_not_load_stops_before_any_command_runs(
+        monkeypatch, capsys):
+    """Every command needs settings, so a credential problem surfaces here
+    rather than partway through one that has already spent money."""
+    def fail():
+        raise ConfigError("GEELARK_API_KEY is not set")
+
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(fail))
+
+    assert cli.main(["ping"]) == 2
+    assert "config: GEELARK_API_KEY is not set" in capsys.readouterr().err
+
+
+# ------------------------------------- the last branches, and the sweep
+def test_a_dump_prints_the_elements_it_found(monkeypatch, capsys, settings):
+    """The whole command: `geelark dump` is read, not parsed, so an element
+    that never reaches the terminal is a screen you cannot see."""
+    from geelark_farm.screen import Element
+
+    cli_mod = _wire(monkeypatch, FakePhones(already_running=True))
+    monkeypatch.setattr(cli_mod.screen, "capture", lambda c, p: "<x/>")
+    monkeypatch.setattr(cli_mod.screen, "parse", lambda xml: [
+        Element(text="Install", desc="", cls="android.widget.Button",
+                resource_id="", bounds="[0,0][9,9]", clickable=True,
+                enabled=True, focused=False, password=False)])
+
+    assert cli_mod.cmd_dump(settings, SimpleNamespace(phone="P1",
+                                                      save=None)) == 0
+    assert "Install" in capsys.readouterr().out
+
+
+def test_a_login_names_the_artifacts_it_kept(monkeypatch, tmp_path, capsys,
+                                              make_settings):
+    """They are the evidence of what the screen looked like when it stopped,
+    and a path nobody is told about is a file nobody opens."""
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    cli_mod = _wire_login(monkeypatch, Lifecycle(already_running=True),
+                          FakeLedger(), ok=False)
+    outcome = login_outcome(ok=False)
+    outcome.artifacts.append("artifacts/2026-login/wrong_password.xml")
+    monkeypatch.setattr(cli_mod.google_login, "sign_in",
+                        lambda *a, **k: outcome)
+
+    cli_mod.cmd_login(settings, login_args())
+
+    assert "wrong_password.xml" in capsys.readouterr().out
+
+
+def test_an_install_names_the_artifacts_it_kept(monkeypatch, tmp_path, capsys,
+                                                 make_settings):
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    cli_mod = _wire_install(monkeypatch, Lifecycle(already_running=True),
+                            FakeLedger(), ok=False)
+    outcome = install_outcome(ok=False)
+    outcome.artifacts.append("artifacts/2026-install/no_install_button.xml")
+    monkeypatch.setattr(cli_mod.play_install, "install",
+                        lambda *a, **k: outcome)
+
+    cli_mod.cmd_install(settings, install_args())
+
+    assert "no_install_button.xml" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ["login", "install", "build"])
+def test_watching_waits_when_there_is_somebody_to_wait_for(
+        command, monkeypatch, tmp_path, make_settings):
+    """The other half of the terminal guard. Skipping the wait when there is
+    a terminal would make the flag do nothing at all, which is what it did
+    before it was read (2026-08-23)."""
+    from geelark_farm import builder as builder_mod
+
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    fake = Lifecycle(already_running=True)
+    waited = []
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt="": waited.append(prompt) or "")
+
+    if command == "build":
+        cli_mod = _wire(monkeypatch, fake)
+        monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+        monkeypatch.setattr(builder_mod, "run",
+                            lambda c, s, *, count, workers, dry_run, on_ready:
+                            on_ready("P7") or [build(1, True)])
+    elif command == "login":
+        cli_mod = _wire_login(monkeypatch, fake, FakeLedger())
+    else:
+        cli_mod = _wire_install(monkeypatch, fake, FakeLedger())
+    monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: True)
+
+    handler = {"build": lambda: cli_mod.cmd_build(settings, Args(watch=True)),
+               "login": lambda: cli_mod.cmd_login(settings,
+                                                  login_args(watch=True)),
+               "install": lambda: cli_mod.cmd_install(settings,
+                                                      install_args(watch=True)),
+               }[command]
+
+    assert handler() == 0
+    assert len(waited) == 1 and "Enter" in waited[0]
+
+
+def test_every_command_the_parser_offers_has_something_to_run():
+    """`main` guards against a subcommand with no handler by refusing at the
+    point somebody types it. This is the same question asked here, where the
+    answer costs nothing to find."""
+    import re
+
+    source = pathlib.Path("src/geelark_farm/cli.py").read_text(encoding="utf-8")
+    declared = set(re.findall(r'add_parser\(\s*"([a-z-]+)"', source))
+    dispatched = set(re.findall(r'^\s+"([a-z-]+)": cmd_\w+,', source, re.M))
+
+    assert declared, "the sweep stopped matching how subcommands are declared"
+    assert declared == dispatched, declared ^ dispatched
