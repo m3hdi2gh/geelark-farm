@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from geelark_farm import screen
 from geelark_farm.flows import play_install
 
@@ -513,3 +515,283 @@ def test_the_two_phases_handle_a_parked_download_the_same_way():
 
     assert source.count("if _restart_download(client, phone_id, package):") == 2
     assert source.count("stall.reset()") == 2
+
+
+# =====================================================================
+# The install loop itself (2026-08-25). The recognisers were tested
+# against captured pages; the loop that acts on them was not - and
+# every branch in it is a row that failed once in a way nobody could
+# read.
+# =====================================================================
+
+class Store:
+    """The Play Store, as a queue of pages and a record of what was pressed."""
+
+    def __init__(self, *pages, taps=(), installs_after=None):
+        self.pages = list(pages)
+        self.taps = set(taps)
+        self.installs_after = installs_after
+        self.tapped: list[str] = []
+        self.commands: list[str] = []
+        self.captures = 0
+        self.packages_seen = 0
+
+    def next_page(self) -> str:
+        self.captures += 1
+        if not self.pages:
+            raise AssertionError(f"asked for page {self.captures}, and only "
+                                 f"{self.captures - 1} were queued")
+        return self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
+
+    def install(self, monkeypatch):
+        def tap_element(client, phone_id, element):
+            if element.label in self.taps:
+                self.tapped.append(element.label)
+                return True
+            return False
+
+        def tap_first_present(client, phone_id, elements, labels, **kw):
+            for label in labels:
+                if label in self.taps:
+                    self.tapped.append(label)
+                    return label
+            return None
+
+        def installed(client, phone_id, package, **kw):
+            self.packages_seen += 1
+            if self.installs_after is None:
+                return False
+            return self.packages_seen > self.installs_after
+
+        monkeypatch.setattr(screen, "capture",
+                            lambda c, p: self.next_page())
+        monkeypatch.setattr(screen, "tap_element", tap_element)
+        monkeypatch.setattr(screen, "tap_first_present", tap_first_present)
+        monkeypatch.setattr(play_install.shell, "package_installed", installed)
+        monkeypatch.setattr(play_install.shell, "run",
+                            lambda c, p, cmd, **kw: self.commands.append(cmd))
+        # A virtual clock, not a no-op sleep. `install` loops until a
+        # monotonic deadline, so a sleep that does nothing turns it into a
+        # busy spin that runs for the whole budget in real seconds - which is
+        # a test suite that hangs rather than reports.
+        now = [1000.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        monkeypatch.setattr(play_install.time, "sleep", sleep)
+        monkeypatch.setattr(play_install.time, "monotonic", lambda: now[0])
+        self.clock = now
+        return self
+
+
+@pytest.fixture
+def store(monkeypatch):
+    def make(*pages, **kw):
+        return Store(*pages, **kw).install(monkeypatch)
+    return make
+
+
+def play_page(*labels, clickable=True):
+    nodes = "".join(
+        f'<node text="{label}" resource-id="" class="android.widget.TextView" '
+        f'bounds="[0,{i * 100}][400,{i * 100 + 80}]" '
+        f'clickable="{str(clickable).lower()}" />'
+        for i, label in enumerate(labels))
+    return f'<?xml version="1.0"?><hierarchy>{nodes}</hierarchy>'
+
+
+BLANK = '<?xml version="1.0"?><hierarchy></hierarchy>'
+
+
+def do_install(**kw):
+    return play_install.install(None, "P", "com.openai.chatgpt", **kw)
+
+
+# ------------------------------------------------------- already done
+def test_an_app_already_on_the_device_is_not_installed_again(store):
+    """Minutes and a Play session for nothing, and the answer is already
+    known - `finish` reaches this on every phone it picks up."""
+    shop = store(BLANK, installs_after=0)
+
+    out = do_install()
+
+    assert out.ok
+    assert out.reason == "already_installed"
+    assert shop.captures == 0, "it opened Play for an app that was there"
+
+
+# ---------------------------------------------------- Play refusing outright
+def test_a_page_play_will_not_install_from_is_named_and_kept(store, tmp_path):
+    """The account cannot install yet - unverified, or needing payment - and
+    that is a fact about the account, not a fault of this phone."""
+    store(play_page("You need to add a payment method to continue"))
+
+    out = do_install(budget_seconds=30, artifact_dir=tmp_path)
+
+    assert out.kind == "fatal"
+    assert out.reason == "play_needs_payment"
+    assert out.artifacts
+
+
+# ------------------------------------------------ a page that never painted
+def test_a_blank_page_is_not_reported_as_a_missing_button(store, tmp_path):
+    """Saying "no Install button" of a blank screen sends whoever reads it
+    looking for a button that was never missing - row 1 spent its pre-install
+    budget waiting and was then reported as though Play had refused it
+    (2026-08-07)."""
+    store(BLANK)
+
+    out = do_install(budget_seconds=0, artifact_dir=tmp_path)
+
+    assert out.reason == "play_page_never_loaded"
+
+
+def test_a_page_with_content_but_no_install_says_what_was_on_it(store,
+                                                                tmp_path):
+    """This reason is only ever diagnosed from what was actually on the page,
+    so the labels go in the message and the page goes on disk."""
+    store(play_page("About this app", "Data safety", "Ratings and reviews"))
+
+    out = do_install(budget_seconds=0, artifact_dir=tmp_path)
+
+    assert out.reason == "no_install_button"
+    assert "About this app" in out.detail
+    assert out.artifacts
+
+
+# ----------------------------------------------------- Play's own error page
+def test_try_again_is_pressed_only_when_it_is_a_real_button(store, tmp_path):
+    """Row 2's page said "Something went wrong. Please go back and try again."
+    and had nothing to press - and "try again" is a whole word inside that
+    sentence, so the label search matched the subtitle. Every attempt tapped a
+    line of text and reported success, so the page was never re-opened and the
+    row failed three identical times (2026-08-08)."""
+    prose = play_page("Something went wrong. Please go back and try again.",
+                      clickable=False)
+    shop = store(prose, taps={"Try again"})
+
+    do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert shop.tapped == [], "it pressed a line of text"
+    assert any("am start" in c for c in shop.commands), (
+        "with nothing pressable, the deep link is what re-opens the page")
+
+
+def test_a_server_error_that_will_not_clear_is_named(store, tmp_path):
+    """`play_server_error` rather than a timeout: the difference is whether to
+    retry the row at all."""
+    shop = store(play_page("Server error"), taps={"Try again"})
+
+    out = do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert out.reason == "play_server_error"
+    assert str(play_install.MAX_PLAY_RETRIES) in out.detail
+    assert shop.captures > play_install.MAX_PLAY_RETRIES
+
+
+# ------------------------------------------- Play wandering off the page
+def test_a_page_without_install_is_reopened_before_it_is_given_up_on(store,
+                                                                     tmp_path):
+    """Play wanders: after its Terms dialog was cleared, one row was left on
+    the "About this app" description page, which has no Install button on it
+    at all and was reported as though Play had refused the install
+    (2026-08-10, row 10)."""
+    shop = store(play_page("About this app", "Data safety"))
+
+    do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    deep_links = [c for c in shop.commands if "am start" in c]
+    assert len(deep_links) >= play_install.MAX_PAGE_REOPENS, (
+        "it gave up on the page Play happened to be showing")
+
+
+def test_an_interstitial_is_cleared_before_install_is_looked_for(store,
+                                                                  tmp_path):
+    """Play puts a Terms dialog and an account-setup card in front of the
+    button, and neither is a refusal."""
+    shop = store(play_page("Complete account setup"),
+                 taps={"Complete account setup"})
+
+    do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert "Complete account setup" in shop.tapped
+
+
+# ------------------------------------------- after Install has been pressed
+def test_the_app_arriving_on_the_device_is_what_ends_the_wait(store,
+                                                              tmp_path):
+    """Not the page saying Open, and not the progress bar disappearing: the
+    package is either in `pm list packages` or it is not."""
+    shop = store(play_page("Install"), taps={"Install"}, installs_after=1)
+
+    out = do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert out.ok
+    assert out.reason == "installed"
+    assert shop.tapped == ["Install"]
+
+
+def test_an_install_that_never_arrives_is_a_budget_not_a_refusal(store,
+                                                                 tmp_path):
+    """A download that is simply slow is not a fault of the account or the
+    page - and the two are settled differently, so they must not share a
+    reason."""
+    store(play_page("Install"), taps={"Install"})
+
+    out = do_install(budget_seconds=120, artifact_dir=tmp_path)
+
+    assert out.kind == "budget"
+    assert out.reason == "budget_exhausted"
+    assert "120s" in out.detail
+    assert out.artifacts, "the page it gave up on was not kept"
+
+
+def test_an_interstitial_during_the_download_is_archived_once(store,
+                                                              tmp_path):
+    """Play raises the same card repeatedly while a download runs. Keeping a
+    copy each time buries the pages that matter under twenty identical ones,
+    and the prune that keeps the directory usable then has to work through
+    them."""
+    shop = store(play_page("Install"), play_page("Got it"),
+                 taps={"Install", "Got it"})
+
+    do_install(budget_seconds=120, artifact_dir=tmp_path)
+
+    kept = [p.name for p in tmp_path.iterdir() if "interstitial" in p.name]
+    assert len(kept) == 1, f"archived the same card {len(kept)} times"
+    assert shop.tapped.count("Got it") > 1, "the card was only raised once"
+
+
+def test_a_verdict_page_during_the_download_ends_it(store, tmp_path):
+    """Play can refuse after the button as well as before it, and waiting out
+    the budget on a page that has already said no spends ten minutes to reach
+    the same answer."""
+    store(play_page("Install"), play_page("This app isn't available"),
+          taps={"Install"})
+
+    out = do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert out.kind == "fatal"
+    assert out.reason == "app_unavailable"
+
+
+def test_an_install_element_with_no_usable_bounds_is_not_a_silent_pass(store,
+                                                                       tmp_path):
+    """Tapping it returned False and the flow carried on waiting for a
+    download nobody started."""
+    store(play_page("Install"), taps=set())
+
+    out = do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert out.reason == "no_install_button"
+    assert "bounds" in out.detail
+
+
+def test_an_outcome_reads_as_kind_reason_and_detail():
+    """Logged and put in a cell beside the others, so it has to be legible on
+    one line."""
+    assert str(play_install.Outcome("fatal", "no_install_button")) == \
+        "fatal:no_install_button"
+    assert str(play_install.Outcome("success", "installed", "com.x")) == \
+        "success:installed - com.x"
