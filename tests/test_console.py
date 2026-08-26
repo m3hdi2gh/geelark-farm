@@ -650,9 +650,14 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
         {"id": "P2", "serialNo": "802", "status": ui.phones.RUNNING},
     ])
     monkeypatch.setattr(ui.phones, "reapable", reapable)
-    monkeypatch.setattr(ui.phones, "reap",
-                        lambda c, book, verdicts=None, dry_run=False:
-                        reaped.setdefault("got", verdicts) or len(verdicts or []))
+    def reap(client, ledger, *, verdicts=None, dry_run=False):
+        # A count, which is what the real one answers and what the console
+        # prints into "stopped {n}". Written as `setdefault(...) or len(...)`
+        # it never reached the len: the list it stored is truthy.
+        reaped["got"] = verdicts
+        return len(verdicts or [])
+
+    monkeypatch.setattr(ui.phones, "reap", reap)
     monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
 
     ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
@@ -675,8 +680,10 @@ def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
     monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "a"))
 
     asked = {}
-    monkeypatch.setattr(ui, "stop_all",
-                        lambda s, targets=None: asked.setdefault("t", targets))
+    def stop_all(settings, targets=None):
+        asked["t"] = targets            # and answers None, as the real one does
+
+    monkeypatch.setattr(ui, "stop_all", stop_all)
 
     ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
 
