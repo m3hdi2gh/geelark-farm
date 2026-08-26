@@ -311,10 +311,10 @@ def test_a_finished_phone_is_named_from_the_moment_it_starts():
     from geelark_farm.ui import BuildReporter
     reporter = BuildReporter()
 
-    reporter.start(1, 3, serial="823", gmail="NovaEclipse738465@gmail.com")
+    reporter.start(1, 3, serial="823", gmail="SkylarVale738465@example.com")
 
     assert reporter.rows[1]["phone"] == "823"
-    assert reporter.rows[1]["email"] == "NovaEclipse738465@gmail.com"
+    assert reporter.rows[1]["email"] == "SkylarVale738465@example.com"
 
 
 def test_a_new_build_still_starts_unnamed():

@@ -263,7 +263,7 @@ class Pool:
 
         The old single-row sheet checked this and the check was lost when that
         module went. A duplicate app account was sitting in the tab within the
-        day (2026-08-13, tararrashnooo@gmail.com on rows 5 and 14).
+        day (2026-08-13, quietmeadow@example.com on rows 5 and 14).
 
         The first occurrence is kept, so the fix is to delete the later row -
         and the error says which one it is.

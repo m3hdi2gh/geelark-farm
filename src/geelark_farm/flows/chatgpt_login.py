@@ -356,7 +356,7 @@ EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
 
 #: The heading the account's own address sits under on the settings page.
 #: Observed beside it on the live capture: `Parental controls`, `Email`,
-#: `mizikilak240@gmail.com`, `Appearance`.
+#: `testaccount001@example.com`, `Appearance`.
 EMAIL_HEADING = "email"
 
 

@@ -276,7 +276,7 @@ geelark screenshot
 
 ### Naming
 
-A phone is called `832 - NovaEclipse738465` in GeeLark's own list: the serial
+A phone is called `832 - SkylarVale738465` in GeeLark's own list: the serial
 first, because that is the key everything else is filed under — the Phones
 tab is addressed by it, History records it, a failed build's artifacts are
 named for it — then the address, because that is the half a person thinks in.
