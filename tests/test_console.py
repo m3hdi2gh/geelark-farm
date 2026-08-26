@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console, Group
 
-from geelark_farm import builder, ui
+from geelark_farm import builder, failures, ui
 from geelark_farm.api import ApiError, TransportError
 from geelark_farm.config import ConfigError
 from geelark_farm.ledger import Ledger
@@ -1251,3 +1251,193 @@ def test_nothing_running_says_so_rather_than_printing_an_empty_list(
 
 def rendered_out(capsys) -> str:
     return capsys.readouterr().out
+
+
+# =====================================================================
+# The views (2026-08-26). These are read by somebody deciding what to
+# do next, so what they leave out is the failure - a row set aside with
+# no advice beside it sends the reader back to the workbook, which is
+# the thing this console exists to replace.
+# =====================================================================
+
+def resource(label="a@b.com", *, row=2, status="", note="", error=None):
+    return type("Resource", (), {
+        "label": label, "sheet_row": row, "error": error,
+        "values": {"Status": status, "Note": note},
+    })()
+
+
+def pool_of(tab, *, available=0, flagged=(), stuck=(), broken=(),
+            service="Google", statuses=None):
+    statuses = statuses or {}
+    return type("Pool", (), {
+        "tab": tab,
+        "service": service,
+        "note_column": "Note",
+        "available": [object()] * available,
+        "flagged": list(flagged),
+        "stuck": list(stuck),
+        "broken": list(broken),
+        "status_of": staticmethod(
+            lambda r: statuses.get(r.label, r.values.get("Status", ""))),
+    })()
+
+
+def book_of(*, gmails=None, apps=None, proxies=None, unfinished=()):
+    return type("Book", (), {
+        "gmails": gmails or pool_of("Gmails"),
+        "apps": apps or pool_of("Gpt Info", service="OpenAI"),
+        "proxies": proxies or pool_of("Proxy"),
+        "phones": type("P", (), {
+            "unfinished": staticmethod(lambda: list(unfinished))})(),
+    })()
+
+
+def showing(monkeypatch, book):
+    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s: book))
+
+
+# ----------------------------------------------------- needs attention
+def test_a_quiet_workbook_says_so_rather_than_showing_an_empty_frame(
+        monkeypatch, make_settings):
+    showing(monkeypatch, book_of())
+
+    assert "Nothing is waiting on you" in rendered(
+        ui.attention_view(make_settings()))
+
+
+def test_a_row_a_flow_set_aside_is_shown_with_what_to_do_about_it(
+        monkeypatch, make_settings):
+    """The view this console did not have. Every question asked of this
+    project in a fortnight was answered by opening the workbook and reading
+    Status columns by eye, then looking up what each reason meant - and all of
+    it was already in `failures.py`."""
+    flagged = resource("bad@b.com", status="wrong_password")
+    showing(monkeypatch, book_of(
+        gmails=pool_of("Gmails", flagged=[flagged])))
+
+    text = rendered(ui.attention_view(make_settings()))
+
+    assert "bad@b.com" in text
+    assert "wrong_password" in text
+    assert failures.verdict("wrong_password", "Google").advice[:24] in text
+
+
+def test_a_row_set_aside_with_a_pools_own_word_shows_the_note_instead(
+        monkeypatch, make_settings):
+    """`challenged` and `dead` are the pool's vocabulary, not the taxonomy's.
+    Asking for a verdict returns the fallback, which tells the reader to go
+    and edit failures.py - and the note the run left already says what
+    happened."""
+    dead = resource("SX4", status="dead",
+                    note="Refused every connection on 26 Aug.")
+    showing(monkeypatch, book_of(proxies=pool_of("Proxy", flagged=[dead])))
+
+    text = rendered(ui.attention_view(make_settings()))
+
+    assert "Refused every connection" in text
+    assert "failures.py" not in text, "it showed the fallback"
+
+
+def test_a_phone_one_step_short_says_it_costs_nothing_new(monkeypatch,
+                                                           make_settings):
+    """The distinction that decides whether to press 2: these need an app
+    account and nothing else."""
+    showing(monkeypatch, book_of(unfinished=[
+        {"serial": "801", "gmail": "a@b.com", "status": "incomplete"}]))
+
+    text = rendered(ui.attention_view(make_settings()))
+
+    assert "801" in text
+    assert "no new phone, Gmail or proxy is spent" in text
+
+
+def test_a_stuck_row_is_pointed_at_the_menu_that_frees_it(monkeypatch,
+                                                           make_settings):
+    """It was the question that came up twice this week, and the answer is not
+    where anyone looks for it."""
+    showing(monkeypatch, book_of(
+        apps=pool_of("Gpt Info", stuck=[resource("held@b.com")])))
+
+    text = rendered(ui.attention_view(make_settings()))
+
+    assert "claimed by a run that is gone" in text
+    assert "What I have to work with" in text
+
+
+def test_a_row_this_tool_cannot_read_names_the_row_and_the_reason(
+        monkeypatch, make_settings):
+    """A broken row is not a failure of a run, it is a cell somebody has to
+    correct - so the sheet row number is the whole of the fix."""
+    showing(monkeypatch, book_of(gmails=pool_of("Gmails", broken=[
+        resource("", row=14, error="not an email address")])))
+
+    text = rendered(ui.attention_view(make_settings()))
+
+    assert "row 14" in text
+    assert "not an email address" in text
+
+
+# --------------------------------------------------- what I have to work with
+def test_the_stock_view_counts_each_pool_and_names_what_is_wrong(
+        monkeypatch, make_settings):
+    showing(monkeypatch, book_of(
+        proxies=pool_of("Proxy", available=7, stuck=[resource("SX1")]),
+        gmails=pool_of("Gmails", available=3,
+                       broken=[resource("", row=9, error="no password")]),
+        apps=pool_of("Gpt Info", available=0)))
+    monkeypatch.setattr(ui, "build_client", lambda s: None)
+    monkeypatch.setattr(ui, "cached_plan", lambda c: {})
+    monkeypatch.setattr(ui.phones, "listing", lambda c: [])
+
+    text = rendered(ui.pools_view(make_settings()))
+
+    assert "7 available" in text
+    assert "1 stuck in_use" in text
+    assert "row 9" in text and "no password" in text
+
+
+def test_slots_held_by_something_else_are_named(monkeypatch, make_settings):
+    """The answer to a create failing while the tab looks full: browser
+    profiles share this pool."""
+    showing(monkeypatch, book_of())
+    monkeypatch.setattr(ui, "build_client", lambda s: None)
+    monkeypatch.setattr(ui, "cached_plan",
+                        lambda c: {"profiles": 30, "availableProfiles": 5})
+    monkeypatch.setattr(ui.phones, "listing", lambda c: [{"id": "P1"}] * 10)
+
+    text = rendered(ui.pools_view(make_settings()))
+
+    assert "15 held by something else" in text
+    assert "browser profiles" in text
+
+
+def test_a_plan_that_cannot_be_read_does_not_take_the_stock_with_it(
+        monkeypatch, make_settings):
+    """The pools came from the sheet and are still true. A dashboard that
+    blanks them because GeeLark was busy is worse than one missing a line."""
+    showing(monkeypatch, book_of(proxies=pool_of("Proxy", available=4)))
+    monkeypatch.setattr(ui, "build_client", lambda s: None)
+    monkeypatch.setattr(ui, "cached_plan",
+                        lambda c: (_ for _ in ()).throw(
+                            TransportError("plan is unreachable")))
+
+    text = rendered(ui.pools_view(make_settings()))
+
+    assert "4 available" in text
+    assert "unreachable" in text
+
+
+# ------------------------------------------------------ the renewal date
+def test_a_renewal_date_nobody_reported_is_not_rendered_as_1970(monkeypatch,
+                                                                 make_settings):
+    """`localtime(0)` is 1 Jan 1970, and a date is read as an answer. This is
+    the one number somebody plans a month around (2026-08-26)."""
+    assert ui.plan_expiry({}, "%d %b %Y") == "not reported"
+    assert ui.plan_expiry({"expirationTime": None}, "%d %b %Y") == "not reported"
+    assert "1970" not in ui.plan_expiry({"expirationTime": 0}, "%d %b %Y")
+
+
+def test_a_renewal_date_that_was_reported_is_shown():
+    assert ui.plan_expiry({"expirationTime": 1789518224}, "%Y") == "2026"
+

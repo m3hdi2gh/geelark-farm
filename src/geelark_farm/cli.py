@@ -397,8 +397,13 @@ def cmd_plan(settings: Settings, args) -> int:
     total = info.get("profiles") or 0
     free = info.get("availableProfiles") or 0
 
-    expires = time.strftime("%Y-%m-%d",
-                            time.localtime(info.get("expirationTime", 0)))
+    # Through the console's helper, so the two say the same thing about a
+    # field GeeLark did not send - this printed 1970-01-01 for it. Imported
+    # here rather than at the top, the way `cmd_ui` does: rich is a heavy
+    # import and every other command pays for it.
+    from .ui import plan_expiry
+
+    expires = plan_expiry(info, "%Y-%m-%d")
     print(f"plan            : {'Pro' if info.get('plan') == 1 else 'Base'}"
           f"  (${info.get('monthlyFee')}/month, expires {expires})")
     print(f"profile slots   : {total} total, {free} free")
