@@ -874,6 +874,19 @@ def attention_view(settings: Settings) -> Panel:
                  border_style=DIM, padding=(1, 2))
 
 
+def plan_expiry(info: dict, shape: str) -> str:
+    """When the subscription renews, or that nobody said.
+
+    `localtime(0)` is 1 Jan 1970, so a missing field rendered as a date - and
+    a date is read as an answer. The renewal is the one number here somebody
+    plans a month around (2026-08-26).
+    """
+    when = info.get("expirationTime")
+    if not when:
+        return "not reported"
+    return time.strftime(shape, time.localtime(when))
+
+
 def pools_view(settings: Settings) -> Panel:
     """What a build has to draw on: the sheet's stock and the plan's slots.
 
@@ -916,8 +929,7 @@ def pools_view(settings: Settings) -> Panel:
         parallel = info.get("parallels")
         table.add_row("parallel", str(parallel) if parallel else
                       f"[{WARN}]none - concurrent phones may cost extra[/]")
-        table.add_row("renews", time.strftime(
-            "%d %b %Y", time.localtime(info.get("expirationTime", 0))))
+        table.add_row("renews", plan_expiry(info, "%d %b %Y"))
     except (ApiError, TransportError) as exc:
         table.add_row("plan", f"[{BAD}]{str(exc).splitlines()[0]}[/]")
 
