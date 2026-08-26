@@ -17,8 +17,9 @@ jobs:
       matrix:
         # The oldest version pyproject claims to support, and the one used for
         # development. A gap between them is worth finding here rather than on
-        # someone else's machine.
-        python-version: ["3.10", "3.12"]
+        # someone else's machine - so the second entry follows the interpreter
+        # in the working venv, and said 3.12 for a while after it was 3.13.
+        python-version: ["3.10", "3.13"]
 
     steps:
       - uses: actions/checkout@v4

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import ast
 import re
-from importlib.metadata import packages_distributions
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -59,23 +58,32 @@ def imported() -> set[str]:
             and name != "geelark_farm"}
 
 
-def distributions_for(module: str) -> set[str]:
-    return {normalised(dist)
-            for dist in packages_distributions().get(module, [])}
+#: The one dependency whose distribution name is not what you import. A table
+#: with a single entry beats asking the environment: `packages_distributions()`
+#: answered for gspread, pyotp and rich on Windows and not on Linux, so the
+#: first version of these tests passed here and turned CI red (2026-08-27) -
+#: which is the failure they exist to prevent, arriving through the test.
+PROVIDES = {"google-auth": {"google"}}
+
+
+def provides(dist: str) -> set[str]:
+    """The top-level names installing `dist` puts on the path."""
+    return PROVIDES.get(dist, {dist.replace("-", "_")})
 
 
 def test_every_package_the_code_imports_is_declared():
     """Otherwise it installs on this machine and not on the next one."""
-    missing = [module for module in sorted(imported())
-               if not distributions_for(module) & declared()]
+    available = {name for dist in declared() for name in provides(dist)}
+    missing = sorted(imported() - available)
 
     assert not missing, f"imported by src/ but not in dependencies: {missing}"
 
 
 def test_every_declared_dependency_is_actually_imported():
     """The other direction, which nothing else would ever notice."""
-    used = {dist for module in imported() for dist in distributions_for(module)}
-    unused = sorted(declared() - used)
+    modules = imported()
+    unused = sorted(dist for dist in declared()
+                    if not provides(dist) & modules)
 
     assert not unused, f"declared but imported nowhere in src/: {unused}"
 
