@@ -14,9 +14,12 @@ import pathlib
 import re
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console, Group
 
 from geelark_farm import builder, ui
+from geelark_farm.api import ApiError
+from geelark_farm.ui import Snapshot
 
 SRC = pathlib.Path(ui.__file__)
 
@@ -255,7 +258,6 @@ def test_the_console_updates_the_sheet_before_it_draws_anything():
 
 
 def test_the_dashboard_states_what_is_running_without_pricing_it():
-    from geelark_farm.ui import Snapshot
 
     text = rendered(ui.dashboard(Snapshot(phones_total=10, phones_running=2)))
 
@@ -268,7 +270,6 @@ def test_the_dashboard_says_when_rows_are_being_refused():
     Two of them were duplicates of earlier rows, which the pools refuse so one
     account cannot be signed into two phones at once - true, and invisible on
     the first screen anyone looks at."""
-    from geelark_farm.ui import Snapshot
 
     text = rendered(ui.dashboard(Snapshot(proxies_free=16, gmails_free=18,
                                           apps_free=2, pools_broken=2)))
@@ -279,7 +280,6 @@ def test_the_dashboard_says_when_rows_are_being_refused():
 
 
 def test_a_clean_dashboard_says_nothing_about_refused_rows():
-    from geelark_farm.ui import Snapshot
 
     text = rendered(ui.dashboard(Snapshot(proxies_free=16, gmails_free=18,
                                           apps_free=2)))
@@ -627,7 +627,7 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
     other caller and the one that actually shows a list to a person, looked
     again instead. A run claiming or releasing a phone in the seconds someone
     spends reading the question is all it takes (2026-08-23)."""
-    import geelark_farm.ui as ui_mod
+    import geelark_farm.ui as ui
 
     shown = [("P1", "not in the ledger"), ("P2", "already released")]
     looks = {"n": 0}
@@ -638,44 +638,44 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
         return shown if looks["n"] == 1 else [("P9", "arrived since")]
 
     reaped = {}
-    monkeypatch.setattr(ui_mod, "build_client", lambda s: object())
-    monkeypatch.setattr(ui_mod.Ledger, "load",
+    monkeypatch.setattr(ui, "build_client", lambda s: object())
+    monkeypatch.setattr(ui.Ledger, "load",
                         staticmethod(lambda d: SimpleNamespace(
                             get=lambda i: None)))
-    monkeypatch.setattr(ui_mod.phones, "listing", lambda c: [
-        {"id": "P1", "serialNo": "801", "status": ui_mod.phones.RUNNING},
-        {"id": "P2", "serialNo": "802", "status": ui_mod.phones.RUNNING},
+    monkeypatch.setattr(ui.phones, "listing", lambda c: [
+        {"id": "P1", "serialNo": "801", "status": ui.phones.RUNNING},
+        {"id": "P2", "serialNo": "802", "status": ui.phones.RUNNING},
     ])
-    monkeypatch.setattr(ui_mod.phones, "reapable", reapable)
-    monkeypatch.setattr(ui_mod.phones, "reap",
+    monkeypatch.setattr(ui.phones, "reapable", reapable)
+    monkeypatch.setattr(ui.phones, "reap",
                         lambda c, book, verdicts=None, dry_run=False:
                         reaped.setdefault("got", verdicts) or len(verdicts or []))
-    monkeypatch.setattr(ui_mod.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
 
-    ui_mod.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+    ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
 
     assert reaped["got"] == shown
 
 
 def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
     """Same rule for the other branch: `stop_all` listed a second time."""
-    import geelark_farm.ui as ui_mod
+    import geelark_farm.ui as ui
 
-    monkeypatch.setattr(ui_mod, "build_client", lambda s: object())
-    monkeypatch.setattr(ui_mod.Ledger, "load",
+    monkeypatch.setattr(ui, "build_client", lambda s: object())
+    monkeypatch.setattr(ui.Ledger, "load",
                         staticmethod(lambda d: SimpleNamespace(
                             get=lambda i: None)))
-    monkeypatch.setattr(ui_mod.phones, "reapable", lambda c, book: [])
-    monkeypatch.setattr(ui_mod.phones, "listing", lambda c: [
-        {"id": "P1", "serialNo": "801", "status": ui_mod.phones.RUNNING},
+    monkeypatch.setattr(ui.phones, "reapable", lambda c, book: [])
+    monkeypatch.setattr(ui.phones, "listing", lambda c: [
+        {"id": "P1", "serialNo": "801", "status": ui.phones.RUNNING},
     ])
-    monkeypatch.setattr(ui_mod.Prompt, "ask", staticmethod(lambda *a, **k: "a"))
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "a"))
 
     asked = {}
-    monkeypatch.setattr(ui_mod, "stop_all",
+    monkeypatch.setattr(ui, "stop_all",
                         lambda s, targets=None: asked.setdefault("t", targets))
 
-    ui_mod.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+    ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
 
     assert asked["t"] == ["P1"]
 
@@ -875,9 +875,9 @@ def test_every_sync_that_acts_puts_back_what_a_dead_run_was_holding():
     test_a_report_does_not_delete_phones.
     """
     from geelark_farm import builder as builder_mod
-    from geelark_farm import ui as ui_mod
+    from geelark_farm import ui as ui
 
-    acting = [(ui_mod, "sync_on_startup"), (ui_mod, "apply_marks"),
+    acting = [(ui, "sync_on_startup"), (ui, "apply_marks"),
               (builder_mod, "run"), (builder_mod, "finish_run")]
 
     for module, function in acting:
@@ -893,13 +893,185 @@ def test_updating_the_sheet_does_everything_opening_the_console_does():
     """The two run the same sync, so the menu action cannot quietly do less.
     It did: no artifact prune and no claim release, both of which the startup
     had."""
-    from geelark_farm import ui as ui_mod
+    from geelark_farm import ui as ui
 
     # `on_step` drives the startup spinner and says nothing about what the
     # sync does, so it is not part of the comparison.
     presentation = {"on_step"}
-    startup = _sync_calls(ui_mod, "sync_on_startup")[0] - presentation
-    menu = _sync_calls(ui_mod, "apply_marks")[0] - presentation
+    startup = _sync_calls(ui, "sync_on_startup")[0] - presentation
+    menu = _sync_calls(ui, "apply_marks")[0] - presentation
 
     missing = startup - menu
     assert not missing, f"`Update the sheet` skips {sorted(missing)}"
+
+
+# =====================================================================
+# The console's decisions (2026-08-26). Most of this module draws
+# tables, and a wrong colour is visible. These are the parts where an
+# answer becomes a run: how many phones, how many at once, and what
+# the plan number is when GeeLark will not say.
+# =====================================================================
+
+def answers(monkeypatch, *replies, start=True):
+    """Feed the prompts a script, and record the defaults they offered.
+
+    Both kinds: `confirm_build` asks for two numbers and then for a yes, and
+    an unpatched one reads stdin - which under pytest is an OSError rather
+    than the answer the test meant to give.
+    """
+    offered: list[int] = []
+    queue = list(replies)
+
+    def ask(prompt, default=None, **kwargs):
+        offered.append(default)
+        return queue.pop(0) if queue else default
+
+    monkeypatch.setattr(ui.IntPrompt, "ask", staticmethod(ask))
+    monkeypatch.setattr(ui.Confirm, "ask",
+                        staticmethod(lambda *a, **k: start))
+    return offered
+
+
+def snapshot(**over):
+    """A dashboard reading, with the fields these tests care about named.
+
+    `has_pools` is not one of them: it is a property, and a negative
+    `proxies_free` is the sentinel for "the resource tabs are not in this
+    sheet at all".
+    """
+    base = dict(phones_total=0, phones_running=0, phones_unfinished=0,
+                proxies_free=0, gmails_free=0, apps_free=0, pools_stuck=0,
+                slots_free=30, slots_total=30, parallels=0)
+    base.update(over)
+    return ui.Snapshot(**base)
+
+
+NO_TABS = -1
+
+
+# --------------------------------------------------- how many phones, and why
+def test_the_default_is_what_the_stock_can_actually_reach(monkeypatch,
+                                                           make_settings):
+    """The arithmetic is `builder.Capacity`'s - the domain's, not the
+    console's. This offers it as the default so the ordinary answer is one
+    keypress."""
+    offered = answers(monkeypatch)
+    snap = snapshot(proxies_free=5, gmails_free=5, apps_free=3, slots_free=30)
+
+    ui.confirm_build(make_settings(), snap)
+
+    assert offered[0] == 3, "the app accounts are the limit, and the default"
+
+
+def test_asking_for_none_is_read_as_one(monkeypatch, make_settings):
+    """Zero is not an answer to "how many phones"; it is a typo or an empty
+    line, and a run of nothing looks identical to a run that failed."""
+    answers(monkeypatch, 0, 1)
+
+    options = ui.confirm_build(make_settings(),
+                                   snapshot(proxies_free=2, gmails_free=2,
+                                            apps_free=2))
+
+    assert options is None or options["count"] >= 1
+
+
+def test_workers_never_exceed_the_number_of_phones(monkeypatch,
+                                                    make_settings):
+    """Four workers for two phones is two threads that start, find nothing to
+    do and exit - and a live table with two empty rows in it."""
+    answers(monkeypatch, 2, 9)
+
+    options = ui.confirm_build(make_settings(),
+                                   snapshot(proxies_free=9, gmails_free=9,
+                                            apps_free=9))
+
+    assert options["workers"] <= options["count"] == 2
+
+
+def test_a_sheet_with_no_resource_tabs_is_refused_before_anything_is_asked(
+        monkeypatch, make_settings):
+    """`build` has nothing to read, and asking "how many phones" first would
+    take an answer it cannot act on."""
+    asked = answers(monkeypatch, 5)
+
+    assert ui.confirm_build(make_settings(),
+                                snapshot(proxies_free=NO_TABS)) is None
+    assert asked == [], "it asked before it knew there was anything to build"
+
+
+# ------------------------------------------------------- the plan, cached
+def test_the_plan_is_asked_for_at_most_once_a_minute(monkeypatch):
+    """Its own limiter is separate from the 200/min one in api.py, so the
+    shared rate limiter cannot see it coming."""
+    monkeypatch.setattr(ui, "_plan_cache", None)
+    calls = []
+    clock = [1000.0]
+    monkeypatch.setattr(ui.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ui.phones, "plan",
+                        lambda c: calls.append(1) or {"profiles": 30})
+
+    assert ui.cached_plan(None)["profiles"] == 30
+    ui.cached_plan(None)
+
+    assert len(calls) == 1, "it asked twice inside the window"
+
+    clock[0] += ui._PLAN_TTL + 1
+    ui.cached_plan(None)
+
+    assert len(calls) == 2, "the window never expired"
+
+
+def test_a_rate_limited_plan_falls_back_to_the_last_answer(monkeypatch):
+    """The last known answer is better than an error message where a number
+    should be - these limits barely change."""
+    monkeypatch.setattr(ui, "_plan_cache", None)
+    clock = [1000.0]
+    monkeypatch.setattr(ui.time, "monotonic", lambda: clock[0])
+
+    answers_from_geelark = [{"profiles": 30}]
+
+    def plan(client):
+        if answers_from_geelark:
+            return answers_from_geelark.pop()
+        raise ApiError(ui.PLAN_RATE_LIMITED, "too many requests",
+                       path="/v1/pay/plan/info", trace_id="T")
+
+    monkeypatch.setattr(ui.phones, "plan", plan)
+
+    assert ui.cached_plan(None)["profiles"] == 30
+
+    clock[0] += ui._PLAN_TTL + 1
+
+    assert ui.cached_plan(None)["profiles"] == 30, "it lost the number"
+
+
+def test_a_rate_limit_with_nothing_cached_is_still_an_error(monkeypatch):
+    """Nothing to fall back on. Swallowing it would draw a dashboard whose
+    plan line is silently made up."""
+    monkeypatch.setattr(ui, "_plan_cache", None)
+    monkeypatch.setattr(ui.time, "monotonic", lambda: 1000.0)
+
+    def plan(client):
+        raise ApiError(ui.PLAN_RATE_LIMITED, "too many requests",
+                       path="/v1/pay/plan/info", trace_id="T")
+
+    monkeypatch.setattr(ui.phones, "plan", plan)
+
+    with pytest.raises(ApiError):
+        ui.cached_plan(None)
+
+
+def test_any_other_api_error_is_not_hidden_behind_a_stale_number(monkeypatch):
+    """A revoked key is not a rate limit, and reporting last minute's plan for
+    it says the account is fine when it is not."""
+    monkeypatch.setattr(ui, "_plan_cache", (1000.0, {"profiles": 30}))
+    monkeypatch.setattr(ui.time, "monotonic", lambda: 9_999.0)
+
+    def plan(client):
+        raise ApiError(40003, "signature rejected",
+                       path="/v1/pay/plan/info", trace_id="T")
+
+    monkeypatch.setattr(ui.phones, "plan", plan)
+
+    with pytest.raises(ApiError):
+        ui.cached_plan(None)
