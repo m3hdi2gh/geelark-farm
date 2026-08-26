@@ -15,9 +15,9 @@ take a proxy ──► create the phone behind it ──► boot
              ──► stop the phone ──► write the row
 ```
 
-About twelve minutes per phone, unattended — the median over 93 phones
-that reached ready, four minutes at the fastest and half an hour at the
-slowest. A phone that works through several credentials takes longer, which is
+About twelve minutes per phone, unattended — the median over 185 phones
+that reached ready, three and a half minutes at the fastest and half an hour
+at the slowest. A phone that works through several credentials takes longer, which is
 the point of it doing so.
 
 Nothing is spent in advance. A credential the service rejects costs that
@@ -87,6 +87,7 @@ The rest have defaults worth knowing about:
 |---|---|---|
 | `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once |
 | `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
+| `STALE_CLAIM_SECONDS` | the build budget | how long a claimed row may go unrefreshed before the sync frees it; shorten it only once every machine on the sheet is refreshing |
 | `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |
 | `TARGET_PACKAGE` | `com.openai.chatgpt` | deep-linked by package id, so no Play Store search and no clones |
 | `LOG_LEVEL` | `INFO` | the console only — the file log is always DEBUG |
@@ -106,9 +107,14 @@ you can rearrange them, and adding your own is safe.
 
 | you fill in | the tool writes |
 |---|---|
-| `Address`, `Password`, `2FA Secret` | `Used Date`, `Phone Serial`, `Status`, `Note` |
+| `Address`, `Password`, `2FA Secret` | `Used Date`, `Phone Serial`, `Status`, `Note`, `Claimed` |
 
 `Purchase Date` and `Seller` are ignored by the tool and yours to use.
+
+`Claimed` is a timestamp, and it is what decides when a row stuck on `in_use`
+comes back. A run refreshes it every minute for as long as it holds the row, so
+a stamp that has stopped moving means the run that took it is gone.
+`STALE_CLAIM_SECONDS` is how long it may stop for.
 
 ### Proxy — the exits
 
@@ -130,7 +136,18 @@ automatically the first time the tool opens the tab.
 
 | you fill in | the tool writes |
 |---|---|
-| `Address`, `Password`, `2FA Secret` | `Phone Serial`, `Status`, `Note` |
+| `Address`, `Password`, `2FA Secret`, `Email code` | `Phone Serial`, `Status`, `Note`, `Claimed` |
+
+`Email code` is a checkbox, and it is declared rather than guessed: ticked, it
+says this account has no password and no authenticator, and the only way in is
+a code the service emails. A blank password cell means "this account cannot
+hold one" exactly as often as it means "nobody has filled it in yet", and
+reading the second as the first is how a row that could never work costs a
+phone.
+
+Untouched, the column is empty and every row means what it meant before it
+existed. **On `stable` a ticked row is refused when the tab is read** — that
+sign-in lives on `main` — so nothing is spent on it either way.
 
 ### Phones — what the runs produced
 
@@ -159,9 +176,10 @@ A proxy is never *spent* — it keeps working, and the column says where it is
 rather than whether it is gone. Two proxy statuses take a row out of the pool
 until you put it back:
 
-- **`change ip`** — a service refused the connection through this exit. These
-  rows carry no port id, so nothing here can ask for a new address; change it
-  in the vendor's panel and set the status back to `free`.
+- **`change ip`** — a service refused the connection through this exit. The
+  proxy is fine; the address it comes out of has been turned down. Nothing
+  here can rotate it, so change it in the vendor's panel and set the status
+  back to `free`.
 - **`dead`** — GeeLark could not reach it. Retested every run, because these
   are rented monthly and one that stopped answering yesterday is often
   answering again today.
@@ -184,7 +202,13 @@ next one:
 | `failed` | something is wrong with it. The phone is deleted, the row dropped, its app account **freed** for another phone. |
 
 Either way the Gmail is retired as `used`: it signed into that phone, and that
-is the credit it had to spend. A running phone is never touched, only reported.
+is the credit it had to spend.
+
+A running phone is stopped first, because GeeLark will not delete one that is
+up. Only a phone a run is actually holding — a live claim in the ledger — is
+refused and reported instead; the power state on its own is not a reason,
+since a phone left up by a browser tab is nobody's and `done` on it still
+means delete.
 
 ## Check the setup
 
