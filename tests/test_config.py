@@ -241,3 +241,122 @@ def test_an_account_no_longer_carries_an_app_credential_nothing_read():
 
     assert not hasattr(accounts, "app_credentials")
     assert "app" not in accounts.Account.__dataclass_fields__
+
+
+# --------------------------------------- what mutation found (2026-08-26)
+def test_settings_cannot_be_changed_after_they_are_read(make_settings):
+    """Frozen on purpose. One object is shared by every worker in a run, and a
+    build that edited its own budget would edit everyone's - the same reason
+    `failures.py`'s verdicts are frozen, which was also untested at 100%
+    coverage until it was asked for (2026-08-26)."""
+    import dataclasses
+
+    import pytest
+
+    from geelark_farm.config import Settings
+
+    assert dataclasses.fields(Settings)          # it is a dataclass
+    settings = make_settings()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        settings.build_budget_seconds = 1
+
+
+def test_a_run_without_an_api_key_is_refused_at_the_door(monkeypatch):
+    """Required, so it fails here with the name of the variable rather than
+    six calls later as a signature rejection - which is what [40003] looks
+    like and sends whoever reads it checking the clock.
+
+    `load_env` is stubbed out: it reads the repository's own .env, which has
+    a key in it, so clearing the environment alone proves nothing.
+    """
+    from geelark_farm import config as config_mod
+
+    monkeypatch.setattr(config_mod, "load_env", lambda: None)
+    monkeypatch.setenv("GEELARK_APP_ID", "id")
+    monkeypatch.delenv("GEELARK_API_KEY", raising=False)
+
+    with pytest.raises(ConfigError, match="GEELARK_API_KEY"):
+        Settings.load()
+
+
+def test_the_default_parallelism_is_one(monkeypatch):
+    """Named, because it is the number that decides how many phones a mistake
+    costs at once. Raising it is a decision, not a default."""
+    from geelark_farm import config as config_mod
+
+    monkeypatch.setattr(config_mod, "load_env", lambda: None)
+    monkeypatch.setenv("GEELARK_APP_ID", "id")
+    monkeypatch.setenv("GEELARK_API_KEY", "key")
+    monkeypatch.delenv("MAX_CONCURRENT_PHONES", raising=False)
+
+    assert Settings.load().max_concurrent_phones == 1
+
+
+def test_the_sheet_check_names_whichever_half_is_missing(make_settings,
+                                                        tmp_path):
+    """Having one of the two is worse than having neither, because it reads
+    like it is set up."""
+    import pytest
+
+    from geelark_farm.config import ConfigError
+
+    no_id = make_settings(sheet_id="", service_account_json=tmp_path / "key.json")
+    with pytest.raises(ConfigError, match="GOOGLE_SHEET_ID"):
+        no_id.require_sheets()
+
+    no_key = make_settings(sheet_id="abc",
+                       service_account_json=tmp_path / "missing.json")
+    with pytest.raises(ConfigError, match="service account"):
+        no_key.require_sheets()
+
+
+def test_the_sheet_check_passes_when_both_halves_are_there(make_settings,
+                                                          tmp_path):
+    """The counterweight: a check that always raises is a check nobody can
+    satisfy."""
+    key = tmp_path / "key.json"
+    key.write_text("{}", encoding="utf-8")
+
+    make_settings(sheet_id="abc",
+                  service_account_json=key).require_sheets()
+
+
+def test_the_directories_are_made_with_their_parents(make_settings, tmp_path):
+    """The older test of this uses paths whose parents already exist, so it
+    holds `exist_ok` and says nothing about `parents` - and a STATE_DIR two
+    levels down is an ordinary thing to configure.
+
+    `log_dir` is in here because it was once left out, and only
+    `_configure_logging` making its own kept that from showing."""
+    settings = make_settings(state_dir=tmp_path / "a" / "state",
+                         artifact_dir=tmp_path / "b" / "artifacts",
+                         log_dir=tmp_path / "c" / "logs")
+
+    settings.ensure_dirs()
+
+    assert settings.state_dir.is_dir()
+    assert settings.artifact_dir.is_dir()
+    assert settings.log_dir.is_dir(), "the log directory was left out again"
+
+
+def test_making_the_directories_twice_is_not_an_error(make_settings, tmp_path):
+    """Every run calls this, and after the first one the directories are
+    already there - so `exist_ok` is not a nicety, it is the ordinary case."""
+    settings = make_settings(state_dir=tmp_path / "state",
+                             artifact_dir=tmp_path / "artifacts",
+                             log_dir=tmp_path / "logs")
+
+    settings.ensure_dirs()
+    settings.ensure_dirs()          # no raise
+
+    assert settings.artifact_dir.is_dir()
+
+
+def test_the_settings_carry_nothing_that_nothing_reads():
+    """`_sheets_checked` was declared in the first commit as a memo for
+    `require_sheets` and never wired up - so it could not be observed, which
+    is why three separate changes to it went unnoticed (2026-08-26)."""
+    from geelark_farm.config import Settings
+
+    assert not hasattr(Settings, "_sheets_checked")

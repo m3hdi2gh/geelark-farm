@@ -227,3 +227,160 @@ def test_releasing_a_phone_nothing_recorded_does_nothing(tmp_path):
     led.release("NEVER-SEEN", note="stopped by hand")
 
     assert led.entries == {}
+
+
+# --------------------------------------- what mutation found (2026-08-26)
+def test_a_ledger_held_open_by_another_reader_is_written_anyway(tmp_path,
+                                                                monkeypatch):
+    """On Windows `os.replace` fails with PermissionError while any other
+    handle has the destination open - and something reading the ledger at the
+    moment a parallel run writes it is exactly that. Caught by a concurrency
+    test rather than in production, where the symptom would have been a phone
+    silently missing from the ledger.
+
+    Only "it eventually gives up" was held. That is also true of a save that
+    never retries at all.
+    """
+    import os
+
+    ledger = Ledger(path=tmp_path / "ledger.json")
+    ledger.record("P1")
+
+    real = os.replace
+    refusals = [PermissionError("in use"), PermissionError("in use")]
+
+    def replace(src, dst):
+        if refusals:
+            raise refusals.pop()
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda _s: None)
+
+    ledger.record("P2")
+
+    assert refusals == [], "it gave up before the handle was released"
+    assert "P2" in Ledger.load(tmp_path).entries
+
+
+def test_a_ledger_that_will_not_write_leaves_no_temporary_behind(tmp_path,
+                                                                 monkeypatch):
+    """The half-written file is worse than the failure: the next load reads a
+    directory with a stray `.tmp` in it, and a crash mid-run leaves one that
+    nothing ever cleans up."""
+    import os
+
+    ledger = Ledger(path=tmp_path / "ledger.json")
+    monkeypatch.setattr(os, "replace",
+                        lambda src, dst: (_ for _ in ()).throw(
+                            PermissionError("never free")))
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda _s: None)
+
+    ledger.record("P1")          # returns rather than raising
+
+    leftovers = [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == [], f"left {leftovers} behind"
+
+
+def test_a_read_blocked_by_the_replace_window_is_tried_again(tmp_path,
+                                                             monkeypatch):
+    """The other half of the same Windows behaviour: while `os.replace` swaps
+    the file in, a reader that happens to open at that instant gets
+    PermissionError even though nothing is wrong. The file is either the old
+    one or the new one, never half of either - so retrying is the whole fix."""
+    path = tmp_path / "ledger.json"
+    path.write_text('{"phones": {"P9": {"created_at": 1.0}}}',
+                    encoding="utf-8")
+
+    real = pathlib.Path.read_text
+    refusals = [PermissionError("mid-replace")]
+
+    def read_text(self, *a, **kw):
+        if refusals and self == path:
+            raise refusals.pop()
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda _s: None)
+
+    assert "P9" in Ledger.load(tmp_path).entries
+    assert refusals == [], "it never hit the refusal"
+
+
+def test_the_directory_the_ledger_lives_in_is_made_for_it(tmp_path):
+    """`state/` on a fresh checkout does not exist, and the ledger is written
+    the instant a phone does - before anything else has had a reason to make
+    it."""
+    nested = tmp_path / "state" / "runs"
+    ledger = Ledger(path=nested / "ledger.json")
+
+    ledger.record("P1")
+
+    assert (nested / "ledger.json").exists()
+
+
+def test_the_read_gives_the_replace_window_a_fixed_number_of_tries(tmp_path,
+                                                                   monkeypatch):
+    """"It retries" is true of one attempt and of a hundred, and the
+    difference is whether a run blocks on a file another process is holding.
+    Ten, and then the refusal is real."""
+    path = tmp_path / "ledger.json"
+    path.write_text('{"phones": {}}', encoding="utf-8")
+
+    tries = []
+    real = pathlib.Path.read_text
+
+    def read_text(self, *a, **kw):
+        if self == path:
+            tries.append(1)
+            raise PermissionError("held open")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda _s: None)
+
+    with pytest.raises(PermissionError):
+        Ledger._read(path)
+
+    assert len(tries) == 10
+
+
+def test_the_replace_gives_up_after_a_fixed_number_of_tries(tmp_path,
+                                                            monkeypatch):
+    """The same question on the writing side. Giving up early loses a phone
+    from the ledger; never giving up blocks the run that recorded it."""
+    import os
+
+    ledger = Ledger(path=tmp_path / "ledger.json")
+    tries = []
+
+    def replace(src, dst):
+        tries.append(1)
+        raise PermissionError("held open")
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(ledger_mod.time, "sleep", lambda _s: None)
+
+    ledger.record("P1")          # returns rather than raising
+
+    assert len(tries) == 10
+
+
+def test_each_wait_is_longer_than_the_one_before(tmp_path, monkeypatch):
+    """A fixed pause spends the whole allowance inside the window it is
+    waiting out. Growing it means the last try is the one most likely to
+    land."""
+    import os
+
+    ledger = Ledger(path=tmp_path / "ledger.json")
+    naps = []
+
+    monkeypatch.setattr(os, "replace",
+                        lambda src, dst: (_ for _ in ()).throw(
+                            PermissionError("held")))
+    monkeypatch.setattr(ledger_mod.time, "sleep", naps.append)
+
+    ledger.record("P1")
+
+    assert naps == sorted(naps)
+    assert naps[-1] > naps[0]

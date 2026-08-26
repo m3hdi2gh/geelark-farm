@@ -8,7 +8,7 @@ without a populated .env.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -179,7 +179,6 @@ class Settings:
     log_dir: Path
     log_level: str
 
-    _sheets_checked: bool = field(default=False, repr=False, compare=False)
 
     @classmethod
     def load(cls) -> Settings:
