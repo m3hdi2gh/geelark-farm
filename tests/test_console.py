@@ -20,6 +20,7 @@ from rich.console import Console, Group
 from geelark_farm import builder, failures, ui
 from geelark_farm.api import ApiError, TransportError
 from geelark_farm.config import ConfigError
+from geelark_farm.gsheet import SheetError
 from geelark_farm.ledger import Ledger
 from geelark_farm.ui import Snapshot
 
@@ -1441,3 +1442,319 @@ def test_a_renewal_date_nobody_reported_is_not_rendered_as_1970(monkeypatch,
 def test_a_renewal_date_that_was_reported_is_shown():
     assert ui.plan_expiry({"expirationTime": 1789518224}, "%Y") == "2026"
 
+
+# ------------------------------------------------------- finishing what waits
+def test_nothing_waiting_is_said_rather_than_asked_about(monkeypatch,
+                                                          make_settings,
+                                                          capsys):
+    """Asking "how many to finish" with nothing to finish takes an answer that
+    cannot be acted on."""
+    asked = answers(monkeypatch, 3)
+
+    assert ui.confirm_finish(make_settings(),
+                             snapshot(phones_unfinished=0)) is None
+    assert asked == []
+
+
+def test_an_empty_gpt_tab_is_a_warning_before_the_question_not_after(
+        monkeypatch, make_settings):
+    """They would stop exactly where they stopped before, and the run would
+    look like a second failure rather than a missing input."""
+    answers(monkeypatch, start=False)
+
+    assert ui.confirm_finish(make_settings(),
+                             snapshot(phones_unfinished=4,
+                                      apps_free=0)) is None
+
+
+def test_going_ahead_with_an_empty_tab_is_allowed_if_it_is_asked_for(
+        monkeypatch, make_settings):
+    """The operator may know something the tab does not - a paste in
+    progress."""
+    answers(monkeypatch, 2, 1, start=True)
+
+    options = ui.confirm_finish(make_settings(),
+                                snapshot(phones_unfinished=4, apps_free=0))
+
+    assert options == {"limit": 2, "workers": 1}
+
+
+def test_the_default_is_the_smaller_of_the_queue_and_the_accounts(
+        monkeypatch, make_settings):
+    """The app pool is the real ceiling: finishing needs one account per phone
+    and nothing else."""
+    offered = answers(monkeypatch)
+
+    ui.confirm_finish(make_settings(),
+                      snapshot(phones_unfinished=9, apps_free=3))
+
+    assert offered[0] == 3
+
+
+def test_more_than_are_waiting_is_capped_at_what_is_waiting(monkeypatch,
+                                                             make_settings):
+    """There is no tenth phone to finish, and a run that reports ten attempts
+    against four phones is a report nobody can reconcile."""
+    answers(monkeypatch, 10, 10)
+
+    options = ui.confirm_finish(make_settings(),
+                                snapshot(phones_unfinished=4, apps_free=9))
+
+    assert options["limit"] == 4
+    assert options["workers"] <= 4
+
+
+# ------------------------------------------------------------- the phone list
+def test_the_phone_list_says_who_each_one_belongs_to(monkeypatch,
+                                                      make_settings, tmp_path):
+    """The ledger's label is what turns twenty numbered rows into something
+    readable - and a phone missing from it is the one worth noticing, because
+    reap cannot account for it."""
+    monkeypatch.setattr(ui, "build_client", lambda s: None)
+    monkeypatch.setattr(ui.phones, "prune_ledger", lambda c, ledger: [])
+    monkeypatch.setattr(ui.phones, "listing", lambda c: [
+        {"id": "P1", "serialNo": "801", "status": ui.phones.RUNNING,
+         "equipmentInfo": {"deviceBrand": "Pixel", "osVersion": "15"}},
+        {"id": "P2", "serialNo": "802", "status": ui.phones.STOPPED},
+    ])
+
+    settings = make_settings(state_dir=tmp_path)
+    ledger = Ledger.load(tmp_path)
+    ledger.record("P1", label="row 4 / a@b.com")
+
+    text = rendered(ui.phones_table(settings))
+
+    assert "row 4 / a@b.com" in text
+    assert "not in ledger" in text, "a phone reap cannot account for"
+    assert "running" in text and "stopped" in text
+    assert "Pixel" in text
+
+
+def test_a_phone_with_no_serial_yet_is_still_listed(monkeypatch,
+                                                     make_settings, tmp_path):
+    """There is a moment between creation and the serial coming back, and a
+    phone that vanishes from this view in it is one nobody stops."""
+    monkeypatch.setattr(ui, "build_client", lambda s: None)
+    monkeypatch.setattr(ui.phones, "prune_ledger", lambda c, ledger: [])
+    monkeypatch.setattr(ui.phones, "listing",
+                        lambda c: [{"id": "P1", "status": ui.phones.RUNNING}])
+
+    text = rendered(ui.phones_table(make_settings(state_dir=tmp_path)))
+
+    assert "P1" in text
+    assert "?" in text
+
+
+# ------------------------------------------------------------- the setup view
+def test_the_setup_view_marks_each_check_by_what_it_found(monkeypatch,
+                                                           make_settings):
+    """A wall of green with one FAIL in it is the whole point: the eye finds
+    the line, and the advice under it says what to do."""
+    from geelark_farm import verify as verify_mod
+
+    monkeypatch.setattr(verify_mod, "run_checks", lambda s: [
+        verify_mod.Check("geelark api", verify_mod.OK, "appId ABC..."),
+        verify_mod.Check("spreadsheet", verify_mod.FATAL,
+                         "no spreadsheet with that id\nShare it as an Editor."),
+        verify_mod.Check("sx.org", verify_mod.INFO, "not set"),
+    ])
+
+    text = rendered(ui.setup_view(make_settings()))
+
+    assert "ok" in text and "FAIL" in text
+    assert "Share it as an Editor" in text, "the advice line was dropped"
+
+
+# ------------------------------------------------------------- the menu loop
+def menu_session(monkeypatch, *keys):
+    """Run the console through a scripted set of keypresses."""
+    pressed = list(keys)
+
+    def ask(prompt, **kwargs):
+        return pressed.pop(0) if pressed else "q"
+
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(ask))
+    monkeypatch.setattr(ui, "sync_on_startup", lambda s: None)
+    monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot())
+    return pressed
+
+
+def test_quitting_leaves_without_asking_about_anything_still_running(
+        monkeypatch, make_settings):
+    """Whether a phone should be left up is the operator's call, made
+    deliberately from the menu - being asked on the way out of every session
+    is nagging, not safety."""
+    menu_session(monkeypatch, "q")
+
+    assert ui.run_console(make_settings()) == 0
+
+
+def test_a_closed_stdin_at_the_menu_is_a_quit_rather_than_a_traceback(
+        monkeypatch, make_settings):
+    """Ctrl+C at the menu, or stdin closing under it - which is what a Ctrl+C
+    during a batch leaves behind. Untrapped, this ended the process from
+    inside the loop with a traceback (2026-08-08)."""
+    monkeypatch.setattr(ui, "sync_on_startup", lambda s: None)
+    monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot())
+    monkeypatch.setattr(ui.Prompt, "ask",
+                        staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+                            EOFError())))
+
+    assert ui.run_console(make_settings()) == 0
+
+
+def test_a_failure_inside_an_action_keeps_the_session_open(monkeypatch,
+                                                            make_settings,
+                                                            capsys):
+    """A console is something you leave open for hours, and each of these
+    ended the session with a traceback."""
+    menu_session(monkeypatch, "5", "q")
+    monkeypatch.setattr(ui, "attention_view",
+                        lambda s: (_ for _ in ()).throw(
+                            SheetError("the sheet's quota stayed exhausted")))
+
+    assert ui.run_console(make_settings()) == 0
+    assert "quota" in rendered_out(capsys)
+
+
+def test_a_bug_is_said_to_be_one_and_the_traceback_goes_to_the_log(
+        monkeypatch, make_settings, capsys):
+    """Not a failure this tool has a name for, which makes it a bug in it.
+    Kept out of the way, and the session stays open - losing what is on it
+    helps nobody."""
+    menu_session(monkeypatch, "7", "q")
+    monkeypatch.setattr(ui, "phones_table",
+                        lambda s: (_ for _ in ()).throw(
+                            ZeroDivisionError("division by zero")))
+
+    assert ui.run_console(make_settings()) == 0
+
+    out = rendered_out(capsys)
+    assert "this one is a bug" in out
+    assert "today's log file" in out
+
+
+def test_a_dashboard_that_cannot_be_read_does_not_end_the_session(
+        monkeypatch, make_settings, capsys):
+    """The snapshot is the first thing each pass does, and everything below it
+    still works from a menu."""
+    monkeypatch.setattr(ui, "sync_on_startup", lambda s: None)
+    monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "q"))
+    monkeypatch.setattr(ui, "take_snapshot",
+                        lambda s: (_ for _ in ()).throw(
+                            RuntimeError("everything is on fire")))
+
+    assert ui.run_console(make_settings()) == 0
+    assert "could not read the current state" in rendered_out(capsys)
+
+
+# ------------------------------------------------- what each key actually runs
+def wired(monkeypatch, **overrides):
+    """Every action the menu can reach, replaced by a recorder."""
+    ran: list[str] = []
+
+    def note(name, answer=None):
+        def action(*a, **kw):
+            ran.append(name)
+            return answer
+        return action
+
+    monkeypatch.setattr(ui, "confirm_build",
+                        note("confirm_build", {"count": 1, "workers": 1}))
+    monkeypatch.setattr(ui, "confirm_finish",
+                        note("confirm_finish", {"limit": 1, "workers": 1}))
+    monkeypatch.setattr(ui, "build_with_live_table", note("build", []))
+    monkeypatch.setattr(ui, "finish_with_live_table", note("finish", []))
+    monkeypatch.setattr(ui, "apply_marks", note("apply_marks"))
+    monkeypatch.setattr(ui, "stop_phones", note("stop_phones"))
+    monkeypatch.setattr(ui, "attention_view", note("attention", ""))
+    monkeypatch.setattr(ui, "pools_view", note("pools", ""))
+    monkeypatch.setattr(ui, "phones_table", note("phones", ""))
+    monkeypatch.setattr(ui, "setup_view", note("setup", ""))
+    for name, action in overrides.items():
+        monkeypatch.setattr(ui, name, action)
+    return ran
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("1", ["confirm_build", "build"]),
+    ("2", ["confirm_finish", "finish"]),
+    ("3", ["apply_marks"]),
+    ("4", ["stop_phones"]),
+    ("5", ["attention"]),
+    ("6", ["pools"]),
+    ("7", ["phones"]),
+    ("8", ["setup"]),
+])
+def test_each_menu_key_runs_the_action_it_promises(monkeypatch, make_settings,
+                                                   key, expected):
+    """The dispatch is a chain of `elif`s against string keys, and a key wired
+    to the wrong branch looks exactly right until somebody presses it."""
+    ran = wired(monkeypatch)
+    menu_session(monkeypatch, key, "q")
+
+    ui.run_console(make_settings())
+
+    assert ran == expected
+
+
+def test_declining_the_build_prompt_does_not_start_one(monkeypatch,
+                                                        make_settings):
+    """`confirm_build` answers None when the operator says no, or when there
+    is nothing to build - and a run started on that answer spends stock
+    against a question that was declined."""
+    ran = wired(monkeypatch, confirm_build=lambda s, snap: None)
+    menu_session(monkeypatch, "1", "q")
+
+    ui.run_console(make_settings())
+
+    assert "build" not in ran
+
+
+def test_declining_the_finish_prompt_does_not_start_one(monkeypatch,
+                                                         make_settings):
+    ran = wired(monkeypatch, confirm_finish=lambda s, snap: None)
+    menu_session(monkeypatch, "2", "q")
+
+    ui.run_console(make_settings())
+
+    assert "finish" not in ran
+
+
+def test_the_stock_view_offers_to_free_stuck_rows_only_when_there_are_some(
+        monkeypatch, make_settings):
+    """The offer is the answer to a question that came up twice this week -
+    and offering it with nothing stuck is a prompt that can only be answered
+    no."""
+    wired(monkeypatch)
+    asked: list[str] = []
+    monkeypatch.setattr(ui.Confirm, "ask",
+                        staticmethod(lambda prompt, **kw: asked.append(str(prompt))
+                                     or False))
+
+    menu_session(monkeypatch, "6", "q")
+    monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot(pools_stuck=0))
+    ui.run_console(make_settings())
+    assert asked == [], "it offered to free nothing"
+
+    menu_session(monkeypatch, "6", "q")
+    monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot(pools_stuck=2))
+    ui.run_console(make_settings())
+    assert any("release 2" in p for p in asked)
+
+
+def test_freeing_stuck_rows_only_happens_when_it_is_agreed_to(monkeypatch,
+                                                               make_settings):
+    """Default no, and for a reason: a row a live run is holding looks
+    identical to one a dead run left."""
+    wired(monkeypatch)
+    freed: list[int] = []
+    monkeypatch.setattr(ui.Confirm, "ask", staticmethod(lambda *a, **k: False))
+    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s: type("B", (), {
+        "release_stuck": staticmethod(lambda: freed.append(1) or 1)})()))
+    menu_session(monkeypatch, "6", "q")
+    monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot(pools_stuck=2))
+
+    ui.run_console(make_settings())
+
+    assert freed == [], "it freed rows nobody agreed to free"
