@@ -99,7 +99,7 @@ def set_proxy(client: Client, phone_id: str, proxy: Proxy) -> None:
     this project's life that a proxy was fixed at creation - which made a
     CAPTCHA a reason to delete the phone, since the verdict was on an exit
     address that could not be changed. It can be changed, and everything built
-    on that assumption is wrong (see UNREUSABLE in orchestrator.py).
+    on that assumption is wrong.
 
     Two constraints from the vendor's docs, both learned the expensive way if
     ignored:
