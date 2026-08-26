@@ -143,7 +143,7 @@ NAME_SEPARATOR = " - "
 
 
 def display_name(serial: str | int = "", account: str = "") -> str:
-    """`832 - RapidStorm162935`, from whichever halves are known.
+    """`832 - MerylQuinn162935`, from whichever halves are known.
 
     Empty when neither is, so the caller can fall back to something unique -
     a phone still has to be called something before it has a serial.

@@ -169,11 +169,16 @@ def elements_of(fixture: str):
 
 def test_the_settings_page_names_the_account():
     """Against the page as it was actually captured (2026-08-17): the Email
-    section shows the address as a plain TextView, no WebView involved."""
+    section shows the address as a plain TextView, no WebView involved.
+
+    The address in it is anonymised. The capture went in with a real one and
+    this repository is public, which is the thing the runbook's own credential
+    note warns about (2026-08-26).
+    """
     named = chatgpt_login.account_email_on(
         elements_of("chatgpt-account-settings.xml"))
 
-    assert named == "mizikilak240@gmail.com"
+    assert named == "testaccount001@example.com"
 
 
 @pytest.mark.parametrize("fixture", ["chatgpt-chat-signed-in.xml",
@@ -218,7 +223,7 @@ class ScriptedPhone:
         return True
 
 
-def verify_ctx(email="mizikilak240@gmail.com"):
+def verify_ctx(email="testaccount001@example.com"):
     ctx = chatgpt_login.Context(
         client=None, phone_id="P1", package="com.openai.chatgpt",
         creds=Credentials(email=email, password="x",
@@ -247,7 +252,7 @@ def test_a_different_account_in_the_app_is_fatal(monkeypatch):
     out = chatgpt_login.verify_account(verify_ctx(email="other@example.com"))
 
     assert out is not None and out.reason == "app_wrong_account"
-    assert "mizikilak240@gmail.com" in out.detail
+    assert "testaccount001@example.com" in out.detail
 
 
 def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):

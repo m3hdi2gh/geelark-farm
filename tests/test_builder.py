@@ -1777,19 +1777,19 @@ def test_a_phone_left_with_a_timestamp_name_is_renamed(monkeypatch):
     listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1786928959",
                 "status": ph.STOPPED}]
     client = naming_client(monkeypatch, listing)
-    book = NamingBook([{"Serial": "832", "Gmail": "ThunderWarden465837@gmail.com"}])
+    book = NamingBook([{"Serial": "832", "Gmail": "AldenBrooke465837@example.com"}])
 
-    assert sync_phone_names(client, book) == ["832 - ThunderWarden465837"]
-    assert client.renames == [("P1", "832 - ThunderWarden465837")]
+    assert sync_phone_names(client, book) == ["832 - AldenBrooke465837"]
+    assert client.renames == [("P1", "832 - AldenBrooke465837")]
 
 
 def test_a_phone_already_named_right_is_not_written_again(monkeypatch):
     from geelark_farm import phones as ph
     from geelark_farm.builder import sync_phone_names
     listing = [{"id": "P1", "serialNo": "832",
-                "serialName": "832 - ThunderWarden465837", "status": ph.STOPPED}]
+                "serialName": "832 - AldenBrooke465837", "status": ph.STOPPED}]
     client = naming_client(monkeypatch, listing)
-    book = NamingBook([{"Serial": "832", "Gmail": "ThunderWarden465837@gmail.com"}])
+    book = NamingBook([{"Serial": "832", "Gmail": "AldenBrooke465837@example.com"}])
 
     assert sync_phone_names(client, book) == []
     assert client.renames == []

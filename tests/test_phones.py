@@ -16,8 +16,8 @@ def test_a_phone_is_named_by_its_serial_and_its_address():
     """The list read `farm-1786928959`, seven rows deep, differing in the last
     three digits of a unix timestamp - the second the phone was made, which is
     the one thing nobody wants to know (2026-08-17)."""
-    assert (phones.display_name("832", "RapidStorm162935@gmail.com")
-            == "832 - RapidStorm162935")
+    assert (phones.display_name("832", "MerylQuinn162935@example.com")
+            == "832 - MerylQuinn162935")
 
 
 def test_the_serial_leads_because_everything_else_is_filed_under_it():
@@ -35,8 +35,8 @@ def test_a_phone_with_no_serial_yet_is_named_by_its_address():
     """There is a moment before GeeLark answers with a serial, and the phone
     still has to be called something - the name it is created with is also
     what survives if the rename afterwards fails."""
-    name = phones.display_name(account="TitanHunter539742@gmail.com")
-    assert name == "TitanHunter539742"
+    name = phones.display_name(account="PiperHolt539742@example.com")
+    assert name == "PiperHolt539742"
 
 
 def test_a_phone_with_neither_is_left_for_the_caller_to_name():
@@ -46,8 +46,8 @@ def test_a_phone_with_neither_is_left_for_the_caller_to_name():
 
 def test_the_name_is_ascii_so_geelark_stores_it_intact():
     """A name with a middle dot came back with a replacement character in it -
-    `832 ? RapidStorm162935` - measured against the live account."""
-    name = phones.display_name("832", "RapidStorm162935@gmail.com")
+    `832 ? MerylQuinn162935` - measured against the live account."""
+    name = phones.display_name("832", "MerylQuinn162935@example.com")
 
     assert name.isascii()
     assert phones.NAME_SEPARATOR.isascii()
@@ -90,7 +90,7 @@ def make(monkeypatch, **kwargs):
     client = FakeClient(**kwargs)
     proxy = Proxy("socks5", "1.2.3.4", 1080, "u", "p")
     phones.create(client, settings, proxy, ledger=FakeLedger(),
-                  account="RapidStorm162935@gmail.com")
+                  account="MerylQuinn162935@example.com")
     return client
 
 
@@ -102,8 +102,8 @@ def test_creating_a_phone_names_it_with_the_serial_geelark_answers_with(
     renamed = next(p for p in client.posts if "detail/update" in p[0])
 
     # Named before the serial exists, with the half that does.
-    assert created[1]["data"][0]["profileName"] == "RapidStorm162935"
-    assert renamed[1] == {"id": "P1", "name": "832 - RapidStorm162935"}
+    assert created[1]["data"][0]["profileName"] == "MerylQuinn162935"
+    assert renamed[1] == {"id": "P1", "name": "832 - MerylQuinn162935"}
 
 
 def test_a_rename_that_fails_does_not_lose_the_phone(monkeypatch):
