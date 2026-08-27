@@ -7,7 +7,9 @@ without a populated .env.
 
 from __future__ import annotations
 
+import functools
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +45,37 @@ def _root() -> Path:
 
 REPO_ROOT = _root()
 ENV_FILE = REPO_ROOT / ".env"
+
+
+@functools.lru_cache(maxsize=1)
+def revision() -> str:
+    """Which commit this is running out of, or "" if that cannot be known.
+
+    Read when it is asked for rather than written down at install time. The
+    install is editable and `git pull` moves the code underneath it, so
+    anything stamped during setup would name the commit that was current the
+    day somebody first configured the machine, not the one that is running.
+
+    `--dirty` is the point of it on a server: a working tree edited in place
+    is the difference between "this is commit abc1234" and "this is commit
+    abc1234 and somebody has been in it", and only the second explains why the
+    machine does not behave like the one next to it.
+
+    Never fatal. A deployment without `.git` - a tarball, a container built
+    from a copy - simply gets nothing, and every caller falls back to the
+    version string alone.
+
+    Cached: the answer cannot change while the process runs, and this is on
+    the path of every single command through the log banner.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "describe",
+             "--always", "--dirty", "--tags"],
+            capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip()
 
 
 class ConfigError(Exception):

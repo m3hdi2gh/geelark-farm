@@ -30,7 +30,7 @@ import time
 from . import __version__, accounts, phones, proxy, screen, shell
 from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
-from .config import REPO_ROOT, ConfigError, Settings
+from .config import REPO_ROOT, ConfigError, Settings, revision
 from .flows import google_login, play_install
 from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
@@ -39,6 +39,18 @@ from .shell import ShellError, TypingError
 
 # Local fallback when no sheet is configured. Same columns as the sheet.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
+
+
+def version_line() -> str:
+    """What this build calls itself.
+
+    The version alone answered nothing on a machine that is not the one you
+    are sitting at: every commit ever made says `0.1.0`. The first question
+    about a server that is misbehaving is which code is on it, and this is
+    the only place the machine can be asked.
+    """
+    commit = revision()
+    return f"geelark-farm {__version__}" + (f" ({commit})" if commit else "")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
                "left running.",
     )
     parser.add_argument("--version", action="version",
-                        version=f"geelark-farm {__version__}")
+                        version=version_line())
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     # ---------------------------------------------------------- pipeline
@@ -961,7 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     log_path = _configure_logging(settings)
     if log_path is not None:
         logging.getLogger(__name__).info(
-            "geelark %s `%s` - logging to %s", __version__,
+            "%s `%s` - logging to %s", version_line(),
             args.command or "", log_path)
 
     handlers = {

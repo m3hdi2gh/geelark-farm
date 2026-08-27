@@ -6,11 +6,30 @@ first time something surprises you, while the diagnosis is still fresh.
 ## First moves
 
 ```bash
+geelark --version         # which code this machine is actually running
 geelark phones --ledger   # what exists, what is billing, and who owns it
 geelark reap --dry-run    # what would be stopped, and why
 geelark reap              # stop anything the ledger cannot account for
 geelark dump --phone ID   # what is actually on that phone's screen right now
 ```
+
+`--version` first, and on a machine you are not sitting at it is the only
+question you cannot answer any other way:
+
+```
+geelark-farm 0.1.0 (v0.1.0-4-gabc1234)
+geelark-farm 0.1.0 (v0.1.0-4-gabc1234-dirty)   <- somebody edited it in place
+```
+
+The commit is read out of the checkout at the moment you ask, so it follows a
+`git pull` without anyone re-running anything. `-dirty` means the files on
+disk are not the commit they claim to be, which is the difference between "this
+is that code" and "this is that code plus whatever somebody tried at 3am" - and
+it is usually the answer to why one machine behaves unlike the one beside it.
+
+Every log file opens with the same line, so a log read weeks later says which
+code wrote it. A deployment with no `.git` - a tarball, a container built from
+a copy - reports the version alone and nothing breaks.
 
 `/phone/start` returns a live-view URL; opening it shows the real screen and
 answers most questions faster than reading logs.

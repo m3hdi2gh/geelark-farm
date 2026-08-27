@@ -2134,3 +2134,40 @@ def test_every_command_the_parser_offers_has_something_to_run():
 
     assert declared, "the sweep stopped matching how subcommands are declared"
     assert declared == dispatched, declared ^ dispatched
+
+
+# --------------------------------------------- what this build calls itself
+def test_the_version_names_the_commit_when_there_is_one(monkeypatch):
+    """`geelark --version` said `0.1.0` for every commit ever made, which
+    answers nothing about a machine you are not sitting at."""
+    from geelark_farm import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "revision", lambda: "v0.1.0-4-gabc1234")
+
+    assert cli_mod.version_line() == "geelark-farm 0.1.0 (v0.1.0-4-gabc1234)"
+
+
+def test_the_version_is_still_a_version_without_a_checkout(monkeypatch):
+    """A deployment with no `.git` gets the version alone rather than an
+    empty pair of brackets."""
+    from geelark_farm import cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "revision", lambda: "")
+
+    assert cli_mod.version_line() == "geelark-farm 0.1.0"
+
+
+def test_the_log_says_which_code_wrote_it(monkeypatch, tmp_path,
+                                           make_settings, capsys):
+    """The log file is what answers "what happened" after the fact, and a
+    file that does not say which commit produced it can only be read against
+    a guess."""
+    from geelark_farm import cli as cli_mod
+
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli_mod.Settings, "load", staticmethod(lambda: settings))
+    monkeypatch.setattr(cli_mod, "revision", lambda: "abc1234")
+    monkeypatch.setattr(cli_mod, "cmd_ping", lambda s, a: 0)
+
+    assert cli_mod.main(["ping"]) == 0
+    assert "abc1234" in capsys.readouterr().err

@@ -94,3 +94,16 @@ def test_mutation_testing_is_a_script_here_and_not_a_dependency():
     one nobody can use."""
     assert (ROOT / "scripts" / "mutate.py").exists()
     assert "mutmut" not in requirements("dev")
+
+
+def test_the_two_version_strings_are_one_version():
+    """`pyproject.toml` names the version and so does `__init__.py`, and
+    nothing held them together. Bump one and `geelark --version` reports the
+    other - which matters now that the answer is read off a server rather
+    than off the machine you are sitting at (2026-08-27)."""
+    from geelark_farm import __version__
+
+    declared = re.search(r'^version = "([^"]+)"', PYPROJECT, re.M)
+
+    assert declared, "pyproject stopped declaring a version this way"
+    assert declared.group(1) == __version__

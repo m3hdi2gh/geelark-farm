@@ -360,3 +360,94 @@ def test_the_settings_carry_nothing_that_nothing_reads():
     from geelark_farm.config import Settings
 
     assert not hasattr(Settings, "_sheets_checked")
+
+
+# ------------------------------------------------- which code is running
+def test_the_revision_is_read_from_the_checkout_it_runs_out_of(monkeypatch):
+    """Read when asked rather than stamped at install: the install is
+    editable and `git pull` moves the code underneath it, so anything written
+    during setup would name the commit that was current the day the machine
+    was configured."""
+    import subprocess
+    from types import SimpleNamespace
+
+    from geelark_farm import config
+
+    config.revision.cache_clear()
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout="abc1234\n"))
+
+    assert config.revision() == "abc1234"
+    config.revision.cache_clear()
+
+
+def test_a_checkout_edited_in_place_says_so(monkeypatch):
+    """On a server that is the difference between "this is commit abc1234"
+    and "this is commit abc1234 and somebody has been in it", and only the
+    second explains why the machine does not behave like the one beside it."""
+    import subprocess
+    from types import SimpleNamespace
+
+    from geelark_farm import config
+
+    config.revision.cache_clear()
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout="v0.1.0-dirty\n"))
+
+    assert config.revision().endswith("-dirty")
+    config.revision.cache_clear()
+
+
+def test_no_git_is_not_a_broken_cli(monkeypatch):
+    """A tarball, or a container built from a copy. The version string alone
+    is a worse answer than a commit, and a traceback is worse than both."""
+    import subprocess
+
+    from geelark_farm import config
+
+    def missing(*a, **k):
+        raise FileNotFoundError("git")
+
+    config.revision.cache_clear()
+    monkeypatch.setattr(subprocess, "run", missing)
+
+    assert config.revision() == ""
+    config.revision.cache_clear()
+
+
+def test_git_failing_is_not_a_broken_cli_either(monkeypatch):
+    """`git describe` outside a repository exits non-zero, and `check=True`
+    turns that into an exception that must not reach the command."""
+    import subprocess
+
+    from geelark_farm import config
+
+    def refuses(*a, **k):
+        raise subprocess.CalledProcessError(128, "git")
+
+    config.revision.cache_clear()
+    monkeypatch.setattr(subprocess, "run", refuses)
+
+    assert config.revision() == ""
+    config.revision.cache_clear()
+
+
+def test_git_is_asked_once_however_often_the_answer_is_wanted(monkeypatch):
+    """It is on the path of every command through the log banner."""
+    import subprocess
+    from types import SimpleNamespace
+
+    from geelark_farm import config
+
+    calls = []
+    config.revision.cache_clear()
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: calls.append(1) or
+                        SimpleNamespace(stdout="abc1234\n"))
+
+    config.revision()
+    config.revision()
+    config.revision()
+
+    assert len(calls) == 1
+    config.revision.cache_clear()
