@@ -40,23 +40,25 @@ accounts and mark deliveries, and the sheet stays correct.
 This phase has value on its own. Even if the bot never arrives, it takes the
 self-healing and the sheet-keeping off both of you.
 
-### Prerequisites
+### Prerequisites — **done, 2026-08-27**
 
-Small, and everything after them is built on sand without them.
+- **A circuit breaker** — `breaker.py`. Five failed builds in a row and it
+  stops, until a person clears it. Consecutive rather than a rate, because the
+  question is whether it has stopped working and one success answers that.
+  Written to `state/`, because `restart: always` means the process that trips
+  it is not the one that has to still know. It counts three outcomes, not two:
+  `no_usable_gpt` is the warm stock working and clears the count, an empty
+  pool is nothing happening and leaves it alone, and everything else counts -
+  including `network_unreachable`, whose blame is `nobody` but which means
+  this machine cannot work right now.
+- **`SIGTERM`** — `cli.stop_on_sigterm`, installed in `main`. It raises the
+  `KeyboardInterrupt` the existing cleanup already listens for rather than
+  inventing a second shutdown path.
+- **`GEELARK_REVISION`** — the build stamps it; `--version` still prefers the
+  checkout when there is one.
 
-- **A circuit breaker.** After N consecutive failed builds, stop and stay
-  stopped until a person clears it. Unattended, this is the only thing standing
-  between one bad deploy and a burnt Gmail pool.
-- **`SIGTERM`.** `docker stop` sends it, and nothing here catches it - every
-  shutdown path is wired to `KeyboardInterrupt`, which Python raises only for
-  Ctrl+C. The cleanup itself already exists and is right (`shutting_down`,
-  cancel the futures, stop every phone this run started); it simply is not
-  reachable from the signal a container is stopped with. Without it a
-  `docker stop` mid-build leaves phones running and billing.
-- **`GEELARK_REVISION`.** `--version` reads the commit out of `.git`, and an
-  image built from a copy has none - so the one thing that answers "which code
-  is on this server" goes blind exactly where it was added to help. A build
-  argument fills it in.
+Still to wire: the breaker has no caller until `serve` exists. That is the
+first thing `serve` does.
 
 `GEELARK_MACHINE` is already an override for the hostname, which is what keeps
 History rows and log filenames meaningful across container restarts. The build
