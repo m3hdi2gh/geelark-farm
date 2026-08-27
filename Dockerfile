@@ -9,8 +9,20 @@
 # The interpreter is pinned to the version CI tests and development uses. The
 # host happens to carry 3.12, which nothing has ever tested this against, and
 # a container is exactly the tool for not caring what the host carries.
+#
+# Pinned by digest, not only by tag, and that is a supply-chain decision
+# rather than a reproducibility one. Docker Hub's blob CDN answers 403 to the
+# server this runs on, so the pull goes through a mirror - and a mirror is
+# something that stands between you and the image your API keys will live in.
+# A digest cannot be substituted: Docker verifies the content against it and
+# refuses anything else. This one was taken from a direct pull from Docker Hub
+# on a machine that can reach it.
+#
+# The cost is that a pinned base does not quietly pick up security updates.
+# Moving it is a deliberate act: pull the tag somewhere with direct access,
+# read the new digest, and change it here.
 
-FROM python:3.13-slim AS deps
+FROM python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4 AS deps
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -27,7 +39,7 @@ RUN mkdir -p src/geelark_farm \
  && pip install .
 
 
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4 AS runtime
 
 # Which commit this image was built from. `--version` reads it out of a
 # checkout when there is one, and an image built from a copy of the tree has
