@@ -402,7 +402,8 @@ for a running phone, so it is per-machine and not shared.
 
 Further reading: [`docs/geelark-api.md`](docs/geelark-api.md) for the API's
 undocumented corners, [`docs/runbook.md`](docs/runbook.md) for what to do when
-a run goes wrong.
+a run goes wrong, [`docs/roadmap.md`](docs/roadmap.md) for where this is
+going and what of it already exists.
 
 ## Development
 
