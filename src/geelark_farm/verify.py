@@ -122,7 +122,19 @@ def _key_file(settings: Settings, checks: list[Check]) -> str:
     """The service-account file, and the address the spreadsheet has to be
     shared with. Returns that address, or "" if the file is unusable."""
     path = settings.service_account_json
-    if not path.exists():
+    try:
+        there = path.exists()
+    except OSError as exc:
+        # `exists()` raises rather than answering when the directory above it
+        # cannot be searched, which is what a container meets when the key is
+        # readable only by the host user. This function promised never to
+        # raise, and this is the one call in it that could (2026-08-27).
+        checks.append(Check("service account", FATAL, "\n".join([
+            f"cannot look at {path} ({exc.strerror or exc})",
+            "In a container the key must be readable by the uid it runs as: "
+            "chown 10001 secrets secrets/service-account.json"])))
+        return ""
+    if not there:
         checks.append(Check("service account", FATAL, "\n".join([
             f"no file at {path}",
             "Create a service account in Google Cloud, download its JSON key, "

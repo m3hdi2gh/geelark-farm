@@ -528,3 +528,26 @@ def test_the_checks_never_raise_whatever_the_network_does(monkeypatch,
     checks = verify.run_checks(settings)          # no raise
 
     assert any(c.state == FATAL for c in checks)
+
+
+def test_a_key_it_cannot_even_look_at_is_reported_not_raised(monkeypatch,
+                                                              tmp_path):
+    """`exists()` raises rather than answering when the directory above the
+    file cannot be searched - which is what a container meets when the key is
+    readable only by the host user. This module promises never to raise, and
+    that was the one call in it that could (2026-08-27)."""
+    class Unreachable:
+        name = "service-account.json"
+
+        def exists(self):
+            raise PermissionError(13, "Permission denied")
+
+        def __str__(self):
+            return "/app/secrets/service-account.json"
+
+    checks = []
+    settings = type("S", (), {"service_account_json": Unreachable()})()
+
+    assert verify._key_file(settings, checks) == ""
+    assert states(checks)["service account"] == FATAL
+    assert "readable by the uid" in detail(checks, "service account")
