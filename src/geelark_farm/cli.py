@@ -123,6 +123,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument("--once", action="store_true",
                          help="do one pass and stop, rather than looping")
+    p_serve.add_argument("--healthcheck", action="store_true",
+                         help="say whether a pass has run recently and exit; "
+                              "0 if it has, 1 if it has not")
 
     p_pools = sub.add_parser(
         "pools", help="what the resource tabs hold, and what is stuck"
@@ -708,6 +711,14 @@ def cmd_serve(settings: Settings, args) -> int:
     nothing else should pay for what only this command needs.
     """
     from . import serve as serve_mod
+
+    if args.healthcheck:
+        # `restart: always` brings back a process that died and does nothing
+        # for one that is alive and stuck. Only the loop knows the difference,
+        # and this is how it tells Docker.
+        ok, said = serve_mod.healthy(settings)
+        print(said, file=sys.stderr if not ok else sys.stdout)
+        return 0 if ok else 1
 
     return serve_mod.run(settings, passes=1 if args.once else None)
 

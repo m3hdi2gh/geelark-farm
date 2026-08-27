@@ -405,6 +405,45 @@ undocumented corners, [`docs/runbook.md`](docs/runbook.md) for what to do when
 a run goes wrong, [`docs/roadmap.md`](docs/roadmap.md) for where this is
 going and what of it already exists.
 
+## Running it as a service
+
+`geelark serve` does continuously what a person does by hand: keeps a stock of
+phones built to one step short of ready, finishes one the moment an app
+account appears, and carries out the State column - which is what deletes a
+phone somebody has marked delivered and gives its slot back.
+
+```bash
+cp .env.example .env                     # then fill it in
+mkdir -p state logs artifacts secrets    # and put the service-account key in secrets/
+
+GEELARK_REVISION="$(git describe --always --tags)" docker compose build
+docker compose up -d
+docker compose logs -f
+```
+
+The revision is passed in because a build sees no `.git`, and without it the
+running container cannot say which commit it is - which is the first question
+anyone asks about a server that is misbehaving.
+
+Deploying a change is the same three commands again. Stopping is
+`docker compose stop`, which sends SIGTERM, which is what the shutdown listens
+for: every phone the run started is stopped before the process goes.
+
+`docker compose ps` shows health. It is unhealthy when no pass has begun for
+longer than a build is allowed to take plus an interval, twice over - `restart:
+always` brings back a process that died, and this is what notices one that is
+alive and stuck.
+
+### What it needs to be true
+
+- **`WARM_STOCK` phones fit in the plan.** Each holds a profile slot until it
+  is delivered, and a finished phone holds one until somebody marks it `done`.
+- **The Gmail and Proxy tabs have stock.** An empty pool is not an error - the
+  service waits - but it is also not a service doing anything.
+- **Nothing else writes to the sheet.** The design assumes one writer, and
+  from the moment this is up that writer is the server. Reading is fine;
+  `geelark build` from a laptop is not.
+
 ## Development
 
 ```bash

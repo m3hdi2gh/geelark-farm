@@ -1,0 +1,59 @@
+# The service as it runs on the server.
+#
+#   docker compose build --build-arg GEELARK_REVISION="$(git describe --always --tags)"
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Building on the box rather than pulling from a registry: there is one
+# machine, the code is a git clone, and a registry would be an account to hold
+# and a credential to leak for no gain. That changes the day there are two.
+
+services:
+  geelark:
+    build:
+      context: .
+      args:
+        # Passed in rather than read here, because a build reads no `.git` -
+        # see the Dockerfile. `make deploy` or the runbook supplies it.
+        GEELARK_REVISION: "${GEELARK_REVISION:-}"
+    image: geelark-farm:local
+    container_name: geelark
+
+    # Everything the tool reads, kept out of the image. `.env` holds Google
+    # passwords, TOTP secrets and the GeeLark key.
+    env_file: .env
+    environment:
+      # Docker invents a new hostname on every restart, so History rows and
+      # log filenames would fill with names that mean nothing.
+      GEELARK_MACHINE: "${GEELARK_MACHINE:-server-1}"
+      # UTC, deliberately. The host is UTC and the History tab should not
+      # disagree with it.
+      TZ: UTC
+      # One object per line, so something other than a person can read it.
+      LOG_FORMAT: json
+
+    volumes:
+      # The ledger. This is the one that costs money to lose: it is what says
+      # a running phone belongs to somebody, and without it `reap` cannot tell
+      # an orphan from a phone in use.
+      - ./state:/app/state
+      # The record of what happened, and the screens of what went wrong.
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts
+      # Read-only: the service reads this key and has no business writing it.
+      - ./secrets:/app/secrets:ro
+
+    restart: always
+
+    # Docker's own log, which grows without a bound of its own. The service
+    # writes its real record to ./logs; this is the copy `docker logs` reads.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+    # No mem_limit on purpose. Hitting one is an OOM kill, which is SIGKILL,
+    # which is the one signal the shutdown cannot catch - so a limit would
+    # turn "under memory pressure" into "phones left running and billing".
+    # This box runs nothing else, so there is nothing to protect from it.

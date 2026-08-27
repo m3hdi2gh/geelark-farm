@@ -47,6 +47,14 @@ log = logging.getLogger(__name__)
 #: What the breaker's count is kept in, under `state/`.
 BREAKER_FILE = "breaker.json"
 
+#: Touched at the start of every pass, and read by `--healthcheck`.
+#:
+#: `restart: always` brings back a process that died. It does nothing at all
+#: for one that is alive and stuck - a socket with no timeout, a lock nobody
+#: releases - and from outside those two look identical. This is the
+#: difference.
+HEARTBEAT_FILE = "heartbeat"
+
 #: How often the exits are re-tested.
 #:
 #: Measured before this existed: a pass made 43 GeeLark calls in 37 seconds
@@ -112,6 +120,46 @@ def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int, int
     warm, _gone = builder._unfinished(client, book)
     free = int(phones.plan(client).get("availableProfiles") or 0)
     return len(warm), free, len(book.apps.available)
+
+
+def beat(settings: Settings) -> None:
+    """Say that a pass has begun. Never fatal: a service that cannot write
+    here should carry on and look unhealthy, not stop."""
+    try:
+        path = settings.state_dir / HEARTBEAT_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(time.time()), encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not touch the heartbeat (%s)", exc)
+
+
+def stale_after(settings: Settings) -> float:
+    """How long without a pass means something is wrong.
+
+    Derived rather than configured, because the honest answer follows from
+    two numbers that are already set. A pass that is building legitimately
+    takes as long as a build is allowed to, and then the next one waits out
+    the interval; anything past both, twice over, is not a slow pass.
+    """
+    return 2 * (settings.build_budget_seconds + settings.serve_interval_seconds)
+
+
+def healthy(settings: Settings, now: float | None = None) -> tuple[bool, str]:
+    """Whether a pass has happened recently enough, and what to say."""
+    path = settings.state_dir / HEARTBEAT_FILE
+    try:
+        last = float(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        # No pass has finished starting yet. On a container that has just come
+        # up this is the truth and not a fault, which is what `start_period`
+        # in the healthcheck is for.
+        return False, "no pass has run yet"
+    since = (now if now is not None else time.time()) - last
+    limit = stale_after(settings)
+    if since > limit:
+        return False, (f"the last pass began {since / 60:.0f} minutes ago, "
+                       f"past the {limit / 60:.0f} this should ever take")
+    return True, f"a pass began {since / 60:.0f} minute(s) ago"
 
 
 def probe_due(last: float | None, now: float,
@@ -189,6 +237,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         probe = probe_due(probed, now)
         if probe:
             probed = now
+        beat(settings)
         try:
             once(client, settings, fuse, probe_proxies=probe)
         except KeyboardInterrupt:

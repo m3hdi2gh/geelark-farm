@@ -1,0 +1,42 @@
+# What must never reach the build context.
+#
+# Two reasons, and the first one is the serious one: anything copied into an
+# image is in the image for whoever ever pulls it. The .env holds Google
+# passwords, TOTP secrets and the GeeLark key; the service-account JSON grants
+# write access to the spreadsheet. Both are mounted at run time instead.
+#
+# The second is size. This runs on a 1 vCPU box, and every megabyte of context
+# is read and sent to the daemon before the build starts.
+.env
+.env.*
+secrets/
+*service-account*.json
+*credentials*.json
+
+# Run state and output. The ledger is mounted from a volume; artifacts and
+# logs are written into ones. A copy of yesterday's baked into the image is
+# confusing at best.
+state/
+artifacts/
+logs/
+*.log
+
+# Local to a developer's machine.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# Not .git: `--version` reads the commit out of it when there is one, and
+# leaving it out is why GEELARK_REVISION exists. The build passes the answer
+# in as an argument, so the history itself is not needed.
+.git/
+.github/

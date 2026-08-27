@@ -407,3 +407,97 @@ def test_a_pass_hands_the_answer_on_to_the_sync(monkeypatch, settings):
     serve_mod.once(object(), settings, Fuse(), probe_proxies=False)
 
     assert asked.get("probe_proxies") is False
+
+
+# ----------------------------------------------------- saying it is still alive
+def test_a_pass_says_it_began(make_settings, tmp_path):
+    """`restart: always` brings back a process that died. It does nothing for
+    one that is alive and stuck, and from outside those look identical."""
+    settings = make_settings(state_dir=tmp_path)
+
+    serve_mod.beat(settings)
+
+    assert (tmp_path / serve_mod.HEARTBEAT_FILE).read_text(encoding="utf-8")
+
+
+def test_a_service_that_cannot_write_its_heartbeat_still_serves(make_settings,
+                                                                 tmp_path,
+                                                                 caplog):
+    """It should look unhealthy, not stop."""
+    settings = make_settings(state_dir=tmp_path / "beat")
+    (tmp_path / "beat").mkdir()
+    (tmp_path / "beat" / serve_mod.HEARTBEAT_FILE).mkdir()
+
+    serve_mod.beat(settings)                       # must not raise
+
+    assert any("heartbeat" in r.getMessage() for r in caplog.records)
+
+
+def test_nothing_has_run_yet_is_not_healthy(make_settings, tmp_path):
+    """True on a container that has only just come up, which is what
+    `start_period` in the healthcheck is for."""
+    ok, said = serve_mod.healthy(make_settings(state_dir=tmp_path))
+
+    assert not ok and "no pass has run yet" in said
+
+
+def test_a_pass_a_moment_ago_is_healthy(make_settings, tmp_path):
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod.beat(settings)
+
+    ok, _said = serve_mod.healthy(settings)
+
+    assert ok
+
+
+def test_a_pass_from_long_enough_ago_is_not(make_settings, tmp_path):
+    import time
+
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod.beat(settings)
+    past = time.time() + serve_mod.stale_after(settings) + 1
+
+    ok, said = serve_mod.healthy(settings, now=past)
+
+    assert not ok and "past the" in said
+
+
+def test_a_build_running_long_is_not_mistaken_for_a_stuck_one(make_settings,
+                                                               tmp_path):
+    """A pass that is building legitimately takes as long as a build is
+    allowed to. Calling that unhealthy would restart a working build."""
+    import time
+
+    settings = make_settings(state_dir=tmp_path, build_budget_seconds=3600,
+                             serve_interval_seconds=30)
+    serve_mod.beat(settings)
+
+    ok, _said = serve_mod.healthy(settings, now=time.time() + 3600)
+
+    assert ok
+
+
+def test_a_heartbeat_that_is_not_a_number_is_not_healthy(make_settings,
+                                                          tmp_path):
+    """A half-written file after a hard kill is not evidence of a live pass."""
+    settings = make_settings(state_dir=tmp_path)
+    (tmp_path / serve_mod.HEARTBEAT_FILE).write_text("", encoding="utf-8")
+
+    ok, _said = serve_mod.healthy(settings)
+
+    assert not ok
+
+
+def test_the_loop_beats_before_every_pass(monkeypatch, make_settings,
+                                           tmp_path):
+    """Before, not after: a pass that never returns is exactly the case this
+    exists to catch, and it would never reach an `after`."""
+    settings = make_settings(state_dir=tmp_path)
+    beats = []
+    monkeypatch.setattr(serve_mod, "beat", lambda s: beats.append(1))
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(serve_mod, "once", lambda c, s, f, **kw: None)
+
+    serve_mod.run(settings, passes=3, sleep=lambda s: None)
+
+    assert len(beats) == 3
