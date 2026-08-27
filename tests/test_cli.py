@@ -2239,3 +2239,43 @@ def test_installing_it_off_the_main_thread_is_not_an_error():
     worker.join()
 
     assert not failed
+
+
+def test_being_stopped_is_not_reported_as_a_crash(monkeypatch, capsys,
+                                                   tmp_path, make_settings):
+    """Ctrl+C and `docker stop` both arrive here, and both arrive last -
+    every `finally` and every inner handler has already put its phones back.
+    All that is left is how it looks, and a traceback for a routine restart
+    makes a normal stop read as a crash in a log opened next week."""
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: settings))
+
+    def interrupted(settings_, args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "cmd_serve", interrupted)
+
+    assert cli.main(["serve"]) == 130
+    assert "stopped" in capsys.readouterr().err
+
+
+def test_the_cleanup_still_runs_before_that(monkeypatch, tmp_path,
+                                             make_settings):
+    """It is caught at the top, so anything deeper has already unwound. A
+    handler that caught it earlier would be one that stopped the phones from
+    being put back."""
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: settings))
+    cleaned = []
+
+    def interrupted(settings_, args):
+        try:
+            raise KeyboardInterrupt
+        finally:
+            cleaned.append("phones put back")
+
+    monkeypatch.setattr(cli, "cmd_serve", interrupted)
+
+    cli.main(["serve"])
+
+    assert cleaned == ["phones put back"]

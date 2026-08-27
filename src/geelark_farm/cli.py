@@ -1065,6 +1065,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return handler(settings, args)
+    except KeyboardInterrupt:
+        # Ctrl+C and `docker stop` both arrive here, and both arrive *last*:
+        # every `finally` and every inner handler has already run, which is
+        # where the phones this run started get put back. All that is left is
+        # how it looks, and a traceback for a routine restart makes a normal
+        # stop read as a crash in a log somebody opens next week.
+        #
+        # 130 is the convention for "a signal ended this", and `restart:
+        # always` does not read the code anyway.
+        print("stopped", file=sys.stderr)
+        return 130
     except AccountError as exc:
         print(f"account: {exc}", file=sys.stderr)
         return 1

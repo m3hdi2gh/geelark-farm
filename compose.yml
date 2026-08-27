@@ -45,6 +45,17 @@ services:
 
     restart: always
 
+    # Docker's default is ten seconds, and this service does not always stop
+    # inside ten. The sync probes the exits eight at a time in a thread pool,
+    # and a KeyboardInterrupt raised while that pool is busy waits for the
+    # connections already in flight before it unwinds - measured at more than
+    # ten seconds with forty exits, which Docker answers with SIGKILL.
+    #
+    # SIGKILL is the one signal nothing can catch. Whatever the run had
+    # started stays started, and phones bill by the minute. This is a
+    # maximum rather than a wait, so a stop that is quick is still quick.
+    stop_grace_period: 120s
+
     # Docker's own log, which grows without a bound of its own. The service
     # writes its real record to ./logs; this is the copy `docker logs` reads.
     logging:
