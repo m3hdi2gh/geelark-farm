@@ -146,14 +146,21 @@ class Pending:
             return [r for r in self._waiting if not r.answered.is_set()]
 
     def answer(self, request: Request, code: str) -> bool:
-        """Give a waiting build its code. False if it is not six digits.
+        """Give a waiting build its code. False if nobody is still waiting for
+        it, or if it is not six digits.
 
         Checked here rather than at the prompt so every answerer gets the same
         rule: a mistyped code costs the account an attempt, and OpenAI counts
         those.
+
+        The deadline is checked for the same reason. A build whose wait has
+        run out has already reported that no code arrived and moved on, so
+        taking one afterwards changes nothing and tells whoever typed it that
+        it did - and this is the answer they would act on, because it is the
+        only thing on screen that says whether the account went through.
         """
         digits = (code or "").strip()
-        if not CODE.fullmatch(digits):
+        if not CODE.fullmatch(digits) or request.seconds_left <= 0:
             return False
         request.code = digits
         request.answered.set()

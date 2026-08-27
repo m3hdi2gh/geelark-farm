@@ -131,3 +131,52 @@ def test_the_request_says_how_long_is_left():
 
     source.give_up(request)
     worker.join(2)
+
+
+def test_a_code_typed_after_the_build_gave_up_is_refused():
+    """The prompt waits on Enter and the deadline does not, so a code typed
+    slowly arrives when nothing is listening. Taking it told whoever typed it
+    that the account went through - and that line is the only thing on screen
+    that answers the question (2026-08-27)."""
+    import threading
+    import time
+
+    pending = codes.Pending()
+    got = {}
+
+    def build():
+        got["code"] = pending.code_for("a@example.com", since=time.time(),
+                                       timeout=0.05)
+
+    worker = threading.Thread(target=build)
+    worker.start()
+    while not pending.waiting():
+        time.sleep(0.005)
+    request = pending.waiting()[0]
+    worker.join()
+
+    assert got["code"] is None                  # the build moved on
+    assert pending.answer(request, "123456") is False
+
+
+def test_a_code_typed_while_the_build_is_still_waiting_is_taken():
+    """The other side of it: the refusal above must not be a refusal of every
+    answer that arrives late in the window."""
+    import threading
+    import time
+
+    pending = codes.Pending()
+    got = {}
+
+    def build():
+        got["code"] = pending.code_for("a@example.com", since=time.time(),
+                                       timeout=30)
+
+    worker = threading.Thread(target=build)
+    worker.start()
+    while not pending.waiting():
+        time.sleep(0.005)
+
+    assert pending.answer(pending.waiting()[0], "481920") is True
+    worker.join(timeout=5)
+    assert got["code"] == "481920"

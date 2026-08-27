@@ -552,6 +552,16 @@ def ask_for_codes(live: Live, reporter: _LiveTable, pending) -> None:
                 if pending.answer(request, typed):
                     console.print(f"[{OK}]  thanks - carrying on[/]")
                     break
+                if request.seconds_left <= 0:
+                    # The prompt waits on Enter and the deadline does not, so
+                    # a code typed slowly lands after the build has already
+                    # reported that none came. Saying "carrying on" here is
+                    # the one thing on screen that answers whether the account
+                    # went through, and it would be answering wrongly.
+                    pending.give_up(request)
+                    console.print(f"[{DIM}]  too late - the build stopped "
+                                  f"waiting and moved on[/]")
+                    break
                 console.print(f"[{BAD}]  that is not a six-digit code[/]")
             else:
                 pending.give_up(request)
