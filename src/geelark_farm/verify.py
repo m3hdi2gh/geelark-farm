@@ -253,6 +253,42 @@ def _stock(settings: Settings, checks: list[Check]) -> None:
 
 #: The Proxy column the cheap retry needs. Not in REQUIRED_COLUMNS, because a
 #: tab without it works - it just always takes the expensive path.
+def _directories(settings: Settings, checks: list[Check]) -> None:
+    """Whether this machine can write the three things a run has to keep.
+
+    `state/` is the one that costs money. It holds the ledger, which is what
+    says a running phone belongs to somebody - without it `reap` cannot tell
+    an orphan from a phone in use, and the breaker cannot count. The service
+    would run, and look like it was running, and be unable to remember any of
+    it.
+
+    Found on the first Linux host it was deployed to (2026-08-27): the
+    container runs as its own uid and a bind-mounted directory keeps the
+    host's ownership, so all three were read-only to it and only the log
+    warned. Docker Desktop maps ownership away and never showed it.
+    """
+    for name, path in (("state", settings.state_dir),
+                       ("logs", settings.log_dir),
+                       ("artifacts", settings.artifact_dir)):
+        probe = path / ".geelark-write-probe"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+        except OSError as exc:
+            why = ("The ledger lives here; without it nothing can tell a "
+                   "phone in use from an orphan."
+                   if name == "state" else
+                   "The run will work and keep no record of itself.")
+            checks.append(Check(
+                f"{name} dir", FATAL if name == "state" else WARN,
+                f"cannot write {path} ({exc.strerror or exc})\n{why}\n"
+                f"In a container it must be writable by the uid the "
+                f"container runs as: chown -R 10001 {path.name}"))
+            continue
+        checks.append(Check(f"{name} dir", OK, str(path)))
+
+
 def run_checks(settings: Settings) -> list[Check]:
     """Every check, in dependency order. Never raises.
 
@@ -269,6 +305,8 @@ def run_checks(settings: Settings) -> list[Check]:
         str(ENV_FILE) if ENV_FILE.exists() else
         f"no file at {ENV_FILE} - settings are coming from the environment "
         f"itself, which works, or are missing"))
+
+    _directories(settings, checks)
 
     if not _geelark(settings, checks):
         return checks

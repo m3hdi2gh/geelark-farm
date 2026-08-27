@@ -7,6 +7,9 @@ and every fatal one must say what to do about it.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from geelark_farm import verify
@@ -167,17 +170,19 @@ def test_a_missing_geelark_key_stops_before_anything_else_is_tried(
     monkeypatch.setattr(verify, "_geelark",
                         lambda s, checks: checks.append(
                             Check("geelark api", FATAL, "bad key")) or False)
-    settings = type("S", (), {"sheet_id": "x"})()
+    settings = type("S", (), {"sheet_id": "x", **DIRS})()
 
     checks = verify.run_checks(settings)
 
-    assert [c.name for c in checks] == [".env", "geelark api"]
+    names = [c.name for c in checks]
+    assert names[-1] == "geelark api"       # it stopped there
+    assert "spreadsheet" not in names       # and never reached the sheet
     assert verify.failed(checks)
 
 
 def test_an_unset_sheet_id_is_reported_as_the_sheet_check(monkeypatch):
     monkeypatch.setattr(verify, "_geelark", lambda s, checks: True)
-    settings = type("S", (), {"sheet_id": ""})()
+    settings = type("S", (), {"sheet_id": "", **DIRS})()
 
     checks = verify.run_checks(settings)
 
@@ -214,7 +219,7 @@ def test_a_bare_404_is_translated(said, expected, monkeypatch):
                         classmethod(lambda cls, path, scopes=None: object()))
     monkeypatch.setattr(gspread, "authorize",
                         lambda creds: (_ for _ in ()).throw(RuntimeError(said)))
-    settings = type("S", (), {"service_account_json": "k.json",
+    settings = type("S", (), {**DIRS, "service_account_json": "k.json",
                               "sheet_id": "x"})()
     checks = []
 
@@ -360,10 +365,17 @@ def geelark(monkeypatch, *, listing=None, plan=None, boom=None,
                         lambda self, settings, **kw: None)
 
 
+#: The three run_checks now writes a probe into. Real and writable, because
+#: the check exists to find out whether they are.
+DIRS = {"state_dir": Path(tempfile.gettempdir()),
+        "log_dir": Path(tempfile.gettempdir()),
+        "artifact_dir": Path(tempfile.gettempdir())}
+
+
 def api_settings(**over):
     base = {"app_id": "APPID123456", "api_key": "k",
             "api_requests_per_minute": 120, "sheet_id": "",
-            "sxorg_api_key": ""}
+            "sxorg_api_key": "", **DIRS}
     base.update(over)
     return type("S", (), base)()
 
