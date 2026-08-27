@@ -34,6 +34,10 @@ def _settings(**overrides) -> Settings:
         android="Android 15",
         phone_name_prefix="farm", target_package="com.example",
         max_concurrent_phones=1, build_budget_seconds=3600,
+        # What `serve` keeps in stock and how often it looks. Small here, so a
+        # test that drives the loop does not have to override them to say
+        # anything about it.
+        warm_stock=2, serve_interval_seconds=1,
         # Its own number now: a live run refreshes what it holds, so how long
         # a claim may go unrefreshed no longer has to be the build budget.
         stale_claim_seconds=3600,

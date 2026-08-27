@@ -185,6 +185,11 @@ class Settings:
     # Budgets. Billing is per running minute, so each of these caps spend as
     # well as time.
     max_concurrent_phones: int
+    #: How many phones `serve` keeps built to one step short of ready, so a
+    #: delivery is one login away rather than a whole build.
+    warm_stock: int
+    #: How long `serve` waits between passes.
+    serve_interval_seconds: int
     # The outer bound on what one phone may spend, and so on what it can cost.
     # It wins: each step below gets whichever is smaller, its own budget or the
     # time left. A build may work through several Gmails and several app
@@ -236,6 +241,8 @@ class Settings:
             phone_name_prefix=_str("PHONE_NAME_PREFIX", "farm"),
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
+            warm_stock=_int("WARM_STOCK", 10),
+            serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),
             build_budget_seconds=(budget := _int("BUILD_BUDGET_SECONDS", 3600)),
             stale_claim_seconds=_int("STALE_CLAIM_SECONDS", budget),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),

@@ -57,8 +57,33 @@ self-healing and the sheet-keeping off both of you.
 - **`GEELARK_REVISION`** — the build stamps it; `--version` still prefers the
   checkout when there is one.
 
-Still to wire: the breaker has no caller until `serve` exists. That is the
-first thing `serve` does.
+### The loop — **done, 2026-08-27**
+
+`geelark serve`, in `serve.py`. `--once` does a single pass, which is what a
+cron entry or a test wants.
+
+The judgement is `decide`, a pure function of five numbers - whether the
+breaker is open, how many phones are warm, how many should be, how many slots
+are free, and how many accounts are waiting. It is kept apart from everything
+that talks to GeeLark on purpose: what the service should do next is the part
+worth being sure about, and this way it can be argued with in a test that has
+no network, no sheet and no clock.
+
+Three things it is careful about:
+
+- **A tripped breaker stops building, not everything.** Finishing spends
+  nothing new, and a customer waiting on an account is the one thing that
+  should still happen while somebody works out why the last five builds
+  failed.
+- **Slots are read before building.** A run of undelivered phones is what runs
+  the plan out of room, and the fix is a person marking rows done - so it says
+  that in words rather than arriving as `[44002]`.
+- **Finishing comes before topping up.** Both want the same pass; only one has
+  somebody waiting at the end of it.
+
+One phone built and one finished per pass. That is the pacing of the whole
+service, and doubling it would double the rate the pools drain at without
+anything saying so.
 
 `GEELARK_MACHINE` is already an override for the hostname, which is what keeps
 History rows and log filenames meaningful across container restarts. The build

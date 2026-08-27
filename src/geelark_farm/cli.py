@@ -7,6 +7,7 @@ not justify another one.
 Commands are grouped by what they are for:
 
   producing phones       build, finish
+  running unattended     serve
   the console            ui
   what the sheet holds   pools
   setup and credentials  verify, ping, plan, proxy
@@ -115,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="how many at once (default: MAX_CONCURRENT_PHONES)")
     p_finish.add_argument("--dry-run", action="store_true",
                           help="show which phones would be finished, spend nothing")
+
+    p_serve = sub.add_parser(
+        "serve", help="keep the warm stock topped up and finish phones as "
+                      "accounts arrive, until stopped"
+    )
+    p_serve.add_argument("--once", action="store_true",
+                         help="do one pass and stop, rather than looping")
 
     p_pools = sub.add_parser(
         "pools", help="what the resource tabs hold, and what is stuck"
@@ -691,6 +699,19 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
+def cmd_serve(settings: Settings, args) -> int:
+    """Run continuously: top the warm stock up, finish phones as accounts
+    arrive, and carry out the State column - which is what deletes a phone
+    somebody has marked delivered and gives its slot back.
+
+    Imported here rather than at module load for the reason `cmd_ui` gives:
+    nothing else should pay for what only this command needs.
+    """
+    from . import serve as serve_mod
+
+    return serve_mod.run(settings, passes=1 if args.once else None)
+
+
 def cmd_build(settings: Settings, args) -> int:
     """Build phones out of the resource tabs, rather than one row at a time."""
     from . import builder
@@ -1022,6 +1043,7 @@ def main(argv: list[str] | None = None) -> int:
         "login": cmd_login,
         "install": cmd_install,
         "build": cmd_build,
+        "serve": cmd_serve,
         "finish": cmd_finish,
         "pools": cmd_pools,
     }

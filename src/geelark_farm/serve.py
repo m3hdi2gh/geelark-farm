@@ -1,0 +1,171 @@
+"""Run the thing continuously instead of typing it.
+
+What a person does today is: keep some phones built to one step short of
+ready, and complete one the moment an account turns up. Neither half is new -
+`build` against an empty `Gpt Info` tab produces exactly that phone, and
+`finish` completes it without spending another phone, Gmail or proxy. This is
+the loop around them, and the judgement about what to do on each pass.
+
+The judgement is `decide`, which is a pure function of five numbers. It is
+separate from everything that talks to GeeLark on purpose: what this service
+should do next is the part worth being sure about, and it can be argued with
+in a test that has no network, no sheet and no clock.
+
+Three things it is careful about, all of which cost money to get wrong:
+
+**A tripped breaker stops building, not everything.** Finishing spends nothing
+new - the phone, the Gmail and the exit are already bought - and a customer
+waiting on an account is the one thing that should still happen while somebody
+works out why the last five builds failed.
+
+**Slots are read before building, not discovered at [44002].** A finished
+phone holds its slot until a person marks it delivered, so a run of
+undelivered phones is what runs the plan out of room. That is worth saying in
+words rather than as an API error, because the fix is a person marking rows
+and nothing here can do it.
+
+**Finishing comes before topping up.** Both want the same pass; only one has
+somebody waiting at the end of it.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from dataclasses import dataclass
+
+from . import phones
+from .api import Client, build_client
+from .breaker import Breaker
+from .config import Settings
+from .ledger import Ledger
+from .pools import Book
+
+log = logging.getLogger(__name__)
+
+#: What the breaker's count is kept in, under `state/`.
+BREAKER_FILE = "breaker.json"
+
+
+@dataclass
+class Decision:
+    """What one pass should do, and why it is not doing the rest."""
+
+    finish: bool = False
+    build: bool = False
+    #: Said out loud when there is something a person has to do about it.
+    warning: str = ""
+
+    @property
+    def idle(self) -> bool:
+        return not self.finish and not self.build
+
+
+def decide(*, tripped: str, warm: int, target: int, free_slots: int,
+           accounts_waiting: int) -> Decision:
+    """What to do this pass, from five numbers and nothing else.
+
+    `tripped` is the breaker's reason, empty when it is closed.
+    """
+    if accounts_waiting and warm:
+        # Somebody is waiting at the end of this one, and it spends nothing
+        # that has not already been bought. It happens even with the breaker
+        # open: what tripped the breaker was building, and this is not that.
+        return Decision(finish=True)
+
+    if tripped:
+        return Decision(warning=tripped)
+
+    if accounts_waiting and not warm:
+        # An account arrived and there is no phone to put it on. Building is
+        # the answer and the branch below is already about to do it; this is
+        # only worth a line because it is the case the warm stock exists to
+        # prevent, and seeing it means the stock is not keeping up.
+        log.info("an account is waiting and no warm phone is ready for it")
+
+    if warm >= target:
+        return Decision()
+
+    if free_slots < 1:
+        return Decision(warning=(
+            f"no free profile slots, so the warm stock is stuck at {warm} of "
+            f"{target}. A finished phone holds its slot until somebody marks "
+            f"it done in the State column - that is what frees one."))
+
+    return Decision(build=True)
+
+
+def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int, int]:
+    """Warm phones, free slots, and accounts with nowhere to go yet."""
+    from . import builder
+
+    warm, _gone = builder._unfinished(client, book)
+    free = int(phones.plan(client).get("availableProfiles") or 0)
+    return len(warm), free, len(book.apps.available)
+
+
+def once(client: Client, settings: Settings, fuse: Breaker) -> Decision:
+    """One pass: bring the sheet up to date, then act on what it says."""
+    from . import builder
+
+    book = Book.open(settings)
+    ledger = Ledger.load(settings.state_dir)
+    # The same call a person's run makes, so the two cannot disagree about
+    # what the sheet means. This is also what carries out the State column -
+    # a phone marked done is deleted here and its slot comes back.
+    builder.sync_sheet(client, book, ledger,
+                       artifact_dir=settings.artifact_dir,
+                       stale_claim_seconds=settings.stale_claim_seconds)
+    book.reload()
+
+    warm, free, waiting = _look(client, settings, book)
+    decision = decide(tripped=fuse.reason(), warm=warm,
+                      target=settings.warm_stock, free_slots=free,
+                      accounts_waiting=waiting)
+    log.info("%d warm of %d, %d free slot(s), %d account(s) waiting",
+             warm, settings.warm_stock, free, waiting)
+    if decision.warning:
+        log.warning("%s", decision.warning)
+
+    if decision.finish:
+        for build in builder.finish_run(client, settings, limit=1):
+            fuse.record(build)
+    if decision.build:
+        for build in builder.run(client, settings, count=1):
+            fuse.record(build)
+    return decision
+
+
+def run(settings: Settings, *, stop: threading.Event | None = None,
+        passes: int | None = None, sleep=time.sleep) -> int:
+    """Keep going until something stops it.
+
+    `stop` is how a signal reaches it, `passes` is how a test reaches an end,
+    and `sleep` is injectable so a test does not spend the interval waiting
+    for it.
+    """
+    settings.ensure_dirs()
+    client = build_client(settings)
+    fuse = Breaker(settings.state_dir / BREAKER_FILE)
+    stop = stop or threading.Event()
+
+    log.info("serving: %d warm phones, a pass every %ds",
+             settings.warm_stock, settings.serve_interval_seconds)
+    done = 0
+    while not stop.is_set() and (passes is None or done < passes):
+        try:
+            once(client, settings, fuse)
+        except KeyboardInterrupt:
+            raise
+        except Exception:                                     # noqa: BLE001
+            # A pass that dies must not take the service with it. The next one
+            # begins by syncing the sheet, which is also how it recovers from
+            # whatever the last one left half-done.
+            log.exception("a pass failed; carrying on to the next one")
+        done += 1
+        if stop.is_set() or (passes is not None and done >= passes):
+            break
+        sleep(settings.serve_interval_seconds)
+    log.info("stopped after %d pass(es)", done)
+    return 0
