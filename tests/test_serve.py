@@ -178,7 +178,7 @@ def test_a_pass_that_dies_does_not_take_the_service_with_it(
     recovers from whatever this one left half-done."""
     settings = make_settings(state_dir=tmp_path, serve_interval_seconds=0)
 
-    def explode(client, settings_, fuse):
+    def explode(client, settings_, fuse, **kw):
         raise RuntimeError("geelark went away")
 
     monkeypatch.setattr(serve_mod, "once", explode)
@@ -194,7 +194,7 @@ def test_being_stopped_ends_the_loop_rather_than_the_pass(
     inside the build - so it must not be swallowed as "a pass failed"."""
     settings = make_settings(state_dir=tmp_path)
 
-    def interrupted(client, settings_, fuse):
+    def interrupted(client, settings_, fuse, **kw):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(serve_mod, "once", interrupted)
@@ -210,7 +210,7 @@ def test_a_stop_event_ends_it_between_passes(monkeypatch, make_settings,
     stop = threading.Event()
     passes = []
 
-    def counted(client, settings_, fuse):
+    def counted(client, settings_, fuse, **kw):
         passes.append(1)
         stop.set()
 
@@ -228,7 +228,7 @@ def test_it_does_not_sleep_after_its_last_pass(monkeypatch, make_settings,
     settings = make_settings(state_dir=tmp_path, serve_interval_seconds=999)
     slept = []
 
-    monkeypatch.setattr(serve_mod, "once", lambda c, s, f: None)
+    monkeypatch.setattr(serve_mod, "once", lambda c, s, f, **kw: None)
     monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
 
     serve_mod.run(settings, passes=1, sleep=slept.append)
@@ -312,7 +312,7 @@ def test_starting_it_already_stopped_does_nothing_at_all(monkeypatch,
     passes = []
 
     monkeypatch.setattr(serve_mod, "once",
-                        lambda c, s, f: passes.append(1))
+                        lambda c, s, f, **kw: passes.append(1))
     monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
 
     serve_mod.run(settings, stop=stop, sleep=lambda s: None)
@@ -361,3 +361,49 @@ def test_an_empty_stock_with_nobody_waiting_is_a_cold_start_not_a_warning(
 
     assert not any("no warm phone is ready" in r.getMessage()
                    for r in caplog.records)
+
+
+# ------------------------------------------------------ re-testing the exits
+def test_a_service_that_has_just_come_back_tests_the_exits():
+    """The one case where they may well have changed while nothing was
+    watching."""
+    assert serve_mod.probe_due(None, now=10.0)
+
+
+def test_they_are_not_tested_again_thirty_seconds_later():
+    """34 of the 43 calls a pass made were one live connection per exit, to
+    answer a question whose answer changes on the scale of days."""
+    assert not serve_mod.probe_due(1000.0, now=1030.0, every=3600)
+
+
+def test_they_are_tested_again_once_the_hour_is_up():
+    assert serve_mod.probe_due(1000.0, now=4600.0, every=3600)
+
+
+def test_the_loop_tests_them_on_the_first_pass_and_not_the_second(
+        monkeypatch, make_settings, tmp_path):
+    settings = make_settings(state_dir=tmp_path)
+    asked = []
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(serve_mod, "once",
+                        lambda c, s, f, *, probe_proxies=True:
+                        asked.append(probe_proxies))
+
+    serve_mod.run(settings, passes=3, sleep=lambda s: None)
+
+    assert asked == [True, False, False]
+
+
+def test_a_pass_hands_the_answer_on_to_the_sync(monkeypatch, settings):
+    """It is `sync_sheet` that does the probing, so the decision has to reach
+    it or it is a decision about nothing."""
+    from geelark_farm import builder
+
+    asked = {}
+    Recorder(warm=0, free=10).install(monkeypatch)
+    monkeypatch.setattr(builder, "sync_sheet",
+                        lambda *a, **k: asked.update(k) or {})
+
+    serve_mod.once(object(), settings, Fuse(), probe_proxies=False)
+
+    assert asked.get("probe_proxies") is False

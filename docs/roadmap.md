@@ -85,12 +85,43 @@ One phone built and one finished per pass. That is the pacing of the whole
 service, and doubling it would double the rate the pools drain at without
 anything saying so.
 
+### What a pass costs — **measured, 2026-08-27**
+
+|  | calls | time |
+|---|---|---|
+| before | 43 | 36.7s |
+| after | **9** | **13.1s** |
+
+34 of those 43 were `/v1/proxy/check` - one live connection per exit, every
+thirty seconds, to answer a question whose answer changes on the scale of
+days. The exits are now re-tested hourly, and on the first pass after a
+restart, which is the one time they may have changed while nothing watched.
+
+That takes the hourly cost from about 5,160 GeeLark calls to about 574,
+against a limit of 24,000 an hour and 200 a minute.
+
+The nine that remain are seven `/v1/phone/list`, one `/v1/proxy/list` and one
+`/v1/pay/plan/info`. The seven are ten separate call sites inside
+`sync_sheet`, and de-duplicating them is **deliberately not being done**: at
+2.4% of the budget it would mean touching ten places in the largest module in
+the project, before that module is split, to solve a problem that is no longer
+one.
+
+The interval is a gap between passes, not a period - `sleep` comes after the
+work - so a pass that runs long delays the next one rather than stacking.
+
 `GEELARK_MACHINE` is already an override for the hostname, which is what keeps
 History rows and log filenames meaningful across container restarts. The build
 path is already headless: neither `builder` nor `flows` reads stdin, and every
 `input()` in the CLI is behind `--yes` or `isatty`.
 
 ### The service
+
+Decided 2026-08-27: **Docker**, and the clock stays **UTC**. The case against
+Docker on this box - 1 vCPU, 2 GB, one service, one machine - was heard and
+overruled, so the image is built to suit it: dependencies in their own layer
+so a code change does not rebuild them, and the interpreter pinned to a
+version CI already tests rather than to the 3.12 the host happens to carry.
 
 - `Dockerfile` and `compose.yml`, with `restart: always`
 - secrets **mounted**, never `COPY`ed: `.env` and `secrets/service-account.json`

@@ -47,6 +47,15 @@ log = logging.getLogger(__name__)
 #: What the breaker's count is kept in, under `state/`.
 BREAKER_FILE = "breaker.json"
 
+#: How often the exits are re-tested.
+#:
+#: Measured before this existed: a pass made 43 GeeLark calls in 37 seconds
+#: and 34 of them were `/v1/proxy/check` - one live connection per exit, every
+#: thirty seconds, to answer a question whose answer changes on the scale of
+#: days. It is still worth asking, because a dead exit found here is a build
+#: that does not fail later; it is not worth asking 120 times an hour.
+PROBE_EVERY_SECONDS = 3600
+
 
 @dataclass
 class Decision:
@@ -105,7 +114,19 @@ def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int, int
     return len(warm), free, len(book.apps.available)
 
 
-def once(client: Client, settings: Settings, fuse: Breaker) -> Decision:
+def probe_due(last: float | None, now: float,
+              every: float = PROBE_EVERY_SECONDS) -> bool:
+    """Whether the exits are due a re-test.
+
+    `None` is "not since this process started", which is due: a service that
+    has just come back is the one case where the exits may well have changed
+    while nothing was watching.
+    """
+    return last is None or (now - last) >= every
+
+
+def once(client: Client, settings: Settings, fuse: Breaker, *,
+         probe_proxies: bool = True) -> Decision:
     """One pass: bring the sheet up to date, then act on what it says."""
     from . import builder
 
@@ -115,6 +136,7 @@ def once(client: Client, settings: Settings, fuse: Breaker) -> Decision:
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
     builder.sync_sheet(client, book, ledger,
+                       probe_proxies=probe_proxies,
                        artifact_dir=settings.artifact_dir,
                        stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
@@ -153,9 +175,14 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     log.info("serving: %d warm phones, a pass every %ds",
              settings.warm_stock, settings.serve_interval_seconds)
     done = 0
+    probed: float | None = None
     while not stop.is_set() and (passes is None or done < passes):
+        now = time.monotonic()
+        probe = probe_due(probed, now)
+        if probe:
+            probed = now
         try:
-            once(client, settings, fuse)
+            once(client, settings, fuse, probe_proxies=probe)
         except KeyboardInterrupt:
             raise
         except Exception:                                     # noqa: BLE001
