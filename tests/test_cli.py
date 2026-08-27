@@ -2171,3 +2171,63 @@ def test_the_log_says_which_code_wrote_it(monkeypatch, tmp_path,
 
     assert cli_mod.main(["ping"]) == 0
     assert "abc1234" in capsys.readouterr().err
+
+
+# ------------------------------------------------- being stopped politely
+def test_the_signal_a_container_is_stopped_with_reaches_the_cleanup():
+    """Everything that puts a phone back hangs off KeyboardInterrupt, and
+    Python raises that for SIGINT and nothing else. SIGTERM's default kills
+    the process where it stands - no finally, no _stop_all, and every phone
+    the run started left up and billing (2026-08-27)."""
+    import signal
+
+    before = signal.getsignal(signal.SIGTERM)
+    try:
+        cli.stop_on_sigterm()
+        installed = signal.getsignal(signal.SIGTERM)
+
+        assert callable(installed) and installed is not before
+        with pytest.raises(KeyboardInterrupt):
+            installed(signal.SIGTERM, None)
+    finally:
+        signal.signal(signal.SIGTERM, before)
+
+
+def test_every_command_is_stoppable_that_way(monkeypatch, tmp_path,
+                                              make_settings):
+    """Installed in `main`, so it covers the long ones - build, finish, and
+    the loop that will run them - without each having to remember."""
+    import signal
+
+    settings = make_settings(state_dir=tmp_path, log_dir=tmp_path)
+    monkeypatch.setattr(cli.Settings, "load", staticmethod(lambda: settings))
+    monkeypatch.setattr(cli, "cmd_ping", lambda s, a: 0)
+
+    before = signal.getsignal(signal.SIGTERM)
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        cli.main(["ping"])
+
+        assert signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGTERM, before)
+
+
+def test_installing_it_off_the_main_thread_is_not_an_error():
+    """Signals can only be installed from the main thread. Anywhere else this
+    is not applicable, and a worker calling it must not die of it."""
+    import threading
+
+    failed = []
+
+    def off_thread():
+        try:
+            cli.stop_on_sigterm()
+        except Exception as exc:            # noqa: BLE001
+            failed.append(exc)
+
+    worker = threading.Thread(target=off_thread)
+    worker.start()
+    worker.join()
+
+    assert not failed

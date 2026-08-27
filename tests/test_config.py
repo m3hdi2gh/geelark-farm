@@ -451,3 +451,38 @@ def test_git_is_asked_once_however_often_the_answer_is_wanted(monkeypatch):
 
     assert len(calls) == 1
     config.revision.cache_clear()
+
+
+def test_an_image_can_stamp_the_revision_it_was_built_from(monkeypatch):
+    """A container built from a copy of the tree has no `.git`, so the one
+    thing that answers "which code is on this server" would go blind exactly
+    where it was added to help."""
+    import subprocess
+
+    from geelark_farm import config
+
+    def refuse(*a, **k):
+        raise AssertionError("git was consulted despite a stamped revision")
+
+    config.revision.cache_clear()
+    monkeypatch.setenv("GEELARK_REVISION", "v0.1.0-4-gabc1234")
+    monkeypatch.setattr(subprocess, "run", refuse)
+
+    assert config.revision() == "v0.1.0-4-gabc1234"
+    config.revision.cache_clear()
+
+
+def test_a_blank_stamp_falls_back_to_the_checkout(monkeypatch):
+    """An unset build argument arrives as an empty string, not as nothing."""
+    import subprocess
+    from types import SimpleNamespace
+
+    from geelark_farm import config
+
+    config.revision.cache_clear()
+    monkeypatch.setenv("GEELARK_REVISION", "   ")
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout="abc1234\n"))
+
+    assert config.revision() == "abc1234"
+    config.revision.cache_clear()

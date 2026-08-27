@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import logging
+import signal
 import sys
 import time
 
@@ -39,6 +40,30 @@ from .shell import ShellError, TypingError
 
 # Local fallback when no sheet is configured. Same columns as the sheet.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
+
+
+def stop_on_sigterm() -> None:
+    """Make the way a container is stopped reach the cleanup Ctrl+C reaches.
+
+    Everything that puts a phone back on the way out hangs off
+    `KeyboardInterrupt`, and Python raises that for SIGINT and nothing else.
+    A container is stopped with SIGTERM, whose default is to kill the process
+    where it stands: no `finally`, no `_stop_all`, and every phone the run had
+    started left up and billing until something reaps it. `systemd`, a
+    supervisor and a plain `kill` all send the same signal.
+
+    It raises the exception the cleanup already listens for rather than
+    inventing a second shutdown path, because the first one is correct and
+    tested and there is no reason to have two.
+
+    Signals can only be installed from the main thread; anywhere else this is
+    not applicable rather than an error.
+    """
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    with contextlib.suppress(ValueError):
+        signal.signal(signal.SIGTERM, interrupt)
 
 
 def version_line() -> str:
@@ -955,6 +980,7 @@ def _configure_logging(settings: Settings):
 
 
 def main(argv: list[str] | None = None) -> int:
+    stop_on_sigterm()
     parser = build_parser()
     args = parser.parse_args(argv)
 

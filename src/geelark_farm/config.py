@@ -68,6 +68,12 @@ def revision() -> str:
     Cached: the answer cannot change while the process runs, and this is on
     the path of every single command through the log banner.
     """
+    # An image built from a copy of the tree has no `.git`, so the one thing
+    # that answers "which code is on this server" would go blind exactly where
+    # it was added to help. The build stamps it instead.
+    stamped = os.environ.get("GEELARK_REVISION", "").strip()
+    if stamped:
+        return stamped
     try:
         done = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "describe",
