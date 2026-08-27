@@ -994,8 +994,8 @@ def _configure_logging(settings: Settings):
     # timestamps, which are the point of a file.
     from .builder import BuildContextFilter
     file.addFilter(BuildContextFilter())
-    file.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s [%(row)s] %(name)s: %(message)s"))
+    from .logs import file_formatter
+    file.setFormatter(file_formatter(settings.log_format))
     root.addHandler(file)
     return path
 

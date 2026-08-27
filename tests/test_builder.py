@@ -2705,3 +2705,57 @@ def test_the_run_starts_and_stops_the_heartbeat_around_the_work():
     tries = [n for n in ast.walk(tree) if isinstance(n, ast.Try)]
     assert any("stop_beating" in ast.unparse(node.finalbody) for node in tries), \
         "nothing stops the heartbeat on the way out"
+
+
+# ------------------------------------- the label a finished build leaves behind
+def test_a_finished_build_stops_labelling_the_lines_after_it(
+        device, settings, monkeypatch):
+    """`_context.build` is a thread-local, and with one worker `work` runs on
+    the caller's own thread - so a build that ended an hour ago went on
+    stamping its number onto every line logged afterwards. In a command that
+    exits, that is until it exits. In `serve`, which does not, it is for ever
+    (2026-08-27).
+
+    The same shape as the console formatter that was replaced and never put
+    back, which is why the label is cleared in a `finally` rather than after
+    the return.
+    """
+    from geelark_farm.logs import NO_BUILD
+
+    book = make_book()
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p: FakeLedger()))
+    monkeypatch.setattr(builder, "build_one",
+                        lambda *a, **k: builder.Build(index=a[4], ok=True,
+                                                      status="ready"))
+    builder._context.build = NO_BUILD
+
+    builder.run(None, settings, count=1, workers=1)
+
+    assert getattr(builder._context, "build", NO_BUILD) == NO_BUILD
+
+
+def test_the_label_is_on_while_the_build_is_running(device, settings,
+                                                     monkeypatch):
+    """Clearing it is only right if it was ever set: a build's lines are
+    exactly what the label is for."""
+    from geelark_farm.logs import NO_BUILD
+
+    book = make_book()
+    seen = []
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p: FakeLedger()))
+    monkeypatch.setattr(builder, "build_one",
+                        lambda *a, **k: seen.append(builder._context.build)
+                        or builder.Build(index=a[4], ok=True, status="ready"))
+    builder._context.build = NO_BUILD
+
+    builder.run(None, settings, count=1, workers=1)
+
+    assert seen == [1]

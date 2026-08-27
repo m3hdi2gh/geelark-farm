@@ -83,7 +83,9 @@ class BuildContextFilter(logging.Filter):
     """Stamp every log record with the build its thread is working on."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.row = getattr(_context, "build", "-")
+        from .logs import NO_BUILD
+
+        record.row = getattr(_context, "build", NO_BUILD)
         return True
 
 
@@ -2119,7 +2121,24 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
             started.add(phone_id)
 
     def work(index: int, job: dict) -> Build:
+        """One job, with this thread's log lines labelled while it runs.
+
+        Cleared when the job ends rather than left behind. With one worker
+        `work` is called on the caller's own thread, so a build that finished
+        an hour ago went on labelling every line after it - and `serve` is a
+        process that does not end, so "an hour ago" becomes "for ever"
+        (2026-08-27). The same shape as the console formatter that was
+        replaced and never put back.
+        """
+        from .logs import NO_BUILD
+
         _context.build = index
+        try:
+            return _run_job(index, job)
+        finally:
+            _context.build = NO_BUILD
+
+    def _run_job(index: int, job: dict) -> Build:
         if reporter:
             # A finish job knows which phone it is before it touches it. A
             # build does not - it has no serial until GeeLark answers with one

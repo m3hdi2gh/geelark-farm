@@ -427,7 +427,7 @@ def test_a_builds_steps_reach_its_state_column():
     """
     import logging
 
-    from geelark_farm import builder
+    from geelark_farm import builder, logs
     from geelark_farm.ui import BuildReporter, ReporterLogHandler
 
     reporter = BuildReporter()
@@ -435,11 +435,19 @@ def test_a_builds_steps_reach_its_state_column():
     handler = ReporterLogHandler(reporter)
     handler.addFilter(builder.BuildContextFilter())
 
-    builder._context.build = 7
-    record = logging.LogRecord("geelark_farm.flows.chatgpt_login", logging.INFO,
-                               "f", 1, "screen: password_entry", None, None)
-    # No record.row set: the filter on the handler is what must supply it.
-    handler.handle(record)
+    # Restored afterwards. It is a thread-local, so leaving it set labels
+    # every later line on this thread as build 7 - which is the same bug the
+    # code it is testing was written to avoid, arriving through the test.
+    try:
+        builder._context.build = 7
+        record = logging.LogRecord("geelark_farm.flows.chatgpt_login",
+                                   logging.INFO, "f", 1,
+                                   "screen: password_entry", None, None)
+        # No record.row set: the filter on the handler must supply it.
+        handler.handle(record)
+    finally:
+        builder._context.build = logs.NO_BUILD
+
     assert reporter.rows[7]["step"] == "screen: password_entry"
 
 

@@ -47,6 +47,9 @@ def _settings(**overrides) -> Settings:
         state_dir=Path(tempfile.gettempdir()),
         artifact_dir=Path(tempfile.gettempdir()),
         log_dir=Path(tempfile.gettempdir()), log_level="INFO",
+        # Prose, which is what the file has always been and what a test that
+        # reads a log line expects. The JSON path has its own tests.
+        log_format="text",
     )
     base.update(overrides)
     return Settings(**base)

@@ -101,14 +101,38 @@ That takes the hourly cost from about 5,160 GeeLark calls to about 574,
 against a limit of 24,000 an hour and 200 a minute.
 
 The nine that remain are seven `/v1/phone/list`, one `/v1/proxy/list` and one
-`/v1/pay/plan/info`. The seven are ten separate call sites inside
-`sync_sheet`, and de-duplicating them is **deliberately not being done**: at
-2.4% of the budget it would mean touching ten places in the largest module in
-the project, before that module is split, to solve a problem that is no longer
-one.
+`/v1/pay/plan/info`.
+
+**Deferred to after the `builder.py` split (decided 2026-08-27).** The seven
+are ten separate call sites inside `sync_sheet`, and reading the panel once a
+pass and handing it down means touching all ten - much cheaper once that
+module is several modules. **Raise it again at the split.** The acceptance
+number for a pass was under five calls and this is the whole of what stands
+between us and it, so it is unfinished rather than rejected. It is not urgent:
+at 2.4% of the rate limit it is tidiness, not a problem.
 
 The interval is a gap between passes, not a period - `sleep` comes after the
 work - so a pass that runs long delays the next one rather than stacking.
+
+### The log a machine can read — **done, 2026-08-27**
+
+`LOG_FORMAT=json` writes the log **file** as one JSON object per line. The
+console stays prose, because those two handlers have always had different
+jobs: the console is for watching a run, the file is for finding out what
+happened afterwards - and increasingly for something else to read and decide
+whether to raise an alarm. `grep -c` over prose breaks the day a sentence is
+rephrased.
+
+Every line carries which machine and which commit wrote it. Two fields rather
+than a header, because a log gets tailed, rotated and concatenated with
+another machine's, and each of those loses a header.
+
+`serve`'s per-pass line now carries its numbers as fields as well as inside
+the sentence - `warm`, `target`, `free_slots`, `accounts_waiting`, `will` -
+which is what makes stage 4's "the stock has been short for an hour" an alarm
+somebody can actually write.
+
+The default stays text: that file is read by hand on the laptop today.
 
 `GEELARK_MACHINE` is already an override for the hostname, which is what keeps
 History rows and log filenames meaningful across container restarts. The build

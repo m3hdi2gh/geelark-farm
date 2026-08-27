@@ -188,6 +188,8 @@ class Settings:
     #: How many phones `serve` keeps built to one step short of ready, so a
     #: delivery is one login away rather than a whole build.
     warm_stock: int
+    #: `text` or `json`. The file only; the console is always prose.
+    log_format: str
     #: How long `serve` waits between passes.
     serve_interval_seconds: int
     # The outer bound on what one phone may spend, and so on what it can cost.
@@ -242,6 +244,7 @@ class Settings:
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
             warm_stock=_int("WARM_STOCK", 10),
+            log_format=_str("LOG_FORMAT", "text").strip().lower(),
             serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),
             build_budget_seconds=(budget := _int("BUILD_BUDGET_SECONDS", 3600)),
             stale_claim_seconds=_int("STALE_CLAIM_SECONDS", budget),

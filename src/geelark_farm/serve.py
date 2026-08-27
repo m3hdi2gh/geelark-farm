@@ -145,8 +145,16 @@ def once(client: Client, settings: Settings, fuse: Breaker, *,
     decision = decide(tripped=fuse.reason(), warm=warm,
                       target=settings.warm_stock, free_slots=free,
                       accounts_waiting=waiting)
+    # The numbers go beside the sentence as well as inside it. On the console
+    # this reads as prose; in a JSON log file they are fields something can
+    # count without matching on the wording, which is what makes an alarm on
+    # "the stock has been short for an hour" possible at all.
     log.info("%d warm of %d, %d free slot(s), %d account(s) waiting",
-             warm, settings.warm_stock, free, waiting)
+             warm, settings.warm_stock, free, waiting,
+             extra={"warm": warm, "target": settings.warm_stock,
+                    "free_slots": free, "accounts_waiting": waiting,
+                    "will": ("finish" if decision.finish else
+                             "build" if decision.build else "nothing")})
     if decision.warning:
         log.warning("%s", decision.warning)
 
