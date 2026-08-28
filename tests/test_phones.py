@@ -493,7 +493,14 @@ def test_a_claim_hours_old_means_the_process_that_made_it_is_gone(tmp_path):
     ledger = ledger_at(tmp_path)
     entry = ledger.record("P1")
     ledger.claim("P1")
-    entry.claimed_at = time.time() - STALE_CLAIM_SECONDS - 3600
+    # Three hours, said outright. It used to be `STALE_CLAIM_SECONDS + 3600`,
+    # which read as "past the window" but asserted on "3.0h" - true only while
+    # the window happened to be two hours. Shortening the window to five
+    # minutes made the age 1.1h and failed a test about the wording of the age
+    # (2026-08-28). The age it reports and the window it is past are two
+    # different facts, and only one of them is being checked here.
+    entry.claimed_at = time.time() - 3 * 60 * 60
+    assert entry.is_stale, "three hours must be past any sane window"
 
     reason = dict(phones.reapable(running("P1"), ledger))["P1"]
 

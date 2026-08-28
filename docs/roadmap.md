@@ -154,6 +154,31 @@ version CI already tests rather than to the 3.12 the host happens to carry.
   accountable for
 - `geelark serve`: the loop above
 
+### Made fit to run unattended — **2026-08-28**
+
+Found by auditing the deployed service rather than by it failing, which is the
+only reason most of these were still cheap.
+
+- **The warm stock could never grow past one.** `serve` called `builder.run`
+  without `finish_first=False`, so a pass that had decided to *build* took back
+  the phones it had just counted as warm and finished one instead — which then
+  found no account, because a build pass only happens when none is waiting.
+  Dormant at `WARM_STOCK=1`, and it would have woken the moment the stock was
+  raised. Its `no_usable_gpt` cleared the breaker each time, so nothing counted.
+- **The ledger and the pools disagreed about staleness.** The pools were
+  shortened to five minutes and `ledger.STALE_CLAIM_SECONDS` was left at two
+  hours, opening a window where a dead run's Gmail went back to the pool while
+  its phone still read as held. One number now, pinned by a test.
+- **The healthcheck could not see a loop that was failing.** The heartbeat is
+  stamped *before* the pass, so a pass that throws stamps it like one that
+  works. Consecutive failed passes are counted on disk and `healthy()` reads
+  them.
+- **Nothing the operator reads said anything.** The `Service` tab is rewritten
+  each pass; every sheet timestamp now ends in `Z`; a finish marks its phone row
+  `building` while it holds it.
+- **The log had no rotation** — the filename carries the start date and is
+  computed once, so a service writes one unbounded file for as long as it runs.
+
 ### The one number that bounds it
 
 The plan has 30 profile slots. Ten are permanently warm, which leaves twenty

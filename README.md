@@ -87,7 +87,7 @@ The rest have defaults worth knowing about:
 |---|---|---|
 | `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once |
 | `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
-| `STALE_CLAIM_SECONDS` | the build budget | how long a claimed row may go unrefreshed before the sync frees it; shorten it only once every machine on the sheet is refreshing |
+| `STALE_CLAIM_SECONDS` | `300` | how long a claimed row may go unrefreshed before the sync frees it — five missed beats; raise it again the moment anything that does not beat touches the sheet |
 | `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |
 | `TARGET_PACKAGE` | `com.openai.chatgpt` | deep-linked by package id, so no Play Store search and no clones |
 | `LOG_LEVEL` | `INFO` | the console only — the file log is always DEBUG |
@@ -146,8 +146,14 @@ reading the second as the first is how a row that could never work costs a
 phone.
 
 Untouched, the column is empty and every row means what it meant before it
-existed. **On `stable` a ticked row is refused when the tab is read** — that
-sign-in lives on `main` — so nothing is spent on it either way.
+existed. **Ticked, and with nothing answering codes, the row is tried once and
+set aside** as `no_code_source`: the phone asks, nobody is there to read the
+inbox, and the account goes back to the tab with a note saying what it was
+waiting for. It keeps its place — nothing was decided against it — but it
+leaves the pool until a person blanks the status, so it is tried once and not
+once a pass. The phone carries straight on to the next account.
+
+Answering those codes without a person is phase 2 (`docs/roadmap.md`).
 
 ### Phones — what the runs produced
 
@@ -155,12 +161,24 @@ Written by the tool, one row per phone, except for `State` which is yours.
 
 `Created`, `Serial`, `State`, `Proxy`, `Gmail`, `GPT Account`, `Status`, `Note`
 
-### Lists and History — created automatically
+### Lists, History and Service — created automatically
 
 `Lists` holds the dropdown values for every `Status` and `State` column,
 regenerated each session from `failures.py` so the dropdown can always offer
 what a run can actually write. `History` is an append-only record of what
 happened, one row per event, stamped with the machine that wrote it.
+
+`Service` is the running service's dashboard, rewritten every pass: when the
+last pass was, which machine and which build of the code, what it is doing
+right now, the warm stock against its target, how many accounts are waiting,
+how many profile slots are free, and whether the breaker is open. Its `Note`
+carries whatever is stopping the loop — a tripped breaker, no free slots, or a
+run of passes that are failing.
+
+It exists because everything above used to live only in the log, on a server,
+and the four states that stop the loop all look identical from the spreadsheet:
+a tab that has gone quiet. Every timestamp the service writes ends in `Z` — it
+runs on UTC, and the people reading the sheet do not.
 
 ### Status: what a run concluded
 

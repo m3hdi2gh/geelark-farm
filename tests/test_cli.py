@@ -509,6 +509,35 @@ def test_every_invocation_leaves_a_debug_file_whatever_the_console_shows(
             handler.close()
 
 
+def test_the_log_file_rolls_rather_than_growing_forever(tmp_path,
+                                                        make_settings):
+    """Nothing else will rotate it once this is a service.
+
+    The filename carries the date it started, which is enough for a command
+    somebody types and nothing at all for a process that runs for weeks - it is
+    computed once, so a service started on Monday is still writing Monday's
+    file on Friday. Idle, that was about 3.4 MB a day, unbounded, on a box with
+    a small disk (2026-08-28).
+    """
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    settings = make_settings(log_dir=tmp_path)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    cli._configure_logging(settings)
+    added = [h for h in root.handlers if h not in before]
+    try:
+        rolling = next(h for h in added
+                       if isinstance(h, RotatingFileHandler))
+        assert rolling.maxBytes > 0, "a size of 0 means it never rolls"
+        assert rolling.backupCount > 0, "and keeping 0 means it never keeps"
+    finally:
+        for handler in added:
+            root.removeHandler(handler)
+            handler.close()
+
+
 def test_a_log_directory_that_cannot_be_made_does_not_kill_the_cli(
         tmp_path, make_settings):
     """A machine where the directory cannot be written gets console logging

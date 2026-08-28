@@ -14,6 +14,82 @@ geelark reap              # stop anything the ledger cannot account for
 geelark dump --phone ID   # what is actually on that phone's screen right now
 ```
 
+## Reading the server
+
+The service runs on the server, in Docker, as a container called `geelark`, out
+of `~/geelark-farm`. Everything under "First moves" still applies — it just has
+to be said *inside* the container:
+
+```bash
+ssh ubuntu@185.231.181.227
+cd ~/geelark-farm
+docker compose exec geelark geelark --version
+docker compose exec geelark geelark breaker
+```
+
+**What is it doing right now:**
+
+```bash
+docker compose logs -f --tail 50 geelark
+```
+
+One line a pass tells you the whole state:
+
+```
+1 warm of 10, 6 free slot(s), 0 account(s) waiting
+```
+
+`not asked about free slot(s)` in place of a number is not a fault — the slot
+endpoint allows one call a minute, so it is only asked on a pass that is about
+to build.
+
+**Is it actually working?**
+
+```bash
+docker ps                                   # healthy / unhealthy
+docker compose exec geelark geelark serve --healthcheck
+```
+
+Two different failures hide here, and only the second is obvious. A loop that
+has **stopped** goes stale and shows unhealthy. A loop that is **running while
+every pass dies** used to look perfectly healthy — it now says so after five
+failed passes in a row (`serve.FAILING_LIMIT`). If the healthcheck says
+"nothing is getting through", read the log: it is almost always the sheet — a
+revoked key, the spreadsheet un-shared, or the Sheets API turned off. The first
+two are fixed in the Google console with no SSH at all, and the next pass picks
+it up on its own.
+
+**Restarting, and what it costs.** `restart: always` covers a crash and a
+reboot. Restarting by hand interrupts whatever build is in flight — a phone
+mid-build is discarded and its row settled, so do not do it to "see if that
+helps" while the log shows a build running:
+
+```bash
+docker compose restart geelark      # keeps the same image
+```
+
+**Deploying new code.** A `git pull` on the server changes nothing that runs:
+the image is what runs, and the revision is stamped into it at build time.
+
+```bash
+cd ~/geelark-farm && git pull
+GEELARK_REVISION="$(git describe --always --dirty --tags)" docker compose build
+docker compose up -d
+docker compose exec geelark geelark --version   # confirm it moved
+```
+
+**Changing a setting** (`WARM_STOCK`, `LOG_FORMAT`, …) means editing `.env` and
+recreating the container — `restart` alone does not re-read it:
+
+```bash
+docker compose up -d
+```
+
+**The files, on the host, not in the container:** `logs/` is the service's own
+record, `state/` holds the ledger and the breaker, `artifacts/` holds the
+screens of everything that went wrong. They are bind-mounted and owned by uid
+`10001`, so reading them from `ubuntu` needs `sudo`.
+
 ## The service is up but building nothing
 
 After enough failed builds in a row it stops on purpose, and stays stopped
@@ -43,11 +119,18 @@ geelark-farm 0.1.0 (v0.1.0-4-gabc1234)
 geelark-farm 0.1.0 (v0.1.0-4-gabc1234-dirty)   <- somebody edited it in place
 ```
 
-The commit is read out of the checkout at the moment you ask, so it follows a
+In a checkout the commit is read at the moment you ask, so it follows a
 `git pull` without anyone re-running anything. `-dirty` means the files on
 disk are not the commit they claim to be, which is the difference between "this
 is that code" and "this is that code plus whatever somebody tried at 3am" - and
 it is usually the answer to why one machine behaves unlike the one beside it.
+
+**In the container it is stamped at build time and nothing else moves it.** An
+image carries no `.git`, so the build passes `GEELARK_REVISION` in and the
+running service reports that (`config.revision`). On the server a `git pull`
+therefore changes *nothing* the service says or runs until the image is built
+again — which is the whole point of asking it, and the trap if you assume the
+checkout answer applies.
 
 Every log file opens with the same line, so a log read weeks later says which
 code wrote it. A deployment with no `.git` - a tarball, a container built from
@@ -84,8 +167,18 @@ billing. If a second Ctrl+C does nothing and the phone log keeps scrolling,
 the main thread has already died and Python is waiting on the worker threads
 (a ThreadPoolExecutor's are not daemons). Kill it and check:
 
+On a laptop:
+
 ```powershell
 Stop-Process -Name geelark -Force
+```
+
+On the server there is no TTY and no Ctrl+C to send. Stop the container, which
+sends SIGTERM and then waits out `stop_grace_period` — 120s, set because the
+shutdown has real work to do and a SIGKILL leaves phones running and billing:
+
+```bash
+docker compose stop
 ```
 
 ```bash

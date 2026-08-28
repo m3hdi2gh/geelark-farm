@@ -14,7 +14,9 @@ services:
       context: .
       args:
         # Passed in rather than read here, because a build reads no `.git` -
-        # see the Dockerfile. `make deploy` or the runbook supplies it.
+        # see the Dockerfile. The runbook's deploy step supplies it. There is
+        # no Makefile: this said `make deploy` for a while and sent a reader
+        # looking for one (2026-08-28).
         GEELARK_REVISION: "${GEELARK_REVISION:-}"
     image: geelark-farm:local
     container_name: geelark

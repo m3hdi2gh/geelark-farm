@@ -106,9 +106,12 @@ class Recorder:
                             lambda c, s, b: self.numbers)
         monkeypatch.setattr(serve_mod.Slots, "look",
                             lambda self_, c, now: self.free)
+        # `service` is None the way a real Book's is when the tab could not be
+        # made - the shape has to match, or the fake tests a Book that does not
+        # exist.
         monkeypatch.setattr(serve_mod, "Book",
                             SimpleNamespace(open=lambda s: SimpleNamespace(
-                                reload=lambda: None, apps=None)))
+                                reload=lambda: None, apps=None, service=None)))
         monkeypatch.setattr(serve_mod, "Ledger",
                             SimpleNamespace(load=lambda d: None))
         monkeypatch.setattr(builder, "sync_sheet",
@@ -160,6 +163,104 @@ def test_a_pass_builds_when_the_stock_is_short(monkeypatch, make_settings,
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
 
     assert recorder.built == 1 and recorder.finished == 0
+
+
+def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
+        monkeypatch, make_settings, tmp_path):
+    """The one that kept the warm stock at one, and hid until it was raised.
+
+    `builder.run` finishes before it builds by default, which is what a person
+    typing it wants. Called from a pass that had already decided to build, it
+    called `_unfinished` and got back the very phones `_look` had just counted
+    as warm, so `to_finish` took the count and `to_build` was left at 0 - the
+    build became a finish. That finish then found no account to use, because a
+    pass only reaches the build branch when none is waiting, and the phone went
+    back to `incomplete`. Warm never passed 1 and a real cloud phone was booted
+    and stopped every pass, with the resulting `no_usable_gpt` *clearing* the
+    breaker each time (2026-08-28).
+
+    Every other test of this branch stubs `builder.run` whole and asserts on
+    `count`, which is exactly why it stayed green. This one goes through the
+    real `run` and watches which job it dispatches.
+    """
+    from test_builder import FakeLedger, make_book
+
+    from geelark_farm import builder
+
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    book = make_book(apps=0)                    # nothing waiting to be finished
+    warm = [{"sheet_row": 2, "phone_id": "P2", "serial": "662",
+             "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}]
+
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (warm, []))
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p: FakeLedger()))
+    monkeypatch.setattr(serve_mod.Slots, "look", lambda self_, c, now: 10)
+    monkeypatch.setattr(builder.phones, "prune_ledger", lambda c, l: [])
+
+    jobs = []
+    monkeypatch.setattr(builder, "build_one", lambda *a, **k: jobs.append("build")
+                        or builder.Build(index=1, ok=True, status="ready"))
+    monkeypatch.setattr(builder, "finish_one", lambda *a, **k: jobs.append("finish")
+                        or builder.Build(index=1, ok=True, status="ready"))
+
+    client = SimpleNamespace(data=lambda *a, **kw: {})
+    serve_mod.once(client, settings, Fuse(), serve_mod.Slots())
+
+    assert jobs == ["build"], (
+        "a build pass must build - finishing here re-cooks a warm phone that "
+        "has no account waiting for it")
+
+
+def board_book(monkeypatch, shown):
+    """A Book whose Service tab records what it was asked to display."""
+    monkeypatch.setattr(
+        serve_mod, "Book",
+        SimpleNamespace(open=lambda s: SimpleNamespace(
+            reload=lambda: None, apps=None,
+            service=SimpleNamespace(show=lambda **kw: shown.update(kw)),
+            phones=SimpleNamespace(CLAIM_FORMAT="%Y-%m-%d %H:%M:%SZ"))))
+
+
+def test_a_pass_says_on_the_sheet_what_it_is_doing(monkeypatch, make_settings,
+                                                   tmp_path):
+    """The operator reads the spreadsheet and nothing else.
+
+    All of this was in the log, on a server they do not read. From the sheet, a
+    loop that had stopped building looked exactly like a loop that was
+    correctly idle - a tab that had gone quiet (2026-08-28).
+    """
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    shown = {}
+    Recorder(warm=1, free=10).install(monkeypatch)
+    board_book(monkeypatch, shown)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert shown["Doing"] == "building a warm phone"
+    assert shown["Warm stock"] == "1 of 3"
+    assert shown["Free slots"] == "10"
+    assert shown["Breaker"] == "closed"
+    assert shown["Last pass"].endswith("Z"), "which clock, said outright"
+
+
+def test_an_open_breaker_reaches_the_sheet_and_not_only_the_log(
+        monkeypatch, make_settings, tmp_path):
+    """It stops the loop building, and a log line saying so is no use to
+    somebody who cannot read the log."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    shown = {}
+    Recorder(warm=1, free=10).install(monkeypatch)
+    board_book(monkeypatch, shown)
+
+    serve_mod.once(object(), settings, Fuse("5 builds in a row failed"),
+                   serve_mod.Slots())
+
+    assert "5 builds in a row failed" in shown["Breaker"]
+    assert "5 builds in a row failed" in shown["Note"]
+    assert shown["Doing"] == "nothing to do"
 
 
 def test_every_build_it_starts_is_shown_to_the_breaker(monkeypatch,
@@ -381,6 +482,70 @@ def test_a_pass_a_moment_ago_is_healthy(make_settings, tmp_path):
     ok, _said = serve_mod.healthy(settings)
 
     assert ok
+
+
+def test_a_loop_whose_every_pass_dies_is_not_healthy(make_settings, tmp_path):
+    """The blind spot the heartbeat cannot see.
+
+    `beat` is stamped before the pass is attempted, on purpose, so a pass that
+    hangs still goes stale. That also means a pass that *throws* stamps it
+    exactly as a working one does - so a service whose every pass died on the
+    first call reported healthy forever, `restart: always` never fired, and the
+    operator saw a quiet tab indistinguishable from a correctly idle loop
+    (2026-08-28).
+    """
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod.beat(settings)
+    for _ in range(serve_mod.FAILING_LIMIT):
+        serve_mod.note_pass(settings, ok=False)
+
+    ok, said = serve_mod.healthy(settings)
+
+    assert not ok
+    assert "in a row" in said and "nothing is getting through" in said
+
+
+def test_one_pass_that_works_makes_it_healthy_again(make_settings, tmp_path):
+    """Consecutive, like the breaker: the question is whether it has stopped
+    working, and one pass getting through answers it."""
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod.beat(settings)
+    for _ in range(serve_mod.FAILING_LIMIT + 3):
+        serve_mod.note_pass(settings, ok=False)
+
+    serve_mod.note_pass(settings, ok=True)
+
+    assert serve_mod.healthy(settings)[0]
+
+
+def test_a_few_failures_are_not_yet_a_dead_service(make_settings, tmp_path):
+    """One flaky call must not raise an alarm - but it is said out loud, so a
+    person reading the line knows it is not a clean run."""
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod.beat(settings)
+    serve_mod.note_pass(settings, ok=False)
+
+    ok, said = serve_mod.healthy(settings)
+
+    assert ok
+    assert "1 failed in a row" in said
+
+
+def test_a_failing_pass_is_counted_by_the_loop_itself(monkeypatch,
+                                                      make_settings, tmp_path):
+    """The counter is worth nothing if `run` forgets to feed it."""
+    settings = make_settings(state_dir=tmp_path, serve_interval_seconds=0)
+
+    def explode(*a, **kw):
+        raise RuntimeError("geelark went away")
+
+    monkeypatch.setattr(serve_mod, "once", explode)
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+
+    serve_mod.run(settings, passes=serve_mod.FAILING_LIMIT,
+                  sleep=lambda s: None)
+
+    assert not serve_mod.healthy(settings)[0]
 
 
 def test_a_pass_from_long_enough_ago_is_not(make_settings, tmp_path):

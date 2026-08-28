@@ -62,6 +62,16 @@ BREAKER_FILE = "breaker.json"
 #: difference.
 HEARTBEAT_FILE = "heartbeat"
 
+#: Where the count of consecutive failed passes lives, and how many in a row
+#: mean the service is not working.
+#:
+#: The heartbeat says a pass *began*; this says whether any of them got
+#: through. Five at the default interval is two and a half minutes, which is
+#: short enough to catch a revoked key on the same afternoon and long enough
+#: that a single flaky call does not raise an alarm.
+FAILING_FILE = "failed-passes"
+FAILING_LIMIT = 5
+
 #: How often the exits are re-tested.
 #:
 #: Measured before this existed: a pass made 43 GeeLark calls in 37 seconds
@@ -221,8 +231,59 @@ def stale_after(settings: Settings) -> float:
     return 2 * (settings.build_budget_seconds + settings.serve_interval_seconds)
 
 
+def note_pass(settings: Settings, *, ok: bool) -> int:
+    """Record whether a pass got through, and answer how many have not.
+
+    The heartbeat alone cannot see this. It is stamped before the pass is
+    attempted - deliberately, so a pass that hangs still shows as stale - which
+    means a pass that *throws* stamps it just as a pass that works does. A
+    service whose every pass died on the first call therefore looked healthy
+    forever: `restart: always` never fires, `docker ps` keeps saying healthy,
+    and the operator, who reads only the sheet, sees a tab that has gone quiet
+    and cannot tell it from a loop that is correctly idle (2026-08-28).
+
+    On disk rather than in memory because the healthcheck is a second process:
+    `geelark serve --healthcheck` is run by Docker, not by the loop.
+
+    Never fatal, for the same reason `beat` is not.
+    """
+    path = settings.state_dir / FAILING_FILE
+    try:
+        if ok:
+            path.unlink(missing_ok=True)
+            return 0
+        # No file and an unreadable one mean the same thing here - nothing is
+        # known against the loop yet - which is what `_failing` already answers.
+        failed = _failing(settings) + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(failed), encoding="utf-8")
+        return failed
+    except OSError as exc:
+        log.warning("could not record how the pass went (%s)", exc)
+        return 0
+
+
+def _failing(settings: Settings) -> int:
+    """How many passes in a row have thrown."""
+    try:
+        return int((settings.state_dir / FAILING_FILE)
+                   .read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+
 def healthy(settings: Settings, now: float | None = None) -> tuple[bool, str]:
-    """Whether a pass has happened recently enough, and what to say."""
+    """Whether the service is doing its job, and what to say.
+
+    Two different failures, and the heartbeat only sees the first: a loop that
+    has stopped or hung, and a loop that is running perfectly on time while
+    every pass dies. The second is the one that used to report healthy.
+    """
+    failed = _failing(settings)
+    if failed >= FAILING_LIMIT:
+        return False, (f"{failed} passes in a row have failed - the loop is "
+                       f"running but nothing is getting through")
+
     path = settings.state_dir / HEARTBEAT_FILE
     try:
         last = float(path.read_text(encoding="utf-8").strip())
@@ -236,7 +297,8 @@ def healthy(settings: Settings, now: float | None = None) -> tuple[bool, str]:
     if since > limit:
         return False, (f"the last pass began {since / 60:.0f} minutes ago, "
                        f"past the {limit / 60:.0f} this should ever take")
-    return True, f"a pass began {since / 60:.0f} minute(s) ago"
+    said = f"a pass began {since / 60:.0f} minute(s) ago"
+    return True, f"{said} ({failed} failed in a row)" if failed else said
 
 
 def probe_due(last: float | None, now: float,
@@ -248,6 +310,41 @@ def probe_due(last: float | None, now: float,
     while nothing was watching.
     """
     return last is None or (now - last) >= every
+
+
+def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
+          waiting: int, free: int | None, tripped: str, failed: int) -> None:
+    """Put this pass's state where the operator can see it.
+
+    Every number here is already in the log, and the log is on a server the
+    operator does not read. This is the same pass, said on the spreadsheet.
+
+    Guarded rather than assumed: a `build` typed by hand has no dashboard, and
+    a workbook the tab could not be made in still has to run.
+    """
+    if book.service is None:
+        return
+    from . import __version__
+    from .config import machine, revision
+
+    stamp = revision()
+    doing = ("finishing a phone for an account" if decision.finish else
+             "building a warm phone" if decision.build else "nothing to do")
+    note = decision.warning
+    if failed:
+        note = (f"{failed} pass(es) in a row have failed - see the log. "
+                f"{note}").strip()
+    book.service.show(**{
+        "Last pass": time.strftime(book.phones.CLAIM_FORMAT),
+        "Machine": machine(),
+        "Version": f"{__version__} ({stamp})" if stamp else __version__,
+        "Doing": doing,
+        "Warm stock": f"{warm} of {settings.warm_stock}",
+        "Accounts waiting": str(waiting),
+        "Free slots": "not asked this pass" if free is None else str(free),
+        "Breaker": tripped or "closed",
+        "Note": note,
+    })
 
 
 def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
@@ -292,12 +389,36 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                              "build" if decision.build else "nothing")})
     if decision.warning:
         log.warning("%s", decision.warning)
+    # Written before the work rather than after it, so a build that takes four
+    # minutes reads as `building` for those four minutes instead of leaving the
+    # tab on the last thing that finished.
+    _show(book, settings, decision, warm=warm, waiting=waiting, free=free,
+          tripped=tripped, failed=_failing(settings))
 
     if decision.finish:
         for build in builder.finish_run(client, settings, limit=1):
             fuse.record(build)
     if decision.build:
-        for build in builder.run(client, settings, count=1):
+        # `finish_first=False` because this loop has already decided. `run`
+        # defaults to finishing before it builds, which is right for a person
+        # typing it - but here the two are separate branches of `decide`, and a
+        # build pass only happens when nothing is waiting to be finished.
+        #
+        # Left at the default it deadlocks the warm stock. `run` would call
+        # `_unfinished` and get back the very phones `_look` had just counted as
+        # warm, take `to_finish = waiting[:count]` and leave `to_build = 0` - so
+        # the build becomes a finish, that finish finds no account to use
+        # (there is none, or this would have been a finish pass), and the phone
+        # goes back to `incomplete`. Warm never passes 1, and a real phone is
+        # booted and stopped every pass. Nothing catches it either: the
+        # `no_usable_gpt` it ends on is in `breaker.WORKED`, which *clears* the
+        # count.
+        #
+        # It hid because `warm >= target` returns before this at 1 of 1, so it
+        # only wakes up when the stock is raised - which is the whole point of
+        # running unattended (2026-08-28).
+        for build in builder.run(client, settings, count=1,
+                                 finish_first=False):
             fuse.record(build)
     return decision
 
@@ -336,7 +457,14 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
             # A pass that dies must not take the service with it. The next one
             # begins by syncing the sheet, which is also how it recovers from
             # whatever the last one left half-done.
-            log.exception("a pass failed; carrying on to the next one")
+            #
+            # But carrying on quietly forever is its own failure: counted here
+            # so the healthcheck can tell "running" from "working".
+            failed = note_pass(settings, ok=False)
+            log.exception("a pass failed (%d in a row); carrying on to the "
+                          "next one", failed)
+        else:
+            note_pass(settings, ok=True)
         done += 1
         if stop.is_set() or (passes is not None and done >= passes):
             break

@@ -300,6 +300,29 @@ def test_the_shared_reasons_name_whoever_actually_refused():
         assert "Google" in failures.verdict(reason, "Google").seen, reason
 
 
+def test_a_refused_password_is_not_reported_as_a_wrong_one():
+    """The two are not the same thing, and only one of them is knowable here.
+
+    OpenAI answers a refused sign-in with "Incorrect email address or
+    password" - one message covering both fields, and one it also shows when
+    what it is refusing is neither. The note used to read "The password in the
+    sheet is not the account's", which is a fact this cannot have: it sent an
+    owner to correct a password that was already right, on an account that had
+    signed in successfully half an hour earlier (2026-08-28, row 89).
+
+    So the note has to send the reader to check before changing anything, and
+    has to say what to do when the password turns out to be fine.
+    """
+    advice = failures.verdict("wrong_password", "OpenAI").advice
+
+    assert "by hand" in advice, (
+        "the note has to say to try the password before changing it")
+    assert "blank the status" in advice, (
+        "and what to do when it works - otherwise a good account stays out")
+    assert "is not the account's" not in advice, (
+        "which of the two refused it cannot be known from here")
+
+
 def test_a_reason_only_one_flow_reports_may_name_it():
     """`no_authenticator_option` is Google's page and nothing else's, so
     spelling that out is the clearer thing to do, not a bug."""

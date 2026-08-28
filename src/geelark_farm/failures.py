@@ -126,10 +126,24 @@ VERDICTS: dict[str, Verdict] = {
         "IP - "
         "the same exit signs the next one in. Blank the status to try it again "
         "later, ideally on a residential exit."),
+    # The note used to say the password in the sheet was not the account's, as
+    # a fact. It is not one that can be known from here. OpenAI's wording is
+    # "Incorrect email address or password" - one message for both fields, and
+    # one it also shows when it is refusing a sign-in for a reason that is
+    # neither. An account whose password was correct, and which had signed in
+    # successfully half an hour earlier on another phone and another exit, was
+    # turned down by it; the note then sent its owner to correct a password
+    # that was already right (2026-08-28, row 89).
+    #
+    # The blame stays with the credential: nothing here can tell the two apart,
+    # and the account has to come out of the pool either way. What changed is
+    # that the note no longer states as fact the half of it that it is guessing.
     "wrong_password": Verdict(
         CREDENTIAL, "{service} would not take the password",
-        "The password in the sheet is not the account's. Correct "
-        "it and blank the status."),
+        "Try the password by hand before changing it - {service} shows this "
+        "when it is refusing the sign-in for other reasons too, so the one in "
+        "the sheet may well be right. If it works by hand, blank the status "
+        "and leave the password alone."),
     "password_changed": Verdict(
         CREDENTIAL, "Google said the password was an old one",
         "Google accepted the address and called the password old. "

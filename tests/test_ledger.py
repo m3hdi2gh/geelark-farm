@@ -58,6 +58,25 @@ def test_a_claim_goes_stale_so_a_dead_run_cannot_hold_a_phone_forever(tmp_path):
     assert entry.is_stale
 
 
+def test_the_ledger_and_the_pools_go_stale_at_the_same_moment():
+    """One question, two records, and they must not answer it differently.
+
+    A run holds its phone in the ledger and its Gmail in the sheet for exactly
+    as long as it holds either, and both are only asking "is the process that
+    claimed this still alive". When the two numbers drifted apart the gap was
+    the bug: the pools were shortened to five minutes once every writer beat,
+    the ledger was left at two hours, and in between `free_abandoned_claims`
+    handed a dead run's Gmail back while `settle_abandoned` still read that
+    run's phone as held - so the same address could be signed into a second
+    phone for the next hour and fifty-five minutes (2026-08-28).
+
+    Pinned rather than commented, because a comment did not stop it.
+    """
+    from geelark_farm import config
+
+    assert ledger_mod.STALE_CLAIM_SECONDS == config.STALE_CLAIM_DEFAULT
+
+
 def test_a_corrupt_ledger_loads_empty_instead_of_crashing(tmp_path, caplog):
     """A bad ledger must not stop a run - but it must be loud, because reap can
     no longer tell an orphan from a claimed phone."""

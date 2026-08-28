@@ -42,6 +42,13 @@ from .shell import ShellError, TypingError
 # Local fallback when no sheet is configured. Same columns as the sheet.
 DEV_ACCOUNTS = "secrets/accounts-dev.tsv"
 
+#: How large the log file gets before it rolls, and how many rolls are kept.
+#: Ten of ten megabytes, matching what compose.yml allows Docker's own log, so
+#: the two cannot surprise anybody by differing. At about 3.4 MB a day idle
+#: that is a month of history and a hard ceiling of 110 MB.
+LOG_BYTES = 10 * 1024 * 1024
+LOG_KEEP = 10
+
 
 def stop_on_sigterm() -> None:
     """Make the way a container is stopped reach the cleanup Ctrl+C reaches.
@@ -1036,7 +1043,18 @@ def _configure_logging(settings: Settings):
     try:
         settings.log_dir.mkdir(parents=True, exist_ok=True)
         path = settings.log_dir / f"{time.strftime('%Y%m%d')}-{machine()}.log"
-        file = logging.FileHandler(path, encoding="utf-8")
+        # Rotated by size, because as a service nothing else will rotate it.
+        # The name carries the date, which is enough for a command somebody
+        # types and nothing at all for a process that runs for weeks: the name
+        # is computed once, at startup, so a service started on Monday is still
+        # writing Monday's file on Friday. It grew about 3.4 MB a day idle,
+        # unbounded, on a box with a small disk (2026-08-28).
+        #
+        # `docker logs` is capped separately in compose.yml; this is the
+        # service's own record, which is the one worth keeping.
+        from logging.handlers import RotatingFileHandler
+        file = RotatingFileHandler(
+            path, maxBytes=LOG_BYTES, backupCount=LOG_KEEP, encoding="utf-8")
     except OSError as exc:
         print(f"warning: no log file ({exc}); console only", file=sys.stderr)
         return None

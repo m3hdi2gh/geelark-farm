@@ -897,6 +897,18 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if on_phone:
             on_phone(phone_id)
         ledger.claim(phone_id, label=f"finish {build.serial}")
+        # Say on the sheet that this phone is in hand, the moment it is. A
+        # finish leaves the row reading `incomplete` for its whole length -
+        # which is what it read before the finish started - so the tab gave a
+        # reader no way to tell a phone being worked on right now from one
+        # sitting warm and untouched. The account's row says `in_use` in the
+        # same minute, and the two are meant to be read together (2026-08-28).
+        #
+        # Restored by `_write_row` in the `finally` whatever happens, so an
+        # interrupted finish does not leave it saying `building` forever - and
+        # `settle_abandoned` treats a `building` row with a stale claim as
+        # abandoned, which is exactly what it would be.
+        _note_on_row(book, build.serial, Status=book.phones.BUILDING)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-finish{build.serial}"

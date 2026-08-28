@@ -58,6 +58,7 @@ APPS_TAB = "Gpt Info"
 PHONES_TAB = "Phones"
 LISTS_TAB = "Lists"
 HISTORY_TAB = "History"
+SERVICE_TAB = "Service"
 
 # The default vocabulary a tab's Status column speaks. A pool can override any
 # of it - the Proxy tab does, because a proxy is not consumed the way a
@@ -175,7 +176,21 @@ class Pool:
 
     #: How the stamp is written. Sortable and readable, and the same format
     #: the Proxy tab has been using since the rotation landed.
-    CLAIM_FORMAT = "%Y-%m-%d %H:%M:%S"
+    #:
+    #: The `Z` says which clock it is, and it is there because its absence cost
+    #: an hour. The server runs on UTC; a reader in Iran is UTC+3:30, so every
+    #: stamp on the sheet looked three and a half hours stale, and a row claimed
+    #: ninety seconds earlier was read as stuck for over three hours
+    #: (2026-08-28). The sheet is read by people in a different timezone from
+    #: the machine writing it, and an unmarked local-looking stamp is a wrong
+    #: answer rather than a missing one.
+    CLAIM_FORMAT = "%Y-%m-%d %H:%M:%SZ"
+
+    #: The same stamp without the marker. Rows claimed before the `Z` are still
+    #: on the sheet, and one that cannot be parsed is never freed - so reading
+    #: has to accept both, whatever writing does. `_when` strips the marker and
+    #: parses with this.
+    CLAIM_FORMAT_UNMARKED = "%Y-%m-%d %H:%M:%S"
 
     #: How often a live run restamps what it is holding. The staleness window
     #: has to be a large multiple of this: a beat can be late - a network blip,
@@ -352,11 +367,19 @@ class Pool:
         stopped moving is proof the run that wrote it is gone, and the window
         only has to outlast a few late beats.
 
-        It was the build budget before the heartbeat, and still defaults to
-        it: with nothing refreshing a claim, the only safe answer was "longer
-        than any run could legitimately hold one". A machine running a version
-        that does not beat is exactly that case, which is why shortening the
-        window is a decision rather than a default.
+        It was the build budget before the heartbeat, because with nothing
+        refreshing a claim the only safe answer was "longer than any run could
+        legitimately hold one". It defaults to five minutes now
+        (`config.STALE_CLAIM_DEFAULT`), which is five missed beats - a decision
+        taken when the server became the only writer (2026-08-28). A machine
+        running a version that does not beat puts that back: a window shorter
+        than the holder's silence hands a live run's row to somebody else
+        mid-build.
+
+        `ledger.STALE_CLAIM_SECONDS` is the same number and has to stay the
+        same number - the two answer one question between them, and the gap
+        between a short one here and a long one there is a window in which the
+        same Gmail reaches a second phone.
 
         A row with no stamp - one claimed before the column existed - is left
         alone, because "no time recorded" is not "a long time ago".
@@ -370,7 +393,12 @@ class Pool:
             if not stamp:
                 continue
             try:
-                when = time.mktime(time.strptime(stamp, self.CLAIM_FORMAT))
+                # The marker is stripped rather than parsed, so a row claimed
+                # before the `Z` existed still reads. Refusing those would have
+                # left every claim on the sheet at the moment this shipped
+                # unfreeable for good.
+                when = time.mktime(time.strptime(
+                    stamp.rstrip("Zz"), self.CLAIM_FORMAT_UNMARKED))
             except ValueError:
                 # Said, not skipped. A row claimed with a stamp nothing can
                 # read is never old enough to be abandoned, so it stays
@@ -934,7 +962,7 @@ class PhoneLog:
         The row number is found and written under one lock: two workers
         appending at once would otherwise both find the same first empty row.
         """
-        fields.setdefault("Created", time.strftime("%Y-%m-%d %H:%M"))
+        fields.setdefault("Created", time.strftime("%Y-%m-%d %H:%MZ"))
         fields.setdefault("Status", self.BUILDING)
         fields.setdefault("State", self.UNUSED)
         line = [""] * self.width
@@ -1183,6 +1211,47 @@ class HistoryLog:
             self._ws.append_row(row, value_input_option="RAW")
 
 
+class ServiceBoard:
+    """What the service is doing, in the one place the operator actually reads.
+
+    All of this is in the log already, and the log is on a server the operator
+    does not read. Four things stop the loop and none of them wrote a word to
+    the spreadsheet: an open breaker, no free profile slots, an empty pool, and
+    a pass that throws. From the sheet, every one of them looks the same as a
+    loop that is correctly idle - a tab that has simply gone quiet
+    (2026-08-28).
+
+    Rewritten in place each pass rather than appended: this is the *current*
+    state, and History is where "what happened" belongs. The labels live in
+    column A and are written once, at creation; a pass writes only column B, as
+    one range, so it costs one call however many rows there are.
+
+    Never fatal. A service that cannot write its dashboard must keep building -
+    losing the display is worth a line in the log and not a stopped run.
+    """
+
+    #: Written down the sheet in this order. Appended to rather than reordered,
+    #: for the same reason History's are: the labels are written once and a
+    #: reordering would leave every existing tab labelled wrong.
+    ROWS = ("Last pass", "Machine", "Version", "Doing", "Warm stock",
+            "Accounts waiting", "Free slots", "Breaker", "Note")
+
+    def __init__(self, worksheet, lock: threading.Lock):
+        self._ws = worksheet
+        self._lock = lock
+
+    def show(self, **fields: str) -> None:
+        values = [[clip(str(fields.get(name, "")))] for name in self.ROWS]
+        try:
+            with self._lock:
+                self._ws.update(values,
+                                f"B2:B{len(self.ROWS) + 1}",
+                                value_input_option="RAW")
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("could not write the %s tab (%s); carrying on",
+                        SERVICE_TAB, exc)
+
+
 def _make_checkbox(worksheet, position: int) -> None:
     """Turn a freshly added column into real checkboxes.
 
@@ -1263,7 +1332,8 @@ class Book:
 
     def __init__(self, gmails: GmailPool, proxies: ProxyPool, apps: AppPool,
                  phones: PhoneLog, lists=None, history: HistoryLog | None = None,
-                 lock: threading.Lock | None = None):
+                 lock: threading.Lock | None = None,
+                 service: ServiceBoard | None = None):
         self.gmails = gmails
         self.proxies = proxies
         self.apps = apps
@@ -1271,6 +1341,9 @@ class Book:
         # Only sync_lists needs these, and only when a real workbook is open.
         self._lists = lists
         self.history = history
+        #: None off a real workbook - a `build` typed by hand has no dashboard
+        #: to keep, and every caller checks before writing.
+        self.service = service
         self._lock = lock or threading.Lock()
 
     def record_history(self, **fields: str) -> None:
@@ -1283,7 +1356,7 @@ class Book:
         """
         if self.history is None:
             return
-        fields.setdefault("When", time.strftime("%Y-%m-%d %H:%M"))
+        fields.setdefault("When", time.strftime("%Y-%m-%d %H:%MZ"))
         fields.setdefault("Machine", machine())
         try:
             self.history.append(**fields)
@@ -1317,7 +1390,8 @@ class Book:
                 f"{GMAILS_TAB}, {PROXY_TAB} and {APPS_TAB} are stock you "
                 f"fill in and {PHONES_TAB} is where a build writes what it "
                 f"produced, so all four have to exist before a run. "
-                f"{LISTS_TAB} and {HISTORY_TAB} are made automatically.\n"
+                f"{LISTS_TAB}, {HISTORY_TAB} and {SERVICE_TAB} are made "
+                f"automatically.\n"
                 f"If none of the names above look familiar, GOOGLE_SHEET_ID "
                 f"is pointing at the wrong spreadsheet."
             )
@@ -1345,6 +1419,28 @@ class Book:
         except Exception as exc:                                  # noqa: BLE001
             log.warning("no History tab this session (%s)", exc)
 
+        # Made here for the same reason History is: it is machine-written, and
+        # requiring the operator to create it by hand would mean every workbook
+        # is missing it until the morning somebody needs to know why the
+        # service went quiet.
+        service = None
+        try:
+            if SERVICE_TAB in tabs:
+                sheet = tabs[SERVICE_TAB]
+            else:
+                sheet = book.add_worksheet(
+                    SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 2, cols=2)
+                sheet.append_row(["What", "Now"])
+            # The labels, written once. A pass writes only column B, so these
+            # are what makes the numbers beside them mean anything - and
+            # rewriting them each time would double the cost of every pass.
+            sheet.update([[name] for name in ServiceBoard.ROWS],
+                         f"A2:A{len(ServiceBoard.ROWS) + 1}",
+                         value_input_option="RAW")
+            service = ServiceBoard(sheet, lock)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("no %s tab this session (%s)", SERVICE_TAB, exc)
+
         pools = cls(
             gmails=GmailPool(tabs[GMAILS_TAB],
                              ensure_columns(tabs[GMAILS_TAB],
@@ -1362,6 +1458,7 @@ class Book:
                             ensure_columns(tabs[PHONES_TAB],
                                            PhoneLog.APP_COLUMN), lock),
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,
+            service=service,
         )
         for pool in (pools.gmails, pools.proxies, pools.apps):
             pool.load()

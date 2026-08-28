@@ -24,11 +24,29 @@ from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
+from . import config
+
 log = logging.getLogger(__name__)
 
 # A phone claimed for longer than this has been abandoned by a dead process:
-# nothing legitimately holds one for hours, and it is billing the whole time.
-STALE_CLAIM_SECONDS = 2 * 60 * 60
+# nothing legitimately holds one for that long, and it is billing the whole time.
+#
+# The same window the sheet's pools use, and it has to stay the same window.
+# They answer one question between them - "is the process that claimed this
+# still alive" - and a run holds its phone and its Gmail for exactly as long as
+# it holds either.
+#
+# When they disagreed, the gap was the bug. `STALE_CLAIM_DEFAULT` was shortened
+# to five minutes once every writer beat (config.py), and this was left at two
+# hours: `free_abandoned_claims` handed a dead run's Gmail back to the pool
+# after five minutes while `settle_abandoned` still read that run's phone as
+# held, so for the next hour and fifty-five minutes the same address could be
+# signed into a second phone - the one mistake here that costs an account
+# rather than a minute (2026-08-28).
+#
+# Taken from config rather than written twice, so shortening one shortens both.
+# `test_ledger.py` pins them together.
+STALE_CLAIM_SECONDS = config.STALE_CLAIM_DEFAULT
 
 
 def _now() -> float:

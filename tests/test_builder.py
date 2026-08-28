@@ -879,6 +879,35 @@ def test_a_challenged_account_is_not_handed_out_twice_in_one_build(
             == ["email_code_required"] * 2)
 
 
+def test_a_finish_says_on_the_row_that_the_phone_is_in_hand(device, settings,
+                                                            monkeypatch):
+    """Otherwise the tab cannot tell "being worked on" from "sitting warm".
+
+    A finish left the row reading `incomplete` for its whole length - which is
+    exactly what it read while the phone sat untouched. The account's row says
+    `in_use` in the same minute, and an operator reading only the sheet is
+    meant to be able to put the two together (2026-08-28).
+    """
+    book = make_book(apps=1)
+    book.phones.start(Serial="691", Status="incomplete")
+
+    seen = []
+    monkeypatch.setattr(
+        builder.phones, "ensure_running",
+        lambda *a, **k: seen.append(
+            book.phones._ws.rows[0][PHONE_HEADERS.index("Status")]))
+    # Ends at the first check after the marker, which is all this is about.
+    monkeypatch.setattr(builder.shell, "device_accounts", lambda *a, **k: [])
+
+    builder.finish_one(
+        None, settings, book, FakeLedger(),
+        {"sheet_row": 2, "phone_id": "P1", "serial": "691",
+         "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
+
+    assert seen == [book.phones.BUILDING], (
+        "the row must say the phone is in hand while it is")
+
+
 def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
                                                         monkeypatch):
     """`finish` assembled its own list of what a session was holding, and when

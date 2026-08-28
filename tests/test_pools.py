@@ -1122,6 +1122,33 @@ def test_a_claim_older_than_any_budget_is_abandoned():
     assert [r.label for r in pool.abandoned(3600)] == ["old@b.com"]
 
 
+def test_a_claim_stamped_before_the_utc_marker_is_still_freed():
+    """Reading has to accept what writing used to produce.
+
+    The `Z` was added so a reader in another timezone stops reading UTC as
+    local - a row claimed ninety seconds earlier looked stuck for over three
+    hours from Iran (2026-08-28). But every claim already on the sheet was
+    written without it, and a stamp that cannot be parsed is never old enough
+    to be abandoned: it stays `in_use` for good. Refusing the old shape would
+    have stranded every claimed row at the moment this shipped.
+    """
+    old = time.strftime(GmailPool.CLAIM_FORMAT_UNMARKED,
+                        time.localtime(time.time() - 7200))
+    assert not old.endswith("Z"), "the point of the test is the missing marker"
+    pool = claimed_pool([claimed_row("before@b.com", when=old)])
+
+    assert [r.label for r in pool.abandoned(3600)] == ["before@b.com"]
+
+
+def test_a_claim_is_stamped_as_utc_so_a_reader_elsewhere_can_tell():
+    """The machine writing this runs on UTC and the people reading it do not."""
+    pool = claimed_pool([claimed_row("a@b.com", status="")])
+
+    taken = pool.claim()
+
+    assert taken.values["Claimed"].endswith("Z")
+
+
 def test_a_claim_inside_the_budget_is_left_to_the_run_that_has_it():
     """Handing the same Gmail to two phones is worse than leaving one out of
     the pool, which is why this waits rather than guesses."""
