@@ -24,6 +24,13 @@ undelivered phones is what runs the plan out of room. That is worth saying in
 words rather than as an API error, because the fix is a person marking rows
 and nothing here can do it.
 
+They are read sparingly, though, and that took a deployment to learn. The
+endpoint allows one call a minute on a budget of its own, this loop runs every
+thirty seconds, and asking every pass meant every other pass died of [40007] -
+losing the sync with it. So the count is asked for only on the pass that is
+about to build, and then no oftener than every five minutes; a full stock, a
+waiting account or an open breaker each settle the pass without ever looking.
+
 **Finishing comes before topping up.** Both want the same pass; only one has
 somebody waiting at the end of it.
 """
@@ -64,6 +71,63 @@ HEARTBEAT_FILE = "heartbeat"
 #: that does not fail later; it is not worth asking 120 times an hour.
 PROBE_EVERY_SECONDS = 3600
 
+#: How often the free-slot count is read.
+#:
+#: `/v1/pay/plan/info` allows one call a minute on a budget of its own,
+#: separate from the account's 200. This loop asked every pass, so every other
+#: pass raised [40007] and died - and a pass that dies loses the sync too, so a
+#: phone somebody had marked done waited an extra cycle to be deleted. Three of
+#: the first six passes on the server went that way (2026-08-28).
+#:
+#: Five minutes is seven times under the limit and still fresh enough: a slot
+#: frees when a phone is deleted, which is a delivery, not a second.
+PLAN_EVERY_SECONDS = 300
+
+
+@dataclass
+class Slots:
+    """How many profile slots are free, asked no oftener than that changes.
+
+    Kept across passes because the answer stays true between them, and because
+    the endpoint that gives it is rate-limited on its own.
+    """
+
+    every: float = PLAN_EVERY_SECONDS
+    free: int | None = None
+    read_at: float | None = None
+
+    def look(self, client: Client, now: float) -> int | None:
+        """The count, reading it again only when it is old enough to."""
+        if self.read_at is not None and (now - self.read_at) < self.every:
+            return self.free
+        self.read_at = now
+        try:
+            self.free = int(phones.plan(client).get("availableProfiles") or 0)
+        except Exception as exc:                                  # noqa: BLE001
+            # The last answer, or None if there has never been one. Waiting
+            # out the interval before asking again rather than retrying next
+            # pass: what this exists to avoid is asking too often.
+            log.warning("could not read how many slots are free (%s); "
+                        "carrying on with %s", exc,
+                        "the last answer" if self.free is not None
+                        else "no answer at all")
+        return self.free
+
+
+def needs_slots(*, tripped: str, warm: int, target: int,
+                accounts_waiting: int) -> bool:
+    """Whether this pass's decision turns on how many slots are free.
+
+    The same numbers `decide` reaches its first three answers from, asked
+    again here for one reason: the number it does not have costs a call to an
+    endpoint that allows one a minute, and most passes never look at it.
+    """
+    if accounts_waiting and warm:
+        return False              # finishing, which takes no new slot
+    if tripped:
+        return False              # not building anyway
+    return warm < target
+
 
 @dataclass
 class Decision:
@@ -79,11 +143,13 @@ class Decision:
         return not self.finish and not self.build
 
 
-def decide(*, tripped: str, warm: int, target: int, free_slots: int,
+def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
            accounts_waiting: int) -> Decision:
     """What to do this pass, from five numbers and nothing else.
 
-    `tripped` is the breaker's reason, empty when it is closed.
+    `tripped` is the breaker's reason, empty when it is closed. `free_slots`
+    is None when nobody has managed to read it - which only matters on the one
+    branch that turns on it, and which is not a reason to build blind.
     """
     if accounts_waiting and warm:
         # Somebody is waiting at the end of this one, and it spends nothing
@@ -104,6 +170,14 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int,
     if warm >= target:
         return Decision()
 
+    if free_slots is None:
+        # Building without knowing is how you meet [44002] at phone creation,
+        # having already spent the reads that got you there. One pass costs
+        # less than one blind build.
+        return Decision(warning=(
+            "how many profile slots are free could not be read, so nothing "
+            "is being built this pass rather than built blind."))
+
     if free_slots < 1:
         return Decision(warning=(
             f"no free profile slots, so the warm stock is stuck at {warm} of "
@@ -113,13 +187,16 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int,
     return Decision(build=True)
 
 
-def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int, int]:
-    """Warm phones, free slots, and accounts with nowhere to go yet."""
+def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int]:
+    """Warm phones, and accounts with nowhere to go yet.
+
+    Not the free slots. Those cost a call to an endpoint with a limit of one a
+    minute, and the two numbers here settle most passes without them.
+    """
     from . import builder
 
     warm, _gone = builder._unfinished(client, book)
-    free = int(phones.plan(client).get("availableProfiles") or 0)
-    return len(warm), free, len(book.apps.available)
+    return len(warm), len(book.apps.available)
 
 
 def beat(settings: Settings) -> None:
@@ -173,7 +250,7 @@ def probe_due(last: float | None, now: float,
     return last is None or (now - last) >= every
 
 
-def once(client: Client, settings: Settings, fuse: Breaker, *,
+def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
          probe_proxies: bool = True) -> Decision:
     """One pass: bring the sheet up to date, then act on what it says."""
     from . import builder
@@ -189,16 +266,26 @@ def once(client: Client, settings: Settings, fuse: Breaker, *,
                        stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
-    warm, free, waiting = _look(client, settings, book)
-    decision = decide(tripped=fuse.reason(), warm=warm,
+    warm, waiting = _look(client, settings, book)
+    tripped = fuse.reason()
+    # Asked only when the answer changes what happens, which is the pass that
+    # is about to build. A full stock, a waiting account or an open breaker
+    # all settle it without ever looking.
+    free = (slots.look(client, time.monotonic())
+            if needs_slots(tripped=tripped, warm=warm,
+                           target=settings.warm_stock,
+                           accounts_waiting=waiting)
+            else None)
+    decision = decide(tripped=tripped, warm=warm,
                       target=settings.warm_stock, free_slots=free,
                       accounts_waiting=waiting)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
     # "the stock has been short for an hour" possible at all.
-    log.info("%d warm of %d, %d free slot(s), %d account(s) waiting",
-             warm, settings.warm_stock, free, waiting,
+    log.info("%d warm of %d, %s free slot(s), %d account(s) waiting",
+             warm, settings.warm_stock,
+             free if free is not None else "not asked about", waiting,
              extra={"warm": warm, "target": settings.warm_stock,
                     "free_slots": free, "accounts_waiting": waiting,
                     "will": ("finish" if decision.finish else
@@ -226,6 +313,9 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     settings.ensure_dirs()
     client = build_client(settings)
     fuse = Breaker(settings.state_dir / BREAKER_FILE)
+    # Kept across passes: the count stays true between them, and the
+    # endpoint that gives it allows one call a minute.
+    slots = Slots()
     stop = stop or threading.Event()
 
     log.info("serving: %d warm phones, a pass every %ds",
@@ -239,7 +329,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
             probed = now
         beat(settings)
         try:
-            once(client, settings, fuse, probe_proxies=probe)
+            once(client, settings, fuse, slots, probe_proxies=probe)
         except KeyboardInterrupt:
             raise
         except Exception:                                     # noqa: BLE001
