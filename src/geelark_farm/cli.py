@@ -7,7 +7,7 @@ not justify another one.
 Commands are grouped by what they are for:
 
   producing phones       build, finish
-  running unattended     serve
+  running unattended     serve, breaker
   the console            ui
   what the sheet holds   pools
   setup and credentials  verify, ping, plan, proxy
@@ -126,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--healthcheck", action="store_true",
                          help="say whether a pass has run recently and exit; "
                               "0 if it has, 1 if it has not")
+
+    p_breaker = sub.add_parser(
+        "breaker", help="why the service has stopped building, and let it "
+                        "carry on"
+    )
+    p_breaker.add_argument("--clear", action="store_true",
+                           help="start the count again, once you know why it "
+                                "stopped")
 
     p_pools = sub.add_parser(
         "pools", help="what the resource tabs hold, and what is stuck"
@@ -702,6 +710,41 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
+def cmd_breaker(settings: Settings, args) -> int:
+    """What has stopped the service building, and how to let it carry on.
+
+    The breaker was written before there was any way to look at it: it lived
+    in a file under `state/` and nothing said so, so a service that had
+    stopped could only be diagnosed by somebody who already knew the layout.
+    A guard nobody can read is a guard nobody can clear (2026-08-28).
+
+    Exits 1 while it is open, so a script watching the service can tell.
+    """
+    from .breaker import Breaker
+    from .serve import BREAKER_FILE
+
+    fuse = Breaker(settings.state_dir / BREAKER_FILE)
+
+    if args.clear:
+        fuse.clear()
+        print("cleared - the next pass will build again")
+        return 0
+
+    count, reasons = fuse.seen()
+    stopped = fuse.reason()
+    if stopped:
+        print(stopped)
+        print("\nWhat it saw is above. When you know why, "
+              "'geelark breaker --clear' starts the count again.")
+        return 1
+
+    print(f"building: {count} failure(s) in a row of the {fuse.limit} that "
+          f"would stop it")
+    if reasons:
+        print(f"  the last were: {', '.join(reasons)}")
+    return 0
+
+
 def cmd_serve(settings: Settings, args) -> int:
     """Run continuously: top the warm stock up, finish phones as accounts
     arrive, and carry out the State column - which is what deletes a phone
@@ -1055,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
         "install": cmd_install,
         "build": cmd_build,
         "serve": cmd_serve,
+        "breaker": cmd_breaker,
         "finish": cmd_finish,
         "pools": cmd_pools,
     }

@@ -7,11 +7,33 @@ first time something surprises you, while the diagnosis is still fresh.
 
 ```bash
 geelark --version         # which code this machine is actually running
+geelark breaker           # whether the service has stopped building, and why
 geelark phones --ledger   # what exists, what is billing, and who owns it
 geelark reap --dry-run    # what would be stopped, and why
 geelark reap              # stop anything the ledger cannot account for
 geelark dump --phone ID   # what is actually on that phone's screen right now
 ```
+
+## The service is up but building nothing
+
+After enough failed builds in a row it stops on purpose, and stays stopped
+until somebody says otherwise - which is the only thing standing between one
+bad afternoon and a burnt Gmail pool.
+
+```bash
+geelark breaker           # what it saw, and how close it is
+geelark breaker --clear   # once you know why
+```
+
+It exits 1 while it is open, so something watching the service can tell.
+
+Finishing carries on regardless: it spends nothing new, and a customer waiting
+on an account is the one thing that should still happen while you work out why
+the last five builds failed.
+
+Some outcomes never count towards it - an empty pool, a warm phone waiting for
+an account, and GeeLark running out of machines of one Android version. None
+of those is this machine failing.
 
 `--version` first, and on a machine you are not sitting at it is the only
 question you cannot answer any other way:

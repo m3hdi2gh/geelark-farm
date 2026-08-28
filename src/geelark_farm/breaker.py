@@ -125,6 +125,15 @@ class Breaker:
             log.warning("%d build(s) in a row have failed (%s)",
                         count, build.status)
 
+    def seen(self) -> tuple[int, list[str]]:
+        """How many failures in a row, and what they were.
+
+        `reason` answers "is it open", which is what the loop asks. This is
+        what a person asks: how close is it, and to what.
+        """
+        state = self._read()
+        return int(state.get("consecutive") or 0), list(state.get("reasons") or [])
+
     def reason(self) -> str:
         """Why building is stopped, or "" when it is not.
 

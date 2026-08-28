@@ -207,3 +207,20 @@ def test_geelarks_own_shortage_is_not_held_against_this_machine(tmp_path):
     assert fuse.reason() == ""
     assert not counts_against(build(False, "no_capacity"))
     assert not shows_it_works(build(False, "no_capacity"))
+
+
+def test_it_says_how_close_it_is_and_to_what(tmp_path):
+    """`reason` answers "is it open", which is what the loop asks. A person
+    asks something else: how close, and to what."""
+    fuse = Breaker(tmp_path / "breaker.json", limit=5)
+    fuse.record(build(False, "proxy_blocked"))
+    fuse.record(build(False, "phone_never_started"))
+
+    count, reasons = fuse.seen()
+
+    assert count == 2
+    assert reasons == ["proxy_blocked", "phone_never_started"]
+
+
+def test_a_machine_that_has_never_failed_says_nothing_happened(tmp_path):
+    assert Breaker(tmp_path / "breaker.json").seen() == (0, [])

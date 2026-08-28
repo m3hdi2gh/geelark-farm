@@ -2279,3 +2279,81 @@ def test_the_cleanup_still_runs_before_that(monkeypatch, tmp_path,
     cli.main(["serve"])
 
     assert cleaned == ["phones put back"]
+
+
+# ------------------------------------- being able to see and clear the guard
+def breaker_args(clear=False):
+    return SimpleNamespace(clear=clear)
+
+
+def test_the_breaker_can_be_read_without_knowing_where_it_lives(
+        monkeypatch, tmp_path, capsys, make_settings):
+    """It was written before there was any way to look at it: a file under
+    `state/` that nothing mentioned. A service that had stopped could only be
+    diagnosed by somebody who already knew the layout (2026-08-28)."""
+    from geelark_farm.breaker import Breaker
+    from geelark_farm.builder import Build
+    from geelark_farm.serve import BREAKER_FILE
+
+    settings = make_settings(state_dir=tmp_path)
+    fuse = Breaker(tmp_path / BREAKER_FILE, limit=5)
+    fuse.record(Build(index=1, ok=False, status="proxy_blocked"))
+
+    assert cli.cmd_breaker(settings, breaker_args()) == 0
+    out = capsys.readouterr().out
+    assert "1 failure(s) in a row of the 5" in out
+    assert "proxy_blocked" in out
+
+
+def test_a_tripped_breaker_says_so_and_exits_non_zero(monkeypatch, tmp_path,
+                                                       capsys, make_settings):
+    """So a script watching the service can tell, and so a person is told
+    what to do rather than only what is wrong."""
+    from geelark_farm.breaker import Breaker
+    from geelark_farm.builder import Build
+    from geelark_farm.serve import BREAKER_FILE
+
+    settings = make_settings(state_dir=tmp_path)
+    fuse = Breaker(tmp_path / BREAKER_FILE)
+    for _ in range(fuse.limit):
+        fuse.record(Build(index=1, ok=False, status="phone_never_started"))
+
+    assert cli.cmd_breaker(settings, breaker_args()) == 1
+    out = capsys.readouterr().out
+    assert "in a row failed" in out
+    assert "--clear" in out
+
+
+def test_clearing_it_is_one_command_rather_than_a_deleted_file(
+        monkeypatch, tmp_path, capsys, make_settings):
+    from geelark_farm.breaker import Breaker
+    from geelark_farm.builder import Build
+    from geelark_farm.serve import BREAKER_FILE
+
+    settings = make_settings(state_dir=tmp_path)
+    fuse = Breaker(tmp_path / BREAKER_FILE)
+    for _ in range(fuse.limit):
+        fuse.record(Build(index=1, ok=False, status="phone_never_started"))
+    assert fuse.reason()
+
+    assert cli.cmd_breaker(settings, breaker_args(clear=True)) == 0
+    assert "cleared" in capsys.readouterr().out
+    assert Breaker(tmp_path / BREAKER_FILE).reason() == ""
+
+
+def test_it_reads_the_file_the_service_actually_writes(tmp_path,
+                                                        make_settings):
+    """Two names for one file is a command that reports on nothing."""
+    from geelark_farm import serve as serve_mod
+    from geelark_farm.breaker import Breaker
+    from geelark_farm.builder import Build
+
+    settings = make_settings(state_dir=tmp_path)
+    # What `serve.run` builds, written the way it writes it.
+    Breaker(settings.state_dir / serve_mod.BREAKER_FILE).record(
+        Build(index=1, ok=False, status="proxy_blocked"))
+
+    count, _reasons = Breaker(
+        settings.state_dir / serve_mod.BREAKER_FILE).seen()
+
+    assert count == 1
