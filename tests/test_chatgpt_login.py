@@ -1233,3 +1233,127 @@ def test_a_code_page_without_its_box_is_left_alone(app):
 
     assert chatgpt_login.act_totp(ctx) is None
     assert device.filled == []
+
+
+# ------------------------------- the welcome screen after OpenAI redrew it
+def fixture_ctx(name, **kw):
+    """A Context holding a captured screen, the way `refresh` leaves one."""
+    from geelark_farm.flows import chatgpt_login
+
+    xml = (FIXTURES / f"{name}.xml").read_text(encoding="utf-8")
+    ctx = chatgpt_login.Context(client=None, phone_id="P1", creds=CREDS,
+                                package="com.openai.chatgpt", **kw)
+    ctx.raw = xml
+    ctx.elements = screen.parse(xml)
+    # `blob` is what `has` reads, and only `refresh` sets it. A test that
+    # assigns `elements` alone gets a Context that answers `has` with False
+    # for everything - which routes the welcome screen to `onboarding` and
+    # looks like a bug in the registry (2026-08-28).
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+def routes_to(ctx):
+    from geelark_farm.flows import chatgpt_login
+
+    return [(s.name, s.act.__name__) for s in chatgpt_login.SCREENS
+            if s.match(ctx)]
+
+
+def test_the_redrawn_welcome_screen_is_still_the_welcome_screen():
+    """OpenAI replaced three choices with one "Continue" and moved the words
+    "Log in" into a paragraph (2026-08-28). The entry still has to claim it,
+    or the flow meets an unknown screen instead of a known one."""
+    first = routes_to(fixture_ctx("chatgpt-welcome-continue-only"))[0]
+
+    assert first == ("welcome", "act_choose_login")
+
+
+def test_the_old_welcome_screen_is_claimed_by_the_same_entry():
+    """The change adds a case rather than replacing one: a phone that has not
+    updated the app still meets the screen this was written for."""
+    first = routes_to(fixture_ctx("chatgpt-welcome"))[0]
+
+    assert first == ("welcome", "act_choose_login")
+
+
+def test_continue_is_taken_when_the_welcome_screen_offers_nothing_else(
+        phone, monkeypatch):
+    """It leads to the guest chat, which carries a "Log in" of its own and
+    which `logged_out_chat` already takes - so this is a step on the way, not
+    a second path into the account."""
+    from geelark_farm.flows import chatgpt_login
+
+    tapped = []
+    monkeypatch.setattr(chatgpt_login.screen, "tap_element",
+                        lambda c, p, e: tapped.append(e.label) or True)
+
+    out = chatgpt_login.act_choose_login(
+        fixture_ctx("chatgpt-welcome-continue-only"))
+
+    assert out is None                      # carry on rather than give up
+    assert tapped == ["Continue"]
+
+
+def test_a_real_login_control_is_still_preferred_over_continue(phone,
+                                                               monkeypatch):
+    """The old screen has both, and the login label is the shorter way in."""
+    from geelark_farm.flows import chatgpt_login
+
+    tapped = []
+    monkeypatch.setattr(chatgpt_login.screen, "tap_element",
+                        lambda c, p, e: tapped.append(e.label) or True)
+
+    chatgpt_login.act_choose_login(fixture_ctx("chatgpt-welcome"))
+
+    assert tapped == ["Log in or sign up"]
+
+
+def test_the_google_button_is_never_what_continue_finds():
+    """On the old screen a bare search for "continue" finds "Continue with
+    Google" first. Tapping it signs in the account that owns the device
+    rather than the one the sheet names, which looks like success."""
+    from geelark_farm.flows.chatgpt_login import _continue_button
+
+    ctx = fixture_ctx("chatgpt-welcome")
+    picked = _continue_button(ctx.elements)
+
+    assert picked is not None
+    assert "google" not in picked.label.casefold()
+
+
+def test_a_sentence_is_never_taken_for_a_button():
+    """"By continuing, you agree to our Terms" shares the screen with the
+    button. Tapping prose instead of a control is a mistake this project has
+    already made once, on Play's "Try again"."""
+    from geelark_farm.flows.chatgpt_login import _continue_button
+
+    ctx = fixture_ctx("chatgpt-welcome-continue-only")
+
+    assert _continue_button(ctx.elements).label == "Continue"
+
+
+def test_a_welcome_screen_with_no_way_off_it_still_gives_up(phone,
+                                                            monkeypatch):
+    """The fallback must not turn every unrecognised welcome into a tap on
+    nothing - `no_login_button` is still the honest answer when there is no
+    control at all."""
+    from geelark_farm.flows import chatgpt_login
+
+    ctx = chatgpt_login.Context(client=None, phone_id="P1", creds=CREDS,
+                                package="com.openai.chatgpt")
+    ctx.elements = screen.parse(
+        '<hierarchy><node text="Welcome to ChatGPT" class="android.widget'
+        '.TextView" bounds="[0,0][100,50]"/></hierarchy>')
+
+    out = chatgpt_login.act_choose_login(ctx)
+
+    assert out is not None and out.reason == "no_login_button"
+
+
+def test_the_guest_chat_continue_leads_to_is_one_the_flow_already_knows():
+    """The whole reason tapping Continue is safe: what it produces is a
+    screen with a registry entry, and that entry taps the login on it."""
+    first = routes_to(fixture_ctx("chatgpt-guest-chat-with-login"))[0]
+
+    assert first == ("logged_out_chat", "act_reset_app")

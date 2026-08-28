@@ -530,6 +530,25 @@ def act_fatal(ctx: Context) -> Outcome:
     return Outcome("fatal", reason, detail, artifacts=[path] if path else [])
 
 
+def _continue_button(elements: list[screen.Element]) -> screen.Element | None:
+    """The welcome screen's "Continue", when that is all it offers.
+
+    Never Google's. On the old screen a bare search for "continue" finds
+    "Continue with Google" first, and tapping that signs in the account that
+    owns the device rather than the one the sheet names - which looks like
+    success and is the worst thing this flow can do.
+
+    The shortest match, because a button is short and prose is long. This app
+    puts "By continuing, you agree to our Terms" on the same screen, and
+    tapping a sentence instead of a control is a mistake this project has
+    already made once, on Play's "Try again".
+    """
+    found = [e for e in elements
+             if "continue" in (e.label or "").casefold()
+             and GOOGLE_BUTTON not in (e.label or "").casefold()]
+    return min(found, key=lambda e: len(e.label)) if found else None
+
+
 def act_choose_login(ctx: Context) -> Outcome | None:
     """Take the email path, never "Continue with Google".
 
@@ -552,6 +571,27 @@ def act_choose_login(ctx: Context) -> Outcome | None:
             log.info("taking the email login path via %r", found.label)
             time.sleep(6)
             return None
+    # The welcome screen stopped carrying a login of its own (2026-08-28).
+    # OpenAI replaced three choices - "Log in or sign up", "Continue with
+    # Google", "Continue without logging in" - with one "Continue", and moved
+    # the words "Log in" into a paragraph that is not a button.
+    #
+    # What Continue leads to is the guest chat, which carries a "Log in" of
+    # its own and which `logged_out_chat` already takes. So this is a step on
+    # the way rather than a second path into the account, and nothing after it
+    # changes. Confirmed on a phone before it was written: Continue produced
+    # "How can I help?" with a "Log in" beside it.
+    #
+    # After the loop above rather than instead of it: while a real login
+    # control is on the screen that is the shorter way in, and on the old
+    # screen it still is.
+    if (button := _continue_button(ctx.elements)) is not None:
+        if screen.tap_element(ctx.client, ctx.phone_id, button):
+            log.info("the welcome screen offers only %r; taking it to the "
+                     "chat, which carries a login of its own", button.label)
+            time.sleep(6)
+            return None
+
     path = ctx.save("no-login-button")
     return Outcome("unknown", "no_login_button",
                    "the welcome screen offered no email login",
