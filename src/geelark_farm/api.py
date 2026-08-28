@@ -57,6 +57,10 @@ KNOWN_CODES = {
     44002: "the GeeLark plan is full: no slots left for another phone. "
            "Delete phones you have finished with, or raise the plan. Rows "
            "already done are unaffected; re-run to pick up the rest.",
+    43043: "GeeLark has no free machine of this Android version right now. "
+           "Nothing is wrong with the phone, the account or the plan - it "
+           "clears in minutes. `phones.start` asks again a few times before "
+           "giving up, and a run that gives up says so as `no_capacity`.",
 }
 
 # Endpoints that only read. A timed-out write may have been applied server

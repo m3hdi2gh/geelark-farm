@@ -44,6 +44,28 @@ class PhoneError(Exception):
     """A phone is not in a usable state."""
 
 
+class PhoneCapacityError(PhoneError):
+    """GeeLark has no machine free of this Android version right now.
+
+    Its own subclass because it is the one refusal that says nothing about
+    this phone, this account or this code. Nothing was created and nothing
+    was spent; the answer is to come back shortly, which is what GeeLark's
+    own message advises.
+    """
+
+
+#: What GeeLark answers when it is out of machines of the requested Android
+#: version. Transient - it clears in minutes - and it arrives at the phone
+#: that happened to ask, not at anything that is wrong (2026-08-28).
+CAPACITY_REFUSED = 43043
+
+#: How many times to ask before giving the refusal back to the caller, and how
+#: long to leave between. Four over half a minute: long enough to ride out the
+#: usual dip, short enough that a build budget does not notice.
+CAPACITY_ATTEMPTS = 4
+CAPACITY_WAIT_SECONDS = 10
+
+
 #: A page that comes back short is the last one. The cap is a guard against a
 #: server that keeps answering full pages forever, not an expected limit: at
 #: 100 a page it allows ten thousand phones, and a plan holds tens.
@@ -297,12 +319,35 @@ def tidy_url(url: str) -> str:
                   lambda found: quote(found.group(0), safe=""), url)
 
 
-def start(client: Client, phone_id: str) -> str | None:
+def start(client: Client, phone_id: str, *,
+          attempts: int = CAPACITY_ATTEMPTS) -> str | None:
     """Begin billing. Returns the live-view URL, which is the fastest way to
-    see what a flow is actually doing."""
-    data = client.data("/v1/phone/start", {"ids": [phone_id]}) or {}
-    for item in data.get("failDetails") or []:
-        raise PhoneError(f"start failed [{item.get('code')}] {item.get('msg')}")
+    see what a flow is actually doing.
+
+    A capacity refusal is asked again rather than raised at once. GeeLark runs
+    out of machines of a given Android version for minutes at a time, says so,
+    and advises trying again - and it is safe to: the refusal means no phone
+    was started, so asking twice cannot start two.
+
+    Every other refusal is raised on the first answer. Retrying a phone that
+    has expired or been deleted only takes longer to say the same thing.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be >= 1")
+
+    for attempt in range(1, attempts + 1):
+        data = client.data("/v1/phone/start", {"ids": [phone_id]}) or {}
+        refused = next(iter(data.get("failDetails") or []), None)
+        if refused is None:
+            break
+        said = f"start failed [{refused.get('code')}] {refused.get('msg')}"
+        if refused.get("code") != CAPACITY_REFUSED:
+            raise PhoneError(said)
+        if attempt == attempts:
+            raise PhoneCapacityError(said)
+        log.warning("%s - asking again (%d of %d)", said, attempt, attempts)
+        time.sleep(CAPACITY_WAIT_SECONDS)
+
     url = None
     for item in data.get("successDetails") or []:
         url = tidy_url(item["url"]) if item.get("url") else url

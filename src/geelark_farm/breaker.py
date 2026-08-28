@@ -45,7 +45,13 @@ WORKED = frozenset({"no_usable_gpt"})
 #: machine still works - so these leave the count exactly where it was. A
 #: breaker silently defused by an empty pool between two real failures is
 #: worse than one that never tripped.
-NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy"})
+#: `no_capacity` is here for the same reason and it took a live deployment to
+#: see it: GeeLark ran out of machines of one Android version, every attempt
+#: cost a second and nothing else, and each one counted. Five in a row - which
+#: is an ordinary afternoon - would have opened the breaker over a shortage at
+#: somebody else's datacentre (2026-08-28).
+NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
+                              "no_capacity"})
 
 
 def counts_against(build) -> bool:

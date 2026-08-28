@@ -753,6 +753,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.error("the network went away: %s", exc)
         return finish("network_unreachable",
                       failures.situation("network_unreachable"))
+    except phones.PhoneCapacityError as exc:
+        # Before `PhoneError`, because it is one. GeeLark had no machine of
+        # this Android version free, which says nothing about this phone, this
+        # account or this row - and `start` has already asked several times.
+        log.warning("no capacity at GeeLark: %s", exc)
+        return finish("no_capacity", failures.situation("no_capacity"))
     except phones.PhoneError as exc:
         # Expected, and named. It used to reach the catch-all below and be
         # reported as "an error nobody planned for", which is the wrong thing
@@ -965,6 +971,17 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.error("the network went away: %s", exc)
         return finish("network_unreachable",
                       failures.situation("network_unreachable"))
+    except phones.PhoneCapacityError as exc:
+        log.warning("no capacity at GeeLark: %s", exc)
+        return finish("no_capacity", failures.situation("no_capacity"))
+    except phones.PhoneError as exc:
+        # The same naming `build_one` has had since 2026-08-17. Finishing
+        # lacked it, so a phone that would not boot was reported here as "an
+        # error nobody planned for" - and a GeeLark capacity refusal, which is
+        # nobody's fault at all, counted against the breaker as one (2026-08-28).
+        vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
+        return finish("phone_is_gone" if vanished else "phone_would_not_start",
+                      str(exc))
     except Exception as exc:                                      # noqa: BLE001
         log.exception("finishing %s failed with an unhandled error", build.serial)
         return finish("error", str(exc))

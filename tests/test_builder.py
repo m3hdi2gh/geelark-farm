@@ -2759,3 +2759,46 @@ def test_the_label_is_on_while_the_build_is_running(device, settings,
     builder.run(None, settings, count=1, workers=1)
 
     assert seen == [1]
+
+
+# ------------------------------ GeeLark having no machine free for a while
+def test_a_capacity_refusal_is_named_rather_than_called_an_error(
+        monkeypatch, tmp_path, make_settings):
+    """It reached the catch-all and was recorded as `error`, which is a name
+    the breaker counts - so a shortage at GeeLark, which costs a second and
+    says nothing about us, was on its way to stopping the service
+    (2026-08-28)."""
+    from geelark_farm import builder, phones
+
+    captured = {}
+
+    def refuse(*a, **k):
+        raise phones.PhoneCapacityError(
+            "start failed [43043] High demand for Android 15 cloud phones.")
+
+    monkeypatch.setattr(builder.phones, "ensure_running", refuse)
+    monkeypatch.setattr(builder, "_write_row",
+                        lambda *a, **k: captured.setdefault("row", a))
+
+    # Both doors: `build_one` has named PhoneError since August, `finish_one`
+    # never did, and this arrived through the second one.
+    import inspect
+    for name in ("build_one", "finish_one"):
+        source = inspect.getsource(getattr(builder, name))
+        assert "PhoneCapacityError" in source, f"{name} does not name it"
+        assert source.index("PhoneCapacityError") < source.index(
+            "except phones.PhoneError"), f"{name} catches the general case first"
+
+
+def test_finishing_names_a_phone_that_will_not_boot_the_way_building_does():
+    """The two paths had different vocabularies for the same failure: a
+    phone that would not start was `phone_would_not_start` from a build and
+    "an error nobody planned for" from a finish."""
+    import inspect
+
+    from geelark_farm import builder
+
+    for name in ("build_one", "finish_one"):
+        source = inspect.getsource(getattr(builder, name))
+        assert "phone_would_not_start" in source, name
+        assert "phone_is_gone" in source, name

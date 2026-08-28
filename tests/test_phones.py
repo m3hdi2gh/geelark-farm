@@ -4,6 +4,7 @@ proxying and reaping it."""
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -826,3 +827,110 @@ def test_a_refused_creation_is_not_recorded_as_a_phone():
                       ledger=ledger, account="a@example.com")
 
     assert ledger.recorded == [], "a phone that does not exist went in the ledger"
+
+
+# --------------------------------- GeeLark running out of machines for a while
+def capacity_refusal():
+    return {"failDetails": [{"id": "P1", "code": phones.CAPACITY_REFUSED,
+                             "msg": "High demand for Android 15 cloud phones. "
+                                    "Please try again later or use another "
+                                    "Android version."}]}
+
+
+def test_a_capacity_refusal_is_asked_again_rather_than_raised_at_once(
+        monkeypatch):
+    """GeeLark runs out of machines of one Android version for minutes at a
+    time and advises trying again. It is safe to: the refusal means no phone
+    was started, so asking twice cannot start two (2026-08-28)."""
+    asks = []
+
+    def answer(path, payload=None, **kw):
+        asks.append(path)
+        return ({"successDetails": [{"url": "https://watch/me"}]}
+                if len(asks) == 3 else capacity_refusal())
+
+    monkeypatch.setattr(phones.time, "sleep", lambda *_: None)
+    client = SimpleNamespace(data=answer)
+
+    url = phones.start(client, "P1")
+
+    assert len(asks) == 3          # refused, refused, then through
+    assert url == "https://watch/me"
+
+
+def test_it_gives_up_after_enough_tries_and_says_which_refusal_it_was(
+        monkeypatch):
+    """A shortage that outlasts the retries is still an answer, and the run
+    that gets it must be able to tell it from a phone that will not boot."""
+    monkeypatch.setattr(phones.time, "sleep", lambda *_: None)
+    client = SimpleNamespace(data=lambda *a, **k: capacity_refusal())
+
+    with pytest.raises(phones.PhoneCapacityError) as caught:
+        phones.start(client, "P1", attempts=2)
+
+    assert "43043" in str(caught.value)
+
+
+def test_a_capacity_error_is_still_a_phone_error(monkeypatch):
+    """Callers that only know the general case must keep catching it."""
+    assert issubclass(phones.PhoneCapacityError, phones.PhoneError)
+
+
+def test_every_other_refusal_is_raised_on_the_first_answer(monkeypatch):
+    """Asking again about a phone that has been deleted only takes longer to
+    say the same thing - and each ask is a live call."""
+    asks = []
+
+    def answer(path, payload=None, **kw):
+        asks.append(path)
+        return {"failDetails": [{"id": "P1", "code": 43005,
+                                 "msg": "env not found"}]}
+
+    monkeypatch.setattr(phones.time, "sleep", lambda *_: None)
+
+    with pytest.raises(phones.PhoneError) as caught:
+        phones.start(SimpleNamespace(data=answer), "P1")
+
+    assert len(asks) == 1
+    assert not isinstance(caught.value, phones.PhoneCapacityError)
+
+
+def test_asking_zero_times_is_refused_rather_than_silently_doing_nothing():
+    """Without the guard the loop never runs and the success path reads a
+    `data` that was never fetched."""
+    with pytest.raises(ValueError):
+        phones.start(SimpleNamespace(data=lambda *a, **k: {}), "P1", attempts=0)
+
+
+def test_it_asks_exactly_as_many_times_as_it_says(monkeypatch):
+    """Each ask is a live call to GeeLark, and the number is the whole of what
+    `attempts` promises. Off by one either way is a call nobody asked for or
+    one the caller was counting on."""
+    asks = []
+    monkeypatch.setattr(phones.time, "sleep", lambda *_: None)
+
+    def answer(path, payload=None, **kw):
+        asks.append(path)
+        return capacity_refusal()
+
+    with pytest.raises(phones.PhoneCapacityError):
+        phones.start(SimpleNamespace(data=answer), "P1", attempts=3)
+
+    assert len(asks) == 3
+
+
+def test_one_attempt_means_one_ask_and_no_retrying(monkeypatch):
+    """`attempts=1` is the old behaviour, and a caller with its own budget
+    may want exactly that. It must be allowed rather than refused as too few."""
+    asks = []
+    monkeypatch.setattr(phones.time, "sleep",
+                        lambda *_: pytest.fail("waited with nothing to wait for"))
+
+    def answer(path, payload=None, **kw):
+        asks.append(path)
+        return capacity_refusal()
+
+    with pytest.raises(phones.PhoneCapacityError):
+        phones.start(SimpleNamespace(data=answer), "P1", attempts=1)
+
+    assert len(asks) == 1

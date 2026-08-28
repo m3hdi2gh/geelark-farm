@@ -190,3 +190,20 @@ def test_the_first_run_on_a_fresh_machine_can_write_its_file(tmp_path):
     fuse.record(build(False, "phone_never_started"))
 
     assert "1 builds in a row failed" in fuse.reason()
+
+
+def test_geelarks_own_shortage_is_not_held_against_this_machine(tmp_path):
+    """It took a live deployment to see this. GeeLark ran out of machines of
+    one Android version, every attempt cost a second and nothing else, and
+    each one counted - so five in a row, which is an ordinary afternoon,
+    would have opened the breaker over a shortage at somebody else's
+    datacentre (2026-08-28)."""
+    fuse = Breaker(tmp_path / "breaker.json", limit=2)
+
+    fuse.record(build(False, "phone_never_started"))
+    fuse.record(build(False, "no_capacity"))
+    fuse.record(build(False, "no_capacity"))
+
+    assert fuse.reason() == ""
+    assert not counts_against(build(False, "no_capacity"))
+    assert not shows_it_works(build(False, "no_capacity"))

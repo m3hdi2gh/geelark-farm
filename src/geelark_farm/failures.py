@@ -371,6 +371,15 @@ VERDICTS: dict[str, Verdict] = {
         "spent. Check the connection, run `geelark verify`, and if the run "
         "died holding rows they are freed with `geelark pools "
         "--release-stuck`."),
+    "no_capacity": Verdict(
+        NOBODY, "GeeLark had no free machine of this Android version",
+        "GeeLark ran out of machines of the Android version this account asks "
+        "for, which it does for minutes at a time and which says nothing about "
+        "the phone, the account or the row. `phones.start` already asked "
+        "several times before giving up, so this is the answer after those. "
+        "Nothing was created and nothing was spent; the next run picks it up. "
+        "If it lasts, another Android version is the way out - the region this "
+        "account uses offers more than one."),
     "no_usable_gmail": Verdict(
         NOBODY, "the Gmails tab had no unused address to give it",
         "No address was free, so no phone was created and nothing was spent. "
