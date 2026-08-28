@@ -43,6 +43,13 @@ def _root() -> Path:
     return Path.cwd().resolve()
 
 
+#: How long a claim may go unrefreshed before the sync puts the row back.
+#:
+#: Five missed heartbeats. A run restamps what it holds every 60 seconds, so a
+#: stamp that has not moved in five minutes is not a slow run - it is a run
+#: that is gone.
+STALE_CLAIM_DEFAULT = 300
+
 REPO_ROOT = _root()
 ENV_FILE = REPO_ROOT / ".env"
 
@@ -207,10 +214,19 @@ class Settings:
     #: stamp that has stopped moving means the holder is gone whatever the
     #: budget is - and the wait can be minutes instead of an hour.
     #:
-    #: The default is still the build budget, deliberately. Shortening it is
-    #: only safe once EVERY machine that touches this sheet runs a version
-    #: that beats; an older one holds a row without refreshing it, and a
-    #: shorter window would hand that row to somebody else mid-build.
+    #: That condition is now met (2026-08-28): the server is the only machine
+    #: that builds against this sheet, and it beats. So the default is five
+    #: minutes - five missed beats - rather than an hour.
+    #:
+    #: What an hour cost, the day it was shortened: a run was interrupted
+    #: holding an app account, its phone was discarded, and the account sat
+    #: `in_use` and unusable while the sheet waited out a window sized for a
+    #: mechanism that no longer applies.
+    #:
+    #: It goes back up the moment something that does not beat touches this
+    #: sheet again - an older checkout on somebody's laptop is enough. A
+    #: window shorter than the holder's silence hands a live run's row to
+    #: somebody else mid-build.
     stale_claim_seconds: int
     login_budget_seconds: int
     install_budget_seconds: int
@@ -246,8 +262,9 @@ class Settings:
             warm_stock=_int("WARM_STOCK", 10),
             log_format=_str("LOG_FORMAT", "text").strip().lower(),
             serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),
-            build_budget_seconds=(budget := _int("BUILD_BUDGET_SECONDS", 3600)),
-            stale_claim_seconds=_int("STALE_CLAIM_SECONDS", budget),
+            build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
+            stale_claim_seconds=_int("STALE_CLAIM_SECONDS",
+                                     STALE_CLAIM_DEFAULT),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
             app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),

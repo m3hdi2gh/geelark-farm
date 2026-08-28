@@ -2240,23 +2240,44 @@ def test_the_sync_measures_against_the_window_not_the_budget(monkeypatch):
     assert passed["stale_claim_seconds"] == "settings.stale_claim_seconds"
 
 
-def test_the_window_still_defaults_to_the_build_budget(monkeypatch):
-    """An older machine on the same sheet holds a row without refreshing it.
-    Defaulting the window to anything shorter would hand that row to somebody
-    else mid-build, so the default has to be the answer that was safe before
-    the heartbeat existed."""
-    from geelark_farm.config import Settings
+def test_the_window_is_five_missed_heartbeats_and_not_a_whole_budget(
+        monkeypatch):
+    """It used to default to the build budget, because before the heartbeat
+    the only safe answer was "longer than any run could legitimately hold
+    one". A run now restamps what it holds every sixty seconds, so a stamp
+    that has not moved in five minutes is not a slow run - it is a gone one.
+
+    What the old answer cost, the day it changed: a run was interrupted
+    holding an app account, its phone was discarded, and the account sat
+    `in_use` and unusable for the rest of an hour (2026-08-28).
+
+    It is not free. A window shorter than a live holder's silence hands that
+    holder's row to somebody else mid-build, so this is only right while every
+    machine that claims against this sheet beats - which is why it is a
+    default and not a constant.
+    """
+    from geelark_farm.config import STALE_CLAIM_DEFAULT, Settings
 
     monkeypatch.setenv("GEELARK_APP_ID", "id")
     monkeypatch.setenv("GEELARK_API_KEY", "key")
     monkeypatch.setenv("BUILD_BUDGET_SECONDS", "1234")
     monkeypatch.delenv("STALE_CLAIM_SECONDS", raising=False)
 
-    assert Settings.load().stale_claim_seconds == 1234
+    assert Settings.load().stale_claim_seconds == STALE_CLAIM_DEFAULT
+    assert STALE_CLAIM_DEFAULT == 5 * 60
 
     monkeypatch.setenv("STALE_CLAIM_SECONDS", "600")
     assert Settings.load().stale_claim_seconds == 600
     assert Settings.load().build_budget_seconds == 1234, "the two are separate"
+
+
+def test_the_window_is_several_beats_wide_rather_than_one(monkeypatch):
+    """One missed beat is a slow sheet write, not a dead run. The margin is
+    the whole reason this is not simply `HEARTBEAT_SECONDS`."""
+    from geelark_farm.config import STALE_CLAIM_DEFAULT
+    from geelark_farm.pools import Pool
+
+    assert STALE_CLAIM_DEFAULT >= 4 * Pool.HEARTBEAT_SECONDS
 
 
 # --------------------------------------------- the path a build walked
