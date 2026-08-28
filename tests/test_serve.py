@@ -215,13 +215,19 @@ def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
 
 
 def board_book(monkeypatch, shown):
-    """A Book whose Service tab records what it was asked to display."""
+    """A Book whose Service tab records what it was asked to display.
+
+    Nothing invented here. An earlier version of this fake gave `phones` a
+    `CLAIM_FORMAT`, which `PhoneLog` does not have - the format belongs to
+    `Pool`. The fake was the only place that attribute existed, so the tests
+    were green and the server threw on every single pass (2026-08-28). A fake
+    that carries what the real object lacks tests a program nobody is running.
+    """
     monkeypatch.setattr(
         serve_mod, "Book",
         SimpleNamespace(open=lambda s: SimpleNamespace(
             reload=lambda: None, apps=None,
-            service=SimpleNamespace(show=lambda **kw: shown.update(kw)),
-            phones=SimpleNamespace(CLAIM_FORMAT="%Y-%m-%d %H:%M:%SZ"))))
+            service=SimpleNamespace(show=lambda **kw: shown.update(kw)))))
 
 
 def test_a_pass_says_on_the_sheet_what_it_is_doing(monkeypatch, make_settings,

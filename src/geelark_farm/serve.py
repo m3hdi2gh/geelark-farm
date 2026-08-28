@@ -47,7 +47,7 @@ from .api import Client, build_client
 from .breaker import Breaker
 from .config import Settings
 from .ledger import Ledger
-from .pools import Book
+from .pools import Book, Pool
 
 log = logging.getLogger(__name__)
 
@@ -335,7 +335,11 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
         note = (f"{failed} pass(es) in a row have failed - see the log. "
                 f"{note}").strip()
     book.service.show(**{
-        "Last pass": time.strftime(book.phones.CLAIM_FORMAT),
+        # `Pool`'s format, not `book.phones`'s: PhoneLog is not a Pool and has
+        # no CLAIM_FORMAT. A test fake invented one, which is how this reached
+        # the server and threw on every pass until the sheet said so
+        # (2026-08-28).
+        "Last pass": time.strftime(Pool.CLAIM_FORMAT),
         "Machine": machine(),
         "Version": f"{__version__} ({stamp})" if stamp else __version__,
         "Doing": doing,
