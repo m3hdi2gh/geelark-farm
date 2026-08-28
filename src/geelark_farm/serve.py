@@ -125,26 +125,42 @@ class Slots:
 
 
 def needs_slots(*, tripped: str, warm: int, target: int,
-                accounts_waiting: int) -> bool:
+                accounts_waiting: int, cap: int = 1) -> bool:
     """Whether this pass's decision turns on how many slots are free.
 
-    The same numbers `decide` reaches its first three answers from, asked
-    again here for one reason: the number it does not have costs a call to an
-    endpoint that allows one a minute, and most passes never look at it.
+    The same numbers `decide` reaches its first answers from, asked again here
+    for one reason: the number it does not have costs a call to an endpoint
+    that allows one a minute, and most passes never look at it.
+
+    It used to answer False whenever anything was being finished, because a
+    pass did one job and a finishing pass was therefore not a building one.
+    With a cap above 1 that is no longer true - a pass can finish two and build
+    three - and the old shortcut left `free_slots` at None on exactly those
+    passes, which `decide` then refuses to build blind on. Every combined pass
+    would have finished and then declined to build, for ever.
     """
-    if accounts_waiting and warm:
-        return False              # finishing, which takes no new slot
     if tripped:
         return False              # not building anyway
-    return warm < target
+    to_finish = min(accounts_waiting, warm, cap)
+    if cap - to_finish < 1:
+        return False              # no room left to build this pass
+    return (warm - to_finish) < target
 
 
 @dataclass
 class Decision:
-    """What one pass should do, and why it is not doing the rest."""
+    """How much of each thing this pass should do, and why not the rest.
 
-    finish: bool = False
-    build: bool = False
+    Counts rather than flags. They were booleans while a pass did one job, and
+    one job a pass meant ten phones took ten passes - about seventy minutes of
+    wall clock for work the builder can already run at once. The machinery was
+    never the limit: `_drive_jobs` has had a thread pool the whole time and has
+    run twenty phones ten at a time in production (2026-08-25). What was
+    missing was a caller that asked for more than one.
+    """
+
+    finish: int = 0
+    build: int = 0
     #: Said out loud when there is something a person has to do about it.
     warning: str = ""
 
@@ -152,61 +168,100 @@ class Decision:
     def idle(self) -> bool:
         return not self.finish and not self.build
 
+    @property
+    def jobs(self) -> int:
+        return self.finish + self.build
+
 
 def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
-           accounts_waiting: int) -> Decision:
-    """What to do this pass, from five numbers and nothing else.
+           accounts_waiting: int, cap: int = 1,
+           gmails: int | None = None, exits: int | None = None) -> Decision:
+    """How much to do this pass, from the numbers and nothing else.
 
     `tripped` is the breaker's reason, empty when it is closed. `free_slots`
-    is None when nobody has managed to read it - which only matters on the one
-    branch that turns on it, and which is not a reason to build blind.
+    is None when nobody has managed to read it - which only matters on the
+    branches that turn on it, and which is not a reason to build blind.
+
+    `cap` is the most jobs one pass may run at once. It defaults to 1, which is
+    what this did for its whole life: one job a pass, ten phones in ten passes.
+
+    `gmails` and `exits` are how deep the pools are. None means "not counted,
+    do not constrain" - a caller that does not know must not be second-guessed
+    here. Counted, they stop a pass asking for four builds against a two-
+    address tab: the two surplus builds spend a claim and a live proxy check
+    each, create nothing, end `no_usable_gmail` - and that reason is in
+    `breaker.NOTHING_HAPPENED`, so nothing anywhere counts them.
+
+    The order below is load-bearing and unchanged. Finishing is settled first,
+    above the breaker, because it spends nothing new and somebody is waiting at
+    the end of it; what tripped the breaker was building, and this is not that.
     """
-    if accounts_waiting and warm:
-        # Somebody is waiting at the end of this one, and it spends nothing
-        # that has not already been bought. It happens even with the breaker
-        # open: what tripped the breaker was building, and this is not that.
-        return Decision(finish=True)
+    to_finish = min(accounts_waiting, warm, cap)
 
     if tripped:
-        return Decision(warning=tripped)
+        return Decision(finish=to_finish, warning=tripped)
 
     if accounts_waiting and not warm:
         # An account arrived and there is no phone to put it on. Building is
-        # the answer and the branch below is already about to do it; this is
-        # only worth a line because it is the case the warm stock exists to
+        # the answer and the arithmetic below is already about to do it; this
+        # is only worth a line because it is the case the warm stock exists to
         # prevent, and seeing it means the stock is not keeping up.
         log.info("an account is waiting and no warm phone is ready for it")
 
-    if warm >= target:
-        return Decision()
+    room = cap - to_finish
+    # A phone that gets finished stops being warm, so the hole to fill is
+    # measured after this pass's finishes, not before them.
+    short = target - (warm - to_finish)
+    if room < 1 or short < 1:
+        return Decision(finish=to_finish)
 
     if free_slots is None:
         # Building without knowing is how you meet [44002] at phone creation,
         # having already spent the reads that got you there. One pass costs
         # less than one blind build.
-        return Decision(warning=(
+        return Decision(finish=to_finish, warning=(
             "how many profile slots are free could not be read, so nothing "
             "is being built this pass rather than built blind."))
 
     if free_slots < 1:
-        return Decision(warning=(
+        return Decision(finish=to_finish, warning=(
             f"no free profile slots, so the warm stock is stuck at {warm} of "
             f"{target}. A finished phone holds its slot until somebody marks "
             f"it done in the State column - that is what frees one."))
 
-    return Decision(build=True)
+    limits = [short, room, free_slots]
+    if gmails is not None:
+        limits.append(gmails)
+    if exits is not None:
+        limits.append(exits)
+    to_build = min(limits)
+
+    if to_build < 1:
+        return Decision(finish=to_finish, warning=(
+            f"the warm stock is {warm} of {target} and nothing can be built: "
+            f"the Gmails or Proxy tab has no usable row left."))
+
+    return Decision(finish=to_finish, build=to_build)
 
 
-def _look(client: Client, settings: Settings, book: Book) -> tuple[int, int]:
-    """Warm phones, and accounts with nowhere to go yet.
+def _look(client: Client, settings: Settings,
+          book: Book) -> tuple[int, int, int, int]:
+    """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
 
     Not the free slots. Those cost a call to an endpoint with a limit of one a
-    minute, and the two numbers here settle most passes without them.
+    minute, and the numbers here settle most passes without them.
+
+    The pool depths are free: the tabs are already loaded and `available` is a
+    list comprehension over rows in memory. They exist so a pass that may ask
+    for several builds cannot ask for more than there is stock to make - four
+    builds against a two-address tab spends two claims and two live proxy
+    checks to create nothing, and ends on a reason the breaker ignores.
     """
     from . import builder
 
     warm, _gone = builder._unfinished(client, book)
-    return len(warm), len(book.apps.available)
+    return (len(warm), len(book.apps.available),
+            len(book.gmails.available), len(book.proxies.available))
 
 
 def beat(settings: Settings) -> None:
@@ -328,8 +383,14 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
     from .config import machine, revision
 
     stamp = revision()
-    doing = ("finishing a phone for an account" if decision.finish else
-             "building a warm phone" if decision.build else "nothing to do")
+    # Both halves, because a pass can now do both at once and a reader who is
+    # told only one of them will wonder where the other phones went.
+    busy = []
+    if decision.finish:
+        busy.append(f"finishing {decision.finish} for waiting account(s)")
+    if decision.build:
+        busy.append(f"building {decision.build} warm phone(s)")
+    doing = " and ".join(busy) or "nothing to do"
     note = decision.warning
     if failed:
         note = (f"{failed} pass(es) in a row have failed - see the log. "
@@ -367,19 +428,20 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                        stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
-    warm, waiting = _look(client, settings, book)
+    warm, waiting, gmails, exits = _look(client, settings, book)
     tripped = fuse.reason()
-    # Asked only when the answer changes what happens, which is the pass that
-    # is about to build. A full stock, a waiting account or an open breaker
-    # all settle it without ever looking.
+    cap = max(1, settings.max_concurrent_phones)
+    # Asked only when the answer changes what happens, which is a pass with
+    # room to build. A full stock or an open breaker settle it without looking.
     free = (slots.look(client, time.monotonic())
             if needs_slots(tripped=tripped, warm=warm,
                            target=settings.warm_stock,
-                           accounts_waiting=waiting)
+                           accounts_waiting=waiting, cap=cap)
             else None)
     decision = decide(tripped=tripped, warm=warm,
                       target=settings.warm_stock, free_slots=free,
-                      accounts_waiting=waiting)
+                      accounts_waiting=waiting, cap=cap,
+                      gmails=gmails, exits=exits)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
@@ -389,6 +451,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
              free if free is not None else "not asked about", waiting,
              extra={"warm": warm, "target": settings.warm_stock,
                     "free_slots": free, "accounts_waiting": waiting,
+                    "gmails_free": gmails, "exits_free": exits,
+                    "to_finish": decision.finish, "to_build": decision.build,
                     "will": ("finish" if decision.finish else
                              "build" if decision.build else "nothing")})
     if decision.warning:
@@ -399,30 +463,29 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     _show(book, settings, decision, warm=warm, waiting=waiting, free=free,
           tripped=tripped, failed=_failing(settings))
 
-    if decision.finish:
-        for build in builder.finish_run(client, settings, limit=1):
-            fuse.record(build)
-    if decision.build:
-        # `finish_first=False` because this loop has already decided. `run`
-        # defaults to finishing before it builds, which is right for a person
-        # typing it - but here the two are separate branches of `decide`, and a
-        # build pass only happens when nothing is waiting to be finished.
+    if decision.jobs:
+        # One call, one Book, one runner - never `finish_run` and `run` as two
+        # concurrent calls. Each opens its own Book, and `Pool`'s claim lock is
+        # per instance: two Books have two locks, and the serialisation that
+        # stops one Gmail reaching two phones stops holding.
         #
-        # Left at the default it deadlocks the warm stock. `run` would call
-        # `_unfinished` and get back the very phones `_look` had just counted as
-        # warm, take `to_finish = waiting[:count]` and leave `to_build = 0` - so
-        # the build becomes a finish, that finish finds no account to use
-        # (there is none, or this would have been a finish pass), and the phone
-        # goes back to `incomplete`. Warm never passes 1, and a real phone is
-        # booted and stopped every pass. Nothing catches it either: the
-        # `no_usable_gpt` it ends on is in `breaker.WORKED`, which *clears* the
-        # count.
+        # `finish_limit` says exactly how many of these jobs are finishes.
+        # Without it `count` is a total that finishing eats first, so a pass
+        # asking for two finishes and three builds would get five finishes -
+        # and the three with no account to use would each boot a real phone,
+        # end `no_usable_gpt`, and put it back. That is the 2026-08-28
+        # deadlock, once per surplus job, and `no_usable_gpt` is in
+        # `breaker.WORKED`, so nothing would count it.
         #
-        # It hid because `warm >= target` returns before this at 1 of 1, so it
-        # only wakes up when the stock is raised - which is the whole point of
-        # running unattended (2026-08-28).
-        for build in builder.run(client, settings, count=1,
-                                 finish_first=False):
+        # `workers` must be passed. Left to its default `_drive_jobs` falls
+        # back to `max_concurrent_phones`, and a pass of ten jobs would run
+        # them one after another inside one pass - seventy minutes instead of
+        # fifteen, which is the opposite of the point.
+        for build in builder.run(client, settings,
+                                 count=decision.jobs,
+                                 finish_limit=decision.finish,
+                                 workers=decision.jobs,
+                                 finish_first=bool(decision.finish)):
             fuse.record(build)
     return decision
 

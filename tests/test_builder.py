@@ -549,6 +549,57 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
     assert jobs == [("finish", "668"), ("finish", "670"), ("build", None)]
 
 
+def _job_world(monkeypatch, waiting):
+    """Enough of a world for `run` to dispatch jobs and nothing more."""
+    book = make_book()
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p: FakeLedger()))
+    jobs = []
+    monkeypatch.setattr(builder, "finish_one",
+                        lambda *a, **k: jobs.append("finish")
+                        or builder.Build(index=a[5], ok=True, status="ready"))
+    monkeypatch.setattr(builder, "build_one",
+                        lambda *a, **k: jobs.append("build")
+                        or builder.Build(index=a[4], ok=True, status="ready"))
+    return jobs
+
+
+def test_finish_limit_says_how_many_of_the_jobs_are_finishes(device, settings,
+                                                             monkeypatch):
+    """`count` is a total that finishing eats first, so a caller who knows only
+    two accounts are waiting still gets one finish per waiting phone - and each
+    surplus one boots a real phone, finds no account, ends `no_usable_gpt` and
+    puts it back, while that very reason clears the breaker (2026-08-28)."""
+    waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
+                "gmail": "a@example.com", "proxy": "", "status": "incomplete"}
+               for r in (2, 3, 4, 5)]
+    jobs = _job_world(monkeypatch, waiting)
+
+    builder.run(None, settings, count=4, finish_limit=2, workers=1)
+
+    assert jobs == ["finish", "finish", "build", "build"]
+
+
+def test_a_mixed_batch_runs_its_jobs_at_once(device, settings, monkeypatch):
+    """The thread pool has run twenty phones ten at a time in production and
+    has never had a test. It is what every parallel pass now goes through."""
+    waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
+                "gmail": "a@example.com", "proxy": "", "status": "incomplete"}
+               for r in (2, 3)]
+    jobs = _job_world(monkeypatch, waiting)
+
+    builds = builder.run(None, settings, count=5, finish_limit=2, workers=5)
+
+    # Order is whatever the pool decides, so count rather than sequence.
+    assert sorted(jobs) == ["build"] * 3 + ["finish"] * 2
+    assert len(builds) == 5
+    assert [b.index for b in builds] == sorted(b.index for b in builds), (
+        "results come back in job order however they finished")
+
+
 def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
         device, settings, monkeypatch):
     book = make_book()

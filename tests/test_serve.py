@@ -87,16 +87,100 @@ def test_it_never_finishes_a_phone_that_is_not_there():
     assert not decision.finish
 
 
+# ------------------------------------------------------- more than one job
+def test_five_accounts_are_finished_while_five_more_phones_are_built():
+    """The shape the whole change exists for.
+
+    Five accounts arrive against five warm phones: finish all five, and build
+    five more at the same time so the stock is back where it was. One pass, ten
+    jobs, instead of ten passes and about seventy minutes.
+    """
+    decision = decide(**numbers(warm=5, target=5, accounts_waiting=5,
+                                free_slots=23, cap=10, gmails=15, exits=38))
+
+    assert (decision.finish, decision.build) == (5, 5)
+    assert decision.jobs == 10
+
+
+def test_the_cap_is_the_most_a_pass_will_take_on():
+    """It is what a person sets when the box or the rate limiter says stop."""
+    decision = decide(**numbers(warm=5, target=5, accounts_waiting=5,
+                                free_slots=23, cap=5, gmails=15, exits=38))
+
+    # The five finishes use the whole cap, so nothing is built this pass. The
+    # next pass builds, because those five are no longer warm.
+    assert (decision.finish, decision.build) == (5, 0)
+
+
+def test_it_never_asks_for_more_phones_than_there_is_stock_to_make():
+    """Four builds against a two-address tab spends two claims and two live
+    proxy checks to create nothing - and ends on `no_usable_gmail`, which the
+    breaker ignores, so nothing anywhere counts it."""
+    decision = decide(**numbers(warm=0, target=10, free_slots=20,
+                                cap=10, gmails=2, exits=9))
+
+    assert decision.build == 2
+
+    decision = decide(**numbers(warm=0, target=10, free_slots=20,
+                                cap=10, gmails=9, exits=2))
+
+    assert decision.build == 2
+
+
+def test_it_never_asks_for_more_phones_than_there_are_slots():
+    decision = decide(**numbers(warm=0, target=10, free_slots=3,
+                                cap=10, gmails=50, exits=50))
+
+    assert decision.build == 3
+
+
+def test_finishing_shrinks_the_warm_stock_it_is_topping_up():
+    """A phone that gets finished stops being warm, so the hole to fill is
+    measured after this pass's finishes rather than before them. Measured the
+    other way, a full stock being wholly delivered would build nothing and the
+    next pass would start from zero."""
+    decision = decide(**numbers(warm=3, target=3, accounts_waiting=3,
+                                free_slots=20, cap=6, gmails=50, exits=50))
+
+    assert (decision.finish, decision.build) == (3, 3)
+
+
+def test_a_pass_with_room_to_build_still_asks_about_slots():
+    """The old shortcut said "finishing, so no new slot is needed" and left the
+    count unread - which `decide` then refuses to build blind on. Every
+    combined pass would have finished and then declined to build, for ever."""
+    assert serve_mod.needs_slots(tripped="", warm=5, target=5,
+                                 accounts_waiting=5, cap=10)
+    # ...and still does not ask when the cap is spent on finishing.
+    assert not serve_mod.needs_slots(tripped="", warm=5, target=5,
+                                     accounts_waiting=5, cap=5)
+
+
+def test_a_tripped_breaker_still_finishes_all_of_them():
+    """Finishing spends nothing new, and five customers are waiting."""
+    decision = decide(**numbers(warm=5, target=5, accounts_waiting=5, cap=10,
+                                tripped="5 builds in a row failed"))
+
+    assert decision.finish == 5 and not decision.build
+
+
 # ------------------------------------------------------------- the passes
 class Recorder:
     """What the loop asked the rest of the code to do."""
 
-    def __init__(self, warm=0, free=10, waiting=0):
-        self.numbers = (warm, waiting)
+    def __init__(self, warm=0, free=10, waiting=0, gmails=50, exits=50):
+        # Four numbers, because `_look` returns four. The pool depths are
+        # generous by default so a test about something else is never
+        # accidentally constrained by them.
+        self.numbers = (warm, waiting, gmails, exits)
         self.free = free
         self.synced = 0
         self.built = 0
         self.finished = 0
+        #: The keyword arguments of the last `builder.run` call. One call does
+        #: both jobs now, so "how many finishes and how many builds" is read
+        #: from here rather than from two counters.
+        self.asked = {}
         self.recorded = []
 
     def install(self, monkeypatch, *, fails=False):
@@ -116,13 +200,19 @@ class Recorder:
                             SimpleNamespace(load=lambda d: None))
         monkeypatch.setattr(builder, "sync_sheet",
                             lambda *a, **k: self.bump("synced") or {})
-        monkeypatch.setattr(builder, "run",
-                            lambda *a, **k: self.bump("built") or
-                            [build(ok=not fails)])
+        monkeypatch.setattr(builder, "run", self._run(fails))
         monkeypatch.setattr(builder, "finish_run",
                             lambda *a, **k: self.bump("finished") or
                             [build(ok=True)])
         return self
+
+    def _run(self, fails):
+        def run(*a, **kw):
+            self.asked = kw
+            self.bump("built")
+            jobs = kw.get("count", 1)
+            return [build(ok=not fails) for _ in range(jobs)]
+        return run
 
     def bump(self, name):
         setattr(self, name, getattr(self, name) + 1)
@@ -227,6 +317,8 @@ def board_book(monkeypatch, shown):
         serve_mod, "Book",
         SimpleNamespace(open=lambda s: SimpleNamespace(
             reload=lambda: None, apps=None,
+            gmails=SimpleNamespace(available=["g"] * 20),
+            proxies=SimpleNamespace(available=["p"] * 20),
             service=SimpleNamespace(show=lambda **kw: shown.update(kw)))))
 
 
@@ -245,7 +337,7 @@ def test_a_pass_says_on_the_sheet_what_it_is_doing(monkeypatch, make_settings,
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
 
-    assert shown["Doing"] == "building a warm phone"
+    assert "building 1" in shown["Doing"]
     assert shown["Warm stock"] == "1 of 3"
     assert shown["Free slots"] == "10"
     assert shown["Breaker"] == "closed"
@@ -267,6 +359,38 @@ def test_an_open_breaker_reaches_the_sheet_and_not_only_the_log(
     assert "5 builds in a row failed" in shown["Breaker"]
     assert "5 builds in a row failed" in shown["Note"]
     assert shown["Doing"] == "nothing to do"
+
+
+def test_a_pass_asks_for_its_jobs_to_run_at_once(monkeypatch, make_settings,
+                                                 tmp_path):
+    """Without `workers`, `_drive_jobs` falls back to `max_concurrent_phones`
+    - and ten jobs would run one after another *inside one pass*: seventy
+    minutes instead of fifteen, which is the opposite of the point."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=5,
+                             max_concurrent_phones=10)
+    recorder = Recorder(warm=5, free=20, waiting=5).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.asked.get("count") == 10
+    assert recorder.asked.get("finish_limit") == 5
+    assert recorder.asked.get("workers") == 10, (
+        "the jobs have to be handed over as concurrent, not just as many")
+
+
+def test_one_call_does_both_jobs(monkeypatch, make_settings, tmp_path):
+    """Never two concurrent calls. `finish_run` and `run` each open their own
+    Book, and a Pool's claim lock is per instance - two Books have two locks,
+    and the serialisation that stops one Gmail reaching two phones stops
+    holding."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=5,
+                             max_concurrent_phones=10)
+    recorder = Recorder(warm=5, free=20, waiting=5).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.built == 1, "one runner"
+    assert recorder.finished == 0, "finish_run is not called separately"
 
 
 def test_every_build_it_starts_is_shown_to_the_breaker(monkeypatch,
@@ -396,19 +520,23 @@ def test_a_pass_builds_one_phone_and_finishes_one(monkeypatch, make_settings,
     assert asked.get("count") == 1
 
 
-def test_a_finish_takes_one_phone_at_a_time_too(monkeypatch, make_settings,
-                                                 tmp_path):
-    from geelark_farm import builder
+def test_a_finish_says_exactly_how_many_of_the_jobs_are_finishes(
+        monkeypatch, make_settings, tmp_path):
+    """`count` alone would be read as "finish as many as you can".
 
+    Finishing takes from `count` first, so a pass asking for one finish and
+    two builds would get three finishes - and the two with no account to use
+    would each boot a real phone, end `no_usable_gpt` and put it back, while
+    that very reason cleared the breaker (2026-08-28).
+    """
     settings = make_settings(state_dir=tmp_path, warm_stock=3)
-    asked = {}
-    Recorder(warm=2, free=10, waiting=1).install(monkeypatch)
-    monkeypatch.setattr(builder, "finish_run",
-                        lambda c, s, **kw: asked.update(kw) or [build()])
+    recorder = Recorder(warm=2, free=10, waiting=1).install(monkeypatch)
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
 
-    assert asked.get("limit") == 1
+    assert recorder.asked.get("finish_limit") == 1, (
+        "one account is waiting, so exactly one of these is a finish")
+    assert recorder.asked.get("count") == 1, "and the cap is 1 by default"
 
 
 def test_starting_it_already_stopped_does_nothing_at_all(monkeypatch,
@@ -440,13 +568,16 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
     """
     from geelark_farm import builder
 
-    book = SimpleNamespace(apps=SimpleNamespace(available=["a", "b", "c"]))
+    book = SimpleNamespace(
+        apps=SimpleNamespace(available=["a", "b", "c"]),
+        gmails=SimpleNamespace(available=["g", "h", "i", "j"]),
+        proxies=SimpleNamespace(available=["p"]))
     monkeypatch.setattr(builder, "_unfinished",
                         lambda c, b: ([{"serial": "1"}, {"serial": "2"}], []))
     monkeypatch.setattr(serve_mod.phones, "plan",
                         lambda c: pytest.fail("the plan was read for nothing"))
 
-    assert serve_mod._look(object(), settings, book) == (2, 3)
+    assert serve_mod._look(object(), settings, book) == (2, 3, 4, 1)
 
 
 # ----------------------------------------------------- saying it is still alive

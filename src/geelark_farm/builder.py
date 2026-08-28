@@ -2355,6 +2355,7 @@ def run(client: Client, settings: Settings, *, count: int,
         on_ready: Callable[[str], None] | None = None,
         cancel: threading.Event | None = None,
         finish_first: bool = True,
+        finish_limit: int | None = None,
         codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Produce `count` ready phones, finishing before building.
 
@@ -2384,7 +2385,19 @@ def run(client: Client, settings: Settings, *, count: int,
     gone: list[dict] = []
     if finish_first:
         waiting, gone = _unfinished(client, book)
-    to_finish = waiting[:count]
+    # `count` alone cannot say "finish exactly two and build exactly five". It
+    # is a total, and finishing takes from it first - so a caller that knows
+    # only two accounts are waiting still gets `min(count, len(waiting))`
+    # finishes, and every finish past the second one boots a real phone, finds
+    # no account, ends `no_usable_gpt` and puts the phone back. That is the
+    # 2026-08-28 deadlock, once per surplus job, and its `no_usable_gpt`
+    # *clears* the breaker so nothing counts it.
+    #
+    # `finish_limit` is how a caller that has already counted says so. None
+    # keeps the old behaviour, which is what a person typing `geelark build 5`
+    # wants: use the phones that are already half-built before making new ones.
+    to_finish = waiting[:count if finish_limit is None else min(finish_limit,
+                                                               count)]
     to_build = count - len(to_finish)
 
     if dry_run:
