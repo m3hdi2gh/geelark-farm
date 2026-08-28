@@ -600,6 +600,41 @@ def test_a_mixed_batch_runs_its_jobs_at_once(device, settings, monkeypatch):
         "results come back in job order however they finished")
 
 
+def test_an_interrupted_build_does_not_let_the_service_carry_on(
+        device, settings, monkeypatch):
+    """Swallowing it made `docker stop` mean nothing while a build ran.
+
+    SIGTERM arrives as a KeyboardInterrupt, this caught it, the phones were
+    stopped - and then `run` returned normally and the serve loop carried on.
+    Docker waited out its 120s grace period and SIGKILLed, and in those two
+    minutes the loop could start four more passes and create phones that the
+    one signal nothing can catch then killed (2026-08-28).
+    """
+    _job_world(monkeypatch, [])
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builder, "build_one", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        builder.run(None, settings, count=1, workers=1)
+
+
+def test_an_interrupted_batch_does_not_let_the_service_carry_on_either(
+        device, settings, monkeypatch):
+    """The pool path, which every parallel pass now goes through."""
+    _job_world(monkeypatch, [])
+
+    def interrupted(_futures):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builder, "wait", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        builder.run(None, settings, count=3, workers=3)
+
+
 def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
         device, settings, monkeypatch):
     book = make_book()

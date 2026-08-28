@@ -1234,11 +1234,65 @@ class ServiceBoard:
     #: for the same reason History's are: the labels are written once and a
     #: reordering would leave every existing tab labelled wrong.
     ROWS = ("Last pass", "Machine", "Version", "Doing", "Warm stock",
-            "Accounts waiting", "Free slots", "Breaker", "Note")
+            "Accounts waiting", "Free slots", "Breaker", "Needs you", "Note")
+
+    #: Things a person can ask for, as checkboxes in column D beside their
+    #: labels in column C. Appended to rather than reordered, like ROWS.
+    #:
+    #: Checkboxes rather than a word to type, and the reason is the State
+    #: column: it takes free text, `done` is matched exactly, and `dome` is
+    #: silently nothing at all. A checkbox has two states and no third.
+    #:
+    #: The loop reads these before it decides and unticks each one the moment
+    #: it has read it - not after acting. A pass can run for minutes, and a
+    #: tick that lands while it works has to survive to the next pass rather
+    #: than be wiped by a write that means "I have dealt with this".
+    CONTROLS = ("Clear breaker", "Pause building", "Stop unaccounted phones")
+
+    #: Ticked means "keep doing this", not "do this once", so these are left
+    #: ticked after they are read. Unticking a mode would turn a pause into a
+    #: single skipped pass, which is not what anybody ticking it wants.
+    STANDING = frozenset({"Pause building"})
 
     def __init__(self, worksheet, lock: threading.Lock):
         self._ws = worksheet
         self._lock = lock
+
+    def asked(self) -> list[str]:
+        """Which controls are ticked, in CONTROLS order.
+
+        Never fatal: a dashboard that cannot be read must not stop the loop
+        that would otherwise be building.
+        """
+        try:
+            with self._lock:
+                cells = self._ws.get(f"D2:D{len(self.CONTROLS) + 1}")
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not read the %s controls (%s)", SERVICE_TAB, exc)
+            return []
+        ticked = []
+        for index, name in enumerate(self.CONTROLS):
+            row = cells[index] if index < len(cells) else []
+            if row and str(row[0]).strip().upper() == "TRUE":
+                ticked.append(name)
+        return ticked
+
+    def taken(self, name: str) -> None:
+        """Untick one control, so a tick is one request and not a standing one.
+
+        One cell at a time rather than the block, so a control ticked while
+        this pass was working is still ticked when the next pass looks.
+        """
+        try:
+            row = self.CONTROLS.index(name) + 2
+            with self._lock:
+                self._ws.update([[False]], f"D{row}",
+                                value_input_option="USER_ENTERED")
+        except Exception as exc:                                  # noqa: BLE001
+            # Left ticked, so it will be done again next pass. Every control
+            # here is safe to repeat - that is why they are the three.
+            log.warning("could not untick %r on the %s tab (%s)",
+                        name, SERVICE_TAB, exc)
 
     def show(self, **fields: str) -> None:
         values = [[clip(str(fields.get(name, "")))] for name in self.ROWS]
@@ -1275,7 +1329,7 @@ def _dress_service(worksheet, rows: int) -> None:
     """
     last = rows + 1                        # header row plus one row per field
     grid = {"sheetId": worksheet.id, "startRowIndex": 0, "endRowIndex": last,
-            "startColumnIndex": 0, "endColumnIndex": 2}
+            "startColumnIndex": 0, "endColumnIndex": 4}
     edge = {"style": "SOLID", "width": 1, "color": _RULE}
 
     def band(row_from, row_to, col_from, col_to, fmt, fields):
@@ -1300,14 +1354,19 @@ def _dress_service(worksheet, rows: int) -> None:
                 "properties": {"sheetId": worksheet.id,
                                "gridProperties": {"frozenRowCount": 1}},
                 "fields": "gridProperties.frozenRowCount"}},
-            band(0, 1, 0, 2,
+            band(0, 1, 0, 4,
                  {"backgroundColor": _SLATE,
                   "verticalAlignment": "MIDDLE",
                   "textFormat": {"bold": True, "fontSize": 11,
                                  "foregroundColor": _WHITE}},
                  "backgroundColor,textFormat,verticalAlignment"),
-            # The labels read as labels rather than as more values.
+            # The labels read as labels rather than as more values. Column C
+            # gets the same treatment: it labels the checkboxes beside it.
             band(1, last, 0, 1,
+                 {"backgroundColor": _PAPER, "verticalAlignment": "MIDDLE",
+                  "textFormat": {"bold": True}},
+                 "backgroundColor,textFormat,verticalAlignment"),
+            band(1, last, 2, 3,
                  {"backgroundColor": _PAPER, "verticalAlignment": "MIDDLE",
                   "textFormat": {"bold": True}},
                  "backgroundColor,textFormat,verticalAlignment"),
@@ -1316,8 +1375,15 @@ def _dress_service(worksheet, rows: int) -> None:
             band(1, last, 1, 2,
                  {"wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"},
                  "wrapStrategy,verticalAlignment"),
+            # The boxes sit under their heading rather than off to its left.
+            band(1, last, 3, 4,
+                 {"horizontalAlignment": "CENTER",
+                  "verticalAlignment": "MIDDLE"},
+                 "horizontalAlignment,verticalAlignment"),
             width(0, 190),
             width(1, 620),
+            width(2, 210),
+            width(3, 60),
             {"updateBorders": {"range": grid, "innerHorizontal": edge,
                                "innerVertical": edge, "top": edge,
                                "bottom": edge, "left": edge, "right": edge}},
@@ -1504,9 +1570,13 @@ class Book:
                 sheet = tabs[SERVICE_TAB]
             else:
                 sheet = book.add_worksheet(
-                    SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 1, cols=2)
-                sheet.update([["What", "Now"]], "A1:B1",
+                    SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 1, cols=4)
+                sheet.update([["What", "Now", "Ask for", "Tick"]], "A1:D1",
                              value_input_option="RAW")
+                # Real checkboxes, not the words TRUE and FALSE. The State
+                # column is what a typo-able control looks like: `done` is
+                # matched exactly, so `dome` is silently nothing.
+                _make_checkbox(sheet, 3)
                 # Only for a tab this made, and only once: the four stock tabs
                 # were laid out by a person, and this one arriving as a bare
                 # grid beside them is how the tab whose whole job is being read
@@ -1517,6 +1587,9 @@ class Book:
             # rewriting them each time would double the cost of every pass.
             sheet.update([[name] for name in ServiceBoard.ROWS],
                          f"A2:A{len(ServiceBoard.ROWS) + 1}",
+                         value_input_option="RAW")
+            sheet.update([[name] for name in ServiceBoard.CONTROLS],
+                         f"C2:C{len(ServiceBoard.CONTROLS) + 1}",
                          value_input_option="RAW")
             service = ServiceBoard(sheet, lock)
         except Exception as exc:                                  # noqa: BLE001

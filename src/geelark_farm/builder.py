@@ -2314,6 +2314,21 @@ def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
             print("\ninterrupted - stopping here", flush=True)
             shutting_down.set()
             _stop_all(client, started, ledger)
+            # Re-raised, because swallowing it made `docker stop` mean nothing
+            # while a build was running. SIGTERM arrives here as a
+            # KeyboardInterrupt (cli.stop_on_sigterm), this caught it, the
+            # phones were stopped - and then `run` returned normally, `once`
+            # returned normally, and the serve loop carried on. Docker waited
+            # out `stop_grace_period` (120s) and SIGKILLed, and in those two
+            # minutes the loop could start four more passes and create phones
+            # that the one signal nothing can catch then killed. The grace
+            # period exists to prevent exactly that.
+            #
+            # Everything above has already run: the phones are stopped and the
+            # rows released. `cli` catches this last and prints a line instead
+            # of a traceback, and `serve.run` re-raises it to end the loop -
+            # both were written expecting it to arrive (2026-08-28).
+            raise
         return builds
 
     log.info("%d phones, %d at a time", total, parallel)
@@ -2335,6 +2350,7 @@ def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
         for future in futures:
             future.cancel()
         _stop_all(client, started, ledger)
+        raise                        # see the serial path above
 
     builds = []
     for future, index in futures.items():

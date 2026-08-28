@@ -125,7 +125,8 @@ class Slots:
 
 
 def needs_slots(*, tripped: str, warm: int, target: int,
-                accounts_waiting: int, cap: int = 1) -> bool:
+                accounts_waiting: int, cap: int = 1,
+                paused: bool = False) -> bool:
     """Whether this pass's decision turns on how many slots are free.
 
     The same numbers `decide` reaches its first answers from, asked again here
@@ -139,7 +140,7 @@ def needs_slots(*, tripped: str, warm: int, target: int,
     passes, which `decide` then refuses to build blind on. Every combined pass
     would have finished and then declined to build, for ever.
     """
-    if tripped:
+    if tripped or paused:
         return False              # not building anyway
     to_finish = min(accounts_waiting, warm, cap)
     if cap - to_finish < 1:
@@ -174,7 +175,7 @@ class Decision:
 
 
 def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
-           accounts_waiting: int, cap: int = 1,
+           accounts_waiting: int, cap: int = 1, paused: bool = False,
            gmails: int | None = None, exits: int | None = None) -> Decision:
     """How much to do this pass, from the numbers and nothing else.
 
@@ -200,6 +201,14 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
 
     if tripped:
         return Decision(finish=to_finish, warning=tripped)
+
+    if paused:
+        # Below finishing for the same reason the breaker is: a customer
+        # waiting on an account is not what anybody ticking "pause" means to
+        # stop, and it spends nothing new.
+        return Decision(finish=to_finish, warning=(
+            "building is paused. Untick `Pause building` on the Service tab "
+            "to start again."))
 
     if accounts_waiting and not warm:
         # An account arrived and there is no phone to put it on. Building is
@@ -367,8 +376,38 @@ def probe_due(last: float | None, now: float,
     return last is None or (now - last) >= every
 
 
+def needs_you(outcome: dict) -> str:
+    """What this pass could not finish on its own, in one sentence.
+
+    `sync_sheet` returns a dict of labelled outcomes and every one of them used
+    to be discarded here - so a step that was attempted and failed lived only
+    in a log file, on a server the operator does not read. From the sheet it
+    looked exactly like a pass where nothing had gone wrong.
+    """
+    said = []
+    stopped_short = outcome.get("incomplete") or []
+    if stopped_short:
+        said.append(f"{len(stopped_short)} sync step(s) stopped short "
+                    f"({', '.join(stopped_short)})")
+    for key, phrase in (
+            ("unknown_phones",
+             "{n} phone(s) GeeLark has that this sheet never recorded - "
+             "they bill until somebody stops them"),
+            ("stranded_waiting",
+             "{n} account(s) whose phone is gone, which nothing here will "
+             "guess about"),
+            ("running",
+             "{n} phone(s) marked done that would not stop"),
+    ):
+        rows = outcome.get(key) or []
+        if rows:
+            said.append(phrase.format(n=len(rows)))
+    return "; ".join(said)
+
+
 def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
-          waiting: int, free: int | None, tripped: str, failed: int) -> None:
+          waiting: int, free: int | None, tripped: str, failed: int,
+          needs: str = "") -> None:
     """Put this pass's state where the operator can see it.
 
     Every number here is already in the log, and the log is on a server the
@@ -408,8 +447,53 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
         "Accounts waiting": str(waiting),
         "Free slots": "not asked this pass" if free is None else str(free),
         "Breaker": tripped or "closed",
+        "Needs you": needs or "nothing",
         "Note": note,
     })
+
+
+def _controls(client: Client, book: Book, ledger, fuse: Breaker) -> bool:
+    """Carry out whatever was ticked on the Service tab. Returns "paused".
+
+    Read and acted on at the very top of a pass, which is the one moment
+    nothing of this process's own is running - `once` is synchronous, so no
+    build of ours is in flight here. That matters for `Stop unaccounted
+    phones`: `reap` spares a phone whose ledger claim is live and unstale, and
+    a claim is written once and never refreshed, so a build past its fifth
+    minute looks abandoned to it. Called anywhere else in the pass, the tick
+    that stops orphans would stop the phone being built beside it.
+
+    Each one-shot control is unticked as soon as it is read, not after it is
+    acted on: a pass can run for minutes, and a tick that lands while it works
+    has to survive to the next pass rather than be wiped by a write meaning
+    "dealt with".
+    """
+    from .pools import ServiceBoard
+
+    if book.service is None:
+        return False
+    asked = book.service.asked()
+    for name in asked:
+        if name not in ServiceBoard.STANDING:
+            book.service.taken(name)
+
+    if "Clear breaker" in asked:
+        fuse.clear()
+        log.warning("the breaker was cleared from the sheet")
+
+    if "Stop unaccounted phones" in asked:
+        try:
+            stopped = phones.reap(client, ledger)
+            log.warning("stopped %d phone(s) nothing was accountable for, "
+                        "asked for from the sheet", stopped)
+        except Exception as exc:                                  # noqa: BLE001
+            # Asked for by hand and worth saying out loud, but never worth
+            # taking the pass down: everything below it still needs to happen.
+            log.error("could not stop the unaccounted phones (%s)", exc)
+
+    if "Pause building" in asked:
+        log.info("building is paused from the sheet")
+    return "Pause building" in asked
 
 
 def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
@@ -422,10 +506,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
-    builder.sync_sheet(client, book, ledger,
-                       probe_proxies=probe_proxies,
-                       artifact_dir=settings.artifact_dir,
-                       stale_claim_seconds=settings.stale_claim_seconds)
+    paused = _controls(client, book, ledger, fuse)
+    outcome = builder.sync_sheet(client, book, ledger,
+                                 probe_proxies=probe_proxies,
+                                 artifact_dir=settings.artifact_dir,
+                                 stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
     warm, waiting, gmails, exits = _look(client, settings, book)
@@ -436,11 +521,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     free = (slots.look(client, time.monotonic())
             if needs_slots(tripped=tripped, warm=warm,
                            target=settings.warm_stock,
-                           accounts_waiting=waiting, cap=cap)
+                           accounts_waiting=waiting, cap=cap, paused=paused)
             else None)
     decision = decide(tripped=tripped, warm=warm,
                       target=settings.warm_stock, free_slots=free,
-                      accounts_waiting=waiting, cap=cap,
+                      accounts_waiting=waiting, cap=cap, paused=paused,
                       gmails=gmails, exits=exits)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
@@ -461,7 +546,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # minutes reads as `building` for those four minutes instead of leaving the
     # tab on the last thing that finished.
     _show(book, settings, decision, warm=warm, waiting=waiting, free=free,
-          tripped=tripped, failed=_failing(settings))
+          tripped=tripped, failed=_failing(settings),
+          needs=needs_you(outcome or {}))
 
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two

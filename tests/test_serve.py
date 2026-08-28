@@ -164,6 +164,114 @@ def test_a_tripped_breaker_still_finishes_all_of_them():
     assert decision.finish == 5 and not decision.build
 
 
+# -------------------------------------------------- controls on the sheet
+class Board:
+    """A Service tab with boxes that can be ticked."""
+
+    def __init__(self, *ticked):
+        self.ticked = list(ticked)
+        self.unticked = []
+        self.shown = {}
+
+    def asked(self):
+        return list(self.ticked)
+
+    def taken(self, name):
+        self.unticked.append(name)
+
+    def show(self, **kw):
+        self.shown.update(kw)
+
+
+def _with_board(monkeypatch, board, recorder):
+    from geelark_farm import builder
+
+    monkeypatch.setattr(serve_mod, "Book", SimpleNamespace(
+        open=lambda s: SimpleNamespace(
+            reload=lambda: None, apps=None,
+            gmails=SimpleNamespace(available=["g"] * 20),
+            proxies=SimpleNamespace(available=["p"] * 20),
+            service=board)))
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+
+
+def test_a_ticked_box_clears_the_breaker(monkeypatch, make_settings, tmp_path):
+    """The sharpest hole there was: the breaker stops the half of the service
+    that earns, it is shown on the tab the operator reads, and until now the
+    person it waits for had no way at all to answer it."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=3, free=10).install(monkeypatch)
+    board = Board("Clear breaker")
+    _with_board(monkeypatch, board, recorder)
+    fuse = Fuse(tripped="5 builds in a row failed")
+
+    serve_mod.once(object(), settings, fuse, serve_mod.Slots())
+
+    assert fuse.cleared
+
+
+def test_a_one_shot_control_is_unticked_as_soon_as_it_is_read(
+        monkeypatch, make_settings, tmp_path):
+    """Not after it is acted on. A pass can run for minutes, and a tick that
+    lands while it works has to survive to the next pass rather than be wiped
+    by a write that means "dealt with"."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=3, free=10).install(monkeypatch)
+    board = Board("Clear breaker")
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert board.unticked == ["Clear breaker"]
+
+
+def test_a_standing_mode_is_left_ticked(monkeypatch, make_settings, tmp_path):
+    """Unticking a pause would turn it into one skipped pass, which is not
+    what anybody ticking it wants."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=0, free=10).install(monkeypatch)
+    board = Board("Pause building")
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert board.unticked == []
+
+
+def test_pausing_stops_building_and_still_finishes():
+    """A customer waiting on an account is not what a pause means to stop, and
+    finishing spends nothing new."""
+    decision = decide(**numbers(warm=3, target=10, accounts_waiting=1,
+                                paused=True))
+
+    assert decision.finish == 1 and not decision.build
+    assert "Untick" in decision.warning
+
+
+def test_a_paused_pass_never_spends_the_rate_limited_call():
+    assert not serve_mod.needs_slots(tripped="", warm=0, target=5,
+                                     accounts_waiting=0, paused=True)
+
+
+def test_what_a_sync_could_not_finish_reaches_the_sheet():
+    """Every one of these used to be discarded, so a step that was attempted
+    and failed lived only in a log on a server nobody reads - and from the
+    sheet it looked exactly like a pass where nothing went wrong."""
+    said = serve_mod.needs_you({
+        "incomplete": ["proxies"],
+        "unknown_phones": ["901", "902"],
+        "stranded_waiting": [{"row": 4}],
+    })
+
+    assert "proxies" in said
+    assert "2 phone(s)" in said and "bill" in said
+    assert "1 account(s)" in said
+
+
+def test_a_quiet_sync_says_so_rather_than_nothing():
+    assert serve_mod.needs_you({}) == ""
+
+
 # ------------------------------------------------------------- the passes
 class Recorder:
     """What the loop asked the rest of the code to do."""
@@ -227,12 +335,19 @@ class Fuse:
     def __init__(self, tripped=""):
         self.tripped = tripped
         self.seen = []
+        self.cleared = False
 
     def reason(self):
         return self.tripped
 
     def record(self, build):
         self.seen.append(build)
+
+    def clear(self):
+        # The real Breaker has this and the fake did not, which is the drift
+        # `scripts/audit_fakes.py` exists to catch.
+        self.cleared = True
+        self.tripped = ""
 
 
 def test_a_pass_syncs_before_it_decides(monkeypatch, settings):
@@ -319,7 +434,9 @@ def board_book(monkeypatch, shown):
             reload=lambda: None, apps=None,
             gmails=SimpleNamespace(available=["g"] * 20),
             proxies=SimpleNamespace(available=["p"] * 20),
-            service=SimpleNamespace(show=lambda **kw: shown.update(kw)))))
+            service=SimpleNamespace(show=lambda **kw: shown.update(kw),
+                                    asked=lambda: [],
+                                    taken=lambda name: None))))
 
 
 def test_a_pass_says_on_the_sheet_what_it_is_doing(monkeypatch, make_settings,
