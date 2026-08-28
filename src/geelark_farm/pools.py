@@ -1252,6 +1252,81 @@ class ServiceBoard:
                         SERVICE_TAB, exc)
 
 
+#: The Service tab's colours, as the Sheets API wants them (0..1 floats).
+_SLATE = {"red": 0.20, "green": 0.25, "blue": 0.29}      # header band
+_PAPER = {"red": 0.95, "green": 0.96, "blue": 0.96}      # label column
+_RULE = {"red": 0.85, "green": 0.87, "blue": 0.88}       # gridlines
+_WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+
+
+def _dress_service(worksheet, rows: int) -> None:
+    """Make the Service tab worth looking at.
+
+    The other tabs were laid out by a person and this one is made by the tool,
+    so without this it arrives as a bare grid beside four tidy ones - and the
+    tab whose whole purpose is being read is the one nobody wants to read.
+
+    Done once, when the tab is created. `Book.open` runs on every pass, and
+    formatting on every pass would be one more API call every thirty seconds
+    to change nothing.
+
+    Cosmetic, so it is never allowed to matter: a workbook that refuses the
+    formatting still gets its dashboard.
+    """
+    last = rows + 1                        # header row plus one row per field
+    grid = {"sheetId": worksheet.id, "startRowIndex": 0, "endRowIndex": last,
+            "startColumnIndex": 0, "endColumnIndex": 2}
+    edge = {"style": "SOLID", "width": 1, "color": _RULE}
+
+    def band(row_from, row_to, col_from, col_to, fmt, fields):
+        return {"repeatCell": {
+            "range": {"sheetId": worksheet.id,
+                      "startRowIndex": row_from, "endRowIndex": row_to,
+                      "startColumnIndex": col_from, "endColumnIndex": col_to},
+            "cell": {"userEnteredFormat": fmt},
+            "fields": f"userEnteredFormat({fields})"}}
+
+    def width(column, pixels):
+        return {"updateDimensionProperties": {
+            "range": {"sheetId": worksheet.id, "dimension": "COLUMNS",
+                      "startIndex": column, "endIndex": column + 1},
+            "properties": {"pixelSize": pixels}, "fields": "pixelSize"}}
+
+    try:
+        worksheet.spreadsheet.batch_update({"requests": [
+            # The header stays put when the tab is scrolled, which matters the
+            # day somebody adds a field to the bottom of ROWS.
+            {"updateSheetProperties": {
+                "properties": {"sheetId": worksheet.id,
+                               "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount"}},
+            band(0, 1, 0, 2,
+                 {"backgroundColor": _SLATE,
+                  "verticalAlignment": "MIDDLE",
+                  "textFormat": {"bold": True, "fontSize": 11,
+                                 "foregroundColor": _WHITE}},
+                 "backgroundColor,textFormat,verticalAlignment"),
+            # The labels read as labels rather than as more values.
+            band(1, last, 0, 1,
+                 {"backgroundColor": _PAPER, "verticalAlignment": "MIDDLE",
+                  "textFormat": {"bold": True}},
+                 "backgroundColor,textFormat,verticalAlignment"),
+            # `Note` is a sentence, and a sentence that runs off the edge of
+            # the cell is the one field here nobody would be able to read.
+            band(1, last, 1, 2,
+                 {"wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"},
+                 "wrapStrategy,verticalAlignment"),
+            width(0, 190),
+            width(1, 620),
+            {"updateBorders": {"range": grid, "innerHorizontal": edge,
+                               "innerVertical": edge, "top": edge,
+                               "bottom": edge, "left": edge, "right": edge}},
+        ]})
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("could not lay out the %s tab (%s); it will still be "
+                    "written, it will just look plain", SERVICE_TAB, exc)
+
+
 def _make_checkbox(worksheet, position: int) -> None:
     """Turn a freshly added column into real checkboxes.
 
@@ -1429,8 +1504,14 @@ class Book:
                 sheet = tabs[SERVICE_TAB]
             else:
                 sheet = book.add_worksheet(
-                    SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 2, cols=2)
-                sheet.append_row(["What", "Now"])
+                    SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 1, cols=2)
+                sheet.update([["What", "Now"]], "A1:B1",
+                             value_input_option="RAW")
+                # Only for a tab this made, and only once: the four stock tabs
+                # were laid out by a person, and this one arriving as a bare
+                # grid beside them is how the tab whose whole job is being read
+                # becomes the one nobody reads.
+                _dress_service(sheet, len(ServiceBoard.ROWS))
             # The labels, written once. A pass writes only column B, so these
             # are what makes the numbers beside them mean anything - and
             # rewriting them each time would double the cost of every pass.
