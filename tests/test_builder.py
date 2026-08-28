@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -2802,3 +2803,85 @@ def test_finishing_names_a_phone_that_will_not_boot_the_way_building_does():
         source = inspect.getsource(getattr(builder, name))
         assert "phone_would_not_start" in source, name
         assert "phone_is_gone" in source, name
+
+
+# ------------------ a killed run leaving a row that says what is true of it
+def test_the_gmail_reaches_the_row_the_moment_google_is_signed_in():
+    """The column `settle_abandoned` reads to decide whether a phone a dead
+    run left behind is finishable or is not a phone at all. It was written
+    once, at the end, in a finally - so for the whole length of a build it was
+    empty, and any interruption deleted a working phone (2026-08-28, phone
+    1315: signed into Google, app installed, signed into ChatGPT, deleted by
+    the next sync two minutes after a restart)."""
+    import inspect
+
+    from geelark_farm import builder
+
+    source = inspect.getsource(builder.build_one)
+    signed_in = source.index("gmail_signed_in = True")
+    recorded = source.index("_note_on_row(book, build.serial, Gmail=")
+
+    # Beside the line that makes it true, not somewhere after the loop.
+    assert recorded - signed_in < 400
+
+
+def test_a_note_on_a_row_is_written_by_serial_not_by_row_number():
+    """`start` hands back a row number, and a sibling discarding its phone
+    deletes a row and moves every row below it up - so that number can have
+    come to mean a different phone by the time this runs."""
+    import inspect
+
+    from geelark_farm import builder
+
+    source = inspect.getsource(builder._note_on_row)
+
+    assert "book.phones.write(serial" in source
+    assert "log_row" not in source
+
+
+def test_a_row_that_cannot_be_written_does_not_end_the_run(caplog):
+    """The build is what matters; this is only how it is remembered."""
+    from geelark_farm import builder
+
+    class Refuses:
+        def write(self, serial, **fields):
+            raise RuntimeError("the sheet quota is exhausted")
+
+    builder._note_on_row(SimpleNamespace(phones=Refuses()), "1315",
+                         Gmail="a@example.com")
+
+    assert any("could not note" in r.getMessage() for r in caplog.records)
+
+
+def test_a_phone_with_no_row_left_is_said_out_loud(caplog):
+    """It has been discarded underneath this build, which is worth a line
+    rather than a silent no-op."""
+    from geelark_farm import builder
+
+    class Gone:
+        def write(self, serial, **fields):
+            return False
+
+    builder._note_on_row(SimpleNamespace(phones=Gone()), "1315",
+                         Gmail="a@example.com")
+
+    assert any("no row in the Phones tab" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_only_the_field_it_was_given_is_written():
+    """Status stays `building` - the run is not over - and Note is not
+    trampled with a sentence about a build that is still going."""
+    from geelark_farm import builder
+
+    wrote = {}
+
+    class Row:
+        def write(self, serial, **fields):
+            wrote.update(fields)
+            return True
+
+    builder._note_on_row(SimpleNamespace(phones=Row()), "1315",
+                         Gmail="a@example.com")
+
+    assert wrote == {"Gmail": "a@example.com"}

@@ -680,6 +680,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if outcome.ok:
                 build.gmail = account.email
                 gmail_signed_in = True
+                # On the row now, not at the end. This is the column that
+                # decides whether a phone a killed run left behind is
+                # finishable or gets deleted, and it is true from this moment.
+                _note_on_row(book, build.serial, Gmail=account.email)
                 break
             # Every way a Google sign-in fails is about the account or the
             # device, never the exit: a CAPTCHA is Google distrusting this
@@ -1262,6 +1266,40 @@ def _phone_note(build: Build) -> str:
                          for line in attempts_of(build))
     lead = "Also tried" if build.ok else "Tried"
     return f"{opening} {lead}: {attempts}."
+
+
+def _note_on_row(book: Book, serial: str, **fields: str) -> None:
+    """Say on a phone's row what has just become true of it.
+
+    The row was written once, at the end, in a `finally`. Everything a build
+    learned on the way - which Gmail signed in, above all - lived only in
+    memory until then, so a run that died left a row saying nothing had
+    happened.
+
+    `settle_abandoned` reads that row to decide whether a phone a dead run
+    left behind is worth finishing or is not a phone at all, and it reads the
+    Gmail column to do it. Empty for the whole length of a build meant every
+    interruption deleted a phone that was signed in and working: 1315 had
+    signed into Google, installed the app and signed into ChatGPT, and was
+    deleted by the next sync two minutes after a restart (2026-08-28).
+
+    By serial, never by the row number `start` handed back ten minutes ago: a
+    sibling discarding its phone deletes a row, and every row below it moves
+    up, so that number can have come to mean a different phone.
+
+    Never fatal. The build is what matters and this is only how it is
+    remembered - a sheet that will not take the write costs a line in the log
+    and the old behaviour, not the run.
+    """
+    what = ", ".join(fields)
+    try:
+        if not book.phones.write(serial, **fields):
+            log.warning("phone %s has no row in the Phones tab to note %s on",
+                        serial, what)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not note %s on phone %s's row (%s); a run "
+                    "interrupted from here would leave the row saying less "
+                    "than is true", what, serial, exc)
 
 
 def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:
