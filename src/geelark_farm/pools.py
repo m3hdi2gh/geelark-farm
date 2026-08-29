@@ -1488,7 +1488,10 @@ class ServiceBoard:
 
 
 #: The Service tab's colours, as the Sheets API wants them (0..1 floats).
-_SLATE = {"red": 0.20, "green": 0.25, "blue": 0.29}      # header band
+#: The same header band the four hand-made tabs already wore. This one used to
+#: be a shade darker and a point larger, which is the kind of difference nobody
+#: names and everybody sees (2026-08-29).
+_SLATE = {"red": 0.22, "green": 0.28, "blue": 0.31}      # header band
 _PAPER = {"red": 0.95, "green": 0.96, "blue": 0.96}      # label column
 _RULE = {"red": 0.85, "green": 0.87, "blue": 0.88}       # gridlines
 _WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
@@ -1538,7 +1541,7 @@ def _dress_service(worksheet, rows: int) -> None:
             band(0, 1, 0, 4,
                  {"backgroundColor": _SLATE,
                   "verticalAlignment": "MIDDLE",
-                  "textFormat": {"bold": True, "fontSize": 11,
+                  "textFormat": {"bold": True, "fontSize": 10,
                                  "foregroundColor": _WHITE}},
                  "backgroundColor,textFormat,verticalAlignment"),
             # The labels read as labels rather than as more values. Column C
