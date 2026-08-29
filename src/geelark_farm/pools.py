@@ -575,6 +575,21 @@ class GmailPool(Pool):
     #: been kept out of the pool for a reason nobody reads as "wrong column".
     RECOVERY_COLUMN = "Recovery Email"
 
+    #: What a `Seller` promises about how its accounts answer a challenge, and
+    #: the column that has to be filled for the promise to hold.
+    #:
+    #: The flow does not read this - it reads the cells, and picks whichever
+    #: option Google offers that the row can answer. This is here to catch the
+    #: row where the two disagree, before a phone is created for it. A recovery
+    #: address pasted into `2FA Secret` is refused for not being a base32 key,
+    #: which is true and unhelpful; a row that says `Egypt` with an empty
+    #: `Recovery Email` says exactly what is wrong with it.
+    #:
+    #: Only these two names carry a promise. Any other seller is unchecked, so
+    #: an older batch keeps working and a new one is not forced into a category
+    #: before anybody knows which it is.
+    SELLERS = {"usa": "2FA Secret", "egypt": RECOVERY_COLUMN}
+
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
         credentials = Credentials(
@@ -587,6 +602,14 @@ class GmailPool(Pool):
         # broken row in `Gpt Info` read identically, and the reader is left
         # to guess which tab to open.
         credentials.validate(what="gmail:")
+
+        wanted = self.SELLERS.get(values.get("Seller", "").strip().casefold())
+        if wanted and not values.get(wanted, "").strip():
+            raise AccountError(
+                f"gmail: {credentials.email}: the Seller column says "
+                f"{values.get('Seller', '').strip()!r}, and those accounts "
+                f"answer Google with the {wanted!r} column - which is empty "
+                f"on this row. Fill it, or change the Seller.")
         resource.credentials = credentials
 
     def spend(self, resource: Resource, *, serial: str = "",

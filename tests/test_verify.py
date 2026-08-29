@@ -253,9 +253,13 @@ def test_every_column_the_pools_read_is_required_or_optional_on_purpose():
     required = {c for cols in REQUIRED_COLUMNS.values() for c in cols}
 
     # Known-optional, each for a reason written where it is used.
+    # `Seller` is read but never demanded on purpose: only the two names in
+    # `GmailPool.SELLERS` promise anything about a row, and a tab without the
+    # column simply makes no promises - which is what every batch did before
+    # the promise existed.
     optional = {"Host", "Port", "Username", "Name", "Last Exit IP",
                 "Claimed", "Times Used", "Last Used",
-                "Used Date", "App", "Email code", "Phone ID"}
+                "Used Date", "App", "Email code", "Phone ID", "Seller"}
 
     assert not (read - required - optional), (
         f"the pools read {sorted(read - required - optional)} and nothing "

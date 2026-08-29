@@ -1773,3 +1773,55 @@ def test_one_write_covers_every_row_the_pool_is_holding():
 
     assert len(calls) == 1, "one batch, not one call per row"
     assert len(calls[0]) == 3
+
+
+# --------------------------------------------- what a seller promises about a row
+SELLER_HEADERS = ["Seller", "Address", "Password", "2FA Secret",
+                  "Recovery Email", "Status", "Note", "Phone Serial"]
+
+
+def seller_pool(rows) -> GmailPool:
+    pool = GmailPool(FakeWorksheet(SELLER_HEADERS, rows), SELLER_HEADERS,
+                     threading.Lock())
+    pool.load()
+    return pool
+
+
+def test_a_usa_row_without_an_authenticator_key_is_refused():
+    """The Seller says these answer with a code, and this one cannot. Caught
+    here rather than on a booted phone, which is where the cost is."""
+    pool = seller_pool([["USA", "a@b.com", "pw", "", "", "", "", ""]])
+
+    assert not pool.available
+    assert "2FA Secret" in pool._rows[0].error
+
+
+def test_an_egypt_row_without_a_recovery_address_is_refused():
+    pool = seller_pool([["Egypt", "a@b.com", "pw", "", "", "", "", ""]])
+
+    assert not pool.available
+    assert "Recovery Email" in pool._rows[0].error
+
+
+def test_each_kind_is_usable_when_it_carries_what_it_promises():
+    pool = seller_pool([
+        ["USA", "a@b.com", "pw", SECRET, "", "", "", ""],
+        ["Egypt", "c@d.com", "pw", "", "rec@e.com", "", "", ""],
+    ])
+
+    assert len(pool.available) == 2
+
+
+def test_a_seller_nobody_has_categorised_is_left_alone():
+    """Only the two named ones promise anything. An older batch keeps working
+    and a new one is not forced into a category before anybody knows which it
+    is."""
+    pool = seller_pool([["Hoavan", "a@b.com", "pw", "", "", "", "", ""]])
+
+    assert len(pool.available) == 1
+
+
+def test_the_seller_name_is_matched_however_it_is_typed():
+    pool = seller_pool([[" egypt ", "a@b.com", "pw", "", "", "", "", ""]])
+
+    assert not pool.available
