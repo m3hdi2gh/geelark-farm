@@ -359,6 +359,18 @@ class Pool:
                 log.info("claimed %s from %s%s", resource.label, self.tab,
                          f" for phone {serial}" if serial else "")
                 return resource
+        # Deliberately NOT re-read here. Looking again would find a row pasted
+        # in since the snapshot - which is the thing a service wants and a
+        # `geelark build` at a terminal never needed. But `load` replaces every
+        # Resource in `_rows`, and a run in flight is holding three of them: its
+        # Gmail, its exit and its app account. After a reload those are orphans,
+        # and every check that works by identity - the exits this build has
+        # already been refused, the accounts it set aside - silently stops
+        # matching. Three tests caught exactly that (2026-08-29).
+        #
+        # The cost of not doing it is one pass of latency: the build ends
+        # `no_usable_gpt`, becomes a warm phone, and the next pass finishes it
+        # with the account that arrived. That is a wait, not a loss.
         return None
 
     def note_serial(self, resource: Resource, serial: str) -> None:

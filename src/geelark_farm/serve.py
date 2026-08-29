@@ -750,7 +750,14 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                  finish_limit=decision.finish,
                                  workers=decision.jobs,
                                  finish_first=bool(decision.finish),
-                                 cancel=stopping):
+                                 cancel=stopping,
+                                 # This pass has already opened the book and
+                                 # synced it. Without handing both over, `run`
+                                 # opened a second Book and ran a second full
+                                 # sync - and two Books are two claim locks
+                                 # over two snapshots, which is the one thing
+                                 # stopping a Gmail reaching two phones.
+                                 book=book, ledger=ledger):
             fuse.record(build)
     return decision
 

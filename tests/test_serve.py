@@ -1336,3 +1336,32 @@ def test_zero_in_the_env_means_no_cap(make_settings, tmp_path):
     settings = make_settings(state_dir=tmp_path, max_concurrent_phones=0)
 
     assert (settings.max_concurrent_phones or None) is None
+
+
+# ------------------------------------------- one book, one ledger, one sync
+def test_a_pass_syncs_once_not_twice(monkeypatch, make_settings, tmp_path):
+    """`serve.once` opened a Book and synced; then `builder.run` opened a
+    SECOND Book and ran a SECOND full sync of the same workbook. Every pass
+    paid for two, and the decision `_show` had just published was computed
+    against the state before the second one mutated it (2026-08-29)."""
+    from geelark_farm import builder
+
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=1, free=10).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.synced == 1
+
+
+def test_the_batch_is_handed_the_pass_own_book_and_ledger(
+        monkeypatch, make_settings, tmp_path):
+    """Two Books are two `Pool._claim_lock`s over two snapshots, and that lock
+    is the only thing stopping one Gmail reaching two phones."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=1, free=10).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.asked.get("book") is not None
+    assert "ledger" in recorder.asked

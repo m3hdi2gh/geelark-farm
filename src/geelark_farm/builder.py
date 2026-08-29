@@ -2348,6 +2348,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
               reporter: Reporter | None,
               on_ready: Callable[[str], None] | None,
               cancel: threading.Event | None,
+              ledger: Ledger | None = None,
               codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Run a mixed list of build and finish jobs, up to `workers` at a time.
 
@@ -2356,7 +2357,11 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     the first steps differ.
     """
     settings.ensure_dirs()
-    ledger = Ledger.load(settings.state_dir)
+    # The caller's, when it has one. A Ledger rewrites the whole file from its
+    # own dict, so two of them in a process erase each other's phones - and a
+    # phone missing from the ledger is one `reap` calls an orphan and stops
+    # (2026-08-29).
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
     phones.prune_ledger(client, ledger)
     restore_logging = install_build_logging()
 
@@ -2604,6 +2609,8 @@ def run(client: Client, settings: Settings, *, count: int,
         cancel: threading.Event | None = None,
         finish_first: bool = True,
         finish_limit: int | None = None,
+        book: Book | None = None,
+        ledger: Ledger | None = None,
         codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Produce `count` ready phones, finishing before building.
 
@@ -2623,9 +2630,21 @@ def run(client: Client, settings: Settings, *, count: int,
     never reaches the worker running this - so without a signal to pass in, the
     interrupt left the build running as an orphan (2026-08-11).
     """
-    book = Book.open(settings)
-    if not dry_run:
-        sync_sheet(client, book, Ledger.load(settings.state_dir),
+    # A caller that has already opened the book and synced hands both in.
+    # Without that this opened a SECOND Book and ran a SECOND full sync of the
+    # same workbook every pass - `serve.once` had just done exactly that, so
+    # every pass paid for two, and the decision `_show` had published was
+    # computed against the state before the second one mutated it.
+    #
+    # Two Books is not merely wasteful, either. `Pool._claim_lock` is per
+    # instance, so two of them are two different locks over two snapshots -
+    # and that lock is the only thing stopping one Gmail reaching two phones
+    # (2026-08-29).
+    synced = book is not None
+    book = book if book is not None else Book.open(settings)
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
+    if not dry_run and not synced:
+        sync_sheet(client, book, ledger,
                    artifact_dir=settings.artifact_dir,
                    stale_claim_seconds=settings.stale_claim_seconds)
 
@@ -2692,7 +2711,7 @@ def run(client: Client, settings: Settings, *, count: int,
     if not jobs:
         return []
     return _run_jobs(client, settings, book, jobs, workers=workers,
-                     reporter=reporter, on_ready=on_ready, cancel=cancel,
+                     reporter=reporter, on_ready=on_ready, cancel=cancel, ledger=ledger,
                      codes_source=codes_source)
 
 
@@ -2700,14 +2719,18 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
                workers: int | None = None, dry_run: bool = False,
                reporter: Reporter | None = None,
                cancel: threading.Event | None = None,
+               book: Book | None = None,
+               ledger: Ledger | None = None,
                codes_source: codes.CodeSource | None = None) -> list[Build]:
     """Complete every phone that is one step short, and build nothing."""
-    book = Book.open(settings)
-    if not dry_run:
+    synced = book is not None
+    book = book if book is not None else Book.open(settings)
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
+    if not dry_run and not synced:
         # A finish reuses the phone's own exit and only takes a free one if
         # it has to swap, so the pool check is worth its seconds here too -
         # that is the run that discovers a swap has nowhere to go.
-        sync_sheet(client, book, Ledger.load(settings.state_dir),
+        sync_sheet(client, book, ledger,
                    artifact_dir=settings.artifact_dir,
                    stale_claim_seconds=settings.stale_claim_seconds)
     pending, gone = _unfinished(client, book)
@@ -2733,7 +2756,7 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
     jobs = [{"kind": "finish", "phone": p} for p in pending]
     return _run_jobs(client, settings, book, jobs, workers=workers,
                      reporter=reporter, on_ready=None, cancel=cancel,
-                     codes_source=codes_source)
+                     ledger=ledger, codes_source=codes_source)
 
 
 def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:
