@@ -21,7 +21,7 @@ import json
 import logging
 
 from .config import ENV_FILE, Settings
-from .gsheet import SCOPES
+from .gsheet import SCOPES, with_timeout
 
 log = logging.getLogger(__name__)
 
@@ -158,8 +158,9 @@ def _spreadsheet(settings: Settings, email: str, checks: list[Check]):
     import gspread
     from google.oauth2.service_account import Credentials as Key
     try:
-        client = gspread.authorize(Key.from_service_account_file(
-            str(settings.service_account_json), scopes=SCOPES))
+        client = with_timeout(gspread.authorize(
+            Key.from_service_account_file(
+                str(settings.service_account_json), scopes=SCOPES)))
         book = client.open_by_key(settings.sheet_id)
     except Exception as exc:                                  # noqa: BLE001
         # By far the most common cause, and the one the error does not say:

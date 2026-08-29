@@ -20,6 +20,27 @@ log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+#: How long any one Sheets call may take: (connect, read).
+#:
+#: gspread's own default is `None`, which is no timeout at all - every call to
+#: Google could wait for ever, and one did. A build hit a fatal screen at
+#: 06:24:30, wrote its artifact, and then went silent inside the sheet write
+#: that follows: no CPU, no log line, the pass frozen at twelve minutes and
+#: counting (2026-08-29). The GeeLark client had been given a deadline that
+#: morning for the same failure; this is the other half of it.
+#:
+#: A read timeout is per socket read, not per call, so this bounds a stall and
+#: not a slow-but-moving response. That is the right shape here: the caller is
+#: a loop that will try again in thirty seconds, and every write it makes is
+#: safe to repeat.
+SHEET_TIMEOUT = (15.0, 60.0)
+
+
+def with_timeout(client):
+    """Give a gspread client a deadline. Returns it, for chaining."""
+    client.set_timeout(SHEET_TIMEOUT)
+    return client
+
 
 #: gspread's own API error, re-exported so callers catch a
 #: quota or transport failure without importing gspread. A 429

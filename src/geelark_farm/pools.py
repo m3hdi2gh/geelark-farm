@@ -46,7 +46,8 @@ from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
 from .config import Settings, machine
-from .gsheet import SCOPES, SheetError, a1_column, batch_write, read_values
+from .gsheet import (SCOPES, SheetError, a1_column, batch_write,
+                     read_values, with_timeout)
 from .proxy import Proxy, ProxyError
 from .proxy import parse as parse_proxy
 
@@ -1639,9 +1640,9 @@ class Book:
         except ImportError as exc:                                # pragma: no cover
             raise SheetError(f"missing dependency: {exc}") from exc
 
-        client = gspread.authorize(
+        client = with_timeout(gspread.authorize(
             Key.from_service_account_file(str(settings.service_account_json),
-                                          scopes=SCOPES))
+                                          scopes=SCOPES)))
         try:
             book = client.open_by_key(settings.sheet_id)
         except Exception as exc:                                  # gspread errors vary

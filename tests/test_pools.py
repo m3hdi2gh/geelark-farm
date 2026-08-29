@@ -1936,3 +1936,36 @@ def test_a_taken_phone_is_not_counted_as_stock():
 
     assert log.counts()["app_only"] == 0
     assert log.unfinished() == []
+
+
+# ------------------------------------------ every Sheets call has a deadline
+def test_the_sheets_client_is_given_a_timeout():
+    """gspread's default is `None` - no timeout at all. A build hit a fatal
+    screen, wrote its artifact, and went silent inside the sheet write that
+    follows: no CPU, no log line, the pass frozen at twelve minutes. The
+    GeeLark client got a deadline that morning for the same failure; this is
+    the other half of it (2026-08-29)."""
+    import inspect
+
+    from geelark_farm import pools, verify
+    from geelark_farm.gsheet import SHEET_TIMEOUT, with_timeout
+
+    connect, read = SHEET_TIMEOUT
+    assert connect > 0 and read > 0
+
+    seen = []
+
+    class Fake:
+        def set_timeout(self, value):
+            seen.append(value)
+
+    assert isinstance(with_timeout(Fake()), Fake)
+    assert seen == [SHEET_TIMEOUT]
+
+    # Both places that build a client have to go through it, or one path is
+    # bounded and the other is not.
+    for module in (pools, verify):
+        source = inspect.getsource(module)
+        for line in source.splitlines():
+            if "gspread.authorize(" in line:
+                assert "with_timeout(" in line, (module.__name__, line.strip())
