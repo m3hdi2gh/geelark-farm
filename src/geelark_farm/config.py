@@ -203,6 +203,15 @@ class Settings:
     #: How many phones `serve` keeps built to one step short of ready, so a
     #: delivery is one login away rather than a whole build.
     warm_stock: int
+    #: Whether a pass hands its work to a worker pool instead of waiting.
+    #:
+    #: Off by default, and deliberately. A pass that waits is what every
+    #: invariant in this loop was written against - the reap that is safe
+    #: because "nothing of ours is running", the breaker that counts passes,
+    #: the watchdog that times one. Concurrency is the right shape and it
+    #: changes all of those, so it is a thing somebody turns on and can turn
+    #: off again in one line (2026-08-29).
+    serve_concurrent: bool
     #: `text` or `json`. The file only; the console is always prose.
     log_format: str
     #: How long `serve` waits between passes.
@@ -269,6 +278,8 @@ class Settings:
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1,
                                        minimum=0),
             warm_stock=_int("WARM_STOCK", 10),
+            serve_concurrent=_str("SERVE_CONCURRENT", "0").strip()
+                              in ("1", "true", "yes", "on"),
             log_format=_str("LOG_FORMAT", "text").strip().lower(),
             serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),
             build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),

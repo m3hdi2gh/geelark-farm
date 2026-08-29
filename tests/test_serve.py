@@ -1365,3 +1365,140 @@ def test_the_batch_is_handed_the_pass_own_book_and_ledger(
 
     assert recorder.asked.get("book") is not None
     assert "ledger" in recorder.asked
+
+
+# ----------------------------------------- not ordering the same work twice
+def test_a_build_already_under_way_is_not_ordered_again():
+    """A phone under construction has no row until its device exists, and
+    reads `building` after - so `unfinished` counts it as nothing and the
+    shortfall it was started to fill is still a shortfall. A scheduler that
+    does not wait would order it again every thirty seconds (2026-08-29)."""
+    short_by_three = dict(warm=2, target=5, free_slots=20, cap=None,
+                          gmails=50, exits=50)
+
+    assert decide(**numbers(**short_by_three)).build == 3
+    assert decide(**numbers(**short_by_three, coming=3)).build == 0
+    assert decide(**numbers(**short_by_three, coming=1)).build == 2
+
+
+def test_more_in_flight_than_the_shortfall_builds_nothing():
+    """Two passes could both have ordered before either landed."""
+    decision = decide(**numbers(warm=2, target=5, free_slots=20, cap=None,
+                                gmails=50, exits=50, coming=9))
+
+    assert decision.build == 0
+    assert decision.idle
+
+
+def test_what_is_coming_does_not_change_what_can_be_finished():
+    """Finishing is bounded by the phones that exist now, not by the ones
+    being made - an account cannot go onto a phone that is still booting."""
+    decision = decide(**numbers(warm=3, target=5, accounts_waiting=3,
+                                free_slots=20, cap=None, gmails=50, exits=50,
+                                coming=2))
+
+    assert decision.finish == 3
+
+
+# ---------------------------------------- handing the work to a worker pool
+class Pool:
+    """A pool that records what it was given and runs it when told."""
+
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn):
+        self.submitted.append(fn)
+
+
+def test_a_pass_with_a_pool_hands_the_work_over_and_returns(
+        monkeypatch, make_settings, tmp_path):
+    """The whole point: the next pass syncs, counts and writes the dashboard
+    thirty seconds later rather than when a ten-minute build happens to end."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=0, free=10).install(monkeypatch)
+    pool, flight = Pool(), serve_mod.InFlight()
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
+                   flight=flight, pool=pool)
+
+    assert len(pool.submitted) == 1
+    assert recorder.built == 0, "nothing ran inside the pass"
+    assert flight.busy > 0, "and the next pass already knows about it"
+
+
+def test_the_work_is_counted_before_it_is_submitted():
+    """The pool may not have started a thread yet when the next pass looks."""
+    flight = serve_mod.InFlight()
+    flight.took_on(builds=3, finishes=2)
+
+    assert flight.counts() == (3, 2)
+    assert flight.busy == 5
+
+    flight.done_with(builds=3, finishes=2)
+
+    assert flight.busy == 0
+
+
+def test_a_finished_batch_never_counts_below_zero():
+    """Two `done_with` calls for one batch would otherwise make the loop think
+    it has spare capacity it does not."""
+    flight = serve_mod.InFlight()
+    flight.took_on(builds=1, finishes=0)
+    flight.done_with(builds=1, finishes=0)
+    flight.done_with(builds=1, finishes=0)
+
+    assert flight.counts() == (0, 0)
+
+
+def test_without_a_pool_the_work_still_runs_in_the_pass(
+        monkeypatch, make_settings, tmp_path):
+    """Which is how this has always run, and what `--once` and every other
+    test are written against."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=0, free=10).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.built == 1
+
+
+def test_the_reap_refuses_while_batches_are_out(monkeypatch, make_settings,
+                                                 tmp_path):
+    """`reapable` stops a phone that is "created but never claimed", which is
+    exactly the window another batch sits in between `phones.create` and
+    `ledger.claim`. The rule the control was written under - "the top of the
+    pass is the one moment nothing of ours is running" - holds only while a
+    pass waits for its work (2026-08-29)."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=3, free=10).install(monkeypatch)
+    board = Board("Stop unaccounted phones")
+    _with_board(monkeypatch, board, None)
+    reaped = []
+    monkeypatch.setattr(serve_mod.phones, "reap",
+                        lambda c, l: reaped.append(1) or 0)
+    flight = serve_mod.InFlight()
+    flight.took_on(builds=2, finishes=0)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
+                   flight=flight, pool=Pool())
+
+    assert reaped == [], "it must not run while work is out"
+    assert board.unticked == [], "and the tick has to survive to a quiet pass"
+
+
+def test_the_reap_runs_when_nothing_is_out(monkeypatch, make_settings,
+                                           tmp_path):
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=3, free=10).install(monkeypatch)
+    board = Board("Stop unaccounted phones")
+    _with_board(monkeypatch, board, None)
+    reaped = []
+    monkeypatch.setattr(serve_mod.phones, "reap",
+                        lambda c, l: reaped.append(1) or 0)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
+                   flight=serve_mod.InFlight(), pool=Pool())
+
+    assert reaped == [1]
+    assert board.unticked == ["Stop unaccounted phones"]

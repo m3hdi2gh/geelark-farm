@@ -86,6 +86,7 @@ The rest have defaults worth knowing about:
 | setting | default | effect |
 |---|---|---|
 | `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once — and, under `serve`, the most jobs one pass may take on, finishing counted against it too. **`0` means no ceiling of its own**, which is what a running service usually wants: the pass is already bounded by the accounts waiting, the warm phones there are, the shortfall, the free slots and the depth of the Gmail and Proxy tabs. More at once never exceeds `API_REQUESTS_PER_MINUTE` — it queues behind it, and a phone waiting its turn is a phone billing by the minute |
+| `SERVE_CONCURRENT` | `0` | whether a pass hands its work to a worker pool instead of waiting. Off, a pass is as long as its longest job and the sheet does not move meanwhile; on, the sheet keeps moving and several batches can be in flight — which every invariant in the loop was written without, so turn it on deliberately |
 | `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
 | `STALE_CLAIM_SECONDS` | `300` | how long a claimed row may go unrefreshed before the sync frees it — five missed beats; raise it again the moment anything that does not beat touches the sheet |
 | `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |

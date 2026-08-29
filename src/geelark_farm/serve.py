@@ -42,6 +42,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from . import phones
@@ -52,6 +53,11 @@ from .ledger import Ledger
 from .pools import Book, Pool
 
 log = logging.getLogger(__name__)
+
+#: Guards `Breaker.record`, which is read-modify-write on a file with no
+#: lock of its own. Safe while one thread reported after a batch returned;
+#: not once workers report whenever they finish.
+_FUSE_LOCK = threading.Lock()
 
 #: What the breaker's count is kept in, under `state/`.
 BREAKER_FILE = "breaker.json"
@@ -94,6 +100,48 @@ PROBE_EVERY_SECONDS = 3600
 #: Five minutes is seven times under the limit and still fresh enough: a slot
 #: frees when a phone is deleted, which is a delivery, not a second.
 PLAN_EVERY_SECONDS = 300
+
+
+class InFlight:
+    """The jobs the workers are on, so the scheduler can subtract them.
+
+    Without this, a pass that does not wait would order the same work again
+    every thirty seconds. `PhoneLog.unfinished` skips rows whose Status is
+    `building`, and a build has no row at all until its phone exists - so a
+    phone being made counts as *nothing* in `warm`, and the shortfall it was
+    started to fill is still a shortfall to the next pass. The same for a
+    finish: the account it will claim is claimed minutes in, so
+    `accounts_waiting` still counts it.
+
+    Held here rather than read off the sheet because the sheet cannot know:
+    the row is written after the phone is created, and that is a minute into
+    the job.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.builds = 0
+        self.finishes = 0
+        self.started: dict[str, float] = {}
+
+    def took_on(self, *, builds: int, finishes: int) -> None:
+        with self._lock:
+            self.builds += builds
+            self.finishes += finishes
+
+    def done_with(self, *, builds: int, finishes: int) -> None:
+        with self._lock:
+            self.builds = max(0, self.builds - builds)
+            self.finishes = max(0, self.finishes - finishes)
+
+    def counts(self) -> tuple[int, int]:
+        with self._lock:
+            return self.builds, self.finishes
+
+    @property
+    def busy(self) -> int:
+        with self._lock:
+            return self.builds + self.finishes
 
 
 @dataclass
@@ -195,7 +243,8 @@ def _to_finish(accounts_waiting: int, warm: int, cap: int | None) -> int:
 
 def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
            accounts_waiting: int, cap: int | None = 1, paused: bool = False,
-           gmails: int | None = None, exits: int | None = None) -> Decision:
+           gmails: int | None = None, exits: int | None = None,
+           coming: int = 0) -> Decision:
     """How much to do this pass, from the numbers and nothing else.
 
     `tripped` is the breaker's reason, empty when it is closed. `free_slots`
@@ -239,7 +288,13 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
     room = None if cap is None else cap - to_finish
     # A phone that gets finished stops being warm, so the hole to fill is
     # measured after this pass's finishes, not before them.
-    short = target - (warm - to_finish)
+    #
+    # `coming` is what is already being built and has not landed yet. A phone
+    # under construction has no row until its device exists, and reads
+    # `building` after - so `unfinished` counts it as nothing and the shortfall
+    # it was started to fill is still a shortfall. A scheduler that does not
+    # wait would order it again, and again, every thirty seconds (2026-08-29).
+    short = target - (warm - to_finish) - coming
     if (room is not None and room < 1) or short < 1:
         return Decision(finish=to_finish)
 
@@ -597,8 +652,8 @@ class Watchdog:
         self._stop.set()
 
 
-def _controls(client: Client, book: Book, ledger,
-              fuse: Breaker) -> frozenset[str]:
+def _controls(client: Client, book: Book, ledger, fuse: Breaker,
+              flight: InFlight | None = None) -> frozenset[str]:
     """Carry out whatever was ticked on the Service tab, and say what was.
 
     Read and acted on at the very top of a pass, which is the one moment
@@ -628,6 +683,23 @@ def _controls(client: Client, book: Book, ledger,
                     "or finished until `Stop everything` is unticked")
         return asked
 
+    # Whether the reap can run at all, decided before anything is unticked.
+    #
+    # The rule this control was written under - "the top of the pass is the
+    # one moment nothing of ours is running" - holds only while a pass waits
+    # for its work. With a worker pool it does not, and `reapable` stops a
+    # phone that is "created but never claimed", which is exactly the window
+    # another batch sits in between `phones.create` and `ledger.claim`.
+    reaping = "Stop unaccounted phones" in asked
+    if reaping and flight is not None and flight.busy:
+        log.warning("not stopping unaccounted phones while %d job(s) are in "
+                    "flight; the tick stays on and a quiet pass will do it",
+                    flight.busy)
+        reaping = False
+        # ...and it is left ticked, which is the whole point of deciding this
+        # before the unticking below rather than after it.
+        asked = asked - {"Stop unaccounted phones"}
+
     for name in asked:
         if name not in ServiceBoard.STANDING:
             book.service.taken(name)
@@ -636,7 +708,7 @@ def _controls(client: Client, book: Book, ledger,
         fuse.clear()
         log.warning("the breaker was cleared from the sheet")
 
-    if "Stop unaccounted phones" in asked:
+    if reaping:
         try:
             stopped = phones.reap(client, ledger)
             log.warning("stopped %d phone(s) nothing was accountable for, "
@@ -653,8 +725,18 @@ def _controls(client: Client, book: Book, ledger,
 
 def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
          probe_proxies: bool = True,
-         stopping: threading.Event | None = None) -> Decision:
-    """One pass: bring the sheet up to date, then act on what it says."""
+         stopping: threading.Event | None = None,
+         flight: InFlight | None = None,
+         pool=None) -> Decision:
+    """One pass: bring the sheet up to date, then act on what it says.
+
+    `flight` and `pool` are what make a pass stop waiting. Given both, the
+    work is handed to the pool and the pass returns - so the next one syncs,
+    counts and writes the dashboard thirty seconds later instead of when a
+    ten-minute build happens to finish. Given neither, the work runs here and
+    the pass is as long as its longest job, which is how this has always
+    behaved and is still what `--once` and every test want.
+    """
     from . import builder
 
     book = Book.open(settings)
@@ -662,7 +744,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
-    asked = _controls(client, book, ledger, fuse)
+    asked = _controls(client, book, ledger, fuse, flight)
     if "Stop everything" in asked:
         # Nothing below this line runs: not the sync, which is what carries out
         # the State column and frees claims; not the counting, which reads
@@ -690,10 +772,18 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     warm, waiting, gmails, exits, stock = _look(client, settings, book)
     tripped = fuse.reason()
+    # What the workers are already on. Nothing on the sheet says it: a build
+    # has no row until its phone exists, and an account is claimed minutes
+    # into a finish. Subtracted here, or ordered a second time thirty seconds
+    # from now (2026-08-29).
+    coming, claimed = flight.counts() if flight is not None else (0, 0)
+    waiting = max(0, waiting - claimed)
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
     # there are, the shortfall, the free slots and the pool depths.
     cap = settings.max_concurrent_phones or None
+    if cap is not None:
+        cap = max(0, cap - (coming + claimed))
     # Asked only when the answer changes what happens, which is a pass with
     # room to build. A full stock or an open breaker settle it without looking.
     free = (slots.look(client, time.monotonic())
@@ -702,9 +792,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                            accounts_waiting=waiting, cap=cap, paused=paused)
             else None)
     decision = decide(tripped=tripped, warm=warm,
-                      target=settings.warm_stock, free_slots=free,
+                      target=settings.warm_stock,
+                      free_slots=(free if free is None
+                                  else max(0, free - coming)),
                       accounts_waiting=waiting, cap=cap, paused=paused,
-                      gmails=gmails, exits=exits)
+                      gmails=gmails, exits=exits, coming=coming)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
@@ -745,20 +837,43 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         # back to `max_concurrent_phones`, and a pass of ten jobs would run
         # them one after another inside one pass - seventy minutes instead of
         # fifteen, which is the opposite of the point.
-        for build in builder.run(client, settings,
-                                 count=decision.jobs,
-                                 finish_limit=decision.finish,
-                                 workers=decision.jobs,
-                                 finish_first=bool(decision.finish),
-                                 cancel=stopping,
-                                 # This pass has already opened the book and
-                                 # synced it. Without handing both over, `run`
-                                 # opened a second Book and ran a second full
-                                 # sync - and two Books are two claim locks
-                                 # over two snapshots, which is the one thing
-                                 # stopping a Gmail reaching two phones.
-                                 book=book, ledger=ledger):
-            fuse.record(build)
+        def batch():
+            return builder.run(client, settings,
+                               count=decision.jobs,
+                               finish_limit=decision.finish,
+                               workers=decision.jobs,
+                               finish_first=bool(decision.finish),
+                               cancel=stopping,
+                               # This pass has already opened the book and
+                               # synced it. Without handing both over, `run`
+                               # opened a second Book and ran a second full
+                               # sync - and two Books are two claim locks over
+                               # two snapshots, which is the one thing stopping
+                               # a Gmail reaching two phones.
+                               book=book, ledger=ledger)
+
+        def work():
+            """Run the batch and tell the fuse what came of it."""
+            try:
+                for build in batch():
+                    with _FUSE_LOCK:
+                        # `Breaker.record` is read-modify-write on a file with
+                        # no lock of its own. It was safe while one thread
+                        # reported after the batch returned; with workers
+                        # finishing whenever they finish, it is not.
+                        fuse.record(build)
+            finally:
+                if flight is not None:
+                    flight.done_with(builds=decision.build,
+                                     finishes=decision.finish)
+
+        if pool is not None and flight is not None:
+            # Counted before it is submitted, so the very next pass already
+            # knows about it - the pool may not have started a thread yet.
+            flight.took_on(builds=decision.build, finishes=decision.finish)
+            pool.submit(work)
+        else:
+            work()
     return decision
 
 
@@ -782,6 +897,16 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # This is what turns "unhealthy" into "restarted".
     guard = Watchdog(stale_after(settings))
     guard.start()
+    # Off unless somebody turned it on. With a pool, a pass hands its work
+    # over and returns, so the sheet keeps moving through a ten-minute build;
+    # without one, the pass is as long as its longest job, which is how this
+    # has always run.
+    flight = InFlight() if settings.serve_concurrent else None
+    pool = (ThreadPoolExecutor(max_workers=4, thread_name_prefix="batch")
+            if settings.serve_concurrent else None)
+    if pool is not None:
+        log.warning("passes will not wait for their work: the sheet keeps "
+                    "moving, and several batches can be in flight at once")
 
     log.info("serving: %d warm phones, a pass every %ds",
              settings.warm_stock, settings.serve_interval_seconds)
@@ -796,7 +921,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         guard.began()
         try:
             once(client, settings, fuse, slots, probe_proxies=probe,
-                 stopping=stop)
+                 stopping=stop, flight=flight, pool=pool)
         except KeyboardInterrupt:
             raise
         except Exception:                                     # noqa: BLE001
@@ -820,5 +945,10 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
             break
         sleep(settings.serve_interval_seconds)
     guard.stop()
+    if pool is not None:
+        # The batches keep their own phones' cleanup in their `finally`; this
+        # only waits for them to reach it.
+        log.info("waiting for %d job(s) still in flight", flight.busy)
+        pool.shutdown(wait=True)
     log.info("stopped after %d pass(es)", done)
     return 0

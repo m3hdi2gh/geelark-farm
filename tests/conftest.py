@@ -50,6 +50,9 @@ def _settings(**overrides) -> Settings:
         # Prose, which is what the file has always been and what a test that
         # reads a log line expects. The JSON path has its own tests.
         log_format="text",
+        # Off, as it is on a server that has not been told otherwise: a pass
+        # that waits is what every test of the loop is written against.
+        serve_concurrent=False,
     )
     base.update(overrides)
     return Settings(**base)
