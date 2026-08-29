@@ -1320,10 +1320,10 @@ def test_the_three_readers_agree_about_what_a_row_is():
 
     source = inspect.getsource(PhoneLog)
 
-    # One definition and five users: rows, unfinished, marked, counts,
-    # count_try. The number is the point - a reader that walked the tab with
-    # its own copy of the rule is exactly what this catches.
-    assert source.count("_typed_rows(") == 6
+    # One definition and six users: rows, unfinished, marked, counts,
+    # count_try, state_of. The number is the point - a reader that walked the
+    # tab with its own copy of the rule is exactly what this catches.
+    assert source.count("_typed_rows(") == 7
     assert "if not any(line)" not in source
 
 

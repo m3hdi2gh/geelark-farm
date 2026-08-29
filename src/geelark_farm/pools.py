@@ -1145,6 +1145,27 @@ class PhoneLog:
         found.sort(key=lambda row: row["app"] != self.INSTALLED)
         return found
 
+    def state_of(self, serial: str) -> str:
+        """What a person has written in this phone's State cell, right now.
+
+        Read live rather than from anything the run remembers. The point of it
+        is to notice a word typed *since* the run started: `unfinished` keeps a
+        marked row out of the queue, but a build already under way has no way
+        to learn it has been marked, and goes on spending minutes on a phone
+        the next sync is going to delete (2026-08-29).
+
+        Never raises. A build must not die because this read failed - the worst
+        case is that it carries on, which is what it did before this existed.
+        """
+        wanted = str(serial).strip()
+        try:
+            for _offset, cells in self._typed_rows("the Phones tab"):
+                if (cells.get("Serial") or "").strip() == wanted:
+                    return (cells.get("State") or "").strip().casefold()
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not read the State of %s (%s)", wanted, exc)
+        return ""
+
     @staticmethod
     def tries(cells: dict) -> int:
         """How many finishes this row has been through. Unreadable counts as

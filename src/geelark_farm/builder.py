@@ -432,6 +432,15 @@ def _sign_into_app(session: _Session) -> Build | None:
     s = session
     while not s.app_signed_in:
         s.check_cancelled()
+        # Before another account is spent on it. This loop is where a finish
+        # spends most of its minutes, so it is where a row marked mid-run has
+        # to be noticed - and an account claimed for a phone about to be
+        # deleted is the one cost worth a read of the tab to avoid.
+        marked = _given_up_on(s.book, s.build.serial)
+        if marked:
+            return s.finish("given_up_on",
+                            f"somebody wrote {marked!r} in its State while "
+                            f"this was running, so it was left alone")
         if s.remaining() <= ATTEMPT_SECONDS:
             return s.finish("budget_exhausted",
                             "installed, but no budget left for the app login")
@@ -746,6 +755,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
         # ----------------------------------------------------- the install
         check_cancelled()
+        marked = _given_up_on(book, build.serial)
+        if marked:
+            return finish("given_up_on",
+                          f"somebody wrote {marked!r} in its State while this "
+                          f"was running, so it was left alone")
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
         installed = play_install.install(
@@ -1313,6 +1327,25 @@ def attempts_of(build: Build) -> list[str]:
     """Every credential this build gave up on, one readable line each."""
     return [f"{email} - {failures.verdict(reason, service).seen}"
             for email, reason, service in build.tried]
+
+
+def _given_up_on(book: Book, serial: str) -> str:
+    """The word somebody has written in this phone's State, if any.
+
+    Checked at the few places a build is about to spend real time, because a
+    row can be marked while the run that owns it is minutes into its work.
+    `unfinished` keeps a marked row out of the queue, but the build already
+    under way never learned - so a phone marked `failed` at 20:06 had the app
+    installed on it until 20:36, and the sync then deleted it (2026-08-29).
+
+    `taken` is here too: somebody has claimed the phone by hand and this run
+    should let go of it rather than drive it.
+    """
+    if not serial:
+        return ""
+    state = book.phones.state_of(serial)
+    return state if state in (book.phones.DONE, book.phones.FAILED,
+                              book.phones.TAKEN) else ""
 
 
 def _phone_status(build: Build) -> str:

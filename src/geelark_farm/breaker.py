@@ -55,7 +55,8 @@ WORKED = frozenset({"no_usable_gpt"})
 #: created, nothing was spent, and a person using their own stock is not
 #: evidence that this machine has stopped working (2026-08-29).
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
-                              "no_capacity", "in_use_by_hand"})
+                              "no_capacity", "in_use_by_hand",
+                              "given_up_on"})
 
 
 def counts_against(build) -> bool:

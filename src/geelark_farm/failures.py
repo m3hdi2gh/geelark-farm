@@ -165,6 +165,16 @@ VERDICTS: dict[str, Verdict] = {
         "Somebody is using this phone by hand, so the run left it alone. If "
         "that is right, put `taken` in its State column and it will not be "
         "offered again. If nobody is on it, stop it and it will be picked up."),
+    # Somebody wrote `done`, `failed` or `taken` in the phone's State while a
+    # run was minutes into working on it. `unfinished` keeps a marked row out
+    # of the queue, but the run already under way never learned - so a phone
+    # marked failed at 20:06 had the app installed on it until 20:36, and the
+    # sync then deleted it (2026-08-29). Nobody's fault and nothing spent: the
+    # run let go the moment it noticed.
+    "given_up_on": Verdict(
+        NOBODY, "its State was written while the run was working on it",
+        "Somebody marked this phone while a run had it. The run stopped and "
+        "left it alone; the next sync carries out whatever was written."),
     "password_changed": Verdict(
         CREDENTIAL, "Google said the password was an old one",
         "Google accepted the address and called the password old. "

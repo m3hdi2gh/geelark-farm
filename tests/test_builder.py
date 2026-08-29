@@ -3212,3 +3212,54 @@ def test_all_four_words_are_offered_in_the_dropdown():
                        PhoneLog.INCOMPLETE}
     for build in (a_build(), a_build(installed=True), a_build(ok=True)):
         assert builder._phone_status(build) in offered
+
+
+# ------------------------- letting go of a phone somebody has marked mid-run
+class Marked:
+    """A Phones tab whose State cell answers whatever the test says."""
+
+    DONE, FAILED, TAKEN, UNUSED = "done", "failed", "taken", "unused"
+
+    def __init__(self, state):
+        self.state = state
+        self.asked = 0
+
+    def state_of(self, serial):
+        self.asked += 1
+        return self.state
+
+
+@pytest.mark.parametrize("word", ["failed", "done", "taken"])
+def test_a_build_lets_go_of_a_phone_marked_while_it_ran(word):
+    """`unfinished` keeps a marked row out of the queue, but a run already
+    under way never learned. A phone marked failed at 20:06 had the app
+    installed on it until 20:36, and the sync then deleted it (2026-08-29)."""
+    book = type("B", (), {"phones": Marked(word)})()
+
+    assert builder._given_up_on(book, "1399") == word
+
+
+def test_an_unmarked_phone_is_carried_on_with():
+    for word in ("", "unused"):
+        book = type("B", (), {"phones": Marked(word)})()
+        assert builder._given_up_on(book, "1399") == ""
+
+
+def test_a_read_that_fails_does_not_stop_the_build():
+    """The worst case is carrying on, which is what it did before this."""
+    class Broken:
+        DONE, FAILED, TAKEN = "done", "failed", "taken"
+
+        def state_of(self, serial):
+            return ""          # PhoneLog.state_of swallows its own errors
+
+    book = type("B", (), {"phones": Broken()})()
+
+    assert builder._given_up_on(book, "1399") == ""
+
+
+def test_giving_up_is_nobodys_fault_and_the_breaker_ignores_it():
+    from geelark_farm import breaker, failures
+
+    assert failures.verdict("given_up_on").blame == failures.NOBODY
+    assert "given_up_on" in breaker.NOTHING_HAPPENED
