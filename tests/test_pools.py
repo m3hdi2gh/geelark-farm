@@ -1790,7 +1790,7 @@ def seller_pool(rows) -> GmailPool:
     return pool
 
 
-def test_a_usa_row_without_an_authenticator_key_is_refused():
+def test_a_usa_row_carrying_a_recovery_address_is_refused():
     """The Seller says these answer with a code, and this one cannot. Caught
     here rather than on a booted phone, which is where the cost is."""
     pool = seller_pool([["USA", "a@b.com", "pw", "rec@e.com", "", "", ""]])
@@ -1799,7 +1799,7 @@ def test_a_usa_row_without_an_authenticator_key_is_refused():
     assert "authenticator key" in pool._rows[0].error
 
 
-def test_an_egypt_row_without_a_recovery_address_is_refused():
+def test_an_egypt_row_carrying_an_authenticator_key_is_refused():
     pool = seller_pool([["Egypt", "a@b.com", "pw", SECRET, "", "", ""]])
 
     assert not pool.available
@@ -2039,3 +2039,26 @@ def test_counting_a_phone_that_is_not_there_is_not_an_error():
     log = tries_tab([a_try_row("1508")])
 
     assert log.count_try("9999") == 0
+
+
+def test_an_account_with_no_second_factor_at_all_is_usable():
+    """A third kind nothing had accounted for: sold with neither an
+    authenticator nor a recovery address, signing in on the password alone.
+    The flow has always handled it - `validate` guards its secret check with
+    `if self.totp_secret` and `has_authenticator` is simply False - but a
+    Seller rule written that morning demanded a value and refused two such
+    rows (2026-08-29)."""
+    for seller in ("USA", "Egypt", "Hoavan", ""):
+        pool = seller_pool([[seller, "a@b.com", "pw", "", "", "", ""]])
+        assert len(pool.available) == 1, seller
+        assert pool.available[0].credentials.totp_secret == ""
+        assert pool.available[0].credentials.recovery_email == ""
+
+
+def test_an_empty_cell_is_a_fact_and_a_wrong_one_is_a_mistake():
+    """The distinction the rule turns on."""
+    empty = seller_pool([["USA", "a@b.com", "pw", "", "", "", ""]])
+    wrong = seller_pool([["USA", "c@d.com", "pw", "rec@e.com", "", "", ""]])
+
+    assert len(empty.available) == 1
+    assert not wrong.available

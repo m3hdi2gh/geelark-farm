@@ -647,9 +647,20 @@ class GmailPool(Pool):
         credentials.validate(what="gmail:")
 
         promised = self.SELLERS.get(values.get("Seller", "").strip().casefold())
-        if promised:
-            carries = ("a recovery address" if recovery else
-                       "an authenticator key" if secret else "nothing")
+        # Only when the cell holds the *wrong kind*, never when it is empty.
+        #
+        # Requiring a value refused a whole third kind that nothing had
+        # accounted for: accounts sold with no second factor at all, which
+        # sign in on password alone and which this code has always handled -
+        # `validate` guards its secret check with `if self.totp_secret` and
+        # `has_authenticator` is simply False. Two such rows sat unusable
+        # under a rule written that morning (2026-08-29).
+        #
+        # An empty cell is a fact about the account. A cell holding the other
+        # seller's kind of value is a mistake, and that is what this catches.
+        if promised and secret:
+            carries = ("a recovery address" if recovery
+                       else "an authenticator key")
             if carries != promised:
                 raise AccountError(
                     f"gmail: {credentials.email}: the Seller column says "

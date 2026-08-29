@@ -122,9 +122,15 @@ give on its own. The recovery one is the simpler of them: Google's "Confirm your
 recovery email" screen asks you to type the whole address, so the cell *is* the
 answer and no inbox is read.
 
+An account may also have **neither** — no key and no recovery address, signing
+in on the password alone. Leave `Secret` empty for those. Google lets some
+accounts through without a second factor, and if it does challenge one there is
+nothing here that can answer, which the row then says.
+
 `Seller` is yours to use, except that `USA` and `Egypt` promise which kind their
-rows carry. A row that says one and holds the other is refused before a phone is
-made for it.
+rows carry. A row that says one and holds the *other kind* is refused before a
+phone is made for it — an empty cell is not: that is a fact about the account,
+not a mistake.
 
 `Claimed` is a timestamp, and it is what decides when a row stuck on `in_use`
 comes back. A run refreshes it every minute for as long as it holds the row, so
