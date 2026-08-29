@@ -635,6 +635,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # them back, and every phone had the same two values anyway.
         log_row = book.phones.start(Serial=build.serial,
                                     Proxy=build.proxy_name or build.proxy)
+        # The Gmail was claimed inside `_starting`, before this phone existed -
+        # it has to be, or a phone can be created with no address to sign in.
+        # So the serial goes on now, the moment there is one. Without it the
+        # row reads `in_use` with nothing saying which phone, and a tab with
+        # several at once can be counted but not read (2026-08-29).
+        book.gmails.note_serial(gmail_row, build.serial)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         # By serial, not by batch position: `build3` today and `build3`
@@ -659,8 +665,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                               "ran out of budget before a Gmail signed in")
             if gmail_row is None:
                 # The first was claimed before the phone existed; this is the
-                # next one, after that address was refused on this device.
-                gmail_row = book.gmails.claim()
+                # next one, after that address was refused on this device - so
+                # this one can say which phone it is on from the start.
+                gmail_row = book.gmails.claim(build.serial)
                 if gmail_row is None:
                     return finish("no_usable_gmail",
                                   "the Gmails tab had no other address to try "

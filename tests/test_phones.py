@@ -941,3 +941,59 @@ def test_one_attempt_means_one_ask_and_no_retrying(monkeypatch):
         phones.start(SimpleNamespace(data=answer), "P1", attempts=1)
 
     assert len(asks) == 1
+
+
+# --------------------------------- a capacity refusal, whatever type it arrives as
+class Refusing:
+    """GeeLark answering `/v1/phone/start` with a refusal."""
+
+    def __init__(self, code, times=99):
+        self.code = code
+        self.times = times
+        self.asked = 0
+
+    def data(self, path, payload=None, **kw):
+        self.asked += 1
+        if self.asked > self.times:
+            return {}
+        return {"failDetails": [{"code": self.code,
+                                 "msg": "High demand for Android 15 cloud "
+                                        "phones. Please try again later."}]}
+
+
+@pytest.mark.parametrize("code", [43043, "43043"])
+def test_a_capacity_refusal_is_named_however_the_code_is_typed(code, monkeypatch):
+    """`43043 != "43043"` sent it down the branch for everything else: raised
+    as a bare PhoneError on the first answer instead of being retried, and
+    written into the sheet as `error` - which counts against the breaker -
+    rather than `no_capacity`, which does not (2026-08-29)."""
+    monkeypatch.setattr(phones.time, "sleep", lambda s: None)
+    client = Refusing(code)
+
+    with pytest.raises(phones.PhoneCapacityError):
+        phones.start(client, "P1", attempts=2)
+
+    assert client.asked == 2, "and it was retried rather than given up on"
+
+
+def test_any_other_refusal_is_still_raised_at_once(monkeypatch):
+    """Retrying a phone that has expired only takes longer to say so."""
+    monkeypatch.setattr(phones.time, "sleep", lambda s: None)
+    client = Refusing("40004")
+
+    with pytest.raises(phones.PhoneError) as raised:
+        phones.start(client, "P1", attempts=3)
+
+    assert not isinstance(raised.value, phones.PhoneCapacityError)
+    assert client.asked == 1
+
+
+def test_a_capacity_refusal_that_clears_is_not_an_error_at_all(monkeypatch):
+    """The refusal means no phone was started, so asking twice cannot start
+    two - which is why it is safe to retry."""
+    monkeypatch.setattr(phones.time, "sleep", lambda s: None)
+    client = Refusing("43043", times=1)
+
+    phones.start(client, "P1", attempts=3)
+
+    assert client.asked == 2

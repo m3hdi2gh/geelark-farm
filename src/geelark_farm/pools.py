@@ -360,6 +360,17 @@ class Pool:
                 return resource
         return None
 
+    def note_serial(self, resource: Resource, serial: str) -> None:
+        """Say which phone this claimed row is for, once there is one.
+
+        Some rows are claimed before the phone exists - a Gmail has to be,
+        because a phone created with no address to sign in is a phone paid for
+        and wasted. This is how such a row stops reading `in_use` with nothing
+        beside it.
+        """
+        if serial and self.serial_column:
+            self._set(resource, {self.serial_column: serial})
+
     def _claim_fields(self, resource: Resource,
                       serial: str = "") -> dict[str, str]:
         """What claiming writes. The status, and whatever else a pool needs

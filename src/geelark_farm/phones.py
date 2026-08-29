@@ -341,7 +341,15 @@ def start(client: Client, phone_id: str, *,
         if refused is None:
             break
         said = f"start failed [{refused.get('code')}] {refused.get('msg')}"
-        if refused.get("code") != CAPACITY_REFUSED:
+        # Compared as text, because the envelope is not consistent about it.
+        # `43043 != "43043"` sent a capacity refusal down the branch for
+        # everything else, so it was raised as a bare PhoneError on the first
+        # answer instead of being retried - and arrived in the sheet as
+        # `error`, which counts against the breaker, rather than `no_capacity`,
+        # which is in `NOTHING_HAPPENED` and does not. Five busy afternoons in
+        # a row would have stopped the service over a shortage of machines at
+        # somebody else's datacentre (2026-08-29).
+        if str(refused.get("code")) != str(CAPACITY_REFUSED):
             raise PhoneError(said)
         if attempt == attempts:
             raise PhoneCapacityError(said)
