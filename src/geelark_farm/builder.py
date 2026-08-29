@@ -166,7 +166,19 @@ ATTEMPT_SECONDS = 420
 # so in the note; the Status column answers the only question asked of it at a
 # glance - can I use this phone.
 READY = "ready"
-INCOMPLETE = "incomplete"
+#: A phone with Google signed in and the app installed, and no app account.
+#:
+#: Named for what it has, not for what it lacks. `incomplete` named the
+#: absence, and the absence is the whole product: this is the phone somebody
+#: takes to sign a customer's own account into by hand. Read cold in a tab,
+#: "incomplete" says "broken", and a reader who believes it either throws away
+#: a finished thing or waits for it to finish something it never will
+#: (2026-08-29).
+#:
+#: History rows written before this keep the old word. They are a record of
+#: what was said at the time and are not rewritten; `unfinished()` reads the
+#: columns rather than the status, so old rows go on working either way.
+APP_ONLY = "app_only"
 
 # What becomes of a resource a build was holding. It was a boolean - spent or
 # not - and a challenged app account is neither: it was not used, and putting
@@ -1411,7 +1423,7 @@ def _record(book: Book, build: Build) -> None:
 
     try:
         wrote = book.phones.write(
-            build.serial, Status=READY if build.ok else INCOMPLETE,
+            build.serial, Status=READY if build.ok else APP_ONLY,
             Proxy=build.proxy_name or build.proxy,
             Gmail=said(build.gmail), Note=note,
             **{"GPT Account": said(build.app_account),
@@ -1427,7 +1439,7 @@ def _record(book: Book, build: Build) -> None:
     # it every answer to "what did we build on Tuesday". History keeps the
     # outcome, appended, whichever machine produced it.
     book.record_history(
-        Serial=build.serial, Event=READY if build.ok else INCOMPLETE,
+        Serial=build.serial, Event=READY if build.ok else APP_ONLY,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
         Gmail=build.gmail, Note=note, Steps=build.steps,
         **{"GPT Account": build.app_account,
@@ -1447,7 +1459,7 @@ def possible_statuses() -> list[str]:
     """
     from .pools import PhoneLog
 
-    return [PhoneLog.BUILDING, READY, INCOMPLETE]
+    return [PhoneLog.BUILDING, READY, APP_ONLY]
 
 
 def _this_module():
@@ -1839,13 +1851,13 @@ def settle_abandoned(client: Client, book: Book,
             note = ("Stopped short: the run holding this phone ended before "
                     "it could say why. Google is signed in, so finishing it "
                     "costs only an app account.")
-            book.phones.finish(row["sheet_row"], Status=INCOMPLETE, Note=note)
+            book.phones.finish(row["sheet_row"], Status=APP_ONLY, Note=note)
             outcome["abandoned"].append(str(serial))
             # This wrote nothing to History at all, so a phone rescued from a
             # killed run left no trace of having been rescued - the tab said
             # `incomplete` and the record of how it got there was missing
             # (2026-08-20).
-            book.record_history(Event=INCOMPLETE, Note=note, **recorded)
+            book.record_history(Event=APP_ONLY, Note=note, **recorded)
             continue
 
         # Nothing was ever signed into it - the same rule build_one applies.

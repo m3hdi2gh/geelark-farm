@@ -180,7 +180,7 @@ Written by the tool, one row per phone, except for `State` which is yours.
 | Status | GPT Account | what it is |
 |---|---|---|
 | `ready` | an address | signed into an account from the pool — usable as it is |
-| `incomplete` | empty | Google signed in and the app installed, **no account** — for whoever signs a customer's own account in by hand |
+| `app_only` | empty | Google signed in and the app installed, **no account** — for whoever signs a customer's own account in by hand |
 
 The second is not a failure. It is what a run produces when the `Gpt Info` tab
 is empty, and it is one step from the first — which is why the service keeps
@@ -258,8 +258,15 @@ next one:
 | you write | what happens |
 |---|---|
 | `unused` | the default. Nothing. |
+| `taken` | it is out with somebody. Off the shelf — never finished, never deleted, and not counted as stock, so a replacement gets built. |
 | `done` | finished with it. The phone is deleted, the row dropped, its app account marked `delivered`. |
 | `failed` | something is wrong with it. The phone is deleted, the row dropped, its app account **freed** for another phone. |
+
+`taken` is the only one of these that does not end in a deleted phone, and it
+is the one to write **before** using an `app_only` phone by hand. Without it
+the loop still counts that phone as stock, and the next account pasted into
+`Gpt Info` can send a run at it — which would clear the app to sign its own
+account in, taking the session you put there with it.
 
 Either way the Gmail is retired as `used`: it signed into that phone, and that
 is the credit it had to spend.

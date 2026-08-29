@@ -874,7 +874,7 @@ def phone_log(rows, headers=None):
 
 
 def phone_row(serial, *, gmail="g@example.com", app="", account="",
-              status="incomplete", headers=None):
+              status="app_only", headers=None):
     headers = headers or PHONE_APP_HEADERS
     line = [""] * len(headers)
     for name, value in (("Serial", serial), ("Gmail", gmail), ("App", app),
@@ -1876,7 +1876,7 @@ def phones_tab(rows):
     return PhoneLog(FakeWorksheet(head, rows), head, threading.Lock())
 
 
-def a_phone(serial, state="", status="incomplete", gpt=""):
+def a_phone(serial, state="", status="app_only", gpt=""):
     return ["2026-08-29", serial, state, "SX1", "a@b.com", gpt, status, ""]
 
 

@@ -574,7 +574,7 @@ def test_finish_limit_says_how_many_of_the_jobs_are_finishes(device, settings,
     surplus one boots a real phone, finds no account, ends `no_usable_gpt` and
     puts it back, while that very reason clears the breaker (2026-08-28)."""
     waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
-                "gmail": "a@example.com", "proxy": "", "status": "incomplete"}
+                "gmail": "a@example.com", "proxy": "", "status": "app_only"}
                for r in (2, 3, 4, 5)]
     jobs = _job_world(monkeypatch, waiting)
 
@@ -587,7 +587,7 @@ def test_a_mixed_batch_runs_its_jobs_at_once(device, settings, monkeypatch):
     """The thread pool has run twenty phones ten at a time in production and
     has never had a test. It is what every parallel pass now goes through."""
     waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
-                "gmail": "a@example.com", "proxy": "", "status": "incomplete"}
+                "gmail": "a@example.com", "proxy": "", "status": "app_only"}
                for r in (2, 3)]
     jobs = _job_world(monkeypatch, waiting)
 
@@ -750,7 +750,7 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
     written = book.phones._ws.rows[0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
     # the tab answers "can I use this phone", in one of three words
-    assert written[PHONE_HEADERS.index("Status")] == "incomplete"
+    assert written[PHONE_HEADERS.index("Status")] == "app_only"
     # and the note says why in words. The token is in the Status column's
     # vocabulary and in the terminal summary; this cell is prose.
     note = written[PHONE_HEADERS.index("Note")]
@@ -762,7 +762,7 @@ class FakePhoneLog:
     """A Phones tab that answers `marked` and records what was deleted."""
 
     DONE, FAILED, UNUSED = "done", "failed", "unused"
-    BUILDING, READY, INCOMPLETE = "building", "ready", "incomplete"
+    BUILDING, READY, APP_ONLY = "building", "ready", "app_only"
 
     def __init__(self, rows):
         self._rows = rows
@@ -976,7 +976,7 @@ def test_a_finish_says_on_the_row_that_the_phone_is_in_hand(device, settings,
     meant to be able to put the two together (2026-08-28).
     """
     book = make_book(apps=1)
-    book.phones.start(Serial="691", Status="incomplete")
+    book.phones.start(Serial="691", Status="app_only")
 
     seen = []
     monkeypatch.setattr(
@@ -989,7 +989,7 @@ def test_a_finish_says_on_the_row_that_the_phone_is_in_hand(device, settings,
     builder.finish_one(
         None, settings, book, FakeLedger(),
         {"sheet_row": 2, "phone_id": "P1", "serial": "691",
-         "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
+         "gmail": "g@example.com", "proxy": "", "status": "app_only"}, 1)
 
     assert seen == [book.phones.BUILDING], (
         "the row must say the phone is in hand while it is")
@@ -1013,7 +1013,7 @@ def test_finishing_gives_back_the_accounts_it_set_aside(device, settings,
     build = builder.finish_one(
         None, settings, book, FakeLedger(),
         {"sheet_row": 3, "phone_id": "P1", "serial": "691",
-         "gmail": "g@example.com", "proxy": "", "status": "incomplete"}, 1)
+         "gmail": "g@example.com", "proxy": "", "status": "app_only"}, 1)
 
     assert not build.ok and build.status == "no_usable_gpt"
     # both carry what they were asked for, and neither is left claimed, which
@@ -1385,7 +1385,7 @@ def test_a_row_left_building_with_a_gmail_becomes_finishable(world):
     outcome = builder.settle_abandoned(None, book, FakeLedger())
 
     assert outcome["abandoned"] == ["730"]
-    assert written[4]["Status"] == "incomplete"
+    assert written[4]["Status"] == "app_only"
     assert "Google is signed in" in written[4]["Note"]
     assert world["deleted"] == []          # it is worth finishing, not deleting
 
@@ -1486,7 +1486,7 @@ def test_a_running_phone_with_a_gmail_is_stopped_and_made_finishable(
     outcome = builder.settle_abandoned(None, book, FakeLedger())
 
     assert outcome["abandoned"] == ["729"]
-    assert written[4]["Status"] == "incomplete"
+    assert written[4]["Status"] == "app_only"
     assert world["deleted"] == []          # worth finishing, not deleting
 
 
@@ -2098,7 +2098,7 @@ def test_a_rescued_phone_is_recorded_like_any_other(world, monkeypatch):
     assert len(history) == 1
     written = history[0]
     assert written["Serial"] == "730"
-    assert written["Event"] == "incomplete"
+    assert written["Event"] == "app_only"
     assert written["Proxy"] == "SX7"           # the row knew it all along
     assert written["Gmail"] == "g@example.com"
     assert "Google is signed in" in written["Note"]
@@ -3094,7 +3094,7 @@ class Running:
 
 def a_warm_phone():
     return {"phone_id": "P1", "serial": "1401", "gmail": "a@b.com",
-            "proxy": "", "status": "incomplete"}
+            "proxy": "", "status": "app_only"}
 
 
 @pytest.mark.parametrize("state", [0, 1])          # RUNNING, STARTING

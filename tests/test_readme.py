@@ -60,7 +60,7 @@ def test_every_path_it_links_to_exists():
 def test_the_status_words_it_documents_are_the_ones_the_pools_write():
     """The words are the whole contract with the operator - they read them in
     the tab and type them back into it."""
-    from geelark_farm.pools import AppPool, GmailPool, ProxyPool
+    from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
 
     for pool in (GmailPool, ProxyPool, AppPool):
         for word in (pool.claimed_status, pool.spent_status,
@@ -91,7 +91,8 @@ def test_the_state_column_it_documents_is_the_one_the_tool_reads():
 
     documented = first_column(section("### State: an instruction back"))
 
-    assert documented == {PhoneLog.DONE, PhoneLog.FAILED, PhoneLog.UNUSED}
+    assert documented == {PhoneLog.DONE, PhoneLog.FAILED,
+                          PhoneLog.TAKEN, PhoneLog.UNUSED}
 
 
 def test_the_blames_it_documents_are_the_ones_the_table_hands_out():
@@ -108,13 +109,20 @@ def test_the_failures_it_names_as_examples_are_real_reasons():
     """An example that no longer exists sends someone searching the sheet for
     a status nothing writes."""
     from geelark_farm import failures
-    from geelark_farm.pools import AppPool, GmailPool, ProxyPool
+    from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
 
     # A snake_case word in backticks is one of two things, and both come from
     # the code: a failure reason or a pool's status word.
     statuses = {word for pool in (GmailPool, ProxyPool, AppPool)
                 for word in (pool.claimed_status, pool.spent_status,
                              pool.retired_status)}
+    # The Phones tab's own words too - its Status and the State a person
+    # writes. They were invisible to this check while every one of them was a
+    # single word: the pattern needs an underscore, and `ready`, `building`,
+    # `done`, `failed` and the old `incomplete` had none. `app_only` does.
+    statuses |= {PhoneLog.BUILDING, PhoneLog.READY, PhoneLog.APP_ONLY,
+                 PhoneLog.DONE, PhoneLog.FAILED, PhoneLog.TAKEN,
+                 PhoneLog.UNUSED}
     known = set(failures.VERDICTS) | set(failures.SITUATIONS) | statuses
     named = set(re.findall(r"`([a-z]+(?:_[a-z]+)+)`", README))
     named -= {"service_account", "geelark_farm"}    # paths, not reasons

@@ -1013,7 +1013,7 @@ class PhoneLog:
     #: reader acts on differently - see builder.possible_statuses.
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
-    INCOMPLETE = "incomplete"  # anything else; the Note says what happened
+    APP_ONLY = "app_only"     # anything else; the Note says what happened
 
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet

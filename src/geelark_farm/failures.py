@@ -470,7 +470,7 @@ SUCCESSES = frozenset({"signed_in", "already_signed_in", "installed",
 #: What the Phones tab's Status column holds, which is a different vocabulary
 #: from a reason: `ready` is not something that went wrong and wants no
 #: verdict, and the other two are written beside a note that carries the one.
-BUILD_STATES = frozenset({"ready", "incomplete", "failed"})
+BUILD_STATES = frozenset({"ready", "app_only", "failed"})
 
 
 #: The router's own reason, one per screen: `stuck_on_totp_entry`. Built from
