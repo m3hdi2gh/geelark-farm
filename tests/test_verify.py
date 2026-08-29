@@ -235,8 +235,11 @@ def test_the_column_a_missing_secret_hides_behind_is_required():
     `no_authenticator` - blaming the row for a missing heading (2026-08-23)."""
     from geelark_farm.verify import REQUIRED_COLUMNS
 
-    for tab in ("Gmails", "Gpt Info"):
-        assert "2FA Secret" in REQUIRED_COLUMNS[tab]
+    # One column each, and they are named differently: the Gmails tab's
+    # `Secret` holds either an authenticator key or a recovery address, and
+    # `Gpt Info` has only ever held the first.
+    assert "Secret" in REQUIRED_COLUMNS["Gmails"]
+    assert "2FA Secret" in REQUIRED_COLUMNS["Gpt Info"]
 
 
 def test_every_column_the_pools_read_is_required_or_optional_on_purpose():

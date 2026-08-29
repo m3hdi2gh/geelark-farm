@@ -107,17 +107,23 @@ you can rearrange them, and adding your own is safe.
 
 | you fill in | the tool writes |
 |---|---|
-| `Address`, `Password`, `2FA Secret`, `Recovery Email` | `Used Date`, `Phone Serial`, `Status`, `Note`, `Claimed` |
+| `Address`, `Password`, `Secret` | `Used Date`, `Phone Serial`, `Status`, `Note`, `Claimed` |
 
 `Purchase Date` and `Seller` are ignored by the tool and yours to use.
 
-An account needs **either** a `2FA Secret` **or** a `Recovery Email`, not both.
+`Secret` holds whatever the account answers a Google challenge with, and there
+are two kinds. An authenticator key is base32 — `A`–`Z` and `2`–`7`. A recovery
+address is an address. They cannot be mistaken for each other, so one column
+carries both and the cell says which it is.
+
 Google challenges most new sign-ins, and those are the two answers this tool can
-give on its own: an authenticator code, or the recovery address Google already
-holds — its "Confirm your recovery email" screen asks you to type the whole
-address, so the cell is the answer and no inbox is read. Put the recovery
-address in its own column; pasted into `2FA Secret` it is refused, correctly but
-confusingly, for not being a base32 key.
+give on its own. The recovery one is the simpler of them: Google's "Confirm your
+recovery email" screen asks you to type the whole address, so the cell *is* the
+answer and no inbox is read.
+
+`Seller` is yours to use, except that `USA` and `Egypt` promise which kind their
+rows carry. A row that says one and holds the other is refused before a phone is
+made for it.
 
 `Claimed` is a timestamp, and it is what decides when a row stuck on `in_use`
 comes back. A run refreshes it every minute for as long as it holds the row, so

@@ -26,7 +26,7 @@ from geelark_farm.pools import (
 # The tabs as they are. Columns are located by header name, so these are the
 # real shapes rather than a superset - a test that passes against columns the
 # sheet does not have proves less than it looks like it does.
-GMAIL_HEADERS = ["Purchase Date", "Seller", "Address", "Password", "2FA Secret",
+GMAIL_HEADERS = ["Purchase Date", "Seller", "Address", "Password", "Secret",
                  "Used Date", "Phone Serial", "Status", "Note"]
 PROXY_HEADERS = ["Name", "Proxy String", "Expires", "Last Exit IP",
                  "Used By", "Status", "Note"]
@@ -194,7 +194,7 @@ def test_a_gmail_with_no_2fa_is_usable():
     """Accounts bought without 2FA sign in on the shorter path; an empty secret
     is a fact about the account, not a broken row."""
     row = gmail_row("a@example.com")
-    row[GMAIL_HEADERS.index("2FA Secret")] = ""
+    row[GMAIL_HEADERS.index("Secret")] = ""
     pool = gmail_pool([row])
     claimed = pool.claim()
     assert claimed is not None
@@ -1776,8 +1776,8 @@ def test_one_write_covers_every_row_the_pool_is_holding():
 
 
 # --------------------------------------------- what a seller promises about a row
-SELLER_HEADERS = ["Seller", "Address", "Password", "2FA Secret",
-                  "Recovery Email", "Status", "Note", "Phone Serial"]
+SELLER_HEADERS = ["Seller", "Address", "Password", "Secret",
+                  "Status", "Note", "Phone Serial"]
 
 
 def seller_pool(rows) -> GmailPool:
@@ -1790,23 +1790,23 @@ def seller_pool(rows) -> GmailPool:
 def test_a_usa_row_without_an_authenticator_key_is_refused():
     """The Seller says these answer with a code, and this one cannot. Caught
     here rather than on a booted phone, which is where the cost is."""
-    pool = seller_pool([["USA", "a@b.com", "pw", "", "", "", "", ""]])
+    pool = seller_pool([["USA", "a@b.com", "pw", "rec@e.com", "", "", ""]])
 
     assert not pool.available
-    assert "2FA Secret" in pool._rows[0].error
+    assert "authenticator key" in pool._rows[0].error
 
 
 def test_an_egypt_row_without_a_recovery_address_is_refused():
-    pool = seller_pool([["Egypt", "a@b.com", "pw", "", "", "", "", ""]])
+    pool = seller_pool([["Egypt", "a@b.com", "pw", SECRET, "", "", ""]])
 
     assert not pool.available
-    assert "Recovery Email" in pool._rows[0].error
+    assert "recovery address" in pool._rows[0].error
 
 
 def test_each_kind_is_usable_when_it_carries_what_it_promises():
     pool = seller_pool([
-        ["USA", "a@b.com", "pw", SECRET, "", "", "", ""],
-        ["Egypt", "c@d.com", "pw", "", "rec@e.com", "", "", ""],
+        ["USA", "a@b.com", "pw", SECRET, "", "", ""],
+        ["Egypt", "c@d.com", "pw", "rec@e.com", "", "", ""],
     ])
 
     assert len(pool.available) == 2
@@ -1816,12 +1816,12 @@ def test_a_seller_nobody_has_categorised_is_left_alone():
     """Only the two named ones promise anything. An older batch keeps working
     and a new one is not forced into a category before anybody knows which it
     is."""
-    pool = seller_pool([["Hoavan", "a@b.com", "pw", "", "", "", "", ""]])
+    pool = seller_pool([["Hoavan", "a@b.com", "pw", "", "", "", ""]])
 
     assert len(pool.available) == 1
 
 
 def test_the_seller_name_is_matched_however_it_is_typed():
-    pool = seller_pool([[" egypt ", "a@b.com", "pw", "", "", "", "", ""]])
+    pool = seller_pool([[" egypt ", "a@b.com", "pw", SECRET, "", "", ""]])
 
     assert not pool.available

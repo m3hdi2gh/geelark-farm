@@ -568,12 +568,15 @@ class GmailPool(Pool):
     # it: the Used Date beside it says when.
     retired_status = "used"
 
-    #: Where the address for Google's "confirm your recovery email" challenge
-    #: lives. Its own column rather than a second use of `2FA Secret`: an
-    #: address pasted there is refused outright, because base32 keys have no
-    #: `@` in them - which is the check working, but only after the row has
-    #: been kept out of the pool for a reason nobody reads as "wrong column".
-    RECOVERY_COLUMN = "Recovery Email"
+    #: One column for whatever the account answers a Google challenge with.
+    #:
+    #: Two were a column each for the two kinds, which meant every row left one
+    #: of them blank and a reader had to look at both to learn anything. They
+    #: merge because the values cannot be mistaken for each other: an
+    #: authenticator key is base32 - A-Z and 2-7, nothing else - and an address
+    #: always carries an `@`. So the cell says which it is, and nothing has to
+    #: be declared beside it.
+    SECRET_COLUMN = "Secret"
 
     #: What a `Seller` promises about how its accounts answer a challenge, and
     #: the column that has to be filled for the promise to hold.
@@ -588,28 +591,35 @@ class GmailPool(Pool):
     #: Only these two names carry a promise. Any other seller is unchecked, so
     #: an older batch keeps working and a new one is not forced into a category
     #: before anybody knows which it is.
-    SELLERS = {"usa": "2FA Secret", "egypt": RECOVERY_COLUMN}
+    SELLERS = {"usa": "an authenticator key", "egypt": "a recovery address"}
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
+        secret = values.get(self.SECRET_COLUMN, "").strip()
+        # `@` is the whole test, and it is decisive: base32 has no `@` in it,
+        # and no address is without one.
+        recovery = secret if "@" in secret else ""
         credentials = Credentials(
             email=values.get("Address", ""),
             password=values.get("Password", ""),
-            totp_secret=normalize_totp_secret(values.get("2FA Secret", "")),
-            recovery_email=values.get(self.RECOVERY_COLUMN, ""),
+            totp_secret="" if recovery else normalize_totp_secret(secret),
+            recovery_email=recovery,
         )
         # Named, like the app account's. Without it a broken row here and a
         # broken row in `Gpt Info` read identically, and the reader is left
         # to guess which tab to open.
         credentials.validate(what="gmail:")
 
-        wanted = self.SELLERS.get(values.get("Seller", "").strip().casefold())
-        if wanted and not values.get(wanted, "").strip():
-            raise AccountError(
-                f"gmail: {credentials.email}: the Seller column says "
-                f"{values.get('Seller', '').strip()!r}, and those accounts "
-                f"answer Google with the {wanted!r} column - which is empty "
-                f"on this row. Fill it, or change the Seller.")
+        promised = self.SELLERS.get(values.get("Seller", "").strip().casefold())
+        if promised:
+            carries = ("a recovery address" if recovery else
+                       "an authenticator key" if secret else "nothing")
+            if carries != promised:
+                raise AccountError(
+                    f"gmail: {credentials.email}: the Seller column says "
+                    f"{values.get('Seller', '').strip()!r}, and those accounts "
+                    f"answer Google with {promised} - but the Secret column "
+                    f"carries {carries}. Fix the cell, or change the Seller.")
         resource.credentials = credentials
 
     def spend(self, resource: Resource, *, serial: str = "",
