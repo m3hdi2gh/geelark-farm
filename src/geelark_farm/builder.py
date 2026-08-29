@@ -916,6 +916,34 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     try:
         if on_phone:
             on_phone(phone_id)
+
+        # A phone that is already running, with nothing in the ledger holding
+        # it, is one somebody started by hand and is using right now. Do not
+        # drive it.
+        #
+        # This is the second net under the `taken` word, and it catches the
+        # case that word is forgotten in. What it prevents is severe: the app
+        # would be showing a session this run did not create, `act_reset_app`
+        # reads a chat screen with no `Log in` control as the app's logged-out
+        # mode, and settles the ambiguity with `pm clear` - throwing away
+        # somebody's signed-in account to make room for one of ours. The flow's
+        # own docstring names that cost; it was written about a previous run's
+        # session, not about a person's (2026-08-29).
+        held = ledger.get(phone_id)
+        if held is None or not held.is_claimed or held.is_stale:
+            try:
+                live = phones.status(client, phone_id)
+            except Exception as exc:                              # noqa: BLE001
+                # Not knowing is not a reason to refuse - the boot below asks
+                # again anyway, and a finish that cannot start is its own
+                # named failure.
+                log.debug("could not read the state of %s (%s)", phone_id, exc)
+            else:
+                if live in (phones.RUNNING, phones.STARTING):
+                    return finish("in_use_by_hand",
+                                  "the phone is already running and nothing "
+                                  "here started it, so somebody is using it")
+
         ledger.claim(phone_id, label=f"finish {build.serial}")
         # Say on the sheet that this phone is in hand, the moment it is. A
         # finish leaves the row reading `incomplete` for its whole length -
@@ -1284,6 +1312,16 @@ def _phone_note(build: Build) -> str:
     """
     opening = (f"Ready - {outcome_of(build)}." if build.ok
                else f"Stopped short: {outcome_of(build)}.")
+    # `no_usable_gpt` is not a fault, it is a finished product of the other
+    # kind: Google is signed in, the app is on it, and only an account is
+    # missing. Read cold, "Stopped short" says the opposite - and this phone is
+    # exactly the one somebody takes to sign a customer in by hand. The
+    # taxonomy already computes the reassuring half and it was being thrown
+    # away here (2026-08-29).
+    if not build.ok and build.status == "no_usable_gpt":
+        opening += (" The phone itself is finished - signed into Google with "
+                    "the app installed - and is ready to take as it is if "
+                    "somebody is signing in themselves.")
     if build.shared_exit:
         # Said on the phone's own row, because whoever reads it later is
         # deciding whether these accounts can be treated as unrelated.
@@ -1548,12 +1586,24 @@ def apply_phone_states(client: Client, book: Book,
                           serial, exc)
                 continue
         finished_rows.append(row["sheet_row"])
+        # Three notes, not two. The pair branched on `failed` alone and said
+        # "its app account was delivered with it" whichever way - including for
+        # a phone that never had one, which is a whole product: the app is
+        # installed and somebody signs a customer's own account in by hand.
+        # History is the only durable record once the row is deleted, so it was
+        # the one place that claimed a farm account went out with every such
+        # hand-over (2026-08-29).
+        if failed:
+            note = ("Marked failed and deleted; its app account went back to "
+                    "the pool for another phone.")
+        elif row["app_account"]:
+            note = "Marked done and deleted; its app account was delivered with it."
+        else:
+            note = ("Marked done and deleted. No app account was ever on it - "
+                    "the app was installed and whoever took it signs in "
+                    "themselves.")
         book.record_history(
-            Serial=serial, Event=row["state"], Gmail=row["gmail"],
-            Note=("Marked done and deleted; its app account was delivered "
-                  "with it." if not failed else
-                  "Marked failed and deleted; its app account went back to "
-                  "the pool for another phone."),
+            Serial=serial, Event=row["state"], Gmail=row["gmail"], Note=note,
             **{"GPT Account": row["app_account"]})
 
     # Only now, and bottom up: the row numbers were read before any moved.

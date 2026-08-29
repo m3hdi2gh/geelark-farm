@@ -156,6 +156,15 @@ VERDICTS: dict[str, Verdict] = {
         "holds. That address is the answer - there is no code to fetch - and "
         "this row does not carry one. Put it in the Recovery Email column of "
         "the Gmails tab and blank this status."),
+    # A phone that is already running with nothing in the ledger holding it is
+    # one somebody started by hand and is working in. Nothing is wrong with it
+    # and nothing was spent - the run refused before it claimed anything - so
+    # this is `nobody`'s fault and the breaker ignores it (2026-08-29).
+    "in_use_by_hand": Verdict(
+        NOBODY, "the phone is already running and nothing here started it",
+        "Somebody is using this phone by hand, so the run left it alone. If "
+        "that is right, put `taken` in its State column and it will not be "
+        "offered again. If nobody is on it, stop it and it will be picked up."),
     "password_changed": Verdict(
         CREDENTIAL, "Google said the password was an old one",
         "Google accepted the address and called the password old. "

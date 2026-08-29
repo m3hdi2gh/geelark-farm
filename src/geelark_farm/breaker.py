@@ -50,8 +50,12 @@ WORKED = frozenset({"no_usable_gpt"})
 #: cost a second and nothing else, and each one counted. Five in a row - which
 #: is an ordinary afternoon - would have opened the breaker over a shortage at
 #: somebody else's datacentre (2026-08-28).
+#: `in_use_by_hand` is here for the same reason: the run refused before it
+#: claimed anything, because somebody was working in the phone. Nothing was
+#: created, nothing was spent, and a person using their own stock is not
+#: evidence that this machine has stopped working (2026-08-29).
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
-                              "no_capacity"})
+                              "no_capacity", "in_use_by_hand"})
 
 
 def counts_against(build) -> bool:

@@ -273,7 +273,7 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
 
 
 def _look(client: Client, settings: Settings,
-          book: Book) -> tuple[int, int, int, int]:
+          book: Book) -> tuple[int, int, int, int, dict]:
     """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
 
     Not the free slots. Those cost a call to an endpoint with a limit of one a
@@ -289,7 +289,8 @@ def _look(client: Client, settings: Settings,
 
     warm, _gone = builder._unfinished(client, book)
     return (len(warm), len(book.apps.available),
-            len(book.gmails.available), len(book.proxies.available))
+            len(book.gmails.available), len(book.proxies.available),
+            book.phones.counts())
 
 
 def beat(settings: Settings) -> None:
@@ -439,9 +440,17 @@ def needs_you(outcome: dict) -> str:
     return "; ".join(said)
 
 
+def _count(stock: dict | None, key: str, held: bool) -> str:
+    """One of the consumer's numbers, or why it is not there."""
+    if held:
+        return "not read - stopped"
+    return "-" if stock is None else str(stock.get(key, 0))
+
+
 def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
           waiting: int, free: int | None, tripped: str, failed: int,
-          needs: str = "", held: bool = False) -> None:
+          needs: str = "", held: bool = False,
+          stock: dict | None = None) -> None:
     """Put this pass's state where the operator can see it.
 
     Every number here is already in the log, and the log is on a server the
@@ -490,6 +499,12 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
         "Breaker": tripped or "closed",
         "Needs you": needs or "nothing",
         "Note": note,
+        # What a person can walk up and take, which is the only question the
+        # consumer of these phones has. Blank rather than 0 when the pass never
+        # counted, for the reason the numbers above are.
+        "Ready to take": _count(stock, "ready", held),
+        "App-only to take": _count(stock, "app_only", held),
+        "Out with somebody": _count(stock, "taken", held),
     })
 
 
@@ -673,7 +688,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                  stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
-    warm, waiting, gmails, exits = _look(client, settings, book)
+    warm, waiting, gmails, exits, stock = _look(client, settings, book)
     tripped = fuse.reason()
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
@@ -710,7 +725,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # tab on the last thing that finished.
     _show(book, settings, decision, warm=warm, waiting=waiting, free=free,
           tripped=tripped, failed=_failing(settings),
-          needs=needs_you(outcome or {}))
+          needs=needs_you(outcome or {}), stock=stock)
 
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two

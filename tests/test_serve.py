@@ -191,6 +191,8 @@ def _with_board(monkeypatch, board, recorder):
             reload=lambda: None, apps=None,
             gmails=SimpleNamespace(available=["g"] * 20),
             proxies=SimpleNamespace(available=["p"] * 20),
+            phones=SimpleNamespace(
+                counts=lambda: {"ready": 0, "app_only": 0, "taken": 0}),
             service=board)))
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
 
@@ -276,11 +278,14 @@ def test_a_quiet_sync_says_so_rather_than_nothing():
 class Recorder:
     """What the loop asked the rest of the code to do."""
 
-    def __init__(self, warm=0, free=10, waiting=0, gmails=50, exits=50):
-        # Four numbers, because `_look` returns four. The pool depths are
+    def __init__(self, warm=0, free=10, waiting=0, gmails=50, exits=50,
+                 stock=None):
+        # Five values, because `_look` returns five. The pool depths are
         # generous by default so a test about something else is never
         # accidentally constrained by them.
-        self.numbers = (warm, waiting, gmails, exits)
+        self.numbers = (warm, waiting, gmails, exits,
+                        stock if stock is not None
+                        else {"ready": 0, "app_only": warm, "taken": 0})
         self.free = free
         self.synced = 0
         self.built = 0
@@ -434,6 +439,8 @@ def board_book(monkeypatch, shown):
             reload=lambda: None, apps=None,
             gmails=SimpleNamespace(available=["g"] * 20),
             proxies=SimpleNamespace(available=["p"] * 20),
+            phones=SimpleNamespace(
+                counts=lambda: {"ready": 2, "app_only": 3, "taken": 1}),
             service=SimpleNamespace(show=lambda **kw: shown.update(kw),
                                     asked=lambda: [],
                                     taken=lambda name: None))))
@@ -688,13 +695,16 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
     book = SimpleNamespace(
         apps=SimpleNamespace(available=["a", "b", "c"]),
         gmails=SimpleNamespace(available=["g", "h", "i", "j"]),
-        proxies=SimpleNamespace(available=["p"]))
+        proxies=SimpleNamespace(available=["p"]),
+        phones=SimpleNamespace(
+            counts=lambda: {"ready": 1, "app_only": 2, "taken": 0}))
     monkeypatch.setattr(builder, "_unfinished",
                         lambda c, b: ([{"serial": "1"}, {"serial": "2"}], []))
     monkeypatch.setattr(serve_mod.phones, "plan",
                         lambda c: pytest.fail("the plan was read for nothing"))
 
-    assert serve_mod._look(object(), settings, book) == (2, 3, 4, 1)
+    assert serve_mod._look(object(), settings, book) == (
+        2, 3, 4, 1, {"ready": 1, "app_only": 2, "taken": 0})
 
 
 # ----------------------------------------------------- saying it is still alive

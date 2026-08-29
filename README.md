@@ -175,6 +175,34 @@ Written by the tool, one row per phone, except for `State` which is yours.
 
 `Created`, `Serial`, `State`, `Proxy`, `Gmail`, `GPT Account`, `Status`, `Note`
 
+**Two kinds of finished phone come off this line, and both are products.**
+
+| Status | GPT Account | what it is |
+|---|---|---|
+| `ready` | an address | signed into an account from the pool — usable as it is |
+| `incomplete` | empty | Google signed in and the app installed, **no account** — for whoever signs a customer's own account in by hand |
+
+The second is not a failure. It is what a run produces when the `Gpt Info` tab
+is empty, and it is one step from the first — which is why the service keeps
+`WARM_STOCK` of them: an account arriving finds a phone waiting instead of
+starting one from scratch.
+
+`State` is how you tell the loop what to do with a phone:
+
+| you write | what happens |
+|---|---|
+| `taken` | **it is yours.** Off the shelf, never finished, never deleted, and not counted as stock — so a replacement gets built |
+| `done` | delivered: the Gmail is retired, the app account marked `delivered`, and **the phone is deleted**, which is what frees its profile slot |
+| `failed` | something was wrong with it: the app account goes back to the pool, and the phone is deleted |
+| *(blank)* / `unused` | the default — the loop may finish it |
+
+Write `taken` **before** you start using an app-only phone. Without it the loop
+still counts that phone as stock, and the next account pasted into `Gpt Info`
+can send a run at it — which would clear the app to sign its own account in,
+taking the session you put there with it. A second guard refuses any phone that
+is already running with nothing here holding it, but the word is what makes it
+deliberate.
+
 ### Lists, History and Service — created automatically
 
 `Lists` holds the dropdown values for every `Status` and `State` column,

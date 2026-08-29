@@ -1083,6 +1083,14 @@ class PhoneLog:
             # exactly the same test as the ones that say `incomplete`.
             if cell("Status") in (self.BUILDING, self.READY) or not cell("Serial"):
                 continue
+            # Anything written in `State` means a person has said something
+            # about this phone, and none of the three things they can say
+            # leaves it available: `taken` is out with somebody, and `done` and
+            # `failed` are about to be carried out by the sync. Read here as
+            # well as in `marked()` because this is the list a run picks from,
+            # and a phone somebody is holding must not be on it.
+            if cell("State").strip().casefold() not in ("", self.UNUSED):
+                continue
             if not self.said(cell("Gmail")) or self.said(cell("GPT Account")):
                 continue
             # The reason is the head of the note now, not the status - which
@@ -1108,11 +1116,56 @@ class PhoneLog:
         found.sort(key=lambda row: row["app"] != self.INSTALLED)
         return found
 
+    def counts(self) -> dict[str, int]:
+        """How many phones of each kind the tab holds.
+
+        Three numbers a person actually asks for, and only one of them existed:
+        `unfinished()` answered "how much raw stock is there", which is the
+        loop's question. The other two are the consumer's - how many phones can
+        be taken right now with an account already on them, how many without -
+        and how many are out with somebody and therefore not on the shelf.
+
+        Counted off the same rows the rest of this class reads, so it costs
+        nothing beyond the read that has already happened.
+        """
+        ready = waiting = taken = 0
+        for _offset, cells in self._typed_rows("the Phones tab"):
+            state = (cells.get("State") or "").strip().casefold()
+            if state == self.TAKEN:
+                taken += 1
+                continue
+            if state not in ("", self.UNUSED):
+                continue                    # done or failed, about to be swept
+            if not (cells.get("Serial") or "").strip():
+                continue
+            if cells.get("Status") == self.READY:
+                ready += 1
+            elif (cells.get("Status") != self.BUILDING
+                  and self.said(cells.get("Gmail", ""))
+                  and not self.said(cells.get("GPT Account", ""))):
+                waiting += 1
+        return {"ready": ready, "app_only": waiting, "taken": taken}
+
     #: What the operator writes in `State` to say what should happen next.
     #: `Status` is what a run concluded; this is an instruction back to it.
     DONE = "done"          # finished with - delete the phone
     FAILED = "failed"      # something is wrong with it - free its app account
     UNUSED = "unused"      # the default: leave it alone
+    #: Out with somebody, and not to be touched. The one word here that is not
+    #: an instruction to act - it is an instruction to STOP acting.
+    #:
+    #: Without it there was nothing a person could write that this loop would
+    #: honour. A phone with the app and no account is exactly the product one
+    #: consumer takes and signs a customer's own account into by hand - and to
+    #: `unfinished` it was indistinguishable from raw stock, so the next
+    #: account pasted into Gpt Info could send a run at it. `act_reset_app`
+    #: then finds a chat screen this run did not sign in, reads it as the
+    #: app's logged-out mode, and `pm clear`s the customer's session away.
+    #:
+    #: `marked()` deliberately still matches only `done` and `failed`, so this
+    #: word never deletes a phone. It only takes it off the shelf
+    #: (2026-08-29).
+    TAKEN = "taken"
 
     def marked(self) -> list[dict]:
         """Rows the operator has marked `done` or `failed`.
@@ -1299,7 +1352,14 @@ class ServiceBoard:
     #: for the same reason History's are: the labels are written once and a
     #: reordering would leave every existing tab labelled wrong.
     ROWS = ("Last pass", "Machine", "Version", "Doing", "Warm stock",
-            "Accounts waiting", "Free slots", "Breaker", "Needs you", "Note")
+            "Accounts waiting", "Free slots", "Breaker", "Needs you", "Note",
+            # Appended, never reordered - the labels are written once and a
+            # reordering leaves every existing tab labelled wrong.
+            #
+            # The three above the fold are the loop's own numbers. These two
+            # are the consumer's, and they are the only question he actually
+            # has: how many phones can I take right now, of each kind.
+            "Ready to take", "App-only to take", "Out with somebody")
 
     #: Things a person can ask for, as checkboxes in column D beside their
     #: labels in column C. Appended to rather than reordered, like ROWS.
@@ -1739,6 +1799,12 @@ class Book:
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.
             "Phone Statuses": builder.possible_statuses(),
+            # And the State column, which is the other direction: what a person
+            # tells the loop to do about a phone. It had no list at all, so it
+            # took free text and `dome` was silently nothing - the failure mode
+            # the checkbox controls on the Service tab exist to avoid.
+            "Phone States": [PhoneLog.DONE, PhoneLog.FAILED, PhoneLog.TAKEN,
+                             PhoneLog.UNUSED],
         }
 
         grid = read_values(self._lists, self._lock, what="the Lists tab")

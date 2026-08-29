@@ -1320,7 +1320,10 @@ def test_the_three_readers_agree_about_what_a_row_is():
 
     source = inspect.getsource(PhoneLog)
 
-    assert source.count("_typed_rows(") == 4      # one definition, three users
+    # One definition and four users: rows, unfinished, marked, counts. The
+    # number is the point - a reader that walked the tab with its own copy of
+    # the rule is exactly what this catches.
+    assert source.count("_typed_rows(") == 5
     assert "if not any(line)" not in source
 
 
@@ -1863,3 +1866,73 @@ def test_claiming_still_marks_the_status():
 
     assert row.values[pool.status_column] == pool.claimed_status
     assert row.values[pool.serial_column] == "1421"
+
+
+# ---------------------------------------- a phone somebody has taken away
+def phones_tab(rows):
+    from geelark_farm.pools import PhoneLog
+    head = ["Created", "Serial", "State", "Proxy", "Gmail", "GPT Account",
+            "Status", "Note"]
+    return PhoneLog(FakeWorksheet(head, rows), head, threading.Lock())
+
+
+def a_phone(serial, state="", status="incomplete", gpt=""):
+    return ["2026-08-29", serial, state, "SX1", "a@b.com", gpt, status, ""]
+
+
+def test_a_taken_phone_is_never_offered_for_finishing():
+    """The worst thing in the codebase for the consumer. A phone with the app
+    and no account is what he takes to sign a customer's own account into by
+    hand - and to `unfinished` it was raw stock, so the next account pasted
+    into Gpt Info sent a run at it. `act_reset_app` then finds a chat screen
+    this run did not sign in, reads it as the app's logged-out mode, and
+    `pm clear`s the customer's session away (2026-08-29)."""
+    log = phones_tab([a_phone("1401"), a_phone("1402", state="taken")])
+
+    serials = [row["serial"] for row in log.unfinished()]
+
+    assert serials == ["1401"]
+
+
+def test_taking_a_phone_never_deletes_it():
+    """`marked()` is what the sync carries out, and it must not learn this
+    word: the phone is the product, and deleting it is the one thing that
+    cannot be undone."""
+    from geelark_farm.pools import PhoneLog
+
+    log = phones_tab([a_phone("1402", state="taken")])
+
+    assert log.marked() == []
+    assert PhoneLog.TAKEN not in (PhoneLog.DONE, PhoneLog.FAILED)
+
+
+def test_a_row_a_person_has_written_on_is_left_alone():
+    """`done` and `failed` are about to be carried out by the sync; offering
+    them for finishing in the meantime races it."""
+    log = phones_tab([a_phone("1403", state="done"),
+                      a_phone("1404", state="failed"),
+                      a_phone("1405", state="unused"),
+                      a_phone("1406")])
+
+    assert [r["serial"] for r in log.unfinished()] == ["1405", "1406"]
+
+
+def test_the_counts_say_what_can_be_taken_of_each_kind():
+    """The consumer's only real question, and no reader answered it."""
+    log = phones_tab([
+        a_phone("1410", status="ready", gpt="x@y.com"),
+        a_phone("1411", status="ready", gpt="z@y.com"),
+        a_phone("1412"),                      # app-only, on the shelf
+        a_phone("1413", state="taken"),       # out with somebody
+        a_phone("1414", status="building"),   # a run holds it
+    ])
+
+    assert log.counts() == {"ready": 2, "app_only": 1, "taken": 1}
+
+
+def test_a_taken_phone_is_not_counted_as_stock():
+    """Ten taken and the tab said `10 of 10` while the shelf was bare."""
+    log = phones_tab([a_phone(str(1420 + n), state="taken") for n in range(3)])
+
+    assert log.counts()["app_only"] == 0
+    assert log.unfinished() == []

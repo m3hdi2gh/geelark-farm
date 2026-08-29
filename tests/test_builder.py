@@ -3077,3 +3077,97 @@ def test_the_workers_are_told_to_stop_before_the_pool_is_drained(
         builder.run(None, settings, count=2, workers=2, cancel=Watched())
 
     assert order == ["flag", "stop_all"], order
+
+
+# ------------------------------- refusing a phone somebody is working inside
+class Running:
+    """GeeLark saying a phone is up."""
+
+    def __init__(self, state):
+        self.state = state
+        self.asked = 0
+
+    def data(self, path, payload=None, **kw):
+        self.asked += 1
+        return {"successDetails": [{"id": "P1", "status": self.state}]}
+
+
+def a_warm_phone():
+    return {"phone_id": "P1", "serial": "1401", "gmail": "a@b.com",
+            "proxy": "", "status": "incomplete"}
+
+
+@pytest.mark.parametrize("state", [0, 1])          # RUNNING, STARTING
+def test_a_phone_somebody_started_by_hand_is_left_alone(state, settings,
+                                                        monkeypatch):
+    """The second net under the `taken` word, for when that word is forgotten.
+    The app would be showing a session this run did not create, and
+    `act_reset_app` settles that ambiguity with `pm clear` - throwing away
+    somebody's signed-in account to make room for one of ours."""
+    monkeypatch.setattr(builder, "_note_on_row", lambda *a, **k: None)
+    ledger = FakeLedger()
+    build = builder.finish_one(Running(state), settings, make_book(), ledger,
+                               a_warm_phone(), 1)
+
+    assert build.status == "in_use_by_hand"
+    assert not build.ok
+
+
+def test_a_stopped_phone_is_finished_as_before(settings, monkeypatch):
+    """The guard must not refuse the ordinary case, which is every phone the
+    service itself stopped."""
+    monkeypatch.setattr(builder, "_note_on_row", lambda *a, **k: None)
+    seen = []
+    monkeypatch.setattr(builder.phones, "ensure_running",
+                        lambda *a, **k: seen.append("booted"))
+
+    builder.finish_one(Running(2), settings, make_book(), FakeLedger(),
+                       a_warm_phone(), 1)
+
+    assert seen == ["booted"], "a stopped phone is still picked up"
+
+
+def test_the_refusal_is_nobodys_fault_and_the_breaker_ignores_it():
+    """The run refused before it claimed anything: nothing created, nothing
+    spent, and a person using their own stock is not evidence the machine has
+    stopped working."""
+    from geelark_farm import breaker, failures
+
+    assert failures.verdict("in_use_by_hand").blame == failures.NOBODY
+    assert "in_use_by_hand" in breaker.NOTHING_HAPPENED
+    assert not breaker.counts_against(
+        builder.Build(index=1, ok=False, status="in_use_by_hand"))
+
+
+def test_a_hand_over_with_no_account_is_recorded_as_one():
+    """History is the only durable record once the row is deleted, and it
+    claimed a farm account went out with every app-only hand-over. The pair of
+    notes branched on `failed` alone (2026-08-29)."""
+    import inspect
+
+    source = inspect.getsource(builder.apply_phone_states)
+
+    assert "No app account was ever on it" in source
+    # Three branches, not the two that said the same thing either way.
+    assert source.count("Marked done and deleted") == 2
+    assert 'elif row["app_account"]:' in source
+
+
+def test_an_app_only_phone_is_described_as_finished_not_failed():
+    """`no_usable_gpt` is not a fault, it is the other product. Read cold,
+    "Stopped short" says the opposite - and this is exactly the phone somebody
+    takes to sign a customer in by hand."""
+    build = builder.Build(index=1, ok=False, status="no_usable_gpt",
+                          detail="the Gpt Info tab has no unused account left")
+
+    note = builder._phone_note(build)
+
+    assert "ready to take as it is" in note
+    assert "signed into Google with the app installed" in note
+
+
+def test_a_real_failure_is_not_dressed_up_as_a_product():
+    build = builder.Build(index=1, ok=False, status="install_failed",
+                          detail="the app would not install")
+
+    assert "ready to take" not in builder._phone_note(build)
