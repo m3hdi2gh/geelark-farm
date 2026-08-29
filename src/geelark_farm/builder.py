@@ -415,7 +415,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             return s.finish("budget_exhausted",
                             "installed, but no budget left for the app login")
         if s.app_row is None:
-            s.app_row = s.book.apps.claim()
+            s.app_row = s.book.apps.claim(str(s.build.serial or ''))
             if s.app_row is None:
                 return s.finish("no_usable_gpt",
                                 "the Gpt Info tab has no unused account left")

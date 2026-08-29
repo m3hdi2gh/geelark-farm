@@ -1825,3 +1825,41 @@ def test_the_seller_name_is_matched_however_it_is_typed():
     pool = seller_pool([[" egypt ", "a@b.com", "pw", SECRET, "", "", ""]])
 
     assert not pool.available
+
+
+# ------------------------------- which phone a claimed row is being used for
+def test_a_claimed_row_names_the_phone_it_was_taken_for():
+    """Without it the two tabs cannot be joined while the work is happening:
+    Phones says `building`, Gpt Info says `in_use`, and nothing on either says
+    which `in_use` belongs to which phone. With three at once that is the
+    difference between a tab you can read and one you can only count."""
+    pool = gmail_pool([gmail_row("a@b.com"), gmail_row("c@d.com")])
+
+    row = pool.claim("1421")
+
+    assert row is not None
+    assert row.values[pool.serial_column] == "1421"
+
+
+def test_a_claim_with_no_phone_yet_leaves_the_serial_alone():
+    """`claim()` is also called where no phone exists - the diagnostic paths -
+    and writing an empty serial over one would lose it."""
+    pool = gmail_pool([gmail_row("a@b.com")])
+
+    row = pool.claim()
+
+    assert row is not None
+    assert not row.values[pool.serial_column]
+
+
+def test_claiming_still_marks_the_status():
+    """The serial is added to what claiming writes, not instead of it.
+
+    (This tab has no `Claimed` column - `_set` skips a column the tab lacks,
+    which is the behaviour that lets the optional ones be absent.)"""
+    pool = gmail_pool([gmail_row("a@b.com")])
+
+    row = pool.claim("1421")
+
+    assert row.values[pool.status_column] == pool.claimed_status
+    assert row.values[pool.serial_column] == "1421"

@@ -337,26 +337,38 @@ class Pool:
                 if not r.error and self.status_of(r) not in settled]
 
     # ------------------------------------------------------------ claiming
-    def claim(self) -> Resource | None:
+    def claim(self, serial: str = "") -> Resource | None:
         """Take the first usable row, marking it so nothing else can.
 
         The sheet write happens under the same lock as the choice. Without
         that, two workers reaching this at once both see the same first row
         available and both take it.
+
+        `serial` is the phone the row is being taken for, and it is written
+        now rather than when the row is spent. Without it the two tabs cannot
+        be joined while the work is happening: the Phones tab says `building`
+        and this one says `in_use`, and nothing on either says which `in_use`
+        belongs to which phone. With three phones running at once that is the
+        difference between a tab you can read and a tab you can only count
+        (2026-08-29).
         """
         with self._claim_lock:
             for resource in self.available:
-                self._set(resource, self._claim_fields(resource))
-                log.info("claimed %s from %s", resource.label, self.tab)
+                self._set(resource, self._claim_fields(resource, serial))
+                log.info("claimed %s from %s%s", resource.label, self.tab,
+                         f" for phone {serial}" if serial else "")
                 return resource
         return None
 
-    def _claim_fields(self, resource: Resource) -> dict[str, str]:
+    def _claim_fields(self, resource: Resource,
+                      serial: str = "") -> dict[str, str]:
         """What claiming writes. The status, and whatever else a pool needs
         recorded at the moment a row leaves it."""
         fields = {self.status_column: self.claimed_status}
         if self.claimed_at_column:
             fields[self.claimed_at_column] = time.strftime(self.CLAIM_FORMAT)
+        if serial and self.serial_column:
+            fields[self.serial_column] = serial
         return fields
 
     def abandoned(self, older_than: float) -> list[Resource]:
@@ -809,8 +821,9 @@ class ProxyPool(Pool):
             # stopping the run.
             return 0
 
-    def _claim_fields(self, resource: Resource) -> dict[str, str]:
-        fields = super()._claim_fields(resource)
+    def _claim_fields(self, resource: Resource,
+                      serial: str = "") -> dict[str, str]:
+        fields = super()._claim_fields(resource, serial)
         fields[self.uses_column] = str(self._uses(resource) + 1)
         return fields
 
