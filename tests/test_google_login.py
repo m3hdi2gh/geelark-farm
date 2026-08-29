@@ -1471,3 +1471,123 @@ def test_an_artifact_directory_that_is_already_there_is_not_an_error(session,
     login.sign_in(None, "P", ACCOUNT, artifact_dir=tmp_path)   # no raise
 
     assert tmp_path.is_dir()
+
+
+# ------------------------------------------------- confirming a recovery email
+RECOVERY_ACCOUNT = Account(email="sammax21956039@gmail.com", password="aass1122",
+                           totp_secret="",
+                           recovery_email="emersoncarter75478@gmail.com")
+
+
+def context_for(fixture: str, account: Account) -> login.Context:
+    xml = (FIXTURES / fixture).read_text(encoding="utf-8")
+    ctx = login.Context(client=None, phone_id="PHONE", account=account)
+    ctx.elements = screen.parse(xml)
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+def test_a_chooser_offering_a_way_through_is_not_a_verdict():
+    """The real screen, off a real device (2026-08-29). Google offered three
+    ways in and `phone_verification_required` claimed the page, because one of
+    its needles is `get a verification code at` - which says nothing about a
+    phone and matches `Get a verification code at eme...@gmail.com` word for
+    word. A Gmail with nothing wrong with it was marked and set aside."""
+    ctx = context_for("google-verify-chooser.xml", RECOVERY_ACCOUNT)
+
+    assert login._fatal_reason(ctx) is None, (
+        "this page offers `Confirm your recovery email`; it is a menu, not a "
+        "dead end")
+
+
+def test_the_standalone_sms_page_is_still_fatal():
+    """The needle is kept. What changed is that it no longer speaks for a page
+    that also offers a way through."""
+    ctx = context_for("google-verify-chooser.xml", RECOVERY_ACCOUNT)
+    # The same words with no answerable option beside them.
+    ctx.blob = "verify your phone number to continue"
+    ctx.elements = []
+
+    assert login._fatal_reason(ctx) == "phone_verification_required"
+
+
+def only_real_taps(ctx, tapped):
+    """A tap that succeeds only on something actually on screen.
+
+    A fake that answers True to anything makes the first label tried look like
+    the one taken, whatever the page says - which is the opposite of what a
+    test about choosing an option should do.
+    """
+    def tap(label):
+        if screen.find_first(ctx.elements, (label,)) is None:
+            return False
+        tapped.append(label)
+        return True
+    return tap
+
+
+def test_the_recovery_option_is_the_one_taken():
+    """The authenticator is tried first and is not on this page; the recovery
+    row is, and the row carries an address for it."""
+    ctx = context_for("google-verify-chooser.xml", RECOVERY_ACCOUNT)
+    tapped = []
+    ctx.tap = only_real_taps(ctx, tapped)
+
+    assert login.act_choose_authenticator(ctx) is None
+    assert tapped == ["Confirm your recovery email"]
+
+
+def test_the_options_that_cannot_be_answered_are_never_taken():
+    """`Get a verification code at eme...@gmail.com` sends a code to a mailbox
+    nothing here can read, and `Use another phone or computer` wants a second
+    device. Tapping either spends the attempt and strands the sign-in."""
+    ctx = context_for("google-verify-chooser.xml", RECOVERY_ACCOUNT)
+    tapped = []
+    ctx.tap = only_real_taps(ctx, tapped)
+
+    login.act_choose_authenticator(ctx)
+
+    assert not any("verification code at" in t or "another phone" in t
+                   for t in tapped), tapped
+
+
+def test_a_row_with_no_recovery_address_says_which_cell_to_fill():
+    """Not `no_authenticator_option`: the fix is a cell somebody can fill, not
+    an account to replace."""
+    ctx = context_for("google-verify-chooser.xml",
+                      Account(email="a@b.com", password="x", totp_secret=""))
+    ctx.tap = lambda label: False
+
+    outcome = login.act_choose_authenticator(ctx)
+
+    assert outcome.reason == "no_recovery_email"
+    assert "Recovery Email column" in outcome.detail
+
+
+def test_the_confirm_page_is_matched_and_the_address_is_typed():
+    """Transcribed from the real page: the heading, the masked hint, and an
+    empty box with id `knowledge-preregistered-email-response`."""
+    ctx = context_for("google-recovery-email-confirm.xml", RECOVERY_ACCOUNT)
+    found = matched_screen(ctx)
+
+    assert found is not None and found.name == "recovery_email_confirm", (
+        f"matched {found.name if found else None}")
+
+    typed = []
+    ctx.tap = lambda label: True
+    login.fill = lambda c, f, text: typed.append(text) or True
+    login.submit = lambda c: True
+
+    login.act_recovery_email(ctx)
+
+    assert typed == ["emersoncarter75478@gmail.com"]
+
+
+def test_the_confirm_page_outranks_the_code_entry_screen():
+    """`2fa_code_entry` is four loose tokens plus any input, and this page has
+    an input. Matched by it, `act_totp` kills the row as `no_authenticator`
+    for a box that wanted an address."""
+    ctx = context_for("google-recovery-email-confirm.xml", RECOVERY_ACCOUNT)
+    names = [s.name for s in login.SCREENS if s.match(ctx)]
+
+    assert names and names[0] == "recovery_email_confirm", names

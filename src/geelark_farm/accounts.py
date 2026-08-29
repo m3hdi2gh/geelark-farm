@@ -96,6 +96,15 @@ class Credentials:
     #: account" or "somebody has not filled it in yet", and reading the second
     #: as the first is how a row that could not work costs a phone.
     email_code_only: bool = False
+    #: The address Google already holds on the account, for the challenge that
+    #: asks us to confirm it. Nothing is fetched and no inbox is read: the page
+    #: shows `eme•••••••••••••••@gmail.com` and asks for the whole address, so
+    #: the cell on the row IS the answer.
+    #:
+    #: Seen on a real device, 2026-08-29: "Confirm the recovery email address
+    #: you added to your account:" with an empty box whose resource id is
+    #: `knowledge-preregistered-email-response`.
+    recovery_email: str = ""
 
     @property
     def has_authenticator(self) -> bool:

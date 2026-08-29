@@ -64,13 +64,16 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
 
     assert "stuck_on_totp_entry" in reported          # the one that reached 778
     assert "stuck_on_email_entry" in reported
-    # Eighteen distinct across the flows, not twenty-two: the two login flows
+    # Nineteen distinct across the flows, not twenty-three: the two login flows
     # both register `fatal`, `loading`, `email_entry` and `password_entry`, and
     # a screen of that name is the same reason wherever it is handled.
     # The eighteenth is `email_code_entry`, which was a fatal page until it
-    # became a screen that answers the code OpenAI emails.
+    # became a screen that answers the code OpenAI emails. The nineteenth is
+    # `recovery_email_confirm`, which was a fatal page in the same way until it
+    # became a screen that types the address on the row (2026-08-29).
     assert "stuck_on_email_code_entry" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 18
+    assert "stuck_on_recovery_email_confirm" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 19
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

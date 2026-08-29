@@ -107,9 +107,17 @@ you can rearrange them, and adding your own is safe.
 
 | you fill in | the tool writes |
 |---|---|
-| `Address`, `Password`, `2FA Secret` | `Used Date`, `Phone Serial`, `Status`, `Note`, `Claimed` |
+| `Address`, `Password`, `2FA Secret`, `Recovery Email` | `Used Date`, `Phone Serial`, `Status`, `Note`, `Claimed` |
 
 `Purchase Date` and `Seller` are ignored by the tool and yours to use.
+
+An account needs **either** a `2FA Secret` **or** a `Recovery Email`, not both.
+Google challenges most new sign-ins, and those are the two answers this tool can
+give on its own: an authenticator code, or the recovery address Google already
+holds — its "Confirm your recovery email" screen asks you to type the whole
+address, so the cell is the answer and no inbox is read. Put the recovery
+address in its own column; pasted into `2FA Secret` it is refused, correctly but
+confusingly, for not being a base32 key.
 
 `Claimed` is a timestamp, and it is what decides when a row stuck on `in_use`
 comes back. A run refreshes it every minute for as long as it holds the row, so

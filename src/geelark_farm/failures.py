@@ -144,6 +144,18 @@ VERDICTS: dict[str, Verdict] = {
         "when it is refusing the sign-in for other reasons too, so the one in "
         "the sheet may well be right. If it works by hand, blank the status "
         "and leave the password alone."),
+    # Google offers this on the "Choose how you want to sign in" list, and it
+    # is the one option on it answerable from the sheet alone: it asks for the
+    # address already on the account rather than sending anything anywhere.
+    # A row that reaches it without one is a cell somebody can fill, not an
+    # account to replace - so it says that instead of `no_authenticator_option`
+    # (2026-08-29).
+    "no_recovery_email": Verdict(
+        CREDENTIAL, "Google asked for the recovery address and the row has none",
+        "Google asked this account to confirm the recovery address it already "
+        "holds. That address is the answer - there is no code to fetch - and "
+        "this row does not carry one. Put it in the Recovery Email column of "
+        "the Gmails tab and blank this status."),
     "password_changed": Verdict(
         CREDENTIAL, "Google said the password was an old one",
         "Google accepted the address and called the password old. "

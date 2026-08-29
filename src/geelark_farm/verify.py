@@ -56,8 +56,12 @@ class Check:
 #: fails at the code page as `no_authenticator` - which blames the row for a
 #: tab that is missing a heading (2026-08-23).
 REQUIRED_COLUMNS = {
-    "Gmails": ["Address", "Password", "2FA Secret", "Status", "Note",
-               "Phone Serial"],
+    # `Recovery Email` is demanded for the same reason `2FA Secret` is: without
+    # the column every row reads as having none, so a whole batch of accounts
+    # that carry one would be refused `no_recovery_email` and the note would
+    # tell the owner to fill a cell in a column that is not there.
+    "Gmails": ["Address", "Password", "2FA Secret", "Recovery Email",
+               "Status", "Note", "Phone Serial"],
     "Gpt Info": ["Address", "Password", "2FA Secret", "Status", "Note",
                  "Phone Serial"],
     "Proxy": ["Proxy String", "Status", "Note", "Used By"],

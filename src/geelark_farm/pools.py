@@ -568,12 +568,20 @@ class GmailPool(Pool):
     # it: the Used Date beside it says when.
     retired_status = "used"
 
+    #: Where the address for Google's "confirm your recovery email" challenge
+    #: lives. Its own column rather than a second use of `2FA Secret`: an
+    #: address pasted there is refused outright, because base32 keys have no
+    #: `@` in them - which is the check working, but only after the row has
+    #: been kept out of the pool for a reason nobody reads as "wrong column".
+    RECOVERY_COLUMN = "Recovery Email"
+
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
         credentials = Credentials(
             email=values.get("Address", ""),
             password=values.get("Password", ""),
             totp_secret=normalize_totp_secret(values.get("2FA Secret", "")),
+            recovery_email=values.get(self.RECOVERY_COLUMN, ""),
         )
         # Named, like the app account's. Without it a broken row here and a
         # broken row in `Gpt Info` read identically, and the reader is left

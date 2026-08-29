@@ -23,6 +23,7 @@ checks this list against the parser rather than against nothing.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import contextlib
 import logging
 import signal
@@ -626,10 +627,11 @@ def pick_account(settings: Settings, row: int):
         exits = book.proxies.available
         if not exits:
             raise SystemExit("no proxy is free in the Proxy tab")
+        # Every field, for the reason spelled out at the sibling call in
+        # `builder`: a hand-written list here is a list of the fields that
+        # existed the day it was written.
         return accounts.Account(
-            email=found.credentials.email,
-            password=found.credentials.password,
-            totp_secret=found.credentials.totp_secret,
+            **dataclasses.asdict(found.credentials),
             proxy=str(exits[0].values.get("Proxy String") or ""),
             row=row,
         )

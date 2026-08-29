@@ -121,6 +121,11 @@ FATAL_ADVICE = {
         "Google declined without saying why; check the screenshot",
     "phone_verification_required":
         "the account wants an SMS code, which this tool has no way to receive",
+    "no_recovery_email":
+        "Google asked this account to confirm the recovery address it already "
+        "holds, and the row has none. The address is the whole answer - there "
+        "is no code to fetch - so put it in the Recovery Email column of the "
+        "Gmails tab. Nothing here can guess it",
     "no_authenticator":
         "this account has no 2FA secret in the sheet, and Google asked for a "
         "code anyway. Nothing here can produce one. Either the account does "
@@ -166,6 +171,29 @@ def submit(ctx: Context) -> None:
 # a changed password, a disabled account. Those stay fatal wherever they appear.
 NOT_FATAL_BESIDE_AUTHENTICATOR = frozenset({"phone_verification_required"})
 
+#: The row on Google's "Choose how you want to sign in" list that this tool can
+#: answer from the sheet alone. Taken from a real screen (2026-08-29): the
+#: options were "Get a verification code at eme•••@gmail.com", "Use another
+#: phone or computer to finish signing in", "Confirm your recovery email" and
+#: "Try another way", each a clickable View carrying the text as its
+#: description.
+#:
+#: Only the third is answerable here. The first sends a code to that mailbox
+#: and there is no inbox to read it from; the second wants a second device.
+RECOVERY_OPTION_LABELS = ("Confirm your recovery email",)
+
+#: The page that option opens: "Confirm the recovery email address you added to
+#: your account:", a masked hint, and an empty box whose resource id is
+#: `knowledge-preregistered-email-response`. Nothing is fetched - Google is
+#: asking whether we know the address already on the account, and the row has
+#: it.
+RECOVERY_TEXTS = ("confirm the recovery email address",
+                  "recovery email address you added")
+
+#: The field on that page, by id. The text needles above are what a Google
+#: rewording would break first; this is what it would break last.
+RECOVERY_FIELD_ID = "knowledge-preregistered-email-response"
+
 # Google's transient interstitial while it decides what to show next. No
 # progress bar on it, so the generic check does not catch it, and there is
 # nothing to act on - a row reported unknown_screen from this page having
@@ -187,10 +215,32 @@ def _fatal_reason(ctx: Context) -> str | None:
     for reason, needles in FATAL_TEXTS.items():
         if not ctx.has(*needles):
             continue
-        if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and authenticator_offered(ctx):
+        if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and answerable(ctx):
             continue
         return reason
     return None
+
+
+def recovery_offered(ctx: Context) -> bool:
+    return screen.find_first(ctx.elements, RECOVERY_OPTION_LABELS) is not None
+
+
+def answerable(ctx: Context) -> bool:
+    """Whether this page offers something the tool can actually do.
+
+    A chooser is not a verdict. Google's "Choose how you want to sign in" list
+    carries one row reading `Get a verification code at eme•••@gmail.com` -
+    which `phone_verification_required` matches on `get a verification code
+    at`, a needle that says nothing about a phone. So a page offering three
+    ways in, one of them answerable from the sheet, was reported as "the
+    account wants an SMS code, which this tool has no way to receive", and the
+    Gmail was marked and set aside with nothing wrong with it (2026-08-29).
+
+    The needle is kept, because a real standalone SMS page says the same words
+    and is genuinely fatal. What changed is that it no longer speaks for a page
+    that also offers a way through.
+    """
+    return authenticator_offered(ctx) or recovery_offered(ctx)
 
 
 def is_loading(ctx: Context) -> bool:
@@ -303,17 +353,64 @@ def authenticator_offered(ctx: Context) -> bool:
 
 
 def act_choose_authenticator(ctx: Context) -> Outcome | None:
-    """Take the authenticator option, which is the only second factor this tool
-    can satisfy on its own."""
+    """Take the one option on the list this tool can satisfy on its own.
+
+    The authenticator first, because it needs nothing but the row and answers
+    in six digits. Then the recovery address, which also needs nothing but the
+    row - Google asks us to confirm the address it already holds, so the cell
+    is the answer - but only when the row carries one.
+
+    Never the other two. `Get a verification code at eme•••@gmail.com` sends a
+    code to a mailbox nothing here can read, and `Use another phone or computer`
+    wants a second device.
+    """
     for label in AUTHENTICATOR_LABELS:
         if ctx.tap(label):
             log.info("chose the authenticator option")
             time.sleep(5)
             return None
+
+    if ctx.account.recovery_email:
+        for label in RECOVERY_OPTION_LABELS:
+            if ctx.tap(label):
+                log.info("chose the recovery email option")
+                time.sleep(5)
+                return None
+    elif recovery_offered(ctx):
+        # The one way through is on screen and the row cannot take it. Said as
+        # its own reason rather than `no_authenticator_option`, because the
+        # fix is a cell somebody can fill rather than an account to replace.
+        path = ctx.save("no-recovery-email")
+        return Outcome("fatal", "no_recovery_email",
+                       FATAL_ADVICE["no_recovery_email"],
+                       artifacts=[path] if path else [])
+
     path = ctx.save("no-authenticator-option")
     return Outcome("fatal", "no_authenticator_option",
                    "the account's 2FA choices do not include an authenticator app",
                    artifacts=[path] if path else [])
+
+
+def act_recovery_email(ctx: Context) -> Outcome | None:
+    """Type the address Google is asking us to confirm.
+
+    Unlike every other challenge in this file there is nothing to fetch and no
+    inbox to read: Google shows a masked hint and asks for the whole address,
+    and the sheet has it.
+    """
+    field = screen.find_input(ctx.elements, password=False)
+    if field is None:
+        return None
+    if not ctx.account.recovery_email:
+        path = ctx.save("no-recovery-email")
+        return Outcome("fatal", "no_recovery_email",
+                       FATAL_ADVICE["no_recovery_email"],
+                       artifacts=[path] if path else [])
+    log.info("confirming the recovery email address")
+    fill(ctx, field, ctx.account.recovery_email)
+    submit(ctx)
+    time.sleep(5)
+    return None
 
 
 def act_try_another_way(ctx: Context) -> Outcome | None:
@@ -359,6 +456,22 @@ SCREENS: list[Screen] = [
            lambda c: c.has("something went wrong",
                            "please go back and try again"),
            act_go_back, max_visits=3),
+
+    # Above 2fa_code_entry, which would otherwise claim this page: its
+    # predicate is four loose tokens plus any input, and "verification code"
+    # sits in the heading of half of Google's challenge pages. `act_totp` on
+    # this one kills the row as `no_authenticator` for a box that wanted an
+    # address. Above `email_entry` and `dismissable` too - the first would type
+    # the login address into it, the second would tap NEXT on it empty.
+    #
+    # max_visits=2, not the default. A recovery address that Google refuses is
+    # refused every time, and each retry is another wrong answer against a live
+    # account - the argument that made wrong_2fa_code fatal.
+    Screen("recovery_email_confirm",
+           lambda c: (c.has(*RECOVERY_TEXTS)
+                      and screen.find_input(c.elements,
+                                            password=False) is not None),
+           act_recovery_email, max_visits=2),
 
     # Code entry outranks the method list: once a code box is on screen the
     # choice has already been made, and re-choosing would leave it.

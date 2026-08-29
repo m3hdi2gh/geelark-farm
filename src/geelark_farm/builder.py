@@ -54,6 +54,7 @@ GeeLark cannot reach at all is marked `dead`.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 import time
@@ -664,12 +665,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                     return finish("no_usable_gmail",
                                   "the Gmails tab had no other address to try "
                                   "on this phone")
-            account = Account(
-                email=gmail_row.credentials.email,
-                password=gmail_row.credentials.password,
-                totp_secret=gmail_row.credentials.totp_secret,
-                proxy=build.proxy,
-            )
+            # Every field, rather than the three somebody remembered. `Account`
+            # subclasses `Credentials`, and this list was a copy of its fields
+            # as they stood the day it was written: `email_code_only` was added
+            # later and has been silently dropped here ever since, harmless
+            # only because the Gmails tab never sets it. `recovery_email` would
+            # have gone the same way, and the flow would have refused a row for
+            # having no recovery address while the address sat on the row.
+            account = Account(**dataclasses.asdict(gmail_row.credentials),
+                              proxy=build.proxy)
             log.info("signing in as %s", account.email)
             outcome = google_login.sign_in(
                 client, phone_id, account,
