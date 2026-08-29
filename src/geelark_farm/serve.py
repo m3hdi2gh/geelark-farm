@@ -107,20 +107,30 @@ class Slots:
     every: float = PLAN_EVERY_SECONDS
     free: int | None = None
     read_at: float | None = None
+    #: How long to wait after a *failed* read before trying again.
+    #:
+    #: Not `every`. The stamp used to be written before the call, so a refusal
+    #: bought the same five minutes a good answer did - and with no count,
+    #: `decide` will not build. One [40007], which is what a second process
+    #: touching the same endpoint costs, meant five minutes of building
+    #: nothing (2026-08-29). The endpoint's own limit is a minute, so that is
+    #: what a failure waits.
+    retry_after: float = 60.0
 
     def look(self, client: Client, now: float) -> int | None:
         """The count, reading it again only when it is old enough to."""
         if self.read_at is not None and (now - self.read_at) < self.every:
             return self.free
-        self.read_at = now
         try:
             self.free = int(phones.plan(client).get("availableProfiles") or 0)
+            self.read_at = now
         except Exception as exc:                                  # noqa: BLE001
-            # The last answer, or None if there has never been one. Waiting
-            # out the interval before asking again rather than retrying next
-            # pass: what this exists to avoid is asking too often.
+            # Stamped as though the read happened `every - retry_after` ago, so
+            # the next attempt is a minute out rather than five.
+            self.read_at = now - (self.every - self.retry_after)
             log.warning("could not read how many slots are free (%s); "
-                        "carrying on with %s", exc,
+                        "trying again in %.0fs, carrying on with %s",
+                        exc, self.retry_after,
                         "the last answer" if self.free is not None
                         else "no answer at all")
         return self.free

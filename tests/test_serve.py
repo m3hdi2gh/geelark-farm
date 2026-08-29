@@ -913,7 +913,13 @@ def test_a_first_read_that_fails_answers_nothing_rather_than_a_number(
 
 
 def test_a_failed_read_waits_its_turn_before_asking_again(monkeypatch):
-    """Retrying next pass is asking too often, which is the whole problem."""
+    """Retrying next pass is asking too often, which is the whole problem.
+
+    It waits a minute rather than the full five, though - see
+    `test_a_refused_slot_count_is_retried_in_a_minute_not_five`. Five was what
+    the stamp-before-the-call gave it, and with no count `decide` will not
+    build, so one refusal bought five minutes of building nothing.
+    """
     reads = []
 
     def broken(c):
@@ -924,8 +930,8 @@ def test_a_failed_read_waits_its_turn_before_asking_again(monkeypatch):
     slots = serve_mod.Slots(every=300)
 
     slots.look(None, 1000)
-    slots.look(None, 1030)
-    slots.look(None, 1060)
+    slots.look(None, 1030)          # the next pass, and the one after
+    slots.look(None, 1055)
 
     assert len(reads) == 1
 
@@ -1206,3 +1212,62 @@ def test_a_stop_outranks_every_other_control(monkeypatch, make_settings,
 
     assert not fuse.cleared, "the breaker is not touched by a stopped pass"
     assert board.unticked == [], "and the tick is still there next pass"
+
+
+# ------------------------------------------- a refused slot count costs a minute
+class Plan:
+    """The plan endpoint, as a queue of answers."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.asked = 0
+
+    def __call__(self, client):
+        self.asked += 1
+        answer = self.answers.pop(0) if self.answers else {"availableProfiles": 9}
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def test_a_refused_slot_count_is_retried_in_a_minute_not_five(monkeypatch):
+    """The stamp used to be written before the call, so a refusal bought the
+    same five minutes a good answer did - and with no count, `decide` will not
+    build. One [40007], which is what a second process touching the same
+    endpoint costs, meant five minutes of building nothing (2026-08-29)."""
+    plan = Plan(RuntimeError("[40007] too many requests"),
+                {"availableProfiles": 17})
+    monkeypatch.setattr(serve_mod.phones, "plan", plan)
+    slots = serve_mod.Slots()
+
+    assert slots.look(object(), now=1000.0) is None
+    # Half a minute later it is still holding off...
+    assert slots.look(object(), now=1030.0) is None
+    assert plan.asked == 1
+    # ...and a minute after the failure it asks again.
+    assert slots.look(object(), now=1061.0) == 17
+    assert plan.asked == 2
+
+
+def test_a_good_answer_still_lasts_the_full_interval(monkeypatch):
+    """The endpoint allows one call a minute on a budget of its own, and this
+    loop runs every thirty seconds."""
+    plan = Plan({"availableProfiles": 17})
+    monkeypatch.setattr(serve_mod.phones, "plan", plan)
+    slots = serve_mod.Slots()
+
+    assert slots.look(object(), now=1000.0) == 17
+    assert slots.look(object(), now=1000.0 + serve_mod.PLAN_EVERY_SECONDS - 1) == 17
+    assert plan.asked == 1, "it must not ask again inside the window"
+
+
+def test_a_refusal_keeps_the_last_good_answer(monkeypatch):
+    """A count that was true a minute ago beats no count at all, which is what
+    stops the pass building."""
+    plan = Plan({"availableProfiles": 17}, RuntimeError("[40007]"))
+    monkeypatch.setattr(serve_mod.phones, "plan", plan)
+    slots = serve_mod.Slots()
+
+    slots.look(object(), now=1000.0)
+
+    assert slots.look(object(), now=1000.0 + serve_mod.PLAN_EVERY_SECONDS) == 17
