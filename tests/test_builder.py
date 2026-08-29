@@ -749,8 +749,11 @@ def test_every_phone_is_recorded_whether_it_worked_or_not(device, settings, driv
 
     written = book.phones._ws.rows[0]
     assert written[PHONE_HEADERS.index("Serial")] == "622"
-    # the tab answers "can I use this phone", in one of three words
-    assert written[PHONE_HEADERS.index("Status")] == "app_only"
+    # The tab answers "can I use this phone, and how" in one of four words.
+    # This phone never got past the Gmail, so the app is not on it either -
+    # `app_only` would say it was, which is what the status said for every
+    # unfinished build until the word came to name a product (2026-08-29).
+    assert written[PHONE_HEADERS.index("Status")] == "incomplete"
     # and the note says why in words. The token is in the Status column's
     # vocabulary and in the terminal summary; this cell is prose.
     note = written[PHONE_HEADERS.index("Note")]
@@ -3171,3 +3174,41 @@ def test_a_real_failure_is_not_dressed_up_as_a_product():
                           detail="the app would not install")
 
     assert "ready to take" not in builder._phone_note(build)
+
+
+# ------------------------------ the status has to agree with the App column
+def a_build(ok=False, installed=False):
+    return builder.Build(index=1, ok=ok, status="ready" if ok else "x",
+                         app_installed=installed)
+
+
+def test_a_phone_with_no_app_is_not_called_app_only():
+    """`READY if build.ok else APP_ONLY` said the app was on the device
+    whenever a build stopped short - including when the install was the thing
+    that failed, with the App column reading x beside it.
+
+    Vague while `app_only` meant "not finished". Actively misleading once it
+    named a product: the tab would offer a phone with no app to somebody whose
+    whole use for it is opening that app (2026-08-29)."""
+    assert builder._phone_status(a_build(installed=False)) == "incomplete"
+
+
+def test_a_phone_with_the_app_and_no_account_is_the_second_product():
+    assert builder._phone_status(a_build(installed=True)) == "app_only"
+
+
+def test_a_finished_phone_is_ready_whatever_else_is_true():
+    assert builder._phone_status(a_build(ok=True, installed=True)) == "ready"
+
+
+def test_all_four_words_are_offered_in_the_dropdown():
+    """A status a run can write and the Lists tab does not know is one the
+    sheet flags as invalid the moment it appears."""
+    from geelark_farm.pools import PhoneLog
+
+    offered = set(builder.possible_statuses())
+
+    assert offered == {PhoneLog.BUILDING, PhoneLog.READY, PhoneLog.APP_ONLY,
+                       PhoneLog.INCOMPLETE}
+    for build in (a_build(), a_build(installed=True), a_build(ok=True)):
+        assert builder._phone_status(build) in offered

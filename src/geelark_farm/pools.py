@@ -1013,7 +1013,17 @@ class PhoneLog:
     #: reader acts on differently - see builder.possible_statuses.
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
-    APP_ONLY = "app_only"     # anything else; the Note says what happened
+    APP_ONLY = "app_only"     # Google in, the app on it, no account
+    #: Neither a product nor a run in progress: the Gmail signed in but the app
+    #: never made it onto the device, so there is nothing to sign an account
+    #: into and nothing to hand anybody.
+    #:
+    #: It used to be `app_only` - every build that was not `ready` was - and
+    #: the `App` column beside it said `x` while the status said the app was
+    #: there. That was merely vague while the word meant "not finished". It
+    #: became actively misleading the day the word came to name a product
+    #: somebody takes off the shelf (2026-08-29).
+    INCOMPLETE = "incomplete"
 
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet

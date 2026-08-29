@@ -177,10 +177,16 @@ Written by the tool, one row per phone, except for `State` which is yours.
 
 **Two kinds of finished phone come off this line, and both are products.**
 
-| Status | GPT Account | what it is |
-|---|---|---|
-| `ready` | an address | signed into an account from the pool — usable as it is |
-| `app_only` | empty | Google signed in and the app installed, **no account** — for whoever signs a customer's own account in by hand |
+| Status | what it is |
+|---|---|
+| `ready` | an account from the pool is signed in — usable as it is |
+| `app_only` | Google signed in and the app installed, **no account** — for whoever signs a customer's own account in by hand |
+| `incomplete` | the Gmail signed in but the app never arrived. **Not a product**: there is nothing on it to open |
+| `building` | a run is working on it right now |
+
+The first two are products and either can be taken off the shelf. `incomplete`
+is neither a product nor a run in progress, and the `App` column beside it
+reads `✗` — the status and that column always agree.
 
 The second is not a failure. It is what a run produces when the `Gpt Info` tab
 is empty, and it is one step from the first — which is why the service keeps

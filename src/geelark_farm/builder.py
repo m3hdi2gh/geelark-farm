@@ -1309,6 +1309,24 @@ def attempts_of(build: Build) -> list[str]:
             for email, reason, service in build.tried]
 
 
+def _phone_status(build: Build) -> str:
+    """Which of the three words this build ended on.
+
+    `READY if build.ok else APP_ONLY` said the app was on the device whenever
+    a build stopped short - including when the install was the thing that
+    failed. The `App` column beside it said `x` at the same time.
+
+    Vague while `app_only` meant "not finished". Actively misleading once it
+    named a product: the tab would offer a phone with no app to somebody whose
+    whole use for it is opening that app (2026-08-29).
+    """
+    from .pools import PhoneLog
+
+    if build.ok:
+        return READY
+    return APP_ONLY if build.app_installed else PhoneLog.INCOMPLETE
+
+
 def _phone_note(build: Build) -> str:
     """What the Phones tab says about this build, in sentences.
 
@@ -1423,7 +1441,7 @@ def _record(book: Book, build: Build) -> None:
 
     try:
         wrote = book.phones.write(
-            build.serial, Status=READY if build.ok else APP_ONLY,
+            build.serial, Status=_phone_status(build),
             Proxy=build.proxy_name or build.proxy,
             Gmail=said(build.gmail), Note=note,
             **{"GPT Account": said(build.app_account),
@@ -1439,7 +1457,7 @@ def _record(book: Book, build: Build) -> None:
     # it every answer to "what did we build on Tuesday". History keeps the
     # outcome, appended, whichever machine produced it.
     book.record_history(
-        Serial=build.serial, Event=READY if build.ok else APP_ONLY,
+        Serial=build.serial, Event=_phone_status(build),
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
         Gmail=build.gmail, Note=note, Steps=build.steps,
         **{"GPT Account": build.app_account,
@@ -1449,17 +1467,24 @@ def _record(book: Book, build: Build) -> None:
 def possible_statuses() -> list[str]:
     """What the Phones tab's Status column can hold.
 
-    Three, because three is how many the reader acts on differently. It used to
+    Four, because four is how many the reader acts on differently. It used to
     be twenty-four - every reason a build could stop for - and across every run
     ever made only two of them appeared. The rest were noise in a dropdown, and
     the same detail was already in the Note beside them, in full.
 
-    What is lost is nothing: `Status` says whether a phone is usable, `Note`
-    says why not.
+    Two of the four are products - `ready` has an account on it, `app_only` has
+    the app and waits for somebody to sign one in - and the reader takes either
+    off the shelf. `incomplete` is neither: the Gmail signed in and the app
+    never arrived, so there is nothing to open. It is the distinction the
+    fourth word exists for, and it was missing while every unfinished build
+    said `app_only` whatever the App column read.
+
+    What is lost is nothing: `Status` says whether a phone is usable and how,
+    `Note` says why not.
     """
     from .pools import PhoneLog
 
-    return [PhoneLog.BUILDING, READY, APP_ONLY]
+    return [PhoneLog.BUILDING, READY, APP_ONLY, PhoneLog.INCOMPLETE]
 
 
 def _this_module():
