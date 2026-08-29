@@ -34,6 +34,12 @@ log = logging.getLogger(__name__)
 
 BASE_URL = "https://openapi.geelark.com/open"
 
+#: The longest one call may take, retries and backoffs included. Generous -
+#: three attempts at ninety seconds plus backoff is about five minutes when
+#: everything is merely slow - so this only ever catches the case that has no
+#: end of its own.
+TOTAL_SECONDS = 360.0
+
 #: Some endpoints carry their own limit, separate from the account's 200/min,
 #: and answer this when it is hit. It is a wait rather than a refusal, so a
 #: caller with a recent answer can keep using it - see `ui.cached_plan`.
@@ -197,12 +203,30 @@ class Client:
     # ------------------------------------------------------------ requests
     def post(self, path: str, payload: dict | None = None, *,
              strict: bool = True, retry: bool | None = None,
-             timeout: float = 90.0, attempts: int = 3) -> dict:
+             timeout: float = 90.0, attempts: int = 3,
+             total: float = TOTAL_SECONDS) -> dict:
         """POST to `path` and return the parsed envelope.
 
         strict=False returns the envelope even on a non-zero code, for calls
         whose failure is acceptable (stopping a phone that is already stopped).
         retry defaults to True only for read-only endpoints.
+
+        `total` bounds the whole call - every attempt, every backoff between
+        them - because `timeout` does not. requests applies its timeout to each
+        socket read, not to the request, so a peer that dribbles bytes resets it
+        on every one and the read never ends. Three attempts at ninety seconds
+        is not four and a half minutes; it has no upper bound at all.
+
+        That is not a hypothetical. `/v1/phone/list` timed out once at 20:29:49
+        and the service loop never came back - three and a half hours, the
+        container up the whole time, `restart: always` never firing because
+        nothing had exited (2026-08-28).
+
+        The per-read timeout is also narrowed to whatever budget is left, so a
+        dribble runs out of room as the deadline approaches rather than at it.
+        A dribble with gaps shorter than the remaining budget still cannot be
+        caught here - nothing at this layer can catch it - which is why
+        `serve` also watches the clock from outside.
         """
         if attempts < 1:
             # Guarded the way RateLimiter guards its own count, and for the
@@ -213,8 +237,16 @@ class Client:
         if retry is None:
             retry = path in RETRY_SAFE_PATHS
         last_error: Exception | None = None
+        started = time.monotonic()
+
+        def left() -> float:
+            return total - (time.monotonic() - started)
 
         for attempt in range(1, attempts + 1):
+            if left() <= 0:
+                raise TransportError(
+                    f"{path} gave up after {total:.0f}s over {attempt - 1} "
+                    f"attempt(s): {last_error}")
             # The limiter first, then the signature. A signature carries the
             # millisecond it was made in, and the limiter blocks - for up to a
             # full window when the budget is spent. Signing before waiting
@@ -233,7 +265,7 @@ class Client:
             try:
                 response = self.session.post(
                     f"{BASE_URL}{path}", headers=headers,
-                    json=payload or {}, timeout=timeout,
+                    json=payload or {}, timeout=min(timeout, max(left(), 1.0)),
                 )
             except requests.RequestException as exc:
                 last_error = exc

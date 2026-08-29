@@ -601,3 +601,77 @@ def test_build_client_loads_the_settings_when_it_is_given_none(monkeypatch,
 
     assert api.build_client().settings is made
     assert api.build_client(made).settings is made
+
+
+# ------------------------------------------------------ the total deadline
+class Slow:
+    """A peer that never finishes, and a clock that notices."""
+
+    def __init__(self, clock, step):
+        self.clock = clock
+        self.step = step
+        self.sent: list[dict] = []
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.sent.append({"timeout": timeout})
+        self.clock["t"] += self.step
+        raise requests.ConnectionError("read timed out")
+
+
+def test_a_call_gives_up_at_the_total_budget(make_settings, monkeypatch, naps):
+    """`timeout` cannot do this. requests applies it to each socket read, not
+    to the request, so a peer that dribbles bytes resets it on every one -
+    three attempts at ninety seconds is not four and a half minutes, it has no
+    upper bound at all. `/v1/phone/list` timed out once at 20:29:49 and the
+    service loop never came back: three and a half hours, the container up the
+    whole time, `restart: always` never firing because nothing had exited
+    (2026-08-28).
+    """
+    from geelark_farm import api
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(api.time, "monotonic", lambda: clock["t"])
+    line = Slow(clock, step=200.0)
+    client = client_for(make_settings, line)
+
+    with pytest.raises(api.TransportError, match="gave up after"):
+        client.post(READ, total=300.0)
+
+    # Two attempts fit inside 300s; the third is refused before it is sent.
+    assert len(line.sent) == 2
+
+
+def test_the_read_timeout_shrinks_as_the_budget_runs_out(make_settings,
+                                                          monkeypatch, naps):
+    """So a dribble runs out of room as the deadline approaches rather than
+    at it. It cannot catch a dribble with gaps shorter than what is left -
+    nothing at this layer can - which is why `serve` watches from outside."""
+    from geelark_farm import api
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(api.time, "monotonic", lambda: clock["t"])
+    line = Slow(clock, step=250.0)
+    client = client_for(make_settings, line)
+
+    with pytest.raises(api.TransportError):
+        client.post(READ, timeout=90.0, total=300.0)
+
+    assert line.sent[0]["timeout"] == 90.0, "the first attempt has room"
+    assert line.sent[1]["timeout"] == 50.0, "the second gets what is left"
+
+
+def test_the_budget_never_asks_for_a_timeout_of_zero(make_settings,
+                                                      monkeypatch, naps):
+    """A timeout of 0 means "do not wait at all" to requests, which is a
+    different request from the one that was asked for."""
+    from geelark_farm import api
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(api.time, "monotonic", lambda: clock["t"])
+    line = Slow(clock, step=299.9)
+    client = client_for(make_settings, line)
+
+    with pytest.raises(api.TransportError):
+        client.post(READ, timeout=90.0, total=300.0)
+
+    assert all(s["timeout"] >= 1.0 for s in line.sent), line.sent

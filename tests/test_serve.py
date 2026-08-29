@@ -1049,3 +1049,59 @@ def test_the_first_heartbeat_can_make_the_directory_it_lives_in(make_settings,
 
     assert (settings.state_dir / serve_mod.HEARTBEAT_FILE).read_text(
         encoding="utf-8")
+
+
+# ------------------------------------------------- ending a pass that hangs
+def test_nothing_is_overdue_between_passes():
+    """The sleep between them is not a pass running long."""
+    guard = serve_mod.Watchdog(limit=100)
+
+    assert guard.age() is None
+    assert guard.overdue(None, asked=False) == ""
+
+
+def test_a_pass_inside_its_limit_is_left_alone():
+    guard = serve_mod.Watchdog(limit=100)
+
+    assert guard.overdue(99, asked=False) == ""
+
+
+def test_a_pass_past_the_limit_is_interrupted_first():
+    """Politely, because KeyboardInterrupt runs the same shutdown a
+    `docker stop` does - the phones this pass started get stopped and their
+    rows released on the way out."""
+    guard = serve_mod.Watchdog(limit=100)
+
+    assert guard.overdue(101, asked=False) == "interrupt"
+
+
+def test_a_pass_that_ignores_the_interrupt_ends_the_process():
+    """Python delivers KeyboardInterrupt between bytecodes, and a thread
+    blocked in a C-level socket read is not between bytecodes - which is
+    exactly the hang this exists for."""
+    guard = serve_mod.Watchdog(limit=100)
+
+    assert guard.overdue(101, asked=True) == ""
+    assert guard.overdue(100 + serve_mod.GIVE_UP_GRACE + 1,
+                         asked=True) == "exit"
+
+
+def test_the_watchdog_and_the_healthcheck_use_one_number(make_settings,
+                                                          tmp_path):
+    """The thing that reports a hang and the thing that acts on it must never
+    disagree about what counts as one."""
+    settings = make_settings(state_dir=tmp_path)
+    guard = serve_mod.Watchdog(serve_mod.stale_after(settings))
+
+    assert guard.limit == serve_mod.stale_after(settings)
+
+
+def test_a_pass_that_began_is_timed_and_one_that_ended_is_not():
+    guard = serve_mod.Watchdog(limit=100)
+    guard.began()
+
+    assert guard.age() is not None
+
+    guard.ended()
+
+    assert guard.age() is None

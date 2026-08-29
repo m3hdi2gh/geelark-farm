@@ -37,7 +37,9 @@ somebody waiting at the end of it.
 
 from __future__ import annotations
 
+import _thread
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -452,6 +454,95 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
     })
 
 
+#: How long after the limit a polite interrupt is given to work before the
+#: process is ended outright.
+GIVE_UP_GRACE = 60.0
+
+
+class Watchdog:
+    """End the process when a pass stops coming back.
+
+    The healthcheck already sees this - `healthy` calls a stale heartbeat
+    unhealthy, and Docker duly reported it - but nothing acts on it.
+    `restart: always` fires when the process *exits*, and a hung one has not
+    exited. So a loop stuck inside a socket read sat there for three and a half
+    hours, the container marked unhealthy the whole time, while the phones it
+    had left running billed by the minute (2026-08-28).
+
+    Two steps, because the polite one cannot always work.
+
+    First `interrupt_main`, which raises KeyboardInterrupt in the main thread -
+    the same shutdown a `docker stop` runs, so the phones this pass started are
+    stopped and their rows released on the way out. Python delivers that
+    between bytecodes, though, and a thread blocked in a C-level socket read is
+    not between bytecodes. So if the pass is still there `GIVE_UP_GRACE` later,
+    the process is ended outright and `restart: always` brings it back. What
+    the next run finds is what it always finds after an interrupted one: the
+    sync settles it.
+
+    The limit is `stale_after`, deliberately - the same number the healthcheck
+    calls too old. One threshold, so the thing that reports a hang and the
+    thing that acts on it can never disagree.
+    """
+
+    def __init__(self, limit: float):
+        self.limit = limit
+        self._started: float | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+
+    def began(self) -> None:
+        with self._lock:
+            self._started = time.monotonic()
+
+    def ended(self) -> None:
+        with self._lock:
+            self._started = None
+
+    def age(self) -> float | None:
+        """How long the pass in flight has been running, or None between them."""
+        with self._lock:
+            if self._started is None:
+                return None
+            return time.monotonic() - self._started
+
+    def overdue(self, age: float | None, *, asked: bool) -> str:
+        """What to do about a pass of this age: "", "interrupt" or "exit"."""
+        if age is None:
+            return ""
+        if asked:
+            return "exit" if age > self.limit + GIVE_UP_GRACE else ""
+        return "interrupt" if age > self.limit else ""
+
+    def watch(self, every: float = 5.0) -> None:
+        asked = False
+        while not self._stop.wait(every):
+            age = self.age()
+            if age is None:
+                asked = False
+                continue
+            what = self.overdue(age, asked=asked)
+            if what == "interrupt":
+                asked = True
+                log.error("this pass has been running %.0f minutes, past the "
+                          "%.0f it should ever take - stopping the service so "
+                          "it can be restarted", age / 60, self.limit / 60)
+                _thread.interrupt_main()
+            elif what == "exit":
+                log.critical("the pass did not answer the interrupt - ending "
+                             "the process so it gets restarted")
+                os._exit(1)
+
+    def start(self) -> threading.Thread:
+        thread = threading.Thread(target=self.watch, name="watchdog",
+                                  daemon=True)
+        thread.start()
+        return thread
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
 def _controls(client: Client, book: Book, ledger, fuse: Breaker) -> bool:
     """Carry out whatever was ticked on the Service tab. Returns "paused".
 
@@ -591,6 +682,11 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # endpoint that gives it allows one call a minute.
     slots = Slots()
     stop = stop or threading.Event()
+    # Nothing acted on the healthcheck saying a pass had stopped coming back:
+    # `restart: always` waits for an exit, and a hung process has not exited.
+    # This is what turns "unhealthy" into "restarted".
+    guard = Watchdog(stale_after(settings))
+    guard.start()
 
     log.info("serving: %d warm phones, a pass every %ds",
              settings.warm_stock, settings.serve_interval_seconds)
@@ -602,6 +698,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         if probe:
             probed = now
         beat(settings)
+        guard.began()
         try:
             once(client, settings, fuse, slots, probe_proxies=probe)
         except KeyboardInterrupt:
@@ -618,9 +715,14 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
                           "next one", failed)
         else:
             note_pass(settings, ok=True)
+        finally:
+            # Between passes there is nothing to be overdue, and the sleep
+            # below is not a pass running long.
+            guard.ended()
         done += 1
         if stop.is_set() or (passes is not None and done >= passes):
             break
         sleep(settings.serve_interval_seconds)
+    guard.stop()
     log.info("stopped after %d pass(es)", done)
     return 0
