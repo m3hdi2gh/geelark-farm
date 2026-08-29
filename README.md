@@ -85,7 +85,7 @@ The rest have defaults worth knowing about:
 
 | setting | default | effect |
 |---|---|---|
-| `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once — and, under `serve`, the most jobs one pass may take on. Finishing is counted against it too, so 5 accounts arriving on 5 warm phones needs `10` to finish those five *and* build five more in the same pass |
+| `MAX_CONCURRENT_PHONES` | `1` | how many phones are worked on at once — and, under `serve`, the most jobs one pass may take on, finishing counted against it too. **`0` means no ceiling of its own**, which is what a running service usually wants: the pass is already bounded by the accounts waiting, the warm phones there are, the shortfall, the free slots and the depth of the Gmail and Proxy tabs. More at once never exceeds `API_REQUESTS_PER_MINUTE` — it queues behind it, and a phone waiting its turn is a phone billing by the minute |
 | `BUILD_BUDGET_SECONDS` | `3600` | the outer bound on one phone; every step gets the smaller of its own budget and what is left |
 | `STALE_CLAIM_SECONDS` | `300` | how long a claimed row may go unrefreshed before the sync frees it — five missed beats; raise it again the moment anything that does not beat touches the sheet |
 | `API_REQUESTS_PER_MINUTE` | `120` | GeeLark allows 200/min and bans the key for two hours above it |

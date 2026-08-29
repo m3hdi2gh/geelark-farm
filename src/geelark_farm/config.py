@@ -191,6 +191,14 @@ class Settings:
 
     # Budgets. Billing is per running minute, so each of these caps spend as
     # well as time.
+    #: How many phones one run works on at once. `0` means no ceiling of its
+    #: own - under `serve` the pass then takes on whatever the real stock
+    #: allows, which is already bounded: finishing by the accounts waiting and
+    #: the warm phones there are, building by the shortfall, the free profile
+    #: slots and the depth of the Gmail and Proxy tabs. The rate limiter is the
+    #: absolute bound on API load either way; more at once does not exceed it,
+    #: it only queues behind it - and a phone waiting its turn is a phone
+    #: billing by the minute.
     max_concurrent_phones: int
     #: How many phones `serve` keeps built to one step short of ready, so a
     #: delivery is one login away rather than a whole build.
@@ -258,7 +266,8 @@ class Settings:
             android=_str("GEELARK_ANDROID", "Android 15"),
             phone_name_prefix=_str("PHONE_NAME_PREFIX", "farm"),
             target_package=_str("TARGET_PACKAGE", "com.openai.chatgpt"),
-            max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1),
+            max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1,
+                                       minimum=0),
             warm_stock=_int("WARM_STOCK", 10),
             log_format=_str("LOG_FORMAT", "text").strip().lower(),
             serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),

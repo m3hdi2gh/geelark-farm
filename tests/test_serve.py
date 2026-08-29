@@ -1271,3 +1271,58 @@ def test_a_refusal_keeps_the_last_good_answer(monkeypatch):
     slots.look(object(), now=1000.0)
 
     assert slots.look(object(), now=1000.0 + serve_mod.PLAN_EVERY_SECONDS) == 17
+
+
+# ------------------------------------------------------------ with no cap
+def test_with_no_cap_a_pass_finishes_and_builds_at_the_same_time():
+    """The shape the owner asked for: three accounts arrive, three phones are
+    finished for them, and three more are built beside them in the same pass."""
+    decision = decide(**numbers(warm=5, target=5, accounts_waiting=3,
+                                free_slots=17, cap=None, gmails=11, exits=25))
+
+    assert (decision.finish, decision.build) == (3, 3)
+
+
+def test_no_cap_is_still_not_unbounded():
+    """It is bounded by the work there is: never more finishes than accounts
+    waiting or warm phones, and never more builds than the shortfall, the free
+    slots, or the shallower of the two pools."""
+    only_two_accounts = decide(**numbers(warm=9, target=9, accounts_waiting=2,
+                                         free_slots=50, cap=None,
+                                         gmails=50, exits=50))
+    assert only_two_accounts.finish == 2
+
+    only_four_slots = decide(**numbers(warm=0, target=20, free_slots=4,
+                                       cap=None, gmails=50, exits=50))
+    assert only_four_slots.build == 4
+
+    only_three_gmails = decide(**numbers(warm=0, target=20, free_slots=50,
+                                         cap=None, gmails=3, exits=50))
+    assert only_three_gmails.build == 3
+
+    only_one_exit = decide(**numbers(warm=0, target=20, free_slots=50,
+                                     cap=None, gmails=50, exits=1))
+    assert only_one_exit.build == 1
+
+
+def test_no_cap_never_builds_past_the_target():
+    decision = decide(**numbers(warm=4, target=5, free_slots=50, cap=None,
+                                gmails=50, exits=50))
+
+    assert decision.build == 1
+
+
+def test_an_uncapped_pass_still_asks_about_slots():
+    """The shortcut that skipped the read when anything was being finished is
+    what left a combined pass refusing to build blind, every time."""
+    assert serve_mod.needs_slots(tripped="", warm=5, target=5,
+                                 accounts_waiting=3, cap=None)
+
+
+def test_zero_in_the_env_means_no_cap(make_settings, tmp_path):
+    """`0` is how the setting says "no ceiling of my own" - the alternative was
+    a number large enough to never bind, which is a cap you have to remember is
+    not one."""
+    settings = make_settings(state_dir=tmp_path, max_concurrent_phones=0)
+
+    assert (settings.max_concurrent_phones or None) is None

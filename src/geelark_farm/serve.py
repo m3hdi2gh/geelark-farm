@@ -137,7 +137,7 @@ class Slots:
 
 
 def needs_slots(*, tripped: str, warm: int, target: int,
-                accounts_waiting: int, cap: int = 1,
+                accounts_waiting: int, cap: int | None = 1,
                 paused: bool = False) -> bool:
     """Whether this pass's decision turns on how many slots are free.
 
@@ -154,8 +154,8 @@ def needs_slots(*, tripped: str, warm: int, target: int,
     """
     if tripped or paused:
         return False              # not building anyway
-    to_finish = min(accounts_waiting, warm, cap)
-    if cap - to_finish < 1:
+    to_finish = _to_finish(accounts_waiting, warm, cap)
+    if cap is not None and cap - to_finish < 1:
         return False              # no room left to build this pass
     return (warm - to_finish) < target
 
@@ -186,8 +186,15 @@ class Decision:
         return self.finish + self.build
 
 
+def _to_finish(accounts_waiting: int, warm: int, cap: int | None) -> int:
+    """How many phones this pass finishes: one per account with a phone for it,
+    and no more than the cap when there is one."""
+    wanted = min(accounts_waiting, warm)
+    return wanted if cap is None else min(wanted, cap)
+
+
 def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
-           accounts_waiting: int, cap: int = 1, paused: bool = False,
+           accounts_waiting: int, cap: int | None = 1, paused: bool = False,
            gmails: int | None = None, exits: int | None = None) -> Decision:
     """How much to do this pass, from the numbers and nothing else.
 
@@ -209,7 +216,7 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
     above the breaker, because it spends nothing new and somebody is waiting at
     the end of it; what tripped the breaker was building, and this is not that.
     """
-    to_finish = min(accounts_waiting, warm, cap)
+    to_finish = _to_finish(accounts_waiting, warm, cap)
 
     if tripped:
         return Decision(finish=to_finish, warning=tripped)
@@ -229,11 +236,11 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
         # prevent, and seeing it means the stock is not keeping up.
         log.info("an account is waiting and no warm phone is ready for it")
 
-    room = cap - to_finish
+    room = None if cap is None else cap - to_finish
     # A phone that gets finished stops being warm, so the hole to fill is
     # measured after this pass's finishes, not before them.
     short = target - (warm - to_finish)
-    if room < 1 or short < 1:
+    if (room is not None and room < 1) or short < 1:
         return Decision(finish=to_finish)
 
     if free_slots is None:
@@ -250,7 +257,7 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
             f"{target}. A finished phone holds its slot until somebody marks "
             f"it done in the State column - that is what frees one."))
 
-    limits = [short, room, free_slots]
+    limits = [short, free_slots] + ([] if room is None else [room])
     if gmails is not None:
         limits.append(gmails)
     if exits is not None:
@@ -667,7 +674,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     warm, waiting, gmails, exits = _look(client, settings, book)
     tripped = fuse.reason()
-    cap = max(1, settings.max_concurrent_phones)
+    # `0` is "no ceiling of my own": the pass takes on whatever the real stock
+    # allows. `decide` still bounds it by the accounts waiting, the warm phones
+    # there are, the shortfall, the free slots and the pool depths.
+    cap = settings.max_concurrent_phones or None
     # Asked only when the answer changes what happens, which is a pass with
     # room to build. A full stock or an open breaker settle it without looking.
     free = (slots.look(client, time.monotonic())
