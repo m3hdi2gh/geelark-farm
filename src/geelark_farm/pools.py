@@ -1288,12 +1288,13 @@ class ServiceBoard:
     #: it has read it - not after acting. A pass can run for minutes, and a
     #: tick that lands while it works has to survive to the next pass rather
     #: than be wiped by a write that means "I have dealt with this".
-    CONTROLS = ("Clear breaker", "Pause building", "Stop unaccounted phones")
+    CONTROLS = ("Clear breaker", "Pause building", "Stop unaccounted phones",
+                "Stop everything")
 
     #: Ticked means "keep doing this", not "do this once", so these are left
     #: ticked after they are read. Unticking a mode would turn a pause into a
     #: single skipped pass, which is not what anybody ticking it wants.
-    STANDING = frozenset({"Pause building"})
+    STANDING = frozenset({"Pause building", "Stop everything"})
 
     def __init__(self, worksheet, lock: threading.Lock):
         self._ws = worksheet

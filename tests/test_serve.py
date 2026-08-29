@@ -1136,3 +1136,73 @@ def test_a_phone_is_not_reported_twice():
 
     assert said.count("1360") <= 1
     assert "stopped" not in said
+
+
+# --------------------------------------------------- stopping it by hand
+def test_a_stopped_pass_syncs_nothing(monkeypatch, make_settings, tmp_path):
+    """`Pause building` is not enough for editing the sheet: the sync still
+    runs, and the sync is the half that writes - it carries out the State
+    column, frees claims and deletes rows. Half-stopping is the version of
+    this that would look like it worked."""
+    from geelark_farm import builder
+
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    recorder = Recorder(warm=0, free=10).install(monkeypatch)
+    board = Board("Stop everything")
+    _with_board(monkeypatch, board, recorder)
+    synced = []
+    monkeypatch.setattr(builder, "sync_sheet",
+                        lambda *a, **k: synced.append(1) or {})
+
+    decision = serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert synced == [], "the sync must not run"
+    assert recorder.built == 0
+    assert decision.idle
+
+
+def test_a_stop_stays_on_until_it_is_unticked(monkeypatch, make_settings,
+                                              tmp_path):
+    """A stop that lasted one pass would be useless for the thing it is for."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=0, free=10).install(monkeypatch)
+    board = Board("Stop everything")
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert board.unticked == []
+
+
+def test_a_stopped_pass_says_so_where_it_can_be_read(monkeypatch,
+                                                     make_settings, tmp_path):
+    """Not "nothing to do", which is what an idle pass says. The numbers
+    beside it were never read, and printing 0 of them is a lie the reader
+    would act on."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=4, free=10).install(monkeypatch)
+    board = Board("Stop everything")
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert "STOPPED" in board.shown["Doing"]
+    assert "Stop everything" in board.shown["Doing"]
+    assert "not read" in board.shown["Warm stock"]
+    assert "not read" in board.shown["Accounts waiting"]
+
+
+def test_a_stop_outranks_every_other_control(monkeypatch, make_settings,
+                                             tmp_path):
+    """Ticked together, the stop wins and the rest are left for the pass that
+    runs after it - including their unticking, so nothing is silently eaten."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=3)
+    Recorder(warm=0, free=10).install(monkeypatch)
+    board = Board("Stop everything", "Clear breaker")
+    _with_board(monkeypatch, board, None)
+    fuse = Fuse(tripped="5 builds in a row failed")
+
+    serve_mod.once(object(), settings, fuse, serve_mod.Slots())
+
+    assert not fuse.cleared, "the breaker is not touched by a stopped pass"
+    assert board.unticked == [], "and the tick is still there next pass"

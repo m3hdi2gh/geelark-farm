@@ -424,7 +424,7 @@ def needs_you(outcome: dict) -> str:
 
 def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
           waiting: int, free: int | None, tripped: str, failed: int,
-          needs: str = "") -> None:
+          needs: str = "", held: bool = False) -> None:
     """Put this pass's state where the operator can see it.
 
     Every number here is already in the log, and the log is on a server the
@@ -447,6 +447,12 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
     if decision.build:
         busy.append(f"building {decision.build} warm phone(s)")
     doing = " and ".join(busy) or "nothing to do"
+    if held:
+        # Not "nothing to do", which is what an idle pass says and is the one
+        # thing this must not be mistaken for: the numbers beside it were never
+        # read this pass, and saying 0 of them would be a lie the reader would
+        # act on.
+        doing = "STOPPED - untick `Stop everything` to start again"
     note = decision.warning
     if failed:
         note = (f"{failed} pass(es) in a row have failed - see the log. "
@@ -460,8 +466,9 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
         "Machine": machine(),
         "Version": f"{__version__} ({stamp})" if stamp else __version__,
         "Doing": doing,
-        "Warm stock": f"{warm} of {settings.warm_stock}",
-        "Accounts waiting": str(waiting),
+        "Warm stock": ("not read - stopped" if held
+                       else f"{warm} of {settings.warm_stock}"),
+        "Accounts waiting": "not read - stopped" if held else str(waiting),
         "Free slots": "not asked this pass" if free is None else str(free),
         "Breaker": tripped or "closed",
         "Needs you": needs or "nothing",
@@ -558,8 +565,9 @@ class Watchdog:
         self._stop.set()
 
 
-def _controls(client: Client, book: Book, ledger, fuse: Breaker) -> bool:
-    """Carry out whatever was ticked on the Service tab. Returns "paused".
+def _controls(client: Client, book: Book, ledger,
+              fuse: Breaker) -> frozenset[str]:
+    """Carry out whatever was ticked on the Service tab, and say what was.
 
     Read and acted on at the very top of a pass, which is the one moment
     nothing of this process's own is running - `once` is synchronous, so no
@@ -577,8 +585,17 @@ def _controls(client: Client, book: Book, ledger, fuse: Breaker) -> bool:
     from .pools import ServiceBoard
 
     if book.service is None:
-        return False
-    asked = book.service.asked()
+        return frozenset()
+    asked = frozenset(book.service.asked())
+
+    # Before anything else is carried out, including the unticking. A stop is
+    # for editing the sheet by hand, and the whole point is that this pass
+    # writes nothing into what is being edited.
+    if "Stop everything" in asked:
+        log.warning("stopped from the sheet - nothing will be synced, built "
+                    "or finished until `Stop everything` is unticked")
+        return asked
+
     for name in asked:
         if name not in ServiceBoard.STANDING:
             book.service.taken(name)
@@ -599,7 +616,7 @@ def _controls(client: Client, book: Book, ledger, fuse: Breaker) -> bool:
 
     if "Pause building" in asked:
         log.info("building is paused from the sheet")
-    return "Pause building" in asked
+    return asked
 
 
 def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
@@ -612,7 +629,26 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
-    paused = _controls(client, book, ledger, fuse)
+    asked = _controls(client, book, ledger, fuse)
+    if "Stop everything" in asked:
+        # Nothing below this line runs: not the sync, which is what carries out
+        # the State column and frees claims; not the counting, which reads
+        # every tab; not a build. A person editing the sheet by hand is the one
+        # case where this tool's ordinary work is the problem, and half-stopping
+        # it - building held while the sync still rewrote rows underneath - is
+        # the version of this that would look like it worked.
+        #
+        # The heartbeat is stamped before this, so a stopped service stays
+        # healthy rather than looking hung. It is stopped because somebody
+        # stopped it.
+        decision = Decision(warning=(
+            "stopped from the sheet. Nothing is being synced, built or "
+            "finished. Untick `Stop everything` to start again."))
+        _show(book, settings, decision, warm=0, waiting=0, free=None,
+              tripped="", failed=_failing(settings), needs="", held=True)
+        return decision
+
+    paused = "Pause building" in asked
     outcome = builder.sync_sheet(client, book, ledger,
                                  probe_proxies=probe_proxies,
                                  artifact_dir=settings.artifact_dir,
