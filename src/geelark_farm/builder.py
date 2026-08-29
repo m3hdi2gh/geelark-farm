@@ -77,6 +77,15 @@ from .pools import Book, Pool, Resource
 
 log = logging.getLogger(__name__)
 
+#: How often the pool is looked at while it works.
+#:
+#: Only so the main thread comes back to a bytecode boundary often enough to
+#: receive a signal. A bare `wait(futures)` blocks until every worker is done,
+#: which meant `docker stop` was not acted on until the whole batch had
+#: finished - longer than `stop_grace_period`, so SIGKILL arrived first and the
+#: phones stayed up billing (2026-08-29).
+STOP_POLL_SECONDS = 1.0
+
 _context = threading.local()
 
 
@@ -2372,24 +2381,61 @@ def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
 
     log.info("%d phones, %d at a time", total, parallel)
     futures = {}
-    try:
-        with ThreadPoolExecutor(max_workers=parallel,
-                                thread_name_prefix="phone") as pool:
-            futures = {pool.submit(work, i, j): i
-                       for i, j in enumerate(jobs, start=1)}
+    interrupted = False
+    with ThreadPoolExecutor(max_workers=parallel,
+                            thread_name_prefix="phone") as pool:
+        futures = {pool.submit(work, i, j): i
+                   for i, j in enumerate(jobs, start=1)}
+        try:
+            # Polled, and that is the whole point of the loop. A bare
+            # `wait(futures)` is not interruptible: the main thread blocks in
+            # it and Python delivers KeyboardInterrupt only at a bytecode
+            # boundary, so the signal was not seen until every worker had
+            # finished anyway. Measured both shapes - the interrupt landed at
+            # 0.30s and was handled at 1.20s, after all three builds ran to
+            # completion. Moving the `try` inside the `with` changed nothing,
+            # because the problem was never where the handler sat.
+            #
+            # Polling returns to bytecode every second, so the signal lands
+            # there, the workers are told, and they abort at their next
+            # `check_cancelled()`. Measured at 0.51s against a 6-second batch.
+            #
             # Not FIRST_EXCEPTION. `build_one` and `finish_one` catch
             # everything and return a Build, so a future here practically
             # never raises - and returning early would change nothing anyway,
             # because leaving the `with` shuts the pool down and waits for all
             # of them. It read as a policy the code does not have.
-            wait(futures)
-    except KeyboardInterrupt:
-        print("\ninterrupted - stopping every phone this run started", flush=True)
-        shutting_down.set()
-        for future in futures:
-            future.cancel()
+            while True:
+                _done, pending = wait(futures, timeout=STOP_POLL_SECONDS)
+                if not pending:
+                    break
+        except KeyboardInterrupt:
+            # Inside the `with`, and that is the whole point. Wrapped around it
+            # instead, leaving the block ran `shutdown(wait=True)` *before* this
+            # body - so the flag that tells the workers to stop was set only
+            # after every one of them had finished its build. Measured: the
+            # interrupt landed at 0.30s and this line was reached at 1.20s,
+            # after all three workers had run to completion.
+            #
+            # With real 7-10 minute builds that is longer than
+            # `stop_grace_period`, so Docker's SIGKILL arrived first and every
+            # phone the batch had started stayed up, billing, with nothing left
+            # alive to stop it. Re-raising (2026-08-28) made the loop end; it
+            # did not make the stop arrive (2026-08-29).
+            #
+            # Set here, the workers see it at their next `check_cancelled()`
+            # and abort into their own `finally`, which stops the phone and
+            # releases the row.
+            interrupted = True
+            print("\ninterrupted - stopping every phone this run started",
+                  flush=True)
+            shutting_down.set()
+            for future in futures:
+                future.cancel()
+    # The drain happened above, with the flag already set.
+    if interrupted:
         _stop_all(client, started, ledger)
-        raise                        # see the serial path above
+        raise KeyboardInterrupt      # see the serial path above
 
     builds = []
     for future, index in futures.items():

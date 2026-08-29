@@ -626,7 +626,8 @@ def test_an_interrupted_batch_does_not_let_the_service_carry_on_either(
     """The pool path, which every parallel pass now goes through."""
     _job_world(monkeypatch, [])
 
-    def interrupted(_futures):
+    def interrupted(_futures, timeout=None):
+        # The real one is polled now, so the fake takes the timeout too.
         raise KeyboardInterrupt
 
     monkeypatch.setattr(builder, "wait", interrupted)
@@ -3021,3 +3022,58 @@ def test_only_the_field_it_was_given_is_written():
                          Gmail="a@example.com")
 
     assert wrote == {"Gmail": "a@example.com"}
+
+
+def test_a_batch_is_polled_so_a_signal_can_land(device, settings, monkeypatch):
+    """A bare `wait(futures)` blocks until every worker is done, and Python
+    delivers KeyboardInterrupt only at a bytecode boundary - so `docker stop`
+    was not acted on until the whole batch had finished. Longer than
+    `stop_grace_period`, so SIGKILL arrived first and the phones stayed up
+    billing (2026-08-29). Measured: interrupt at 0.30s, handled at 1.20s.
+    """
+    _job_world(monkeypatch, [])
+    seen = []
+
+    def polled(futures, timeout=None):
+        seen.append(timeout)
+        return set(futures), set()
+
+    monkeypatch.setattr(builder, "wait", polled)
+
+    builder.run(None, settings, count=2, workers=2)
+
+    assert seen and all(t is not None for t in seen), (
+        "the wait has to have a timeout, or the signal never lands")
+    assert seen[0] == builder.STOP_POLL_SECONDS
+
+
+def test_the_workers_are_told_to_stop_before_the_pool_is_drained(
+        device, settings, monkeypatch):
+    """The flag is what each job's `check_cancelled` reads. Set after the
+    drain, it is set after every build has already finished - which is the
+    same as not setting it."""
+    _job_world(monkeypatch, [])
+    order = []
+
+    def polled(futures, timeout=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builder, "wait", polled)
+    monkeypatch.setattr(builder, "_stop_all",
+                        lambda *a: order.append("stop_all"))
+
+    class Watched:
+        def __init__(self):
+            self._set = False
+
+        def set(self):
+            order.append("flag")
+            self._set = True
+
+        def is_set(self):
+            return self._set
+
+    with pytest.raises(KeyboardInterrupt):
+        builder.run(None, settings, count=2, workers=2, cancel=Watched())
+
+    assert order == ["flag", "stop_all"], order

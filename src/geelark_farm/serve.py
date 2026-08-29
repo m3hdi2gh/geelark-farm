@@ -637,7 +637,8 @@ def _controls(client: Client, book: Book, ledger,
 
 
 def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
-         probe_proxies: bool = True) -> Decision:
+         probe_proxies: bool = True,
+         stopping: threading.Event | None = None) -> Decision:
     """One pass: bring the sheet up to date, then act on what it says."""
     from . import builder
 
@@ -733,7 +734,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                  count=decision.jobs,
                                  finish_limit=decision.finish,
                                  workers=decision.jobs,
-                                 finish_first=bool(decision.finish)):
+                                 finish_first=bool(decision.finish),
+                                 cancel=stopping):
             fuse.record(build)
     return decision
 
@@ -771,7 +773,8 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         beat(settings)
         guard.began()
         try:
-            once(client, settings, fuse, slots, probe_proxies=probe)
+            once(client, settings, fuse, slots, probe_proxies=probe,
+                 stopping=stop)
         except KeyboardInterrupt:
             raise
         except Exception:                                     # noqa: BLE001
