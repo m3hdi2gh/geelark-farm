@@ -955,6 +955,19 @@ class PhoneLog:
     #: without this `incomplete` covered "waiting on an app account" and "the
     #: app never installed" with one word (2026-08-21).
     APP_COLUMN = "App"
+    #: How many finishes this phone has been through without becoming ready.
+    #:
+    #: A phone keeps its Gmail and its empty GPT Account whatever goes wrong,
+    #: so `unfinished` goes on offering it - and a fault that is not going to
+    #: clear on its own is then a boot, a wait and a failure every time an
+    #: account arrives. An install that fails because the network was slow does
+    #: succeed on the second go, which is why the answer is a few tries and not
+    #: one (2026-08-29).
+    TRIES_COLUMN = "Tries"
+    #: Tried this many times without success, and it stops being offered.
+    #: Three, because the retry is worth having and the fourth has never told
+    #: anybody anything the third did not.
+    GIVE_UP_AFTER = 3
 
     #: How the three step columns read at a glance. `Gmail` and `GPT Account`
     #: hold the address that signed in, because the address is the useful
@@ -1102,6 +1115,11 @@ class PhoneLog:
             # and a phone somebody is holding must not be on it.
             if cell("State").strip().casefold() not in ("", self.UNUSED):
                 continue
+            if self.tries(cells) >= self.GIVE_UP_AFTER:
+                # Still in the tab, still readable, simply not offered again.
+                # Clearing the cell puts it back in the queue, which is what
+                # somebody does after fixing whatever it kept failing on.
+                continue
             if not self.said(cell("Gmail")) or self.said(cell("GPT Account")):
                 continue
             # The reason is the head of the note now, not the status - which
@@ -1126,6 +1144,32 @@ class PhoneLog:
         # of accounts into ready phones sooner.
         found.sort(key=lambda row: row["app"] != self.INSTALLED)
         return found
+
+    @staticmethod
+    def tries(cells: dict) -> int:
+        """How many finishes this row has been through. Unreadable counts as
+        none: a hand-typed word in the cell must not take a phone out of the
+        queue for ever without saying so."""
+        try:
+            return int(str(cells.get(PhoneLog.TRIES_COLUMN, "")).strip() or 0)
+        except ValueError:
+            return 0
+
+    def count_try(self, serial: str) -> int:
+        """Record one more attempt on this phone, and say how many that makes.
+
+        By serial rather than a remembered row number, like everything else
+        that writes here after a build has started: a sibling discarding its
+        phone shifts every row below it.
+        """
+        wanted = str(serial).strip()
+        for _offset, cells in self._typed_rows("the Phones tab"):
+            if (cells.get("Serial") or "").strip() != wanted:
+                continue
+            made = self.tries(cells) + 1
+            self.write(serial, **{self.TRIES_COLUMN: str(made)})
+            return made
+        return 0
 
     def counts(self) -> dict[str, int]:
         """How many phones of each kind the tab holds.
@@ -1759,7 +1803,8 @@ class Book:
                              checkboxes=(AppPool.EMAIL_CODE_COLUMN,)), lock),
             phones=PhoneLog(tabs[PHONES_TAB],
                             ensure_columns(tabs[PHONES_TAB],
-                                           PhoneLog.APP_COLUMN), lock),
+                                           PhoneLog.APP_COLUMN,
+                                           PhoneLog.TRIES_COLUMN), lock),
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,
             service=service,
         )

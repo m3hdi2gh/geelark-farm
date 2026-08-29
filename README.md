@@ -188,6 +188,14 @@ The first two are products and either can be taken off the shelf. `incomplete`
 is neither a product nor a run in progress, and the `App` column beside it
 reads `✗` — the status and that column always agree.
 
+`Tries` counts the finishes a phone has been through without becoming `ready`.
+A phone keeps its Gmail and its empty `GPT Account` whatever goes wrong, so it
+would otherwise be offered again every time an account arrives — a boot, a
+wait and a failure each time. At three it stops being offered; clear the cell
+to put it back, which is what you do after fixing whatever it kept failing on.
+An attempt that only found somebody else already using the phone is not
+counted.
+
 The second is not a failure. It is what a run produces when the `Gpt Info` tab
 is empty, and it is one step from the first — which is why the service keeps
 `WARM_STOCK` of them: an account arriving finds a phone waiting instead of

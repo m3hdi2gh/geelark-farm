@@ -1065,6 +1065,12 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # A proxy swapped in during finishing belongs to this phone now.
         _release(book, build,
                  _session_holds(book, session, proxy_spent=True))
+        # One more attempt on the tally, but only for a finish that neither
+        # worked nor refused before it started. `in_use_by_hand` is somebody
+        # else using the phone and says nothing about the phone; counting it
+        # would retire a perfectly good one for being popular (2026-08-29).
+        if not build.ok and build.status != "in_use_by_hand":
+            _count_try(book, build)
         _write_row(book, build)
         try:
             phones.stop(client, phone_id)
@@ -1400,6 +1406,27 @@ def _note_on_row(book: Book, serial: str, **fields: str) -> None:
         log.warning("could not note %s on phone %s's row (%s); a run "
                     "interrupted from here would leave the row saying less "
                     "than is true", what, serial, exc)
+
+
+def _count_try(book: Book, build: Build) -> None:
+    """Tally one failed finish, and say so on the row when it is the last one.
+
+    Never raises: it is called from a `finally`, where an exception replaces
+    the value the function was about to return.
+    """
+    try:
+        made = book.phones.count_try(build.serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not count the attempt on %s (%s)", build.serial, exc)
+        return
+    limit = book.phones.GIVE_UP_AFTER
+    if made >= limit:
+        log.warning("phone %s has failed %d finishes; it will not be offered "
+                    "again until the %s cell is cleared",
+                    build.serial, made, book.phones.TRIES_COLUMN)
+        build.detail = (f"{build.detail}. Tried {made} times and set aside - "
+                        f"clear the {book.phones.TRIES_COLUMN} cell to offer "
+                        f"it again").strip(". ")
 
 
 def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:

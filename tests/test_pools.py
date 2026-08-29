@@ -1320,10 +1320,10 @@ def test_the_three_readers_agree_about_what_a_row_is():
 
     source = inspect.getsource(PhoneLog)
 
-    # One definition and four users: rows, unfinished, marked, counts. The
-    # number is the point - a reader that walked the tab with its own copy of
-    # the rule is exactly what this catches.
-    assert source.count("_typed_rows(") == 5
+    # One definition and five users: rows, unfinished, marked, counts,
+    # count_try. The number is the point - a reader that walked the tab with
+    # its own copy of the rule is exactly what this catches.
+    assert source.count("_typed_rows(") == 6
     assert "if not any(line)" not in source
 
 
@@ -1969,3 +1969,73 @@ def test_the_sheets_client_is_given_a_timeout():
         for line in source.splitlines():
             if "gspread.authorize(" in line:
                 assert "with_timeout(" in line, (module.__name__, line.strip())
+
+
+# --------------------------------------------- giving up on a hopeless phone
+def tries_tab(rows):
+    from geelark_farm.pools import PhoneLog
+    head = ["Created", "Serial", "State", "Proxy", "Gmail", "App",
+            "GPT Account", "Status", "Note", "Tries"]
+    return PhoneLog(FakeWorksheet(head, rows), head, threading.Lock())
+
+
+def a_try_row(serial, tries="", status="app_only"):
+    return ["2026-08-29", serial, "", "SX1", "a@b.com", "✓", "", status, "",
+            tries]
+
+
+def test_a_phone_that_keeps_failing_stops_being_offered():
+    """A phone keeps its Gmail and its empty GPT Account whatever goes wrong,
+    so `unfinished` went on offering it - and a fault that will not clear on
+    its own was then a boot, a wait and a failure every time an account
+    arrived (2026-08-29)."""
+    from geelark_farm.pools import PhoneLog
+
+    log = tries_tab([a_try_row("1501", tries=str(PhoneLog.GIVE_UP_AFTER)),
+                     a_try_row("1502", tries="1")])
+
+    assert [r["serial"] for r in log.unfinished()] == ["1502"]
+
+
+def test_the_retry_is_worth_having():
+    """An install that failed because the network was slow succeeds on the
+    second go, which is why the answer is a few tries and not one."""
+    from geelark_farm.pools import PhoneLog
+
+    assert PhoneLog.GIVE_UP_AFTER > 1
+    log = tries_tab([a_try_row("1503", tries="1"), a_try_row("1504", tries="2")])
+
+    assert len(log.unfinished()) == 2
+
+
+def test_clearing_the_cell_puts_the_phone_back():
+    """What somebody does after fixing whatever it kept failing on."""
+    from geelark_farm.pools import PhoneLog
+
+    log = tries_tab([a_try_row("1505", tries=str(PhoneLog.GIVE_UP_AFTER))])
+    assert log.unfinished() == []
+
+    back = tries_tab([a_try_row("1505", tries="")])
+    assert [r["serial"] for r in back.unfinished()] == ["1505"]
+
+
+def test_a_hand_typed_word_does_not_retire_a_phone_for_ever():
+    """Unreadable counts as none: a cell somebody typed into must not take a
+    phone out of the queue silently and permanently."""
+    log = tries_tab([a_try_row("1506", tries="lots")])
+
+    assert [r["serial"] for r in log.unfinished()] == ["1506"]
+
+
+def test_counting_an_attempt_writes_it_back():
+    log = tries_tab([a_try_row("1507", tries="1")])
+
+    assert log.count_try("1507") == 2
+    assert [r["serial"] for r in tries_tab(log._ws.rows).unfinished()] == ["1507"]
+
+
+def test_counting_a_phone_that_is_not_there_is_not_an_error():
+    """Called from a `finally`, where raising replaces the outcome."""
+    log = tries_tab([a_try_row("1508")])
+
+    assert log.count_try("9999") == 0
