@@ -1568,6 +1568,18 @@ class Book:
         try:
             if SERVICE_TAB in tabs:
                 sheet = tabs[SERVICE_TAB]
+                if sheet.col_count < 4:
+                    # A tab made before the controls existed. Writing C2 into a
+                    # two-column grid is a 400, and the `except` below would
+                    # take the whole board down with it - so the one thing the
+                    # operator reads would go blank because a feature was
+                    # added. Widen it in place instead (2026-08-29).
+                    sheet.resize(rows=max(sheet.row_count,
+                                          len(ServiceBoard.ROWS) + 1), cols=4)
+                    sheet.update([["What", "Now", "Ask for", "Tick"]], "A1:D1",
+                                 value_input_option="RAW")
+                    _make_checkbox(sheet, 3)
+                    _dress_service(sheet, len(ServiceBoard.ROWS))
             else:
                 sheet = book.add_worksheet(
                     SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 1, cols=4)
