@@ -403,3 +403,57 @@ def test_each_wait_is_longer_than_the_one_before(tmp_path, monkeypatch):
 
     assert naps == sorted(naps)
     assert naps[-1] > naps[0]
+
+
+# ----------------------------------------- keeping a live claim looking live
+def test_a_held_claim_is_restamped(tmp_path, monkeypatch):
+    """It was written once and never refreshed, and the window is five
+    minutes - so a build past its fifth minute read as abandoned to
+    `settle_abandoned` and `apply_phone_states`, both of which spare a phone
+    only while its claim is live. Serial passes were the only thing keeping
+    that harmless (2026-08-29)."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    book = ledger_mod.Ledger.load(tmp_path)
+    book.record("P1", label="build 1")
+    book.claim("P1")
+
+    clock["t"] += ledger_mod.STALE_CLAIM_SECONDS + 1
+    assert book.get("P1").is_stale, "this is the state it used to be left in"
+
+    assert book.beat() == ["P1"]
+    assert not book.get("P1").is_stale
+
+
+def test_a_released_claim_is_left_alone(tmp_path, monkeypatch):
+    """Restamping one would make a finished phone look like a live build, and
+    nothing would ever clean it up."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    book = ledger_mod.Ledger.load(tmp_path)
+    book.record("P1")
+    book.claim("P1")
+    book.release("P1")
+
+    assert book.beat() == []
+    assert not book.get("P1").is_claimed
+
+
+def test_a_beat_survives_a_restart(tmp_path, monkeypatch):
+    """The stamp has to be on disk, not in this process's memory: the thing it
+    protects against is another process's sync."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    book = ledger_mod.Ledger.load(tmp_path)
+    book.record("P1")
+    book.claim("P1")
+    clock["t"] += 400
+    book.beat()
+
+    assert not ledger_mod.Ledger.load(tmp_path).get("P1").is_stale

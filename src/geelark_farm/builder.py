@@ -2273,7 +2273,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                   f"({build.seconds:.0f}s)", flush=True)
         return build
 
-    stop_beating = _start_heartbeat(book)
+    stop_beating = _start_heartbeat(book, ledger)
     try:
         return _drive_jobs(client, settings, jobs, work=work, workers=workers,
                            started=started, ledger=ledger, total=total,
@@ -2285,7 +2285,8 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         restore_logging()
 
 
-def _start_heartbeat(book: Book) -> Callable[[], None]:
+def _start_heartbeat(book: Book, ledger: Ledger | None = None
+                     ) -> Callable[[], None]:
     """Restamp what this run is holding, for as long as it is holding it.
 
     Returns the way to stop. A daemon thread so an interpreter on its way out
@@ -2310,6 +2311,18 @@ def _start_heartbeat(book: Book) -> Callable[[], None]:
                 continue
             if held:
                 log.debug("refreshed %d claim(s)", held)
+            if ledger is not None:
+                # The ledger's claims too. They were written once and never
+                # refreshed, and its staleness window is the same five minutes
+                # the sheet uses - so a build past its fifth minute read as
+                # abandoned to `settle_abandoned` and `apply_phone_states`,
+                # both of which spare a phone only while its claim is live.
+                # Serial passes were the only thing keeping that harmless.
+                try:
+                    ledger.beat()
+                except Exception as exc:                          # noqa: BLE001
+                    log.warning("could not refresh the ledger claims this run "
+                                "is holding (%s)", exc)
 
     thread = threading.Thread(target=beating, name="claims", daemon=True)
     thread.start()

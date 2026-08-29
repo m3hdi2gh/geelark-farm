@@ -220,6 +220,32 @@ class Ledger:
             self.save()
             return entry
 
+    def beat(self) -> list[str]:
+        """Restamp every claim this process is holding. Returns their ids.
+
+        A claim was written once and never refreshed, and `is_stale` is five
+        minutes - so a build past its fifth minute reads as abandoned to
+        anything that asks, including `settle_abandoned` and
+        `apply_phone_states`, both of which spare a phone only while its claim
+        is live and unstale.
+
+        Nothing has been hurt by that yet for one reason: passes are serial, so
+        while a build is running no other pass is looking. That is the whole of
+        the protection, and it is not a property of the ledger - it is a
+        property of the loop's shape. This is what makes the ledger say the
+        truth on its own, which is the prerequisite for ever letting two passes
+        overlap (2026-08-29).
+        """
+        with self._lock:
+            now = _now()
+            held = [phone_id for phone_id, entry in self.entries.items()
+                    if entry.is_claimed]
+            for phone_id in held:
+                self.entries[phone_id].claimed_at = now
+            if held:
+                self.save()
+            return held
+
     def release(self, phone_id: str, note: str = "") -> None:
         """Mark the run finished with this phone. After this it should be
         stopped, and reap will stop it if it is not."""
