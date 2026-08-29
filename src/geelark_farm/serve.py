@@ -391,10 +391,25 @@ def needs_you(outcome: dict) -> str:
     if stopped_short:
         said.append(f"{len(stopped_short)} sync step(s) stopped short "
                     f"({', '.join(stopped_short)})")
+    # Unaccounted phones are two problems, not one, and saying them as one
+    # made the urgent half unanswerable: `Stop unaccounted phones` stopped the
+    # one that was billing and the line went on saying "they bill until
+    # somebody stops them" about two that no longer did. A warning nobody can
+    # clear is one nobody reads (2026-08-29).
+    billing = outcome.get("unknown_running") or []
+    if billing:
+        said.append(f"{len(billing)} phone(s) GeeLark has that this sheet "
+                    f"never recorded are RUNNING and billing - tick `Stop "
+                    f"unaccounted phones`")
+    idle = [s for s in (outcome.get("unknown_phones") or [])
+            if s not in set(billing)]
+    if idle:
+        said.append(f"{len(idle)} phone(s) GeeLark has that this sheet never "
+                    f"recorded are stopped - they cost nothing per minute but "
+                    f"hold a profile slot each, so delete them in the panel "
+                    f"({', '.join(idle)})")
+
     for key, phrase in (
-            ("unknown_phones",
-             "{n} phone(s) GeeLark has that this sheet never recorded - "
-             "they bill until somebody stops them"),
             ("stranded_waiting",
              "{n} account(s) whose phone is gone, which nothing here will "
              "guess about"),

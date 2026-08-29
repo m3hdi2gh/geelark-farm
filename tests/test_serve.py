@@ -264,7 +264,7 @@ def test_what_a_sync_could_not_finish_reaches_the_sheet():
     })
 
     assert "proxies" in said
-    assert "2 phone(s)" in said and "bill" in said
+    assert "2 phone(s)" in said and "profile slot" in said
     assert "1 account(s)" in said
 
 
@@ -1105,3 +1105,34 @@ def test_a_pass_that_began_is_timed_and_one_that_ended_is_not():
     guard.ended()
 
     assert guard.age() is None
+
+
+def test_a_running_unrecorded_phone_is_told_apart_from_a_stopped_one():
+    """Two problems with two different answers. Said as one, the urgent half
+    was unanswerable: `Stop unaccounted phones` stopped the one that was
+    billing and the line went on saying "they bill until somebody stops them"
+    about two that no longer did - a warning nobody could clear, which is a
+    warning nobody reads (2026-08-29)."""
+    said = serve_mod.needs_you({"unknown_phones": ["1357", "1358", "1360"],
+                                "unknown_running": ["1360"]})
+
+    assert "1 phone(s)" in said and "RUNNING and billing" in said
+    assert "Stop unaccounted phones" in said, "and what to do about it"
+    assert "2 phone(s)" in said and "hold a profile slot" in said
+    assert "1357, 1358" in said, "named, because deleting them is by hand"
+
+
+def test_stopped_unrecorded_phones_are_never_called_billing():
+    """The sentence that was wrong."""
+    said = serve_mod.needs_you({"unknown_phones": ["1357", "1358"]})
+
+    assert "billing" not in said
+    assert "hold a profile slot" in said
+
+
+def test_a_phone_is_not_reported_twice():
+    said = serve_mod.needs_you({"unknown_phones": ["1360"],
+                                "unknown_running": ["1360"]})
+
+    assert said.count("1360") <= 1
+    assert "stopped" not in said

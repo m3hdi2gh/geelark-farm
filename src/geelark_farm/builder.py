@@ -2021,15 +2021,30 @@ def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
     guessing wrong either retires an account that was never used or frees one
     that is with a customer.
     """
-    alive = {str(p.get("serialNo") or "") for p in phones.listing(client)}
+    listing = phones.listing(client)
+    alive = {str(p.get("serialNo") or "") for p in listing}
     known = {str(row.get("Serial") or "").strip() for row in book.phones.rows()}
     outcome: dict[str, list[str]] = {}
 
     unknown = sorted(s for s in alive if s and s not in known)
     if unknown:
         outcome["unknown_phones"] = unknown
+        # Which of them are running, separately, because the two are different
+        # problems with different answers. A running one bills by the minute
+        # and `Stop unaccounted phones` deals with it. A stopped one costs
+        # nothing per minute but still holds a profile slot - and slots are
+        # what bound the warm stock - and the only answer to that is a person
+        # deleting it in the panel. Reported as one thing, the urgent half was
+        # unanswerable and the whole line became a warning nobody could ever
+        # clear (2026-08-29).
+        running = {str(p.get("serialNo") or "") for p in listing
+                   if p.get("status") in (phones.RUNNING, phones.STARTING)}
+        billing = sorted(s for s in unknown if s in running)
+        if billing:
+            outcome["unknown_running"] = billing
         log.warning("%d phone(s) exist that the Phones tab has never heard "
-                    "of: %s", len(unknown), ", ".join(unknown))
+                    "of: %s%s", len(unknown), ", ".join(unknown),
+                    f" ({len(billing)} running)" if billing else "")
 
     retired, waiting = [], []
     for pool, held in ((book.gmails, retired), (book.apps, waiting)):
