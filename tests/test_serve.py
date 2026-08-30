@@ -310,7 +310,7 @@ class Recorder:
                             SimpleNamespace(open=lambda s: SimpleNamespace(
                                 reload=lambda: None, apps=None, service=None)))
         monkeypatch.setattr(serve_mod, "Ledger",
-                            SimpleNamespace(load=lambda d: None))
+                            SimpleNamespace(load=lambda d, **k: None))
         monkeypatch.setattr(builder, "sync_sheet",
                             lambda *a, **k: self.bump("synced") or {})
         monkeypatch.setattr(builder, "run", self._run(fails))
@@ -406,7 +406,7 @@ def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
-                        staticmethod(lambda p: FakeLedger()))
+                        staticmethod(lambda p, **k: FakeLedger()))
     monkeypatch.setattr(serve_mod.Slots, "look", lambda self_, c, now: 10)
     monkeypatch.setattr(builder.phones, "prune_ledger", lambda c, l: [])
 

@@ -740,7 +740,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     from . import builder
 
     book = Book.open(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
@@ -908,8 +909,15 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         log.warning("passes will not wait for their work: the sheet keeps "
                     "moving, and several batches can be in flight at once")
 
-    log.info("serving: %d warm phones, a pass every %ds",
-             settings.warm_stock, settings.serve_interval_seconds)
+    # The staleness window is in the first line of every log file on purpose.
+    # It is one number measuring two things - how long before a dead run's
+    # phone is settled, and how long before its credentials go back in the
+    # pool - and when those two disagreed, one account sat on two phones for
+    # 115 minutes (2026-08-28). `.env` can move it, so no deploy should be
+    # able to move it quietly (2026-08-31).
+    log.info("serving: %d warm phones, a pass every %ds, claims go stale "
+             "after %ds", settings.warm_stock,
+             settings.serve_interval_seconds, settings.stale_claim_seconds)
     done = 0
     probed: float | None = None
     while not stop.is_set() and (passes is None or done < passes):

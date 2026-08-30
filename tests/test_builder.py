@@ -537,7 +537,8 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
-    monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p, **k: FakeLedger()))
 
     jobs = []
     monkeypatch.setattr(builder, "finish_one",
@@ -559,7 +560,7 @@ def _job_world(monkeypatch, waiting):
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
-                        staticmethod(lambda p: FakeLedger()))
+                        staticmethod(lambda p, **k: FakeLedger()))
     jobs = []
     monkeypatch.setattr(builder, "finish_one",
                         lambda *a, **k: jobs.append("finish")
@@ -648,7 +649,8 @@ def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
     monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
-    monkeypatch.setattr(builder.Ledger, "load", staticmethod(lambda p: FakeLedger()))
+    monkeypatch.setattr(builder.Ledger, "load",
+                        staticmethod(lambda p, **k: FakeLedger()))
 
     jobs = []
     monkeypatch.setattr(builder, "finish_one",
@@ -3076,7 +3078,7 @@ def test_a_finished_build_stops_labelling_the_lines_after_it(
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
-                        staticmethod(lambda p: FakeLedger()))
+                        staticmethod(lambda p, **k: FakeLedger()))
     monkeypatch.setattr(builder, "build_one",
                         lambda *a, **k: builder.Build(index=a[4], ok=True,
                                                       status="ready"))
@@ -3099,7 +3101,7 @@ def test_the_label_is_on_while_the_build_is_running(device, settings,
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
-                        staticmethod(lambda p: FakeLedger()))
+                        staticmethod(lambda p, **k: FakeLedger()))
     monkeypatch.setattr(builder, "build_one",
                         lambda *a, **k: seen.append(builder._context.build)
                         or builder.Build(index=a[4], ok=True, status="ready"))

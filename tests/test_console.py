@@ -832,7 +832,7 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
     reaped = {}
     monkeypatch.setattr(ui, "build_client", lambda s: object())
     monkeypatch.setattr(ui.Ledger, "load",
-                        staticmethod(lambda d: SimpleNamespace(
+                        staticmethod(lambda d, **k: SimpleNamespace(
                             get=lambda i: None)))
     monkeypatch.setattr(ui.phones, "listing", lambda c: [
         {"id": "P1", "serialNo": "801", "status": ui.phones.RUNNING},
@@ -849,7 +849,8 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
     monkeypatch.setattr(ui.phones, "reap", reap)
     monkeypatch.setattr(ui.Prompt, "ask", staticmethod(lambda *a, **k: "u"))
 
-    ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+    ui.stop_phones(SimpleNamespace(state_dir="/nowhere",
+                                   stale_claim_seconds=300))
 
     assert reaped["got"] == shown
 
@@ -860,7 +861,7 @@ def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
 
     monkeypatch.setattr(ui, "build_client", lambda s: object())
     monkeypatch.setattr(ui.Ledger, "load",
-                        staticmethod(lambda d: SimpleNamespace(
+                        staticmethod(lambda d, **k: SimpleNamespace(
                             get=lambda i: None)))
     monkeypatch.setattr(ui.phones, "reapable", lambda c, book: [])
     monkeypatch.setattr(ui.phones, "listing", lambda c: [
@@ -874,7 +875,8 @@ def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
 
     monkeypatch.setattr(ui, "stop_all", stop_all)
 
-    ui.stop_phones(SimpleNamespace(state_dir="/nowhere"))
+    ui.stop_phones(SimpleNamespace(state_dir="/nowhere",
+                                   stale_claim_seconds=300))
 
     assert asked["t"] == ["P1"]
 
@@ -1491,7 +1493,7 @@ def book_of(*, gmails=None, apps=None, proxies=None, unfinished=()):
 
 
 def showing(monkeypatch, book):
-    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s: book))
+    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s, **k: book))
 
 
 # ----------------------------------------------------- needs attention
@@ -1946,7 +1948,7 @@ def test_freeing_stuck_rows_only_happens_when_it_is_agreed_to(monkeypatch,
     wired(monkeypatch)
     freed: list[int] = []
     monkeypatch.setattr(ui.Confirm, "ask", staticmethod(lambda *a, **k: False))
-    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s: type("B", (), {
+    monkeypatch.setattr(ui.Book, "open", staticmethod(lambda s, **k: type("B", (), {
         "release_stuck": staticmethod(lambda: freed.append(1) or 1)})()))
     menu_session(monkeypatch, "6", "q")
     monkeypatch.setattr(ui, "take_snapshot", lambda s: snapshot(pools_stuck=2))
@@ -1954,3 +1956,41 @@ def test_freeing_stuck_rows_only_happens_when_it_is_agreed_to(monkeypatch,
     ui.run_console(make_settings())
 
     assert freed == [], "it freed rows nobody agreed to free"
+
+
+# ----------------------------- every ledger the program loads carries the window
+def test_every_ledger_the_program_loads_carries_the_resolved_window():
+    """`Ledger.load` takes the staleness window as a keyword with a default,
+    so a call that forgets it is not an error - it quietly measures claims
+    against the module constant while the credential side measures them
+    against the setting. That gap is the 2026-08-28 incident, where one
+    ChatGPT account sat on two phones for 115 minutes.
+
+    The keyword is defaulted deliberately: a required argument would break
+    every hand-built Ledger in the suite and every future one, for a mistake
+    only production can make. So the guard is here instead, and it is the
+    thing that catches the nineteenth call site somebody adds next month
+    (2026-08-31).
+    """
+    import geelark_farm.builder, geelark_farm.cli, geelark_farm.serve, geelark_farm.ui
+
+    missing = []
+    for module in (geelark_farm.builder, geelark_farm.cli,
+                   geelark_farm.serve, geelark_farm.ui):
+        path = pathlib.Path(module.__file__)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if ast.unparse(node.func) != "Ledger.load":
+                continue
+            window = next((kw for kw in node.keywords
+                           if kw.arg == "stale_after"), None)
+            if window is None or ast.unparse(window.value) != \
+                    "settings.stale_claim_seconds":
+                missing.append(f"{path.name}:{node.lineno}")
+
+    assert not missing, (
+        "these Ledger.load calls measure claims against the module default "
+        "while the credentials measure them against the setting: "
+        + ", ".join(missing))

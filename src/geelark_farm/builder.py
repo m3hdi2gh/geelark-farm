@@ -2497,7 +2497,8 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     # own dict, so two of them in a process erase each other's phones - and a
     # phone missing from the ledger is one `reap` calls an orphan and stops
     # (2026-08-29).
-    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     phones.prune_ledger(client, ledger)
     restore_logging = install_build_logging()
 
@@ -2791,7 +2792,8 @@ def run(client: Client, settings: Settings, *, count: int,
     # (2026-08-29).
     synced = book is not None
     book = book if book is not None else Book.open(settings)
-    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     if not dry_run and not synced:
         sync_sheet(client, book, ledger,
                    artifact_dir=settings.artifact_dir,
@@ -2874,7 +2876,8 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
     """Complete every phone that is one step short, and build nothing."""
     synced = book is not None
     book = book if book is not None else Book.open(settings)
-    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir)
+    ledger = ledger if ledger is not None else Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     if not dry_run and not synced:
         # A finish reuses the phone's own exit and only takes a free one if
         # it has to swap, so the pool check is worth its seconds here too -

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import json
 import time
 
 import pytest
@@ -73,18 +74,57 @@ def test_the_ledger_and_the_pools_go_stale_at_the_same_moment():
     Pinned rather than commented, because a comment did not stop it.
     """
     from geelark_farm import config
-    from geelark_farm.config import Settings
 
     assert ledger_mod.STALE_CLAIM_SECONDS == config.STALE_CLAIM_DEFAULT
-    # And against the number the run will actually use. The line above pins
-    # the ledger to the default; the credential side resolves the *setting*,
-    # which `.env.example` invites you to override. Uncomment that line and
-    # the phone lease stays 300s while the credential lease becomes 3600s -
-    # the exact gap of 2026-08-28, which this test claimed to prevent and
-    # could not see (2026-08-30).
-    assert ledger_mod.STALE_CLAIM_SECONDS == Settings.load().stale_claim_seconds, (
-        "STALE_CLAIM_SECONDS in the environment moves the credential lease "
-        "and not the phone lease; they have to be one number")
+    # The pin this test claimed to make and could not: it compared the
+    # constant to its own default, so an environment that moved only the
+    # credential lease was invisible to it (2026-08-30). It is now enforced by
+    # construction instead - a Ledger carries the resolved window and stamps
+    # it on every entry - and the three tests below hold the construction up.
+    # This line stays because the default is still the fallback for a Ledger
+    # loaded without one.
+
+
+def test_the_phone_lease_is_the_number_the_environment_set(tmp_path):
+    """The window a run measures claims against comes from the setting, not
+    from the module constant. That gap is what let one ChatGPT account sit on
+    two phones for 115 minutes (2026-08-28)."""
+    led = ledger_mod.Ledger.load(tmp_path, stale_after=1800)
+    led.record("P1", serial="1")
+    led.claim("P1")
+
+    led.get("P1").claimed_at = time.time() - 1795
+    assert not led.get("P1").is_stale
+    led.get("P1").claimed_at = time.time() - 1805
+    assert led.get("P1").is_stale
+
+
+def test_the_window_is_never_written_into_the_ledger_file(tmp_path):
+    """A persisted window is a strictly worse version of 2026-08-28: a phone
+    claimed under yesterday's number would keep it for ever, across restarts,
+    invisibly - and no environment could move it back."""
+    led = ledger_mod.Ledger.load(tmp_path, stale_after=1800)
+    led.record("P1", serial="1")
+    led.claim("P1")
+    led.save()
+
+    on_disk = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))
+    assert "stale_after" not in on_disk["phones"]["P1"]
+
+    # and a Ledger loaded with a different window answers to that one
+    again = ledger_mod.Ledger.load(tmp_path, stale_after=300)
+    again.get("P1").claimed_at = time.time() - 400
+    assert again.get("P1").is_stale, "the reloaded entry kept the old window"
+
+
+def test_a_window_is_not_a_field_so_it_cannot_be_persisted():
+    """The mechanical guard behind the test above. `save` serialises every
+    dataclass field and `load` restores every field it knows by name, so the
+    window has to be a ClassVar to stay out of the file."""
+    from dataclasses import fields as dataclass_fields
+
+    assert "stale_after" not in {f.name
+                                 for f in dataclass_fields(ledger_mod.Entry)}
 
 
 def test_a_corrupt_ledger_loads_empty_instead_of_crashing(tmp_path, caplog):

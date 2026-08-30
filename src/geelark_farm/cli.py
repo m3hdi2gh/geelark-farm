@@ -23,8 +23,8 @@ checks this list against the parser rather than against nothing.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import contextlib
+import dataclasses
 import logging
 import signal
 import sys
@@ -333,7 +333,8 @@ def refuse_if_busy(settings: Settings, phone_id: str) -> None:
     with Google. The ledger already tracks who holds a phone; this is what that
     claim is for.
     """
-    entry = Ledger.load(settings.state_dir).get(phone_id)
+    entry = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds).get(phone_id)
     if entry and entry.is_claimed and not entry.is_stale:
         raise SystemExit(
             f"phone {phone_id} is in use by another run "
@@ -346,7 +347,8 @@ def refuse_if_busy(settings: Settings, phone_id: str) -> None:
 
 def cmd_phones(settings: Settings, args) -> int:
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     # Phones also get deleted from the GeeLark panel directly; drop their
     # entries so the ledger describes what actually exists.
     phones.prune_ledger(client, ledger)
@@ -388,7 +390,8 @@ def cmd_create(settings: Settings, args) -> int:
     print(f"  outbound {result.get('outboundIP')} / "
           f"{result.get('country') or 'unknown country'}")
 
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     entry = phones.create(client, settings, parsed, ledger=ledger,
                           name=args.name, label=args.label)
     print(f"created {entry.phone_id} (serial {entry.serial}), recorded in the ledger")
@@ -419,7 +422,8 @@ def cmd_delete(settings: Settings, args) -> int:
         if answer not in ("y", "yes"):
             print("cancelled")
             return 1
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     phones.delete(client, [args.phone], ledger=ledger)
     print(f"deleted {args.phone}")
     return 0
@@ -427,7 +431,8 @@ def cmd_delete(settings: Settings, args) -> int:
 
 def cmd_reap(settings: Settings, args) -> int:
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     verdicts = phones.reapable(client, ledger)
     if not verdicts:
         print("nothing to reap - no phone is running unaccounted for")
@@ -520,7 +525,8 @@ def cmd_start(settings: Settings, args) -> int:
 
 def cmd_stop(settings: Settings, args) -> int:
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     if args.all:
         targets = [p["id"] for p in phones.listing(client)
                    if p.get("status") in (phones.RUNNING, phones.STARTING)]
@@ -655,7 +661,8 @@ def cmd_login(settings: Settings, args) -> int:
     either way, so an interrupted experiment cannot leave one billing.
     """
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     account = pick_account(settings, args.row)
     print(f"account: {account.label}")
 
@@ -847,7 +854,8 @@ def cmd_pools(settings: Settings, args) -> int:
     if args.no_sync:
         print("(reporting the tabs as they stand; --no-sync)\n")
     for label, items in ({} if args.no_sync else builder.sync_sheet(
-            client, book, Ledger.load(settings.state_dir),
+            client, book, Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds),
             # A report does not delete phones. `geelark build` carries out the
             # State column, and the console does after showing what it will do.
             apply_marks=False)).items():
@@ -875,7 +883,8 @@ def cmd_install(settings: Settings, args) -> int:
     failure would otherwise read as "no Install button".
     """
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     package = args.package or settings.target_package
     phone_id = resolve_phone(client, args.phone)
     refuse_if_busy(settings, phone_id)

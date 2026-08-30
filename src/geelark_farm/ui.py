@@ -1002,7 +1002,8 @@ def setup_view(settings: Settings) -> Table:
 
 def phones_table(settings: Settings) -> Table:
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     phones.prune_ledger(client, ledger)
 
     table = Table(box=None, padding=(0, 2))
@@ -1231,7 +1232,8 @@ def sync_on_startup(settings: Settings) -> None:
         with quiet_console(), console.status("opening the sheet...") as spinner:
             outcome = builder.sync_sheet(
                 build_client(settings), Book.open(settings),
-                Ledger.load(settings.state_dir),
+                Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds),
                 artifact_dir=settings.artifact_dir,
                 stale_claim_seconds=settings.stale_claim_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
@@ -1387,7 +1389,8 @@ def stop_all(settings: Settings, targets: list[str] | None = None) -> None:
     reason `phones.reap` takes its verdicts the same way.
     """
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     if targets is None:
         targets = [p["id"] for p in phones.listing(client)
                    if p.get("status") in (phones.RUNNING, phones.STARTING)]
@@ -1409,7 +1412,8 @@ def stop_phones(settings: Settings) -> None:
     ask.
     """
     client = build_client(settings)
-    ledger = Ledger.load(settings.state_dir)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
     running = [p for p in phones.listing(client)
                if p.get("status") in (phones.RUNNING, phones.STARTING)]
     if not running:
@@ -1579,7 +1583,8 @@ def apply_marks(settings: Settings) -> None:
     # action named "make all four tabs agree with the panel" was the one place
     # that would not do it (2026-08-25).
     show_sync(builder.sync_sheet(build_client(settings), book,
-                                 Ledger.load(settings.state_dir),
+                                 Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds),
                                  apply_marks=apply,
                                  artifact_dir=settings.artifact_dir,
                                  stale_claim_seconds=settings.stale_claim_seconds))

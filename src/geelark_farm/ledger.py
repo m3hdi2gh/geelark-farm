@@ -23,6 +23,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
+from typing import ClassVar
 
 from . import config
 
@@ -44,8 +45,14 @@ log = logging.getLogger(__name__)
 # signed into a second phone - the one mistake here that costs an account
 # rather than a minute (2026-08-28).
 #
-# Taken from config rather than written twice, so shortening one shortens both.
-# `test_ledger.py` pins them together.
+# The default, and only the default. The number a run actually uses is
+# `settings.stale_claim_seconds`, resolved once and handed to `Ledger.load`,
+# which stamps it onto every Entry it holds. This is what an Entry built by
+# hand answers with, and what a Ledger loaded without a window falls back to.
+#
+# It was the phone lease itself until 2026-08-31, and that is what made the
+# bug above possible: `.env` moved the credential lease and could not move
+# this one, so the two describing the same dead run could disagree.
 STALE_CLAIM_SECONDS = config.STALE_CLAIM_DEFAULT
 
 
@@ -56,6 +63,20 @@ def _now() -> float:
 @dataclass
 class Entry:
     """One phone, and who is responsible for it."""
+
+    #: The staleness window this entry is measured against, in seconds.
+    #:
+    #: A ClassVar and not a dataclass field, deliberately. `save` serialises
+    #: every field through `asdict`, and `load` restores every field it knows
+    #: by name - so a window kept as a field would be written into
+    #: ledger.json and read back on the next start, and a phone claimed under
+    #: yesterday's window would keep yesterday's window for ever, across
+    #: restarts, invisibly. That is a worse version of the bug above, not a
+    #: fix for it.
+    #:
+    #: The Ledger holding this entry sets it per instance; the class value is
+    #: the module default, for an Entry built by hand.
+    stale_after: ClassVar[float] = STALE_CLAIM_SECONDS
 
     phone_id: str
     created_at: float
@@ -74,7 +95,7 @@ class Entry:
 
     @property
     def is_stale(self) -> bool:
-        return self.is_claimed and (_now() - self.claimed_at) > STALE_CLAIM_SECONDS
+        return self.is_claimed and (_now() - self.claimed_at) > self.stale_after
 
 
 @dataclass
@@ -92,7 +113,24 @@ class Ledger:
 
     path: Path
     entries: dict[str, Entry] = field(default_factory=dict)
+    #: Resolved once per process from `settings.stale_claim_seconds` and
+    #: stamped onto every Entry this Ledger holds. Per Ledger rather than per
+    #: Entry so that two Ledger objects in one process cannot come to
+    #: disagree the way the constant and the setting did.
+    stale_after: float = STALE_CLAIM_SECONDS
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+
+    def _adopt(self, entry: Entry) -> Entry:
+        """Every Entry this Ledger holds is measured against this Ledger's
+        window and no other.
+
+        One assignment, at the two places an entry arrives, rather than a
+        lookup inside `is_stale`: that property is read on a dataclass that
+        knows nothing but itself, and giving it a Settings to consult would
+        need credentials the test suite has never had.
+        """
+        entry.stale_after = self.stale_after      # type: ignore[misc]
+        return entry
 
     @staticmethod
     def _read(path: Path, attempts: int = 10) -> str:
@@ -119,9 +157,19 @@ class Ledger:
             "unreachable: the loop above returns or raises")
 
     @classmethod
-    def load(cls, state_dir: str | Path) -> Ledger:
+    def load(cls, state_dir: str | Path, *,
+             stale_after: float | None = None) -> Ledger:
+        """`stale_after` is the window every claim here is measured against.
+
+        `None` means the module default, which is what a call that has no
+        Settings to hand gets. Every caller in `src/` passes the resolved
+        setting, and a test walks the AST to keep it that way - a call that
+        quietly took the default would be the 2026-08-28 bug again.
+        """
         path = Path(state_dir) / "ledger.json"
-        ledger = cls(path=path)
+        ledger = cls(path=path,
+                     stale_after=(STALE_CLAIM_SECONDS if stale_after is None
+                                  else stale_after))
         if not path.exists():
             return ledger
         try:
@@ -151,9 +199,9 @@ class Ledger:
                             "know (%s); reading the rest of it",
                             phone_id, ", ".join(unknown))
             try:
-                ledger.entries[phone_id] = Entry(
+                ledger.entries[phone_id] = ledger._adopt(Entry(
                     phone_id=phone_id,
-                    **{k: v for k, v in data.items() if k in known})
+                    **{k: v for k, v in data.items() if k in known}))
             except TypeError as exc:
                 log.error("ledger entry %s could not be read (%s); it is "
                           "skipped, so `geelark phones` is the only thing "
@@ -203,8 +251,9 @@ class Ledger:
                proxy: str = "", note: str = "") -> Entry:
         """Register a phone that now exists. Call this before anything else."""
         with self._lock:
-            entry = Entry(phone_id=phone_id, created_at=_now(), serial=serial,
-                          label=label, proxy=proxy, note=note)
+            entry = self._adopt(
+                Entry(phone_id=phone_id, created_at=_now(), serial=serial,
+                      label=label, proxy=proxy, note=note))
             self.entries[phone_id] = entry
             self.save()
             return entry

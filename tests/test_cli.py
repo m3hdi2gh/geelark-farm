@@ -14,7 +14,6 @@ from types import SimpleNamespace
 import pytest
 
 from geelark_farm import cli
-from geelark_farm import ledger as ledger_mod
 from geelark_farm.accounts import AccountError, Credentials
 from geelark_farm.api import TransportError
 from geelark_farm.config import ConfigError
@@ -101,12 +100,18 @@ def test_a_released_phone_is_not_refused(tmp_path, make_settings):
 
 
 def test_a_stale_claim_does_not_lock_a_phone_forever(tmp_path, make_settings):
-    """A dead process must not hold a phone hostage."""
+    """A dead process must not hold a phone hostage.
+
+    Aged against the window the run will actually carry, not the module
+    default. Since 2026-08-31 the ledger measures claims with
+    `settings.stale_claim_seconds`, and this fixture sets an hour - so ageing
+    by the 300-second default left the claim fresh and the phone refused."""
+    settings = make_settings(state_dir=tmp_path)
     ledger = claimed_ledger(tmp_path)
-    ledger.get("P1").claimed_at = time.time() - ledger_mod.STALE_CLAIM_SECONDS - 1
+    ledger.get("P1").claimed_at = time.time() - settings.stale_claim_seconds - 1
     ledger.save()
 
-    cli.refuse_if_busy(make_settings(state_dir=tmp_path), "P1")   # no raise
+    cli.refuse_if_busy(settings, "P1")   # no raise
 
 
 def test_an_unknown_phone_is_not_refused(tmp_path, make_settings):
@@ -689,7 +694,7 @@ def _wire(monkeypatch, fake, *, claimed=False, ledger=None):
     monkeypatch.setattr(cli_mod, "build_client", lambda s: object())
     entry = SimpleNamespace(is_claimed=claimed, is_stale=False, label="a build")
     book = ledger if ledger is not None else FakeLedger(entry if claimed else None)
-    monkeypatch.setattr(cli_mod.Ledger, "load", staticmethod(lambda d: book))
+    monkeypatch.setattr(cli_mod.Ledger, "load", staticmethod(lambda d, **k: book))
     return cli_mod
 
 
@@ -1653,7 +1658,7 @@ def _wire_pools(monkeypatch):
     monkeypatch.setattr(Book, "open", staticmethod(lambda s: book))
     monkeypatch.setattr(cli_mod, "build_client", lambda s: object())
     monkeypatch.setattr(cli_mod.Ledger, "load",
-                        staticmethod(lambda d: FakeLedger()))
+                        staticmethod(lambda d, **k: FakeLedger()))
     return cli_mod, book
 
 
