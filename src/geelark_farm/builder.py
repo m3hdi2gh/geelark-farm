@@ -577,6 +577,16 @@ def _sign_into_app(session: _Session) -> Build | None:
 #: The signal was never how many a phone ate. It is that the phone signed
 #: nobody in, and a phone that signed nobody in has proved nothing about any
 #: account it touched.
+def _refused_what_it_was_given(session: _Session | None) -> bool:
+    """Whether this phone turned down every account it was handed.
+
+    The same test `_give_back_condemned` makes, asked from the outside so the
+    tally and the exoneration cannot come to different answers about the same
+    run.
+    """
+    return bool(session and session.condemned and not session.app_signed_in)
+
+
 def _give_back_condemned(s: _Session) -> None:
     """Undo this phone's judgements when the phone itself is the likelier fault.
 
@@ -1175,7 +1185,17 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # which is not their fault and not something they can be fixed of
         # (2026-08-30). `in_use_by_hand` was the one exception written out by
         # hand here; it is in `NOTHING_HAPPENED` and now arrives with the rest.
-        if breaker.counts_against(build):
+        #
+        # And the phone is charged for refusing accounts it was given, which
+        # `breaker` cannot see: those runs end `no_usable_gpt` - the tab ran
+        # dry, because this phone had just spent what was in it - and that is
+        # in `WORKED`. Without this half, exonerating the accounts left nobody
+        # answerable: phone 1465 refused a hand-verified account on a
+        # hand-swapped exit, gave it back, went back on the shelf, and would
+        # have done it again every pass for ever. `_give_back_condemned` is
+        # where the run concludes the phone is the fault; this is the same
+        # conclusion, spent (2026-08-30).
+        if breaker.counts_against(build) or _refused_what_it_was_given(session):
             _count_try(book, build)
         _write_row(book, build)
         try:

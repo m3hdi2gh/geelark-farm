@@ -2614,6 +2614,67 @@ def test_an_empty_pool_does_not_cost_the_phone_a_strike(device, settings,
         "an empty tab put a strike on the phone, three of which retire it")
 
 
+def test_a_phone_that_refuses_what_it_is_given_is_charged_for_it(
+        device, settings, monkeypatch):
+    """The other half of exonerating the accounts. Those runs end
+    `no_usable_gpt` - the tab ran dry because this phone had just spent what
+    was in it - and that reason is in `breaker.WORKED`, so the tally could not
+    see them. Phone 1465 refused a hand-verified account on a hand-swapped
+    exit, was given it back, went back on the shelf, and would have done the
+    same every pass for ever: no account lost, and no way for it to be
+    retired either (2026-08-30)."""
+    book = make_book(apps=1)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda *a, **k: ["g@example.com"])
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: Outcome("fatal", "wrong_password"))
+    tries = []
+    monkeypatch.setattr(book.phones, "count_try",
+                        lambda serial: tries.append(serial) or len(tries))
+
+    build = builder.finish_one(
+        None, settings, book, FakeLedger(),
+        {"sheet_row": 3, "phone_id": "P1", "serial": "1465",
+         "gmail": "g@example.com", "proxy": "", "status": "app_only"}, 1)
+
+    assert build.status == "no_usable_gpt"
+    # the account is not spent...
+    assert book.apps._rows[0].values["Status"] == ""
+    # ...and the phone is
+    assert tries == ["1465"], (
+        "nobody was charged: the account came back and the phone went back "
+        "on the shelf to do it again next pass")
+
+
+def test_a_phone_is_not_charged_twice_for_one_run(device, settings,
+                                                  monkeypatch):
+    """The guard on the condition above being an `or`: a run that both
+    refuses accounts and ends on a reason the breaker counts must take one
+    strike, not two, or three passes retire a phone in one."""
+    book = make_book(apps=1)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda *a, **k: ["g@example.com"])
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: Outcome("fatal", "wrong_password"))
+    tries = []
+    monkeypatch.setattr(book.phones, "count_try",
+                        lambda serial: tries.append(serial) or len(tries))
+    monkeypatch.setattr(builder.breaker, "counts_against", lambda build: True)
+
+    builder.finish_one(
+        None, settings, book, FakeLedger(),
+        {"sheet_row": 3, "phone_id": "P1", "serial": "1465",
+         "gmail": "g@example.com", "proxy": "", "status": "app_only"}, 1)
+
+    assert tries == ["1465"], f"charged {len(tries)} times for one run"
+
+
 def test_a_failure_the_phone_is_answerable_for_still_counts():
     """The guard: the tally is what retires a phone that cannot be finished,
     and it has to keep doing that."""
