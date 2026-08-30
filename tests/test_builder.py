@@ -3061,15 +3061,15 @@ def test_the_run_starts_and_stops_the_heartbeat_around_the_work():
 # ------------------------------------- the label a finished build leaves behind
 def test_a_finished_build_stops_labelling_the_lines_after_it(
         device, settings, monkeypatch):
-    """`_context.build` is a thread-local, and with one worker `work` runs on
-    the caller's own thread - so a build that ended an hour ago went on
-    stamping its number onto every line logged afterwards. In a command that
-    exits, that is until it exits. In `serve`, which does not, it is for ever
+    """The label was a thread-local, and with one worker `work` runs on the
+    caller's own thread - so a build that ended an hour ago went on stamping
+    its number onto every line logged afterwards. In a command that exits,
+    that is until it exits. In `serve`, which does not, it is for ever
     (2026-08-27).
 
-    The same shape as the console formatter that was replaced and never put
-    back, which is why the label is cleared in a `finally` rather than after
-    the return.
+    A ContextVar does not fix that on its own: a pool thread is reused too.
+    The `reset` in the `finally` is the whole of it, which is why this test
+    outlived the mechanism it was written against.
     """
     from geelark_farm.logs import NO_BUILD
 
@@ -3082,11 +3082,10 @@ def test_a_finished_build_stops_labelling_the_lines_after_it(
     monkeypatch.setattr(builder, "build_one",
                         lambda *a, **k: builder.Build(index=a[4], ok=True,
                                                       status="ready"))
-    builder._context.build = NO_BUILD
-
     builder.run(None, settings, count=1, workers=1)
 
-    assert getattr(builder._context, "build", NO_BUILD) == NO_BUILD
+    assert builder._build.get() == NO_BUILD
+    assert builder._run.get() == NO_BUILD
 
 
 def test_the_label_is_on_while_the_build_is_running(device, settings,
@@ -3103,13 +3102,16 @@ def test_the_label_is_on_while_the_build_is_running(device, settings,
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
     monkeypatch.setattr(builder, "build_one",
-                        lambda *a, **k: seen.append(builder._context.build)
+                        lambda *a, **k: seen.append(
+                            (builder._build.get(), builder._run.get()))
                         or builder.Build(index=a[4], ok=True, status="ready"))
-    builder._context.build = NO_BUILD
 
     builder.run(None, settings, count=1, workers=1)
 
-    assert seen == [1]
+    assert [b for b, _ in seen] == [1]
+    assert all(r != NO_BUILD for _, r in seen), (
+        "the batch's run id never reached the worker - ThreadPoolExecutor "
+        "does not copy the caller's context, so `work` has to set it again")
 
 
 # ------------------------------ GeeLark having no machine free for a while
@@ -3552,3 +3554,85 @@ def test_giving_up_is_nobodys_fault_and_the_breaker_ignores_it():
 
     assert failures.verdict("given_up_on").blame == failures.NOBODY
     assert "given_up_on" in breaker.NOTHING_HAPPENED
+
+
+# ------------------------------- two batches at once must not share a label
+def test_the_filter_cannot_raise_from_a_thread_that_set_nothing():
+    """A filter runs outside the try that guards `emit` - `Handler.handle`
+    calls it directly, and neither `callHandlers` nor `Logger._log` catches -
+    so a LookupError here comes back out of the `log.info(...)` call and kills
+    the build on its own log line. A ContextVar declared without `default=`
+    does exactly that (2026-08-31)."""
+    import logging as stdlib_logging
+    import threading as stdlib_threading
+
+    from geelark_farm.logs import NO_BUILD
+
+    seen = []
+
+    def from_a_bare_thread():
+        made = stdlib_logging.LogRecord("x", 20, "f", 1, "m", (), None)
+        seen.append(builder.BuildContextFilter().filter(made))
+        seen.append((made.row, made.run, made.build))
+
+    thread = stdlib_threading.Thread(target=from_a_bare_thread)
+    thread.start()
+    thread.join()
+
+    assert seen[0] is True
+    assert seen[1] == (NO_BUILD, NO_BUILD, NO_BUILD)
+
+
+def test_two_batches_at_once_do_not_share_a_label(device, settings,
+                                                  monkeypatch):
+    """The bug this whole change is for. `row` is the job's index within its
+    batch, so with several batches in flight `[1]` labelled several phones at
+    once - and the file is the only account of a run that crosses machines.
+
+    Stated positively: the same `row` value appears under two different run
+    ids, and no line is ambiguous once both are read together."""
+    import logging as stdlib_logging
+
+    lines = []
+
+    class Capture(stdlib_logging.Handler):
+        def emit(self, record):
+            lines.append((getattr(record, "run", None),
+                          getattr(record, "row", None)))
+
+    handler = Capture()
+    handler.addFilter(builder.BuildContextFilter())
+    root = stdlib_logging.getLogger()
+    was = root.level
+    root.addHandler(handler)
+    root.setLevel(stdlib_logging.INFO)
+
+    def one_batch():
+        book = make_book()
+        monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
+        monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+        monkeypatch.setattr(builder.Book, "open",
+                            classmethod(lambda cls, s: book))
+        monkeypatch.setattr(builder.Ledger, "load",
+                            staticmethod(lambda p, **k: FakeLedger()))
+        monkeypatch.setattr(
+            builder, "build_one",
+            lambda *a, **k: stdlib_logging.getLogger(
+                "geelark_farm.builder").info("in a job")
+            or builder.Build(index=a[4], ok=True, status="ready"))
+        builder.run(None, settings, count=1, workers=1)
+
+    try:
+        one_batch()
+        one_batch()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(was)
+
+    runs = {run for run, row in lines if row == 1}
+    assert len(runs) == 2, (
+        f"the two batches did not get separate run ids, so `row` 1 names "
+        f"two phones and nothing tells them apart: {sorted(lines)}")
+    # and the thing that made it ambiguous is still true, which is the point:
+    # the same job index really does appear under both.
+    assert all(any(run == r and row == 1 for run, row in lines) for r in runs)

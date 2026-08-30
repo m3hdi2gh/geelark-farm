@@ -46,7 +46,8 @@ NO_BUILD = "-"
 FORMATS = ("text", "json")
 
 #: The text the file has always used. Here so both formats live in one place.
-TEXT_FORMAT = "%(asctime)s %(levelname)s [%(row)s] %(name)s: %(message)s"
+TEXT_FORMAT = ("%(asctime)s %(levelname)s [%(run)s/%(row)s] "
+               "%(name)s: %(message)s")
 
 
 class JsonLines(logging.Formatter):
@@ -75,7 +76,7 @@ class JsonLines(logging.Formatter):
         for key, value in record.__dict__.items():
             # `row` is on every record whether or not a build is running.
             # No build is not a value worth a field on every line.
-            if key in RESERVED or (key == "row"
+            if key in RESERVED or (key in ("row", "run", "build")
                                    and value in ("", NO_BUILD)):
                 continue
             payload[key] = value

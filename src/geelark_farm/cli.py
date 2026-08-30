@@ -1043,7 +1043,20 @@ def _configure_logging(settings: Settings):
     root.setLevel(logging.DEBUG)
     console = logging.StreamHandler()
     console.setLevel(getattr(logging, settings.log_level, logging.INFO))
-    console.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    # On the handler, not on the root logger. A logger's filters apply only to
+    # records logged through that logger, and every record here comes from a
+    # module-level child that reaches root by propagation - a root filter
+    # would stamp nothing.
+    #
+    # Attached before the format that needs it, and before the early return
+    # further down, because a console line with no `run` costs the line: the
+    # formatter raises ValueError, `handleError` prints to stderr, and the
+    # message is gone. Nothing asserts on stderr, so the suite would stay
+    # green while the tool went mute (2026-08-31).
+    from .builder import BuildContextFilter
+    console.addFilter(BuildContextFilter())
+    console.setFormatter(logging.Formatter(
+        "%(levelname)s [%(run)s/%(row)s] %(name)s: %(message)s"))
     root.addHandler(console)
 
     # Third parties narrate every connection at DEBUG. That is their debugging,
@@ -1070,12 +1083,11 @@ def _configure_logging(settings: Settings):
         print(f"warning: no log file ({exc}); console only", file=sys.stderr)
         return None
     file.setLevel(logging.DEBUG)
-    # The build-context filter is attached here, at creation, so
-    # install_build_logging leaves this handler's format alone - it skips
-    # handlers that already carry the filter. Without that it would replace
-    # this formatter with the console's, and the file would lose its
-    # timestamps, which are the point of a file.
-    from .builder import BuildContextFilter
+    # The filter at creation, because this handler's format interpolates
+    # `%(row)s` and `%(run)s` and a record without them is a lost line, not a
+    # plain one. It used to be here so `install_build_logging` would skip this
+    # handler; that function is gone (2026-08-31) and this is not - the two
+    # are not one reason.
     file.addFilter(BuildContextFilter())
     from .logs import file_formatter
     file.setFormatter(file_formatter(settings.log_format))

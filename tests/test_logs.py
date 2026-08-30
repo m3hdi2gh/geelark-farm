@@ -155,11 +155,17 @@ def test_json_is_asked_for_and_text_is_the_default():
 
 def test_the_text_format_is_the_one_the_file_has_always_had():
     """Changing it silently would break anything anyone has ever written to
-    read these files."""
-    made = record("hello", row="build 3")
+    read these files.
+
+    It changed once, on 2026-08-31, and deliberately: the bracket carries the
+    run as well as the build, because under concurrency the build number alone
+    is the job's index within its batch and several batches number from 1 at
+    once. Both ids in one bracket, so what was one field to a reader is still
+    one field."""
+    made = record("hello", row=3, run="r7")
     line = file_formatter("text").format(made)
 
-    assert "INFO" in line and "[build 3]" in line
+    assert "INFO" in line and "[r7/3]" in line
     assert "geelark_farm.serve: hello" in line
 
 
@@ -172,7 +178,9 @@ def test_a_line_from_outside_a_build_carries_no_row_at_all(formatter):
     """The filter stamps a placeholder rather than nothing, because `[-]` is
     what the text format wants. In JSON it is a field on every line that says
     nothing at all."""
-    assert "row" not in rendered(formatter, record(row=logs.NO_BUILD))
+    made = record(row=logs.NO_BUILD, run=logs.NO_BUILD, build=logs.NO_BUILD)
+    line = rendered(formatter, made)
+    assert "row" not in line and "run" not in line and "build" not in line
 
 
 def test_the_filter_and_the_formatter_agree_on_what_no_build_looks_like():
@@ -185,4 +193,4 @@ def test_the_filter_and_the_formatter_agree_on_what_no_build_looks_like():
     made = stdlib_logging.LogRecord("x", 20, "f", 1, "m", (), None)
     BuildContextFilter().filter(made)
 
-    assert made.row == logs.NO_BUILD
+    assert made.row == made.run == made.build == logs.NO_BUILD

@@ -55,11 +55,13 @@ GeeLark cannot reach at all is marked `dead`.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import logging
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -73,6 +75,7 @@ from .config import Settings
 from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
+from .logs import NO_BUILD
 from .pools import Book, Pool, Resource
 
 log = logging.getLogger(__name__)
@@ -86,50 +89,52 @@ log = logging.getLogger(__name__)
 #: phones stayed up billing (2026-08-29).
 STOP_POLL_SECONDS = 1.0
 
-_context = threading.local()
+#: The batch a thread's work belongs to, and the job within that batch.
+#:
+#: `default=` is not optional. `ContextVar.get()` with no default raises
+#: LookupError, and a filter runs OUTSIDE the try that guards `emit` -
+#: `Handler.handle` calls it directly, and neither `callHandlers` nor
+#: `Logger._log` catches - so a filter that raises comes back out of the
+#: `log.info(...)` call and kills the build on its own log line.
+#:
+#: ContextVars rather than the `threading.local` that was here: a pool thread
+#: is reused, and a local left set leaks into the next job on it. A token and
+#: a `reset` in a `finally` cannot.
+_run: ContextVar[str] = ContextVar("geelark_run", default=NO_BUILD)
+_build: ContextVar[int | str] = ContextVar("geelark_build", default=NO_BUILD)
+
+
+_RUN_IDS = itertools.count(1)
+
+
+def _next_run_id() -> str:
+    """One id per batch.
+
+    `_run_jobs` is the boundary because it is exactly one batch: under `serve`
+    with a pool, one pass submits one `work`, which makes one `builder.run`,
+    which makes one `_run_jobs` - so a run id is also a pass's id. Short,
+    because it is on every line of the file and of the console.
+    """
+    return f"r{next(_RUN_IDS)}"
 
 
 class BuildContextFilter(logging.Filter):
-    """Stamp every log record with the build its thread is working on."""
+    """Stamp every log record with the run and the build it came from.
+
+    `row` stays exactly what it has always been - the bare int job index, or
+    NO_BUILD - because `ui.ReporterLogHandler.emit` and `ui.print_new_notices`
+    both gate on `isinstance(row, int)` and the live table's rows are keyed by
+    that int. A composite id there does not raise; it silently freezes the
+    step column on "starting" for a whole batch.
+
+    Nothing here may raise, for the reason given above the ContextVars.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        from .logs import NO_BUILD
-
-        record.row = getattr(_context, "build", NO_BUILD)
+        record.build = _build.get()
+        record.run = _run.get()
+        record.row = record.build
         return True
-
-
-def install_build_logging() -> Callable[[], None]:
-    """Stamp the console's lines with the build they came from, for a while.
-
-    Returns what undoes it. The formatter was replaced and never put back, so
-    every console line for the rest of a session carried `[build -]` - a
-    label for a build that is not running - and the console is something a
-    person leaves open across several of them (2026-08-23).
-
-    The file handler is skipped because it already carries the filter, which
-    `_configure_logging` attaches at creation for exactly this reason: its own
-    format has the timestamps, which are the point of a file.
-    """
-    root = logging.getLogger()
-    changed: list[tuple[logging.Handler, logging.Formatter | None,
-                        logging.Filter]] = []
-    for handler in root.handlers:
-        if any(isinstance(f, BuildContextFilter) for f in handler.filters):
-            continue
-        stamp = BuildContextFilter()
-        changed.append((handler, handler.formatter, stamp))
-        handler.addFilter(stamp)
-        handler.setFormatter(
-            logging.Formatter("%(levelname)s [build %(row)s] %(name)s: %(message)s")
-        )
-
-    def restore() -> None:
-        for handler, formatter, stamp in changed:
-            handler.removeFilter(stamp)
-            handler.setFormatter(formatter)
-
-    return restore
 
 
 # A credential the service judged and rejected costs that credential and nothing
@@ -2500,7 +2505,8 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     ledger = ledger if ledger is not None else Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds)
     phones.prune_ledger(client, ledger)
-    restore_logging = install_build_logging()
+    run_id = _next_run_id()
+    run_token = _run.set(run_id)
 
     total = len(jobs)
     started: set[str] = set()
@@ -2514,20 +2520,25 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
     def work(index: int, job: dict) -> Build:
         """One job, with this thread's log lines labelled while it runs.
 
-        Cleared when the job ends rather than left behind. With one worker
+        Reset when the job ends rather than left behind. With one worker
         `work` is called on the caller's own thread, so a build that finished
         an hour ago went on labelling every line after it - and `serve` is a
         process that does not end, so "an hour ago" becomes "for ever"
-        (2026-08-27). The same shape as the console formatter that was
-        replaced and never put back.
-        """
-        from .logs import NO_BUILD
+        (2026-08-27). A pool thread is reused, so the same is true of every
+        worker; contextvars do not fix that, the reset does.
 
-        _context.build = index
+        Both ids are set here, on the worker thread, and the run id as well as
+        the build one. `ThreadPoolExecutor.submit` does not copy the caller's
+        context, so the run id set in `_run_jobs` - which runs on the batch's
+        own thread - is invisible inside this one unless it is set again.
+        """
+        job_run = _run.set(run_id)
+        job_build = _build.set(index)
         try:
             return _run_job(index, job)
         finally:
-            _context.build = NO_BUILD
+            _build.reset(job_build)
+            _run.reset(job_run)
 
     def _run_job(index: int, job: dict) -> Build:
         if reporter:
@@ -2584,20 +2595,21 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                   f"({build.seconds:.0f}s)", flush=True)
         return build
 
-    stop_beating = _start_heartbeat(book, ledger)
+    stop_beating = _start_heartbeat(book, ledger, run_id)
     try:
         return _drive_jobs(client, settings, jobs, work=work, workers=workers,
                            started=started, ledger=ledger, total=total,
                            on_ready=on_ready, shutting_down=shutting_down)
     finally:
         stop_beating()
-        # The console outlives a build and several of them, so the format the
-        # build installed must not outlive this one.
-        restore_logging()
+        # The batch's own thread stops belonging to it. Nothing here installs
+        # a format any more, so there is none to put back - which is why the
+        # 2026-08-23 incident cannot recur rather than being guarded against.
+        _run.reset(run_token)
 
 
-def _start_heartbeat(book: Book, ledger: Ledger | None = None
-                     ) -> Callable[[], None]:
+def _start_heartbeat(book: Book, ledger: Ledger | None = None,
+                     run_id: str = NO_BUILD) -> Callable[[], None]:
     """Restamp what this run is holding, for as long as it is holding it.
 
     Returns the way to stop. A daemon thread so an interpreter on its way out
@@ -2612,6 +2624,11 @@ def _start_heartbeat(book: Book, ledger: Ledger | None = None
     stop = threading.Event()
 
     def beating() -> None:
+        # A Thread starts with a fresh, empty context, so without this the
+        # beat's warnings carry no run at all - and under concurrency four
+        # batches each start one, all saying the same thing about different
+        # runs (2026-08-31).
+        _run.set(run_id)
         while not stop.wait(Pool.HEARTBEAT_SECONDS):
             try:
                 held = book.beat()

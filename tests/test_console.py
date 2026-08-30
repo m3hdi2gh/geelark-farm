@@ -989,18 +989,29 @@ def test_the_dashboard_reports_a_sheet_failure_rather_than_raising():
 
 
 # ======================= the build's log format does not outlive the build
-def test_the_console_format_is_put_back_after_a_build():
+def test_no_build_ever_changes_the_console_format():
     """It was replaced and never restored, so every console line for the rest
     of a session carried `[build -]` - a label for a build that is not
-    running (2026-08-23)."""
+    running (2026-08-23).
+
+    The guard moved rather than went. Nothing installs a temporary format any
+    more - the ids come from a filter attached once at startup - so nothing
+    can fail to put one back. That is strictly stronger than restoring it
+    correctly, and this is what holds it (2026-08-31)."""
+    import inspect
     import io
     import logging
 
     from geelark_farm import builder as builder_mod
 
+    assert not hasattr(builder_mod, "install_build_logging")
+    assert "setFormatter" not in inspect.getsource(builder_mod), (
+        "something in builder is installing a format again")
+
     buffer = io.StringIO()
     handler = logging.StreamHandler(buffer)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    fixed = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+    handler.setFormatter(fixed)
     root = logging.getLogger()
     was = root.level
     root.addHandler(handler)
@@ -1008,18 +1019,21 @@ def test_the_console_format_is_put_back_after_a_build():
     log = logging.getLogger("geelark_farm.pools")
     try:
         log.warning("before")
-        restore = builder_mod.install_build_logging()
-        log.warning("during")
-        restore()
+        token = builder_mod._build.set(3)
+        try:
+            log.warning("during")
+        finally:
+            builder_mod._build.reset(token)
         log.warning("after")
     finally:
         root.removeHandler(handler)
         root.setLevel(was)
 
-    before, during, after = buffer.getvalue().splitlines()
-    assert "[build" in during
-    assert "[build" not in before
-    assert "[build" not in after
+    assert handler.formatter is fixed, "the format was swapped under a build"
+    assert buffer.getvalue().splitlines() == [
+        "WARNING geelark_farm.pools: before",
+        "WARNING geelark_farm.pools: during",
+        "WARNING geelark_farm.pools: after"]
 
 
 def test_a_run_puts_the_format_back_however_it_ends():
@@ -1031,9 +1045,11 @@ def test_a_run_puts_the_format_back_however_it_ends():
 
     source = inspect.getsource(builder_mod._run_jobs)
 
-    assert "restore_logging = install_build_logging()" in source
+    assert "install_build_logging" not in source, (
+        "the temporary-format mechanism is back")
     assert "finally:" in source
-    assert "restore_logging()" in source
+    assert "_build.reset(" in source
+    assert "_run.reset(" in source
 
 
 def test_a_phone_with_no_serial_is_shown_as_unknown_not_as_none():

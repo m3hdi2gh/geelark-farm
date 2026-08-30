@@ -432,7 +432,7 @@ def test_a_builds_steps_reach_its_state_column():
     """
     import logging
 
-    from geelark_farm import builder, logs
+    from geelark_farm import builder
     from geelark_farm.ui import BuildReporter, ReporterLogHandler
 
     reporter = BuildReporter()
@@ -440,18 +440,19 @@ def test_a_builds_steps_reach_its_state_column():
     handler = ReporterLogHandler(reporter)
     handler.addFilter(builder.BuildContextFilter())
 
-    # Restored afterwards. It is a thread-local, so leaving it set labels
-    # every later line on this thread as build 7 - which is the same bug the
-    # code it is testing was written to avoid, arriving through the test.
+    # Reset afterwards. Leaving it set labels every later line in this
+    # context as build 7 - the same bug the code under test was written to
+    # avoid, arriving through the test. The token is what makes that
+    # automatic rather than remembered.
+    token = builder._build.set(7)
     try:
-        builder._context.build = 7
         record = logging.LogRecord("geelark_farm.flows.chatgpt_login",
                                    logging.INFO, "f", 1,
                                    "screen: password_entry", None, None)
         # No record.row set: the filter on the handler must supply it.
         handler.handle(record)
     finally:
-        builder._context.build = logs.NO_BUILD
+        builder._build.reset(token)
 
     assert reporter.rows[7]["step"] == "screen: password_entry"
 
@@ -2391,3 +2392,67 @@ def test_it_reads_the_file_the_service_actually_writes(tmp_path,
         settings.state_dir / serve_mod.BREAKER_FILE).seen()
 
     assert count == 1
+
+
+# ------------------- the console must never lose a line to its own format
+def test_the_console_stamps_its_lines_from_the_very_first_one(
+        tmp_path, make_settings, capsys):
+    """The console format interpolates `%(run)s` and `%(row)s`, so a record
+    that reaches it without them is not a plain line - it is a lost one. The
+    formatter raises ValueError, `handleError` prints to stderr, and the
+    message is gone.
+
+    Nothing else in this suite can see that: no test asserts on stderr, so the
+    tool could go mute while the suite stayed green (2026-08-31)."""
+    import logging
+
+    # The root is emptied for the duration, not merely added to: an earlier
+    # test leaves handlers whose files have since been cleaned up, and their
+    # own "--- Logging error ---" would be indistinguishable from the one this
+    # test is about.
+    root = logging.getLogger()
+    had = list(root.handlers)
+    for handler in had:
+        root.removeHandler(handler)
+    try:
+        cli._configure_logging(make_settings(log_dir=tmp_path / "logs"))
+        logging.getLogger("geelark_farm.pools").warning("a line")
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        for handler in had:
+            root.addHandler(handler)
+
+    err = capsys.readouterr().err
+    assert "--- Logging error ---" not in err
+    assert "[-/-]" in err, f"the ids never reached the console: {err!r}"
+
+
+def test_the_console_only_fallback_still_stamps_its_lines(
+        tmp_path, make_settings, capsys, monkeypatch):
+    """The branch where the log directory cannot be made returns early. A
+    filter attached after the file handler would never run on this machine,
+    and every console line on it would be destroyed by its own format."""
+    import logging
+    import pathlib as _pathlib
+
+    def refuse(self, *a, **k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(_pathlib.Path, "mkdir", refuse)
+    root = logging.getLogger()
+    had = list(root.handlers)
+    for handler in had:
+        root.removeHandler(handler)
+    try:
+        cli._configure_logging(make_settings(log_dir=tmp_path / "nope"))
+        logging.getLogger("geelark_farm.pools").warning("a line")
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        for handler in had:
+            root.addHandler(handler)
+
+    err = capsys.readouterr().err
+    assert "--- Logging error ---" not in err
+    assert "[-/-]" in err
