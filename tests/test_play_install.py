@@ -763,6 +763,71 @@ def test_an_interstitial_during_the_download_is_archived_once(store,
     assert shop.tapped.count("Got it") > 1, "the card was only raised once"
 
 
+# -------------------------------------------- an Install tap that was eaten
+def test_an_install_tap_that_was_swallowed_is_pressed_again(store, tmp_path):
+    """Play answers the tap with a dialog instead of the download. Clearing
+    the dialog leaves the page exactly as it was - Install still on it,
+    nothing downloading - so the stall clock never sees anything either, and
+    the loop polls out its whole budget waiting for a download nobody asked
+    for. Four builds died that way on 2026-08-29, phone 1399 three times over
+    (2026-08-30)."""
+    shop = store(play_page("Install"), taps={"Install"})
+
+    do_install(budget_seconds=120, artifact_dir=tmp_path)
+
+    assert shop.tapped.count("Install") > 1, (
+        "the page still offered Install and nothing pressed it again")
+
+
+def test_pressing_install_again_is_bounded(store, tmp_path):
+    """A page that will not start a download after three presses is not going
+    to, and the budget is better spent ending than pressing."""
+    shop = store(play_page("Install"), taps={"Install"})
+
+    out = do_install(budget_seconds=300, artifact_dir=tmp_path)
+
+    assert shop.tapped.count("Install") == 1 + play_install.MAX_INSTALL_RETAPS
+    assert out.reason == "budget_exhausted", (
+        "pressing again became a way of never finishing")
+    kept = [p.name for p in tmp_path.iterdir() if "install-tap-lost" in p.name]
+    assert len(kept) == play_install.MAX_INSTALL_RETAPS, (
+        f"the pages it pressed on were not kept: {kept}")
+
+
+def test_a_running_download_is_not_pressed_at(store, tmp_path):
+    """While a download runs Play takes the button away, so finding it is the
+    whole signal. Pressing at a page that is working would be the way to turn
+    this fix into a fault of its own."""
+    shop = store(play_page("Install"), play_page("Cancel"), taps={"Install"})
+
+    do_install(budget_seconds=120, artifact_dir=tmp_path)
+
+    assert shop.tapped.count("Install") == 1, (
+        "it pressed Install at a download that was already running")
+
+
+def test_a_dialog_that_ate_the_tap_is_cleared_and_then_install_repeated(
+        store, tmp_path, monkeypatch):
+    """The incident itself: a card raised once, in answer to the tap."""
+    shop = store(play_page("Install"), taps={"Install"})
+    cleared: list[str] = []
+
+    def once(client, phone_id, elements, labels, **kw):
+        if cleared:
+            return None
+        cleared.append("Got it")
+        shop.tapped.append("Got it")
+        return "Got it"
+
+    monkeypatch.setattr(screen, "tap_first_present", once)
+
+    do_install(budget_seconds=120, artifact_dir=tmp_path)
+
+    assert cleared == ["Got it"], "the card was not cleared"
+    assert shop.tapped.count("Install") > 1, (
+        "the tap the card ate was never made again")
+
+
 def test_a_verdict_page_during_the_download_ends_it(store, tmp_path):
     """Play can refuse after the button as well as before it, and waiting out
     the budget on a page that has already said no spends ten minutes to reach

@@ -214,7 +214,20 @@ class Build:
     #: recorded, so `incomplete` covered "waiting on an app account" and "the
     #: app never installed" with the same word and no way to tell them apart
     #: (2026-08-21).
-    app_installed: bool = False
+    #:
+    #: Three states, not two, because "no app" and "never looked" are
+    #: different answers and only one of them belongs on a row. `None` is a
+    #: run that did not get far enough to find out: a `finish` that could not
+    #: start the phone knows nothing about what is installed on it. As a bool
+    #: that run said `False`, and `_record` wrote `incomplete` with a cross in
+    #: the App column over a phone that had the app - phone 1415 was demoted
+    #: from `app_only` to `incomplete` that way, by an attempt that never
+    #: reached the device, and `app_only` is a product somebody sells
+    #: (2026-08-30).
+    #:
+    #: A phone this run created is `False` rather than `None`: it is new, so
+    #: nothing is installed on it, and that is knowledge.
+    app_installed: bool | None = None
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
@@ -655,6 +668,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
+        # This phone did not exist a moment ago, so nothing is installed on
+        # it. Said here rather than left to the field's default so that the
+        # default can mean "nobody looked" - which is what a `finish` that
+        # never reached the device has to be able to say.
+        build.app_installed = False
         if on_phone:
             on_phone(phone_id)
         ledger.claim(phone_id, label=f"build {index}")
@@ -1013,6 +1031,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             )
             build.trails.append(("install", installed.trail))
             if not installed.ok:
+                # Looked, and it is not there - which is a different answer
+                # from the `None` this started as, and the row should say so.
+                build.app_installed = False
                 # The taxonomy's words, not the flow's. play_install writes its
                 # detail for whoever is debugging it - "on screen: [Install,
                 # Uninstall]" - and that is not what the tab is read for.
@@ -1348,8 +1369,8 @@ def _given_up_on(book: Book, serial: str) -> str:
                               book.phones.TAKEN) else ""
 
 
-def _phone_status(build: Build) -> str:
-    """Which of the three words this build ended on.
+def _phone_status(build: Build) -> str | None:
+    """Which of the three words this build ended on, or None for "cannot say".
 
     `READY if build.ok else APP_ONLY` said the app was on the device whenever
     a build stopped short - including when the install was the thing that
@@ -1358,11 +1379,22 @@ def _phone_status(build: Build) -> str:
     Vague while `app_only` meant "not finished". Actively misleading once it
     named a product: the tab would offer a phone with no app to somebody whose
     whole use for it is opening that app (2026-08-29).
+
+    That fix answered one half. The other half is a run that never looked:
+    `else PhoneLog.INCOMPLETE` was reached by a `finish` whose phone would not
+    start, and wrote `incomplete` over a row that had truthfully said
+    `app_only` for two hours. `app_only` is one of the two things this farm
+    sells, and the demoted phone was headed for its third strike and deletion
+    (phone 1415, 2026-08-30).
+
+    So None, and `_record` leaves the columns it would have written alone.
     """
     from .pools import PhoneLog
 
     if build.ok:
         return READY
+    if build.app_installed is None:
+        return None
     return APP_ONLY if build.app_installed else PhoneLog.INCOMPLETE
 
 
@@ -1495,17 +1527,26 @@ def _record(book: Book, build: Build) -> None:
     """
     note = _phone_note(build)
     cross = book.phones.NO
+    status = _phone_status(build)
 
     def said(value: str) -> str:
         return value or cross
 
+    # Status and App are claims about the device. A run that never reached it
+    # makes neither, and the cells keep what the last run that did look put
+    # there. Everything else is about the run itself - which exit it used,
+    # what happened - and is true whether or not the phone ever came up.
+    device: dict[str, str] = {}
+    if status is not None:
+        device = {"Status": status,
+                  "App": book.phones.YES if build.app_installed else cross}
+
     try:
         wrote = book.phones.write(
-            build.serial, Status=_phone_status(build),
+            build.serial,
             Proxy=build.proxy_name or build.proxy,
             Gmail=said(build.gmail), Note=note,
-            **{"GPT Account": said(build.app_account),
-               "App": book.phones.YES if build.app_installed else cross},
+            **{"GPT Account": said(build.app_account)}, **device,
         )
         if not wrote:
             log.error("phone %s has no row in the Phones tab to record on; "
@@ -1516,8 +1557,12 @@ def _record(book: Book, build: Build) -> None:
     # The Phones tab is current state - a row marked done is deleted, and with
     # it every answer to "what did we build on Tuesday". History keeps the
     # outcome, appended, whichever machine produced it.
+    # History is appended whatever happened, and `Event` is the one word it
+    # gets. Where the run cannot name a phone status it names its own outcome
+    # instead - `phone_would_not_start` says more about that row than a
+    # guessed `incomplete` ever did, and it is already a `failures` token.
     book.record_history(
-        Serial=build.serial, Event=_phone_status(build),
+        Serial=build.serial, Event=status or build.status,
         Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
         Gmail=build.gmail, Note=note, Steps=build.steps,
         **{"GPT Account": build.app_account,

@@ -159,6 +159,22 @@ STALLED_TEXTS = (
 )
 MAX_DOWNLOAD_RESTARTS = 3
 
+# How many times to press Install again when the page still shows it and
+# nothing is downloading.
+#
+# A dialog raised BY the Install tap eats it: Play answers with the dialog
+# instead of the download, and clearing the dialog leaves the page exactly as
+# it was - Install still on it, nothing downloading, so nothing for the stall
+# clock above to see. The loop then polls out its whole budget waiting for a
+# download nobody asked for. Every one of the four builds that died this way
+# on 2026-08-29 had cleared a 'Got it' first; the thirty-one that met no such
+# dialog all went through. Phone 1399 spent three finishes on it and was set
+# aside and deleted (2026-08-30).
+#
+# Two, not more: this is for a tap that was swallowed, and a page that will
+# not start a download after three presses is not going to.
+MAX_INSTALL_RETAPS = 2
+
 # How long a page has to look parked before it is treated as parked, and how
 # long to leave a restarted download alone afterwards.
 #
@@ -441,6 +457,7 @@ def install(client: Client, phone_id: str, package: str, *,
 
     deadline = time.monotonic() + budget_seconds
     seen: set[str] = set()
+    retaps = 0
     while time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
         # Not strict: a poll, where an empty answer means the download has
@@ -497,8 +514,23 @@ def install(client: Client, phone_id: str, package: str, *,
                 archive(f"interstitial-{tapped.replace(' ', '-')}", xml or "")
                 seen.add(tapped)
             log.info("interstitial: tapped %r", tapped)
-        else:
-            log.info("still installing...")
+            continue
+
+        # An Install button still on the page is the whole signal that the tap
+        # did not take: while a download is running Play replaces it, and if
+        # the package were on the device the poll above would have returned.
+        # See MAX_INSTALL_RETAPS for what puts it there.
+        again = screen.find(elements, "Install")
+        if again and retaps < MAX_INSTALL_RETAPS:
+            retaps += 1
+            archive(f"install-tap-lost-{retaps}", xml or "")
+            log.warning("Install is still on the page and nothing is "
+                        "downloading (%d/%d); pressing it again",
+                        retaps, MAX_INSTALL_RETAPS)
+            screen.tap_element(client, phone_id, again)
+            continue
+
+        log.info("still installing...")
 
     archive("install-budget-exhausted", xml or "")
     return Outcome("budget", "budget_exhausted",

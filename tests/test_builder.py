@@ -30,6 +30,7 @@ from geelark_farm.pools import (
 from tests.test_pools import (
     APP_HEADERS,
     GMAIL_HEADERS,
+    PHONE_APP_HEADERS,
     PHONE_HEADERS,
     PROXY_HEADERS,
     PROXY_HEADERS_OPTIONAL,
@@ -59,8 +60,10 @@ SIGNED_IN = Outcome("success", "signed_in")
 INSTALLED = InstallOutcome("success", "installed")
 
 
-def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
+def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None,
+              phone_headers=None) -> Book:
     proxy_headers = proxy_headers or PROXY_HEADERS
+    phone_headers = phone_headers or PHONE_HEADERS
     lock = threading.Lock()
     gmail_pool = GmailPool(
         FakeWorksheet(GMAIL_HEADERS,
@@ -76,7 +79,7 @@ def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None) -> Book:
                       [[f"a{i}@example.com", "pw", SECRET, "", "", ""]
                        for i in range(apps)]),
         APP_HEADERS, lock)
-    phone_log = PhoneLog(FakeWorksheet(PHONE_HEADERS, []), PHONE_HEADERS, lock)
+    phone_log = PhoneLog(FakeWorksheet(phone_headers, []), phone_headers, lock)
     book = Book(gmails=gmail_pool, proxies=proxy_pool, apps=app_pool,
                 phones=phone_log,
                 history=HistoryLog(FakeWorksheet(HistoryLog.HEADERS, []), lock))
@@ -3199,6 +3202,85 @@ def test_a_phone_with_the_app_and_no_account_is_the_second_product():
 
 def test_a_finished_phone_is_ready_whatever_else_is_true():
     assert builder._phone_status(a_build(ok=True, installed=True)) == "ready"
+
+
+# ------------------------- a run that never looked does not get to have a view
+def test_a_run_that_never_reached_the_device_cannot_name_a_status():
+    """The other half of the 2026-08-29 fix. `else INCOMPLETE` was reached by
+    a finish whose phone would not start - a run that never saw the device and
+    so knows nothing about what is on it."""
+    assert builder._phone_status(a_build(installed=None)) is None
+
+
+def test_a_failed_finish_does_not_demote_a_phone_that_has_the_app():
+    """Phone 1415 was `app_only` for two hours - built, app installed, waiting
+    only for an account. At 23:33 a finish could not start it, wrote
+    `incomplete` with a cross in the App column, and put a strike on a phone
+    that was one of the two things this farm sells. Three strikes deletes it
+    (2026-08-30)."""
+    book = make_book(gmails=3, proxies=3, apps=3,
+                     phone_headers=PHONE_APP_HEADERS)
+    tab = book.phones._ws
+
+    def row_now():
+        row = tab.rows[0]
+        return {name: row[PHONE_APP_HEADERS.index(name)]
+                for name in ("Status", "App", "Note")}
+
+    book.phones.start(Serial="1415", Proxy="SX1")
+    # The build that installed the app and ran out of accounts.
+    builder._record(book, builder.Build(
+        index=1, status="no_usable_gpt", serial="1415",
+        gmail="g@example.com", app_installed=True))
+    assert row_now()["Status"] == "app_only"
+    assert row_now()["App"] == book.phones.YES
+
+    # Two hours later, a finish that never gets the phone up.
+    builder._record(book, builder.Build(
+        index=1, status="phone_would_not_start", serial="1415",
+        gmail="g@example.com",
+        detail="phone 635032199195787275 would not start"))
+
+    after = row_now()
+    assert after["Status"] == "app_only", (
+        f"a run that never reached the device demoted the row: {after}")
+    assert after["App"] == book.phones.YES, (
+        f"a run that never reached the device crossed off the app: {after}")
+    # It still records itself - the note is how anyone finds out what happened.
+    assert "would not start" in after["Note"]
+
+
+def test_a_run_that_did_look_and_found_no_app_still_says_incomplete():
+    """The guard on the fix above: `None` must mean "nobody looked" and not
+    become the answer for a phone that genuinely has no app on it."""
+    book = make_book(gmails=3, proxies=3, apps=3,
+                     phone_headers=PHONE_APP_HEADERS)
+    tab = book.phones._ws
+    book.phones.start(Serial="1416", Proxy="SX1")
+
+    builder._record(book, builder.Build(
+        index=1, status="install_failed", serial="1416",
+        gmail="g@example.com", app_installed=False))
+
+    row = tab.rows[0]
+    assert row[PHONE_APP_HEADERS.index("Status")] == "incomplete"
+    assert row[PHONE_APP_HEADERS.index("App")] == book.phones.NO
+
+
+def test_history_names_the_runs_own_outcome_when_it_cannot_name_the_phones():
+    """History gets one word per row and is appended whatever happened. A
+    guessed `incomplete` was worse than useless there; the run's own token
+    says which of the fifty-five ways it went."""
+    book = make_book(gmails=3, proxies=3, apps=3)
+    book.phones.start(Serial="1415", Proxy="SX1")
+
+    builder._record(book, builder.Build(
+        index=1, status="phone_would_not_start", serial="1415",
+        gmail="g@example.com"))
+
+    events = [row[HistoryLog.HEADERS.index("Event")]
+              for row in book.history._ws.rows]
+    assert events == ["phone_would_not_start"]
 
 
 def test_all_four_words_are_offered_in_the_dropdown():
