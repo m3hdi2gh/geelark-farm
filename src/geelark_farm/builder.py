@@ -565,25 +565,18 @@ def _sign_into_app(session: _Session) -> Build | None:
     return None
 
 
-#: How many accounts a phone has to have condemned before its own failure
-#: says more about the phone than about them.
+#: No threshold, deliberately. The first version of this asked for two
+#: accounts before it would believe the phone, and that number was wrong in
+#: the one situation it most had to be right in: a thin pool. Phone 1465 was
+#: handed the only free account there was, refused it, ran out, and kept the
+#: condemnation - twice, in two separate passes, on an account whose password
+#: its owner then checked by hand and found perfectly good. The same pass had
+#: phone 1468 refuse two and give both back, because two was all that was
+#: left to give it (2026-08-30).
 #:
-#: Two, and it is deliberately not a cap on how many are tried. A cap was
-#: here once and stopped a phone at three while eleven usable accounts sat in
-#: the tab (2026-08-11, phones 654 and 656) - because a run of bad
-#: credentials looks exactly like a bad phone until one of them works. So the
-#: loop still works through every account there is; what changed is what
-#: happens afterwards.
-#:
-#: The signal is the phone's own outcome. A phone that signs somebody in has
-#: proved the accounts before them were the fault, and they stay condemned. A
-#: phone that refuses every account it is given and then stops has proved
-#: nothing about any of them - and on 2026-08-30 two such phones took six
-#: accounts in fifteen minutes, four of which had signed into another phone
-#: perfectly two hours earlier.
-ENOUGH_TO_BLAME_THE_PHONE = 2
-
-
+#: The signal was never how many a phone ate. It is that the phone signed
+#: nobody in, and a phone that signed nobody in has proved nothing about any
+#: account it touched.
 def _give_back_condemned(s: _Session) -> None:
     """Undo this phone's judgements when the phone itself is the likelier fault.
 
@@ -595,9 +588,11 @@ def _give_back_condemned(s: _Session) -> None:
     Released, not set aside: nothing was learnt about these rows, and an empty
     status is what "nothing was learnt" means. If one of them really is bad it
     will be condemned again on the next phone - and stay condemned, because
-    that phone will sign somebody in.
+    that phone will sign somebody in. That is the whole safeguard against
+    handing a genuinely bad account round the pool for ever, and it is enough:
+    a bad account only has to meet one working phone.
     """
-    if s.app_signed_in or len(s.condemned) < ENOUGH_TO_BLAME_THE_PHONE:
+    if s.app_signed_in or not s.condemned:
         return
     for address in s.condemned:
         row = s.book.apps.find(address)

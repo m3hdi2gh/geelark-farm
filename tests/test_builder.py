@@ -997,15 +997,23 @@ def test_accounts_a_working_phone_condemned_stay_condemned(
         ["wrong_password"] * 2
 
 
-def test_one_refusal_is_not_evidence_about_the_phone(device, settings, drive):
-    """Below the threshold nothing is inferred. One account failing on one
-    phone is the ordinary case the whole stock-not-rows rule is built on."""
+def test_the_last_account_in_a_thin_pool_is_given_back_too(device, settings,
+                                                          drive):
+    """The hole in the first version of this, which asked for two accounts
+    before it would believe the phone. Phone 1465 was handed the only free
+    account there was, refused it, ran out, and kept the condemnation - twice,
+    on an account whose password its owner then checked by hand and found
+    good. A threshold fails exactly when the pool is thin, which is when it
+    matters most (2026-08-30)."""
     book = make_book(apps=1)
     build = drive(book, settings, google=[SIGNED_IN],
                   app=[Outcome("fatal", "wrong_password")])
 
-    assert not build.ok
-    assert book.apps._rows[0].values["Status"] == "wrong_password"
+    assert not build.ok and build.status == "no_usable_gpt"
+    assert book.apps._rows[0].values["Status"] == "", (
+        "the only account in the pool was left condemned by a phone that "
+        "signed nobody in")
+    assert len(book.apps.available) == 1
 
 
 def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
