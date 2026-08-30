@@ -443,6 +443,39 @@ def account_email_on(elements: list[screen.Element]) -> str | None:
     return next((t for t in labels if EMAIL_TEXT.fullmatch(t)), None)
 
 
+def back_in_the_app(ctx: Context) -> bool:
+    """Bring the app back if the phone has wandered out of it. True if it did.
+
+    The walk below assumed the phone was still where the login left it.
+    Thirty-six runs on 2026-08-30 say otherwise, and they agree with each
+    other: every one of them passed email, password and the authenticator,
+    and the screen archived when the walk gave up was the Play Store's own
+    Subscriptions page - `com.android.vending`, "Discover subscriptions",
+    "Get started" - with nothing of this app on it. `find_first` looked for
+    `Menu` on a page that has never had one, found nothing, and reported a
+    session it had no way to read. Three phones reached `GIVE_UP_AFTER` on it
+    and were set aside.
+
+    Asking the device which app is in front, rather than reading the screen,
+    for the reason `launch` gives: an unrecognised page looks identical
+    whether the app is showing something new or was never in front at all.
+
+    What sent it to Play is a separate question - the screen between is not
+    archived, because the router only keeps the ones it can name. This does
+    not need the answer: whatever wandered off, the fix is to come back and
+    look again, and the warning names the app that was in front, which is
+    what will settle it.
+    """
+    if not ctx.package:
+        return False
+    front = shell.foreground_package(ctx.client, ctx.phone_id)
+    if not front or front == ctx.package:
+        return False
+    log.warning("%s is in front, not %s; bringing the app back before giving "
+                "up on reading the session", front, ctx.package)
+    return launch(ctx.client, ctx.phone_id, ctx.package)
+
+
 def verify_account(ctx: Context) -> Outcome | None:
     """Read the signed-in address out of the app's own settings.
 
@@ -463,18 +496,33 @@ def verify_account(ctx: Context) -> Outcome | None:
     for labels, name in ((MENU_LABELS, "sidebar"),
                          (ACCOUNT_SETTINGS_LABELS, "account settings")):
         found = None
-        for _ in range(6):
+        brought_back = False
+        for look in range(6):
             ctx.refresh()
             found = screen.find_first(ctx.elements, labels)
             if found is not None:
                 break
+            # Two looks first, so a page still drawing is not mistaken for one
+            # that is not this app's - and so the common case costs no shell
+            # call at all. Once per control, because `launch` has its own
+            # three attempts and this must not multiply them.
+            if look >= 2 and not brought_back:
+                brought_back = True
+                if back_in_the_app(ctx):
+                    continue
             time.sleep(3)
         if found is None or not screen.tap_element(ctx.client, ctx.phone_id,
                                                    found):
             path = ctx.save("verify-lost")
+            # Which app was in front, in the reason itself. The archived page
+            # said `com.android.vending` thirty-six times and nothing that a
+            # person read said so (2026-08-30).
+            front = shell.foreground_package(ctx.client, ctx.phone_id)
+            where = (f" - {front} was in front"
+                     if front and front != ctx.package else "")
             return Outcome("fatal", "session_unverified",
                            f"the {name} control never appeared, so the "
-                           f"session could not be read back",
+                           f"session could not be read back{where}",
                            artifacts=[path] if path else [])
         time.sleep(2)
 

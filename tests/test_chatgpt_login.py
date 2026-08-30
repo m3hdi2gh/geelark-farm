@@ -255,6 +255,63 @@ def test_a_different_account_in_the_app_is_fatal(monkeypatch):
     assert "testaccount001@example.com" in out.detail
 
 
+def test_the_app_is_brought_back_when_the_phone_has_left_it(monkeypatch):
+    """The 2026-08-30 failure, thirty-six times over. Every one of them passed
+    email, password and the authenticator, and the page archived when the walk
+    gave up was the Play Store's own Subscriptions screen - a real capture,
+    the fixture below. `Menu` has never been on that page, so the walk asked
+    six times, found nothing, and condemned a session it never looked at."""
+    phone = ScriptedPhone(monkeypatch, ["play-store-subscriptions.xml",
+                                        "chatgpt-chat-signed-in.xml",
+                                        "chatgpt-account-menu.xml",
+                                        "chatgpt-account-settings.xml"])
+    monkeypatch.setattr(chatgpt_login.shell, "foreground_package",
+                        lambda c, p: "com.android.vending")
+
+    def came_back(client, phone_id, package):
+        phone.screens.pop(0)          # the app is in front again
+        return True
+
+    monkeypatch.setattr(chatgpt_login, "launch", came_back)
+
+    assert chatgpt_login.verify_account(verify_ctx()) is None
+    assert phone.tapped == ["Menu", "Account settings"]
+
+
+def test_the_app_that_is_already_in_front_is_not_relaunched(monkeypatch):
+    """The guard: coming back must not become something the walk does on every
+    slow render. `launch` kills and restarts, and a restart mid-walk would be
+    a way of never reading the session at all."""
+    ScriptedPhone(monkeypatch, ["chatgpt-chat-signed-in.xml",
+                                "chatgpt-account-menu.xml",
+                                "chatgpt-account-settings.xml"])
+    monkeypatch.setattr(chatgpt_login.shell, "foreground_package",
+                        lambda c, p: "com.openai.chatgpt")
+    launched = []
+    monkeypatch.setattr(chatgpt_login, "launch",
+                        lambda *a: launched.append(a) or True)
+
+    assert chatgpt_login.verify_account(verify_ctx()) is None
+    assert launched == [], "it restarted an app that was already in front"
+
+
+def test_a_walk_that_still_cannot_find_the_app_says_what_was_in_front(
+        monkeypatch):
+    """Coming back is allowed to fail, and then it is still fatal - `could not
+    check` never counts as `checked`. But the reason names the app that was in
+    front, which is the fact nobody had until the archives were read by hand
+    (2026-08-30)."""
+    ScriptedPhone(monkeypatch, ["play-store-subscriptions.xml"])
+    monkeypatch.setattr(chatgpt_login.shell, "foreground_package",
+                        lambda c, p: "com.android.vending")
+    monkeypatch.setattr(chatgpt_login, "launch", lambda *a: False)
+
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "session_unverified"
+    assert "com.android.vending" in out.detail
+
+
 def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):
     """On 2026-08-08 a phone was handed over ready with nobody in the app -
     'could not check' must never again count as 'checked'."""
