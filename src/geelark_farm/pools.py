@@ -46,8 +46,15 @@ from dataclasses import dataclass
 
 from .accounts import AccountError, Credentials, normalize_totp_secret
 from .config import Settings, machine
-from .gsheet import (SCOPES, SheetError, a1_column, batch_write,
-                     read_values, with_timeout)
+from .gsheet import (
+    SCOPES,
+    SheetError,
+    a1_column,
+    batch_write,
+    read_cell,
+    read_values,
+    with_timeout,
+)
 from .proxy import Proxy, ProxyError
 from .proxy import parse as parse_proxy
 
@@ -355,6 +362,8 @@ class Pool:
         """
         with self._claim_lock:
             for resource in self.available:
+                if not self._still_free(resource):
+                    continue
                 self._set(resource, self._claim_fields(resource, serial))
                 log.info("claimed %s from %s%s", resource.label, self.tab,
                          f" for phone {serial}" if serial else "")
@@ -383,6 +392,57 @@ class Pool:
         """
         if serial and self.serial_column:
             self._set(resource, {self.serial_column: serial})
+
+    def _still_free(self, resource: Resource) -> bool:
+        """Ask the sheet, not the snapshot, whether this row is still free.
+
+        `_rows` is a picture taken when the Book was opened, and `serve` opens
+        a Book per pass (`serve.py`) while SERVE_CONCURRENT lets passes
+        overlap - so a batch that has been running ten minutes chooses from a
+        picture that old. On 2026-08-30 that gave
+        `niloofarizadifard7466@gmail.com` to phone 1435 at 15:19 and to phone
+        1442 at 15:29. Both signed in: one ChatGPT account on two devices, one
+        of them already handed over.
+
+        `_claim_lock` did not help and could not have. The two batches held
+        different `Pool` objects and each took its own lock honestly; what was
+        missing was looking at the row rather than at the memory of it.
+
+        One cell, not the tab. Re-reading the tab would replace every
+        `Resource`, which is the one thing `claim` must not do - see the note
+        at the end of it. Writing the fresh value into this row's own `values`
+        is safe, changes no identities, and takes the row out of `available`
+        for the rest of this run.
+
+        This narrows the window to the moment between this read and the write
+        below. It does not close it: two processes reading a free cell at the
+        same instant still both write. Closing it needs a store that can
+        compare and set in one operation, which a spreadsheet cannot.
+
+        A read that fails refuses the claim. The costs are not symmetrical: a
+        row not taken is one pass of waiting, and a row taken twice is an
+        account on two phones.
+        """
+        index = self._index.get(self.status_column)
+        if index is None:                    # no status column to check
+            return True
+        cell = f"{a1_column(index + 1)}{resource.sheet_row}"
+        try:
+            fresh = read_cell(self._ws, self._lock, cell,
+                              what=f"{self.tab} {cell}")
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not check whether %s is still free (%s); "
+                        "leaving it alone", resource.label, exc)
+            return False
+        if fresh.strip().lower() in self.available_statuses:
+            return True
+        # Someone else took it while this snapshot aged. Record what the sheet
+        # actually says, so `available` stops offering it.
+        log.info("%s was taken by another run while this pass was working "
+                 "(the tab says %r); looking further down %s",
+                 resource.label, fresh, self.tab)
+        resource.values[self.status_column] = fresh
+        return False
 
     def _claim_fields(self, resource: Resource,
                       serial: str = "") -> dict[str, str]:

@@ -111,6 +111,30 @@ def read_values(worksheet, lock: threading.Lock | None = None, *,
     return retrying(once, what=what, attempts=attempts)
 
 
+def read_cell(worksheet, lock: threading.Lock | None, cell: str, *,
+              what: str, attempts: int = 4) -> str:
+    """One cell, as a string, with the same retry the whole-tab read has.
+
+    A whole tab costs the same quota as a cell and returns a picture that is
+    immediately out of date; this exists for the one question that has to be
+    asked of the sheet rather than of a snapshot - "is this row still free" -
+    which `Pool.claim` asks about a single row a moment before taking it.
+
+    Empty for a cell that is blank, missing, or off the end of the grid.
+    """
+    def once() -> str:
+        if lock is None:
+            got = worksheet.get(cell)
+        else:
+            with lock:
+                got = worksheet.get(cell)
+        if not got or not got[0]:
+            return ""
+        return str(got[0][0])
+
+    return retrying(once, what=what, attempts=attempts)
+
+
 def batch_write(worksheet, lock: threading.Lock, payload: list[dict], *,
                 what: str, attempts: int = 4) -> None:
     """Send a batch update, retrying transient network failures.

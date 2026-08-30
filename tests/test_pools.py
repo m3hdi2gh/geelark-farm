@@ -9,6 +9,7 @@ one run later. Neither raises - both just quietly spend the stock.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -45,6 +46,14 @@ PROXY_HEADERS_OPTIONAL = ["Name", "Proxy String", "Host", "Port", "Username",
 SECRET = "JBSWY3DPEHPK3PXP"
 
 
+def column_number(letters: str) -> int:
+    """"C" -> 3. The inverse of `gsheet.a1_column`, needed only here."""
+    number = 0
+    for letter in letters:
+        number = number * 26 + (ord(letter) - 64)
+    return number
+
+
 class FakeWorksheet:
     """Enough gspread to answer a read and record the writes."""
 
@@ -72,6 +81,24 @@ class FakeWorksheet:
 
     def get_all_values(self):
         return [self.headers, *self.rows]
+
+    def get(self, a1: str):
+        """One cell or a column range, the way gspread answers it: a list of
+        rows, each a list of cells, with trailing blanks dropped."""
+        spot = re.fullmatch(r"([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?", a1.upper())
+        if not spot:
+            raise AssertionError(f"the fake worksheet cannot read {a1!r}")
+        col = column_number(spot.group(1))
+        first, last = int(spot.group(2)), int(spot.group(4) or spot.group(2))
+        grid = [self.headers, *self.rows]
+        out = []
+        for number in range(first, last + 1):
+            row = grid[number - 1] if 0 < number <= len(grid) else []
+            cell = row[col - 1] if col - 1 < len(row) else ""
+            out.append([cell] if cell != "" else [])
+        while out and not out[-1]:
+            out.pop()
+        return out
 
     #: gspread reaches the workbook through the worksheet, and `delete_rows`
     #: goes that way. One object answers both here.
@@ -180,6 +207,67 @@ def test_claiming_marks_the_row_so_nothing_else_takes_it():
     assert first.credentials.email == "a@example.com"
     assert second.credentials.email == "b@example.com"
     assert pool.claim() is None
+
+
+def test_a_row_another_run_took_since_the_snapshot_is_not_claimed():
+    """The 2026-08-30 incident. `serve` opens a Book per pass and
+    SERVE_CONCURRENT lets passes overlap, so a batch ten minutes into its work
+    is choosing from a ten-minute-old picture of the tab. That gave one
+    ChatGPT account to phone 1435 at 15:19 and to phone 1442 at 15:29, and
+    both signed in - one account on two devices, one already handed over.
+
+    The lock cannot see this: the two batches hold different `Pool` objects,
+    and each takes its own lock honestly."""
+    pool = gmail_pool([gmail_row("a@example.com"), gmail_row("b@example.com")])
+    # Another pass claimed the first row after this pool's snapshot was taken.
+    status = pool._index[pool.status_column]
+    pool._ws.rows[0][status] = pool.claimed_status
+
+    taken = pool.claim()
+
+    assert taken.credentials.email == "b@example.com", (
+        "it handed out a row the tab already says is in use")
+
+
+def test_a_row_taken_since_the_snapshot_stops_being_offered():
+    """Reading the cell also repairs this row of the snapshot - one row, by
+    value. Reloading the tab instead would replace every `Resource`, which is
+    what `claim` must never do while a run is holding three of them."""
+    pool = gmail_pool([gmail_row("a@example.com")])
+    status = pool._index[pool.status_column]
+    pool._ws.rows[0][status] = pool.claimed_status
+
+    assert pool.claim() is None
+    assert pool.available == [], "the stale row is still on offer"
+
+
+def test_a_check_that_cannot_be_made_refuses_the_claim(monkeypatch):
+    """A row not taken costs one pass of waiting. A row taken twice costs an
+    account on two phones. The costs are not symmetrical, so an unanswerable
+    question is answered no."""
+    pool = gmail_pool([gmail_row("a@example.com")])
+
+    from geelark_farm import pools
+    from geelark_farm.gsheet import SheetError
+
+    def unreachable(*_args, **_kwargs):
+        raise SheetError("the tab could not be read")
+
+    monkeypatch.setattr(pools, "read_cell", unreachable)
+
+    assert pool.claim() is None
+    assert not pool._ws.writes, "it wrote a claim it could not verify"
+
+
+def test_a_free_row_is_still_claimed_after_the_check():
+    """The guard on the three above: the check must not become a way of never
+    claiming anything."""
+    pool = gmail_pool([gmail_row("a@example.com")])
+
+    taken = pool.claim()
+
+    assert taken is not None and taken.credentials.email == "a@example.com"
+    assert pool.status_of(taken) == pool.claimed_status
 
 
 def test_an_unusable_row_is_never_claimed():
