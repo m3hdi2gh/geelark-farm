@@ -572,9 +572,18 @@ class Pool:
 
     def fail(self, resource: Resource, reason: str, *, note: str = "") -> None:
         """Record what was wrong with a row, in the vocabulary of the tab's own
-        Status list, so the column stays a thing you can filter on."""
-        self._set(resource, {self.status_column: reason,
-                             self.note_column: note})
+        Status list, so the column stays a thing you can filter on.
+
+        Through `_off_a_phone` like every other way out, because this is one:
+        a row judged on a phone has left that phone. It was the only verb not
+        on the list when the rule was written, so it kept the serial of a
+        device it is no longer on - and unlike the `ready` strands, nothing
+        reports a failure-status row with a stale serial, because
+        `strand_check` only looks at rows still marked spent. Four rows in the
+        Gpt Info tab said `wrong_password` beside a live phone's number
+        (2026-08-30).
+        """
+        self._set(resource, self._off_a_phone(reason, note))
 
     # ------------------------------------------------------------- writing
     #: How much of a note is kept. The column is read by a person beside

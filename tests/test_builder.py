@@ -933,6 +933,81 @@ def test_each_app_attempt_after_the_first_starts_from_a_cleared_app(
     assert fresh_flags == [False, True, True]
 
 
+def test_a_finish_clears_the_app_before_its_first_account_too(settings,
+                                                              monkeypatch):
+    """A build installed the app a moment ago, so its first attempt starts on
+    a clean one. A finish picks up a phone that has been sitting with whatever
+    an earlier run left signed in, and `act_reset_app` only clears that when it
+    happens to recognise the screen (2026-08-30).
+
+    Driven through `_sign_into_app` itself, which is the one loop `build` and
+    `finish` share - the flag is the only thing that differs between them."""
+    fresh_flags = []
+    monkeypatch.setattr(
+        builder.chatgpt_login, "sign_in",
+        lambda *a, **k: fresh_flags.append(k.get("fresh")) or SIGNED_IN)
+
+    def session(reset_first):
+        book = make_book(apps=1)
+        return builder._Session(
+            client=None, settings=settings, book=book,
+            build=builder.Build(index=1, serial="691"), phone_id="P1",
+            artifacts=settings.artifact_dir, deadline=time.monotonic() + 600,
+            started=time.monotonic(), reset_first=reset_first)
+
+    builder._sign_into_app(session(reset_first=False))
+    builder._sign_into_app(session(reset_first=True))
+
+    assert fresh_flags == [False, True], (
+        "a finish trusted whatever the last run left in the app")
+
+
+def test_a_phone_that_signs_nobody_in_gives_its_accounts_back(
+        device, settings, drive):
+    """Two phones took six accounts in fifteen minutes on 2026-08-30, every
+    one answered "Incorrect email address or password" - and four of the six
+    had signed into another phone perfectly two hours earlier. The verdict for
+    a refused password already says the service shows that page when it is
+    refusing for other reasons too; a phone that refused every account it was
+    given is that other reason."""
+    book = make_book(apps=3)
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(book, settings, google=[SIGNED_IN], app=[wrong] * 3)
+
+    assert not build.ok and build.status == "no_usable_gpt"
+    statuses = [r.values["Status"] for r in book.apps._rows]
+    assert statuses == ["", "", ""], (
+        f"the phone's judgements were left standing: {statuses}")
+    assert len(book.apps.available) == 3, "the accounts did not go back"
+
+
+def test_accounts_a_working_phone_condemned_stay_condemned(
+        device, settings, drive):
+    """The other half, and the reason this is not a cap: a phone that signs
+    somebody in has proved the accounts before them were the fault. A cap
+    stopped one at three while eleven usable accounts sat in the tab
+    (2026-08-11, phones 654 and 656)."""
+    book = make_book(apps=3)
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[wrong, wrong, SIGNED_IN])
+
+    assert build.ok
+    assert [r.values["Status"] for r in book.apps._rows[:2]] == \
+        ["wrong_password"] * 2
+
+
+def test_one_refusal_is_not_evidence_about_the_phone(device, settings, drive):
+    """Below the threshold nothing is inferred. One account failing on one
+    phone is the ordinary case the whole stock-not-rows rule is built on."""
+    book = make_book(apps=1)
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[Outcome("fatal", "wrong_password")])
+
+    assert not build.ok
+    assert book.apps._rows[0].values["Status"] == "wrong_password"
+
+
 def test_a_challenge_sets_the_account_aside_instead_of_condemning_it(
         device, settings, drive):
     """OpenAI emailing a code says nothing about the account - three addresses
@@ -991,6 +1066,7 @@ def test_a_finish_says_on_the_row_that_the_phone_is_in_hand(device, settings,
             book.phones._ws.rows[0][PHONE_HEADERS.index("Status")]))
     # Ends at the first check after the marker, which is all this is about.
     monkeypatch.setattr(builder.shell, "device_accounts", lambda *a, **k: [])
+    monkeypatch.setattr(builder.shell, "package_installed", lambda *a, **k: True)
 
     builder.finish_one(
         None, settings, book, FakeLedger(),

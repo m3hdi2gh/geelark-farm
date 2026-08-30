@@ -573,7 +573,8 @@ def test_every_way_off_a_phone_drops_the_serial():
     pool still naming that phone, and three rows in the live tab said
     `Phone Serial 684` about a phone deleted hours earlier (2026-08-13).
     """
-    for leaving in ("release", "retire", "set_aside"):
+    for leaving, args in (("release", ()), ("retire", ()), ("set_aside", ()),
+                          ("fail", ("wrong_password",))):
         pool = AppPool(FakeWorksheet(APP_HEADERS, [
             ["a@example.com", "pw", SECRET, "", "", ""]]), APP_HEADERS,
             threading.Lock())
@@ -582,10 +583,28 @@ def test_every_way_off_a_phone_drops_the_serial():
         pool.spend(row, serial="684", note="On phone 684.")
         assert row.values["Phone Serial"] == "684"
 
-        getattr(pool, leaving)(row, note="whatever became of it")
+        getattr(pool, leaving)(row, *args, note="whatever became of it")
 
         assert row.values["Phone Serial"] == "", (
             f"{leaving} left the row naming a phone it is no longer on")
+
+
+def test_a_failed_row_still_records_the_reason_as_its_status():
+    """The guard on adding `fail` to the loop above: clearing the serial must
+    not turn a judgement into a release. The Status column is what the tab is
+    filtered on, and the reason is what belongs in it."""
+    pool = AppPool(FakeWorksheet(APP_HEADERS, [
+        ["a@example.com", "pw", SECRET, "", "", ""]]), APP_HEADERS,
+        threading.Lock())
+    pool.load()
+    row = pool._rows[0]
+    pool.spend(row, serial="684", note="On phone 684.")
+
+    pool.fail(row, "wrong_password", note="try it by hand")
+
+    assert pool.status_of(row) == "wrong_password"
+    assert row.values["Phone Serial"] == ""
+    assert row not in pool.available
 
 
 def test_a_proxy_let_go_stops_naming_its_phone_too():

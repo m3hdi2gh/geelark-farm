@@ -258,6 +258,13 @@ VERDICTS: dict[str, Verdict] = {
         "nobody in the app. The archived screen shows where the walk "
         "stopped; if OpenAI moved its menus, the walk in the ChatGPT login "
         "flow is what to update."),
+    "phone_refuses_accounts": Verdict(
+        DEVICE, "this phone turned down every account it was given",
+        "Three app accounts in a row were refused on this phone and put back "
+        "in the pool untouched - so the phone or the exit behind it is the "
+        "fault, not the credentials. The exit is where to look first: the "
+        "same accounts sign in from somewhere else. Delete the phone, or "
+        "swap its proxy and finish it again."),
     "app_wrong_account": Verdict(
         DEVICE, "the app's own settings name a different account",
         "The app is signed in, but as someone else - a session from an "

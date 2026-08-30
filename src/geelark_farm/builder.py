@@ -397,6 +397,19 @@ class _Session:
     #: freshly installed app; every one after it has to clear what the last
     #: attempt left on screen.
     attempted: int = 0
+    #: Whether even the first attempt has to start from a cleared app. A build
+    #: installed the app a moment ago and nothing has touched it, so it does
+    #: not; a finish picked up a phone that has been sitting with whatever an
+    #: earlier run left signed in, and `act_reset_app` only clears that when it
+    #: happens to recognise the screen. Unconditional here is one `pm clear`
+    #: and three seconds, against reading a previous session as this account's
+    #: problem (2026-08-30).
+    reset_first: bool = False
+    #: Addresses this phone has condemned, in order. Counted rather than
+    #: merely recorded: past a point they stop being evidence about the
+    #: accounts and start being evidence about the phone. See
+    #: ACCOUNTS_BEFORE_BLAMING_THE_PHONE.
+    condemned: list[str] = field(default_factory=list)
     #: Accounts the service challenged rather than judged, with what it asked
     #: for - held so this build does not take them again, and put back at the
     #: end carrying the reason as their status.
@@ -455,11 +468,13 @@ def _sign_into_app(session: _Session) -> Build | None:
                             f"somebody wrote {marked!r} in its State while "
                             f"this was running, so it was left alone")
         if s.remaining() <= ATTEMPT_SECONDS:
+            _give_back_condemned(s)
             return s.finish("budget_exhausted",
                             "installed, but no budget left for the app login")
         if s.app_row is None:
             s.app_row = s.book.apps.claim(str(s.build.serial or ''))
             if s.app_row is None:
+                _give_back_condemned(s)
                 return s.finish("no_usable_gpt",
                                 "the Gpt Info tab has no unused account left")
         log.info("signing into the app as %s", s.app_row.credentials.email)
@@ -476,7 +491,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             # previous one left the app wherever it stopped, and the router
             # matches whatever is on screen - so without this, one account's
             # verification page is read as the next account's problem.
-            fresh=s.attempted > 0,
+            fresh=s.attempted > 0 or s.reset_first,
         )
         s.attempted += 1
         # Each attempt appends its own, so a phone that worked through three
@@ -537,14 +552,64 @@ def _sign_into_app(session: _Session) -> Build | None:
             named = (outcome.reason if outcome.reason.startswith("app")
                      else f"app_{outcome.reason}")
             said = failures.verdict(outcome.reason, s.book.apps.service)
+            _give_back_condemned(s)
             return s.finish(named,
                             f"the app login could not go on with this phone - "
                             f"{said.seen}")
+        condemned = s.app_row.credentials.email
         s.book.apps.fail(s.app_row, outcome.reason,
                          note=failures.verdict(outcome.reason,
                                               s.book.apps.service).advice)
         s.app_row = None
+        s.condemned.append(condemned)
     return None
+
+
+#: How many accounts a phone has to have condemned before its own failure
+#: says more about the phone than about them.
+#:
+#: Two, and it is deliberately not a cap on how many are tried. A cap was
+#: here once and stopped a phone at three while eleven usable accounts sat in
+#: the tab (2026-08-11, phones 654 and 656) - because a run of bad
+#: credentials looks exactly like a bad phone until one of them works. So the
+#: loop still works through every account there is; what changed is what
+#: happens afterwards.
+#:
+#: The signal is the phone's own outcome. A phone that signs somebody in has
+#: proved the accounts before them were the fault, and they stay condemned. A
+#: phone that refuses every account it is given and then stops has proved
+#: nothing about any of them - and on 2026-08-30 two such phones took six
+#: accounts in fifteen minutes, four of which had signed into another phone
+#: perfectly two hours earlier.
+ENOUGH_TO_BLAME_THE_PHONE = 2
+
+
+def _give_back_condemned(s: _Session) -> None:
+    """Undo this phone's judgements when the phone itself is the likelier fault.
+
+    Called only where the app phase gives up having signed nobody in. The
+    verdict for a refused password already says the sheet's password "may well
+    be right" - the service shows that page when it is refusing for other
+    reasons too. A phone that refused every one of them is that other reason.
+
+    Released, not set aside: nothing was learnt about these rows, and an empty
+    status is what "nothing was learnt" means. If one of them really is bad it
+    will be condemned again on the next phone - and stay condemned, because
+    that phone will sign somebody in.
+    """
+    if s.app_signed_in or len(s.condemned) < ENOUGH_TO_BLAME_THE_PHONE:
+        return
+    for address in s.condemned:
+        row = s.book.apps.find(address)
+        if row is None:
+            continue
+        s.book.apps.release(row, note=(
+            f"Phone {s.build.serial} refused {len(s.condemned)} accounts and "
+            f"signed none in, so the phone or its exit is the likelier fault "
+            f"and nothing was judged here. Free to try on another phone."))
+    log.warning("phone %s refused %d accounts and signed none in (%s); "
+                "putting them back rather than leaving them condemned",
+                s.build.serial, len(s.condemned), ", ".join(s.condemned))
 
 
 def _fresh_proxy(client: Client, book: Book) -> Resource:
@@ -1059,7 +1124,8 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            build=build, phone_id=phone_id, artifacts=artifacts,
                            deadline=deadline, started=started,
                            codes=codes_source or codes.NoSource(),
-                           cancelled=cancelled, proxy_row=own_exit)
+                           cancelled=cancelled, proxy_row=own_exit,
+                           reset_first=True)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up
