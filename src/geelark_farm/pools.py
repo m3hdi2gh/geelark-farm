@@ -147,6 +147,9 @@ class Pool:
     editing safe.
     """
 
+    #: Shared by every pool of every Book in this process - see `__init__`.
+    _CLAIM_LOCK = threading.Lock()
+
     tab = ""
     #: Who judges the credentials in this tab. Three reasons are reported by
     #: both login flows, and their wording names the service - so a row's own
@@ -213,7 +216,11 @@ class Pool:
         self.headers = headers
         self._index = {name: i for i, name in enumerate(headers)}
         self._rows: list[Resource] = []
-        self._claim_lock = threading.Lock()
+        # Class-level: `serve` opens a Book per pass, so a per-instance lock
+        # is two locks the moment two passes overlap - which is exactly when
+        # it has to hold. `claim` re-reads the row as well (see `_still_free`)
+        # and that is the real guard; this makes the in-process half whole.
+        self._claim_lock = Pool._CLAIM_LOCK
         #: The rows THIS process is holding right now, by sheet row. Kept so
         #: `beat` can restamp them: a claim that is being refreshed is one a
         #: live run still wants, and that is what tells it apart from a claim
@@ -1477,8 +1484,13 @@ class HistoryLog:
     #: a column would scramble every row already written under the old one -
     #: which is also why `Steps` sits after `Note` rather than beside the
     #: fields it belongs with.
+    #: Appended to, never reordered: `append` writes by position, so a column
+    #: inserted anywhere but the end moves every value in every row written
+    #: before it. `App` is last for that reason - `builder._record` has been
+    #: sending it since the column existed on the Phones tab and History had
+    #: nowhere to put it, so it was dropped on every row (2026-08-30).
     HEADERS = ["When", "Machine", "Serial", "Event", "Seconds", "Proxy",
-               "Gmail", "GPT Account", "Note", "Steps"]
+               "Gmail", "GPT Account", "Note", "Steps", "App"]
 
     def __init__(self, worksheet, lock: threading.Lock):
         self._ws = worksheet

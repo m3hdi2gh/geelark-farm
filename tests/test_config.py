@@ -486,3 +486,22 @@ def test_a_blank_stamp_falls_back_to_the_checkout(monkeypatch):
 
     assert config.revision() == "abc1234"
     config.revision.cache_clear()
+
+
+def test_an_unknown_log_format_is_refused_not_quietly_ignored(monkeypatch):
+    """`logs.file_formatter` returns the text formatter for anything that is
+    not exactly "json", so a typo gave a prose log and said nothing - while
+    anything counting those lines believed it had objects. `logs.FORMATS`
+    existed and nothing consulted it (2026-08-30)."""
+    from geelark_farm import config
+    from geelark_farm.logs import FORMATS
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("LOG_FORMAT", "jsonl")
+    with pytest.raises(config.ConfigError) as refused:
+        config.Settings.load()
+    assert "jsonl" in str(refused.value)
+    for good in FORMATS:
+        monkeypatch.setenv("LOG_FORMAT", good.upper() + " ")
+        assert config.Settings.load().log_format == good

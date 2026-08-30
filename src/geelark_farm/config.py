@@ -159,6 +159,25 @@ def _int(key: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _log_format() -> str:
+    """`LOG_FORMAT`, refused rather than quietly ignored.
+
+    `logs.file_formatter` returns the text formatter for anything that is not
+    exactly "json", so `LOG_FORMAT=JSONL` or a stray space gave a prose log
+    and said nothing - while everything downstream that counts those lines
+    would have been reading sentences believing it had objects. The set of
+    valid values existed as `logs.FORMATS` and nothing had ever consulted it
+    (2026-08-30).
+    """
+    from .logs import FORMATS
+
+    value = _str("LOG_FORMAT", "text").strip().lower()
+    if value not in FORMATS:
+        raise ConfigError(
+            f"LOG_FORMAT={value!r} is not one of: {', '.join(FORMATS)}")
+    return value
+
+
 def _path(key: str, default: str) -> Path:
     raw = _str(key, default)
     path = Path(raw)
@@ -280,7 +299,7 @@ class Settings:
             warm_stock=_int("WARM_STOCK", 10),
             serve_concurrent=_str("SERVE_CONCURRENT", "0").strip()
                               in ("1", "true", "yes", "on"),
-            log_format=_str("LOG_FORMAT", "text").strip().lower(),
+            log_format=_log_format(),
             serve_interval_seconds=_int("SERVE_INTERVAL_SECONDS", 30),
             build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
             stale_claim_seconds=_int("STALE_CLAIM_SECONDS",

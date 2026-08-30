@@ -2582,13 +2582,73 @@ def test_a_flow_that_stops_before_the_loop_carries_an_empty_path():
     assert Outcome("fatal", "app_not_installed").trail == []
 
 
+def test_an_empty_pool_does_not_cost_the_phone_a_strike(device, settings,
+                                                       monkeypatch):
+    """`no_usable_gpt` says the Gpt Info tab was empty. That is not the
+    phone's fault and not something the phone can be fixed of - and three
+    strikes retire it. Phones 1465 and 1468 were both set aside that way, with
+    `the Gpt Info tab has no unused account left` in their notes (2026-08-30).
+
+    `breaker` had already drawn this line - `no_usable_gpt` is in its `WORKED`
+    set, evidence the pipeline works - and the tally disagreed with it."""
+    from geelark_farm import breaker
+
+    assert "no_usable_gpt" in breaker.WORKED
+    book = make_book(apps=0)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda *a, **k: ["g@example.com"])
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: ["com.openai.chatgpt"])
+    tries = []
+    monkeypatch.setattr(book.phones, "count_try",
+                        lambda serial: tries.append(serial) or len(tries))
+
+    build = builder.finish_one(
+        None, settings, book, FakeLedger(),
+        {"sheet_row": 3, "phone_id": "P1", "serial": "1465",
+         "gmail": "g@example.com", "proxy": "", "status": "app_only"}, 1)
+
+    assert build.status == "no_usable_gpt"
+    assert tries == [], (
+        "an empty tab put a strike on the phone, three of which retire it")
+
+
+def test_a_failure_the_phone_is_answerable_for_still_counts():
+    """The guard: the tally is what retires a phone that cannot be finished,
+    and it has to keep doing that."""
+    from geelark_farm import breaker
+
+    for status in ("install_failed", "app_session_unverified",
+                   "phone_would_not_start"):
+        build = builder.Build(index=1, ok=False, status=status)
+        assert breaker.counts_against(build), (
+            f"{status} stopped counting against the phone")
+
+
 def test_history_writes_the_path_beside_the_outcome():
     """Appended, never reordered: rows are written by position, so moving a
-    column scrambles every row already written under the old one."""
+    column scrambles every row already written under the old one.
+
+    Pinned as fixed positions rather than "Steps is last", so that appending
+    the next column is allowed and moving any existing one is not - which is
+    what the rule actually says. `App` was appended on 2026-08-30."""
     from geelark_farm.pools import HistoryLog
 
-    assert HistoryLog.HEADERS[-1] == "Steps"
-    assert HistoryLog.HEADERS.index("Note") < HistoryLog.HEADERS.index("Steps")
+    assert HistoryLog.HEADERS[:10] == [
+        "When", "Machine", "Serial", "Event", "Seconds", "Proxy",
+        "Gmail", "GPT Account", "Note", "Steps"]
+
+
+def test_history_keeps_the_column_the_builder_has_always_sent_it():
+    """`_record` passes `App=` to `record_history`, `append` writes by
+    position over HEADERS, and HEADERS had no such column - so the value was
+    dropped on every row ever written. History is the only account of a run
+    once the Phones row is deleted, and "did this phone have the app" is half
+    of what tells the two products apart (2026-08-30)."""
+    from geelark_farm.pools import HistoryLog
+
+    assert "App" in HistoryLog.HEADERS
 
 
 # ------------------------------------------ an exit we are standing on, not on

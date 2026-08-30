@@ -73,8 +73,18 @@ def test_the_ledger_and_the_pools_go_stale_at_the_same_moment():
     Pinned rather than commented, because a comment did not stop it.
     """
     from geelark_farm import config
+    from geelark_farm.config import Settings
 
     assert ledger_mod.STALE_CLAIM_SECONDS == config.STALE_CLAIM_DEFAULT
+    # And against the number the run will actually use. The line above pins
+    # the ledger to the default; the credential side resolves the *setting*,
+    # which `.env.example` invites you to override. Uncomment that line and
+    # the phone lease stays 300s while the credential lease becomes 3600s -
+    # the exact gap of 2026-08-28, which this test claimed to prevent and
+    # could not see (2026-08-30).
+    assert ledger_mod.STALE_CLAIM_SECONDS == Settings.load().stale_claim_seconds, (
+        "STALE_CLAIM_SECONDS in the environment moves the credential lease "
+        "and not the phone lease; they have to be one number")
 
 
 def test_a_corrupt_ledger_loads_empty_instead_of_crashing(tmp_path, caplog):

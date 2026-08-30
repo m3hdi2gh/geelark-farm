@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import artifacts as archive
-from . import codes, failures, phones, shell
+from . import breaker, codes, failures, phones, shell
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
@@ -1161,11 +1161,21 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # A proxy swapped in during finishing belongs to this phone now.
         _release(book, build,
                  _session_holds(book, session, proxy_spent=True))
-        # One more attempt on the tally, but only for a finish that neither
-        # worked nor refused before it started. `in_use_by_hand` is somebody
-        # else using the phone and says nothing about the phone; counting it
-        # would retire a perfectly good one for being popular (2026-08-29).
-        if not build.ok and build.status != "in_use_by_hand":
+        # One more attempt on the tally, but only for a finish that says
+        # something about the phone.
+        #
+        # `breaker` already draws that line and draws it in two places:
+        # `WORKED` is a build that proves the pipeline works, and
+        # `NOTHING_HAPPENED` is one where nothing was created and nothing
+        # spent. Neither is evidence against the phone, and the tally is
+        # nothing but evidence against the phone - so it reads the same sets
+        # rather than keeping its own opinion, which is how the two came to
+        # disagree. `no_usable_gpt` is in `WORKED`, and it retired phones 1465
+        # and 1468 at three strikes each for the Gpt Info tab being empty -
+        # which is not their fault and not something they can be fixed of
+        # (2026-08-30). `in_use_by_hand` was the one exception written out by
+        # hand here; it is in `NOTHING_HAPPENED` and now arrives with the rest.
+        if breaker.counts_against(build):
             _count_try(book, build)
         _write_row(book, build)
         try:
@@ -2532,6 +2542,19 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         if build.artifact_dir:
             archive.record(Path(build.artifact_dir),
                            ok=build.ok, status=build.status)
+        # The one line where the reason token and the duration appear
+        # together, and it went to stdout alone - so it reached `docker logs`,
+        # which is capped and does not survive a rebuild, and never the log
+        # file, which is bind-mounted and already JSON on the server. Counting
+        # failures by reason meant reading the container's memory before it
+        # rolled (2026-08-30). `extra` lands each field beside the message in
+        # the JSON line - see logs.JsonLines - so `jq` can group by them.
+        log.info("%s %s: %s (%.0fs)", build.name,
+                 "OK" if build.ok else "FAIL", build.status, build.seconds,
+                 extra={"outcome": build.status, "ok": build.ok,
+                        "seconds": round(build.seconds), "serial": build.serial,
+                        "gmail": build.gmail, "proxy": build.proxy_name,
+                        "app_account": build.app_account})
         if reporter:
             reporter.finish(build)
         else:
