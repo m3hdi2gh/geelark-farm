@@ -328,7 +328,7 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
 
 
 def _look(client: Client, settings: Settings,
-          book: Book) -> tuple[int, int, int, int, dict]:
+          book: Book) -> tuple[int, int, int, int, dict, int]:
     """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
 
     Not the free slots. Those cost a call to an endpoint with a limit of one a
@@ -345,7 +345,13 @@ def _look(client: Client, settings: Settings,
     warm, _gone = builder._unfinished(client, book)
     return (len(warm), len(book.apps.available),
             len(book.gmails.available), len(book.proxies.available),
-            book.phones.counts())
+            book.phones.counts(),
+            # Free, like the depths above it: `broken` is a comprehension over
+            # rows already in memory, and the reload ran a line before this.
+            # The three Pools only - `PhoneLog` is not a `Pool`, has no
+            # `_rows` and no `broken`, and inventing one on it is the same
+            # mistake a fake made with CLAIM_FORMAT (2026-08-28).
+            sum(len(p.broken) for p in (book.proxies, book.gmails, book.apps)))
 
 
 def beat(settings: Settings) -> None:
@@ -505,7 +511,8 @@ def _count(stock: dict | None, key: str, held: bool) -> str:
 def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
           waiting: int, free: int | None, tripped: str, failed: int,
           needs: str = "", held: bool = False,
-          stock: dict | None = None) -> None:
+          stock: dict | None = None, broken: int = 0,
+          unknown: int = 0, unknown_running: int = 0) -> None:
     """Put this pass's state where the operator can see it.
 
     Every number here is already in the log, and the log is on a server the
@@ -560,6 +567,25 @@ def _show(book: Book, settings: Settings, decision: Decision, *, warm: int,
         "Ready to take": _count(stock, "ready", held),
         "App-only to take": _count(stock, "app_only", held),
         "Out with somebody": _count(stock, "taken", held),
+        # Two numbers the loop has always computed and only ever logged. A
+        # row the pool refused looks free in the tab - `available` skips it,
+        # but its Status cell is blank, which is what "free" looks like to a
+        # person - so an account can sit there for days being counted as
+        # stock by the only reader who matters.
+        "Unusable rows": (
+            "not read - stopped" if held else "0" if not broken
+            else f"{broken} - they look free in the tab, "
+                 f"their Status cell is blank"),
+        # Split the way `Needs you` splits it, because the two sit a few
+        # cells apart and a bare total beside a split is a reconciliation the
+        # operator has to do by hand. The split is the point: a running one
+        # bills by the minute and `Stop unaccounted phones` answers it; a
+        # stopped one only holds a profile slot, and only a person deleting
+        # it in the panel does.
+        "Phones not in the sheet": (
+            "not read - stopped" if held else "0" if not unknown
+            else f"{unknown} - {unknown_running} running and billing, "
+                 f"{unknown - unknown_running} holding a profile slot"),
     })
 
 
@@ -771,7 +797,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                  stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
-    warm, waiting, gmails, exits, stock = _look(client, settings, book)
+    warm, waiting, gmails, exits, stock, broken = _look(client, settings, book)
     tripped = fuse.reason()
     # What the workers are already on. Nothing on the sheet says it: a build
     # has no row until its phone exists, and an account is claimed minutes
@@ -818,7 +844,9 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # tab on the last thing that finished.
     _show(book, settings, decision, warm=warm, waiting=waiting, free=free,
           tripped=tripped, failed=_failing(settings),
-          needs=needs_you(outcome or {}), stock=stock)
+          needs=needs_you(outcome or {}), stock=stock, broken=broken,
+          unknown=len(outcome.get("unknown_phones") or []),
+          unknown_running=len(outcome.get("unknown_running") or []))
 
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two

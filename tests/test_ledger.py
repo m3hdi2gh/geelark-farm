@@ -8,9 +8,9 @@ the minutes.
 
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
-import json
 import time
 
 import pytest

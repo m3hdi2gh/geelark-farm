@@ -1972,7 +1972,10 @@ def test_every_ledger_the_program_loads_carries_the_resolved_window():
     thing that catches the nineteenth call site somebody adds next month
     (2026-08-31).
     """
-    import geelark_farm.builder, geelark_farm.cli, geelark_farm.serve, geelark_farm.ui
+    import geelark_farm.builder
+    import geelark_farm.cli
+    import geelark_farm.serve
+    import geelark_farm.ui
 
     missing = []
     for module in (geelark_farm.builder, geelark_farm.cli,

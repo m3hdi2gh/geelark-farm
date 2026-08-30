@@ -1539,7 +1539,14 @@ class ServiceBoard:
             # The three above the fold are the loop's own numbers. These two
             # are the consumer's, and they are the only question he actually
             # has: how many phones can I take right now, of each kind.
-            "Ready to take", "App-only to take", "Out with somebody")
+            "Ready to take", "App-only to take", "Out with somebody",
+            # Appended 2026-08-31. Both were computed and logged every pass
+            # and reached nothing the operator reads: a pool row that failed
+            # validation looks free in the tab because its Status cell is
+            # blank, and a phone with no row is touched by nothing here at
+            # all. Both cost real stock in the week before they were put on
+            # the board.
+            "Unusable rows", "Phones not in the sheet")
 
     #: Things a person can ask for, as checkboxes in column D beside their
     #: labels in column C. Appended to rather than reordered, like ROWS.
@@ -1700,6 +1707,40 @@ def _dress_service(worksheet, rows: int) -> None:
     except Exception as exc:                                  # noqa: BLE001
         log.warning("could not lay out the %s tab (%s); it will still be "
                     "written, it will just look plain", SERVICE_TAB, exc)
+
+
+def _fit_service_tab(sheet) -> None:
+    """Grow a Service tab that was made before a column or a row was added.
+
+    Writing C2 into a two-column grid is a 400, and so is writing A16 into a
+    fourteen-row one: the same "exceeds grid limits" the Phones tab lost 28
+    phones to. `Book.open` catches everything around this, so the failure is
+    not an error anybody sees - the board goes blank and takes all four
+    controls with it, `Stop everything` included, permanently, because every
+    pass repeats the same failing write.
+
+    The column half has been here since 2026-08-29. The row half was missing,
+    and it was the more dangerous of the two: a tab created since the controls
+    landed already has four columns, so it was never resized again - and it is
+    created with exactly `len(ROWS) + 1` rows. Appending a row to ROWS was
+    therefore a silent, permanent way to kill the dashboard (2026-08-31).
+
+    Does nothing to a tab that already fits, because this runs on every pass
+    and an API call that changes nothing is the thing `record_exit` was
+    rewritten to stop making.
+    """
+    needed = len(ServiceBoard.ROWS) + 1
+    narrow = sheet.col_count < 4
+    if not (narrow or sheet.row_count < needed):
+        return
+    sheet.resize(rows=max(sheet.row_count, needed), cols=4)
+    if narrow:
+        sheet.update([["What", "Now", "Ask for", "Tick"]], "A1:D1",
+                     value_input_option="RAW")
+        _make_checkbox(sheet, 3)
+    # After the resize, never before: it paints rows 1..n+1, and on a row
+    # grow the new rows are precisely the unformatted ones.
+    _dress_service(sheet, len(ServiceBoard.ROWS))
 
 
 def _make_checkbox(worksheet, position: int) -> None:
@@ -1877,18 +1918,7 @@ class Book:
         try:
             if SERVICE_TAB in tabs:
                 sheet = tabs[SERVICE_TAB]
-                if sheet.col_count < 4:
-                    # A tab made before the controls existed. Writing C2 into a
-                    # two-column grid is a 400, and the `except` below would
-                    # take the whole board down with it - so the one thing the
-                    # operator reads would go blank because a feature was
-                    # added. Widen it in place instead (2026-08-29).
-                    sheet.resize(rows=max(sheet.row_count,
-                                          len(ServiceBoard.ROWS) + 1), cols=4)
-                    sheet.update([["What", "Now", "Ask for", "Tick"]], "A1:D1",
-                                 value_input_option="RAW")
-                    _make_checkbox(sheet, 3)
-                    _dress_service(sheet, len(ServiceBoard.ROWS))
+                _fit_service_tab(sheet)
             else:
                 sheet = book.add_worksheet(
                     SERVICE_TAB, rows=len(ServiceBoard.ROWS) + 1, cols=4)

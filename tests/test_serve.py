@@ -279,13 +279,14 @@ class Recorder:
     """What the loop asked the rest of the code to do."""
 
     def __init__(self, warm=0, free=10, waiting=0, gmails=50, exits=50,
-                 stock=None):
-        # Five values, because `_look` returns five. The pool depths are
+                 stock=None, broken=0):
+        # Six values, because `_look` returns six. The pool depths are
         # generous by default so a test about something else is never
         # accidentally constrained by them.
         self.numbers = (warm, waiting, gmails, exits,
                         stock if stock is not None
-                        else {"ready": 0, "app_only": warm, "taken": 0})
+                        else {"ready": 0, "app_only": warm, "taken": 0},
+                        broken)
         self.free = free
         self.synced = 0
         self.built = 0
@@ -692,10 +693,13 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
     """
     from geelark_farm import builder
 
+    # `broken` on each pool because the real `Pool` has it and `_look` now
+    # counts it - a fake that answers `available` and not `broken` is the
+    # shape of fake that lets a real AttributeError through to production.
     book = SimpleNamespace(
-        apps=SimpleNamespace(available=["a", "b", "c"]),
-        gmails=SimpleNamespace(available=["g", "h", "i", "j"]),
-        proxies=SimpleNamespace(available=["p"]),
+        apps=SimpleNamespace(available=["a", "b", "c"], broken=[]),
+        gmails=SimpleNamespace(available=["g", "h", "i", "j"], broken=[]),
+        proxies=SimpleNamespace(available=["p"], broken=["bad row"]),
         phones=SimpleNamespace(
             counts=lambda: {"ready": 1, "app_only": 2, "taken": 0}))
     monkeypatch.setattr(builder, "_unfinished",
@@ -704,7 +708,7 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
                         lambda c: pytest.fail("the plan was read for nothing"))
 
     assert serve_mod._look(object(), settings, book) == (
-        2, 3, 4, 1, {"ready": 1, "app_only": 2, "taken": 0})
+        2, 3, 4, 1, {"ready": 1, "app_only": 2, "taken": 0}, 1)
 
 
 # ----------------------------------------------------- saying it is still alive
@@ -1502,3 +1506,80 @@ def test_the_reap_runs_when_nothing_is_out(monkeypatch, make_settings,
 
     assert reaped == [1]
     assert board.unticked == ["Stop unaccounted phones"]
+
+
+# ------------------------------- the board's labels and its values must agree
+def test_every_row_the_dashboard_writes_has_a_label(monkeypatch, make_settings,
+                                                    tmp_path):
+    """`show()` forgives in the wrong direction, twice over.
+
+    A name in `ROWS` that nobody passes renders as an empty cell -
+    indistinguishable from "nothing to report". A `show()` keyword that is not
+    in `ROWS` is dropped without a word. So a field added to one and not the
+    other is invisible both ways, and this is the only thing that can see it
+    (2026-08-31).
+    """
+    from geelark_farm.pools import ServiceBoard
+
+    Recorder(warm=1, free=5).install(monkeypatch)
+    board = Board()
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), make_settings(state_dir=tmp_path), Fuse(),
+                   serve_mod.Slots())
+
+    assert set(board.shown) == set(ServiceBoard.ROWS), (
+        f"only in ROWS: {sorted(set(ServiceBoard.ROWS) - set(board.shown))}; "
+        f"only in show(): {sorted(set(board.shown) - set(ServiceBoard.ROWS))}")
+
+
+def test_the_dashboard_says_how_many_pool_rows_are_unusable(
+        monkeypatch, make_settings, tmp_path):
+    """A row the pool refused looks free in the tab: `available` skips it, but
+    its Status cell is blank, and blank is what free looks like to a person.
+    One sat there for days being counted as stock (2026-08-31)."""
+    Recorder(warm=1, free=5, broken=2).install(monkeypatch)
+    board = Board()
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), make_settings(state_dir=tmp_path), Fuse(),
+                   serve_mod.Slots())
+
+    assert "2" in board.shown["Unusable rows"]
+    assert "Status cell is blank" in board.shown["Unusable rows"]
+
+
+def test_the_dashboard_splits_the_phones_the_sheet_has_never_heard_of(
+        monkeypatch, make_settings, tmp_path):
+    """Said the way `Needs you` says it, because the two sit a few cells apart
+    and a bare total beside a split is a reconciliation done by hand. The
+    split is the point: a running one bills by the minute, a stopped one only
+    holds a profile slot."""
+    from geelark_farm import builder
+
+    Recorder(warm=1, free=5).install(monkeypatch)
+    board = Board()
+    _with_board(monkeypatch, board, None)
+    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {
+        "unknown_phones": ["1", "2", "3"], "unknown_running": ["1"]})
+
+    serve_mod.once(object(), make_settings(state_dir=tmp_path), Fuse(),
+                   serve_mod.Slots())
+
+    said = board.shown["Phones not in the sheet"]
+    assert "3" in said and "1 running" in said and "2 holding" in said
+
+
+def test_a_stopped_pass_does_not_claim_to_have_read_the_new_numbers(
+        monkeypatch, make_settings, tmp_path):
+    """Same rule as the numbers above them: a pass that read nothing says so,
+    because printing 0 is a lie the reader would act on."""
+    Recorder(warm=4, free=10).install(monkeypatch)
+    board = Board("Stop everything")
+    _with_board(monkeypatch, board, None)
+
+    serve_mod.once(object(), make_settings(state_dir=tmp_path), Fuse(),
+                   serve_mod.Slots())
+
+    assert "not read" in board.shown["Unusable rows"]
+    assert "not read" in board.shown["Phones not in the sheet"]

@@ -2169,3 +2169,99 @@ def test_an_empty_cell_is_a_fact_and_a_wrong_one_is_a_mistake():
 
     assert len(empty.available) == 1
     assert not wrong.available
+
+
+# ------------------------- a tab made before a row was added must grow, not die
+class FakeServiceTab:
+    """A Service tab with a real grid, which `FakeWorksheet` does not have.
+
+    `FakeWorksheet` cannot stand in here: it has no `update` at all, and its
+    `batch_update` grid check reads only the *start* of a range
+    (`item["range"].split(":")[0]`), so `A2:A16` written into a fourteen-row
+    grid looks like `A2` and passes. A test written against it would prove
+    nothing about the failure it is for.
+    """
+
+    id = 1
+
+    def __init__(self, rows: int, cols: int = 4):
+        self.row_count = rows
+        self.col_count = cols
+        self.resized = []
+        self.updates = []
+        self.batches = []
+
+    def resize(self, rows=None, cols=None):
+        self.resized.append((rows, cols))
+        if rows is not None:
+            self.row_count = rows
+        if cols is not None:
+            self.col_count = cols
+
+    def _check(self, a1: str) -> None:
+        end = a1.split(":")[-1]
+        row = int("".join(c for c in end if c.isdigit()) or 1)
+        col = sum((ord(c) - 64) for c in end if c.isalpha())
+        if row > self.row_count or col > self.col_count:
+            raise AssertionError(
+                f"APIError: [400]: Range ('{a1}') exceeds grid limits. "
+                f"Max rows: {self.row_count}, max columns: {self.col_count}")
+
+    def update(self, values, a1, **_kw):
+        self._check(a1)
+        self.updates.append((a1, values))
+
+    @property
+    def spreadsheet(self):
+        return self
+
+    def batch_update(self, payload, **_kw):
+        self.batches.append(payload)
+
+
+def test_a_service_tab_made_before_a_row_was_added_is_grown_not_blanked():
+    """The whole `Book.open` Service block is inside one `except`, so this
+    failure is not an error anybody sees: the board goes blank and takes all
+    four controls with it - `Stop everything` included - permanently, because
+    every pass repeats the same failing write.
+
+    A tab created since the controls landed already has four columns, so the
+    2026-08-29 guard never fired on it again; and it is created with exactly
+    `len(ROWS) + 1` rows. Appending a row to ROWS was a silent, permanent way
+    to kill the dashboard (2026-08-31)."""
+    from geelark_farm.pools import ServiceBoard, _fit_service_tab
+
+    tab = FakeServiceTab(rows=len(ServiceBoard.ROWS) - 1, cols=4)
+
+    _fit_service_tab(tab)
+
+    assert tab.row_count >= len(ServiceBoard.ROWS) + 1
+    # and the write that used to fail now fits
+    tab.update([[n] for n in ServiceBoard.ROWS],
+               f"A2:A{len(ServiceBoard.ROWS) + 1}")
+
+
+def test_a_service_tab_that_already_fits_is_not_touched():
+    """This runs on every pass. An API call that changes nothing is the thing
+    `record_exit` was rewritten to stop making, and it spends one of the sixty
+    writes a minute Google allows."""
+    from geelark_farm.pools import ServiceBoard, _fit_service_tab
+
+    tab = FakeServiceTab(rows=len(ServiceBoard.ROWS) + 1, cols=4)
+
+    _fit_service_tab(tab)
+
+    assert tab.resized == [] and tab.updates == [] and tab.batches == []
+
+
+def test_a_tab_made_before_the_controls_still_gets_its_column():
+    """The 2026-08-29 half, kept: a two-column tab gets the header row and the
+    checkbox column as well as the resize."""
+    from geelark_farm.pools import ServiceBoard, _fit_service_tab
+
+    tab = FakeServiceTab(rows=len(ServiceBoard.ROWS) + 1, cols=2)
+
+    _fit_service_tab(tab)
+
+    assert tab.col_count == 4
+    assert any(a1 == "A1:D1" for a1, _ in tab.updates)
