@@ -219,6 +219,24 @@ VERDICTS: dict[str, Verdict] = {
     #:
     #: What tells them apart is not the page but what came before it, which the
     #: flow already tracks (2026-08-21).
+    #: The app itself naming the account's problem, on a page of its own.
+    #:
+    #: A Plus account with a broken payment method draws "There's a problem
+    #: with your payment method" over the app the moment it signs in, and
+    #: the modal blocks the walk that reads the session back. Before this
+    #: was its own reason it was reported as session_unverified - the
+    #: device's fault - so the account went back to the pool blank and four
+    #: phones burned twelve attempts on the same row (2026-08-31). The page
+    #: names the account, so the account wears the status.
+    "payment_problem": Verdict(
+        CHALLENGED,
+        "the app says the account's payment method is broken",
+        "ChatGPT drew \"There's a problem with your payment method\" over "
+        "the app, which blocks reading the session back, so no unattended "
+        "run can finish with this account. The password and 2FA were "
+        "accepted - the subscription is what is broken. Fix the payment on "
+        "the account (or let its plan lapse), then blank this status to "
+        "offer it again."),
     "email_code_required": Verdict(
         CHALLENGED,
         "OpenAI took the password and then asked for an emailed code",

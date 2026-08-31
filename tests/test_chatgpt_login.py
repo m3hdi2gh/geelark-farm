@@ -1416,20 +1416,30 @@ def test_the_guest_chat_continue_leads_to_is_one_the_flow_already_knows():
     assert first == ("logged_out_chat", "act_reset_app")
 
 
-def test_a_payment_nag_is_dismissed_before_the_walk_gives_up(monkeypatch):
+def test_the_payment_nag_is_the_accounts_own_verdict(monkeypatch):
     """The 2026-08-31 failure, twelve times over: a Plus account with a
-    broken payment method drew its nag over the app. The dump still shows
-    Menu underneath the modal, so the walk must notice the nag before
-    trusting anything it found - the fixture is the real capture archived
-    by phone 1534's last attempt."""
-    phone = ScriptedPhone(monkeypatch, ["chatgpt-payment-nag.xml",
-                                        "chatgpt-chat-signed-in.xml",
-                                        "chatgpt-account-menu.xml",
-                                        "chatgpt-account-settings.xml"])
+    broken payment method drew its nag over the app and twelve verifies
+    took device blame for it. The page names the account, so the answer is
+    the account's status - immediately, with nothing tapped, because the
+    dump still shows Menu underneath the modal and a trusted tap would land
+    on the scrim. The fixture is the real capture from phone 1534."""
+    phone = ScriptedPhone(monkeypatch, ["chatgpt-payment-nag.xml"])
 
-    assert chatgpt_login.verify_account(verify_ctx()) is None
-    assert phone.tapped[0] == "Close", "the nag's own Close was not used"
-    assert phone.tapped[1:] == ["Menu", "Account settings"]
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "payment_problem"
+    assert phone.tapped == [], "something was tapped under the modal"
+
+
+def test_the_payment_verdict_sets_the_account_aside_not_the_phone():
+    """The whole point of the reason: the account wears the status and the
+    phone is not condemned - the opposite of what session_unverified did to
+    four phones in one afternoon."""
+    from geelark_farm import failures
+
+    said = failures.verdict("payment_problem")
+    assert said.sets_aside
+    assert not said.stops_the_phone and not said.costs_the_credential
 
 
 def test_the_nag_fixture_really_hides_the_walk_from_taps():

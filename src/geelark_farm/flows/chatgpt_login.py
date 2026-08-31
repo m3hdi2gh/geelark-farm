@@ -415,9 +415,29 @@ ACCOUNT_SETTINGS_LABELS = ("Account settings",)
 #: found control is trusted. Both spellings, because the title is prose
 #: OpenAI can reword while the button is the part that has to stay.
 #: (12 builds on 2026-08-31: "Update your payment method by Sep 2, 2026 to
-#: keep your Plus plan active", archived in chatgpt-payment-nag.xml.)
+#: keep your Plus plan active", archived in chatgpt-payment-nag.xml.
+#: Dismissing it was tried first and did not stick - 1523 failed three more
+#: verifies the same evening - so the page is answered as the account's own
+#: verdict instead.)
 PAYMENT_NAG_LABELS = ("There's a problem with your payment method",
                       "Update payment")
+
+
+def _payment_nag(ctx: Context) -> Outcome | None:
+    """The broken-payment modal as the account's own verdict, if it is up.
+
+    The app is naming the account's problem to whoever is looking, and it
+    blocks the session read-back - so it is answered the way the emailed-code
+    page is: the ACCOUNT carries the status and the phone moves on, instead
+    of the phone taking device blame and the row going back to the pool
+    blank for the next phone to draw."""
+    if screen.find_first(ctx.elements, PAYMENT_NAG_LABELS) is None:
+        return None
+    path = ctx.save("verify-payment-nag")
+    return Outcome("fatal", "payment_problem",
+                   "the app drew its broken-payment notice over the page, "
+                   "so the session cannot be read back",
+                   artifacts=[path] if path else [])
 
 EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
 
@@ -507,23 +527,15 @@ def verify_account(ctx: Context) -> Outcome | None:
                          (ACCOUNT_SETTINGS_LABELS, "account settings")):
         found = None
         brought_back = False
-        nagged = False
         for look in range(6):
             ctx.refresh()
             # Before trusting anything found: the payment nag covers the
-            # page but not the dump, so the control can be visible here and
-            # untappable on the phone. Its own Close first, BACK otherwise -
-            # a modal takes both. Once per control, like the bring-back.
-            if not nagged and screen.find_first(ctx.elements,
-                                                PAYMENT_NAG_LABELS):
-                nagged = True
-                log.info("a payment nag is drawn over the app; "
-                         "dismissing it before reading the session")
-                close = screen.find(ctx.elements, "Close")
-                if close is None or not screen.tap_element(
-                        ctx.client, ctx.phone_id, close):
-                    shell.keyevent(ctx.client, ctx.phone_id, 4)   # BACK
-                continue
+            # page but not the dump, so a control can be visible here and
+            # untappable on the phone - and the nag is the account's own
+            # verdict besides.
+            answered = _payment_nag(ctx)
+            if answered is not None:
+                return answered
             found = screen.find_first(ctx.elements, labels)
             if found is not None:
                 break
@@ -554,6 +566,9 @@ def verify_account(ctx: Context) -> Outcome | None:
     named = None
     for _ in range(6):
         ctx.refresh()
+        answered = _payment_nag(ctx)
+        if answered is not None:
+            return answered
         named = account_email_on(ctx.elements)
         if named is not None:
             break
