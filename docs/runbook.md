@@ -90,6 +90,37 @@ record, `state/` holds the ledger and the breaker, `artifacts/` holds the
 screens of everything that went wrong. They are bind-mounted and owned by uid
 `10001`, so reading them from `ubuntu` needs `sudo`.
 
+## Backups
+
+`state/` is backed up nightly, off-box, into the managed Postgres cluster -
+the same one the farm's database will live on. Until 2026-08-31 there was no
+backup at all: the spreadsheet was the de-facto offsite copy, and the sheet
+is being retired, which is what made this load-bearing. The ledger is the
+file that costs money to lose - it is what says a running phone belongs to
+somebody, and without it `reap` cannot tell an orphan from a phone in use.
+
+**What runs:** `~/geelark-backup.sh` on the host, from `ubuntu`'s crontab at
+02:30 UTC, appending to `~/geelark-backup.log`. It tars `state/` (~16 KB),
+inserts the tarball into `state_backups` on the cluster, and deletes rows
+older than 60 days. Credentials come from `~/.pgpass` (mode 600).
+
+**Restore:** `~/geelark-restore-drill.sh` fetches the newest backup, untars
+it to a temp dir, and parses the ledger - run it after any change to the
+backup path, and the drill counts as passed only when it prints the phone
+count. To actually restore: stop the service first (`Stop everything`, then
+`docker compose down`), copy the extracted files into `state/`, fix
+ownership to uid 10001, and bring the service back.
+
+**What is deliberately not in the tarball:** `.env` and `secrets/` - copies
+of credentials multiply the places they can leak, and both are recoverable
+from the people who issued them. `logs/` and `artifacts/` are records, not
+state; losing them costs history, not money.
+
+**DNS note:** the box's ISP resolvers time out on `*.db.arvandbaas.ir`;
+`/etc/systemd/resolved.conf.d/geelark-dns.conf` appends public resolvers so
+the cluster's name resolves. If the cluster becomes unreachable, check that
+file survived the last provisioning before blaming the network.
+
 ## The service is up but building nothing
 
 After enough failed builds in a row it stops on purpose, and stays stopped
