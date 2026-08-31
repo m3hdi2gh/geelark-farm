@@ -232,11 +232,12 @@ VERDICTS: dict[str, Verdict] = {
         CHALLENGED,
         "the app says the account's payment method is broken",
         "ChatGPT drew \"There's a problem with your payment method\" over "
-        "the app, which blocks reading the session back, so no unattended "
-        "run can finish with this account. The password and 2FA were "
-        "accepted - the subscription is what is broken. Fix the payment on "
-        "the account (or let its plan lapse), then blank this status to "
-        "offer it again."),
+        "the app - or sent the phone to Play's subscriptions page, the same "
+        "problem's other face - which blocks reading the session back, so "
+        "no unattended run can finish with this account. The password and "
+        "2FA were accepted - the subscription is what is broken. Fix the "
+        "payment on the account (or let its plan lapse), then blank this "
+        "status to offer it again."),
     "email_code_required": Verdict(
         CHALLENGED,
         "OpenAI took the password and then asked for an emailed code",

@@ -422,21 +422,34 @@ ACCOUNT_SETTINGS_LABELS = ("Account settings",)
 PAYMENT_NAG_LABELS = ("There's a problem with your payment method",
                       "Update payment")
 
+#: The same broken subscription's other face: instead of the modal, the app
+#: sometimes deep-links the phone straight into the Play Store's own
+#: Subscriptions page (36 runs on 2026-08-30, and phone 1533 again the
+#: evening the modal variant was named). One distinctive label, because
+#: "Get started" and "Subscriptions" appear on pages that are nobody's
+#: verdict.
+PLAY_SUBSCRIPTION_LABELS = ("Discover subscriptions",)
+
 
 def _payment_nag(ctx: Context) -> Outcome | None:
-    """The broken-payment modal as the account's own verdict, if it is up.
+    """The broken subscription as the account's own verdict, if it shows.
 
-    The app is naming the account's problem to whoever is looking, and it
+    Either face - the in-app payment modal, or Play's subscriptions page
+    the app deep-links to. The app is naming the account's problem, and it
     blocks the session read-back - so it is answered the way the emailed-code
     page is: the ACCOUNT carries the status and the phone moves on, instead
     of the phone taking device blame and the row going back to the pool
     blank for the next phone to draw."""
-    if screen.find_first(ctx.elements, PAYMENT_NAG_LABELS) is None:
+    if screen.find_first(ctx.elements, PAYMENT_NAG_LABELS) is not None:
+        said = "the app drew its broken-payment notice over the page"
+    elif screen.find_first(ctx.elements, PLAY_SUBSCRIPTION_LABELS) is not None:
+        said = ("the app sent the phone to Play's own subscriptions page "
+                "instead of its settings")
+    else:
         return None
     path = ctx.save("verify-payment-nag")
     return Outcome("fatal", "payment_problem",
-                   "the app drew its broken-payment notice over the page, "
-                   "so the session cannot be read back",
+                   f"{said}, so the session cannot be read back",
                    artifacts=[path] if path else [])
 
 EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)

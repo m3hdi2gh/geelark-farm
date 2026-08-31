@@ -256,17 +256,15 @@ def test_a_different_account_in_the_app_is_fatal(monkeypatch):
 
 
 def test_the_app_is_brought_back_when_the_phone_has_left_it(monkeypatch):
-    """The 2026-08-30 failure, thirty-six times over. Every one of them passed
-    email, password and the authenticator, and the page archived when the walk
-    gave up was the Play Store's own Subscriptions screen - a real capture,
-    the fixture below. `Menu` has never been on that page, so the walk asked
-    six times, found nothing, and condemned a session it never looked at."""
-    phone = ScriptedPhone(monkeypatch, ["play-store-subscriptions.xml",
+    """A phone that wandered out of the app is brought back and the walk
+    continues. (The wander here is the home screen: the Play-subscriptions
+    wander of 2026-08-30 is a named verdict of its own now, below.)"""
+    phone = ScriptedPhone(monkeypatch, ["android-home-screen.xml",
                                         "chatgpt-chat-signed-in.xml",
                                         "chatgpt-account-menu.xml",
                                         "chatgpt-account-settings.xml"])
     monkeypatch.setattr(chatgpt_login.shell, "foreground_package",
-                        lambda c, p: "com.android.vending")
+                        lambda c, p: "com.android.launcher3")
 
     def came_back(client, phone_id, package):
         phone.screens.pop(0)          # the app is in front again
@@ -301,15 +299,30 @@ def test_a_walk_that_still_cannot_find_the_app_says_what_was_in_front(
     check` never counts as `checked`. But the reason names the app that was in
     front, which is the fact nobody had until the archives were read by hand
     (2026-08-30)."""
-    ScriptedPhone(monkeypatch, ["play-store-subscriptions.xml"])
+    ScriptedPhone(monkeypatch, ["android-home-screen.xml"])
     monkeypatch.setattr(chatgpt_login.shell, "foreground_package",
-                        lambda c, p: "com.android.vending")
+                        lambda c, p: "com.android.launcher3")
     monkeypatch.setattr(chatgpt_login, "launch", lambda *a: False)
 
     out = chatgpt_login.verify_account(verify_ctx())
 
     assert out is not None and out.reason == "session_unverified"
-    assert "com.android.vending" in out.detail
+    assert "com.android.launcher3" in out.detail
+
+
+def test_plays_subscriptions_page_is_the_same_payment_verdict(monkeypatch):
+    """The broken subscription's other face: instead of the in-app modal,
+    the app deep-links the phone into Play's Subscriptions page (36 runs on
+    2026-08-30, phone 1533 again on 2026-08-31). Same verdict, same status,
+    nothing tapped and no bring-back spent on it - the real capture is the
+    fixture."""
+    phone = ScriptedPhone(monkeypatch, ["play-store-subscriptions.xml"])
+
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "payment_problem"
+    assert "subscriptions page" in out.detail
+    assert phone.tapped == []
 
 
 def test_a_walk_that_never_reaches_settings_is_not_a_pass(monkeypatch):
