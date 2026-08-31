@@ -300,6 +300,13 @@ class Settings:
     #: Loopback-published; the only way in from outside the box is an SSH
     #: tunnel until the domain lands at stage 7.
     web_port: int = 8787
+    #: What the listener binds. Loopback by default - but inside the
+    #: container it must be 0.0.0.0, because Docker's port proxy connects to
+    #: the container's own address and a socket bound to the container's
+    #: loopback answers a published port with nothing at all (found the hard
+    #: way on first deploy, 2026-08-31). The host side of the publish is
+    #: what keeps it private: compose pins it to the host's 127.0.0.1.
+    web_bind: str = "127.0.0.1"
 
 
     @classmethod
@@ -341,6 +348,7 @@ class Settings:
             web_enabled=_str("WEB_ENABLED", "0").strip()
                         in ("1", "true", "yes", "on"),
             web_port=_int("WEB_PORT", 8787),
+            web_bind=_str("WEB_BIND", "127.0.0.1"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

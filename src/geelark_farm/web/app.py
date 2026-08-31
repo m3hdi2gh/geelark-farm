@@ -46,13 +46,15 @@ def start(settings: Settings) -> ThreadingHTTPServer:
         pass
 
     Handler.settings = settings
-    server = ThreadingHTTPServer(("127.0.0.1", settings.web_port), Handler)
+    server = ThreadingHTTPServer((settings.web_bind, settings.web_port),
+                                 Handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever,
                               name="web", daemon=True)
     thread.start()
-    log.info("web ui listening on 127.0.0.1:%d (loopback only; reach it "
-             "through an ssh tunnel)", server.server_address[1])
+    log.info("web ui listening on %s:%d (published to the host's loopback "
+             "only; reach it through an ssh tunnel)",
+             settings.web_bind, server.server_address[1])
     return server
 
 
