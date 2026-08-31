@@ -57,6 +57,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -206,6 +207,22 @@ APP_ONLY = "app_only"
 SPEND = "spend"
 RELEASE = "release"
 SET_ASIDE = "set aside"
+
+#: App-login reasons where the account was typed in and the phone took the
+#: blame, but the account could as easily be the culprit: a session that
+#: cannot be read back, or a password page that never moves. One Plus account
+#: with a broken payment method drew its nag over the app's settings page and
+#: failed this way on four phones in a row - and because the blame said
+#: DEVICE, it went back to the pool blank after every one of them, was the
+#: only free row, and got re-claimed until the breaker tripped (2026-08-31).
+APP_SUSPECTS = frozenset({"session_unverified", "stuck_on_password_entry"})
+
+#: How many *different* phones must end there with the same account before
+#: the account is set aside. Different, because one phone burning its own
+#: three tries proves nothing about the account - that is the 1465 lesson,
+#: where a perfectly good password wore a condemnation a phone had earned.
+SUSPECT_STRIKES = 3
+_STRIKE = re.compile(r"\(strike (\d+) of \d+, last on phone ([^)]*)\)")
 
 # Held across "claim an address, take an exit, create the phone". See build_one:
 # it is what stops a phone being created with nothing to sign in, and what makes
@@ -434,6 +451,9 @@ class _Session:
     #: for - held so this build does not take them again, and put back at the
     #: end carrying the reason as their status.
     set_aside: list[tuple[Resource, str]] = field(default_factory=list)
+    #: The APP_SUSPECTS reason the phone stopped on, if it did - read at
+    #: release time so the account it happened with carries a strike.
+    suspect_reason: str = ""
     # Proxies tried and moved on from, with what was seen through each. Held
     # claimed for the rest of the run so a swap cannot hand one back.
     refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
@@ -572,6 +592,10 @@ def _sign_into_app(session: _Session) -> Build | None:
             named = (outcome.reason if outcome.reason.startswith("app")
                      else f"app_{outcome.reason}")
             said = failures.verdict(outcome.reason, s.book.apps.service)
+            if outcome.reason in APP_SUSPECTS:
+                # The phone keeps the blame, but the account was typed in -
+                # _session_holds counts a strike against it on the way out.
+                s.suspect_reason = outcome.reason
             _give_back_condemned(s)
             return s.finish(named,
                             f"the app login could not go on with this phone - "
@@ -1348,6 +1372,43 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     return replacement
 
 
+def _suspected(book: Book, session: _Session) -> tuple:
+    """What becomes of an account a phone stopped on for an APP_SUSPECTS
+    reason: a strike, and at SUSPECT_STRIKES different phones, set aside.
+
+    The count lives in the row's own Note - "(strike 2 of 3, last on phone
+    1531)" - so it survives restarts, resets itself the moment the account
+    is spent or hand-edited, and is readable by the person whose sheet it
+    is. A repeat on the SAME phone keeps the count where it was: that phone
+    already took the blame once, and burning three tries on one bad phone
+    must not condemn a good account (the 1465 lesson).
+
+    Without this, a DEVICE-blamed failure released the account back blank,
+    indistinguishable from a row nobody had tried - and on 2026-08-31 the
+    one free account in the pool failed that way on four phones in a row,
+    burned all their tries and tripped the breaker.
+    """
+    row = session.app_row
+    said = failures.verdict(session.suspect_reason, book.apps.service).seen
+    serial = str(session.build.serial or "")
+    seen = _STRIKE.search(row.values.get(book.apps.note_column) or "")
+    strikes, last = (int(seen.group(1)), seen.group(2)) if seen else (0, "")
+    if not seen or serial != last:
+        strikes += 1
+    if strikes >= SUSPECT_STRIKES:
+        return (book.apps, row, SET_ASIDE,
+                f"On {failures.today()} {said}. {SUSPECT_STRIKES} different "
+                f"phones in a row ended there with this account, so the "
+                f"account is the common factor, not the phones. Log into it "
+                f"by hand - a payment or subscription nag drawn over the app "
+                f"is the known cause - fix what it shows, then blank this "
+                f"status to offer it again.", session.suspect_reason)
+    return (book.apps, row, RELEASE,
+            f"Free again - {said} (strike {strikes} of {SUSPECT_STRIKES}, "
+            f"last on phone {serial}). The phone took the blame, but if "
+            f"different phones keep ending there this row is set aside.", "")
+
+
 def _session_holds(book: Book, session: _Session | None, *,
                    proxy_spent: bool) -> list[tuple]:
     """Everything the app phase is still holding, and what each should become.
@@ -1364,8 +1425,12 @@ def _session_holds(book: Book, session: _Session | None, *,
     if session is None:
         return []
     today = failures.today()
-    held: list[tuple] = [(book.apps, session.app_row,
-                          SPEND if session.app_signed_in else RELEASE, "", "")]
+    app: tuple = (book.apps, session.app_row,
+                  SPEND if session.app_signed_in else RELEASE, "", "")
+    if (session.app_row is not None and not session.app_signed_in
+            and session.suspect_reason):
+        app = _suspected(book, session)
+    held: list[tuple] = [app]
     if session.proxy_row is not None:
         held.append((book.proxies, session.proxy_row,
                      SPEND if proxy_spent else RELEASE, "", ""))

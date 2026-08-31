@@ -409,6 +409,16 @@ def verified_on_device(ctx: Context) -> bool:
 MENU_LABELS = ("Menu",)
 ACCOUNT_SETTINGS_LABELS = ("Account settings",)
 
+#: The modal a Plus account with a broken payment method draws over the app.
+#: It floats above the page and steals every tap, while the controls under it
+#: still show up in the dump - so its presence must be checked before any
+#: found control is trusted. Both spellings, because the title is prose
+#: OpenAI can reword while the button is the part that has to stay.
+#: (12 builds on 2026-08-31: "Update your payment method by Sep 2, 2026 to
+#: keep your Plus plan active", archived in chatgpt-payment-nag.xml.)
+PAYMENT_NAG_LABELS = ("There's a problem with your payment method",
+                      "Update payment")
+
 EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
 
 
@@ -497,8 +507,23 @@ def verify_account(ctx: Context) -> Outcome | None:
                          (ACCOUNT_SETTINGS_LABELS, "account settings")):
         found = None
         brought_back = False
+        nagged = False
         for look in range(6):
             ctx.refresh()
+            # Before trusting anything found: the payment nag covers the
+            # page but not the dump, so the control can be visible here and
+            # untappable on the phone. Its own Close first, BACK otherwise -
+            # a modal takes both. Once per control, like the bring-back.
+            if not nagged and screen.find_first(ctx.elements,
+                                                PAYMENT_NAG_LABELS):
+                nagged = True
+                log.info("a payment nag is drawn over the app; "
+                         "dismissing it before reading the session")
+                close = screen.find(ctx.elements, "Close")
+                if close is None or not screen.tap_element(
+                        ctx.client, ctx.phone_id, close):
+                    shell.keyevent(ctx.client, ctx.phone_id, 4)   # BACK
+                continue
             found = screen.find_first(ctx.elements, labels)
             if found is not None:
                 break

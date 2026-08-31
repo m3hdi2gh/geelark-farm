@@ -1414,3 +1414,34 @@ def test_the_guest_chat_continue_leads_to_is_one_the_flow_already_knows():
     first = routes_to(fixture_ctx("chatgpt-guest-chat-with-login"))[0]
 
     assert first == ("logged_out_chat", "act_reset_app")
+
+
+def test_a_payment_nag_is_dismissed_before_the_walk_gives_up(monkeypatch):
+    """The 2026-08-31 failure, twelve times over: a Plus account with a
+    broken payment method drew its nag over the app. The dump still shows
+    Menu underneath the modal, so the walk must notice the nag before
+    trusting anything it found - the fixture is the real capture archived
+    by phone 1534's last attempt."""
+    phone = ScriptedPhone(monkeypatch, ["chatgpt-payment-nag.xml",
+                                        "chatgpt-chat-signed-in.xml",
+                                        "chatgpt-account-menu.xml",
+                                        "chatgpt-account-settings.xml"])
+
+    assert chatgpt_login.verify_account(verify_ctx()) is None
+    assert phone.tapped[0] == "Close", "the nag's own Close was not used"
+    assert phone.tapped[1:] == ["Menu", "Account settings"]
+
+
+def test_the_nag_fixture_really_hides_the_walk_from_taps():
+    """What makes the ordering matter: on the real capture the sidebar's
+    Menu is findable while the nag is up - a walk that trusts it taps a
+    scrim. And the nag's own labels are all present to be noticed."""
+    nag = elements_of("chatgpt-payment-nag.xml")
+    assert screen.find_first(nag, chatgpt_login.MENU_LABELS) is not None
+    assert screen.find_first(nag, chatgpt_login.PAYMENT_NAG_LABELS) is not None
+    # and no other screen in the walk shows the nag, so a false positive
+    # cannot press BACK on a healthy page
+    for fixture in ("chatgpt-chat-signed-in.xml", "chatgpt-account-menu.xml",
+                    "chatgpt-account-settings.xml"):
+        assert screen.find_first(elements_of(fixture),
+                                 chatgpt_login.PAYMENT_NAG_LABELS) is None

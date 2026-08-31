@@ -3636,3 +3636,104 @@ def test_two_batches_at_once_do_not_share_a_label(device, settings,
     # and the thing that made it ambiguous is still true, which is the point:
     # the same job index really does appear under both.
     assert all(any(run == r and row == 1 for run, row in lines) for r in runs)
+
+
+# ------------------------------------------------- suspect app-login strikes
+def _suspect_session(note, serial, reason="session_unverified"):
+    """The slice of a _Session that _session_holds reads, with the app row's
+    Note carrying whatever the last release wrote there."""
+    row = SimpleNamespace(values={"Note": note})
+    return SimpleNamespace(app_row=row, app_signed_in=False,
+                           suspect_reason=reason,
+                           build=SimpleNamespace(serial=serial),
+                           proxy_row=None, refused_exits=[], set_aside=[])
+
+
+def _apps_book():
+    return SimpleNamespace(apps=SimpleNamespace(note_column="Note",
+                                                service="OpenAI"))
+
+
+def test_a_suspect_failure_writes_a_strike_not_a_blank_release():
+    """2026-08-31: a DEVICE-blamed app failure released the account back
+    blank - indistinguishable from a row nobody had tried - and the one free
+    account in the pool went around four phones before the breaker tripped.
+    A strike in the Note is what makes the second phone's failure legible."""
+    held = builder._session_holds(_apps_book(),
+                                  _suspect_session("", "1523"),
+                                  proxy_spent=False)
+    pool, row, action, note, reason = held[0]
+    assert action == builder.RELEASE
+    assert "(strike 1 of 3, last on phone 1523)" in note
+
+
+def test_the_same_phone_failing_again_adds_no_strike():
+    """One phone burning its own tries proves nothing about the account -
+    the 1465 lesson, where a good password wore a phone's condemnation."""
+    held = builder._session_holds(
+        _apps_book(),
+        _suspect_session("Free again - whatever (strike 1 of 3, last on "
+                         "phone 1523). tail", "1523"),
+        proxy_spent=False)
+    _, _, action, note, _ = held[0]
+    assert action == builder.RELEASE
+    assert "(strike 1 of 3, last on phone 1523)" in note
+
+
+def test_the_third_different_phone_sets_the_account_aside():
+    held = builder._session_holds(
+        _apps_book(),
+        _suspect_session("Free again - whatever (strike 2 of 3, last on "
+                         "phone 1531).", "1533"),
+        proxy_spent=False)
+    _, _, action, note, reason = held[0]
+    assert action == builder.SET_ASIDE
+    assert reason == "session_unverified"
+    assert "blank this status" in note
+
+
+def test_an_unsuspected_release_stays_exactly_what_it_was():
+    """The strike path must not touch the ordinary case: budget exhausted,
+    account claimed but never typed in."""
+    held = builder._session_holds(_apps_book(),
+                                  _suspect_session("", "1523", reason=""),
+                                  proxy_spent=False)
+    assert held[0][2] == builder.RELEASE and held[0][3] == ""
+
+
+def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
+        monkeypatch):
+    """The wiring: _sign_into_app must stamp suspect_reason on the way out,
+    or the strike path above is dead code behind a field nobody sets."""
+    session = SimpleNamespace(
+        app_signed_in=False, attempted=0, reset_first=False, condemned=[],
+        set_aside=[], suspect_reason="", refused_exits=[], exits=0,
+        app_row=SimpleNamespace(credentials=SimpleNamespace(
+            email="a@b.com", password="x", totp_secret="")),
+        book=SimpleNamespace(apps=SimpleNamespace(service="OpenAI")),
+        build=builder.Build(index=1, serial="1523"),
+        client=None, phone_id="P1", codes=None,
+        settings=SimpleNamespace(target_package="com.openai.chatgpt",
+                                 app_login_budget_seconds=100),
+        artifacts=None, cancelled=None,
+        check_cancelled=lambda: None,
+        remaining=lambda: 999.0,
+        exits_seen=lambda: set(),
+    )
+
+    def finish(status, detail="", ok=False):
+        session.build.ok, session.build.status = ok, status
+        return session.build
+
+    session.finish = finish
+
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda client, phone_id, creds, **kw: SimpleNamespace(
+                            ok=False, reason="session_unverified", detail="",
+                            trail=[]))
+    monkeypatch.setattr(builder, "_given_up_on", lambda book, serial: "")
+
+    out = builder._sign_into_app(session)
+
+    assert out is not None and out.status == "app_session_unverified"
+    assert session.suspect_reason == "session_unverified"
