@@ -45,6 +45,14 @@ services:
       # Read-only: the service reads this key and has no business writing it.
       - ./secrets:/app/secrets:ro
 
+    # The web UI, loopback ONLY - published to the host's 127.0.0.1, so
+    # nothing outside the box can reach it and an ssh tunnel is the door:
+    #   ssh -L 8787:127.0.0.1:8787 ubuntu@<server>
+    # Docker's published ports bypass ufw, which is why the bind address is
+    # the guard and not a firewall rule.
+    ports:
+      - "127.0.0.1:8787:8787"
+
     restart: always
 
     # Docker's default is ten seconds, and this service does not always stop
