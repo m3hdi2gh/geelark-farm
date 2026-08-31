@@ -10,7 +10,7 @@ from __future__ import annotations
 import functools
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -277,6 +277,23 @@ class Settings:
     log_dir: Path
     log_level: str
 
+    #: Whether the Postgres store is wired in at all. Off, the `store`
+    #: package is never imported - the flag is checked before the import, so
+    #: a broken store module cannot take the loop down on a box where the
+    #: store was never asked for. This is the trunk-based rule for every
+    #: stage of the sheet retirement: merged inert, enabled deliberately.
+    store_enabled: bool = False
+    # The managed cluster. Split fields rather than one URL, because every
+    # other credential here is a field and a URL invites the password into
+    # a process list. `store_password` is deliberately excluded from repr.
+    # All defaulted, like `store_enabled`: a Settings built by hand in a test
+    # gets a store that is off, which is exactly what the flag rule promises.
+    store_host: str = ""
+    store_port: int = 5432
+    store_db: str = "gfarm"
+    store_user: str = "gfarm"
+    store_password: str = field(repr=False, default="")
+
 
     @classmethod
     def load(cls) -> Settings:
@@ -312,6 +329,13 @@ class Settings:
             artifact_dir=_path("ARTIFACT_DIR", "./artifacts"),
             log_dir=_path("LOG_DIR", "./logs"),
             log_level=_str("LOG_LEVEL", "INFO").upper(),
+            store_enabled=_str("STORE_ENABLED", "0").strip()
+                          in ("1", "true", "yes", "on"),
+            store_host=_str("STORE_HOST"),
+            store_port=_int("STORE_PORT", 5432),
+            store_db=_str("STORE_DB", "gfarm"),
+            store_user=_str("STORE_USER", "gfarm"),
+            store_password=_str("STORE_PASSWORD"),
         )
 
     def require_sheets(self) -> None:
@@ -326,6 +350,23 @@ class Settings:
                 "Create a service account, download its JSON key, and share "
                 "the spreadsheet with that account's email as an Editor."
             )
+
+    def require_store(self) -> None:
+        """Fail early, with a fixable message, before anything is spent.
+
+        Only called on the paths that are about to open a connection, so a
+        box that never enables the store never needs these set - the same
+        contract `require_sheets` gives the sheet settings.
+        """
+        if not self.store_host:
+            raise ConfigError(
+                "STORE_ENABLED is on but STORE_HOST is not set - the store "
+                "has no cluster to talk to.")
+        if not self.store_password:
+            raise ConfigError(
+                "STORE_ENABLED is on but STORE_PASSWORD is not set. It "
+                "belongs in .env beside the other credentials, never in "
+                "the repo.")
 
     def ensure_dirs(self) -> None:
         """Make every directory this object names.
