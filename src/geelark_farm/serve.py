@@ -988,8 +988,21 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         # Once, here, rather than per pass: the sink is process-lifetime
         # state exactly like the watchdog beside it.
         from . import builder
+        from .store import db as store_db
         from .store import events as store_events
 
+        # ensure_schema's own docstring says it runs on every store-enabled
+        # start - and until 2026-08-31 nothing made that true: only the
+        # store-init command called it, so a schema change deployed with the
+        # code never reached the cluster and the first page to need the new
+        # column answered 500. Warn-not-fatal, like every store touch: a
+        # cluster that is down at boot must not stop the farm.
+        try:
+            store_db.ensure_schema(settings)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not ensure the store schema at startup (%s); "
+                        "store writes will keep failing until it is back",
+                        exc)
         builder.set_event_sink(
             lambda kind, **kw: store_events.emit(settings, kind, **kw))
 

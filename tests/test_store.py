@@ -459,3 +459,46 @@ def test_a_state_typo_mirrors_as_empty_not_as_a_failed_pass():
     assert _state_word("dome") == ""
     assert _state_word(" TAKEN ") == "taken"
     assert _state_word(None) == ""
+
+
+def test_a_store_enabled_start_ensures_the_schema(monkeypatch, make_settings):
+    """ensure_schema's docstring promised it runs on every store-enabled
+    start, and until 2026-08-31 nothing made that true: only store-init
+    called it, so an ALTER deployed with the code never reached the cluster
+    and the first page needing the new column answered 500. This is the
+    wiring the docstring assumed."""
+    import threading
+
+    import geelark_farm.serve as serve_mod
+
+    ensured = []
+    monkeypatch.setattr("geelark_farm.store.db.ensure_schema",
+                        lambda s: ensured.append(True))
+    monkeypatch.setattr("geelark_farm.store.events.emit",
+                        lambda *a, **k: True)
+    settings = make_settings(store_enabled=True, store_host="h",
+                             store_password="p")
+    stop = threading.Event()
+    stop.set()
+    serve_mod.run(settings, stop=stop, passes=0)
+
+    assert ensured, "a store-enabled start did not ensure the schema"
+
+
+def test_a_dead_cluster_at_boot_does_not_stop_the_farm(monkeypatch,
+                                                       make_settings, caplog):
+    import threading
+
+    import geelark_farm.serve as serve_mod
+
+    monkeypatch.setattr(
+        "geelark_farm.store.db.ensure_schema",
+        lambda s: (_ for _ in ()).throw(ConnectionError("down")))
+    settings = make_settings(store_enabled=True, store_host="h",
+                             store_password="p")
+    stop = threading.Event()
+    stop.set()
+    serve_mod.run(settings, stop=stop, passes=0)      # no raise
+
+    assert any("could not ensure the store schema" in r.message
+               for r in caplog.records)
