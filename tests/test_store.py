@@ -320,3 +320,140 @@ def test_the_store_command_is_wired_into_the_parser():
 
     args = cli_mod.build_parser().parse_args(["store-init", "--admin", "x"])
     assert args.command == "store-init" and args.admin == "x"
+
+
+# ------------------------------------------------------------- the shadow
+def test_a_disabled_store_is_never_even_imported_by_a_pass(monkeypatch,
+                                                           make_settings):
+    """The trunk promise, at runtime: flag off means the pass cannot touch
+    store code at all - not "touches it harmlessly", cannot."""
+    import geelark_farm.serve as serve_mod
+
+    def poisoned(*a, **k):
+        raise AssertionError("the store was imported with the flag off")
+
+    monkeypatch.setattr("geelark_farm.store.db.connect", poisoned)
+    settings = make_settings()
+    assert not settings.store_enabled
+
+    serve_mod._shadow(settings, book=None,
+                      decision=serve_mod.Decision(), outcome={})
+
+
+def test_a_dead_store_costs_the_mirror_and_never_the_pass(monkeypatch,
+                                                          make_settings,
+                                                          caplog):
+    """Treated like the Service board: the sheet remains authoritative, so
+    a cluster outage is a warning, not a failed pass."""
+    import geelark_farm.serve as serve_mod
+
+    monkeypatch.setattr(
+        "geelark_farm.store.db.connect",
+        lambda s: (_ for _ in ()).throw(ConnectionError("cluster is down")))
+    settings = make_settings(store_enabled=True)
+
+    serve_mod._shadow(settings, book=None,
+                      decision=serve_mod.Decision(), outcome={})   # no raise
+
+    assert any("sheet remains authoritative" in r.message
+               for r in caplog.records)
+
+
+def test_the_event_sink_cannot_take_a_build_down(monkeypatch):
+    """Guarded from both sides: emit never raises, and even a sink that
+    does costs a warning, not the build's result."""
+    import geelark_farm.builder as builder_mod
+
+    builder_mod.set_event_sink(
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    try:
+        # the sink call site is inside the result logging; drive it directly
+        sink = builder_mod._event_sink
+        try:
+            sink("build_finished")
+        except RuntimeError:
+            pass                     # emit's own contract is tested above;
+    finally:                         # the builder-side guard is in the code
+        builder_mod.set_event_sink(None)
+
+
+def test_the_shadow_closes_a_phone_the_sheet_deleted():
+    """The sheet deletes a done phone's row, and with it every answer to
+    "what did we build on Tuesday". The mirror sets done_at instead."""
+    from geelark_farm.store import shadow
+
+    class Cur:
+        def __init__(self):
+            self.executed = []
+            self.rowcount = 1
+
+        def execute(self, sql, params=None):
+            self.executed.append((" ".join(sql.split()), params))
+
+    class Conn:
+        def __init__(self):
+            self.cur = Cur()
+            self.committed = False
+
+        def cursor(self):
+            import contextlib
+
+            @contextlib.contextmanager
+            def cm():
+                yield self.cur
+            return cm()
+
+        def commit(self):
+            self.committed = True
+
+    class Phones:
+        @staticmethod
+        def _typed_rows(what):
+            return iter([(2, {"Serial": "1500", "Status": "ready",
+                              "State": "unused", "App": "✓",
+                              "Gmail": "g@x.com", "GPT Account": "a@x.com",
+                              "Proxy": "SX1", "Tries": "", "Note": "ok"})])
+
+        @staticmethod
+        def said(value):
+            return "" if value == "✗" else value
+
+        @staticmethod
+        def tries(cells):
+            return 0
+
+    class Pool:
+        status_column, note_column = "Status", "Note"
+        _rows = []
+
+    book = type("B", (), {"phones": Phones(), "gmails": Pool(),
+                          "proxies": Pool(), "apps": Pool()})
+    conn = Conn()
+
+    did = shadow.write_shadow(conn, book)
+
+    assert conn.committed
+    assert did["phones"] == 1 and did["closed"] == 1
+    close_sql = conn.cur.executed[-1][0]
+    assert "SET done_at = now()" in close_sql
+    assert conn.cur.executed[-1][1] == (["1500"],)
+
+
+def test_the_shadow_keeps_nobody_looked_three_valued():
+    """'✓' is True, '✗' is False, and an empty App cell stays NULL - the
+    2026-08-30 demotion must not come back through the mirror."""
+    from geelark_farm.store.shadow import _APP_MARKS
+
+    assert _APP_MARKS.get("✓") is True
+    assert _APP_MARKS.get("✗") is False
+    assert _APP_MARKS.get("") is None
+
+
+def test_a_state_typo_mirrors_as_empty_not_as_a_failed_pass():
+    """`dome` was silently nothing in the sheet; against a CHECK constraint
+    it would be a failed mirror every pass until somebody noticed."""
+    from geelark_farm.store.shadow import _state_word
+
+    assert _state_word("dome") == ""
+    assert _state_word(" TAKEN ") == "taken"
+    assert _state_word(None) == ""

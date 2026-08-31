@@ -104,6 +104,21 @@ _run: ContextVar[str] = ContextVar("geelark_run", default=NO_BUILD)
 _build: ContextVar[int | str] = ContextVar("geelark_build", default=NO_BUILD)
 
 
+#: Where build events go, when anywhere. Injected by `serve` when the store
+#: is enabled, never imported: the sheet retirement's trunk rule is that no
+#: module imports `store` unconditionally, and an injection point keeps this
+#: file ignorant of whether a store even exists. The sink must not raise -
+#: store.events.emit already cannot - but the call is guarded anyway,
+#: because "the monitoring took the build down" must be impossible from
+#: both sides.
+_event_sink = None
+
+
+def set_event_sink(sink) -> None:
+    global _event_sink
+    _event_sink = sink
+
+
 _RUN_IDS = itertools.count(1)
 
 
@@ -2587,6 +2602,18 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                         "seconds": round(build.seconds), "serial": build.serial,
                         "gmail": build.gmail, "proxy": build.proxy_name,
                         "app_account": build.app_account})
+        if _event_sink is not None:
+            try:
+                _event_sink(
+                    "build_finished", run_id=_run.get(), build=str(index),
+                    serial=build.serial, status=build.status,
+                    seconds=round(build.seconds, 1),
+                    detail=(f"ok={build.ok} gmail={build.gmail} "
+                            f"proxy={build.proxy_name} "
+                            f"app={build.app_account}"))
+            except Exception:                                     # noqa: BLE001
+                log.warning("the event sink raised; the build is unaffected",
+                            exc_info=True)
         if reporter:
             reporter.finish(build)
         else:

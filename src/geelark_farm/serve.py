@@ -327,6 +327,44 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
     return Decision(finish=to_finish, build=to_build)
 
 
+def _shadow(settings: Settings, book: Book, decision: Decision,
+            outcome: dict) -> None:
+    """Mirror this pass into the store, and say what the pass did.
+
+    Sheet stays authoritative; this is the read-model the web will serve
+    from so its pages never touch the Sheets quota. Treated exactly like
+    the Service board: a store that cannot be reached costs a warning and
+    this pass's mirror, never the pass - and a fresh connection each time,
+    because 25ms a pass is cheaper than owning a long-lived connection's
+    failure modes across the Watchdog's os._exit.
+
+    The pass event obeys the emit-on-change rule: a quiet pass writes
+    nothing, so a quiet day is a few dozen rows and every transition is
+    kept - 2,880 rows a day of "nothing happened" is how an events table
+    stops being read.
+    """
+    if not settings.store_enabled:
+        return
+    try:
+        from .store import db as store_db
+        from .store import events as store_events
+        from .store import shadow as store_shadow
+
+        with store_db.connect(settings) as conn:
+            did = store_shadow.write_shadow(conn, book)
+        acted = {k: v for k, v in (outcome or {}).items() if v}
+        if decision.jobs or acted or did["closed"]:
+            store_events.emit(
+                settings, "pass",
+                status=(decision.warning or "")[:60],
+                detail=(f"finish={decision.finish} build={decision.build} "
+                        f"closed={did['closed']} sync={sorted(acted)}"))
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the store did not take this pass's mirror (%s); "
+                    "the sheet remains authoritative and the pass is "
+                    "unaffected", exc)
+
+
 def _look(client: Client, settings: Settings,
           book: Book) -> tuple[int, int, int, int, dict, int]:
     """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
@@ -848,6 +886,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
+    _shadow(settings, book, decision, outcome)
+
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two
         # concurrent calls. Each opens its own Book, and `Pool`'s claim lock is
@@ -943,6 +983,16 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # pool - and when those two disagreed, one account sat on two phones for
     # 115 minutes (2026-08-28). `.env` can move it, so no deploy should be
     # able to move it quietly (2026-08-31).
+    if settings.store_enabled:
+        # Injected, not imported by builder - see builder.set_event_sink.
+        # Once, here, rather than per pass: the sink is process-lifetime
+        # state exactly like the watchdog beside it.
+        from . import builder
+        from .store import events as store_events
+
+        builder.set_event_sink(
+            lambda kind, **kw: store_events.emit(settings, kind, **kw))
+
     log.info("serving: %d warm phones, a pass every %ds, claims go stale "
              "after %ds", settings.warm_stock,
              settings.serve_interval_seconds, settings.stale_claim_seconds)
