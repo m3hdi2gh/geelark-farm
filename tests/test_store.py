@@ -149,3 +149,109 @@ def test_ensure_schema_applies_and_reapplies(make_settings):
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'schema_rev'").fetchone()
         assert row == (store_db.SCHEMA_REV,)
+
+
+# ------------------------------------------------------------ validators
+def test_a_bad_gmail_is_refused_at_the_door():
+    """Write-time, not read-time: the sheet judged rows on load, and a row
+    that failed sat looking free for days (Mamadovskii, 2026-08-31). Here
+    the same judgement happens before the INSERT ever runs."""
+    from geelark_farm.store import validate
+
+    with pytest.raises(validate.AccountError, match="not an email address"):
+        validate.gmail_row(address="fifa19.900t@pAss", password="x")
+
+
+def test_a_33_char_secret_is_refused_with_the_reason():
+    """The exact row that sat broken: base32 with one extra character."""
+    from geelark_farm.store import validate
+
+    with pytest.raises(validate.AccountError):
+        validate.gmail_row(address="a@b.com", password="pw",
+                           secret="YIBI" + "A" * 28 + "Q")
+
+
+def test_the_secret_cell_splits_on_the_at_sign():
+    """One cell, two meanings, same decisive test pools.py uses: base32 has
+    no @ in it, and no address is without one."""
+    from geelark_farm.store import validate
+
+    with_recovery = validate.gmail_row(address="a@b.com", password="pw",
+                                       secret="rescue@mail.com")
+    assert with_recovery["recovery_email"] == "rescue@mail.com"
+    assert with_recovery["totp_secret"] == ""
+
+    with_key = validate.gmail_row(address="a@b.com", password="pw",
+                                  secret="JBSWY3DPEHPK3PXP")
+    assert with_key["totp_secret"] == "JBSWY3DPEHPK3PXP"
+    assert with_key["recovery_email"] == ""
+
+
+def test_the_seller_promise_refuses_only_the_wrong_kind():
+    """Never an empty cell - that is how password-only accounts stay
+    welcome, and forgetting it refused two of them on 2026-08-30."""
+    from geelark_farm.store import validate
+
+    # empty secret under a promising seller: fine
+    validate.gmail_row(address="a@b.com", password="pw", seller="usa")
+    # the wrong kind under a promising seller: refused
+    with pytest.raises(validate.AccountError, match="disagree"):
+        validate.gmail_row(address="a@b.com", password="pw",
+                           seller="usa", secret="rescue@mail.com")
+
+
+def test_the_sellers_table_matches_the_sheets():
+    """Duplicated knowingly (store must not import the sheet module); this
+    is the pin that keeps the two copies one."""
+    from geelark_farm.pools import GmailPool
+    from geelark_farm.store import validate
+
+    assert validate.SELLERS == GmailPool.SELLERS
+
+
+def test_an_email_code_only_app_account_needs_no_password():
+    from geelark_farm.store import validate
+
+    row = validate.app_row(address="codes@only.com", email_code_only=True)
+    assert row["email_code_only"] is True
+
+    with pytest.raises(validate.AccountError, match="no password"):
+        validate.app_row(address="normal@acct.com")
+
+
+def test_a_proxy_row_carries_the_identity_triple():
+    """host+port+username is the identity pools._identity joined in Python;
+    here it is what the partial unique index enforces."""
+    from geelark_farm.store import validate
+
+    row = validate.proxy_row(raw="socks5://u:p@10.0.0.1:9999", name="SX1")
+    assert (row["host"], row["port"], row["username"]) == ("10.0.0.1", 9999, "u")
+
+
+# ------------------------------------------------------------------ auth
+def test_a_password_verifies_against_its_own_stored_parameters():
+    """The parameters ride beside the hash so they can be raised later
+    without invalidating anyone - so verify must read them from the row."""
+    from geelark_farm.store import auth
+
+    row = auth.hash_password("hunter2")
+    assert auth.verify_password("hunter2", row)
+    assert not auth.verify_password("hunter3", row)
+
+    # a row hashed under weaker, older parameters still verifies
+    import hashlib
+    import os
+    salt = os.urandom(16)
+    old = dict(password_salt=salt, scrypt_n=4096, scrypt_r=8, scrypt_p=1,
+               password_hash=hashlib.scrypt(b"legacy", salt=salt, n=4096,
+                                            r=8, p=1, dklen=64))
+    assert auth.verify_password("legacy", old)
+
+
+def test_two_hashes_of_one_password_differ():
+    """A fresh salt every call, or the users table becomes a rainbow-table
+    lookup the day it leaks."""
+    from geelark_farm.store import auth
+
+    assert (auth.hash_password("same")["password_hash"]
+            != auth.hash_password("same")["password_hash"])

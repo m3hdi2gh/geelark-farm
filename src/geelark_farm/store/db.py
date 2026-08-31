@@ -111,6 +111,182 @@ class Store:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    # ------------------------------------------------------------- stock
+    def add_resource(self, row: dict) -> int:
+        """Insert one validated row and return its id.
+
+        `row` comes from store.validate - this method trusts its shape and
+        lets the partial unique indexes speak for identity: a duplicate
+        raises rather than flagging after the fact, which is the whole
+        upgrade over _flag_duplicates.
+        """
+        columns = sorted(row)
+        placeholders = ", ".join(["%s"] * len(columns))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO resources ({', '.join(columns)}) "
+                f"VALUES ({placeholders}) RETURNING id",
+                [row[c] for c in columns])
+            new_id = cur.fetchone()[0]
+        self._conn.commit()
+        return new_id
+
+    def available(self, kind: str) -> list[dict]:
+        """Free rows of one kind, in the claim's own order - so what a page
+        shows is what the next claim will take."""
+        return self._rows(
+            "SELECT * FROM resources WHERE kind = %s AND error IS NULL "
+            "AND status = '' ORDER BY "
+            "CASE WHEN kind = 'proxy' THEN times_used ELSE 0 END, "
+            "sheet_row NULLS LAST, id", (kind,))
+
+    # ------------------------------------------------------------- claims
+    def claim(self, kind: str, *, run_id: str, machine: str,
+              lease_seconds: float,
+              owner_id: int | None = None) -> dict | None:
+        """Take the first free row of `kind`, atomically, or None.
+
+        One transaction: pick with FOR UPDATE SKIP LOCKED, mark, and write
+        the claims row carrying the ONE lease. Two processes racing here
+        get two different rows, or one row and a None - the property the
+        sheet needed a process-wide lock plus a re-read to approximate, and
+        the engine simply has (2026-08-30 was exactly this gap).
+
+        `owner_id` narrows the pick to that user's reserved rows plus the
+        shared pool - assignment is a filter here, not a separate stock.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "WITH picked AS ("
+                "  SELECT id FROM resources"
+                "  WHERE kind = %s AND error IS NULL AND status = ''"
+                "    AND (owner_id IS NULL OR owner_id = %s)"
+                "  ORDER BY CASE WHEN kind = 'proxy' THEN times_used"
+                "           ELSE 0 END, sheet_row NULLS LAST, id"
+                "  FOR UPDATE SKIP LOCKED LIMIT 1)"
+                "UPDATE resources r SET status = 'in_use',"
+                "  times_used = times_used"
+                "    + CASE WHEN r.kind = 'proxy' THEN 1 ELSE 0 END,"
+                "  updated_at = now()"
+                "  FROM picked WHERE r.id = picked.id RETURNING r.*",
+                (kind, owner_id))
+            row = _one_dict(cur)
+            if row is None:
+                self._conn.rollback()
+                return None
+            cur.execute(
+                "INSERT INTO claims (run_id, machine, resource_id,"
+                " lease_until) VALUES (%s, %s, %s,"
+                " now() + make_interval(secs => %s)) RETURNING id",
+                (run_id, machine, row["id"], lease_seconds))
+            row["claim_id"] = cur.fetchone()[0]
+        self._conn.commit()
+        return row
+
+    def beat(self, run_id: str, lease_seconds: float) -> int:
+        """Push every live lease this run holds forward. Returns how many -
+        the heartbeat logs that number, so a beat that stopped covering a
+        claim is visible rather than silent."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE claims SET lease_until ="
+                " now() + make_interval(secs => %s)"
+                " WHERE run_id = %s AND released_at IS NULL",
+                (lease_seconds, run_id))
+            moved = cur.rowcount
+        self._conn.commit()
+        return moved
+
+    def release(self, claim_id: int, *, outcome: str,
+                resource_status: str = "") -> None:
+        """Close one claim and put its resource where `outcome` says.
+
+        `resource_status` empty means back to the pool - "nothing was
+        learnt", the same meaning a blank sheet cell had.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE claims SET released_at = now(), outcome = %s"
+                " WHERE id = %s AND released_at IS NULL"
+                " RETURNING resource_id", (outcome, claim_id))
+            got = cur.fetchone()
+            if got is not None:
+                cur.execute(
+                    "UPDATE resources SET status = %s, updated_at = now()"
+                    " WHERE id = %s", (resource_status, got[0]))
+        self._conn.commit()
+
+    def sweep_stale(self) -> list[dict]:
+        """Free everything whose lease has passed - a dead run's holdings.
+
+        A separate sweep rather than a predicate inside `claim`, so freeing
+        is one visible, logged event per dead run instead of a side effect
+        scattered across whoever claims next. Called once a pass, like the
+        sheet's abandoned() sweep.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE claims SET released_at = now(),"
+                " outcome = 'lease_expired'"
+                " WHERE released_at IS NULL AND lease_until < now()"
+                " RETURNING id, run_id, resource_id")
+            dead = [dict(zip(("claim_id", "run_id", "resource_id"), r,
+                          strict=True))
+                    for r in cur.fetchall()]
+            for item in dead:
+                if item["resource_id"] is not None:
+                    cur.execute(
+                        "UPDATE resources SET status = '',"
+                        " updated_at = now() WHERE id = %s",
+                        (item["resource_id"],))
+        self._conn.commit()
+        return dead
+
+    # -------------------------------------------------------------- users
+    def create_user(self, *, username: str, password: str, role: str,
+                    sees: str) -> int:
+        from . import auth
+
+        hashed = auth.hash_password(password)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password_hash, password_salt,"
+                " scrypt_n, scrypt_r, scrypt_p, role, sees)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (username, hashed["password_hash"],
+                 hashed["password_salt"], hashed["scrypt_n"],
+                 hashed["scrypt_r"], hashed["scrypt_p"], role, sees))
+            new_id = cur.fetchone()[0]
+        self._conn.commit()
+        return new_id
+
+    def check_login(self, username: str, password: str) -> dict | None:
+        """The user row on success, None on any failure - one answer for
+        wrong-name and wrong-password alike, so the login page cannot be
+        used to enumerate usernames."""
+        from . import auth
+
+        rows = self._rows(
+            "SELECT * FROM users WHERE username = %s AND active",
+            (username,))
+        if not rows:
+            return None
+        row = rows[0]
+        if not auth.verify_password(password, row):
+            return None
+        row.pop("password_hash", None)
+        row.pop("password_salt", None)
+        return row
+
+    # ---------------------------------------------------------- plumbing
+    def _rows(self, sql: str, params: tuple = ()) -> list[dict]:
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
+            names = [d.name for d in cur.description]
+            out = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        self._conn.rollback()      # reads leave no transaction behind
+        return out
+
     # ------------------------------------------------------------ health
     def ping(self) -> bool:
         """Whether the cluster answers, without raising. The store's callers
@@ -123,3 +299,10 @@ class Store:
         except Exception as exc:                                  # noqa: BLE001
             log.warning("the store did not answer (%s)", exc)
             return False
+
+def _one_dict(cur) -> dict | None:
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return dict(zip([d.name for d in cur.description], row, strict=True))
+
