@@ -255,3 +255,68 @@ def test_two_hashes_of_one_password_differ():
 
     assert (auth.hash_password("same")["password_hash"]
             != auth.hash_password("same")["password_hash"])
+
+
+# --------------------------------------------------------------- the CLI
+def test_store_init_applies_schema_then_makes_the_admin(monkeypatch, capsys,
+                                                        make_settings):
+    """The first admin is the one user nobody with an admin page can make -
+    and the schema must exist before the INSERT that creates them."""
+    import geelark_farm.cli as cli_mod
+
+    order = []
+
+    class FakeStore:
+        def __init__(self, settings):
+            order.append("connect")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def create_user(self, *, username, password, role, sees):
+            order.append(("user", username, role, sees))
+            return 7
+
+    fake = type("M", (), {
+        "ensure_schema": staticmethod(lambda s: order.append("schema")),
+        "Store": FakeStore})
+    monkeypatch.setattr(cli_mod, "store", fake, raising=False)
+    monkeypatch.setattr("geelark_farm.store.ensure_schema",
+                        fake.ensure_schema, raising=False)
+    import geelark_farm.store as real_store
+    monkeypatch.setattr(real_store, "ensure_schema", fake.ensure_schema)
+    monkeypatch.setattr(real_store, "Store", FakeStore)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "long-enough-pw")
+
+    args = type("A", (), {"admin": "mehdi"})
+    code = cli_mod.cmd_store_init(make_settings(), args)
+
+    assert code == 0
+    assert order == ["schema", "connect", ("user", "mehdi", "admin", "all")]
+    assert "admin 'mehdi' created (id 7)" in capsys.readouterr().out
+
+
+def test_store_init_refuses_a_short_admin_password(monkeypatch, capsys,
+                                                   make_settings):
+    """The admin can reset everyone else; nobody resets the admin."""
+    import geelark_farm.cli as cli_mod
+    import geelark_farm.store as real_store
+
+    monkeypatch.setattr(real_store, "ensure_schema", lambda s: None)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "short")
+
+    args = type("A", (), {"admin": "mehdi"})
+    code = cli_mod.cmd_store_init(make_settings(), args)
+
+    assert code == 1
+    assert "at least 8" in capsys.readouterr().err
+
+
+def test_the_store_command_is_wired_into_the_parser():
+    import geelark_farm.cli as cli_mod
+
+    args = cli_mod.build_parser().parse_args(["store-init", "--admin", "x"])
+    assert args.command == "store-init" and args.admin == "x"

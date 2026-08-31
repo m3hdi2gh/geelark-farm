@@ -10,6 +10,7 @@ Commands are grouped by what they are for:
   running unattended     serve, breaker
   the console            ui
   what the sheet holds   pools
+  the sheet's successor  store-init, store-ping
   setup and credentials  verify, ping, plan, proxy
   phone lifecycle        phones, create, delete, start, stop, reap
   device diagnostics     dump, tap, shell, type, screenshot
@@ -157,6 +158,17 @@ def build_parser() -> argparse.ArgumentParser:
                               "bringing them into agreement with the panel")
 
     # ------------------------------------------------------ diagnostics
+    p_store_init = sub.add_parser(
+        "store-init",
+        help="apply the store schema and, with --admin, create the first "
+             "admin - the one user nobody with an admin page can make"
+    )
+    p_store_init.add_argument("--admin", metavar="USERNAME",
+                              help="create this admin user; the password is "
+                                   "prompted, never taken as an argument")
+    sub.add_parser("store-ping",
+                   help="one SELECT 1 against the store's cluster")
+
     sub.add_parser("ping", help="verify API credentials and list phones")
     sub.add_parser("verify",
                    help="check the whole setup and say what is missing")
@@ -947,6 +959,46 @@ def cmd_install(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
+def cmd_store_init(settings: Settings, args) -> int:
+    """Prepare a box to opt in: apply the schema, optionally seed the admin.
+
+    Deliberately usable BEFORE STORE_ENABLED is turned on - init is the
+    preparation, the flag is the opt-in - so it gates on the connection
+    settings (require_store) and not on the flag.
+
+    The import lives in here, not at module level: the trunk rule for the
+    whole sheet retirement, pinned by an AST test. A bug in half-built
+    store code must not take this CLI down on a box that never opted in.
+    """
+    from . import store as store_mod
+
+    store_mod.ensure_schema(settings)
+    print("schema ensured")
+    if args.admin:
+        import getpass
+
+        password = getpass.getpass(f"password for {args.admin}: ")
+        if len(password) < 8:
+            # The admin can reset everyone else; nobody resets the admin.
+            print("refused: the admin password needs at least 8 characters",
+                  file=sys.stderr)
+            return 1
+        with store_mod.Store(settings) as store:
+            user_id = store.create_user(username=args.admin,
+                                        password=password,
+                                        role="admin", sees="all")
+        print(f"admin {args.admin!r} created (id {user_id})")
+    return 0
+
+
+def cmd_store_ping(settings: Settings, args) -> int:
+    from . import store as store_mod
+
+    with store_mod.Store(settings) as store:
+        print("ok" if store.ping() else "no answer")
+    return 0
+
+
 def cmd_ping(settings: Settings, args) -> int:
     """Prove the credentials sign correctly, and show what they can see.
 
@@ -1142,6 +1194,8 @@ def main(argv: list[str] | None = None) -> int:
         "breaker": cmd_breaker,
         "finish": cmd_finish,
         "pools": cmd_pools,
+        "store-init": cmd_store_init,
+        "store-ping": cmd_store_ping,
     }
     handler = handlers.get(args.command)
     if not handler:
