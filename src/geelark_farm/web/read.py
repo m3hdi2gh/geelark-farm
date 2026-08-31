@@ -72,3 +72,60 @@ def events(settings: Settings, limit: int = 200) -> list[dict]:
         return store._rows(
             "SELECT at, kind, run_id, build, serial, status, seconds,"
             " detail FROM events ORDER BY id DESC LIMIT %s", (limit,))
+
+
+#: Every status word that means "settled, nothing for a person to do", per
+#: kind - the complement of pools.Pool.flagged, restated here because the
+#: web may not import the sheet module. A pin test derives the same sets
+#: from the Pool classes and holds the two copies together.
+ROUTINE = {
+    "gmail": frozenset({"", "in_use", "ready", "used"}),
+    "app": frozenset({"", "in_use", "ready", "delivered"}),
+    "proxy": frozenset({"", "free", "unused", "claimed",
+                        "on a phone", "used"}),
+}
+
+
+def needs(settings: Settings) -> dict:
+    """Everything waiting on a person, in one read of the mirror.
+
+    This is the two needs_you implementations unified - serve's pure
+    function over the sync outcome, and the console's list with its
+    proxies-waiting item - rebuilt over the mirror so a page load costs
+    the sheet nothing. Panel-vs-sheet strays (phones GeeLark has that the
+    tab does not) are the one item that cannot be derived from the mirror;
+    they live on the Service board's own row, written by the pass that
+    counted them.
+
+    Four sections, ordered by what they cost while they wait:
+    - orphaned: a spent credential naming a phone that no longer exists -
+      stock held by nothing, forever, until a person decides
+    - flagged: rows a run judged and set aside, with the verdict's advice
+    - broken: rows validation refused, invisible in the sheet by design
+    - given_up: phones at the tries limit, off the shelf until cleared
+    """
+    with Store(settings) as store:
+        flagged = []
+        for kind, routine in ROUTINE.items():
+            flagged += store._rows(
+                "SELECT kind, coalesce(nullif(address, ''), proxy_name) who,"
+                " status, serial, note FROM resources"
+                " WHERE kind = %s AND error IS NULL"
+                " AND NOT (status = ANY(%s))"
+                " ORDER BY sheet_row", (kind, sorted(routine)))
+        orphaned = store._rows(
+            "SELECT kind, address who, status, serial FROM resources"
+            " WHERE kind IN ('gmail', 'app') AND status = 'ready'"
+            " AND serial <> '' AND serial NOT IN"
+            " (SELECT serial FROM phones WHERE done_at IS NULL)"
+            " ORDER BY kind, serial")
+        broken = store._rows(
+            "SELECT kind, coalesce(address, proxy_name,"
+            " host || ':' || port) who, error FROM resources"
+            " WHERE error IS NOT NULL ORDER BY kind")
+        given_up = store._rows(
+            "SELECT serial, status, tries, note FROM phones"
+            " WHERE done_at IS NULL AND tries >= 3"
+            " AND state IN ('', 'unused') ORDER BY serial")
+    return {"orphaned": orphaned, "flagged": flagged, "broken": broken,
+            "given_up": given_up}

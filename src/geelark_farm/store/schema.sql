@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS resources (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- Which phone a spent credential is on - the sheet's "Phone Serial"
+-- column, mirrored so "held against a phone that is gone" is answerable
+-- from the store alone. ALTER, because CREATE IF NOT EXISTS does not add
+-- columns to a table that already exists; additive-only, like everything
+-- in this file.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS serial text NOT NULL DEFAULT '';
+
 CREATE UNIQUE INDEX IF NOT EXISTS resources_addr_ident
     ON resources (kind, lower(address))
     WHERE kind IN ('gmail', 'app') AND address IS NOT NULL;

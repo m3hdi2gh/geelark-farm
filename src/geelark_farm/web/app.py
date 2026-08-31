@@ -78,6 +78,11 @@ class _Handler(BaseHTTPRequestHandler):
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.phones_page(
                     read.phones(self.settings, scope), user))
+            if path == "/needs":
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                return self._html(200, pages.needs_page(
+                    read.needs(self.settings), user, _advice))
             if path == "/pools":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -188,3 +193,18 @@ def _locked_out(username: str) -> bool:
 def _note_failure(username: str) -> None:
     with _lock:
         _failures.setdefault(username, []).append(time.time())
+
+
+def _advice(status: str) -> str:
+    """One line of meaning for a flagged row's status token.
+
+    failures.py is the one import allowed past the mirror rule: it is pure
+    - zero package imports, no I/O - and it IS the meaning of these words.
+    A word it does not know renders as nothing rather than a crash: rows
+    written before a rename are data, not errors.
+    """
+    from ..failures import VERDICTS, verdict
+
+    if status not in VERDICTS:
+        return ""
+    return verdict(status).seen

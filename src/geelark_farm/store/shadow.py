@@ -82,8 +82,9 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
         return
     cur.execute(
         "INSERT INTO resources (kind, sheet_row, status, address, password,"
-        " totp_secret, email_code_only, recovery_email, seller, note, error)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " totp_secret, email_code_only, recovery_email, seller, serial,"
+        " note, error)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT (kind, lower(address))"
         " WHERE kind IN ('gmail', 'app') AND address IS NOT NULL"
         " DO UPDATE SET sheet_row = EXCLUDED.sheet_row,"
@@ -91,14 +92,16 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
         "  totp_secret = EXCLUDED.totp_secret,"
         "  email_code_only = EXCLUDED.email_code_only,"
         "  recovery_email = EXCLUDED.recovery_email,"
-        "  seller = EXCLUDED.seller, note = EXCLUDED.note,"
+        "  seller = EXCLUDED.seller, serial = EXCLUDED.serial,"
+        "  note = EXCLUDED.note,"
         "  error = EXCLUDED.error, updated_at = now()",
         (kind, row.sheet_row, status, address,
          creds.password if creds else "",
          creds.totp_secret if creds else "",
          bool(creds and creds.email_code_only),
          (creds.recovery_email if creds else "") or "",
-         (values.get("Seller") or "").strip(), note, error))
+         (values.get("Seller") or "").strip(),
+         (values.get("Phone Serial") or "").strip(), note, error))
 
 
 def _upsert_phones(cur, book) -> list[str]:

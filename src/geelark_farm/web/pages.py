@@ -47,7 +47,8 @@ def page(title: str, body: str, *, user: dict | None = None) -> str:
         links = ['<b>geelark</b>', '<a href="/">داشبورد</a>',
                  '<a href="/phones">گوشی‌ها</a>']
         if user.get("sees") == "all":
-            links += ['<a href="/pools">استخرها</a>',
+            links += ['<a href="/needs">نیازمند توجه</a>',
+                      '<a href="/pools">استخرها</a>',
                       '<a href="/events">رویدادها</a>']
         links += [f'<form method="post" action="/logout">'
                   f'<span class="muted">{esc(user["username"])}</span> '
@@ -150,3 +151,61 @@ def events_page(rows: list[dict], user: dict) -> str:
 def forbidden(user: dict) -> str:
     return page("دسترسی نیست",
                 "<h2>این صفحه در دامنهٔ دید شما نیست</h2>", user=user)
+
+
+def needs_page(data: dict, user: dict, advice) -> str:
+    """`advice` is failures.verdict, passed in rather than imported here:
+    pages render, read decides, and the one module that may know the verdict
+    table is the one assembling the data."""
+    total = sum(len(v) for v in data.values())
+    body = f"<h2>نیازمند توجه ({total})</h2>"
+    if not total:
+        body += "<p class=\"muted\">هیچ‌چیز منتظر کسی نیست.</p>"
+
+    if data["orphaned"]:
+        body += ("<h3>در گروِ گوشی‌ای که دیگر نیست</h3>"
+                 "<p class=\"muted\">اعتبارنامهٔ خرج‌شده روی گوشی‌ای که از "
+                 "پنل رفته - تا کسی تصمیم نگیرد، برای همیشه بیرون از "
+                 "استخر می‌ماند. تحویل‌شده یا آزاد؟ همان قضاوتی است که "
+                 "برنامه عمداً نمی‌کند.</p>"
+                 "<table><tr><th>تب</th><th>کدام</th><th>گوشی</th></tr>")
+        for r in data["orphaned"]:
+            body += (f"<tr><td>{esc(r['kind'])}</td>"
+                     f"<td>{esc(str(r['who']))}</td>"
+                     f"<td>{esc(str(r['serial']))}</td></tr>")
+        body += "</table>"
+
+    if data["flagged"]:
+        body += ("<h3>علامت‌خورده - یک اجرا قضاوت کرد و کنار گذاشت</h3>"
+                 "<table><tr><th>تب</th><th>کدام</th><th>وضعیت</th>"
+                 "<th>یعنی</th></tr>")
+        for r in data["flagged"]:
+            said = advice(r["status"])
+            body += (f"<tr><td>{esc(r['kind'])}</td>"
+                     f"<td>{esc(str(r['who']))}</td>"
+                     f"<td>{esc(str(r['status']))}</td>"
+                     f"<td class=\"muted\">{esc(said)}</td></tr>")
+        body += "</table>"
+
+    if data["broken"]:
+        body += ("<h3>غیرقابل‌استفاده - اعتبارسنجی رد کرد</h3>"
+                 "<table><tr><th>تب</th><th>کدام</th><th>چرا</th></tr>")
+        for r in data["broken"]:
+            body += (f"<tr><td>{esc(r['kind'])}</td>"
+                     f"<td>{esc(str(r['who']))}</td>"
+                     f"<td>{esc(str(r['error']))}</td></tr>")
+        body += "</table>"
+
+    if data["given_up"]:
+        body += ("<h3>گوشی‌های کنارگذاشته - سه شکست</h3>"
+                 "<p class=\"muted\">پاک‌کردن سلول Tries در شیت برشان "
+                 "می‌گرداند به صف.</p>"
+                 "<table><tr><th>سریال</th><th>وضعیت</th><th>تلاش</th>"
+                 "<th>یادداشت</th></tr>")
+        for r in data["given_up"]:
+            body += (f"<tr><td>{esc(str(r['serial']))}</td>"
+                     f"<td>{esc(str(r['status']))}</td>"
+                     f"<td>{r['tries']}</td>"
+                     f"<td>{esc(str(r['note']))}</td></tr>")
+        body += "</table>"
+    return page("نیازمند توجه", body, user=user)

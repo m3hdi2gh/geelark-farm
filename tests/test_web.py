@@ -199,3 +199,65 @@ def test_the_pages_speak_from_the_mirror_not_the_book():
                 if set(name.split(".")) & forbidden:
                     hits.append(f"{path.name}: {name}")
     assert not hits, f"the web reached past the mirror: {hits}"
+
+
+def test_the_routine_sets_match_what_the_pools_call_settled():
+    """ROUTINE is the one knowing duplication of the sheet vocabulary in the
+    web (it may not import pools); this derives the same sets from the Pool
+    classes and holds the two copies together - the SELLERS pin's shape."""
+    from geelark_farm.pools import AppPool, GmailPool, ProxyPool
+    from geelark_farm.web.read import ROUTINE
+
+    for pool_cls, kind in ((GmailPool, "gmail"), (AppPool, "app"),
+                           (ProxyPool, "proxy")):
+        settled = set(pool_cls.available_statuses) | {
+            pool_cls.claimed_status, pool_cls.spent_status,
+            pool_cls.retired_status}
+        assert ROUTINE[kind] == settled, (
+            f"{kind}: the web and the pool disagree about what is settled")
+
+
+def test_needs_page_names_the_orphans_and_explains_the_flags(web, monkeypatch):
+    import geelark_farm.web.app as app_mod
+
+    monkeypatch.setattr(app_mod.read, "needs", lambda s: {
+        "orphaned": [{"kind": "app", "who": "nazarihassan1997@outlook.com",
+                      "status": "ready", "serial": "1398"}],
+        "flagged": [{"kind": "gmail", "who": "x@y.com",
+                     "status": "wrong_password", "serial": "", "note": ""}],
+        "broken": [], "given_up": []})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/needs")
+
+    assert status == 200
+    assert "nazarihassan1997@outlook.com" in body and "1398" in body
+    # the verdict's own words, not the token alone
+    assert "would not take the password" in body
+
+
+def test_needs_page_is_scope_gated_like_the_other_farm_pages(web,
+                                                             monkeypatch):
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own"})
+    client = web()
+    client.login(username="narrow")
+    status, _, _ = client.request("GET", "/needs")
+    assert status == 403
+
+
+def test_a_status_the_verdict_table_never_heard_of_renders_as_data(web,
+                                                                   monkeypatch):
+    """Rows written before a rename are data, not errors."""
+    import geelark_farm.web.app as app_mod
+
+    monkeypatch.setattr(app_mod.read, "needs", lambda s: {
+        "orphaned": [], "given_up": [], "broken": [],
+        "flagged": [{"kind": "gmail", "who": "old@row.com",
+                     "status": "some_forgotten_word", "serial": "",
+                     "note": ""}]})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/needs")
+    assert status == 200 and "some_forgotten_word" in body
