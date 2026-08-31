@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 
 -- ---------------------------------------------------------------- users
 -- Two axes, deliberately not one list of role names: what buttons you have
--- (role) and what rows you see (sees). The owner's "ترکیبی" answer is these
+-- (role) and what rows you see (sees). The owner's "both" answer is these
 -- two axes composed, with no third role invented for it.
 CREATE TABLE IF NOT EXISTS users (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -194,3 +194,29 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
 CREATE INDEX IF NOT EXISTS events_kind_at ON events (kind, at);
 CREATE INDEX IF NOT EXISTS events_serial_at ON events (serial, at) WHERE serial <> '';
+
+-- --------------------------------------------------------------- actions
+-- The command queue: how a web button reaches the sheet without a second
+-- writer. A POST inserts a row; the serve pass drains it with its own Book
+-- and writes status/result back. Control verbs are drained ABOVE the
+-- Stop-everything check (or a web restart could never run); everything
+-- else drains below it, so a stopped service still does not delete phones.
+-- idem_key is UNIQUE: a double-submit inserts once and the second attempt
+-- finds the first row - indistinguishable from success, by design.
+CREATE TABLE IF NOT EXISTS actions (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    verb         text NOT NULL,
+    payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    requested_by bigint NOT NULL REFERENCES users(id),
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    status       text NOT NULL DEFAULT 'queued'
+                 CHECK (status IN ('queued', 'awaiting_confirm', 'running',
+                                   'done', 'failed', 'refused', 'cancelled')),
+    result       text NOT NULL DEFAULT '',
+    detail       jsonb,
+    executed_at  timestamptz,
+    idem_key     text UNIQUE
+);
+CREATE INDEX IF NOT EXISTS actions_open
+    ON actions (requested_at)
+    WHERE status IN ('queued', 'awaiting_confirm');

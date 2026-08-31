@@ -307,6 +307,10 @@ class Settings:
     #: way on first deploy, 2026-08-31). The host side of the publish is
     #: what keeps it private: compose pins it to the host's 127.0.0.1.
     web_bind: str = "127.0.0.1"
+    #: Stage 5: the mutation verbs. Off means every action POST answers 403
+    #: and the serve drain never runs - the read-only web of stage 3,
+    #: exactly.
+    web_mutations: bool = False
 
 
     @classmethod
@@ -349,6 +353,8 @@ class Settings:
                         in ("1", "true", "yes", "on"),
             web_port=_int("WEB_PORT", 8787),
             web_bind=_str("WEB_BIND", "127.0.0.1"),
+            web_mutations=_str("WEB_MUTATIONS", "0").strip()
+                          in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

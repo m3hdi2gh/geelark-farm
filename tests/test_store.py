@@ -502,3 +502,114 @@ def test_a_dead_cluster_at_boot_does_not_stop_the_farm(monkeypatch,
 
     assert any("could not ensure the store schema" in r.message
                for r in caplog.records)
+
+
+# ---------------------------------------------------------- the actions queue
+def test_web_mutations_defaults_off(make_settings):
+    """A fresh deploy is dark: stage 5 arrives disabled, like every flag."""
+    assert make_settings().web_mutations is False
+
+
+class _ScriptedConn:
+    """execute() plays back a script - each entry is the fetch answer, or an
+    exception to raise - and records the SQL for the asserts."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.sql = []
+        self.committed = 0
+        self.rolled_back = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+        answer = self.script.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+
+        class Cur:
+            @staticmethod
+            def fetchone():
+                return answer
+
+            @staticmethod
+            def fetchall():
+                return answer
+        return Cur()
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def test_enqueue_answers_a_double_submit_with_the_first_row(monkeypatch,
+                                                            make_settings):
+    """The INSERT hits the idem_key UNIQUE; the person who double-tapped
+    gets the id of the command they already queued, not an error page."""
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([RuntimeError("duplicate key value"), (41,)])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+
+    got = actions.enqueue(make_settings(), verb="noop", payload={},
+                          requested_by=7, idem_key="k")
+
+    assert got == 41
+    assert conn.rolled_back == 1, "the failed INSERT was left open"
+
+
+def test_cancel_tells_the_truth_in_all_three_directions(monkeypatch,
+                                                        make_settings):
+    from geelark_farm.store import actions
+
+    settings = make_settings()
+
+    def with_script(script):
+        conn = _ScriptedConn(script)
+        monkeypatch.setattr(actions, "connect", lambda s: conn)
+        return conn
+
+    with_script([(5,)])                      # still queued, mine
+    assert actions.cancel(settings, action_id=5, user_id=7,
+                          is_admin=False) == "cancelled"
+
+    with_script([None, (7,)])                # mine, but a pass took it
+    assert actions.cancel(settings, action_id=5, user_id=7,
+                          is_admin=False) == "too_late"
+
+    with_script([None, (99,)])               # someone else's
+    assert actions.cancel(settings, action_id=5, user_id=7,
+                          is_admin=False) == "not_yours"
+
+    with_script([None, (99,)])               # an admin may touch anyone's
+    assert actions.cancel(settings, action_id=5, user_id=7,
+                          is_admin=True) == "too_late"
+
+    with_script([None, None])                # a row that never existed
+    assert actions.cancel(settings, action_id=6, user_id=7,
+                          is_admin=True) == "not_yours"
+
+
+def test_take_batch_splits_control_verbs_from_the_rest():
+    """The two drain positions only work if the SQL splits the queue the
+    same way: controls to the early drain, everything else to the late."""
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([[(1, "noop", {}, 7)]])
+    rows = actions.take_batch(conn, controls_only=False)
+    assert rows == [{"id": 1, "verb": "noop", "payload": {},
+                     "requested_by": 7}]
+    assert "verb <> 'control'" in conn.sql[0]
+    assert "SKIP LOCKED" in conn.sql[0]
+    assert conn.committed == 1
+
+    conn = _ScriptedConn([[]])
+    assert actions.take_batch(conn, controls_only=True) == []
+    assert "verb = 'control'" in conn.sql[0]

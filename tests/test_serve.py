@@ -409,7 +409,8 @@ def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
     monkeypatch.setattr(serve_mod.Slots, "look", lambda self_, c, now: 10)
-    monkeypatch.setattr(builder.phones, "prune_ledger", lambda c, l: [])
+    monkeypatch.setattr(builder.phones, "prune_ledger",
+                        lambda c, led: [])
 
     jobs = []
     monkeypatch.setattr(builder, "build_one", lambda *a, **k: jobs.append("build")
@@ -1348,7 +1349,6 @@ def test_a_pass_syncs_once_not_twice(monkeypatch, make_settings, tmp_path):
     SECOND Book and ran a SECOND full sync of the same workbook. Every pass
     paid for two, and the decision `_show` had just published was computed
     against the state before the second one mutated it (2026-08-29)."""
-    from geelark_farm import builder
 
     settings = make_settings(state_dir=tmp_path, warm_stock=3)
     recorder = Recorder(warm=1, free=10).install(monkeypatch)
@@ -1480,7 +1480,7 @@ def test_the_reap_refuses_while_batches_are_out(monkeypatch, make_settings,
     _with_board(monkeypatch, board, None)
     reaped = []
     monkeypatch.setattr(serve_mod.phones, "reap",
-                        lambda c, l: reaped.append(1) or 0)
+                        lambda c, led: reaped.append(1) or 0)
     flight = serve_mod.InFlight()
     flight.took_on(builds=2, finishes=0)
 
@@ -1499,7 +1499,7 @@ def test_the_reap_runs_when_nothing_is_out(monkeypatch, make_settings,
     _with_board(monkeypatch, board, None)
     reaped = []
     monkeypatch.setattr(serve_mod.phones, "reap",
-                        lambda c, l: reaped.append(1) or 0)
+                        lambda c, led: reaped.append(1) or 0)
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
                    flight=serve_mod.InFlight(), pool=Pool())
@@ -1583,3 +1583,105 @@ def test_a_stopped_pass_does_not_claim_to_have_read_the_new_numbers(
 
     assert "not read" in board.shown["Unusable rows"]
     assert "not read" in board.shown["Phones not in the sheet"]
+
+
+# ------------------------------------------------------------- the drain
+class _DrainConn:
+    """connect() as the drain sees it: a context manager and nothing else -
+    take_batch and finish are patched, so nobody executes SQL here."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+
+def _drain_world(monkeypatch, batch):
+    """Wire a fake store under _drain_actions and record what finish saw."""
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.db as db_mod
+
+    monkeypatch.setattr(db_mod, "connect", lambda s: _DrainConn())
+    monkeypatch.setattr(actions_mod, "take_batch",
+                        lambda conn, *, controls_only: list(batch))
+    finished = []
+    monkeypatch.setattr(
+        actions_mod, "finish",
+        lambda conn, aid, *, status, result, detail=None:
+        finished.append((aid, status, result)))
+    return finished
+
+
+def test_the_drain_never_wakes_while_either_flag_is_off(monkeypatch,
+                                                        make_settings):
+    """Dark deploy in one assertion: store on or mutations on alone is not
+    enough, and the gate sits before the first store import."""
+    import geelark_farm.store.db as db_mod
+
+    calls = []
+    monkeypatch.setattr(db_mod, "connect",
+                        lambda s: calls.append(s) or _DrainConn())
+    for flags in ({"store_enabled": False, "web_mutations": True},
+                  {"store_enabled": True, "web_mutations": False}):
+        settings = make_settings(**flags)
+        assert serve_mod._drain_actions(settings, None, None,
+                                        controls_only=False) == 0
+    assert calls == [], "a switched-off drain touched the cluster"
+
+
+def test_the_drain_runs_a_noop_and_records_done(monkeypatch, make_settings):
+    finished = _drain_world(monkeypatch, [
+        {"id": 1, "verb": "noop", "payload": {}, "requested_by": 7}])
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    did = serve_mod._drain_actions(settings, None, None, controls_only=False)
+
+    assert did == 1
+    assert finished == [(1, "done", "did nothing, successfully")]
+
+
+def test_an_unknown_verb_is_refused_not_crashed(monkeypatch, make_settings):
+    """Rows can outlive a rename; the queue answers them, never chokes."""
+    finished = _drain_world(monkeypatch, [
+        {"id": 3, "verb": "explode_the_moon", "payload": {},
+         "requested_by": 7}])
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    serve_mod._drain_actions(settings, None, None, controls_only=False)
+
+    assert finished == [(3, "refused", "unknown verb: explode_the_moon")]
+
+
+def test_a_handler_that_raises_costs_its_row_not_the_pass(monkeypatch,
+                                                          make_settings,
+                                                          caplog):
+    finished = _drain_world(monkeypatch, [
+        {"id": 4, "verb": "boom", "payload": {}, "requested_by": 7},
+        {"id": 5, "verb": "noop", "payload": {}, "requested_by": 7}])
+    monkeypatch.setitem(
+        serve_mod.ACTION_VERBS, "boom",
+        lambda *a: (_ for _ in ()).throw(RuntimeError("kaput")))
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    did = serve_mod._drain_actions(settings, None, None, controls_only=False)
+
+    assert did == 2, "the row after the broken one still ran"
+    assert finished[0][1] == "failed" and "program error" in finished[0][2]
+    assert finished[1] == (5, "done", "did nothing, successfully")
+
+
+def test_the_two_drain_positions_hold_their_signed_ground():
+    """Signed 2026-09-01: control verbs drain ABOVE the Stop-everything
+    check, because a stopped pass must still obey "start again from the
+    web"; every other verb drains BELOW it, because a stopped service must
+    not delete phones. This pins the order in once() itself."""
+    import pathlib
+
+    src = pathlib.Path("src/geelark_farm/serve.py").read_text(
+        encoding="utf-8")
+    controls = src.index("controls_only=True)")
+    asked = src.index("asked = _controls(")
+    main = src.index("controls_only=False)")
+    shadow = src.index("_shadow(settings, book, decision, outcome)")
+    assert controls < asked < main < shadow

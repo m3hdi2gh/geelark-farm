@@ -9,6 +9,7 @@ on a machine that has never seen the cluster.
 from __future__ import annotations
 
 import http.client
+import re
 import threading
 
 import pytest
@@ -38,8 +39,11 @@ class FakeStore:
 
 
 @pytest.fixture
-def web(monkeypatch, make_settings):
-    """A live server on an ephemeral port, faked reads, torn down after."""
+def web(request, monkeypatch, make_settings):
+    """A live server on an ephemeral port, faked reads, torn down after.
+
+    Indirect parametrization with True turns web_mutations on for tests
+    of the action verbs; everyone else gets the read-only default."""
     monkeypatch.setattr("geelark_farm.store.db.Store", FakeStore)
     monkeypatch.setattr(app_mod.read, "snapshot",
                         lambda s, owner_id=None: {
@@ -61,17 +65,19 @@ def web(monkeypatch, make_settings):
     monkeypatch.setattr(app_mod, "_sessions", {})
     monkeypatch.setattr(app_mod, "_failures", {})
 
-    settings = make_settings(store_enabled=True, web_enabled=True, web_port=0)
+    settings = make_settings(store_enabled=True, web_enabled=True, web_port=0,
+                             web_mutations=getattr(request, "param", False))
     server = app_mod.start(settings)
     port = server.server_address[1]
 
     class Client:
         def __init__(self):
             self.cookie = ""
+            self.port = port
 
-        def request(self, method, path, body=None):
+        def request(self, method, path, body=None, headers=None):
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            headers = {}
+            headers = dict(headers or {})
             if self.cookie:
                 headers["Cookie"] = self.cookie
             if body is not None:
@@ -89,6 +95,12 @@ def web(monkeypatch, make_settings):
             return self.request(
                 "POST", "/login",
                 f"username={username}&password={password}")
+
+        def csrf(self):
+            """The token as a browser would learn it: off the page."""
+            _, _, body = self.request("GET", "/")
+            hit = re.search(r'name="csrf" value="([^"]*)"', body)
+            return hit.group(1) if hit else ""
 
     try:
         yield Client
@@ -111,7 +123,7 @@ def test_a_good_login_sets_a_cookie_and_opens_the_dashboard(web):
     assert client.cookie.startswith("gf=")
 
     status, _, body = client.request("GET", "/")
-    assert status == 200 and "داشبورد" in body
+    assert status == 200 and "Dashboard" in body
 
 
 def test_wrong_name_and_wrong_password_read_identically(web):
@@ -152,12 +164,116 @@ def test_an_own_scoped_user_is_kept_out_of_the_farm_pages(web, monkeypatch):
     assert status == 403
 
 
-def test_logout_ends_the_session_for_real(web):
+def test_logout_needs_the_token_and_then_works(web):
+    """CSRF in one story: a bare POST bounces and costs nothing, and the
+    same POST with the page's own token ends the session for real."""
     client = web()
     client.login()
-    client.request("POST", "/logout")
+    status, _, _ = client.request("POST", "/logout", "x=1")
+    assert status == 403
+    status, _, _ = client.request("GET", "/")
+    assert status == 200, "the refused POST killed the session"
+
+    status, _, _ = client.request("POST", "/logout",
+                                  f"csrf={client.csrf()}")
+    assert status == 303
     status, headers, _ = client.request("GET", "/")
     assert status == 303 and dict(headers)["Location"] == "/login"
+
+
+def test_a_token_from_another_session_buys_nothing(web):
+    """Per-session tokens: knowing your own is not knowing anyone's."""
+    alice, bob = web(), web()
+    alice.login()
+    bob.login()
+    status, _, _ = bob.request("POST", "/logout", f"csrf={alice.csrf()}")
+    assert status == 403
+
+
+def test_a_foreign_origin_is_refused_even_with_the_token(web):
+    client = web()
+    client.login()
+    token = client.csrf()
+    status, _, _ = client.request(
+        "POST", "/logout", f"csrf={token}",
+        headers={"Origin": "https://evil.example"})
+    assert status == 403
+    # and the browser's own origin passes - the check is a filter, not a wall
+    status, _, _ = client.request(
+        "POST", "/logout", f"csrf={token}",
+        headers={"Origin": f"http://127.0.0.1:{client.port}"})
+    assert status == 303
+
+
+def test_cancel_is_shut_while_the_mutations_flag_is_off(web):
+    """Stage 3's promise survives stage 5: with the flag off, the web can
+    still not change anything, token or no token."""
+    client = web()
+    client.login()
+    status, _, body = client.request("POST", "/requests/5/cancel",
+                                     f"csrf={client.csrf()}")
+    assert status == 403 and "not switched on" in body
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_cancel_reaches_the_store_and_says_what_happened(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+
+    def fake_cancel(settings, *, action_id, user_id, is_admin):
+        got.update(action_id=action_id, user_id=user_id, is_admin=is_admin)
+        return "cancelled"
+
+    monkeypatch.setattr(actions_mod, "cancel", fake_cancel)
+    client = web()
+    client.login()
+    status, headers, _ = client.request("POST", "/requests/5/cancel",
+                                        f"csrf={client.csrf()}")
+    assert status == 303
+    assert dict(headers)["Location"] == "/requests?said=cancelled"
+    assert got == {"action_id": 5, "user_id": 7, "is_admin": True}
+
+
+def test_requests_page_offers_undo_only_while_queued(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    rows = [
+        {"id": 2, "verb": "noop", "payload": {}, "status": "queued",
+         "result": "", "requested_at": "2026-09-01 10:00:00+00",
+         "executed_at": None, "requested_by": "mehdi"},
+        {"id": 1, "verb": "noop", "payload": {}, "status": "done",
+         "result": "did nothing, successfully",
+         "requested_at": "2026-09-01 09:00:00+00",
+         "executed_at": "2026-09-01 09:00:30+00", "requested_by": "mehdi"},
+    ]
+    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: list(rows))
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/requests")
+    assert status == 200
+    assert body.count("/cancel") == 1, "undo offered off the queued row"
+    assert "badge queued" in body and "badge done" in body
+    assert 'http-equiv="refresh"' in body, "a pending list must follow itself"
+
+    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: rows[1:])
+    _, _, body = client.request("GET", "/requests")
+    assert 'http-equiv="refresh"' not in body, "a settled list sits still"
+    assert "/cancel" not in body
+
+
+def test_the_said_banner_speaks_only_known_words(web, monkeypatch):
+    """?said= comes off the address bar, which is user input like any
+    other: known tokens get their sentence, anything else gets silence."""
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: [])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/requests?said=cancelled")
+    assert "Cancelled - it never ran." in body
+    _, _, body = client.request("GET", "/requests?said=whatever")
+    assert 'class="said"' not in body
 
 
 def test_the_web_is_never_imported_with_the_flag_off(monkeypatch,
