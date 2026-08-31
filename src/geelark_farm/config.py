@@ -294,6 +294,13 @@ class Settings:
     store_user: str = "gfarm"
     store_password: str = field(repr=False, default="")
 
+    #: The read-only web UI (stage 3). Same flag rule as the store: off by
+    #: default, and `serve` imports the web package only inside the check.
+    web_enabled: bool = False
+    #: Loopback-published; the only way in from outside the box is an SSH
+    #: tunnel until the domain lands at stage 7.
+    web_port: int = 8787
+
 
     @classmethod
     def load(cls) -> Settings:
@@ -331,6 +338,9 @@ class Settings:
             log_level=_str("LOG_LEVEL", "INFO").upper(),
             store_enabled=_str("STORE_ENABLED", "0").strip()
                           in ("1", "true", "yes", "on"),
+            web_enabled=_str("WEB_ENABLED", "0").strip()
+                        in ("1", "true", "yes", "on"),
+            web_port=_int("WEB_PORT", 8787),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

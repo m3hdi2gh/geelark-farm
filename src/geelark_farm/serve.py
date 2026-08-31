@@ -993,6 +993,14 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         builder.set_event_sink(
             lambda kind, **kw: store_events.emit(settings, kind, **kw))
 
+    if settings.web_enabled:
+        # Loopback-only, read-only, daemon: it dies with the process and
+        # holds nothing that must survive - sessions cost a re-login after
+        # the Watchdog's os._exit, and that is the whole loss.
+        from . import web
+
+        web.start(settings)
+
     log.info("serving: %d warm phones, a pass every %ds, claims go stale "
              "after %ds", settings.warm_stock,
              settings.serve_interval_seconds, settings.stale_claim_seconds)
