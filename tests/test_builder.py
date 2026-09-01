@@ -3365,7 +3365,10 @@ def test_a_hand_over_with_no_account_is_recorded_as_one():
     assert "No app account was ever on it" in source
     # Three branches, not the two that said the same thing either way.
     assert source.count("Marked done and deleted") == 2
-    assert 'elif row["app_account"]:' in source
+    # ...and the branch turns on the account actually found, not on the
+    # Phones cell alone - the cell went blank once and the note lied
+    # (2026-09-01, phone 1542).
+    assert "elif carried:" in source
 
 
 def test_an_app_only_phone_is_described_as_finished_not_failed():
@@ -3737,3 +3740,71 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
 
     assert out is not None and out.status == "app_session_unverified"
     assert session.suspect_reason == "session_unverified"
+
+
+def test_a_done_phone_whose_cell_lost_the_account_still_delivers_it(
+        monkeypatch):
+    """The Phones row is not the only record of what a phone is carrying.
+
+    Phone 1542 was signed into at 23:13 and marked `done` three hours later
+    with its `GPT Account` cell empty. The delivery went unrecorded, so the
+    account was neither delivered nor freed and sat holding a phone that no
+    longer existed. The Gpt Info row knew all along - it keeps its own
+    serial - so that is asked when the cell is blank (2026-09-01).
+    """
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "g@example.com", "app_account": ""}], apps=1)
+    book.apps.spend(book.apps.claim(), serial="650")     # as the finish left it
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["delivered"] == ["a0@example.com"]
+    assert book.apps._rows[0].values["Status"] == "delivered"
+    assert book.apps._rows[0].values["Phone Serial"] == ""
+    # and History says what really happened, not "no app account was ever on it"
+    written = " ".join(book.history._ws.rows[-1])
+    assert "delivered with it" in written and "a0@example.com" in written
+
+
+def test_a_failed_phone_whose_cell_lost_the_account_still_frees_it(monkeypatch):
+    """The same hole, the other way round: a lost cell must not strand an
+    account that never got a fair phone either."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 5, "state": "failed", "serial": "650",
+                        "gmail": "", "app_account": ""}], apps=1)
+    book.apps.spend(book.apps.claim(), serial="650")
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["freed"] == ["a0@example.com"]
+    assert [r.credentials.email for r in book.apps.available] == \
+        ["a0@example.com"]
+
+
+def test_a_row_that_only_remembers_the_serial_is_not_called_a_delivery(
+        monkeypatch):
+    """The guard on the fallback. A `delivered` row has been settled once
+    already and a blank one is stock that happens to remember the phone it
+    was last on - taking either would be inventing a delivery rather than
+    finding one, and `delivered` is not reversible."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "650", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
+                        "gmail": "", "app_account": ""}], apps=2)
+    settled, stock = book.apps._rows
+    book.apps.retire(settled, note="went out yesterday")
+    settled.values["Phone Serial"] = "650"          # a serial it still recalls
+    stock.values["Phone Serial"] = "650"            # never blanked when freed
+
+    out = builder.apply_phone_states(None, book, FakeLedger())
+
+    assert out["delivered"] == [] and out["freed"] == []
+    assert stock.values["Status"] == ""             # still stock
+    written = " ".join(book.history._ws.rows[-1])
+    assert "No app account was ever on it" in written

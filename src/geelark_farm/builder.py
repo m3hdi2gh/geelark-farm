@@ -1773,6 +1773,36 @@ def _this_module():
     return sys.modules[__name__]
 
 
+def _account_on(book: Book, serial: str, named: str) -> Resource | None:
+    """The app account this phone is carrying, asking both records.
+
+    The Phones row's `GPT Account` cell is the first answer and the usual
+    one. When it is blank the Gpt Info tab is asked whether any row is still
+    standing on this phone, because that tab keeps its own serial - and the
+    two disagreed once. Phone 1542 was signed in at 23:13 and marked `done`
+    three hours later with that cell empty, so the delivery went unrecorded:
+    the account was neither delivered nor freed, and sat holding a phone that
+    no longer existed while every pass warned about it (2026-09-01).
+
+    Only a row the pool calls spent counts. A `delivered` row has been
+    settled already, and a blank one is stock that happens to remember the
+    serial it was last on - taking either would be this inventing a delivery
+    rather than finding one.
+    """
+    if named:
+        return book.apps.find(named)
+    column = book.apps.serial_column
+    if not column:
+        return None
+    wanted = str(serial).strip()
+    for resource in book.apps._rows:
+        if (resource.values.get(column) or "").strip() != wanted:
+            continue
+        if book.apps.status_of(resource) == book.apps.spent_status:
+            return resource
+    return None
+
+
 def _settle_before_deleting(client: Client, phone_id: str, serial: str,
                             timeout: float = 90) -> bool:
     """Stop a phone and wait for it to say so. False if it will not.
@@ -1877,23 +1907,24 @@ def apply_phone_states(client: Client, book: Book,
                                   f"out of the pool from now on.")
                 outcome["retired"].append(row["gmail"])
 
-        if row["app_account"]:
-            account = book.apps.find(row["app_account"])
-            if account is not None and failed:
+        account = _account_on(book, serial, row["app_account"])
+        carried = account.label if account is not None else ""
+        if account is not None:
+            if failed:
                 # It never got a fair phone. Back to the pool, so the next
                 # build can put it on one that works.
                 book.apps.release(
                     account, note=f"Phone {serial} was marked failed and "
                                   f"deleted before this account got a fair "
                                   f"run. Free to try on another phone.")
-                outcome["freed"].append(row["app_account"])
-            elif account is not None:
+                outcome["freed"].append(carried)
+            else:
                 # `done` means the phone was the product and it has been
                 # handed over. The account went with it.
                 book.apps.retire(
                     account, note=f"Delivered on phone {serial}, which was marked "
                                   f"done and handed over.")
-                outcome["delivered"].append(row["app_account"])
+                outcome["delivered"].append(carried)
 
         if present:
             try:
@@ -1914,7 +1945,7 @@ def apply_phone_states(client: Client, book: Book,
         if failed:
             note = ("Marked failed and deleted; its app account went back to "
                     "the pool for another phone.")
-        elif row["app_account"]:
+        elif carried:
             note = "Marked done and deleted; its app account was delivered with it."
         else:
             note = ("Marked done and deleted. No app account was ever on it - "
@@ -1922,7 +1953,7 @@ def apply_phone_states(client: Client, book: Book,
                     "themselves.")
         book.record_history(
             Serial=serial, Event=row["state"], Gmail=row["gmail"], Note=note,
-            **{"GPT Account": row["app_account"]})
+            **{"GPT Account": carried})
 
     # Only now, and bottom up: the row numbers were read before any moved.
     book.phones.delete_rows(finished_rows)
