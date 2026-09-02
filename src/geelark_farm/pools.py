@@ -83,6 +83,11 @@ AVAILABLE = frozenset({""})
 
 # What a resource's Status becomes when the build it served succeeded.
 SPENT = "ready"
+#: What the Importer writes into a sheet stock row once the store holds it
+#: (C2). Not in any pool's available_statuses, so a sheet pool never hands
+#: out a row the store already owns. Spelled here rather than imported from
+#: the store package, which this module may not import at module level.
+IMPORTED = "imported"
 
 #: How much of a note any tab keeps. One number, because the Phones tab, the
 #: History tab and a resource row are read beside each other, and a sentence
@@ -111,6 +116,10 @@ class Resource:
     credentials: Credentials | None = None
     proxy: Proxy | None = None
     error: str | None = None
+    #: The store's id when the row lives in Postgres (store.pgpool); None
+    #: for a row read off a tab. `sheet_row` stays what it was - the
+    #: sheet's ordering contract - and is 0 for a row born in the store.
+    store_id: int | None = None
 
     @property
     def name(self) -> str:
@@ -1824,11 +1833,16 @@ class Book:
     def __init__(self, gmails: GmailPool, proxies: ProxyPool, apps: AppPool,
                  phones: PhoneLog, lists=None, history: HistoryLog | None = None,
                  lock: threading.Lock | None = None,
-                 service: ServiceBoard | None = None):
+                 service: ServiceBoard | None = None,
+                 sheet_pools: tuple = ()):
         self.gmails = gmails
         self.proxies = proxies
         self.apps = apps
         self.phones = phones
+        #: With the pools in Postgres (C2), the sheet's three stock tabs are
+        #: still read - as the input funnel the Importer drains each pass.
+        #: Empty while the tabs ARE the pools.
+        self.sheet_pools = sheet_pools
         # Only sync_lists needs these, and only when a real workbook is open.
         self._lists = lists
         self.history = history
@@ -1946,27 +1960,45 @@ class Book:
         except Exception as exc:                                  # noqa: BLE001
             log.warning("no %s tab this session (%s)", SERVICE_TAB, exc)
 
+        sheet_gmails = GmailPool(tabs[GMAILS_TAB],
+                                 ensure_columns(tabs[GMAILS_TAB],
+                                                GmailPool.claimed_at_column),
+                                 lock)
+        sheet_proxies = ProxyPool(tabs[PROXY_TAB],
+                                  ensure_columns(tabs[PROXY_TAB],
+                                                 ProxyPool.uses_column,
+                                                 ProxyPool.last_used_column),
+                                  lock)
+        sheet_apps = AppPool(tabs[APPS_TAB],
+                             ensure_columns(
+                                 tabs[APPS_TAB], AppPool.claimed_at_column,
+                                 AppPool.EMAIL_CODE_COLUMN,
+                                 checkboxes=(AppPool.EMAIL_CODE_COLUMN,)),
+                             lock)
+        gmails, proxies, apps = sheet_gmails, sheet_proxies, sheet_apps
+        sheet_pools: tuple = ()
+        if settings.pools_in_pg:
+            # The switch of C2. The import stays inside the flag, like every
+            # store import in this package: a box that never opted in never
+            # executes a line of it (pinned by an AST test).
+            settings.require_store()
+            from .store.pgpool import PgAppPool, PgGmailPool, PgProxyPool, ResourceTable
+
+            table = ResourceTable(settings)
+            gmails, proxies, apps = (PgGmailPool(table), PgProxyPool(table),
+                                     PgAppPool(table))
+            sheet_pools = (sheet_gmails, sheet_proxies, sheet_apps)
+
         pools = cls(
-            gmails=GmailPool(tabs[GMAILS_TAB],
-                             ensure_columns(tabs[GMAILS_TAB],
-                                            GmailPool.claimed_at_column), lock),
-            proxies=ProxyPool(tabs[PROXY_TAB],
-                              ensure_columns(tabs[PROXY_TAB],
-                                             ProxyPool.uses_column,
-                                             ProxyPool.last_used_column), lock),
-            apps=AppPool(tabs[APPS_TAB],
-                         ensure_columns(
-                             tabs[APPS_TAB], AppPool.claimed_at_column,
-                             AppPool.EMAIL_CODE_COLUMN,
-                             checkboxes=(AppPool.EMAIL_CODE_COLUMN,)), lock),
+            gmails=gmails, proxies=proxies, apps=apps,
             phones=PhoneLog(tabs[PHONES_TAB],
                             ensure_columns(tabs[PHONES_TAB],
                                            PhoneLog.APP_COLUMN,
                                            PhoneLog.TRIES_COLUMN), lock),
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,
-            service=service,
+            service=service, sheet_pools=sheet_pools,
         )
-        for pool in (pools.gmails, pools.proxies, pools.apps):
+        for pool in (pools.gmails, pools.proxies, pools.apps, *sheet_pools):
             pool.load()
         return pools
 
@@ -1997,19 +2029,22 @@ class Book:
                           if failures.verdict(r).costs_the_credential
                           or failures.verdict(r).sets_aside)
 
+        # `imported` is what the Importer writes into a stock row once the
+        # store has it (C2) - offered here so the dropdown does not flag the
+        # very word the program wrote.
         wanted = {
             "Gmail Statuses": [GmailPool.claimed_status, GmailPool.spent_status,
-                               GmailPool.retired_status,
+                               GmailPool.retired_status, IMPORTED,
                                *credential_reasons(google_login)],
             "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
-                             AppPool.retired_status,
+                             AppPool.retired_status, IMPORTED,
                              *credential_reasons(chatgpt_login)],
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
                                ProxyPool.spent_status,
                                ProxyPool.needs_new_ip,
-                               ProxyPool.dead_status],
+                               ProxyPool.dead_status, IMPORTED],
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.
             "Phone Statuses": builder.possible_statuses(),

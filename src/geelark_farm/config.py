@@ -316,6 +316,12 @@ class Settings:
     #: exist; the six permissions are still read by `users.may`, they just
     #: cannot be changed from the web.
     web_user_admin: bool = False
+    #: C2: the three pools live in Postgres. Off, every pool is a sheet tab
+    #: exactly as before. On, a Book opens its Gmails / Proxy / Gpt Info
+    #: from the resources table, claims are one atomic statement, and the
+    #: sheet's three tabs become an input funnel the Importer drains each
+    #: pass. Needs the store settings; refused at Book.open otherwise.
+    pools_in_pg: bool = False
 
 
     @classmethod
@@ -362,6 +368,8 @@ class Settings:
                           in ("1", "true", "yes", "on"),
             web_user_admin=_str("WEB_USER_ADMIN", "0").strip()
                            in ("1", "true", "yes", "on"),
+            pools_in_pg=_str("POOLS_IN_PG", "0").strip()
+                        in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

@@ -387,6 +387,24 @@ def _drain_actions(settings: Settings, book: Book, ledger,
     return done
 
 
+def _import_from_sheet(settings: Settings, book: Book) -> None:
+    """With the pools in the store (C2), drain the sheet's fresh rows into
+    it before the pass reads its stock - so a row pasted a minute ago is
+    stock this pass, not next. Never fatal: an import that fails leaves the
+    rows in the sheet, blank, to be taken next pass."""
+    if not settings.pools_in_pg or not book.sheet_pools:
+        return
+    try:
+        from .store import importer as store_importer
+        from .store.pgpool import ResourceTable
+
+        store_importer.pull(book.sheet_pools, ResourceTable(settings))
+        book.reload()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the sheet import did not run this pass (%s); fresh "
+                    "rows stay in the sheet until the next one", exc)
+
+
 def _shadow(settings: Settings, book: Book, decision: Decision,
             outcome: dict) -> None:
     """Mirror this pass into the store, and say what the pass did.
@@ -411,7 +429,8 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
         from .store import shadow as store_shadow
 
         with store_db.connect(settings) as conn:
-            did = store_shadow.write_shadow(conn, book)
+            did = store_shadow.write_shadow(
+                conn, book, resources=not settings.pools_in_pg)
         acted = {k: v for k, v in (outcome or {}).items() if v}
         if decision.jobs or acted or did["closed"]:
             store_events.emit(
@@ -890,6 +909,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         return decision
 
     paused = "Pause building" in asked
+    _import_from_sheet(settings, book)
     outcome = builder.sync_sheet(client, book, ledger,
                                  probe_proxies=probe_proxies,
                                  artifact_dir=settings.artifact_dir,

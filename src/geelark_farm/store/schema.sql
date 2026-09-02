@@ -238,3 +238,17 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS may_take_phones      boolean NOT NULL
 -- the first thing this person does after signing in is choose their own.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at        timestamptz;
+
+-- --------------------------------------------------- resources, rev 5 (C2)
+-- The columns the sheet pools kept beside a row and the mirror never
+-- carried, needed the day this table becomes the pool itself rather than
+-- a picture of one. Text where the sheet held free text (a purchase date
+-- typed by a person is not a DATE), timestamptz where the program stamps.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS claimed_at   timestamptz;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS used_at      text NOT NULL DEFAULT '';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS purchased_on text NOT NULL DEFAULT '';
+-- Where a row came from: the sheet funnel, the customer panel, or a person
+-- typing it into the web (added_by names them). 'sheet' for everything
+-- that predates the question.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS source       text NOT NULL DEFAULT 'sheet';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS added_by     bigint REFERENCES users(id);

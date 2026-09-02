@@ -32,17 +32,22 @@ log = logging.getLogger(__name__)
 _APP_MARKS = {"✓": True, "✗": False}
 
 
-def write_shadow(conn, book) -> dict:
+def write_shadow(conn, book, *, resources: bool = True) -> dict:
     """One pass's mirror, in one transaction. Returns what it did, for the
     pass event. Raises to the caller, who treats the store like the board:
-    never fatal to the pass."""
+    never fatal to the pass.
+
+    `resources=False` once the pools live in the store (C2): the table is
+    the pool then, and mirroring the sheet's stale picture over it would
+    un-claim every row a build is holding, thirty seconds at a time."""
     did = {"resources": 0, "phones": 0, "closed": 0}
     with conn.cursor() as cur:
-        for pool, kind in ((book.gmails, "gmail"), (book.proxies, "proxy"),
-                           (book.apps, "app")):
-            for row in pool._rows:
-                _upsert_resource(cur, kind, pool, row)
-                did["resources"] += 1
+        if resources:
+            for pool, kind in ((book.gmails, "gmail"),
+                               (book.proxies, "proxy"), (book.apps, "app")):
+                for row in pool._rows:
+                    _upsert_resource(cur, kind, pool, row)
+                    did["resources"] += 1
         live = _upsert_phones(cur, book)
         did["phones"] = len(live)
         cur.execute(
@@ -58,23 +63,42 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
     status = (values.get(pool.status_column) or "").strip()
     note = (values.get(pool.note_column) or "").strip()
     error = str(row.error) if row.error else None
+    # The columns the pools keep beside a row - claim stamp, use count, the
+    # serial an exit carries, the dates - ride along too, so the last mirror
+    # before the C2 switch leaves the table holding everything the tab did.
+    claimed_at = _when(values.get(pool.claimed_at_column)
+                       if pool.claimed_at_column else "")
     if kind == "proxy":
         proxy = row.proxy
         if proxy is None:
             return                     # an unparseable row has no identity
+        try:
+            times_used = int((values.get("Times Used") or "0").strip() or 0)
+        except ValueError:
+            # The same reading ProxyPool._uses makes: a note typed into the
+            # count column is "never used", not a failed mirror.
+            log.warning("Proxy row %s: Times Used %r is not a number; "
+                        "mirrored as 0", row.sheet_row,
+                        values.get("Times Used"))
+            times_used = 0
         cur.execute(
             "INSERT INTO resources (kind, sheet_row, status, host, port,"
-            " username, proxy_pass, proxy_name, last_exit_ip, note, error)"
-            " VALUES ('proxy', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " username, proxy_pass, proxy_name, last_exit_ip, note, error,"
+            " serial, times_used, claimed_at)"
+            " VALUES ('proxy', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+            " %s, %s, %s)"
             " ON CONFLICT (host, port, username) WHERE kind = 'proxy'"
             " DO UPDATE SET sheet_row = EXCLUDED.sheet_row,"
             "  status = EXCLUDED.status, proxy_name = EXCLUDED.proxy_name,"
             "  last_exit_ip = EXCLUDED.last_exit_ip, note = EXCLUDED.note,"
-            "  error = EXCLUDED.error, updated_at = now()",
+            "  error = EXCLUDED.error, serial = EXCLUDED.serial,"
+            "  times_used = EXCLUDED.times_used,"
+            "  claimed_at = EXCLUDED.claimed_at, updated_at = now()",
             (row.sheet_row, status, proxy.host, proxy.port,
              proxy.username or "", proxy.password or "",
              (values.get("Name") or "").strip(),
-             (values.get("Last Exit IP") or "").strip(), note, error))
+             (values.get("Last Exit IP") or "").strip(), note, error,
+             (values.get("Used By") or "").strip(), times_used, claimed_at))
         return
     creds = row.credentials
     address = (creds.email if creds else values.get("Address", "")).strip()
@@ -83,8 +107,8 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
     cur.execute(
         "INSERT INTO resources (kind, sheet_row, status, address, password,"
         " totp_secret, email_code_only, recovery_email, seller, serial,"
-        " note, error)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " note, error, claimed_at, used_at, purchased_on)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         " ON CONFLICT (kind, lower(address))"
         " WHERE kind IN ('gmail', 'app') AND address IS NOT NULL"
         " DO UPDATE SET sheet_row = EXCLUDED.sheet_row,"
@@ -94,14 +118,34 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
         "  recovery_email = EXCLUDED.recovery_email,"
         "  seller = EXCLUDED.seller, serial = EXCLUDED.serial,"
         "  note = EXCLUDED.note,"
-        "  error = EXCLUDED.error, updated_at = now()",
+        "  error = EXCLUDED.error, claimed_at = EXCLUDED.claimed_at,"
+        "  used_at = EXCLUDED.used_at,"
+        "  purchased_on = EXCLUDED.purchased_on, updated_at = now()",
         (kind, row.sheet_row, status, address,
          creds.password if creds else "",
          creds.totp_secret if creds else "",
          bool(creds and creds.email_code_only),
          (creds.recovery_email if creds else "") or "",
          (values.get("Seller") or "").strip(),
-         (values.get("Phone Serial") or "").strip(), note, error))
+         (values.get("Phone Serial") or "").strip(), note, error,
+         claimed_at, (values.get("Used Date") or "").strip(),
+         (values.get("Purchase Date") or "").strip()))
+
+
+def _when(stamp: str | None):
+    """A sheet claim stamp as something the timestamptz column takes, or
+    None. Both spellings the pools ever wrote - with and without the Z -
+    and anything else is 'no time recorded', never an error."""
+    import time
+
+    text = (stamp or "").strip()
+    if not text:
+        return None
+    try:
+        time.strptime(text.rstrip("Zz"), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return text.rstrip("Zz") + "+00"
 
 
 def _upsert_phones(cur, book) -> list[str]:
