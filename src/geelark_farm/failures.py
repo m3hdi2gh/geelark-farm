@@ -485,6 +485,11 @@ VERDICTS: dict[str, Verdict] = {
         "You stopped the run. The phone was stopped and every row it held "
         "went back to its pool, so nothing was lost - the phone is in the tab "
         "and can be finished."),
+    "stopped_by_hand": Verdict(
+        NOBODY, "somebody pressed Stop this one on the web",
+        "A person stopped this phone's job from the Requests page. The "
+        "phone was stopped and every row it held went back to its pool, so "
+        "nothing was lost - the phone is in the tab and can be finished."),
 }
 
 #: The reasons nothing is to blame for. Derived, so it cannot disagree with the

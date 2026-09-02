@@ -7,6 +7,8 @@ runs it, and says in a sentence what it did.
 
 from __future__ import annotations
 
+import pytest
+
 from geelark_farm import serve as serve_mod
 from geelark_farm import verbs
 from geelark_farm.web import paste
@@ -193,7 +195,7 @@ def test_login_selected_pairs_each_chosen_account_with_a_warm_phone(
             "nobody@example.com", "a3@example.com"]},
         object(), launch=launched.append)
 
-    assert status == "done"
+    assert status == "running"
     jobs = launched[0]
     assert [(j["kind"], j["phone"]["serial"], j["phone"]["account"].label)
             for j in jobs] == [("finish", "1500", "a0@example.com"),
@@ -295,3 +297,48 @@ def test_change_proxy_refuses_a_phone_a_run_is_working_on():
 
     assert status == "refused" and "worked on" in said
     assert len(book.proxies.available) == 2, "no exit was claimed"
+
+
+# ------------------------------------------------- C7: stop this one
+def test_login_selected_answers_running_with_a_line_per_phone(monkeypatch):
+    from geelark_farm import builder
+
+    book = make_book(apps=2)
+    monkeypatch.setattr(builder, "_unfinished",
+                        lambda client, book_: (_warm("1500", "1501"), []))
+
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"by": "mehdi", "addresses": [
+            "a0@example.com", "a1@example.com"]},
+        object(), launch=lambda jobs: None)
+
+    assert status == "running", "the phones are booting; the launcher settles"
+    assert detail["phones"] == [
+        {"serial": "1500", "account": "a0@example.com", "status": "booting",
+         "ok": None},
+        {"serial": "1501", "account": "a1@example.com", "status": "booting",
+         "ok": None}]
+
+
+def test_stop_this_one_reaches_the_session_at_its_next_step():
+    from geelark_farm import builder
+    from geelark_farm.builder import Build
+
+    builder.STOP_BY_HAND.clear()
+    status, said, _ = verbs.stop_phone(None, None, None, {"serial": "1549"},
+                                       None)
+    assert status == "done" and "1549" in said
+    assert "1549" in builder.STOP_BY_HAND
+
+    session = object.__new__(builder._Session)
+    session.cancelled = None
+    session.build = Build(index=1, serial="1549")
+    with pytest.raises(builder.Aborted, match="stopped_by_hand"):
+        session.check_cancelled()
+    assert "1549" not in builder.STOP_BY_HAND, "honoured once, then gone"
+
+    other = object.__new__(builder._Session)
+    other.cancelled = None
+    other.build = Build(index=2, serial="1550")
+    other.check_cancelled()                     # not named: carries on
+    assert serve_mod.ACTION_VERBS["stop_phone"] is verbs.stop_phone

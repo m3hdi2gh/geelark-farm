@@ -93,13 +93,25 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/requests":
                 from ..store import actions as store_actions
 
-                rows = store_actions.listing(
-                    self.settings, user_id=user["id"],
-                    everyone=user["role"] == "admin")
                 query = parse_qs(self.path.partition("?")[2])
-                said = (query.get("said") or [""])[0]
+                first = {k: v[0] for k, v in query.items()}
+                mine = first.get("mine") == "1"
+                everyone = user["role"] == "admin" and not mine
+                view = first.get("view", "")
+                if view not in pages.REQUEST_VIEWS:
+                    view = ""
+                rows = store_actions.listing(
+                    self.settings, user_id=user["id"], everyone=everyone,
+                    view=view)
+                try:
+                    tally = store_actions.counts(
+                        self.settings, user_id=user["id"], everyone=everyone)
+                except Exception as exc:                          # noqa: BLE001
+                    log.debug("the request pills did not count (%s)", exc)
+                    tally = {}
                 return self._html(200, pages.requests_page(
-                    rows, user, said=said))
+                    rows, user, said=first.get("said", ""), counts=tally,
+                    view=view, mine=mine))
             if path == "/needs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -186,6 +198,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._pool_post(user, field)
             if self.path == "/accounts/login":
                 return self._login_accounts(user, form.get("addresses") or [])
+            if self.path.startswith("/requests/") and \
+                    self.path.endswith("/retry"):
+                return self._retry_action(user)
+            if self.path.startswith("/phones/") and \
+                    self.path.endswith("/stop"):
+                serial = self.path[len("/phones/"):-len("/stop")]
+                return self._act(user, "may_login_accounts", "stop_phone",
+                                 {"serial": serial},
+                                 idem=self._minute_key(user, "stop", serial),
+                                 back="/requests")
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/proxy"):
                 serial = self.path[len("/phones/"):-len("/proxy")]
@@ -221,6 +243,21 @@ class _Handler(BaseHTTPRequestHandler):
                                    user_id=user["id"],
                                    is_admin=user["role"] == "admin")
         self._redirect(f"/requests?said={got}")
+
+    def _retry_action(self, user: dict) -> None:
+        """A failed command, queued again as a new row (C7)."""
+        if not self.settings.web_mutations:
+            return self._html(403, pages.page(
+                "Disabled", "<h2>Actions are not switched on yet</h2>",
+                user=user))
+        from ..store import actions as store_actions
+
+        action_id = int(self.path.split("/")[2])
+        got = store_actions.retry(self.settings, action_id=action_id,
+                                  user_id=user["id"],
+                                  is_admin=user["role"] == "admin")
+        self._redirect(f"/requests?said="
+                       f"{'queued' if isinstance(got, int) else got}")
 
     # -------------------------------------------------------------- pools
     def _act(self, user: dict, permission: str, verb: str, payload: dict,

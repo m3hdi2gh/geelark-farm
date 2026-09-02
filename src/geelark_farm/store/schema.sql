@@ -263,3 +263,9 @@ CREATE TABLE IF NOT EXISTS service_state (
     value      jsonb NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- --------------------------------------------------- actions, rev 7 (C7)
+-- When a command settled. `executed_at` is when a pass took it; a command
+-- that starts phone work stays `running` for minutes after that, and the
+-- Requests page wants "how long did it take", which is this minus that.
+ALTER TABLE actions ADD COLUMN IF NOT EXISTS finished_at timestamptz;

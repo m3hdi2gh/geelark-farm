@@ -12,6 +12,7 @@ them, so the page and the tab never disagree about a word.
 
 from __future__ import annotations
 
+import datetime
 import time
 from html import escape as esc
 
@@ -484,49 +485,235 @@ _SAID = {
     "queued": "Queued - the next pass (within ~30s) will run it.",
     "cancelled": "Cancelled - it never ran.",
     "too_late": "Too late - a pass had already taken it; see its row below.",
-    "not_yours": "That request is not yours to cancel.",
+    "not_yours": "That request is not yours to touch.",
+    "not_failed": "Only a failed request can be retried.",
+    "refused": "You may not do that - ask an admin for the permission.",
 }
 
+#: The pills above the list, in order. "" is everything.
+REQUEST_VIEWS = ("", "running", "queued", "failed")
 
-def requests_page(rows: list[dict], user: dict, said: str = "") -> str:
-    """The queue, newest first: what was asked, by whom, what became of it.
+_PENDING = ("queued", "awaiting_confirm", "running")
 
-    Refreshes itself only while something is pending - a settled list
-    sitting still is the signal that nothing is owed."""
-    body = ""
-    note = _SAID.get(said, "")
-    if note:
-        body += f'<p class="said">{esc(note)}</p>'
-    head = ("<tr><th>#</th><th>Verb</th><th>Status</th><th>Result</th>"
-            "<th>By</th><th>Asked</th><th></th></tr>")
+
+def _local(address: str) -> str:
+    return str(address or "").split("@")[0]
+
+
+def _plural(n: int, one: str, many: str = "") -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def describe(verb: str, payload: dict) -> tuple[str, str]:
+    """A command in the words a person would say it: (head, aside).
+
+    The head is what was asked; the aside is who or what it was about,
+    shown dimmer. Every verb the buttons queue has a line here; anything
+    else reads as its verb, which is still better than a JSON blob."""
+    p = payload or {}
+    rows = p.get("rows") or []
+    if verb == "login_accounts":
+        who = [_local(a) for a in (p.get("addresses") or [])]
+        return _plural(len(who), "account").replace(
+            str(len(who)), f"Log in {len(who)}", 1), ", ".join(who)
+    if verb == "change_proxy":
+        return f"Change proxy on {p.get('serial', '?')}", ""
+    if verb == "stop_phone":
+        return f"Stop phone {p.get('serial', '?')}", ""
+    if verb == "add_gmails":
+        seller = p.get("seller") or ""
+        return (f"Add {_plural(len(rows), 'gmail')}",
+                f"seller {seller}" if seller else "")
+    if verb == "add_proxies":
+        return f"Add {_plural(len(rows), 'proxy', 'proxies')}", ""
+    if verb == "add_gpt":
+        return "Add GPT account", ", ".join(r.get("address", "")
+                                           for r in rows)
+    if verb == "adopt_proxy":
+        return "Adopt proxy", f"{p.get('host', '')}:{p.get('port', '')}"
+    if verb == "offer_again":
+        return "Offer again", p.get("address", "")
+    if verb == "mark_proxy_free":
+        return f"Mark {p.get('name', '?')} free", "IP changed at the vendor"
+    if verb == "test_proxy":
+        return f"Test {p.get('name', '?')}", ""
+    if verb == "test_all_proxies":
+        return "Test all proxies", ""
+    if verb == "remove_proxy":
+        return f"Remove {p.get('name', '?')}", "from the pool"
+    if verb == "control":
+        return str(p.get("what") or "Control"), ""
+    return verb.replace("_", " ").capitalize(), ""
+
+
+def _targets(verb: str, payload: dict, detail: dict | None = None) -> dict:
+    """What a command holds while it runs: {thing: kind}. Two commands
+    that share one are serialised by the pass, and the queued one says
+    which row it waits for. The phones a login was paired with live in
+    the detail, not the payload - so both are read."""
+    p = dict(payload or {})
+    if isinstance(detail, dict) and detail.get("phones"):
+        p["phones"] = detail["phones"]
+    held = {}
+    if p.get("serial"):
+        held[str(p["serial"])] = "phone"
+    for a in p.get("addresses") or []:
+        held[str(a).lower()] = "account"
+    if p.get("address"):
+        held[str(p["address"]).lower()] = "account"
+    if p.get("name"):
+        held[str(p["name"])] = "exit"
+    for ph in (p.get("phones") or []):
+        held[str(ph.get("serial"))] = "phone"
+    return held
+
+
+def _waits_for(row: dict, rows: list[dict]) -> str:
+    """For a queued row: the earlier pending row holding the same thing."""
+    mine = _targets(row["verb"], row.get("payload") or {}, row.get("detail"))
+    if not mine:
+        return ""
+    for other in rows:
+        if other is row or other["status"] not in _PENDING:
+            continue
+        # A running row holds its things whatever its number; among the
+        # queued, the earlier number goes first.
+        if other["status"] != "running" and other["id"] >= row["id"]:
+            continue
+        theirs = _targets(other["verb"], other.get("payload") or {},
+                          other.get("detail"))
+        shared = [t for t in mine if t in theirs]
+        if shared:
+            kind = mine[shared[0]]
+            return (f"waits for #{other['id']} to release the {kind} - "
+                    f"same {kind}, one at a time")
+    return ""
+
+
+def _as_dt(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime.datetime):
+        return value
+    try:
+        return datetime.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _span(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m {seconds % 60:02d}s"
+
+
+def _took(row: dict) -> str:
+    """How long it took, or has been running."""
+    started = _as_dt(row.get("executed_at"))
+    if started is None:
+        return ""
+    ended = _as_dt(row.get("finished_at"))
+    if ended is None and row.get("status") == "running":
+        now = datetime.datetime.now(started.tzinfo)
+        return _span((now - started).total_seconds())
+    if ended is None:
+        return ""
+    return _span((ended - started).total_seconds())
+
+
+def _clock(value) -> str:
+    text = str(value or "")
+    return esc(text[11:19] if len(text) >= 19 else text[:19])
+
+
+def requests_page(rows: list[dict], user: dict, said: str = "", *,
+                  counts: dict | None = None, view: str = "",
+                  mine: bool = False) -> str:
+    """The queue, newest first: what was asked, in words, by whom, what
+    became of it - and under a command that works several phones, one
+    line per phone. Refreshes itself only while something is pending."""
+    counts = counts or {}
+    body = _said(said, _SAID)
+    can_stop = _may(user, "may_login_accounts")
+    is_admin = user.get("role") == "admin"
+    keep = "&mine=1" if mine else ""
+    pills = []
+    for name in REQUEST_VIEWS:
+        label = name or "all"
+        n = (sum(counts.values()) if not name else counts.get(name, 0))
+        href = f"/requests?view={name}{keep}" if name else f"/requests?{keep[1:]}"
+        pills.append(f'<span>{label} · {n}</span>' if name == view else
+                     f'<a href="{href}">{label} · {n}</a>')
+    top = f'<div class="pills">{"".join(pills)}</div>'
+    if is_admin:
+        flip = f"/requests?view={view}" + ("" if mine else "&mine=1")
+        top += (f'<a class="btn quiet" href="{flip}">'
+                f'{"everyone" if mine else "mine only"}</a>')
+    head = ("<tr><th>#</th><th>what</th><th>by</th><th>asked</th>"
+            "<th>state</th><th>result / progress</th><th></th></tr>")
     lines = []
     pending = False
     for r in rows:
         status = str(r["status"])
-        if status in ("queued", "awaiting_confirm", "running"):
+        if status in _PENDING:
             pending = True
-        undo = ""
+        head_text, aside = describe(str(r["verb"]), r.get("payload") or {})
+        what = esc(head_text) + (f' <span class="dim">— {esc(aside)}</span>'
+                                 if aside else "")
+        action = ""
         if status == "queued":
-            undo = (f'<form method="post" action="/requests/{r["id"]}/cancel">'
-                    f'<input type="hidden" name="csrf" '
-                    f'value="{esc(user.get("csrf", ""))}">'
-                    f'<button>Cancel</button></form>')
+            action = (f'<form method="post" class="inline" '
+                      f'action="/requests/{r["id"]}/cancel">{_csrf(user)}'
+                      f'<button class="quiet">Cancel</button></form>')
+        elif status == "failed":
+            action = (f'<form method="post" class="inline" '
+                      f'action="/requests/{r["id"]}/retry">{_csrf(user)}'
+                      f'<button class="quiet">Retry</button></form>')
+        said_what = str(r.get("result") or "")
+        if status == "queued" and not said_what:
+            said_what = _waits_for(r, rows) or "waiting for the next pass"
+        took = _took(r)
+        result = esc(said_what) + (f' <span class="dim">— {took}</span>'
+                                   if took else "")
         lines.append(
-            "<tr>"
-            f"<td class=\"muted\">{r['id']}</td>"
-            f"<td>{esc(str(r['verb']))}</td>"
-            f"<td><span class=\"badge {esc(status)}\">{esc(status)}"
-            f"</span></td>"
-            f"<td>{esc(str(r['result'] or ''))}</td>"
-            f"<td class=\"muted\">{esc(str(r['requested_by']))}</td>"
-            f"<td class=\"muted\">{esc(str(r['requested_at'])[:19])}</td>"
-            f"<td>{undo}</td></tr>")
-    body += f"<h2>Requests ({len(rows)})</h2>"
+            f'<tr><td class="muted">{r["id"]}</td><td>{what}</td>'
+            f'<td class="muted">{esc(str(r["requested_by"]))}</td>'
+            f'<td class="muted">{_clock(r["requested_at"])}</td>'
+            f'<td><span class="badge {esc(status)}">{esc(status)}</span></td>'
+            f'<td>{result}</td><td>{action}</td></tr>')
+        detail = r.get("detail") or {}
+        for ph in (detail.get("phones") or []) if isinstance(detail, dict) \
+                else []:
+            stop = ""
+            if status == "running" and can_stop and ph.get("ok") is None:
+                stop = (f'<form method="post" class="inline" '
+                        f'action="/phones/{esc(str(ph.get("serial")))}/stop">'
+                        f'{_csrf(user)}<button class="quiet warn">Stop this '
+                        f'one</button></form>')
+            word = ("is ready" if ph.get("ok") else
+                    f"failed: {ph.get('status')}" if ph.get("ok") is False
+                    else str(ph.get("status") or "working"))
+            lines.append(
+                f'<tr><td></td><td colspan="4" class="mono dim">↳ '
+                f'{esc(str(ph.get("serial")))} — '
+                f'{esc(str(ph.get("account") or ""))}</td>'
+                f'<td class="dim">{esc(word)}'
+                + (f' — {_span(ph.get("seconds"))}' if ph.get("seconds")
+                   else "")
+                + f'</td><td>{stop}</td></tr>')
+    body = (f'<div class="top"><h2>Requests</h2>{top}</div>' + body)
     if not rows:
-        body += "<p class=\"muted\">Nothing has been asked yet.</p>"
+        body += '<p class="muted">Nothing has been asked yet.</p>'
     else:
-        body += f"<table>{head}{''.join(lines)}</table>"
-    return page("Requests", body, user=user, refresh=10 if pending else 0)
+        body += (f'<div class="panel"><table>{head}{"".join(lines)}</table>'
+                 f'<p class="dim">every command anyone gives lands here - '
+                 f'including the instant ones - and stays as the record</p>'
+                 f'</div>')
+    return page("Requests", body, user=user, here="/requests",
+                refresh=10 if pending else 0)
 
 
 # ------------------------------------------------------------------ users

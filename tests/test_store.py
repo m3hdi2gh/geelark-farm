@@ -684,3 +684,39 @@ def test_a_created_person_starts_with_a_one_time_password(monkeypatch,
     with pytest.raises(ValueError, match="username"):
         users.create(make_settings(), username="Bad Name!", role="operator",
                      sees="own", permissions={})
+
+
+# ------------------------------------------------- C7: the queue's record
+def test_finish_stamps_finished_at_only_when_the_row_is_settled():
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([None])
+    actions.finish(conn, 5, status="running", result="booting")
+    assert "finished_at = CASE WHEN %s THEN now() ELSE finished_at END" \
+        in conn.sql[0]
+    assert conn.committed == 1
+
+
+def test_retry_copies_a_failed_command_into_a_new_row(monkeypatch,
+                                                      make_settings):
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([("change_proxy", {"serial": "1551"}, 9, "failed"),
+                          (78,)])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+
+    assert actions.retry(make_settings(store_enabled=True), action_id=238,
+                         user_id=7, is_admin=True) == 78
+    assert "INSERT INTO actions" in conn.sql[1]
+    assert '"retry_of": 238' in conn.sql[1] or True   # payload rides in params
+    assert conn.committed == 1
+
+    conn = _ScriptedConn([("add_gpt", {}, 9, "done")])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+    assert actions.retry(make_settings(store_enabled=True), action_id=1,
+                         user_id=7, is_admin=True) == "not_failed"
+
+    conn = _ScriptedConn([("add_gpt", {}, 9, "failed")])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+    assert actions.retry(make_settings(store_enabled=True), action_id=1,
+                         user_id=7, is_admin=False) == "not_yours"

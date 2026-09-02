@@ -316,12 +316,30 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
                     f"yet; the keeper is building, press again later")
     if refused:
         bits.append(f"{len(refused)} refused")
-    status = "done" if started else "failed"
-    return status, "; ".join(bits), {"started": started, "unpaired": unpaired,
-                                     "refused": refused}
+    # `running`, not `done`: the phones are booting. The launcher settles
+    # the row with what became of each when they end (serve._settle_action).
+    status = "running" if started else "failed"
+    return status, "; ".join(bits), {
+        "phones": [{"serial": str(j["phone"]["serial"]),
+                    "account": j["phone"]["account"].label,
+                    "status": "booting", "ok": None} for j in jobs],
+        "unpaired": unpaired, "refused": refused}
 
 
 login_accounts.needs_launch = True
+
+
+def stop_phone(book, ledger, settings, payload, client):
+    """"Stop this one": the job on one phone gives up at its next step,
+    the way an interrupt would, and puts back what it held."""
+    from . import builder
+
+    serial = str(payload.get("serial") or "").strip()
+    if not serial:
+        return "refused", "no phone named", None
+    builder.STOP_BY_HAND.add(serial)
+    return ("done", f"phone {serial} stops at its next step; whatever it "
+                    f"held goes back to its pool", None)
 
 
 def change_proxy(book, ledger, settings, payload, client):
@@ -385,6 +403,7 @@ def change_proxy(book, ledger, settings, payload, client):
 VERBS = {
     "login_accounts": login_accounts,
     "change_proxy": change_proxy,
+    "stop_phone": stop_phone,
     "add_gmails": add_gmails,
     "add_gpt": add_gpt,
     "add_proxies": add_proxies,

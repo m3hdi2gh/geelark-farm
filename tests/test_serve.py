@@ -1767,3 +1767,76 @@ def test_the_pass_leaves_its_pulse_for_the_dashboard(monkeypatch,
     assert kept["warm"] == 3 and kept["target"] == 5
     assert kept["waiting"] == 1, "the real count, not the decision's zero"
     assert kept["manual_login"] is True and kept["tripped"] == ""
+
+
+# --------------------------------------------- C7: settling the command
+def test_a_launched_command_is_settled_with_what_became_of_each_phone(
+        monkeypatch, make_settings, tmp_path):
+    """The drain answers `running`; minutes later the launcher closes the
+    row: one clause per phone, the phones in the detail."""
+    from types import SimpleNamespace
+
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.builder import Build
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    kept = {}
+    monkeypatch.setattr(actions_mod, "settle",
+                        lambda s, action_id, **k: kept.update(k, id=action_id))
+    account = SimpleNamespace(label="arman@x.com")
+    jobs = [{"kind": "finish", "phone": {"serial": "1549",
+                                          "account": account}},
+            {"kind": "finish", "phone": {"serial": "1550"}}]
+    builds = [Build(index=1, ok=True, status="ready", serial="1549",
+                    seconds=264.4),
+              Build(index=2, ok=False, status="app_session_unverified",
+                    serial="1550", seconds=120.0, detail="the app said no")]
+
+    serve_mod._settle_action(settings, 241, jobs, builds)
+
+    assert kept["id"] == 241 and kept["status"] == "failed"
+    assert kept["result"] == ("1549 is ready; 1550 failed: "
+                              "app_session_unverified - 4m 24s")
+    phones = kept["detail"]["phones"]
+    assert phones[0] == {"serial": "1549", "account": "arman@x.com",
+                         "status": "ready", "ok": True, "seconds": 264,
+                         "detail": ""}
+    assert phones[1]["account"] == "" and phones[1]["ok"] is False
+
+
+def test_the_drain_tells_the_launcher_which_row_it_works_for(monkeypatch,
+                                                             make_settings):
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.db as db_mod
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    seen = {}
+    monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
+    monkeypatch.setattr(actions_mod, "take_batch",
+                        lambda conn, *, controls_only: [
+                            {"id": 241, "verb": "spy", "payload": {},
+                             "requested_by": 7}])
+    monkeypatch.setattr(actions_mod, "finish",
+                        lambda conn, aid, *, status, result, detail=None:
+                        seen.update(status=status))
+
+    def spy(book, ledger, settings, payload, client, launch=None):
+        launch([{"kind": "finish", "phone": {"serial": "1"}}])
+        return "running", "", None
+
+    spy.needs_launch = True
+    monkeypatch.setitem(serve_mod.ACTION_VERBS, "spy", spy)
+
+    def launch(jobs, *, action_id=None):
+        seen["action_id"] = action_id
+
+    settings = make_settings(store_enabled=True, web_mutations=True)
+    serve_mod._drain_actions(settings, None, None, controls_only=False,
+                             client=None, launch=launch)
+    assert seen == {"action_id": 241, "status": "running"}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from ..config import Settings
 from .db import Store, connect
@@ -67,14 +68,67 @@ def record_refused(settings: Settings, *, verb: str, payload: dict,
 
 
 def listing(settings: Settings, *, user_id: int,
-            everyone: bool = False, limit: int = 50) -> list[dict]:
+            everyone: bool = False, limit: int = 50,
+            view: str = "") -> list[dict]:
+    """Newest first. `everyone` is the admin's whole queue; off, only the
+    person's own rows. `view` narrows to one status (C7's pills)."""
     with Store(settings) as store:
         return store._rows(
-            "SELECT a.id, a.verb, a.payload, a.status, a.result,"
-            " a.requested_at, a.executed_at, u.username AS requested_by"
+            "SELECT a.id, a.verb, a.payload, a.status, a.result, a.detail,"
+            " a.requested_at, a.executed_at, a.finished_at,"
+            " u.username AS requested_by"
             " FROM actions a JOIN users u ON u.id = a.requested_by"
             " WHERE (%s OR a.requested_by = %s)"
-            " ORDER BY a.id DESC LIMIT %s", (everyone, user_id, limit))
+            " AND (%s = '' OR a.status = %s)"
+            " ORDER BY a.id DESC LIMIT %s",
+            (everyone, user_id, view, view, limit))
+
+
+def counts(settings: Settings, *, user_id: int,
+           everyone: bool = False) -> dict:
+    """How many rows each status has, for the pills above the list."""
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT status, count(*) AS c FROM actions"
+            " WHERE (%s OR requested_by = %s) GROUP BY status",
+            (everyone, user_id))
+    return {r["status"]: r["c"] for r in rows}
+
+
+def retry(settings: Settings, *, action_id: int, user_id: int,
+          is_admin: bool) -> int | str:
+    """Queue a failed command again, as a new row that names the old one.
+
+    Only `failed`: a refused one needs a permission, not a retry, and a
+    done one is done. Returns the new id, or 'not_failed' / 'not_yours'.
+    """
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT verb, payload, requested_by, status FROM actions"
+            " WHERE id = %s", (action_id,))
+        row = cur.fetchone()
+        if row is None or (not is_admin and row[2] != user_id):
+            return "not_yours"
+        verb, payload, _by, status = row
+        if status != "failed":
+            return "not_failed"
+        payload = dict(payload or {}, retry_of=action_id)
+        cur = conn.execute(
+            "INSERT INTO actions (verb, payload, requested_by, idem_key)"
+            " VALUES (%s, %s, %s, %s) RETURNING id",
+            (verb, json.dumps(payload), user_id,
+             f"retry:{action_id}:{int(time.time())}"))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        return new_id
+
+
+def settle(settings: Settings, action_id: int, *, status: str, result: str,
+           detail: dict | None = None) -> None:
+    """Close a command from outside the drain - the launcher, minutes
+    later, when the phone work it started has ended."""
+    with connect(settings) as conn:
+        finish(conn, action_id, status=status, result=result, detail=detail)
 
 
 def cancel(settings: Settings, *, action_id: int, user_id: int,
@@ -121,10 +175,18 @@ def take_batch(conn, *, controls_only: bool) -> list[dict]:
     return rows
 
 
+#: The statuses a command never leaves. `running` is not one: a handler
+#: that started phone work answers `running`, and the launcher settles the
+#: row when the work ends - so finished_at is stamped only on these.
+TERMINAL = ("done", "failed", "refused", "cancelled")
+
+
 def finish(conn, action_id: int, *, status: str, result: str,
            detail: dict | None = None) -> None:
     conn.execute(
-        "UPDATE actions SET status = %s, result = %s, detail = %s"
+        "UPDATE actions SET status = %s, result = %s, detail = %s,"
+        " finished_at = CASE WHEN %s THEN now() ELSE finished_at END"
         " WHERE id = %s",
-        (status, result, json.dumps(detail) if detail else None, action_id))
+        (status, result, json.dumps(detail) if detail else None,
+         status in TERMINAL, action_id))
     conn.commit()

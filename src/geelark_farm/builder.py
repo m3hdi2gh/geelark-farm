@@ -400,6 +400,14 @@ class Aborted(Exception):
     """The run is shutting down; stop what this build is doing."""
 
 
+#: Serials somebody asked to stop from the web ("Stop this one", C7). The
+#: pass's drain adds to it; every session looks at its next step and, if
+#: its phone is named, gives up with `stopped_by_hand` - the same path an
+#: interrupt takes, so what it held goes back to its pool. One process,
+#: so a set is enough; a serial is taken out the moment it is honoured.
+STOP_BY_HAND: set[str] = set()
+
+
 @dataclass
 class _Session:
     """One phone being worked on, and everything claimed for it.
@@ -481,6 +489,10 @@ class _Session:
     def check_cancelled(self) -> None:
         if self.cancelled and self.cancelled():
             raise Aborted("interrupted")
+        serial = str(self.build.serial or "").strip()
+        if serial and serial in STOP_BY_HAND:
+            STOP_BY_HAND.discard(serial)
+            raise Aborted("stopped_by_hand")
 
     def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
         self.build.ok, self.build.status, self.build.detail = ok, status, detail

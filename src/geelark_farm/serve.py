@@ -38,6 +38,7 @@ somebody waiting at the end of it.
 from __future__ import annotations
 
 import _thread
+import functools
 import logging
 import os
 import threading
@@ -376,9 +377,15 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                     # pass's launcher, so its jobs run under the same fuse
                     # and flight as the decision's own.
                     if getattr(handler, "needs_launch", False):
+                        # The launcher learns which row it is working
+                        # for, so it can settle that row when the phones
+                        # are done - minutes after this drain returned.
+                        launcher = (None if launch is None else
+                                    functools.partial(launch,
+                                                      action_id=action["id"]))
                         status, result, detail = handler(
                             book, ledger, settings, action["payload"], client,
-                            launch=launch)
+                            launch=launcher)
                     else:
                         status, result, detail = handler(
                             book, ledger, settings, action["payload"], client)
@@ -413,6 +420,40 @@ def _import_from_sheet(settings: Settings, book: Book) -> None:
     except Exception as exc:                                      # noqa: BLE001
         log.warning("the sheet import did not run this pass (%s); fresh "
                     "rows stay in the sheet until the next one", exc)
+
+
+def _settle_action(settings: Settings, action_id: int, jobs: list[dict],
+                   builds: list) -> None:
+    """Close a web command's row with what became of each phone (C7).
+
+    One line per phone in the sentence, the phones in the detail, so the
+    Requests page can show "1551 is ready; 1549 failed: ..." and a row
+    under the command per phone. Never fatal: the phones are done either
+    way, and a row left `running` is a warning, not a lost build."""
+    try:
+        from .store import actions as store_actions
+
+        accounts = {str(j.get("phone", {}).get("serial")):
+                    getattr(j.get("phone", {}).get("account"), "label", "")
+                    for j in jobs}
+        phones = [{"serial": b.serial, "account": accounts.get(str(b.serial),
+                                                                 ""),
+                   "status": b.status, "ok": b.ok, "seconds": round(b.seconds),
+                   "detail": (b.detail or "")[:200]} for b in builds]
+        said = "; ".join(
+            f"{p['serial']} is ready" if p["ok"] else
+            f"{p['serial']} failed: {p['status']}" for p in phones)
+        longest = max((p["seconds"] for p in phones), default=0)
+        store_actions.settle(
+            settings, action_id,
+            status="done" if phones and all(p["ok"] for p in phones)
+            else "failed",
+            result=f"{said} - {longest // 60}m {longest % 60:02d}s"
+            if said else "nothing ran",
+            detail={"phones": phones})
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("web action %s could not be settled (%s); its row "
+                    "stays running", action_id, exc)
 
 
 def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
@@ -1025,15 +1066,19 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
-    def launch(jobs: list[dict]) -> None:
+    def launch(jobs: list[dict], *, action_id: int | None = None) -> None:
         """Run finish jobs a web command chose (C6), on this pass's Book
         and ledger, under this pass's fuse and flight - exactly as the
-        decision's own jobs run, so the next pass counts them too."""
+        decision's own jobs run, so the next pass counts them too. The
+        command's row is settled when they end (C7)."""
         def chosen():
-            return builder._run_jobs(client, settings, book, jobs,
-                                     workers=len(jobs), reporter=None,
-                                     on_ready=None, cancel=stopping,
-                                     ledger=ledger)
+            builds = builder._run_jobs(client, settings, book, jobs,
+                                       workers=len(jobs), reporter=None,
+                                       on_ready=None, cancel=stopping,
+                                       ledger=ledger)
+            if action_id is not None:
+                _settle_action(settings, action_id, jobs, builds)
+            return builds
         _dispatch(chosen, fuse, flight=flight, pool=pool,
                   builds=0, finishes=len(jobs))
 

@@ -925,3 +925,138 @@ def test_change_proxy_is_one_queued_command_for_that_serial(web, monkeypatch):
     assert status == 303 and dict(headers)["Location"] == "/?said=queued"
     assert got["verb"] == "change_proxy"
     assert got["payload"] == {"serial": "1500", "by": "mehdi"}
+
+
+# ------------------------------------------------------ C7: Requests
+_REQUESTS = [
+    {"id": 241, "verb": "login_accounts", "status": "running",
+     "payload": {"addresses": ["arman.tehrani88@gmail.com",
+                               "nvd.sharifi@outlook.com"], "by": "mehdi"},
+     "result": "logging in 2 account(s) in parallel",
+     "detail": {"phones": [
+         {"serial": "1549", "account": "arman.tehrani88@gmail.com",
+          "status": "booting", "ok": None},
+         {"serial": "1550", "account": "nvd.sharifi@outlook.com",
+          "status": "booting", "ok": None}]},
+     "requested_at": "2026-09-01 18:06:12+00:00",
+     "executed_at": "2026-09-01 18:06:30+00:00", "finished_at": None,
+     "requested_by": "mehdi"},
+    {"id": 240, "verb": "change_proxy", "status": "queued",
+     "payload": {"serial": "1549", "by": "alireza"}, "result": "",
+     "detail": None, "requested_at": "2026-09-01 18:02:51+00:00",
+     "executed_at": None, "finished_at": None, "requested_by": "alireza"},
+    {"id": 239, "verb": "add_gmails", "status": "done",
+     "payload": {"rows": [{}] * 26, "seller": "egypt"},
+     "result": "24 gmails added, 2 already in the pool", "detail": None,
+     "requested_at": "2026-09-01 17:58:03+00:00",
+     "executed_at": "2026-09-01 17:58:20+00:00",
+     "finished_at": "2026-09-01 17:58:20.3+00:00", "requested_by": "mehdi"},
+    {"id": 238, "verb": "change_proxy", "status": "failed",
+     "payload": {"serial": "1551"}, "result": "no free exit answered",
+     "detail": None, "requested_at": "2026-09-01 17:41:20+00:00",
+     "executed_at": "2026-09-01 17:41:30+00:00",
+     "finished_at": "2026-09-01 17:42:34+00:00", "requested_by": "alireza"},
+]
+
+
+def test_describe_says_each_command_in_words():
+    from geelark_farm.web.pages import describe
+
+    assert describe("login_accounts", _REQUESTS[0]["payload"]) == (
+        "Log in 2 accounts", "arman.tehrani88, nvd.sharifi")
+    assert describe("login_accounts", {"addresses": ["a@x.com"]}) == (
+        "Log in 1 account", "a")
+    assert describe("add_gmails", _REQUESTS[2]["payload"]) == (
+        "Add 26 gmails", "seller egypt")
+    assert describe("add_proxies", {"rows": [{}]}) == ("Add 1 proxy", "")
+    assert describe("add_proxies", {"rows": [{}, {}]}) == ("Add 2 proxies", "")
+    assert describe("change_proxy", {"serial": "1549"}) == (
+        "Change proxy on 1549", "")
+    assert describe("remove_proxy", {"name": "SX3"}) == (
+        "Remove SX3", "from the pool")
+    assert describe("noop", {}) == ("Noop", "")
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_the_requests_page_reads_as_a_story_with_a_line_per_phone(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "listing",
+                        lambda s, **k: list(_REQUESTS))
+    monkeypatch.setattr(actions_mod, "counts",
+                        lambda s, **k: {"running": 1, "queued": 1,
+                                        "done": 1, "failed": 1})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/requests")
+    assert status == 200
+    assert "Log in 2 accounts" in body and "arman.tehrani88, nvd.sharifi" in body
+    assert "↳ 1549 — arman.tehrani88@gmail.com" in body
+    assert body.count("Stop this one") == 2, "one per phone still working"
+    assert body.count("/phones/1549/stop") == 1
+    assert ("waits for #241 to release the phone - same phone, one at a "
+            "time") in body, "the queued change on 1549 says who it waits for"
+    assert "Add 26 gmails" in body and "seller egypt" in body
+    assert "/requests/238/retry" in body and "Retry" in body
+    assert "/requests/240/cancel" in body
+    assert "/requests/239/retry" not in body, "done is done"
+    assert "running · 1" in body and "failed · 1" in body and "all · 4" in body
+    assert "mine only" in body, "an admin can narrow to their own"
+    assert "18:06:12" in body, "asked, as a clock"
+    assert "— 1m 04s" in body, "how long the failed change took"
+    assert 'http-equiv="refresh"' in body
+
+
+def test_the_view_pill_and_mine_only_reach_the_store(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    asked = {}
+    monkeypatch.setattr(actions_mod, "listing",
+                        lambda s, **k: asked.update(k) or [])
+    monkeypatch.setattr(actions_mod, "counts", lambda s, **k: {})
+    client = web()
+    client.login()
+    client.request("GET", "/requests?view=failed&mine=1")
+    assert asked["view"] == "failed" and asked["everyone"] is False
+    client.request("GET", "/requests?view=bogus")
+    assert asked["view"] == "" and asked["everyone"] is True
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_retry_queues_a_failed_request_again(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "retry",
+                        lambda s, **k: got.update(k) or 77)
+    client = web()
+    client.login()
+    status, headers, _ = client.request("POST", "/requests/238/retry",
+                                        f"csrf={client.csrf()}")
+    assert status == 303
+    assert dict(headers)["Location"] == "/requests?said=queued"
+    assert got == {"action_id": 238, "user_id": 7, "is_admin": True}
+
+    monkeypatch.setattr(actions_mod, "retry", lambda s, **k: "not_failed")
+    _, headers, _ = client.request("POST", "/requests/239/retry",
+                                   f"csrf={client.csrf()}")
+    assert dict(headers)["Location"] == "/requests?said=not_failed"
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_stop_this_one_is_one_queued_command_for_that_phone(web,
+                                                            monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 43)
+    client = web()
+    client.login()
+    status, headers, _ = client.request("POST", "/phones/1549/stop",
+                                        f"csrf={client.csrf()}")
+    assert status == 303
+    assert dict(headers)["Location"] == "/requests?said=queued"
+    assert got["verb"] == "stop_phone"
+    assert got["payload"] == {"serial": "1549", "by": "mehdi"}
