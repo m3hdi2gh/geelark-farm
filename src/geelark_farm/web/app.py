@@ -71,6 +71,14 @@ class _Handler(BaseHTTPRequestHandler):
             user = self._user()
             if user is None:
                 return self._redirect("/login")
+            # A one-time password buys exactly one page: the one where the
+            # person chooses their own. Everything else waits.
+            if user.get("must_change_password") and path != "/password":
+                return self._redirect("/password")
+            if path == "/password":
+                return self._html(200, pages.password_page(user))
+            if path == "/users":
+                return self._users_get(user)
             if path == "/":
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.dashboard(
@@ -134,12 +142,23 @@ class _Handler(BaseHTTPRequestHandler):
             host = self.headers.get("Host") or ""
             if origin and host and not origin.endswith("//" + host):
                 return self._html(403, pages.page("403", "<h2>Bad origin</h2>"))
-            user = dict(entry["user"], csrf=entry.get("csrf", ""))
+            user = self._user()
             if self.path == "/logout":
                 token = self._cookie()
                 with _lock:
                     _sessions.pop(token, None)
                 return self._redirect("/login")
+            if self.path == "/password":
+                return self._password_post(user, field, entry)
+            if user.get("must_change_password"):
+                return self._redirect("/password")
+            if self.path == "/users/new":
+                return self._users_new(user, field)
+            if self.path.startswith("/users/") and \
+                    self.path.endswith("/reset"):
+                return self._users_reset(user)
+            if self.path.startswith("/users/"):
+                return self._users_update(user, field)
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/cancel"):
                 return self._cancel_action(user)
@@ -161,6 +180,118 @@ class _Handler(BaseHTTPRequestHandler):
                                    user_id=user["id"],
                                    is_admin=user["role"] == "admin")
         self._redirect(f"/requests?said={got}")
+
+    # -------------------------------------------------------------- users
+    def _admin_page(self, user: dict) -> str | None:
+        """None when this person may see the Users page; else the page
+        that says why not. The flag hides the page entirely (404), the
+        role refuses it (403) - a 404 to an operator says nothing about
+        what exists."""
+        if not self.settings.web_user_admin:
+            return pages.page("404", "<h2>Nothing here</h2>", user=user)
+        if user.get("role") != "admin":
+            return pages.forbidden(user)
+        return None
+
+    def _users_get(self, user: dict) -> None:
+        if (refused := self._admin_page(user)) is not None:
+            code = 404 if not self.settings.web_user_admin else 403
+            return self._html(code, refused)
+        from ..store import users as store_users
+
+        query = parse_qs(self.path.partition("?")[2])
+        wanted = (query.get("id") or [""])[0]
+        selected = None
+        if wanted.isdigit():
+            selected = store_users.get(self.settings, int(wanted))
+        self._html(200, pages.users_page(
+            store_users.listing(self.settings), selected, user,
+            store_users.PERMISSIONS,
+            said=(query.get("said") or [""])[0],
+            error=(query.get("error") or [""])[0]))
+
+    def _users_new(self, user: dict, field: dict) -> None:
+        if (refused := self._admin_page(user)) is not None:
+            code = 404 if not self.settings.web_user_admin else 403
+            return self._html(code, refused)
+        from ..store import users as store_users
+
+        username = (field.get("username") or "").strip().lower()
+        try:
+            new_id, password = store_users.create(
+                self.settings, username=username,
+                role=field.get("role") or "operator",
+                sees=field.get("sees") or "own",
+                permissions=_ticks(field))
+        except ValueError as exc:
+            return self._html(200, pages.users_page(
+                store_users.listing(self.settings), None, user,
+                store_users.PERMISSIONS, error=str(exc)))
+        except Exception as exc:                                  # noqa: BLE001
+            # UNIQUE on username is the likely one; the page says so
+            # without echoing the driver's sentence.
+            log.warning("could not create user %r: %s", username, exc)
+            return self._html(200, pages.users_page(
+                store_users.listing(self.settings), None, user,
+                store_users.PERMISSIONS,
+                error="that username is taken, or the store refused it"))
+        log.info("user %r (id %s) created by %s", username, new_id,
+                 user["username"])
+        self._html(200, pages.one_time_page(username, password, user,
+                                            created=True))
+
+    def _users_update(self, user: dict, field: dict) -> None:
+        if (refused := self._admin_page(user)) is not None:
+            code = 404 if not self.settings.web_user_admin else 403
+            return self._html(code, refused)
+        from ..store import users as store_users
+
+        target = int(self.path.split("/")[2])
+        try:
+            store_users.update(
+                self.settings, target,
+                role=field.get("role") or "operator",
+                sees=field.get("sees") or "own",
+                active=field.get("active") == "1",
+                permissions=_ticks(field), by=user["id"])
+        except ValueError as exc:
+            return self._redirect(f"/users?id={target}&error={_q(str(exc))}")
+        _drop_sessions_of(target, keep=self._cookie())
+        log.info("user id %s updated by %s", target, user["username"])
+        self._redirect(f"/users?id={target}&said=saved")
+
+    def _users_reset(self, user: dict) -> None:
+        if (refused := self._admin_page(user)) is not None:
+            code = 404 if not self.settings.web_user_admin else 403
+            return self._html(code, refused)
+        from ..store import users as store_users
+
+        target = int(self.path.split("/")[2])
+        row = store_users.get(self.settings, target)
+        if row is None:
+            return self._redirect("/users")
+        password = store_users.reset_password(self.settings, target)
+        _drop_sessions_of(target, keep=self._cookie())
+        log.info("password of user id %s reset by %s", target,
+                 user["username"])
+        self._html(200, pages.one_time_page(row["username"], password, user,
+                                            created=False))
+
+    def _password_post(self, user: dict, field: dict, entry: dict) -> None:
+        from ..store import users as store_users
+
+        new = field.get("password") or ""
+        if new != (field.get("again") or ""):
+            return self._html(200, pages.password_page(
+                user, "The two do not match."))
+        try:
+            store_users.set_password(self.settings, user["id"], new)
+        except ValueError as exc:
+            return self._html(200, pages.password_page(user, str(exc)))
+        with _lock:
+            entry["user"]["must_change_password"] = False
+        log.info("user %s chose a password", user["username"])
+        self._redirect("/")
 
     # -------------------------------------------------------------- login
     def _login(self, field: dict) -> None:
@@ -207,8 +338,10 @@ class _Handler(BaseHTTPRequestHandler):
         if entry is None:
             return None
         # The csrf token rides in the user dict so every page's header
-        # (the logout form) can carry it without a second parameter.
-        return dict(entry["user"], csrf=entry.get("csrf", ""))
+        # (the logout form) can carry it without a second parameter; so
+        # does the one flag the header needs to know about.
+        return dict(entry["user"], csrf=entry.get("csrf", ""),
+                    user_admin=self.settings.web_user_admin)
 
     def _cookie(self) -> str:
         raw = self.headers.get("Cookie") or ""
@@ -237,6 +370,35 @@ class _Handler(BaseHTTPRequestHandler):
         # Into the real log, at DEBUG: request lines are tracing, and the
         # file handler keeps DEBUG while the console shows INFO.
         log.debug("web: " + fmt, *args)
+
+
+def _ticks(field: dict) -> dict:
+    """The permission checkboxes as they came off the form: present and
+    "1" means ticked, absent means not - HTML sends nothing for a clear
+    box, which is why every column is read rather than only the sent."""
+    from ..store.users import PERMISSION_COLUMNS
+
+    return {c: field.get(c) == "1" for c in PERMISSION_COLUMNS}
+
+
+def _q(text: str) -> str:
+    from urllib.parse import quote
+
+    return quote(text, safe="")
+
+
+def _drop_sessions_of(user_id: int, *, keep: str = "") -> int:
+    """End every session this person holds, except the one token given
+    (an admin editing themselves keeps their own seat). A permission
+    change or a reset must not leave a stale session acting on old
+    rights, and there is no second copy of the user row to refresh."""
+    dropped = 0
+    with _lock:
+        for token, entry in list(_sessions.items()):
+            if entry["user"].get("id") == user_id and token != keep:
+                _sessions.pop(token, None)
+                dropped += 1
+    return dropped
 
 
 def _locked_out(username: str) -> bool:

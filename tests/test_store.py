@@ -613,3 +613,74 @@ def test_take_batch_splits_control_verbs_from_the_rest():
     conn = _ScriptedConn([[]])
     assert actions.take_batch(conn, controls_only=True) == []
     assert "verb = 'control'" in conn.sql[0]
+
+
+# ------------------------------------------------------------- users (C1)
+def test_may_answers_for_admins_operators_and_nobody():
+    """The one place "may this person do that" is answered."""
+    from geelark_farm.store import users
+
+    admin = {"role": "admin", "sees": "all", "active": True}
+    op = {"role": "operator", "sees": "own", "active": True,
+          "may_add_gmail": True}
+    gone = dict(op, active=False)
+
+    assert users.may(admin, "may_login_accounts")
+    assert users.may(op, "may_add_gmail")
+    assert not users.may(op, "may_login_accounts")
+    assert not users.may(gone, "may_add_gmail")
+    assert not users.may(None, "may_add_gmail")
+    assert not users.may(admin, "may_launch_rockets"), "unknown fails closed"
+
+
+def test_the_permission_vocabulary_matches_the_schema():
+    """PERMISSIONS is the page's list and the schema's columns - two copies
+    of six names, held together here so a seventh cannot be added to one
+    and forgotten in the other."""
+    import pathlib
+    import re
+
+    from geelark_farm.store import users
+
+    ddl = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
+        encoding="utf-8")
+    in_schema = set(re.findall(r"ADD COLUMN IF NOT EXISTS (may_\w+)", ddl))
+    assert in_schema == set(users.PERMISSION_COLUMNS)
+
+
+def test_an_admin_cannot_lock_themselves_out(monkeypatch, make_settings):
+    from geelark_farm.store import users
+
+    settings = make_settings()
+    with pytest.raises(ValueError, match="yourself"):
+        users.update(settings, 7, role="operator", sees="all", active=True,
+                     permissions={}, by=7)
+    with pytest.raises(ValueError, match="yourself"):
+        users.update(settings, 7, role="admin", sees="all", active=False,
+                     permissions={}, by=7)
+
+    conn = _ScriptedConn([(0,)])              # no other active admin
+    monkeypatch.setattr(users, "connect", lambda s: conn)
+    with pytest.raises(ValueError, match="no active admin"):
+        users.update(settings, 7, role="operator", sees="all", active=True,
+                     permissions={}, by=2)
+    assert conn.rolled_back == 1 and conn.committed == 0
+
+
+def test_a_created_person_starts_with_a_one_time_password(monkeypatch,
+                                                           make_settings):
+    from geelark_farm.store import users
+
+    conn = _ScriptedConn([(11,)])
+    monkeypatch.setattr(users, "connect", lambda s: conn)
+
+    new_id, password = users.create(make_settings(), username="sara",
+                                    role="operator", sees="own",
+                                    permissions={"may_add_gmail": True})
+
+    assert new_id == 11 and len(password) >= 10
+    assert "must_change_password" in conn.sql[0]
+    assert conn.committed == 1
+    with pytest.raises(ValueError, match="username"):
+        users.create(make_settings(), username="Bad Name!", role="operator",
+                     sees="own", permissions={})

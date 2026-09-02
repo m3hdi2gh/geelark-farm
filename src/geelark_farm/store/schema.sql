@@ -220,3 +220,21 @@ CREATE TABLE IF NOT EXISTS actions (
 CREATE INDEX IF NOT EXISTS actions_open
     ON actions (requested_at)
     WHERE status IN ('queued', 'awaiting_confirm');
+
+-- ------------------------------------------------------- users, rev 4 (C1)
+-- What an operator may do, one boolean each, ticked by an admin on the
+-- Users page. An admin has every one of them implicitly (users.may), so
+-- the columns only ever matter on operator rows. Booleans rather than a
+-- role table because there are six of them and they are read on every
+-- request - and because "which box is ticked" is exactly the question the
+-- owner asked to be able to answer per person.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_add_gmail        boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_add_gpt          boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_add_proxy        boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_login_accounts   boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_change_proxy     boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS may_take_phones      boolean NOT NULL DEFAULT false;
+-- Set by a create or a reset: the one-time password was shown once, and
+-- the first thing this person does after signing in is choose their own.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at        timestamptz;

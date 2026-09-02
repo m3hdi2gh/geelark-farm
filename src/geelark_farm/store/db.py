@@ -86,7 +86,7 @@ def ensure_schema(settings: Settings) -> None:
 #: is additive-only while the sheet is still authoritative, and a real
 #: migration story is stage 7's problem, not stage 1's. What this buys now
 #: is one queryable fact: which code last touched the schema.
-SCHEMA_REV = "3"
+SCHEMA_REV = "4"
 
 
 class Store:
@@ -276,6 +276,17 @@ class Store:
             return None
         row.pop("password_hash", None)
         row.pop("password_salt", None)
+        # "last seen" on the Users page. Best effort: a login that verified
+        # is a login, whether or not the stamp landed.
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE users SET last_login_at = now()"
+                            " WHERE id = %s", (row["id"],))
+            self._conn.commit()
+        except Exception as exc:                                  # noqa: BLE001
+            self._conn.rollback()
+            log.warning("could not stamp last_login_at for %s (%s)",
+                        username, exc)
         return row
 
     # ---------------------------------------------------------- plumbing

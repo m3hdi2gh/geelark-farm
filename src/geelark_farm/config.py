@@ -311,6 +311,11 @@ class Settings:
     #: and the serve drain never runs - the read-only web of stage 3,
     #: exactly.
     web_mutations: bool = False
+    #: C1: the Users page - an admin making people and ticking what each
+    #: may do. Off means the page answers 404 and the user routes do not
+    #: exist; the six permissions are still read by `users.may`, they just
+    #: cannot be changed from the web.
+    web_user_admin: bool = False
 
 
     @classmethod
@@ -355,6 +360,8 @@ class Settings:
             web_bind=_str("WEB_BIND", "127.0.0.1"),
             web_mutations=_str("WEB_MUTATIONS", "0").strip()
                           in ("1", "true", "yes", "on"),
+            web_user_admin=_str("WEB_USER_ADMIN", "0").strip()
+                           in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

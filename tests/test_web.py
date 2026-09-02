@@ -65,8 +65,11 @@ def web(request, monkeypatch, make_settings):
     monkeypatch.setattr(app_mod, "_sessions", {})
     monkeypatch.setattr(app_mod, "_failures", {})
 
+    overrides = getattr(request, "param", None)
+    if isinstance(overrides, bool):          # the original shorthand
+        overrides = {"web_mutations": overrides}
     settings = make_settings(store_enabled=True, web_enabled=True, web_port=0,
-                             web_mutations=getattr(request, "param", False))
+                             **(overrides or {}))
     server = app_mod.start(settings)
     port = server.server_address[1]
 
@@ -377,3 +380,166 @@ def test_a_status_the_verdict_table_never_heard_of_renders_as_data(web,
     client.login()
     status, _, body = client.request("GET", "/needs")
     assert status == 200 and "some_forgotten_word" in body
+
+
+# ------------------------------------------------------------- users (C1)
+ADMIN_ON = {"web_user_admin": True}
+
+
+def _people(monkeypatch, rows=None):
+    """The users module as the routes see it: a listing and a lookup."""
+    import geelark_farm.store.users as users_mod
+
+    rows = rows if rows is not None else [
+        {"id": 7, "username": "mehdi", "role": "admin", "sees": "all",
+         "active": True, "must_change_password": False,
+         "last_login_at": None, "created_at": None,
+         **{c: False for c in users_mod.PERMISSION_COLUMNS}},
+        {"id": 9, "username": "narrow", "role": "operator", "sees": "own",
+         "active": True, "must_change_password": False,
+         "last_login_at": None, "created_at": None,
+         **{c: False for c in users_mod.PERMISSION_COLUMNS},
+         "may_add_gmail": True},
+    ]
+    monkeypatch.setattr(users_mod, "listing", lambda s: list(rows))
+    monkeypatch.setattr(users_mod, "get",
+                        lambda s, uid: next((dict(r) for r in rows
+                                             if r["id"] == uid), None))
+    return users_mod
+
+
+def test_the_users_page_does_not_exist_while_the_flag_is_off(web):
+    """Flag off means the page is not there - not forbidden, absent."""
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/users")
+    assert status == 404
+    assert 'href="/users"' not in body
+
+
+@pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
+def test_the_users_page_is_admin_only(web, monkeypatch):
+    _people(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own"})
+    client = web()
+    client.login(username="narrow")
+    status, _, _ = client.request("GET", "/users")
+    assert status == 403
+    status, _, _ = client.request("POST", "/users/new",
+                                  f"csrf={client.csrf()}&username=x")
+    assert status == 403
+
+
+@pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
+def test_an_admin_creates_a_person_and_sees_the_password_exactly_once(
+        web, monkeypatch):
+    users_mod = _people(monkeypatch)
+    made = {}
+
+    def create(settings, *, username, role, sees, permissions):
+        made.update(username=username, role=role, sees=sees,
+                    permissions=permissions)
+        return 11, "once-only-pw"
+
+    monkeypatch.setattr(users_mod, "create", create)
+    client = web()
+    client.login()
+    status, _, listing = client.request("GET", "/users")
+    assert status == 200 and "narrow" in listing and "add gmails" in listing
+
+    status, _, body = client.request(
+        "POST", "/users/new",
+        f"csrf={client.csrf()}&username=Sara&role=operator&sees=own"
+        f"&may_add_gmail=1&may_take_phones=1")
+    assert status == 200 and "once-only-pw" in body
+    assert made["username"] == "sara"          # lowered, like the tabs
+    assert made["permissions"]["may_add_gmail"] is True
+    assert made["permissions"]["may_take_phones"] is True
+    assert made["permissions"]["may_add_gpt"] is False
+    # and nowhere after that page
+    _, _, again = client.request("GET", "/users")
+    assert "once-only-pw" not in again
+
+
+@pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
+def test_a_permission_edit_ends_that_persons_sessions_but_not_the_editors(
+        web, monkeypatch):
+    """There is no second copy of the user row to refresh: a session acts
+    on the rights it signed in with, so a change ends the session and the
+    person signs in again with the new ones."""
+    users_mod = _people(monkeypatch)
+    saved = {}
+    monkeypatch.setattr(users_mod, "update",
+                        lambda s, uid, **kw: saved.update(id=uid, **kw))
+    admin = web()
+    admin.login()
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own"})
+    narrow = web()
+    narrow.login(username="narrow")
+    assert narrow.request("GET", "/")[0] == 200
+
+    status, headers, _ = admin.request(
+        "POST", "/users/9",
+        f"csrf={admin.csrf()}&role=operator&sees=own&active=1"
+        f"&may_change_proxy=1")
+    assert status == 303
+    assert dict(headers)["Location"] == "/users?id=9&said=saved"
+    assert saved["id"] == 9 and saved["by"] == 7
+    assert saved["permissions"]["may_change_proxy"] is True
+    assert saved["active"] is True
+
+    status, headers, _ = narrow.request("GET", "/")
+    assert status == 303 and dict(headers)["Location"] == "/login"
+    assert admin.request("GET", "/")[0] == 200
+
+
+@pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
+def test_a_refused_edit_comes_back_with_the_reason(web, monkeypatch):
+    users_mod = _people(monkeypatch)
+    monkeypatch.setattr(users_mod, "update",
+                        lambda s, uid, **kw: (_ for _ in ()).throw(
+                            ValueError("that would leave no active admin")))
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/users/7", f"csrf={client.csrf()}&role=operator&sees=all"
+                            f"&active=1")
+    assert status == 303
+    assert "leave%20no%20active%20admin" in dict(headers)["Location"]
+    _, _, body = client.request("GET", dict(headers)["Location"])
+    assert "leave no active admin" in body
+
+
+def test_a_one_time_password_buys_only_the_page_to_replace_it(web,
+                                                              monkeypatch):
+    """Sign in with a minted password and every page is the one where you
+    choose your own - until you have."""
+    import geelark_farm.store.users as users_mod
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own", "must_change_password": True})
+    chosen = []
+    monkeypatch.setattr(users_mod, "set_password",
+                        lambda s, uid, pw: chosen.append((uid, pw)))
+    client = web()
+    client.login(username="narrow")
+    status, headers, _ = client.request("GET", "/")
+    assert status == 303 and dict(headers)["Location"] == "/password"
+    status, _, body = client.request("GET", "/password")
+    assert status == 200 and "Choose your password" in body
+    token = re.search(r'name="csrf" value="([^"]*)"', body).group(1)
+
+    status, _, body = client.request(
+        "POST", "/password", f"csrf={token}&password=abcdefgh&again=nope")
+    assert status == 200 and "do not match" in body and chosen == []
+
+    status, headers, _ = client.request(
+        "POST", "/password", f"csrf={token}&password=abcdefgh&again=abcdefgh")
+    assert status == 303 and dict(headers)["Location"] == "/"
+    assert chosen == [(9, "abcdefgh")]
+    assert client.request("GET", "/")[0] == 200

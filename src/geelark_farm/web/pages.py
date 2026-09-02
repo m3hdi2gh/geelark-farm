@@ -61,6 +61,8 @@ def page(title: str, body: str, *, user: dict | None = None,
             links += ['<a href="/needs">Needs attention</a>',
                       '<a href="/pools">Pools</a>',
                       '<a href="/events">Events</a>']
+        if user.get("role") == "admin" and user.get("user_admin"):
+            links += ['<a href="/users">Users</a>']
         links += [f'<form method="post" action="/logout">'
                   f'<span class="muted">{esc(user["username"])}</span> '
                   f'<input type="hidden" name="csrf" '
@@ -278,3 +280,128 @@ def requests_page(rows: list[dict], user: dict, said: str = "") -> str:
     else:
         body += f"<table>{head}{''.join(lines)}</table>"
     return page("Requests", body, user=user, refresh=10 if pending else 0)
+
+
+# ------------------------------------------------------------------ users
+_USERS_SAID = {
+    "saved": "Saved. That person's open sessions were ended - the new "
+             "settings apply when they sign in again.",
+    "no_change": "Nothing changed.",
+}
+
+
+def _tick(name: str, on: bool, label: str, hint: str = "") -> str:
+    hint_html = f' <span class="muted">— {esc(hint)}</span>' if hint else ""
+    return (f'<label><input type="checkbox" name="{esc(name)}" value="1"'
+            f'{" checked" if on else ""}> {esc(label)}{hint_html}</label>')
+
+
+def _choice(name: str, options: tuple, current: str) -> str:
+    return "".join(
+        f'<label><input type="radio" name="{esc(name)}" value="{esc(o)}"'
+        f'{" checked" if o == current else ""}> {esc(o)}</label> '
+        for o in options)
+
+
+def users_page(users: list[dict], selected: dict | None, user: dict,
+               permissions: tuple, said: str = "",
+               error: str = "") -> str:
+    """Everyone who can sign in, and an editor for one of them.
+
+    The editor's form is the whole permission model made visible: role,
+    sight, six ticks. Nothing here shows or accepts a password - creating
+    or resetting mints a one-time one that the next page shows exactly
+    once."""
+    csrf = esc(user.get("csrf", ""))
+    body = ""
+    if error:
+        body += f'<p class="err">{esc(error)}</p>'
+    note = _USERS_SAID.get(said, "")
+    if note:
+        body += f'<p class="said">{esc(note)}</p>'
+    body += f"<h2>Users ({len(users)})</h2>"
+    head = ("<tr><th>User</th><th>Role</th><th>Sees</th><th>May</th>"
+            "<th>Last seen</th><th></th></tr>")
+    lines = []
+    for u in users:
+        may = ("everything" if u["role"] == "admin" else
+               ", ".join(label for col, label, _ in permissions
+                         if u.get(col)) or "nothing yet")
+        state = "" if u["active"] else ' <span class="badge">deactivated</span>'
+        seen = str(u.get("last_login_at") or "never")[:16]
+        lines.append(
+            "<tr>"
+            f"<td>{esc(u['username'])}{state}</td>"
+            f"<td>{esc(u['role'])}</td><td>{esc(u['sees'])}</td>"
+            f"<td class=\"muted\">{esc(may)}</td>"
+            f"<td class=\"muted\">{esc(seen)}</td>"
+            f"<td><a href=\"/users?id={u['id']}\">edit</a></td></tr>")
+    body += f"<table>{head}{''.join(lines)}</table>"
+
+    if selected is not None:
+        u = selected
+        ticks = "".join(f"<p>{_tick(col, bool(u.get(col)), label, hint)}</p>"
+                        for col, label, hint in permissions)
+        body += (
+            f"<h3>Edit {esc(u['username'])}</h3>"
+            f'<form method="post" action="/users/{u["id"]}">'
+            f'<input type="hidden" name="csrf" value="{csrf}">'
+            f"<p>Role: {_choice('role', ('admin', 'operator'), u['role'])}</p>"
+            f"<p>Sees: {_choice('sees', ('all', 'own'), u['sees'])}</p>"
+            f"<p>{_tick('active', bool(u['active']), 'active')}</p>"
+            f"<p class=\"muted\">An admin may do everything below and drive "
+            f"the service; an operator may do exactly what is ticked.</p>"
+            f"{ticks}"
+            f"<p><button>Save</button></p></form>"
+            f'<form method="post" action="/users/{u["id"]}/reset">'
+            f'<input type="hidden" name="csrf" value="{csrf}">'
+            f"<p><button>Reset password</button> "
+            f"<span class=\"muted\">shows a one-time password once and "
+            f"signs them out everywhere</span></p></form>")
+
+    ticks = "".join(f"<p>{_tick(col, False, label, hint)}</p>"
+                    for col, label, hint in permissions)
+    body += (
+        "<h3>New user</h3>"
+        '<form method="post" action="/users/new">'
+        f'<input type="hidden" name="csrf" value="{csrf}">'
+        '<p><input name="username" placeholder="username" '
+        'autocomplete="off"></p>'
+        f"<p>Role: {_choice('role', ('admin', 'operator'), 'operator')}</p>"
+        f"<p>Sees: {_choice('sees', ('all', 'own'), 'own')}</p>"
+        f"{ticks}"
+        "<p><button>Create</button> <span class=\"muted\">a one-time "
+        "password is shown once on the next page</span></p></form>")
+    return page("Users", body, user=user)
+
+
+def one_time_page(username: str, password: str, user: dict,
+                  *, created: bool) -> str:
+    """The password, exactly once. Not in a URL, not in the log, not on
+    any later page - the person types it at their first sign-in and is
+    then made to choose their own."""
+    what = "created" if created else "password reset"
+    body = (f"<h2>{esc(username)} — {esc(what)}</h2>"
+            f"<p>Their one-time password, shown only now:</p>"
+            f"<p><code style=\"font-size:1.3rem\">{esc(password)}</code></p>"
+            f"<p class=\"muted\">They will be asked to choose their own the "
+            f"first time they sign in. Every open session of theirs has "
+            f"been ended.</p>"
+            f"<p><a href=\"/users\">Back to users</a></p>")
+    return page("One-time password", body, user=user)
+
+
+def password_page(user: dict, error: str = "") -> str:
+    csrf = esc(user.get("csrf", ""))
+    body = f'<p class="err">{esc(error)}</p>' if error else ""
+    body += ("<h2>Choose your password</h2>"
+             "<p class=\"muted\">The one you signed in with was for one "
+             "use. Pick your own - at least 8 characters.</p>"
+             '<form method="post" action="/password">'
+             f'<input type="hidden" name="csrf" value="{csrf}">'
+             '<p><input name="password" type="password" '
+             'placeholder="new password" autofocus></p>'
+             '<p><input name="again" type="password" '
+             'placeholder="the same, again"></p>'
+             "<p><button>Save</button></p></form>")
+    return page("Choose your password", body, user=user)
