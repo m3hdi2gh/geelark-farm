@@ -427,10 +427,17 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
         from .store import db as store_db
         from .store import events as store_events
         from .store import shadow as store_shadow
+        from .store import state as store_state
 
         with store_db.connect(settings) as conn:
             did = store_shadow.write_shadow(
                 conn, book, resources=not settings.pools_in_pg)
+            # What the sync learned that belongs to no row (C5): the
+            # proxies GeeLark holds that the tab never heard of, kept so
+            # the Proxy Pool page can offer to add them without a call.
+            store_state.put(conn, "unlisted_proxies",
+                            getattr(book, "unlisted_proxies", []))
+            conn.commit()
         acted = {k: v for k, v in (outcome or {}).items() if v}
         if decision.jobs or acted or did["closed"]:
             store_events.emit(

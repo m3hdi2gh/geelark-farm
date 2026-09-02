@@ -2271,11 +2271,21 @@ def sync_proxies(client: Client, book: Book,
         log.warning("could not list GeeLark's own proxies (%s), so nothing is "
                     "reported as unlisted this run", exc)
         held = []
+    unlisted = [item for item in held
+                if f"{item['server']}:{item['port']}:{item.get('username', '')}"
+                not in known]
     changed["unlisted"] = [
         f"{item['server']}:{item['port']} ({item.get('username', '')})"
-        for item in held
-        if f"{item['server']}:{item['port']}:{item.get('username', '')}"
-        not in known]
+        for item in unlisted]
+    # The raw items too, on the Book for the pass to keep in the store: the
+    # web's Proxy Pool page offers "add it to the pool" off this list, and
+    # that needs the credentials, not the report's one-line spelling.
+    book.unlisted_proxies = [
+        {"host": str(item.get("server") or ""),
+         "port": str(item.get("port") or ""),
+         "username": str(item.get("username") or ""),
+         "password": str(item.get("password") or "")}
+        for item in unlisted]
 
     for resource in book.proxies._rows:
         if resource.error or not resource.proxy:

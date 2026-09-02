@@ -252,3 +252,14 @@ ALTER TABLE resources ADD COLUMN IF NOT EXISTS purchased_on text NOT NULL DEFAUL
 -- that predates the question.
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS source       text NOT NULL DEFAULT 'sheet';
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS added_by     bigint REFERENCES users(id);
+
+-- ------------------------------------------------------ service_state (C5)
+-- Small facts a pass learns that belong to no row - the proxies GeeLark
+-- holds that the Proxy tab never heard of, the counts the Service board
+-- shows - written whole each pass so a page can show them without a
+-- GeeLark call. One row per key, jsonb, replaced in place.
+CREATE TABLE IF NOT EXISTS service_state (
+    key        text PRIMARY KEY,
+    value      jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);

@@ -61,6 +61,9 @@ def web(request, monkeypatch, make_settings):
     monkeypatch.setattr(app_mod.read, "pools",
                         lambda s: {"counts": [], "broken": []})
     monkeypatch.setattr(app_mod.read, "events", lambda s, limit=200: [])
+    monkeypatch.setattr(app_mod.read, "nav_counts",
+                        lambda s: {"gmail": 3, "proxy": 2, "app": 1,
+                                   "pending": 0})
     # every test gets clean auth state
     monkeypatch.setattr(app_mod, "_sessions", {})
     monkeypatch.setattr(app_mod, "_failures", {})
@@ -161,9 +164,9 @@ def test_an_own_scoped_user_is_kept_out_of_the_farm_pages(web, monkeypatch):
                          "sees": "own"})
     client = web()
     client.login(username="narrow")
-    status, _, _ = client.request("GET", "/pools")
-    assert status == 403
     status, _, _ = client.request("GET", "/events")
+    assert status == 403
+    status, _, _ = client.request("GET", "/needs")
     assert status == 403
 
 
@@ -543,3 +546,155 @@ def test_a_one_time_password_buys_only_the_page_to_replace_it(web,
     assert status == 303 and dict(headers)["Location"] == "/"
     assert chosen == [(9, "abcdefgh")]
     assert client.request("GET", "/")[0] == 200
+
+
+# --------------------------------------------------------- the pools (C5)
+MUTATIONS_ON = {"web_mutations": True}
+
+
+def _gmail_row(address, status="", **more):
+    row = {"id": 1, "address": address, "status": status, "serial": "",
+           "seller": "egypt", "purchased_on": "2026-08-30", "used_at": "",
+           "note": "", "updated_at": "2026-09-02 10:00:00", "has_totp": True,
+           "has_recovery": False, "source": "sheet", "phone_status": "ready"}
+    row.update(more)
+    return row
+
+
+def _gmail_active(monkeypatch, seen=None):
+    seen = seen if seen is not None else {}
+
+    def gmail_pool(settings, view="active", seller=""):
+        seen.update(view=view, seller=seller)
+        counts = {"queued": 2, "on_phone": 1, "used": 5, "errored": 3,
+                  "broken": 0}
+        if view == "errored":
+            return {"view": view, "counts": counts, "seller": seller,
+                    "rows": [_gmail_row("bad1@x.com", "captcha_shown"),
+                             _gmail_row("bad2@x.com", "wrong_2fa_code")],
+                    "sellers": [{"seller": "egypt", "c": 2}]}
+        return {"view": "active", "counts": counts,
+                "on_phone": [_gmail_row("on@x.com", "ready", serial="1551")],
+                "queued": [_gmail_row("q1@x.com"), _gmail_row("q2@x.com")],
+                "broken": [], "sellers": []}
+
+    monkeypatch.setattr(app_mod.read, "gmail_pool", gmail_pool)
+    return seen
+
+
+def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
+                                                             monkeypatch):
+    _gmail_active(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/pools/gmail")
+    assert status == 200
+    assert 'href="/pools/gmail" class="here"' in body
+    assert '<span class="n">3</span>' in body          # gmail free count
+    assert "on@x.com" in body and "1551" in body and "q2@x.com" in body
+
+
+def test_pool_pages_are_shared_stock_that_everyone_signed_in_sees(
+        web, monkeypatch):
+    """Stock is shared; what a person may DO on it is the buttons' job."""
+    _gmail_active(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own"})
+    client = web()
+    client.login(username="narrow")
+    assert client.request("GET", "/pools/gmail")[0] == 200
+    status, headers, _ = client.request("GET", "/pools")
+    assert status == 303 and dict(headers)["Location"] == "/pools/gmail"
+
+
+def test_buttons_stay_hidden_until_the_flag_and_the_permission_agree(
+        web, monkeypatch):
+    _gmail_active(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert "/pools/gmail/preview" not in body, "flag off: no form"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_add_form_needs_the_flag_and_the_permission_together(
+        web, monkeypatch):
+    _gmail_active(monkeypatch)
+    admin = web()
+    admin.login()
+    _, _, body = admin.request("GET", "/pools/gmail")
+    assert "/pools/gmail/preview" in body
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own", "may_add_gmail": False})
+    narrow = web()
+    narrow.login(username="narrow")
+    _, _, body = narrow.request("GET", "/pools/gmail")
+    assert "/pools/gmail/preview" not in body
+
+
+def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
+        web, monkeypatch):
+    seen = _gmail_active(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET",
+                                     "/pools/gmail?view=errored&seller=egypt")
+    assert status == 200 and seen == {"view": "errored", "seller": "egypt"}
+    assert "bad1@x.com\nbad2@x.com" in body, "the refund box, one per line"
+    assert "captcha_shown" in body and "Addresses for refund (2)" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_page_offers_to_adopt_what_geelark_holds(web, monkeypatch):
+    import geelark_farm.store.state as state_mod
+
+    monkeypatch.setattr(state_mod, "get", lambda s, key, default=None: [
+        {"host": "1.2.3.4", "port": "9999", "username": "u", "password": "p"}])
+    monkeypatch.setattr(app_mod.read, "proxy_pool",
+                        lambda s, unlisted=None: {
+                            "rows": [{"id": 1, "name": "SX1", "host": "10.0.0.1",
+                                      "port": 9999, "username": "u",
+                                      "status": "free", "serial": "",
+                                      "last_exit_ip": "10.0.0.1",
+                                      "times_used": 2, "note": "",
+                                      "updated_at": "2026-09-02 10:00:00",
+                                      "error": None}],
+                            "counts": {"all": 1, "free": 1},
+                            "needs_new_ip": [], "dead": [],
+                            "unlisted": unlisted or []})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/pools/proxy")
+    assert status == 200
+    assert "1.2.3.4:9999 (u)" in body and "Add to pool" in body
+    assert "SX1" in body and 'name="name" value="SX1"' in body  # Remove
+
+
+def test_the_gpt_delivered_view_searches_and_pages(web, monkeypatch):
+    seen = {}
+
+    def gpt_pool(settings, view="active", q="", page=1, per_page=50):
+        seen.update(view=view, q=q, page=page)
+        return {"view": "delivered",
+                "counts": {"awaiting": 0, "logging_in": 0, "on_phone": 0,
+                           "delivered": 108, "needs_human": 0},
+                "rows": [{"id": 1, "address": "d@x.com", "status": "delivered",
+                          "serial": "1542", "source": "manual",
+                          "added_by": None, "added_by_name": None,
+                          "note": "went out", "updated_at": "2026-09-01",
+                          "created_at": "", "email_code_only": False,
+                          "has_totp": True}],
+                "q": q, "page": page, "more": True}
+
+    monkeypatch.setattr(app_mod.read, "gpt_pool", gpt_pool)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "GET", "/pools/gpt?view=delivered&q=abc&page=2")
+    assert status == 200
+    assert seen == {"view": "delivered", "q": "abc", "page": 2}
+    assert "d@x.com" in body and "1542" in body
+    assert "older →" in body and "← newer" in body

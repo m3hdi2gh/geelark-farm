@@ -103,10 +103,37 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.needs_page(
                     read.needs(self.settings), user, _advice))
             if path == "/pools":
-                if user["sees"] != "all":
-                    return self._html(403, pages.forbidden(user))
-                return self._html(200, pages.pools_page(
-                    read.pools(self.settings), user))
+                return self._redirect("/pools/gmail")
+            # The three pool pages (C5): shared stock, so everyone signed
+            # in sees them; what they may DO on them is the buttons' job.
+            query = parse_qs(self.path.partition("?")[2])
+            first = {k: v[0] for k, v in query.items()}
+            if path == "/pools/gmail":
+                return self._html(200, pages.gmail_pool_page(
+                    read.gmail_pool(self.settings,
+                                    view=first.get("view", "active"),
+                                    seller=first.get("seller", "")),
+                    user, said=first.get("said", "")))
+            if path == "/pools/proxy":
+                from ..store import state as store_state
+
+                return self._html(200, pages.proxy_pool_page(
+                    read.proxy_pool(self.settings, unlisted=store_state.get(
+                        self.settings, "unlisted_proxies", [])),
+                    user, said=first.get("said", ""),
+                    state=first.get("state", ""), q=first.get("q", "")))
+            if path == "/pools/gpt":
+                try:
+                    number = max(1, int(first.get("page", "1")))
+                except ValueError:
+                    log.debug("page %r is not a number; showing the first",
+                              first.get("page"))
+                    number = 1
+                return self._html(200, pages.gpt_pool_page(
+                    read.gpt_pool(self.settings,
+                                  view=first.get("view", "active"),
+                                  q=first.get("q", ""), page=number),
+                    user, said=first.get("said", "")))
             if path == "/events":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -339,9 +366,15 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         # The csrf token rides in the user dict so every page's header
         # (the logout form) can carry it without a second parameter; so
-        # does the one flag the header needs to know about.
+        # do the flags the shell needs and the rail's counts.
+        try:
+            nav = read.nav_counts(self.settings)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the rail's counts did not load (%s)", exc)
+            nav = {}
         return dict(entry["user"], csrf=entry.get("csrf", ""),
-                    user_admin=self.settings.web_user_admin)
+                    user_admin=self.settings.web_user_admin,
+                    mutations=self.settings.web_mutations, nav=nav)
 
     def _cookie(self) -> str:
         raw = self.headers.get("Cookie") or ""

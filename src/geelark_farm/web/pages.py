@@ -14,61 +14,153 @@ from __future__ import annotations
 
 from html import escape as esc
 
+#: The console's shell - the "Direction A" the owner chose on the design
+#: canvas (2026-09-01): a dark ops console, a rail of links on the left with
+#: the stock counts beside them, monospace where digits line up. One
+#: stylesheet for every page, no JavaScript, no static files.
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — geelark</title><style>
-body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#182230}}
-header{{display:flex;gap:1.2rem;align-items:baseline;padding:.7rem 1.2rem;
- background:#182230;color:#e8edf2}}
-header b{{font-size:1.05rem}}
-header a{{color:#9fb3c8;text-decoration:none}}
-header a:hover{{color:#fff}}
-header form{{margin-inline-start:auto}}
-main{{max-width:64rem;margin:1.2rem auto;padding:0 1rem}}
-table{{border-collapse:collapse;width:100%;background:#fff;font-size:.9rem}}
-th,td{{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #e3e8ee}}
-th{{background:#eef2f6;font-weight:600}}
-.tiles{{display:flex;gap:.8rem;flex-wrap:wrap;margin:0 0 1.2rem}}
-.tile{{background:#fff;border:1px solid #e3e8ee;border-radius:6px;
- padding:.7rem 1.1rem;min-width:7rem}}
-.tile b{{display:block;font-size:1.5rem}}
-.err{{background:#fdecea;color:#8c3220;padding:.6rem .9rem;border-radius:4px;
- margin:0 0 1rem}}
-.said{{background:#e7f2e8;color:#1e5b2a;padding:.6rem .9rem;border-radius:4px;
- margin:0 0 1rem}}
-.muted{{color:#6b7b90}}
-.badge{{display:inline-block;padding:.1rem .5rem;border-radius:9px;
- font-size:.8rem;background:#e3e8ee;color:#3c4a5c}}
-.badge.queued{{background:#fff3d6;color:#7a5a12}}
-.badge.running{{background:#dceafd;color:#1d4f91}}
-.badge.done{{background:#e7f2e8;color:#1e5b2a}}
-.badge.failed,.badge.refused{{background:#fdecea;color:#8c3220}}
-button{{cursor:pointer}}
-</style>{refresh}</head><body>{header}<main>{body}</main></body></html>"""
+<title>{title} — geelark</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{{--bg:#0f1522;--rail:#0b101b;--panel:#151d2d;--panel2:#101827;--line:#232c3f;
+ --line2:#1d2636;--ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#6b7a90;
+ --green:#58d68d;--green-bg:#10331f;--amber:#f0c064;--amber-bg:#3a2d10;
+ --red:#e0654f;--red-bg:#4d2323;--blue:#7fb4ff;--blue-bg:#16324f;--violet:#c9b8f0;
+ --violet-bg:#2c1f3d;--accent:#2563c4}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--ink);
+ font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}}
+a{{color:var(--blue);text-decoration:none}} a:hover{{color:#a8ccff}}
+.shell{{display:flex;min-height:100vh}}
+nav{{width:216px;flex-shrink:0;background:var(--rail);
+ border-right:1px solid var(--line2);padding:20px 12px;display:flex;
+ flex-direction:column;gap:4px}}
+nav .brand{{font-weight:600;font-size:15px;letter-spacing:.4px;color:#eef3fa;
+ padding:4px 12px 20px}}
+nav a{{display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;
+ border-radius:6px;color:#9aa7ba;font-size:14px}}
+nav a:hover{{color:#fff;background:#141c2b}}
+nav a.here{{background:#1a2334;color:#fff;font-weight:500}}
+nav a .n{{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:12px;
+ color:var(--dim)}}
+nav a .n.hot{{min-width:20px;height:20px;display:flex;align-items:center;
+ justify-content:center;border-radius:10px;background:var(--amber-bg);
+ color:var(--amber)}}
+nav form{{margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px;
+ border-top:1px solid var(--line2)}}
+nav form span{{color:#b9c4d4;font-size:13px}}
+nav form button{{margin-left:auto;background:none;border:0;color:var(--dim);
+ font-size:12px;cursor:pointer;font-family:inherit}}
+main{{flex:1;min-width:0;padding:22px 28px;display:flex;flex-direction:column;gap:16px}}
+h2{{font-size:19px;font-weight:600;color:var(--bright);margin:0}}
+h3{{font-size:13px;font-weight:600;color:#c6d1e0;margin:0}}
+.top{{display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+.top .status{{margin-left:auto;font-family:'IBM Plex Mono',monospace;
+ font-size:12.5px;color:var(--muted)}}
+.panel{{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+ padding:16px 18px;display:flex;flex-direction:column;gap:10px}}
+.panel.warn{{background:#1c1a15;
+ border-color:#57431c}} .panel.warn h3{{color:var(--amber)}}
+.panel.bad{{background:#201414;
+ border-color:var(--red-bg)}} .panel.bad h3{{color:var(--red)}}
+.grid2{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
+.grid3{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}}
+.tiles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}}
+.tile{{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+ padding:14px 18px}}
+.tile .l{{font-size:12.5px;color:var(--muted);margin-bottom:6px}}
+.tile b{{display:block;font-family:'IBM Plex Mono',monospace;font-size:30px;
+ font-weight:500}}
+table{{border-collapse:collapse;width:100%;font-family:'IBM Plex Mono',monospace;
+ font-size:12.5px}}
+th{{text-align:left;padding:0 8px 6px 0;font-weight:400;font-size:12px;
+ color:var(--dim);border-bottom:1px solid var(--line)}}
+td{{padding:6px 8px 6px 0;border-bottom:1px solid var(--line2);color:#b9c4d4;
+ vertical-align:top}}
+tr:last-child td{{border-bottom:0}}
+.pills{{display:flex;border:1px solid #2c3a52;border-radius:6px;overflow:hidden}}
+.pills a,.pills span{{padding:7px 14px;font-size:13px;color:#9aa7ba;
+ font-family:'IBM Plex Sans',system-ui,sans-serif}}
+.pills span,.pills a.here{{background:#1a2334;color:#fff}}
+.chips{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
+.chips a,.chips span{{padding:4px 10px;border-radius:12px;font-size:12px;
+ border:1px solid #2c3a52;color:#9aa7ba}}
+.chips span,.chips a.here{{background:#1a2334;color:#fff;border-color:transparent}}
+.badge{{display:inline-block;padding:1px 8px;border-radius:9px;font-size:11.5px;
+ background:#1d2636;color:#9aa7ba;white-space:nowrap}}
+.badge.ok,.badge.done,.badge.free,.badge.ready{{background:var(--green-bg);
+ color:var(--green)}}
+.badge.warn,.badge.queued,.badge.on_phone,.badge.in_use,.badge.claimed{{background:var(--amber-bg);
+ color:var(--amber)}}
+.badge.bad,.badge.failed,.badge.refused,.badge.dead{{background:var(--red-bg);
+ color:var(--red)}}
+.badge.info,.badge.running,.badge.panel{{background:var(--blue-bg);color:var(--blue)}}
+.badge.manual{{background:var(--violet-bg);color:var(--violet)}}
+.badge.attn{{background:#4b2a12;color:#f0a24a}}
+.muted{{color:var(--muted)}} .dim{{color:var(--dim);font-size:12px}}
+.mono{{font-family:'IBM Plex Mono',monospace}}
+.err{{background:#2a1512;border:1px solid #57241c;color:#f0a094;padding:10px 14px;
+ border-radius:6px;font-size:13px}}
+.said{{background:#0f2b1a;border:1px solid #1e5b2a;color:#9be3b3;padding:10px 14px;
+ border-radius:6px;font-size:13px}}
+input,textarea,select{{background:var(--panel2);border:1px solid #2c3a52;
+ border-radius:6px;color:var(--ink);padding:9px 12px;
+ font-family:'IBM Plex Mono',monospace;font-size:12.5px}}
+textarea{{width:100%;min-height:110px;line-height:1.7}}
+input::placeholder,textarea::placeholder{{color:#55627a}}
+button,.btn{{cursor:pointer;background:var(--accent);color:#fff;border:0;
+ border-radius:6px;padding:9px 18px;
+ font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13.5px;font-weight:600}}
+button.quiet,.btn.quiet{{background:none;border:1px solid #2c3a52;color:#9db4d4;
+ font-weight:400;padding:5px 10px;font-size:12px}}
+button.quiet.warn{{border-color:#57431c;color:var(--amber)}}
+button.quiet.bad{{border-color:var(--red-bg);color:var(--red)}}
+form.inline{{display:inline}}
+.row{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
+label{{display:flex;gap:8px;align-items:center;font-size:13px}}
+p{{margin:0}}
+</style>{refresh}</head><body><div class="shell">{header}
+<main>{body}</main></div></body></html>"""
+
+#: The rail, in the order the canvas fixed. (path, label, count-key). A
+#: count-key names a number in `user["nav"]`; the Requests one is "hot"
+#: (amber) when anything is pending.
+_RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
+         ("/pools/proxy", "Proxy Pool", "proxy"),
+         ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
+         ("/events", "Events", ""), ("/users", "Users", ""))
 
 
 def page(title: str, body: str, *, user: dict | None = None,
-         refresh: int = 0) -> str:
+         refresh: int = 0, here: str = "") -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
-    that the next serve pass will change; zero (the default) means none."""
+    that the next serve pass will change; zero (the default) means none.
+    `here` is the rail entry to light."""
     header = ""
     if user is not None:
-        links = ['<b>geelark</b>', '<a href="/">Dashboard</a>',
-                 '<a href="/phones">Phones</a>',
-                 '<a href="/requests">Requests</a>']
-        if user.get("sees") == "all":
-            links += ['<a href="/needs">Needs attention</a>',
-                      '<a href="/pools">Pools</a>',
-                      '<a href="/events">Events</a>']
-        if user.get("role") == "admin" and user.get("user_admin"):
-            links += ['<a href="/users">Users</a>']
-        links += [f'<form method="post" action="/logout">'
-                  f'<span class="muted">{esc(user["username"])}</span> '
-                  f'<input type="hidden" name="csrf" '
-                  f'value="{esc(user.get("csrf", ""))}">'
-                  f'<button>Log out</button></form>']
-        header = "<header>" + "".join(links) + "</header>"
+        counts = user.get("nav") or {}
+        links = ['<nav><div class="brand">geelark farm</div>']
+        for path, label, key in _RAIL:
+            if path == "/events" and user.get("sees") != "all":
+                continue
+            if path == "/users" and not (user.get("role") == "admin"
+                                         and user.get("user_admin")):
+                continue
+            n = ""
+            if key and counts.get(key) is not None:
+                hot = " hot" if key in ("pending", "app") and counts[key] \
+                    else ""
+                n = f'<span class="n{hot}">{int(counts[key])}</span>'
+            lit = ' class="here"' if path == here else ""
+            links.append(f'<a href="{path}"{lit}>{esc(label)}{n}</a>')
+        links.append(f'<form method="post" action="/logout">'
+                     f'<span>{esc(user["username"])}</span>'
+                     f'<input type="hidden" name="csrf" '
+                     f'value="{esc(user.get("csrf", ""))}">'
+                     f'<button>Log out</button></form></nav>')
+        header = "".join(links)
     tag = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
            if refresh else "")
     return _PAGE.format(title=esc(title), header=header, body=body,
@@ -405,3 +497,409 @@ def password_page(user: dict, error: str = "") -> str:
              'placeholder="the same, again"></p>'
              "<p><button>Save</button></p></form>")
     return page("Choose your password", body, user=user)
+
+
+# ------------------------------------------------------------- the pools
+# The three pool pages of the console (C5). Reads come off the mirror;
+# every button is a POST that lands in the actions queue and is carried
+# out by the next serve pass against the sheet - the interim model, until
+# the pools move into the store for good. Buttons render only when the
+# mutation flag is on AND the person may do the thing; the pages
+# themselves are shared stock and everyone signed in sees them.
+
+_POOL_SAID = {
+    "queued": "Queued - the next pass (within ~30s) carries it out; watch "
+              "Requests.",
+    "refused": "You may not do that - ask an admin for the permission.",
+    "off": "Actions are not switched on yet.",
+}
+
+
+def _may(user: dict, permission: str) -> bool:
+    from ..store.users import may
+
+    return bool(user.get("mutations")) and may(user, permission)
+
+
+def _csrf(user: dict) -> str:
+    return (f'<input type="hidden" name="csrf" '
+            f'value="{esc(user.get("csrf", ""))}">')
+
+
+def _when(value) -> str:
+    return esc(str(value or "")[:16])
+
+
+def _said(said: str, table: dict) -> str:
+    note = table.get(said, "")
+    return f'<p class="said">{esc(note)}</p>' if note else ""
+
+
+def _kind_2fa(row: dict) -> str:
+    if row.get("has_totp"):
+        return '<span class="badge ok">authenticator</span>'
+    if row.get("has_recovery"):
+        return '<span class="badge warn">recovery address</span>'
+    if row.get("email_code_only"):
+        return '<span class="badge warn">email code</span>'
+    return '<span class="badge">password only</span>'
+
+
+def gmail_pool_page(data: dict, user: dict, said: str = "") -> str:
+    """Active = on a phone / queued; Used and Errored are the archives.
+    Errored carries seller, purchase and failure dates and a plain box of
+    addresses - the list the seller is asked to refund."""
+    c = data["counts"]
+    view = data["view"]
+    pills = "".join(
+        (f'<span>{v.capitalize()} · {n}</span>' if view == v else
+         f'<a href="/pools/gmail?view={v}">{v.capitalize()} · {n}</a>')
+        for v, n in {"active": c["queued"] + c["on_phone"],
+                     "used": c["used"], "errored": c["errored"]}.items())
+    body = (f'<div class="top"><h2>Gmail Pool</h2><div class="pills">{pills}'
+            f'</div><span class="status">{c["queued"]} queued covers the '
+            f'next {c["queued"]} builds</span></div>')
+    body += _said(said, _POOL_SAID)
+
+    if view == "used":
+        rows = "".join(
+            f"<tr><td>{esc(r['address'])}</td><td>{esc(r['serial'] or '')}"
+            f"</td><td class=\"muted\">{esc(r['used_at'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['note'] or '')}</td></tr>"
+            for r in data["rows"])
+        body += (f'<div class="panel"><h3>Used — {c["used"]}</h3><table>'
+                 f'<tr><th>address</th><th>phone</th><th>used</th>'
+                 f'<th>seller</th><th>note</th></tr>{rows}</table></div>')
+        return page("Gmail Pool", body, user=user, here="/pools/gmail")
+
+    if view == "errored":
+        chosen = data.get("seller", "")
+        chips = [(f'<span>all sellers · {c["errored"]}</span>' if not chosen
+                  else f'<a href="/pools/gmail?view=errored">all sellers · '
+                       f'{c["errored"]}</a>')]
+        for s in data["sellers"]:
+            name = s["seller"] or "(no seller)"
+            if chosen and chosen.lower() == (s["seller"] or ""):
+                chips.append(f'<span>{esc(name)} · {s["c"]}</span>')
+            else:
+                chips.append(f'<a href="/pools/gmail?view=errored&seller='
+                             f'{esc(s["seller"] or "")}">{esc(name)} · '
+                             f'{s["c"]}</a>')
+        rows = "".join(
+            f"<tr><td>{esc(r['address'])}</td>"
+            f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['purchased_on'] or '')}</td>"
+            f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
+            f"<td><span class=\"badge attn\">{esc(r['status'])}</span></td>"
+            f"<td class=\"muted\">{esc(r['note'] or '')}</td></tr>"
+            for r in data["rows"])
+        addresses = "\n".join(r["address"] for r in data["rows"])
+        body += (f'<div class="chips">{"".join(chips)}</div>'
+                 f'<div class="panel"><table><tr><th>address</th>'
+                 f'<th>seller</th><th>purchased</th><th>failed on</th>'
+                 f'<th>reason</th><th>what happened</th></tr>{rows}</table>'
+                 f'<p class="dim">an errored address never re-enters the '
+                 f'pool - this list exists so the seller pays it back</p>'
+                 f'</div>'
+                 f'<div class="panel"><h3>Addresses for refund '
+                 f'({len(data["rows"])})</h3>'
+                 f'<textarea readonly>{esc(addresses)}</textarea>'
+                 f'<p class="dim">select all, copy, paste to the seller</p>'
+                 f'</div>')
+        return page("Gmail Pool", body, user=user, here="/pools/gmail")
+
+    if _may(user, "may_add_gmail"):
+        body += (
+            '<div class="panel"><h3>Add gmails</h3>'
+            '<form method="post" action="/pools/gmail/preview">'
+            f'{_csrf(user)}'
+            '<textarea name="pasted" placeholder="paste straight from the '
+            'seller\'s sheet - one account per line; tab, colon or comma '
+            'all work"></textarea>'
+            '<p class="dim">the address is found by its @, the secret by its '
+            'shape, the password is what remains; nothing is added until '
+            'you confirm the preview</p>'
+            '<div class="row"><input name="seller" placeholder="seller '
+            '(e.g. egypt)" size="18">'
+            '<span class="dim">purchase date stamps automatically</span>'
+            '<button>Preview</button></div></form></div>')
+
+    def phone_state(r: dict) -> str:
+        if r["status"] == "in_use":
+            return '<span class="badge in_use">signing in</span>'
+        return (f'<span class="badge ready">'
+                f'{esc(r.get("phone_status") or "ready")}</span>')
+
+    on_phone = "".join(
+        f"<tr><td>{esc(r['address'])}</td><td>{esc(r['serial'] or '')}</td>"
+        f"<td>{phone_state(r)}</td>"
+        f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
+        f"<td class=\"muted\">{esc(r['seller'] or '')}</td></tr>"
+        for r in data["on_phone"])
+    queued = "".join(
+        f"<tr><td>{esc(r['address'])}</td>"
+        f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
+        f"<td class=\"muted\">{esc(r['purchased_on'] or '')}</td>"
+        f"<td>{_kind_2fa(r)}</td></tr>"
+        for r in data["queued"])
+    body += (f'<div class="panel"><h3>On a phone — {c["on_phone"]}</h3>'
+             f'<table><tr><th>address</th><th>phone</th><th>state</th>'
+             f'<th>since</th><th>seller</th></tr>{on_phone}</table></div>'
+             f'<div class="panel"><h3>Queued — {c["queued"]}'
+             f' <span class="dim">the keeper claims from the top</span></h3>'
+             f'<table><tr><th>address</th><th>seller</th><th>purchased</th>'
+             f'<th>2fa</th></tr>{queued}</table></div>')
+    if data["broken"]:
+        broken = "".join(
+            f"<tr><td>{esc(r['address'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['error'])}</td></tr>"
+            for r in data["broken"])
+        body += (f'<div class="panel bad"><h3>Refused by validation — '
+                 f'{len(data["broken"])}</h3><table>{broken}</table></div>')
+    return page("Gmail Pool", body, user=user, here="/pools/gmail")
+
+
+_PROXY_STATE = {"free": "free", "on a phone": "on_phone", "claimed": "claimed",
+                "change ip": "attn", "dead": "dead", "": "free",
+                "unused": "free", "imported": "info"}
+
+
+def proxy_pool_page(data: dict, user: dict, said: str = "",
+                    state: str = "", q: str = "") -> str:
+    c = data["counts"]
+    body = (f'<div class="top"><h2>Proxy Pool</h2>'
+            f'<span class="mono muted">{c["all"]} rows — '
+            f'{c.get("free", 0)} free · {c.get("on_phone", 0)} on phones · '
+            f'{c.get("needs_new_ip", 0)} need a new IP · '
+            f'{c.get("dead", 0)} dead</span>')
+    if _may(user, "may_add_proxy"):
+        body += (f'<form method="post" action="/pools/proxy/test-all" '
+                 f'class="inline" style="margin-left:auto">{_csrf(user)}'
+                 f'<button class="quiet">Test all now</button></form>')
+    body += "</div>" + _said(said, _POOL_SAID)
+
+    if _may(user, "may_add_proxy"):
+        body += (
+            '<div class="panel"><h3>Add proxies</h3>'
+            '<form method="post" action="/pools/proxy/preview">'
+            f'{_csrf(user)}'
+            '<textarea name="pasted" placeholder="host:port:user:pass, one '
+            'per line - or a name first, then the string"></textarea>'
+            '<p class="dim">names are handed out in order (SX43, SX44 …) '
+            'unless pasted; each is tested by the pass before it joins</p>'
+            '<div class="row"><button>Preview</button></div></form></div>')
+
+    panels = []
+    if data["needs_new_ip"]:
+        rows = "".join(
+            f"<tr><td>{esc(r['name'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['host'] or '')} — {esc(r['note'] or '')}"
+            f"</td><td>" + (
+                f'<form method="post" action="/pools/proxy/free" '
+                f'class="inline">{_csrf(user)}<input type="hidden" '
+                f'name="name" value="{esc(r["name"] or "")}">'
+                f'<button class="quiet warn">IP changed — mark free</button>'
+                f'</form>' if _may(user, "may_add_proxy") else "") +
+            "</td></tr>" for r in data["needs_new_ip"])
+        panels.append(f'<div class="panel warn"><h3>Needs a new IP — '
+                      f'{len(data["needs_new_ip"])}</h3><table>{rows}'
+                      f'</table><p class="dim">change the IP in the '
+                      f'vendor\'s panel first; marking free re-tests it '
+                      f'before any build takes it</p></div>')
+    if data["unlisted"]:
+        rows = "".join(
+            f"<tr><td class=\"mono\">{esc(u.get('host', ''))}:"
+            f"{esc(u.get('port', ''))} ({esc(u.get('username', ''))})</td>"
+            f"<td>" + (
+                f'<form method="post" action="/pools/proxy/adopt" '
+                f'class="inline">{_csrf(user)}'
+                f'<input type="hidden" name="host" value="{esc(u.get("host", ""))}">'
+                f'<input type="hidden" name="port" value="{esc(u.get("port", ""))}">'
+                f'<input type="hidden" name="username" '
+                f'value="{esc(u.get("username", ""))}">'
+                f'<button class="quiet">Add to pool</button></form>'
+                if _may(user, "may_add_proxy") else "") + "</td></tr>"
+            for u in data["unlisted"])
+        panels.append(f'<div class="panel"><h3>Held by GeeLark, not in the '
+                      f'pool — {len(data["unlisted"])}</h3><table>{rows}'
+                      f'</table><p class="dim">reported, never added on its '
+                      f'own - which of them belong here is your call</p>'
+                      f'</div>')
+    if data["dead"]:
+        rows = "".join(
+            f"<tr><td>{esc(r['name'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['host'] or '')}:{esc(str(r['port'] or ''))}"
+            f" — since {_when(r['updated_at'])}</td><td>" + (
+                f'<form method="post" action="/pools/proxy/test" '
+                f'class="inline">{_csrf(user)}<input type="hidden" '
+                f'name="name" value="{esc(r["name"] or "")}">'
+                f'<button class="quiet">Test again</button></form>'
+                if _may(user, "may_add_proxy") else "") + "</td></tr>"
+            for r in data["dead"])
+        panels.append(f'<div class="panel bad"><h3>Dead — '
+                      f'{len(data["dead"])}</h3><table>{rows}</table>'
+                      f'<p class="dim">kept, never removed on its own - '
+                      f'revive it at the vendor and test again</p></div>')
+    if panels:
+        body += "".join(panels)
+
+    chips = [(f'<span>all · {c["all"]}</span>' if not state else
+              f'<a href="/pools/proxy">all · {c["all"]}</a>')]
+    for key, label in {"free": "free", "on_phone": "on a phone",
+                       "claimed": "claimed", "needs_new_ip": "needs new IP",
+                       "dead": "dead"}.items():
+        n = c.get(key, 0)
+        chips.append(f'<span>{label} · {n}</span>' if state == key else
+                     f'<a href="/pools/proxy?state={key}">{label} · {n}</a>')
+    shown = []
+    for r in data["rows"]:
+        word = (r["status"] or "").lower()
+        key = _PROXY_STATE.get(word, "info")
+        bucket = ("free" if key == "free" else "on_phone" if key == "on_phone"
+                  else "claimed" if key == "claimed" else
+                  "needs_new_ip" if key == "attn" else
+                  "dead" if key == "dead" else "other")
+        if state and bucket != state:
+            continue
+        hay = f"{r['name']} {r['host']} {r['serial']}".lower()
+        if q and q.lower() not in hay:
+            continue
+        shown.append(r)
+    rows = "".join(
+        f"<tr><td>{esc(r['name'] or '')}</td>"
+        f"<td class=\"muted\">{esc(r['host'] or '')}:"
+        f"{esc(str(r['port'] or ''))}</td>"
+        f"<td><span class=\"badge "
+        f"{_PROXY_STATE.get((r['status'] or '').lower(), 'info')}\">"
+        f"{esc(r['status'] or 'free')}</span></td>"
+        f"<td class=\"muted\">{esc(r['last_exit_ip'] or '')}</td>"
+        f"<td>{esc(r['serial'] or '')}</td>"
+        f"<td class=\"muted\">{esc(str(r['times_used'] or 0))}</td>"
+        f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
+        f"<td class=\"muted\">{esc(r['note'] or '')}</td>" + (
+            f"<td><form method=\"post\" action=\"/pools/proxy/remove\" "
+            f"class=\"inline\">{_csrf(user)}<input type=\"hidden\" "
+            f"name=\"name\" value=\"{esc(r['name'] or '')}\">"
+            f"<button class=\"quiet bad\">Remove</button></form></td>"
+            if _may(user, "may_add_proxy") and
+            (r["status"] or "").lower() in ("", "free", "unused", "dead",
+                                            "change ip") else "<td></td>")
+        + "</tr>" for r in shown)
+    body += (f'<div class="panel"><div class="row"><h3>All proxies</h3>'
+             f'<div class="chips">{"".join(chips)}</div>'
+             f'<form method="get" action="/pools/proxy" class="inline" '
+             f'style="margin-left:auto">'
+             f'<input type="hidden" name="state" value="{esc(state)}">'
+             f'<input name="q" value="{esc(q)}" placeholder="name, host or '
+             f'phone" size="22"></form></div>'
+             f'<table><tr><th>name</th><th>host</th><th>state</th><th>exit'
+             f'</th><th>phone</th><th>uses</th><th>updated</th><th>note</th>'
+             f'<th></th></tr>{rows}</table></div>')
+    return page("Proxy Pool", body, user=user, here="/pools/proxy")
+
+
+def gpt_pool_page(data: dict, user: dict, said: str = "") -> str:
+    c = data["counts"]
+    view = data["view"]
+    active_n = c["awaiting"] + c["logging_in"] + c["needs_human"]
+    pills = (f'<span>Active · {active_n}</span>'
+             f'<a href="/pools/gpt?view=delivered">Delivered · '
+             f'{c["delivered"]}</a>' if view == "active" else
+             f'<a href="/pools/gpt">Active · {active_n}</a>'
+             f'<span>Delivered · {c["delivered"]}</span>')
+    body = f'<div class="top"><h2>Gpt Pool</h2><div class="pills">{pills}</div>'
+    if view == "delivered":
+        body += (f'<form method="get" action="/pools/gpt" class="inline" '
+                 f'style="margin-left:auto"><input type="hidden" name="view" '
+                 f'value="delivered"><input name="q" value="{esc(data["q"])}" '
+                 f'placeholder="search an address or a phone" size="28">'
+                 f'</form>')
+    body += "</div>" + _said(said, _POOL_SAID)
+
+    if view == "delivered":
+        rows = "".join(
+            f"<tr><td>{esc(r['address'])}</td>"
+            f"<td><span class=\"badge {esc(r['source'])}\">{esc(r['source'])}"
+            f"{(' · ' + esc(r['added_by_name'])) if r.get('added_by_name') else ''}"
+            f"</span></td><td>{esc(r['serial'] or '')}</td>"
+            f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
+            f"<td class=\"muted\">{esc(r['note'] or '')}</td></tr>"
+            for r in data["rows"])
+        nav = ""
+        if data["page"] > 1:
+            nav += (f'<a href="/pools/gpt?view=delivered&q={esc(data["q"])}'
+                    f'&page={data["page"] - 1}">← newer</a> ')
+        if data["more"]:
+            nav += (f'<a href="/pools/gpt?view=delivered&q={esc(data["q"])}'
+                    f'&page={data["page"] + 1}">older →</a>')
+        body += (f'<div class="panel"><table><tr><th>address</th><th>source'
+                 f'</th><th>phone</th><th>delivered</th><th>note</th></tr>'
+                 f'{rows}</table><div class="row"><span class="dim">'
+                 f'{c["delivered"]} delivered accounts - the panel pulls '
+                 f'each one\'s fate from here</span>'
+                 f'<span class="mono dim" style="margin-left:auto">{nav}'
+                 f'</span></div></div>')
+        return page("Gpt Pool", body, user=user, here="/pools/gpt")
+
+    if _may(user, "may_add_gpt"):
+        body += (
+            '<div class="panel"><h3>Add an account by hand</h3>'
+            '<form method="post" action="/pools/gpt/add">'
+            f'{_csrf(user)}<div class="row">'
+            '<input name="address" placeholder="email address" size="30">'
+            '<input name="password" placeholder="password" size="16">'
+            '<input name="secret" placeholder="2FA secret (optional)" '
+            'size="30"><label><input type="checkbox" name="email_code" '
+            'value="1"> email-code only</label><button>Add</button></div>'
+            '<p class="dim">validated the way the sheet rows are - a bad '
+            '2FA secret or a malformed address is refused here, not '
+            'discovered on a phone</p></form></div>')
+
+    def account_rows(rows: list, by: bool) -> str:
+        out = []
+        for r in rows:
+            state = ('<span class="badge info">logging in — '
+                     f'{esc(r["serial"] or "")}</span>'
+                     if r["status"] == "in_use" else
+                     '<span class="badge warn">awaiting login</span>')
+            who = (f"{esc(r.get('added_by_name') or 'sheet')} · "
+                   f"{_when(r['created_at'])}" if by else _when(r["created_at"]))
+            out.append(f"<tr><td>{esc(r['address'])}</td>"
+                       f"<td class=\"muted\">{who}</td>"
+                       f"<td>{_kind_2fa(r)}</td><td>{state}</td></tr>")
+        return "".join(out)
+
+    body += (f'<div class="panel"><h3><span class="badge panel">panel</span> '
+             f'From the customer panel — {len(data["panel"])}</h3>'
+             f'<table><tr><th>address</th><th>received</th><th>2fa</th>'
+             f'<th>state</th></tr>{account_rows(data["panel"], False)}'
+             f'</table></div>'
+             f'<div class="panel"><h3><span class="badge manual">manual'
+             f'</span> Added by hand or from the sheet — '
+             f'{len(data["manual"])}</h3>'
+             f'<table><tr><th>address</th><th>added by</th><th>2fa</th>'
+             f'<th>state</th></tr>{account_rows(data["manual"], True)}'
+             f'</table></div>')
+    if data["needs_human"]:
+        rows = "".join(
+            f"<tr><td>{esc(r['address'])}</td>"
+            f"<td><span class=\"badge attn\">{esc(r['status'])}</span></td>"
+            f"<td class=\"muted\">{esc(r['note'] or '')}</td><td>" + (
+                f'<form method="post" action="/pools/gpt/offer" '
+                f'class="inline">{_csrf(user)}<input type="hidden" '
+                f'name="address" value="{esc(r["address"])}">'
+                f'<button class="quiet warn">Offer again</button></form>'
+                if _may(user, "may_add_gpt") else "") + "</td></tr>"
+            for r in data["needs_human"])
+        body += (f'<div class="panel warn"><h3>Needs a human — '
+                 f'{len(data["needs_human"])}</h3><table>{rows}</table>'
+                 f'</div>')
+    if data["broken"]:
+        broken = "".join(
+            f"<tr><td>{esc(r['address'] or '')}</td>"
+            f"<td class=\"muted\">{esc(r['error'])}</td></tr>"
+            for r in data["broken"])
+        body += (f'<div class="panel bad"><h3>Refused by validation — '
+                 f'{len(data["broken"])}</h3><table>{broken}</table></div>')
+    return page("Gpt Pool", body, user=user, here="/pools/gpt")
