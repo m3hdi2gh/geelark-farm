@@ -327,6 +327,66 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
     return Decision(finish=to_finish, build=to_build)
 
 
+#: What the drain may execute, by verb. Slices register their handlers
+#: here; S5.0 ships only `noop`, which exists so the plumbing is testable
+#: before any real verb rides it. A handler gets (book, ledger, settings,
+#: payload) and returns (status, result-sentence, detail-dict-or-None);
+#: it may raise - the drain turns that into a failed action and a warning,
+#: never a failed pass.
+ACTION_VERBS: dict = {
+    "noop": lambda book, ledger, settings, payload: (
+        "done", "did nothing, successfully", None),
+}
+
+
+def _drain_actions(settings: Settings, book: Book, ledger,
+                   *, controls_only: bool) -> int:
+    """Execute queued web commands with THIS pass's Book and locks.
+
+    Two positions, one decision each (signed off 2026-09-01): control verbs
+    drain ABOVE the Stop-everything check - a stopped pass must still obey
+    "start again from the web" - and every other verb drains below it, so a
+    stopped service does not delete phones. The queue is how a button
+    reaches the sheet without a second writer.
+
+    Never fatal, action-by-action: one bad command costs its own row a
+    `failed` and a warning, and the next command still runs.
+    """
+    if not (settings.store_enabled and settings.web_mutations):
+        return 0
+    done = 0
+    try:
+        from .store import actions as store_actions
+        from .store import db as store_db
+
+        with store_db.connect(settings) as conn:
+            batch = store_actions.take_batch(conn,
+                                             controls_only=controls_only)
+            for action in batch:
+                handler = ACTION_VERBS.get(action["verb"])
+                if handler is None:
+                    store_actions.finish(
+                        conn, action["id"], status="refused",
+                        result=f"unknown verb: {action['verb']}")
+                    continue
+                try:
+                    status, result, detail = handler(
+                        book, ledger, settings, action["payload"])
+                except Exception as exc:                          # noqa: BLE001
+                    log.warning("web action %s (%s) failed: %s",
+                                action["id"], action["verb"], exc)
+                    status, result, detail = (
+                        "failed", "this one is a program error - "
+                                  "it is in today's log", None)
+                store_actions.finish(conn, action["id"], status=status,
+                                     result=result, detail=detail)
+                done += 1
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the action drain did not run this pass (%s); queued "
+                    "commands wait for the next one", exc)
+    return done
+
+
 def _shadow(settings: Settings, book: Book, decision: Decision,
             outcome: dict) -> None:
     """Mirror this pass into the store, and say what the pass did.
@@ -809,6 +869,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
+    _drain_actions(settings, book, ledger, controls_only=True)
     asked = _controls(client, book, ledger, fuse, flight)
     if "Stop everything" in asked:
         # Nothing below this line runs: not the sync, which is what carries out
@@ -886,6 +947,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
+    _drain_actions(settings, book, ledger, controls_only=False)
     _shadow(settings, book, decision, outcome)
 
     if decision.jobs:

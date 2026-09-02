@@ -6,8 +6,7 @@ static files (no path handling, no traversal to get wrong). Every dynamic
 value goes through `esc` - the mirror carries text typed into a spreadsheet
 by people, and a Note cell is exactly where a `<script>` would sit.
 
-The chrome is Persian and RTL because that is the language the operators
-read; the values (statuses, addresses, serials) stay as the sheet holds
+The values (statuses, addresses, serials) stay exactly as the sheet holds
 them, so the page and the tab never disagree about a word.
 """
 
@@ -16,7 +15,7 @@ from __future__ import annotations
 from html import escape as esc
 
 _PAGE = """<!doctype html>
-<html dir="rtl" lang="fa"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} — geelark</title><style>
 body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f8;color:#182230}}
@@ -28,7 +27,7 @@ header a:hover{{color:#fff}}
 header form{{margin-inline-start:auto}}
 main{{max-width:64rem;margin:1.2rem auto;padding:0 1rem}}
 table{{border-collapse:collapse;width:100%;background:#fff;font-size:.9rem}}
-th,td{{text-align:right;padding:.45rem .6rem;border-bottom:1px solid #e3e8ee}}
+th,td{{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #e3e8ee}}
 th{{background:#eef2f6;font-weight:600}}
 .tiles{{display:flex;gap:.8rem;flex-wrap:wrap;margin:0 0 1.2rem}}
 .tile{{background:#fff;border:1px solid #e3e8ee;border-radius:6px;
@@ -36,67 +35,85 @@ th{{background:#eef2f6;font-weight:600}}
 .tile b{{display:block;font-size:1.5rem}}
 .err{{background:#fdecea;color:#8c3220;padding:.6rem .9rem;border-radius:4px;
  margin:0 0 1rem}}
+.said{{background:#e7f2e8;color:#1e5b2a;padding:.6rem .9rem;border-radius:4px;
+ margin:0 0 1rem}}
 .muted{{color:#6b7b90}}
+.badge{{display:inline-block;padding:.1rem .5rem;border-radius:9px;
+ font-size:.8rem;background:#e3e8ee;color:#3c4a5c}}
+.badge.queued{{background:#fff3d6;color:#7a5a12}}
+.badge.running{{background:#dceafd;color:#1d4f91}}
+.badge.done{{background:#e7f2e8;color:#1e5b2a}}
+.badge.failed,.badge.refused{{background:#fdecea;color:#8c3220}}
 button{{cursor:pointer}}
-</style></head><body>{header}<main>{body}</main></body></html>"""
+</style>{refresh}</head><body>{header}<main>{body}</main></body></html>"""
 
 
-def page(title: str, body: str, *, user: dict | None = None) -> str:
+def page(title: str, body: str, *, user: dict | None = None,
+         refresh: int = 0) -> str:
+    """`refresh` seconds of meta-refresh, when a page shows pending state
+    that the next serve pass will change; zero (the default) means none."""
     header = ""
     if user is not None:
-        links = ['<b>geelark</b>', '<a href="/">داشبورد</a>',
-                 '<a href="/phones">گوشی‌ها</a>']
+        links = ['<b>geelark</b>', '<a href="/">Dashboard</a>',
+                 '<a href="/phones">Phones</a>',
+                 '<a href="/requests">Requests</a>']
         if user.get("sees") == "all":
-            links += ['<a href="/needs">نیازمند توجه</a>',
-                      '<a href="/pools">استخرها</a>',
-                      '<a href="/events">رویدادها</a>']
+            links += ['<a href="/needs">Needs attention</a>',
+                      '<a href="/pools">Pools</a>',
+                      '<a href="/events">Events</a>']
         links += [f'<form method="post" action="/logout">'
                   f'<span class="muted">{esc(user["username"])}</span> '
-                  f'<button>خروج</button></form>']
+                  f'<input type="hidden" name="csrf" '
+                  f'value="{esc(user.get("csrf", ""))}">'
+                  f'<button>Log out</button></form>']
         header = "<header>" + "".join(links) + "</header>"
-    return _PAGE.format(title=esc(title), header=header, body=body)
+    tag = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
+           if refresh else "")
+    return _PAGE.format(title=esc(title), header=header, body=body,
+                        refresh=tag)
 
 
 def login(error: str = "") -> str:
     body = f'<p class="err">{esc(error)}</p>' if error else ""
-    body += ('<h2>ورود</h2><form method="post" action="/login">'
-             '<p><input name="username" placeholder="نام کاربری" autofocus>'
+    body += ('<h2>Sign in</h2><form method="post" action="/login">'
+             '<p><input name="username" placeholder="username" autofocus>'
              '</p><p><input name="password" type="password" '
-             'placeholder="رمز عبور"></p>'
-             '<p><button>ورود</button></p></form>')
-    return page("ورود", body)
+             'placeholder="password"></p>'
+             '<p><button>Sign in</button></p></form>')
+    return page("Sign in", body)
 
 
 def dashboard(snap: dict, user: dict) -> str:
     tiles = []
-    labels = (("ready", "آمادهٔ تحویل"), ("app_only", "فقط اپ"),
-              ("building", "در حال ساخت"), ("incomplete", "ناقص"))
+    labels = (("ready", "Ready to deliver"), ("app_only", "App only"),
+              ("building", "In build"), ("incomplete", "Not finished"))
     for key, label in labels:
         tiles.append(f'<div class="tile">{label}'
                      f'<b>{snap["phones"].get(key, 0)}</b></div>')
-    for kind, label in (("gmail", "جیمیل آزاد"), ("proxy", "پروکسی آزاد"),
-                        ("app", "اکانت آزاد")):
+    for kind, label in (("gmail", "Free gmails"), ("proxy", "Free proxies"),
+                        ("app", "Free accounts")):
         stock = snap["stock"].get(kind, {})
         extra = (f' <span class="muted">({stock.get("unusable", 0)} '
-                 f'خراب)</span>' if stock.get("unusable") else "")
+                 f'unusable)</span>' if stock.get("unusable") else "")
         tiles.append(f'<div class="tile">{label}'
                      f'<b>{stock.get("free", 0)}</b>{extra}</div>')
     body = f'<div class="tiles">{"".join(tiles)}</div>'
     last = snap.get("last_event")
     if last:
-        body += (f'<p class="muted">آخرین رویداد: {esc(str(last["kind"]))} '
+        body += (f'<p class="muted">Last event: {esc(str(last["kind"]))} '
                  f'— {esc(str(last["at"]))}</p>')
-    body += ('<p class="muted">این صفحه از آینهٔ دیتابیس می‌خواند که هر '
-             'پاس (~۳۰ ثانیه) تازه می‌شود؛ شیت همچنان مرجع است.</p>')
-    return page("داشبورد", body, user=user)
+    body += ('<p class="muted">This page reads the database mirror, which '
+             'every pass (~30s) refreshes; the sheet is still the '
+             'authority.</p>')
+    return page("Dashboard", body, user=user)
 
 
-_APP_MARK = {True: "✓", False: "✗", None: "؟"}
+_APP_MARK = {True: "✓", False: "✗", None: "?"}
 
 
 def phones_page(rows: list[dict], user: dict) -> str:
-    head = ("<tr><th>سریال</th><th>وضعیت</th><th>State</th><th>اپ</th>"
-            "<th>جیمیل</th><th>اکانت</th><th>پروکسی</th><th>یادداشت</th></tr>")
+    head = ("<tr><th>Serial</th><th>Status</th><th>State</th><th>App</th>"
+            "<th>Gmail</th><th>Account</th><th>Proxy</th><th>Note</th></tr>")
     lines = []
     for r in rows:
         lines.append(
@@ -104,36 +121,37 @@ def phones_page(rows: list[dict], user: dict) -> str:
             f"<td>{esc(str(r['serial']))}</td>"
             f"<td>{esc(str(r['status']))}</td>"
             f"<td>{esc(str(r['state']))}</td>"
-            f"<td>{_APP_MARK.get(r['app_installed'], '؟')}</td>"
+            f"<td>{_APP_MARK.get(r['app_installed'], '?')}</td>"
             f"<td>{esc(str(r['gmail'] or ''))}</td>"
             f"<td>{esc(str(r['app_account'] or ''))}</td>"
             f"<td>{esc(str(r['proxy_name'] or ''))}</td>"
             f"<td>{esc(str(r['note'] or ''))}</td></tr>")
-    body = (f"<h2>گوشی‌ها ({len(rows)})</h2>"
+    body = (f"<h2>Phones ({len(rows)})</h2>"
             f"<table>{head}{''.join(lines)}</table>")
-    return page("گوشی‌ها", body, user=user)
+    return page("Phones", body, user=user)
 
 
 def pools_page(data: dict, user: dict) -> str:
-    body = "<h2>استخرها</h2><table><tr><th>تب</th><th>وضعیت</th><th>تعداد</th></tr>"
+    body = ("<h2>Pools</h2><table>"
+            "<tr><th>Tab</th><th>Status</th><th>Count</th></tr>")
     for r in data["counts"]:
         body += (f"<tr><td>{esc(r['kind'])}</td>"
                  f"<td>{esc(str(r['status']))}</td><td>{r['c']}</td></tr>")
     body += "</table>"
     if data["broken"]:
-        body += ("<h3>ردیف‌های غیرقابل‌استفاده</h3>"
-                 "<table><tr><th>تب</th><th>کدام</th><th>چرا</th></tr>")
+        body += ("<h3>Unusable rows</h3>"
+                 "<table><tr><th>Tab</th><th>Which</th><th>Why</th></tr>")
         for r in data["broken"]:
             body += (f"<tr><td>{esc(r['kind'])}</td>"
                      f"<td>{esc(str(r['who']))}</td>"
                      f"<td>{esc(str(r['error']))}</td></tr>")
         body += "</table>"
-    return page("استخرها", body, user=user)
+    return page("Pools", body, user=user)
 
 
 def events_page(rows: list[dict], user: dict) -> str:
-    head = ("<tr><th>کی</th><th>چه</th><th>اجرا</th><th>سریال</th>"
-            "<th>وضعیت</th><th>جزئیات</th></tr>")
+    head = ("<tr><th>When</th><th>What</th><th>Run</th><th>Serial</th>"
+            "<th>Status</th><th>Detail</th></tr>")
     lines = []
     for r in rows:
         run = f"{r['run_id']}/{r['build']}" if r["build"] else r["run_id"]
@@ -144,13 +162,13 @@ def events_page(rows: list[dict], user: dict) -> str:
             f"<td>{esc(str(r['serial']))}</td>"
             f"<td>{esc(str(r['status']))}</td>"
             f"<td>{esc(str(r['detail']))}</td></tr>")
-    body = f"<h2>رویدادها</h2><table>{head}{''.join(lines)}</table>"
-    return page("رویدادها", body, user=user)
+    body = f"<h2>Events</h2><table>{head}{''.join(lines)}</table>"
+    return page("Events", body, user=user)
 
 
 def forbidden(user: dict) -> str:
-    return page("دسترسی نیست",
-                "<h2>این صفحه در دامنهٔ دید شما نیست</h2>", user=user)
+    return page("No access",
+                "<h2>This page is outside your visibility</h2>", user=user)
 
 
 def needs_page(data: dict, user: dict, advice) -> str:
@@ -158,17 +176,17 @@ def needs_page(data: dict, user: dict, advice) -> str:
     pages render, read decides, and the one module that may know the verdict
     table is the one assembling the data."""
     total = sum(len(v) for v in data.values())
-    body = f"<h2>نیازمند توجه ({total})</h2>"
+    body = f"<h2>Needs attention ({total})</h2>"
     if not total:
-        body += "<p class=\"muted\">هیچ‌چیز منتظر کسی نیست.</p>"
+        body += "<p class=\"muted\">Nothing is waiting on anyone.</p>"
 
     if data["orphaned"]:
-        body += ("<h3>در گروِ گوشی‌ای که دیگر نیست</h3>"
-                 "<p class=\"muted\">اعتبارنامهٔ خرج‌شده روی گوشی‌ای که از "
-                 "پنل رفته - تا کسی تصمیم نگیرد، برای همیشه بیرون از "
-                 "استخر می‌ماند. تحویل‌شده یا آزاد؟ همان قضاوتی است که "
-                 "برنامه عمداً نمی‌کند.</p>"
-                 "<table><tr><th>تب</th><th>کدام</th><th>گوشی</th></tr>")
+        body += ("<h3>Held by a phone that no longer exists</h3>"
+                 "<p class=\"muted\">A spent credential on a phone that "
+                 "left the panel - until someone decides, it stays out of "
+                 "the pool forever. Delivered, or free again? That is "
+                 "exactly the judgement the program refuses to make.</p>"
+                 "<table><tr><th>Tab</th><th>Which</th><th>Phone</th></tr>")
         for r in data["orphaned"]:
             body += (f"<tr><td>{esc(r['kind'])}</td>"
                      f"<td>{esc(str(r['who']))}</td>"
@@ -176,9 +194,9 @@ def needs_page(data: dict, user: dict, advice) -> str:
         body += "</table>"
 
     if data["flagged"]:
-        body += ("<h3>علامت‌خورده - یک اجرا قضاوت کرد و کنار گذاشت</h3>"
-                 "<table><tr><th>تب</th><th>کدام</th><th>وضعیت</th>"
-                 "<th>یعنی</th></tr>")
+        body += ("<h3>Flagged - a run judged it and set it aside</h3>"
+                 "<table><tr><th>Tab</th><th>Which</th><th>Status</th>"
+                 "<th>Meaning</th></tr>")
         for r in data["flagged"]:
             said = advice(r["status"])
             body += (f"<tr><td>{esc(r['kind'])}</td>"
@@ -188,8 +206,8 @@ def needs_page(data: dict, user: dict, advice) -> str:
         body += "</table>"
 
     if data["broken"]:
-        body += ("<h3>غیرقابل‌استفاده - اعتبارسنجی رد کرد</h3>"
-                 "<table><tr><th>تب</th><th>کدام</th><th>چرا</th></tr>")
+        body += ("<h3>Unusable - validation refused it</h3>"
+                 "<table><tr><th>Tab</th><th>Which</th><th>Why</th></tr>")
         for r in data["broken"]:
             body += (f"<tr><td>{esc(r['kind'])}</td>"
                      f"<td>{esc(str(r['who']))}</td>"
@@ -197,15 +215,66 @@ def needs_page(data: dict, user: dict, advice) -> str:
         body += "</table>"
 
     if data["given_up"]:
-        body += ("<h3>گوشی‌های کنارگذاشته - سه شکست</h3>"
-                 "<p class=\"muted\">پاک‌کردن سلول Tries در شیت برشان "
-                 "می‌گرداند به صف.</p>"
-                 "<table><tr><th>سریال</th><th>وضعیت</th><th>تلاش</th>"
-                 "<th>یادداشت</th></tr>")
+        body += ("<h3>Given-up phones - three failures</h3>"
+                 "<p class=\"muted\">Clearing the Tries cell in the sheet "
+                 "puts them back in the queue.</p>"
+                 "<table><tr><th>Serial</th><th>Status</th><th>Tries</th>"
+                 "<th>Note</th></tr>")
         for r in data["given_up"]:
             body += (f"<tr><td>{esc(str(r['serial']))}</td>"
                      f"<td>{esc(str(r['status']))}</td>"
                      f"<td>{r['tries']}</td>"
                      f"<td>{esc(str(r['note']))}</td></tr>")
         body += "</table>"
-    return page("نیازمند توجه", body, user=user)
+    return page("Needs attention", body, user=user)
+
+
+#: What a `?said=` token means, spelled out where the person reads it.
+#: An unknown token renders as nothing - the address bar is user input.
+_SAID = {
+    "queued": "Queued - the next pass (within ~30s) will run it.",
+    "cancelled": "Cancelled - it never ran.",
+    "too_late": "Too late - a pass had already taken it; see its row below.",
+    "not_yours": "That request is not yours to cancel.",
+}
+
+
+def requests_page(rows: list[dict], user: dict, said: str = "") -> str:
+    """The queue, newest first: what was asked, by whom, what became of it.
+
+    Refreshes itself only while something is pending - a settled list
+    sitting still is the signal that nothing is owed."""
+    body = ""
+    note = _SAID.get(said, "")
+    if note:
+        body += f'<p class="said">{esc(note)}</p>'
+    head = ("<tr><th>#</th><th>Verb</th><th>Status</th><th>Result</th>"
+            "<th>By</th><th>Asked</th><th></th></tr>")
+    lines = []
+    pending = False
+    for r in rows:
+        status = str(r["status"])
+        if status in ("queued", "awaiting_confirm", "running"):
+            pending = True
+        undo = ""
+        if status == "queued":
+            undo = (f'<form method="post" action="/requests/{r["id"]}/cancel">'
+                    f'<input type="hidden" name="csrf" '
+                    f'value="{esc(user.get("csrf", ""))}">'
+                    f'<button>Cancel</button></form>')
+        lines.append(
+            "<tr>"
+            f"<td class=\"muted\">{r['id']}</td>"
+            f"<td>{esc(str(r['verb']))}</td>"
+            f"<td><span class=\"badge {esc(status)}\">{esc(status)}"
+            f"</span></td>"
+            f"<td>{esc(str(r['result'] or ''))}</td>"
+            f"<td class=\"muted\">{esc(str(r['requested_by']))}</td>"
+            f"<td class=\"muted\">{esc(str(r['requested_at'])[:19])}</td>"
+            f"<td>{undo}</td></tr>")
+    body += f"<h2>Requests ({len(rows)})</h2>"
+    if not rows:
+        body += "<p class=\"muted\">Nothing has been asked yet.</p>"
+    else:
+        body += f"<table>{head}{''.join(lines)}</table>"
+    return page("Requests", body, user=user, refresh=10 if pending else 0)
