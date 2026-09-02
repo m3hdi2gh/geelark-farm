@@ -342,3 +342,46 @@ def test_stop_this_one_reaches_the_session_at_its_next_step():
     other.build = Build(index=2, serial="1550")
     other.check_cancelled()                     # not named: carries on
     assert serve_mod.ACTION_VERBS["stop_phone"] is verbs.stop_phone
+
+
+# --------------------------------------------------- C8: stock is an event
+def test_stock_arriving_is_an_event_when_there_is_a_store(monkeypatch,
+                                                          make_settings):
+    import geelark_farm.store.events as events_mod
+
+    emitted = []
+    monkeypatch.setattr(events_mod, "emit",
+                        lambda s, kind, **kw: emitted.append((kind, kw))
+                        or True)
+    book = make_book(gmails=0)
+    rows = [{"address": "new@example.com", "password": "pw",
+             "secret": SECRET, "recovery": ""}]
+
+    verbs.add_gmails(book, None, make_settings(store_enabled=True),
+                     {"by": "mehdi", "seller": "usa", "rows": rows}, None)
+    assert emitted == [("stock", {"status": "gmail",
+                                  "detail": "1 gmail added by mehdi"})]
+
+    emitted.clear()
+    verbs.add_gmails(make_book(gmails=0), None, make_settings(),
+                     {"by": "mehdi", "rows": rows}, None)
+    assert emitted == [], "no store, no connection attempt"
+
+
+def test_an_account_set_aside_is_an_event_on_its_phone(monkeypatch):
+    from geelark_farm import builder
+
+    seen = []
+    monkeypatch.setattr(builder, "_event_sink",
+                        lambda kind, **kw: seen.append((kind, kw)))
+    book = make_book(apps=1)
+    account = book.apps._rows[0]
+    made = builder.Build(index=2, serial="1533")
+
+    builder._release(book, made, [(book.apps, account, builder.SET_ASIDE,
+                                   "the note", "payment_problem")])
+
+    assert book.apps.status_of(account) == "payment_problem"
+    assert seen == [("account", {"run_id": "-", "build": "2",
+                                 "serial": "1533", "status": "set_aside",
+                                 "detail": "a0@example.com: payment_problem"})]

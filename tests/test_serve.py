@@ -1840,3 +1840,99 @@ def test_the_drain_tells_the_launcher_which_row_it_works_for(monkeypatch,
     serve_mod._drain_actions(settings, None, None, controls_only=False,
                              client=None, launch=launch)
     assert seen == {"action_id": 241, "status": "running"}
+
+
+# ---------------------------------------------------- C8: the new events
+def test_the_breaker_opening_is_one_event_not_a_log_line(monkeypatch,
+                                                          make_settings,
+                                                          tmp_path):
+    """Alerts key on events. The moment the fuse opens is the row - once,
+    on the build that opened it, never again while it stays open."""
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    emitted = []
+    monkeypatch.setattr(serve_mod, "_event",
+                        lambda s, kind, **kw: emitted.append((kind, kw)))
+
+    class TrippingFuse(Fuse):
+        def record(self, build):
+            super().record(build)
+            self.tripped = "5 builds in a row failed"
+
+    fuse = TrippingFuse()
+    serve_mod._dispatch(lambda: [build(ok=False), build(ok=False)], fuse,
+                        flight=None, pool=None, builds=2, finishes=0,
+                        settings=settings)
+
+    kinds = [k for k, _ in emitted]
+    assert kinds == ["breaker"], "once, when it opened"
+    assert emitted[0][1]["status"] == "tripped"
+    assert "5 builds in a row" in emitted[0][1]["detail"]
+
+
+def test_a_drained_command_leaves_a_request_event(monkeypatch, make_settings):
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.db as db_mod
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
+    monkeypatch.setattr(actions_mod, "take_batch",
+                        lambda conn, *, controls_only: [
+                            {"id": 5, "verb": "noop",
+                             "payload": {"serial": "1500"},
+                             "requested_by": 7}])
+    monkeypatch.setattr(actions_mod, "finish",
+                        lambda conn, aid, *, status, result, detail=None: None)
+    emitted = []
+    monkeypatch.setattr(serve_mod, "_event",
+                        lambda s, kind, **kw: emitted.append((kind, kw)))
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    serve_mod._drain_actions(settings, None, None, controls_only=False)
+
+    assert emitted == [("request", {
+        "status": "done", "user_id": 7, "serial": "1500",
+        "detail": "#5 noop: did nothing, successfully"})]
+
+
+def test_a_phone_the_sync_took_away_gets_its_last_event(monkeypatch,
+                                                         make_settings):
+    import geelark_farm.store.db as db_mod
+    import geelark_farm.store.events as events_mod
+    import geelark_farm.store.shadow as shadow_mod
+    import geelark_farm.store.state as state_mod
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
+    monkeypatch.setattr(shadow_mod, "write_shadow",
+                        lambda conn, book, resources=True: {"closed": 0})
+    monkeypatch.setattr(state_mod, "put", lambda conn, key, value: None)
+    emitted = []
+    monkeypatch.setattr(events_mod, "emit",
+                        lambda s, kind, **kw: emitted.append((kind, kw))
+                        or True)
+    settings = make_settings(store_enabled=True)
+
+    serve_mod._shadow(settings, object(), serve_mod.Decision(),
+                      {"deleted": ["1519", "1520"], "discarded": ["1521"],
+                       "freed": ["a@x.com"]})
+
+    phones = [(k, kw["serial"], kw["status"]) for k, kw in emitted
+              if k == "phone"]
+    assert phones == [("phone", "1519", "deleted"),
+                      ("phone", "1520", "deleted"),
+                      ("phone", "1521", "discarded")]

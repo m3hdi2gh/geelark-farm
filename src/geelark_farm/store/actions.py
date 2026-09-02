@@ -64,7 +64,12 @@ def record_refused(settings: Settings, *, verb: str, payload: dict,
             (verb, json.dumps(payload), requested_by, reason))
         new_id = cur.fetchone()[0]
         conn.commit()
-        return new_id
+    from . import events
+
+    events.emit(settings, "request", status="refused", user_id=requested_by,
+                serial=str(payload.get("serial") or ""),
+                detail=f"#{new_id} {verb}: {reason}")
+    return new_id
 
 
 def listing(settings: Settings, *, user_id: int,

@@ -1060,3 +1060,110 @@ def test_stop_this_one_is_one_queued_command_for_that_phone(web,
     assert dict(headers)["Location"] == "/requests?said=queued"
     assert got["verb"] == "stop_phone"
     assert got["payload"] == {"serial": "1549", "by": "mehdi"}
+
+
+# ------------------------------------------------ C8: events, logs, story
+def _c8_reads(monkeypatch):
+    monkeypatch.setattr(app_mod.read, "signals", lambda s: {
+        "builds": {"ok": 6, "failed": 1}, "gmail_free": 12,
+        "gmail_per_day": 5.0, "gmail_days": 2.4,
+        "pulse": {"at": 0, "tripped": ""}, "last_stock": None})
+    monkeypatch.setattr(app_mod.read, "events_feed",
+                        lambda s, **k: {"rows": [
+                            {"id": 9, "at": "2026-09-02 18:04:31+00",
+                             "kind": "build_finished", "run_id": "r9",
+                             "build": "1", "serial": "1551",
+                             "status": "ready", "seconds": 264,
+                             "detail": "ok=True gmail=x"},
+                            {"id": 8, "at": "2026-09-02 17:36:02+00",
+                             "kind": "breaker", "run_id": "", "build": "",
+                             "serial": "", "status": "cleared",
+                             "seconds": None,
+                             "detail": "cleared by hand from the sheet"}],
+                            "counts": {"all": 2, "builds": 1, "phones": 0,
+                                       "accounts": 0, "breaker": 1,
+                                       "requests": 0, "stock": 0,
+                                       "passes": 0},
+                            "page": 1, "pages": 1, "total": 2, "asked": k})
+    monkeypatch.setattr(app_mod.read, "logs", lambda s, **k: {
+        "rows": [{"at": "2026-09-02 17:41:35.2+00", "level": "WARNING",
+                  "logger": "geelark_farm.chatgpt_login", "run": "r8",
+                  "build": "1", "serial": "1533",
+                  "msg": "com.android.vending is in front"}],
+        "today": 31204, "asked": k})
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: (
+        None if serial != "1523" else {
+            "serial": "1523",
+            "phone": {"serial": "1523", "status": "app_only", "state": "",
+                      "gmail": "BlazeWolf@gmail.com", "app_account": "",
+                      "proxy_name": "SX3", "created_at":
+                      "2026-09-01 14:09:40+00", "done_at": None},
+            "timeline": [
+                {"at": "2026-09-01 14:09:40+00", "source": "event",
+                 "kind": "phone", "status": "created", "run": "r1/1",
+                 "text": "created behind SX3 for BlazeWolf@gmail.com",
+                 "seconds": None},
+                {"at": "2026-09-01 17:36:00+00", "source": "request",
+                 "kind": "request", "status": "done", "run": "#229",
+                 "text": "mehdi asked: offer_again -> done: back",
+                 "seconds": None},
+                {"at": "2026-09-01 17:42:00+00", "source": "artifact",
+                 "kind": "screens", "status": "app_session_unverified",
+                 "run": "20260901-174200-finish1523",
+                 "text": "3 screen(s) archived", "seconds": None}]}))
+
+
+def test_the_events_page_has_its_signals_pills_and_phone_links(web,
+                                                                monkeypatch):
+    _c8_reads(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/events?kind=builds&q=1551")
+    assert status == 200
+    assert "builds, last hour" in body and "~2 days" in body
+    assert 'href="/events?kind=builds&q=1551" class="here"' in body
+    assert "breaker · 1" in body
+    assert 'href="/phones/1551"' in body
+    assert "build ok" in body and "cleared by hand" in body
+    assert 'href="/logs"' in body
+
+
+def test_the_logs_page_filters_and_shows_the_captured_lines(web,
+                                                            monkeypatch):
+    _c8_reads(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "GET", "/logs?level=warning&phone=1533&q=vending")
+    assert status == 200
+    assert "com.android.vending is in front" in body
+    assert "[r8/1]" in body and "badge warn" in body
+    assert "31,204 lines today" in body
+    assert 'value="1533"' in body
+
+
+def test_a_phone_story_joins_events_requests_and_screens(web, monkeypatch):
+    _c8_reads(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/phones/1523")
+    assert status == 200
+    assert "Phone 1523" in body and "BlazeWolf@gmail.com" in body
+    assert "created behind SX3" in body
+    assert "mehdi asked: offer_again" in body
+    assert "3 screen(s) archived" in body
+    assert 'href="/logs?phone=1523"' in body
+    status, _, _ = client.request("GET", "/phones/9999")
+    assert status == 404
+
+
+def test_the_three_are_admin_only(web, monkeypatch):
+    _c8_reads(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own"})
+    client = web()
+    client.login(username="narrow")
+    for path in ("/events", "/logs", "/phones/1523"):
+        status, _, _ = client.request("GET", path)
+        assert status == 403, path

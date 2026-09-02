@@ -60,7 +60,7 @@ def add_gmails(book, ledger, settings, payload, client):
             "Status": "",
             "Note": f"Added from the web by {_by(payload)} on {_stamp()}."})
         added.append(checked["address"])
-    return _summary("gmail", added, skipped, refused)
+    return _summary("gmail", added, skipped, refused, settings, _by(payload))
 
 
 def add_gpt(book, ledger, settings, payload, client):
@@ -86,7 +86,8 @@ def add_gpt(book, ledger, settings, payload, client):
             "Email code": "TRUE" if checked["email_code_only"] else "FALSE",
             "Note": f"Added from the web by {_by(payload)} on {_stamp()}."})
         added.append(checked["address"])
-    return _summary("account", added, skipped, refused)
+    return _summary("account", added, skipped, refused, settings,
+                    _by(payload))
 
 
 def _next_name(book) -> str:
@@ -130,7 +131,7 @@ def add_proxies(book, ledger, settings, payload, client):
             "Name": name, "Proxy String": raw, "Status": status,
             "Note": note, "Last Exit IP": exit_ip, "Times Used": "0"})
         added.append(name)
-    return _summary("proxy", added, skipped, refused)
+    return _summary("proxy", added, skipped, refused, settings, _by(payload))
 
 
 def adopt_proxy(book, ledger, settings, payload, client):
@@ -145,7 +146,7 @@ def adopt_proxy(book, ledger, settings, payload, client):
 _PLURAL = {"proxy": "proxies"}
 
 
-def _summary(what: str, added, skipped, refused):
+def _summary(what: str, added, skipped, refused, settings=None, by=""):
     many = _PLURAL.get(what, what + "s")
     bits = [f"{len(added)} {what if len(added) == 1 else many} added"]
     if skipped:
@@ -153,8 +154,17 @@ def _summary(what: str, added, skipped, refused):
     if refused:
         bits.append(f"{len(refused)} refused")
     status = "done" if added or (not refused and skipped) else "failed"
-    return status, ", ".join(bits), {"added": added, "skipped": skipped,
-                                     "refused": refused}
+    said = ", ".join(bits)
+    if added and settings is not None and getattr(settings, "store_enabled",
+                                                   False):
+        # Stock arriving is an event (C8): the Events page's `stock` filter
+        # and the gmail-burn forecast both read it.
+        from .store import events as store_events
+
+        store_events.emit(settings, "stock", status=what,
+                          detail=f"{said} by {by or 'the web'}")
+    return status, said, {"added": added, "skipped": skipped,
+                          "refused": refused}
 
 
 # --------------------------------------------------------------- accounts

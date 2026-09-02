@@ -120,6 +120,20 @@ def set_event_sink(sink) -> None:
     _event_sink = sink
 
 
+def _record_event(kind: str, what: str, **fields) -> None:
+    """One event through the sink, when there is one. `what` is the
+    event's status word - phrased this way so the scan for the statuses a
+    build settles a phone with (`failures.reasons_decided_by_the_builder`)
+    does not read an event's word as a verdict. Never raises: an event
+    that is not recorded costs one debug line, never the build."""
+    if _event_sink is None:
+        return
+    try:
+        _event_sink(kind, status=what, **fields)
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("%s event not recorded (%s)", kind, exc)
+
+
 _RUN_IDS = itertools.count(1)
 
 
@@ -794,6 +808,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
+        # The first line of this phone's story (C8): born behind which
+        # exit, for which address.
+        _record_event("phone", "created", run_id=_run.get(), build=str(index),
+                      serial=build.serial,
+                      detail=f"created behind {build.proxy_name} for "
+                             f"{gmail_row.label}")
         # This phone did not exist a moment ago, so nothing is installed on
         # it. Said here rather than left to the field's default so that the
         # default can mean "nobody looked" - which is what a `finish` that
@@ -1496,6 +1516,13 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
         try:
             if action == SET_ASIDE:
                 pool.set_aside(resource, reason=reason, note=note)
+                if pool is book.apps:
+                    # An account leaving the pool is an event (C8): it is
+                    # what the Gpt Pool's "set aside" list is made of.
+                    _record_event("account", "set_aside", run_id=_run.get(),
+                                  build=str(build.index),
+                                  serial=str(build.serial or ""),
+                                  detail=f"{resource.label}: {reason}")
             elif action == SPEND:
                 pool.spend(resource, serial=build.serial, note=(
                     f"On phone {build.serial}."

@@ -269,3 +269,24 @@ CREATE TABLE IF NOT EXISTS service_state (
 -- that starts phone work stays `running` for minutes after that, and the
 -- Requests page wants "how long did it take", which is this minus that.
 ALTER TABLE actions ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+
+-- ------------------------------------------------------- logs, rev 7 (C8)
+-- The process's own INFO-and-up lines, captured in-process and batched in
+-- by store.logdb. The JSON file on disk stays the complete record; this
+-- is the copy a page can filter by run, phone and level. Pruned to 30 days
+-- by the capture thread itself.
+CREATE TABLE IF NOT EXISTS logs (
+    id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at      timestamptz NOT NULL,
+    level   text NOT NULL,
+    logger  text NOT NULL,
+    run     text NOT NULL DEFAULT '',
+    build   text NOT NULL DEFAULT '',
+    serial  text NOT NULL DEFAULT '',
+    machine text NOT NULL DEFAULT '',
+    msg     text NOT NULL,
+    extra   jsonb
+);
+CREATE INDEX IF NOT EXISTS logs_at ON logs (at);
+CREATE INDEX IF NOT EXISTS logs_run_at ON logs (run, at) WHERE run <> '';
+CREATE INDEX IF NOT EXISTS logs_serial_at ON logs (serial, at) WHERE serial <> '';

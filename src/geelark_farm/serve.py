@@ -398,6 +398,14 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                 store_actions.finish(conn, action["id"], status=status,
                                      result=result, detail=detail)
                 done += 1
+                # Its own row in events (C8), so "what did people ask for
+                # today" is one filter, and a serial in the payload joins
+                # the request to that phone's story.
+                _event(settings, "request", status=status,
+                       user_id=action["requested_by"],
+                       serial=str((action["payload"] or {}).get("serial")
+                                  or ""),
+                       detail=f"#{action['id']} {action['verb']}: {result}")
     except Exception as exc:                                      # noqa: BLE001
         log.warning("the action drain did not run this pass (%s); queued "
                     "commands wait for the next one", exc)
@@ -456,8 +464,20 @@ def _settle_action(settings: Settings, action_id: int, jobs: list[dict],
                     "stays running", action_id, exc)
 
 
+def _event(settings: Settings, kind: str, **fields) -> None:
+    """An event, when there is a store to take it. `emit` never raises,
+    but it does try to connect - and a box that never opted in must not
+    pay a connection attempt per event."""
+    if not settings.store_enabled:
+        return
+    from .store import events as store_events
+
+    store_events.emit(settings, kind, **fields)
+
+
 def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
-              builds: int, finishes: int) -> None:
+              builds: int, finishes: int,
+              settings: Settings | None = None) -> None:
     """Run one batch of jobs and tell the fuse and the flight about it.
 
     Handed to the pool when there is one, so the pass returns; run here
@@ -472,7 +492,14 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
                     # no lock of its own. It was safe while one thread
                     # reported after the batch returned; with workers
                     # finishing whenever they finish, it is not.
+                    was = fuse.reason()
                     fuse.record(build)
+                    now = fuse.reason()
+                # The moment it opens is an event (C8): alerts fire on
+                # this row, never on the log line beside it.
+                if settings is not None and now and not was:
+                    _event(settings, "breaker", status="tripped",
+                           serial=str(build.serial or ""), detail=now)
         finally:
             if flight is not None:
                 flight.done_with(builds=builds, finishes=finishes)
@@ -525,6 +552,18 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
                 store_state.put(conn, "pass", pulse)
             conn.commit()
         acted = {k: v for k, v in (outcome or {}).items() if v}
+        # One row per phone the sync took away (C8), with what came off
+        # it: the story of a serial has to end with why it went.
+        for serial in acted.get("deleted") or []:
+            store_events.emit(settings, "phone", serial=str(serial),
+                              status="deleted",
+                              detail="marked done or failed in the sheet "
+                                     "and deleted by the sync")
+        for serial in acted.get("discarded") or []:
+            store_events.emit(settings, "phone", serial=str(serial),
+                              status="discarded",
+                              detail="its build failed and the phone was "
+                                     "discarded by the sync")
         if decision.jobs or acted or did["closed"]:
             store_events.emit(
                 settings, "pass",
@@ -1002,6 +1041,9 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         return decision
 
     paused = "Pause building" in asked
+    if "Clear breaker" in asked:
+        _event(settings, "breaker", status="cleared",
+               detail="cleared by hand from the sheet")
     _import_from_sheet(settings, book)
     outcome = builder.sync_sheet(client, book, ledger,
                                  probe_proxies=probe_proxies,
@@ -1080,7 +1122,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                 _settle_action(settings, action_id, jobs, builds)
             return builds
         _dispatch(chosen, fuse, flight=flight, pool=pool,
-                  builds=0, finishes=len(jobs))
+                  builds=0, finishes=len(jobs), settings=settings)
 
     _drain_actions(settings, book, ledger, client=client, launch=launch,
                    controls_only=False)
@@ -1124,7 +1166,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                book=book, ledger=ledger)
 
         _dispatch(batch, fuse, flight=flight, pool=pool,
-                  builds=decision.build, finishes=decision.finish)
+                  builds=decision.build, finishes=decision.finish,
+                  settings=settings)
     return decision
 
 
@@ -1187,6 +1230,12 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
                         exc)
         builder.set_event_sink(
             lambda kind, **kw: store_events.emit(settings, kind, **kw))
+        # C8: the process's own log lines, batched into the store off a
+        # bounded queue. Never in a build's path; switches itself off if
+        # the cluster stalls. None when LOG_DB is off.
+        from .store import logdb as store_logdb
+
+        store_logdb.install(settings)
 
     if settings.web_enabled:
         # Loopback-only, read-only, daemon: it dies with the process and

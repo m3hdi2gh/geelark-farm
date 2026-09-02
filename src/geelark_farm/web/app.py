@@ -152,8 +152,37 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/events":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
+                try:
+                    number = max(1, int(first.get("page", "1")))
+                except ValueError:
+                    log.debug("page %r is not a number; showing the first",
+                              first.get("page"))
+                    number = 1
+                kind, q = first.get("kind", ""), first.get("q", "").strip()
                 return self._html(200, pages.events_page(
-                    read.events(self.settings), user))
+                    read.events_feed(self.settings, kind=kind, q=q,
+                                     page=number),
+                    user, signals=read.signals(self.settings), kind=kind,
+                    q=q))
+            if path == "/logs":
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                filters = {k: first.get(k, "").strip()
+                           for k in ("logger", "run", "phone", "q")}
+                level = first.get("level", "INFO").upper() or "INFO"
+                return self._html(200, pages.logs_page(
+                    read.logs(self.settings, level=level, **filters),
+                    user, level=level, **filters))
+            if path.startswith("/phones/"):
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                serial = path[len("/phones/"):].strip("/")
+                story = read.phone_story(self.settings, serial) \
+                    if serial.isdigit() else None
+                if story is None:
+                    return self._html(404, pages.page(
+                        "404", "<h2>No such phone</h2>", user=user))
+                return self._html(200, pages.phone_story_page(story, user))
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                        user=user))
         except Exception:                                         # noqa: BLE001

@@ -328,6 +328,9 @@ class Settings:
     #: the stock warm - and a person picks accounts on the dashboard and
     #: presses "Log in selected"; that command is what starts the finishes.
     manual_login: bool = False
+    #: C8: capture the process's own INFO-and-up log lines into the store
+    #: (store.logdb), for the Logs page. Off = the file on disk only.
+    log_db: bool = False
 
 
     @classmethod
@@ -378,6 +381,7 @@ class Settings:
                         in ("1", "true", "yes", "on"),
             manual_login=_str("MANUAL_LOGIN", "0").strip()
                          in ("1", "true", "yes", "on"),
+            log_db=_str("LOG_DB", "0").strip() in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

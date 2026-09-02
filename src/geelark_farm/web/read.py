@@ -14,8 +14,12 @@ narrowing lives HERE, beside the SQL, so a page cannot forget it.
 
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings
 from ..store.db import Store
+
+log = logging.getLogger(__name__)
 
 
 def snapshot(settings: Settings, owner_id: int | None = None) -> dict:
@@ -384,3 +388,199 @@ def needs(settings: Settings) -> dict:
             " AND state IN ('', 'unused') ORDER BY serial")
     return {"orphaned": orphaned, "flagged": flagged, "broken": broken,
             "given_up": given_up}
+
+
+# ------------------------------------------------- events, logs, story (C8)
+#: The Events page's filter pills: a name a person picks, and the closed
+#: vocabulary of `kind` it stands for. Alerts (stage 6) will key on the
+#: same words - never on the prose in `detail`.
+KINDS = {
+    "builds": ("build_finished",),
+    "phones": ("phone",),
+    "accounts": ("account",),
+    "breaker": ("breaker",),
+    "requests": ("request",),
+    "stock": ("stock",),
+    "passes": ("pass",),
+}
+
+_LEVELS = {"INFO": ("INFO", "WARNING", "ERROR", "CRITICAL"),
+           "WARNING": ("WARNING", "ERROR", "CRITICAL"),
+           "ERROR": ("ERROR", "CRITICAL")}
+
+
+def signals(settings: Settings) -> dict:
+    """The Events page's signal bar: the last pass, the hour's builds, the
+    breaker, and how long the free gmails last at this week's burn."""
+    with Store(settings) as store:
+        builds = store._rows(
+            "SELECT count(*) FILTER (WHERE detail LIKE 'ok=True%%') AS ok,"
+            " count(*) FILTER (WHERE detail NOT LIKE 'ok=True%%') AS failed"
+            " FROM events WHERE kind = 'build_finished'"
+            " AND at > now() - interval '1 hour'")
+        week = store._rows(
+            "SELECT count(*) AS spent FROM events"
+            " WHERE kind = 'build_finished' AND detail LIKE 'ok=True%%'"
+            " AND at > now() - interval '7 days'")
+        free = store._rows(
+            "SELECT count(*) AS free FROM resources WHERE kind = 'gmail'"
+            " AND status = '' AND error IS NULL")
+        pulse = store._rows(
+            "SELECT value FROM service_state WHERE key = 'pass'")
+        stock = store._rows(
+            "SELECT at FROM events WHERE kind = 'stock'"
+            " ORDER BY id DESC LIMIT 1")
+    spent = int(week[0]["spent"]) if week else 0
+    per_day = spent / 7.0
+    gmail_free = int(free[0]["free"]) if free else 0
+    return {
+        "builds": dict(builds[0]) if builds else {"ok": 0, "failed": 0},
+        "gmail_free": gmail_free,
+        "gmail_per_day": per_day,
+        "gmail_days": (gmail_free / per_day) if per_day else None,
+        "pulse": (pulse[0]["value"] or {}) if pulse else {},
+        "last_stock": stock[0]["at"] if stock else None,
+    }
+
+
+def events_feed(settings: Settings, *, kind: str = "", q: str = "",
+                page: int = 1, per_page: int = 100) -> dict:
+    """The event table, filtered by pill and by one search word - a serial,
+    an address, a run id - newest first, with the pills' counts for today."""
+    where, params = [], []
+    if kind in KINDS:
+        where.append("kind = ANY(%s)")
+        params.append(list(KINDS[kind]))
+    if q:
+        where.append("(serial = %s OR run_id = %s OR detail ILIKE %s)")
+        params += [q, q, f"%{q}%"]
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    offset = max(0, page - 1) * per_page
+    with Store(settings) as store:
+        total = store._rows(f"SELECT count(*) AS n FROM events{clause}",
+                            tuple(params))
+        rows = store._rows(
+            f"SELECT id, at, kind, run_id, build, serial, status, seconds,"
+            f" detail FROM events{clause} ORDER BY id DESC"
+            f" LIMIT %s OFFSET %s", tuple(params) + (per_page, offset))
+        today = store._rows(
+            "SELECT kind, count(*) AS n FROM events"
+            " WHERE at > date_trunc('day', now()) GROUP BY kind")
+    by_kind = {r["kind"]: int(r["n"]) for r in today}
+    counts = {name: sum(by_kind.get(k, 0) for k in kinds)
+              for name, kinds in KINDS.items()}
+    counts["all"] = sum(by_kind.values())
+    n = int(total[0]["n"]) if total else 0
+    return {"rows": rows, "counts": counts, "page": page,
+            "pages": max(1, -(-n // per_page)), "total": n}
+
+
+def logs(settings: Settings, *, level: str = "INFO", logger: str = "",
+         run: str = "", phone: str = "", q: str = "",
+         limit: int = 200) -> dict:
+    """The captured log lines, newest first, narrowed by whatever the
+    person typed. Empty filters mean "everything at INFO and up"."""
+    where = ["level = ANY(%s)"]
+    params: list = [list(_LEVELS.get(level.upper(), _LEVELS["INFO"]))]
+    if logger:
+        where.append("logger ILIKE %s")
+        params.append(f"%{logger}%")
+    if run:
+        where.append("run = %s")
+        params.append(run)
+    if phone:
+        where.append("(serial = %s OR msg ILIKE %s)")
+        params += [phone, f"%{phone}%"]
+    if q:
+        where.append("msg ILIKE %s")
+        params.append(f"%{q}%")
+    with Store(settings) as store:
+        rows = store._rows(
+            f"SELECT at, level, logger, run, build, serial, msg FROM logs"
+            f" WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT %s",
+            tuple(params) + (limit,))
+        today = store._rows(
+            "SELECT count(*) AS n FROM logs"
+            " WHERE at > date_trunc('day', now())")
+    return {"rows": rows, "today": int(today[0]["n"]) if today else 0}
+
+
+def _stamp_key(value) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def phone_story(settings: Settings, serial: str) -> dict | None:
+    """Everything one phone went through, in order: its events, the
+    requests that named it, and the archived screens on disk - joined on
+    the serial, which is the one name all three sources use."""
+    with Store(settings) as store:
+        phone = store._rows(
+            "SELECT serial, status, state, gmail, app_account, proxy_name,"
+            " tries, note, created_at, updated_at, done_at FROM phones"
+            " WHERE serial = %s ORDER BY id DESC LIMIT 1", (serial,))
+        events = store._rows(
+            "SELECT at, kind, run_id, build, status, seconds, detail"
+            " FROM events WHERE serial = %s ORDER BY id", (serial,))
+        requests = store._rows(
+            "SELECT a.id, a.verb, a.status, a.result, a.requested_at,"
+            " u.username AS requested_by FROM actions a"
+            " JOIN users u ON u.id = a.requested_by"
+            " WHERE a.payload::text ILIKE %s ORDER BY a.id",
+            (f"%{serial}%",))
+    if not phone and not events:
+        return None
+    timeline = []
+    for e in events:
+        timeline.append({"at": e["at"], "source": "event",
+                         "kind": e["kind"], "status": e["status"],
+                         "run": (f"{e['run_id']}/{e['build']}"
+                                 if e["build"] else e["run_id"]),
+                         "text": e["detail"], "seconds": e["seconds"]})
+    for r in requests:
+        timeline.append({"at": r["requested_at"], "source": "request",
+                         "kind": "request", "status": r["status"],
+                         "run": f"#{r['id']}",
+                         "text": f"{r['requested_by']} asked: {r['verb']}"
+                                 f" -> {r['status']}: {r['result']}",
+                         "seconds": None})
+    for folder in _archived(settings.artifact_dir, serial):
+        timeline.append(folder)
+    timeline.sort(key=lambda t: _stamp_key(t["at"]))
+    return {"phone": phone[0] if phone else None, "serial": serial,
+            "timeline": timeline}
+
+
+def _archived(root, serial: str) -> list[dict]:
+    """The archived screens of one phone, as timeline entries. Never
+    raises: a folder that cannot be read is one line in the log and one
+    entry fewer, not a broken page."""
+    from datetime import datetime, timezone
+
+    from ..artifacts import OUTCOME_FILE, serial_of
+
+    found = []
+    try:
+        folders = ([d for d in root.iterdir() if d.is_dir()]
+                   if root.is_dir() else [])
+    except OSError as exc:
+        log.debug("could not list %s (%s)", root, exc)
+        return found
+    for folder in folders:
+        if serial_of(folder) != serial:
+            continue
+        try:
+            outcome_file = folder / OUTCOME_FILE
+            outcome = (outcome_file.read_text(encoding="utf-8").strip()
+                       .splitlines()[0] if outcome_file.is_file() else "")
+            pages = sum(1 for f in folder.iterdir() if f.suffix == ".xml")
+            when = datetime.fromtimestamp(folder.stat().st_mtime,
+                                          tz=timezone.utc)
+        except (OSError, IndexError) as exc:
+            log.debug("skipping %s (%s)", folder, exc)
+            continue
+        found.append({"at": when, "source": "artifact", "kind": "screens",
+                      "status": outcome, "run": folder.name,
+                      "text": f"{pages} screen(s) archived in {folder.name}"
+                              + (f" - {outcome}" if outcome else ""),
+                      "seconds": None})
+    return found

@@ -399,23 +399,6 @@ def pools_page(data: dict, user: dict) -> str:
     return page("Pools", body, user=user)
 
 
-def events_page(rows: list[dict], user: dict) -> str:
-    head = ("<tr><th>When</th><th>What</th><th>Run</th><th>Serial</th>"
-            "<th>Status</th><th>Detail</th></tr>")
-    lines = []
-    for r in rows:
-        run = f"{r['run_id']}/{r['build']}" if r["build"] else r["run_id"]
-        lines.append(
-            "<tr>"
-            f"<td class=\"muted\">{esc(str(r['at'])[:19])}</td>"
-            f"<td>{esc(r['kind'])}</td><td>{esc(run)}</td>"
-            f"<td>{esc(str(r['serial']))}</td>"
-            f"<td>{esc(str(r['status']))}</td>"
-            f"<td>{esc(str(r['detail']))}</td></tr>")
-    body = f"<h2>Events</h2><table>{head}{''.join(lines)}</table>"
-    return page("Events", body, user=user)
-
-
 def forbidden(user: dict) -> str:
     return page("No access",
                 "<h2>This page is outside your visibility</h2>", user=user)
@@ -1322,3 +1305,232 @@ def proxy_preview(rows: list[dict], user: dict, idem: str) -> str:
                '<span class="badge bad">nothing to add</span>')
             + '</div></form>')
     return page("Proxy Pool — preview", body, user=user, here="/pools/proxy")
+
+
+# ------------------------------------------------- events, logs, story (C8)
+def _clock(value) -> str:
+    """HH:MM:SS off a timestamp, whatever type the store handed back."""
+    text = str(value or "")
+    return esc(text[11:19]) if len(text) >= 19 else esc(text)
+
+
+def _day(value) -> str:
+    return esc(str(value or "")[:10])
+
+
+def _event_badge(row: dict) -> str:
+    kind, status = row.get("kind") or "", str(row.get("status") or "")
+    if kind == "build_finished":
+        ok = str(row.get("detail") or "").startswith("ok=True")
+        return (f'<span class="badge {"ok" if ok else "bad"}">'
+                f'build {"ok" if ok else "failed"}</span>')
+    klass = {"phone": "info", "account": "manual", "stock": "ok",
+             "request": "", "pass": "", "breaker": ""}.get(kind, "")
+    if kind == "breaker":
+        klass = "bad" if status == "tripped" else "ok"
+    if kind == "request" and status in ("failed", "refused"):
+        klass = "bad"
+    return f'<span class="badge {klass}">{esc(kind)}</span>'
+
+
+def _serial_link(serial) -> str:
+    text = str(serial or "").strip()
+    if not text:
+        return '<span class="dim">—</span>'
+    return f'<a href="/phones/{esc(text)}">{esc(text)}</a>'
+
+
+def _signal_tiles(signals: dict) -> str:
+    pulse = signals.get("pulse") or {}
+    builds = signals.get("builds") or {}
+    tiles = []
+    tiles.append(("last pass", _ago(pulse["at"]) if pulse.get("at")
+                  else "none yet", ""))
+    tiles.append(("builds, last hour",
+                  f'{int(builds.get("ok") or 0)} <span class="dim">ok</span> '
+                  f'· {int(builds.get("failed") or 0)} '
+                  f'<span class="dim">failed</span>', ""))
+    tiles.append(("breaker", "open" if pulse.get("tripped") else "armed",
+                  "bad" if pulse.get("tripped") else ""))
+    days = signals.get("gmail_days")
+    if days is None:
+        burn = ('no builds this week <span class="dim">'
+                f'· {signals.get("gmail_free", 0)} free</span>')
+    else:
+        burn = (f'~{days:.0f} days <span class="dim">of stock at '
+                f'{signals.get("gmail_per_day", 0):.1f}/day</span>')
+    tiles.append(("gmail burn", burn, "warn" if days is not None and
+                  days < 3 else ""))
+    last = signals.get("last_stock")
+    tiles.append(("stock", f"added {_day(last)}" if last else "no adds yet",
+                  ""))
+    return "".join(
+        f'<div class="tile {klass}"><div class="l">{esc(label)}</div>'
+        f'<div class="mono" style="font-size:16px">{value}</div></div>'
+        for label, value, klass in tiles)
+
+
+def events_page(data: dict, user: dict, *, signals: dict | None = None,
+                kind: str = "", q: str = "") -> str:
+    counts = data.get("counts") or {}
+    pills = [("", "all")] + [(name, name) for name in
+                             ("builds", "phones", "accounts", "breaker",
+                              "requests", "stock", "passes")]
+    chips = []
+    for value, label in pills:
+        n = counts.get(label if value else "all", 0)
+        lit = ' class="here"' if value == kind else ""
+        href = f"/events?kind={esc(value)}&q={esc(q)}"
+        chips.append(f'<a href="{href}"{lit}>{esc(label)} · {n}</a>')
+    lines = []
+    for r in data.get("rows") or []:
+        run = (f"{r['run_id']}/{r['build']}" if r.get("build")
+               else (r.get("run_id") or ""))
+        text = esc(str(r.get("detail") or ""))
+        if r.get("kind") == "build_finished":
+            text = (f'{esc(str(r.get("status") or ""))} · {text}'
+                    + (f' · {int(r["seconds"])}s' if r.get("seconds")
+                       else ""))
+        lines.append(
+            f'<tr><td class="muted">{_day(r.get("at"))} '
+            f'{_clock(r.get("at"))}</td><td>{_event_badge(r)}</td>'
+            f'<td class="muted">{esc(run) or "—"}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td><td>{text}</td></tr>')
+    page_n, pages = int(data.get("page") or 1), int(data.get("pages") or 1)
+    nav = ""
+    if pages > 1:
+        prev = (f'<a href="/events?kind={esc(kind)}&q={esc(q)}&page='
+                f'{page_n - 1}">← newer</a>' if page_n > 1 else "")
+        nxt = (f'<a href="/events?kind={esc(kind)}&q={esc(q)}&page='
+               f'{page_n + 1}">older →</a>' if page_n < pages else "")
+        nav = (f'<div class="row dim">{prev}<span style="margin-left:auto">'
+               f'page {page_n} of {pages}</span>{nxt}</div>')
+    body = ('<div class="top"><h2>Events</h2>'
+            '<div class="pills"><span>Events</span>'
+            '<a href="/logs">Logs</a></div>'
+            '<span class="status">admin only · refreshes every 30s</span>'
+            '</div>'
+            + (f'<div class="tiles" style="grid-template-columns:repeat(5,'
+               f'minmax(0,1fr))">{_signal_tiles(signals)}</div>'
+               if signals is not None else "")
+            + f'<div class="row"><div class="chips">{"".join(chips)}</div>'
+              f'<form method="get" action="/events" class="row" '
+              f'style="margin-left:auto"><input type="hidden" name="kind" '
+              f'value="{esc(kind)}"><input name="q" value="{esc(q)}" '
+              f'placeholder="serial, address, run id"><button class="quiet">'
+              f'Search</button></form></div>'
+            + '<div class="panel"><table><tr><th>time</th><th>kind</th>'
+              '<th>run</th><th>phone</th><th>what</th></tr>'
+            + ("".join(lines) or '<tr><td colspan="5" class="muted">'
+                                  'Nothing recorded yet.</td></tr>')
+            + f'</table>{nav}<p class="dim">alerts (stage 6) fire on these '
+              f'kinds — never on log prose · a serial anywhere opens that '
+              f'phone\'s story · {int(data.get("total") or 0)} matching'
+              f'</p></div>')
+    return page("Events", body, user=user, here="/events", refresh=30)
+
+
+_LEVEL_BADGE = {"INFO": "", "WARNING": "warn", "ERROR": "bad",
+                "CRITICAL": "bad", "DEBUG": ""}
+
+
+def logs_page(data: dict, user: dict, *, level: str = "INFO",
+              logger: str = "", run: str = "", phone: str = "",
+              q: str = "") -> str:
+    def pill(name: str) -> str:
+        lit = ' class="here"' if name == level else ""
+        href = (f"/logs?level={name}&logger={esc(logger)}&run={esc(run)}"
+                f"&phone={esc(phone)}&q={esc(q)}")
+        return f'<a href="{href}"{lit}>{name}</a>'
+
+    lines = []
+    for r in data.get("rows") or []:
+        ctx = (f"[{r.get('run') or '-'}/{r.get('build') or '-'}]")
+        name = str(r.get("logger") or "").replace("geelark_farm.", "")
+        lines.append(
+            f'<tr><td class="muted">{_clock(r.get("at"))}</td>'
+            f'<td><span class="badge '
+            f'{_LEVEL_BADGE.get(str(r.get("level")), "")}">'
+            f'{esc(str(r.get("level")))}</span></td>'
+            f'<td class="muted">{esc(ctx)}</td>'
+            f'<td class="muted">{esc(name)}</td>'
+            f'<td style="white-space:pre-wrap">{esc(str(r.get("msg") or ""))}'
+            f'</td></tr>')
+    body = (f'<div class="top"><h2>Events</h2>'
+            f'<div class="pills"><a href="/events">Events</a><span>Logs'
+            f'</span></div><span class="status">INFO and up · kept 30 days '
+            f'· the JSON file on disk stays the complete record</span></div>'
+            f'<form method="get" action="/logs" class="row">'
+            f'<input type="hidden" name="level" value="{esc(level)}">'
+            f'<div class="chips">{pill("INFO")}{pill("WARNING")}'
+            f'{pill("ERROR")}</div>'
+            f'<input name="logger" value="{esc(logger)}" placeholder="logger">'
+            f'<input name="run" value="{esc(run)}" placeholder="run: r8" '
+            f'size="10"><input name="phone" value="{esc(phone)}" '
+            f'placeholder="phone: 1533" size="12">'
+            f'<input name="q" value="{esc(q)}" placeholder="text in the '
+            f'message"><button class="quiet">Filter</button></form>'
+            f'<div class="panel"><table><tr><th>time</th><th>level</th>'
+            f'<th>run</th><th>logger</th><th>message</th></tr>'
+            + ("".join(lines) or '<tr><td colspan="5" class="muted">'
+                                  'Nothing captured yet - LOG_DB may be off.'
+                                  '</td></tr>')
+            + f'</table><p class="dim">captured in-process, batched into '
+              f'the database; if the database stalls the capture disables '
+              f'itself with one warning — it can never slow a build · '
+              f'{int(data.get("today") or 0):,} lines today</p></div>')
+    return page("Logs", body, user=user, here="/events", refresh=15)
+
+
+def phone_story_page(story: dict, user: dict) -> str:
+    phone = story.get("phone") or {}
+    serial = story["serial"]
+    head = ""
+    if phone:
+        bits = [esc(str(phone.get("gmail") or "no gmail")),
+                esc(str(phone.get("proxy_name") or "no proxy")),
+                f"created {_day(phone.get('created_at'))} "
+                f"{_clock(phone.get('created_at'))}"]
+        if phone.get("app_account"):
+            bits.insert(1, esc(str(phone["app_account"])))
+        head = (f'<span>{_phone_badge(phone)}</span>'
+                f'<span class="dim mono">{" · ".join(bits)}</span>')
+        if phone.get("done_at"):
+            head += (f'<span class="badge">gone {_day(phone["done_at"])}'
+                     f'</span>')
+    action = ""
+    if _may(user, "may_change_proxy") and phone and not phone.get("done_at"):
+        action = (f'<form method="post" class="inline" '
+                  f'action="/phones/{esc(serial)}/proxy">{_csrf(user)}'
+                  f'<button class="quiet">Change proxy</button></form>')
+    items = []
+    for t in story.get("timeline") or []:
+        when = f"{_day(t['at'])} {_clock(t['at'])}"
+        badge = _event_badge({"kind": t["kind"], "status": t["status"],
+                              "detail": ("ok=True" if t["kind"] ==
+                                         "build_finished" and
+                                         str(t["status"]) == "ready"
+                                         else "")})
+        if t["source"] == "artifact":
+            badge = '<span class="badge">screens</span>'
+        run = f' <span class="dim">[{esc(str(t.get("run") or ""))}]</span>' \
+            if t.get("run") else ""
+        secs = (f' <span class="dim">· {int(t["seconds"])}s</span>'
+                if t.get("seconds") else "")
+        items.append(
+            f'<div class="row" style="align-items:flex-start;padding:8px 0;'
+            f'border-bottom:1px solid var(--line2)">'
+            f'<span class="mono dim" style="min-width:150px">{when}</span>'
+            f'{badge}<span>{esc(str(t.get("text") or ""))}{run}{secs}'
+            f'</span></div>')
+    body = (f'<div class="top"><a href="/events" class="dim">← Events</a>'
+            f'<h2>Phone {esc(serial)}</h2>{head}'
+            f'<span class="status">{action}</span></div>'
+            f'<div class="panel">'
+            + ("".join(items) or '<p class="muted">Nothing recorded about '
+                                 'this phone.</p>')
+            + f'<p class="dim">everything this phone went through, in order '
+              f'— events, requests and archived screens joined on its serial'
+              f' · <a href="/logs?phone={esc(serial)}">open its log lines'
+              f'</a></p></div>')
+    return page(f"Phone {serial}", body, user=user, here="/events")
