@@ -230,6 +230,8 @@ class Pool:
         # it has to hold. `claim` re-reads the row as well (see `_still_free`)
         # and that is the real guard; this makes the in-process half whole.
         self._claim_lock = Pool._CLAIM_LOCK
+        self.width = len(headers)
+        self._append_lock = threading.Lock()
         #: The rows THIS process is holding right now, by sheet row. Kept so
         #: `beat` can restamp them: a claim that is being refreshed is one a
         #: live run still wants, and that is what tells it apart from a claim
@@ -644,6 +646,62 @@ class Pool:
                 self._held[resource.sheet_row] = resource
             else:
                 self._held.pop(resource.sheet_row, None)
+
+    # ------------------------------------------------------- stock, by hand
+    def append(self, **fields: str) -> Resource:
+        """Add a row to the tab and return it as a Resource this pool holds.
+
+        The web's add forms (C5) arrive here through the actions queue, so
+        the serve pass - the one sheet writer - is what appends. The same
+        grid rule as PhoneLog.start: the tab has to reach the row before
+        anything can be written into it, and the count and the growth
+        happen under one lock so two appends cannot race for the room one
+        of them made.
+        """
+        line = [""] * self.width
+        values = {name: "" for name in self._index}
+        for name, value in fields.items():
+            index = self._index.get(name)
+            if index is None:
+                log.debug("no %r column in %s; skipping", name, self.tab)
+                continue
+            line[index] = value
+            values[name] = value
+        with self._append_lock:
+            with self._lock:
+                used = len(read_values(self._ws, what=f"the {self.tab} tab"))
+                short = (used + 1) - self._ws.row_count
+                if short > 0:
+                    self._ws.add_rows(short)
+            sheet_row = used + 1
+            batch_write(self._ws, self._lock,
+                        [{"range": f"A{sheet_row}:"
+                                   f"{a1_column(self.width)}{sheet_row}",
+                          "values": [line]}],
+                        what=f"{self.tab} row {sheet_row}")
+        resource = Resource(sheet_row=sheet_row, values=values)
+        try:
+            self._interpret(resource)
+        except (AccountError, ProxyError) as exc:
+            resource.error = str(exc)
+        self._rows.append(resource)
+        return resource
+
+    def delete_row(self, resource: Resource) -> None:
+        """Remove one row from the tab - the web's "remove from the pool".
+
+        Only ever for a row nothing is on: the caller checks the status,
+        because a row a phone is behind is not stock to tidy away. The
+        rows below it shift up, so every other Resource's sheet_row is
+        stale after this; the pass reloads the Book before it acts again.
+        """
+        with self._lock:
+            self._ws.spreadsheet.batch_update({"requests": [
+                {"deleteDimension": {"range": {
+                    "sheetId": self._ws.id, "dimension": "ROWS",
+                    "startIndex": resource.sheet_row - 1,
+                    "endIndex": resource.sheet_row}}}]})
+        self._rows = [r for r in self._rows if r is not resource]
 
     # --------------------------------------------------------- the heartbeat
     def beat(self) -> int:

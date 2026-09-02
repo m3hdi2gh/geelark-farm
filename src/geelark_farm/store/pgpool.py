@@ -137,6 +137,11 @@ class ResourceTable:
             conn.commit()
             return moved
 
+    def delete(self, row_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM resources WHERE id = %s", (row_id,))
+            conn.commit()
+
     def insert(self, row: dict) -> int | None:
         """Add a validated row; None when its identity is already here.
         The partial unique indexes are the duplicate check."""
@@ -252,6 +257,39 @@ class _PgPool(Pool):
         log.info("claimed %s from %s%s", resource.label, self.tab,
                  f" for phone {serial}" if serial else "")
         return resource
+
+    # ------------------------------------------------------- stock, by hand
+    def append(self, **fields: str) -> Resource:
+        """The web's add forms, once the pools live here: one INSERT through
+        the same column map the reads use, source 'web'."""
+        row: dict = {"kind": self.kind, "source": "web"}
+        for name, value in fields.items():
+            column = self.COLUMNS.get(name)
+            if column is None or column in ("secret",):
+                continue
+            row[column] = _to_db(column, value)
+        if isinstance(self, GmailPool):
+            secret = (fields.get("Secret") or "").strip()
+            row["recovery_email"] = secret if "@" in secret else ""
+            row["totp_secret"] = "" if "@" in secret else secret
+        new_id = self._table.insert(row)
+        if new_id is None:
+            raise ValueError("already in the pool")
+        fresh = next((r for r in self._table.rows(self.kind)
+                      if r["id"] == new_id), None)
+        resource = Resource(sheet_row=0, values=self._values_of(fresh or row),
+                            store_id=new_id)
+        try:
+            self._interpret(resource)
+        except (AccountError, ProxyError) as exc:
+            resource.error = str(exc)
+        self._rows.append(resource)
+        return resource
+
+    def delete_row(self, resource: Resource) -> None:
+        if resource.store_id is not None:
+            self._table.delete(resource.store_id)
+        self._rows = [r for r in self._rows if r is not resource]
 
     def abandoned(self, older_than: float) -> list[Resource]:
         """The sheet pool parses its stamp as local time, which is right on

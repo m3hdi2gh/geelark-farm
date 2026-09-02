@@ -60,6 +60,22 @@ def nav_counts(settings: Settings) -> dict:
                                  "pending": 0}
 
 
+def known(settings: Settings, kind: str) -> set[str]:
+    """Every identity the mirror holds for one kind, lowercased - what the
+    add previews check a pasted row against so a duplicate is said before
+    it is queued. Addresses for accounts, host:port for exits."""
+    with Store(settings) as store:
+        if kind == "proxy":
+            rows = store._rows(
+                "SELECT host || ':' || port AS who FROM resources"
+                " WHERE kind = 'proxy' AND host IS NOT NULL")
+        else:
+            rows = store._rows(
+                "SELECT lower(address) AS who FROM resources"
+                " WHERE kind = %s AND address IS NOT NULL", (kind,))
+    return {r["who"] for r in rows if r["who"]}
+
+
 def phones(settings: Settings, owner_id: int | None = None) -> list[dict]:
     with Store(settings) as store:
         return store._rows(

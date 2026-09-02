@@ -90,6 +90,9 @@ class MemoryTable:
             self._rows[i]["claimed_at"] = _now()
         return len(ids)
 
+    def delete(self, row_id):
+        self._rows.pop(row_id, None)
+
     def insert(self, row):
         for r in self._rows.values():
             if r["kind"] != row["kind"]:

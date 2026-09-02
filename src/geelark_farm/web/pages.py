@@ -512,6 +512,9 @@ _POOL_SAID = {
               "Requests.",
     "refused": "You may not do that - ask an admin for the permission.",
     "off": "Actions are not switched on yet.",
+    "bad": "That account was refused at the form - check the address, the "
+           "password and the secret.",
+    "gone": "That exit is no longer in GeeLark's list - nothing to adopt.",
 }
 
 
@@ -903,3 +906,77 @@ def gpt_pool_page(data: dict, user: dict, said: str = "") -> str:
         body += (f'<div class="panel bad"><h3>Refused by validation — '
                  f'{len(data["broken"])}</h3><table>{broken}</table></div>')
     return page("Gpt Pool", body, user=user, here="/pools/gpt")
+
+
+# ----------------------------------------------------------- previews
+# What a paste becomes before it is queued: one line per row with a
+# verdict, and the good rows carried into the confirm form as the same
+# tab-separated text - so the confirm re-reads exactly what was shown.
+
+def _verdict_badge(row: dict) -> str:
+    if row.get("duplicate"):
+        return '<span class="badge bad">already in the pool — skipped</span>'
+    if row.get("error"):
+        return f'<span class="badge bad">{esc(row["error"])}</span>'
+    return '<span class="badge ok">ok</span>'
+
+
+def _second_factor(row: dict) -> str:
+    if row.get("recovery"):
+        return "recovery"
+    return "authenticator" if row.get("secret") else "—"
+
+
+def gmail_preview(rows: list[dict], seller: str, user: dict,
+                  idem: str) -> str:
+    good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
+    lines = "".join(
+        f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
+        f"<td class=\"muted\">{'········' if r.get('password') else '—'}</td>"
+        f"<td class=\"muted\">{_second_factor(r)}</td>"
+        f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
+    carried = "\n".join(
+        f"{r['address']}\t{r['password']}\t{r.get('recovery') or r.get('secret') or ''}"
+        for r in good)
+    body = (f'<div class="top"><h2>Gmail Pool</h2><span class="status">'
+            f'preview — nothing is added yet</span></div>'
+            f'<div class="panel"><table><tr><th>address</th><th>password'
+            f'</th><th>2fa</th><th>verdict</th></tr>{lines}</table></div>'
+            f'<form method="post" action="/pools/gmail/add" class="panel">'
+            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
+            f'<input type="hidden" name="seller" value="{esc(seller)}">'
+            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
+            f'<div class="row"><span class="dim">seller: '
+            f'{esc(seller or "(none)")} · purchase date stamps automatically'
+            f'</span><span style="margin-left:auto"></span>'
+            f'<a class="btn quiet" href="/pools/gmail">Back</a>'
+            + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
+               f'</button>' if good else
+               '<span class="badge bad">nothing to add</span>')
+            + '</div></form>')
+    return page("Gmail Pool — preview", body, user=user, here="/pools/gmail")
+
+
+def proxy_preview(rows: list[dict], user: dict, idem: str) -> str:
+    good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
+    lines = "".join(
+        f"<tr><td>{esc(r.get('name') or 'next SX')}</td>"
+        f"<td class=\"muted\">{esc(r.get('raw') or r.get('line', ''))}</td>"
+        f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
+    carried = "\n".join(f"{r['name']}\t{r['raw']}" if r.get("name")
+                        else r["raw"] for r in good)
+    body = (f'<div class="top"><h2>Proxy Pool</h2><span class="status">'
+            f'preview — each is tested by the pass before it joins</span>'
+            f'</div>'
+            f'<div class="panel"><table><tr><th>name</th><th>proxy</th>'
+            f'<th>verdict</th></tr>{lines}</table></div>'
+            f'<form method="post" action="/pools/proxy/add" class="panel">'
+            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
+            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
+            f'<div class="row"><span style="margin-left:auto"></span>'
+            f'<a class="btn quiet" href="/pools/proxy">Back</a>'
+            + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
+               f'</button>' if good else
+               '<span class="badge bad">nothing to add</span>')
+            + '</div></form>')
+    return page("Proxy Pool — preview", body, user=user, here="/pools/proxy")

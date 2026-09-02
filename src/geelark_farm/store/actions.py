@@ -47,6 +47,25 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
             raise
 
 
+def record_refused(settings: Settings, *, verb: str, payload: dict,
+                   requested_by: int, reason: str) -> int:
+    """A command that never ran because the person may not give it.
+
+    Written as a row all the same - `refused`, with the reason - so the
+    Requests page says what was asked and why nothing happened, instead of
+    a 403 nobody remembers. Nothing drains it: refused is terminal.
+    """
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "INSERT INTO actions (verb, payload, requested_by, status,"
+            " result, executed_at) VALUES (%s, %s, %s, 'refused', %s, now())"
+            " RETURNING id",
+            (verb, json.dumps(payload), requested_by, reason))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        return new_id
+
+
 def listing(settings: Settings, *, user_id: int,
             everyone: bool = False, limit: int = 50) -> list[dict]:
     with Store(settings) as store:

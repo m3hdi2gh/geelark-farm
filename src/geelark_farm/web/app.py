@@ -179,6 +179,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._password_post(user, field, entry)
             if user.get("must_change_password"):
                 return self._redirect("/password")
+            if self.path.startswith("/pools/"):
+                return self._pool_post(user, field)
             if self.path == "/users/new":
                 return self._users_new(user, field)
             if self.path.startswith("/users/") and \
@@ -207,6 +209,142 @@ class _Handler(BaseHTTPRequestHandler):
                                    user_id=user["id"],
                                    is_admin=user["role"] == "admin")
         self._redirect(f"/requests?said={got}")
+
+    # -------------------------------------------------------------- pools
+    def _act(self, user: dict, permission: str, verb: str, payload: dict,
+             *, idem: str, back: str) -> None:
+        """Queue one command, or record that it was refused.
+
+        The person's name rides in the payload so the pass can write it
+        into the sheet's notes. A refusal is a row too - `refused`, with
+        the permission named - so the Requests page says what was asked
+        and why nothing happened, instead of a 403 nobody remembers."""
+        if not self.settings.web_mutations:
+            return self._html(403, pages.page(
+                "Disabled", "<h2>Actions are not switched on yet</h2>",
+                user=user))
+        from ..store import actions as store_actions
+        from ..store.users import may
+
+        payload = dict(payload, by=user["username"])
+        if not may(user, permission):
+            store_actions.record_refused(
+                self.settings, verb=verb, payload=payload,
+                requested_by=user["id"],
+                reason=f"{user['username']} may not do this - permission "
+                       f"{permission} is off")
+            return self._redirect(f"{back}?said=refused")
+        store_actions.enqueue(self.settings, verb=verb, payload=payload,
+                              requested_by=user["id"], idem_key=idem)
+        self._redirect(f"{back}?said=queued")
+
+    def _minute_key(self, user: dict, verb: str, target: str) -> str:
+        return f"{verb}:{target}:{user['id']}:{int(time.time()) // 60}"
+
+    def _pool_post(self, user: dict, field: dict) -> None:
+        from . import paste
+
+        path = self.path
+        if path == "/pools/gmail/preview":
+            from ..store import validate
+
+            known = read.known(self.settings, "gmail")
+            rows = paste.accounts(field.get("pasted", ""))
+            seller = (field.get("seller") or "").strip()
+            for row in rows:
+                try:
+                    validate.gmail_row(address=row["address"],
+                                       password=row["password"],
+                                       secret=row["recovery"] or row["secret"],
+                                       seller=seller)
+                except (validate.AccountError, validate.ProxyError) as exc:
+                    log.debug("gmail paste row refused: %s", exc)
+                    row["error"] = str(exc)
+                row["duplicate"] = row["address"].lower() in known
+            return self._html(200, pages.gmail_preview(
+                rows, seller, user, idem=secrets.token_urlsafe(12)))
+        if path == "/pools/gmail/add":
+            rows = [{"address": r["address"], "password": r["password"],
+                     "secret": r["secret"], "recovery": r["recovery"]}
+                    for r in paste.accounts(field.get("rows", ""))]
+            return self._act(user, "may_add_gmail", "add_gmails",
+                             {"rows": rows,
+                              "seller": (field.get("seller") or "").strip()},
+                             idem=field.get("idem") or secrets.token_urlsafe(12),
+                             back="/pools/gmail")
+        if path == "/pools/proxy/preview":
+            from ..store import validate
+
+            known = read.known(self.settings, "proxy")
+            rows = paste.proxies(field.get("pasted", ""))
+            for row in rows:
+                try:
+                    checked = validate.proxy_row(raw=row["raw"],
+                                                 name=row["name"])
+                    row["duplicate"] = (
+                        f"{checked['host']}:{checked['port']}" in known)
+                except (validate.AccountError, validate.ProxyError) as exc:
+                    log.debug("proxy paste row refused: %s", exc)
+                    row["error"] = str(exc)
+            return self._html(200, pages.proxy_preview(
+                rows, user, idem=secrets.token_urlsafe(12)))
+        if path == "/pools/proxy/add":
+            rows = [{"raw": r["raw"], "name": r["name"]}
+                    for r in paste.proxies(field.get("rows", ""))]
+            return self._act(user, "may_add_proxy", "add_proxies",
+                             {"rows": rows},
+                             idem=field.get("idem") or secrets.token_urlsafe(12),
+                             back="/pools/proxy")
+        if path in ("/pools/proxy/free", "/pools/proxy/test",
+                    "/pools/proxy/remove"):
+            verb = {"free": "mark_proxy_free", "test": "test_proxy",
+                    "remove": "remove_proxy"}[path.rsplit("/", 1)[1]]
+            name = (field.get("name") or "").strip()
+            return self._act(user, "may_add_proxy", verb, {"name": name},
+                             idem=self._minute_key(user, verb, name),
+                             back="/pools/proxy")
+        if path == "/pools/proxy/test-all":
+            return self._act(user, "may_add_proxy", "test_all_proxies", {},
+                             idem=self._minute_key(user, "test_all", "-"),
+                             back="/pools/proxy")
+        if path == "/pools/proxy/adopt":
+            from ..store import state as store_state
+
+            wanted = {k: (field.get(k) or "").strip()
+                      for k in ("host", "port", "username")}
+            # The password comes from what the pass kept, never the form.
+            held = next((u for u in store_state.get(
+                self.settings, "unlisted_proxies", []) or []
+                if all(str(u.get(k, "")) == wanted[k] for k in wanted)), None)
+            if held is None:
+                return self._redirect("/pools/proxy?said=gone")
+            return self._act(user, "may_add_proxy", "adopt_proxy", held,
+                             idem=self._minute_key(
+                                 user, "adopt", f"{held['host']}:{held['port']}"),
+                             back="/pools/proxy")
+        if path == "/pools/gpt/add":
+            from ..store import validate
+
+            row = {"address": (field.get("address") or "").strip(),
+                   "password": field.get("password") or "",
+                   "secret": (field.get("secret") or "").strip(),
+                   "email_code_only": field.get("email_code") == "1"}
+            try:
+                validate.app_row(**row)
+            except (validate.AccountError, validate.ProxyError) as exc:
+                log.info("gpt add refused at the form: %s", exc)
+                return self._redirect("/pools/gpt?said=bad")
+            return self._act(user, "may_add_gpt", "add_gpt", {"rows": [row]},
+                             idem=self._minute_key(user, "add_gpt",
+                                                   row["address"].lower()),
+                             back="/pools/gpt")
+        if path == "/pools/gpt/offer":
+            address = (field.get("address") or "").strip()
+            return self._act(user, "may_add_gpt", "offer_again",
+                             {"address": address},
+                             idem=self._minute_key(user, "offer", address),
+                             back="/pools/gpt")
+        self._html(404, pages.page("404", "<h2>Nothing here</h2>", user=user))
 
     # -------------------------------------------------------------- users
     def _admin_page(self, user: dict) -> str | None:

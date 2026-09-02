@@ -698,3 +698,129 @@ def test_the_gpt_delivered_view_searches_and_pages(web, monkeypatch):
     assert seen == {"view": "delivered", "q": "abc", "page": 2}
     assert "d@x.com" in body and "1542" in body
     assert "older →" in body and "← newer" in body
+
+
+# ------------------------------------------------------ C5b: the buttons
+# A paste is previewed with a verdict per row and only the good rows are
+# carried; a button becomes one queued row with the person's name in it;
+# a refusal is recorded, not just answered; the adopt form never carries
+# the password.
+
+def _form(**fields) -> str:
+    from urllib.parse import urlencode
+
+    return urlencode(fields)
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_the_gmail_preview_judges_each_pasted_row(web, monkeypatch):
+    monkeypatch.setattr(app_mod.read, "known",
+                        lambda s, kind: {"g0@example.com"})
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gmail/preview",
+        _form(csrf=client.csrf(), seller="usa",
+              pasted="g0@example.com\tpw\tJBSWY3DPEHPK3PXP\n"
+                     "new@example.com\tpw2\n"
+                     "not-an-address\tpw3"))
+    assert status == 200
+    assert "already in the pool" in body
+    carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
+                        body).group(1)
+    assert carried == "new@example.com\tpw2\t", \
+        "only the good row travels to the confirm"
+    assert "Add 1 (skip 2)" in body
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_confirming_the_add_queues_the_rows_under_the_persons_name(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+
+    def enqueue(settings, *, verb, payload, requested_by, idem_key):
+        got.update(verb=verb, payload=payload, requested_by=requested_by,
+                   idem_key=idem_key)
+        return 31
+
+    monkeypatch.setattr(actions_mod, "enqueue", enqueue)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/add",
+        _form(csrf=client.csrf(), seller="usa", idem="once-abc",
+              rows="new@example.com\tpw2\tJBSWY3DPEHPK3PXP"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/pools/gmail?said=queued"
+    assert got["verb"] == "add_gmails" and got["idem_key"] == "once-abc"
+    assert got["payload"]["seller"] == "usa"
+    assert got["payload"]["by"] == "mehdi" and got["requested_by"] == 7
+    assert got["payload"]["rows"] == [{
+        "address": "new@example.com", "password": "pw2",
+        "secret": "JBSWY3DPEHPK3PXP", "recovery": ""}]
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_a_refusal_is_written_down_with_the_missing_permission(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.users as users_mod
+
+    monkeypatch.setattr(users_mod, "may", lambda user, permission: False)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda *a, **k: pytest.fail("queued anyway"))
+    noted = {}
+
+    def record_refused(settings, *, verb, payload, requested_by, reason):
+        noted.update(verb=verb, payload=payload, reason=reason)
+        return 32
+
+    monkeypatch.setattr(actions_mod, "record_refused", record_refused)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/test", _form(csrf=client.csrf(), name="SX1"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/pools/proxy?said=refused"
+    assert noted["verb"] == "test_proxy" and noted["payload"]["name"] == "SX1"
+    assert "may_add_proxy" in noted["reason"]
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_adopting_an_exit_takes_its_password_from_the_pass_not_the_form(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.state as state_mod
+
+    monkeypatch.setattr(state_mod, "get", lambda s, key, default=None: [
+        {"host": "1.2.3.4", "port": 9999, "username": "u",
+         "password": "kept-by-the-pass"}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 33)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/adopt",
+        _form(csrf=client.csrf(), host="1.2.3.4", port="9999", username="u",
+              password="from-the-form"))
+    assert status == 303
+    assert got["verb"] == "adopt_proxy"
+    assert got["payload"]["password"] == "kept-by-the-pass"
+
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/adopt",
+        _form(csrf=client.csrf(), host="9.9.9.9", port="1", username=""))
+    assert dict(headers)["Location"] == "/pools/proxy?said=gone"
+
+
+def test_every_pool_button_is_shut_while_the_mutations_flag_is_off(web):
+    client = web()
+    client.login()
+    for path in ("/pools/gpt/offer", "/pools/proxy/free",
+                 "/pools/gmail/add", "/pools/proxy/test-all"):
+        status, _, body = client.request(
+            "POST", path, _form(csrf=client.csrf(), name="SX1", address="a"))
+        assert status == 403 and "not switched on" in body, path

@@ -45,7 +45,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from . import phones
+from . import phones, verbs
 from .api import Client, build_client
 from .breaker import Breaker
 from .config import Settings
@@ -334,13 +334,14 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
 #: it may raise - the drain turns that into a failed action and a warning,
 #: never a failed pass.
 ACTION_VERBS: dict = {
-    "noop": lambda book, ledger, settings, payload: (
+    "noop": lambda book, ledger, settings, payload, client=None: (
         "done", "did nothing, successfully", None),
 }
+ACTION_VERBS.update(verbs.VERBS)
 
 
 def _drain_actions(settings: Settings, book: Book, ledger,
-                   *, controls_only: bool) -> int:
+                   *, controls_only: bool, client: Client | None = None) -> int:
     """Execute queued web commands with THIS pass's Book and locks.
 
     Two positions, one decision each (signed off 2026-09-01): control verbs
@@ -371,7 +372,7 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                     continue
                 try:
                     status, result, detail = handler(
-                        book, ledger, settings, action["payload"])
+                        book, ledger, settings, action["payload"], client)
                 except Exception as exc:                          # noqa: BLE001
                     log.warning("web action %s (%s) failed: %s",
                                 action["id"], action["verb"], exc)
@@ -895,7 +896,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
-    _drain_actions(settings, book, ledger, controls_only=True)
+    _drain_actions(settings, book, ledger, client=client, controls_only=True)
     asked = _controls(client, book, ledger, fuse, flight)
     if "Stop everything" in asked:
         # Nothing below this line runs: not the sync, which is what carries out
@@ -974,7 +975,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
-    _drain_actions(settings, book, ledger, controls_only=False)
+    _drain_actions(settings, book, ledger, client=client, controls_only=False)
     _shadow(settings, book, decision, outcome)
 
     if decision.jobs:
