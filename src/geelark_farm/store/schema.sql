@@ -270,7 +270,7 @@ CREATE TABLE IF NOT EXISTS service_state (
 -- Requests page wants "how long did it take", which is this minus that.
 ALTER TABLE actions ADD COLUMN IF NOT EXISTS finished_at timestamptz;
 
--- ------------------------------------------------------- logs, rev 7 (C8)
+-- ------------------------------------------------------- logs, rev 8 (C8)
 -- The process's own INFO-and-up lines, captured in-process and batched in
 -- by store.logdb. The JSON file on disk stays the complete record; this
 -- is the copy a page can filter by run, phone and level. Pruned to 30 days
