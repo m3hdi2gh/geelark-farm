@@ -1174,6 +1174,11 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            deadline=deadline, started=started,
                            codes=codes_source or codes.NoSource(),
                            cancelled=cancelled, proxy_row=own_exit,
+                           # A finish the web ordered names its account
+                           # (C6): the verb claimed that row for this serial
+                           # already, so the login loop must not claim the
+                           # first free one instead.
+                           app_row=phone.get("account"),
                            reset_first=True)
         gave_up = _sign_into_app(session)
         if gave_up is not None:

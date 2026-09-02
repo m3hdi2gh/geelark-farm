@@ -322,6 +322,12 @@ class Settings:
     #: sheet's three tabs become an input funnel the Importer drains each
     #: pass. Needs the store settings; refused at Book.open otherwise.
     pools_in_pg: bool = False
+    #: C6: app accounts are logged in on command, not on arrival. Off, a
+    #: pass finishes a warm phone for every account waiting, as it always
+    #: has. On, `decide` is told nobody is waiting - the Keeper only keeps
+    #: the stock warm - and a person picks accounts on the dashboard and
+    #: presses "Log in selected"; that command is what starts the finishes.
+    manual_login: bool = False
 
 
     @classmethod
@@ -370,6 +376,8 @@ class Settings:
                            in ("1", "true", "yes", "on"),
             pools_in_pg=_str("POOLS_IN_PG", "0").strip()
                         in ("1", "true", "yes", "on"),
+            manual_login=_str("MANUAL_LOGIN", "0").strip()
+                         in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

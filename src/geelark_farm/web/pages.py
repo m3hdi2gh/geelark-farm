@@ -12,6 +12,7 @@ them, so the page and the tab never disagree about a word.
 
 from __future__ import annotations
 
+import time
 from html import escape as esc
 
 #: The console's shell - the "Direction A" the owner chose on the design
@@ -177,29 +178,183 @@ def login(error: str = "") -> str:
     return page("Sign in", body)
 
 
-def dashboard(snap: dict, user: dict) -> str:
-    tiles = []
-    labels = (("ready", "Ready to deliver"), ("app_only", "App only"),
-              ("building", "In build"), ("incomplete", "Not finished"))
-    for key, label in labels:
-        tiles.append(f'<div class="tile">{label}'
-                     f'<b>{snap["phones"].get(key, 0)}</b></div>')
-    for kind, label in (("gmail", "Free gmails"), ("proxy", "Free proxies"),
-                        ("app", "Free accounts")):
-        stock = snap["stock"].get(kind, {})
-        extra = (f' <span class="muted">({stock.get("unusable", 0)} '
-                 f'unusable)</span>' if stock.get("unusable") else "")
-        tiles.append(f'<div class="tile">{label}'
-                     f'<b>{stock.get("free", 0)}</b>{extra}</div>')
-    body = f'<div class="tiles">{"".join(tiles)}</div>'
-    last = snap.get("last_event")
-    if last:
-        body += (f'<p class="muted">Last event: {esc(str(last["kind"]))} '
-                 f'— {esc(str(last["at"]))}</p>')
-    body += ('<p class="muted">This page reads the database mirror, which '
-             'every pass (~30s) refreshes; the sheet is still the '
-             'authority.</p>')
-    return page("Dashboard", body, user=user)
+_DASH_SAID = {
+    "queued": "Queued - the next pass (within ~30s) carries it out; watch "
+              "Requests.",
+    "refused": "You may not do that - ask an admin for the permission.",
+    "off": "Actions are not switched on yet.",
+    "auto": "Manual login is off: accounts log in on their own on the next "
+            "pass, nothing to press.",
+    "none": "Tick at least one account first.",
+}
+
+#: The Phones tab's status words as the dashboard's badge colours, and the
+#: one word the dashboard says differently: a phone with the app and no
+#: account is "warm" stock, which is what the keeper calls it.
+_PHONE_CLASS = {"ready": "ready", "app_only": "warn", "building": "info",
+                "incomplete": "attn"}
+_PHONE_WORD = {"app_only": "warm"}
+
+
+def _phone_word(status: str) -> str:
+    return _PHONE_WORD.get(status, status or "?")
+
+
+def _phone_badge(row: dict) -> str:
+    if (row.get("state") or "") == "taken":
+        return '<span class="badge manual">taken</span>'
+    status = row.get("status") or ""
+    return (f'<span class="badge {_PHONE_CLASS.get(status, "")}">'
+            f'{esc(_phone_word(status))}</span>')
+
+
+def _actor_bar(data: dict) -> str:
+    pulse = data.get("pulse") or {}
+    queue = data.get("queue") or {}
+    bits = []
+    if pulse:
+        warm, target = pulse.get("warm", 0), pulse.get("target", 0)
+        colour = "green" if warm >= target else "amber"
+        bits.append(f'<span style="color:var(--{colour})">●</span> keeper '
+                    f'{warm}/{target} warm')
+    else:
+        bits.append("keeper: no pass yet")
+    bits.append(f'queue {int(queue.get("running") or 0)} running · '
+                f'{int(queue.get("queued") or 0)} queued')
+    if pulse.get("tripped"):
+        bits.append('<span style="color:var(--red)">breaker open</span>')
+    elif pulse:
+        bits.append("breaker armed")
+    if pulse.get("paused"):
+        bits.append('<span style="color:var(--amber)">building paused</span>')
+    if pulse.get("manual_login"):
+        bits.append("manual login")
+    if pulse.get("at"):
+        bits.append(f"last pass {_ago(pulse['at'])}")
+    return ' <span class="dim">·</span> '.join(bits)
+
+
+def _ago(stamp: float) -> str:
+    seconds = max(0, int(time.time() - float(stamp)))
+    if seconds < 90:
+        return f"{seconds}s ago"
+    if seconds < 5400:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
+
+
+def dashboard(data: dict, user: dict, said: str = "",
+              manual_login: bool = False) -> str:
+    stock = data.get("stock") or {}
+    gmail, proxy = stock.get("gmail", {}), stock.get("proxy", {})
+    app = stock.get("app", {})
+    cards = (
+        f'<div class="tile"><div class="l">Gmail <a href="/pools/gmail" '
+        f'style="float:right">open pool</a></div>'
+        f'<b style="color:var(--green)">{gmail.get("free", 0)}</b>'
+        f'<span class="muted">free — {gmail.get("on_phones", 0)} on phones · '
+        f'{gmail.get("used", 0)} used</span></div>'
+        f'<div class="tile"><div class="l">GPT accounts <a href="/pools/gpt" '
+        f'style="float:right">open pool</a></div>'
+        f'<b style="color:var(--amber)">{app.get("awaiting", 0)}</b>'
+        f'<span class="muted">awaiting login — {app.get("panel", 0)} from '
+        f'panel · {app.get("manual", 0)} manual</span></div>'
+        f'<div class="tile"><div class="l">Proxies <a href="/pools/proxy" '
+        f'style="float:right">open pool</a></div>'
+        f'<b style="color:var(--green)">{proxy.get("free", 0)}</b>'
+        f'<span class="muted">free — {proxy.get("on_phones", 0)} on phones · '
+        f'{proxy.get("dead", 0)} dead</span></div>')
+
+    phones = data.get("phones") or []
+    counts = {}
+    for r in phones:
+        counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
+    summary = " · ".join(f"{n} {_phone_word(k)}" for k, n in counts.items())
+    can_change = _may(user, "may_change_proxy")
+    lines = []
+    for r in phones:
+        action = ""
+        if can_change and (r.get("status") or "") != "building":
+            action = (f'<form method="post" class="inline" '
+                      f'action="/phones/{esc(str(r["serial"]))}/proxy">'
+                      f'{_csrf(user)}<button class="quiet">Change proxy'
+                      f'</button></form>')
+        account = esc(str(r.get("app_account") or "")) or \
+            '<span class="dim">—</span>'
+        lines.append(
+            f"<tr><td>{esc(str(r['serial']))}</td><td>{_phone_badge(r)}</td>"
+            f"<td>{esc(str(r.get('gmail') or ''))}</td><td>{account}</td>"
+            f"<td>{esc(str(r.get('proxy_name') or ''))}</td>"
+            f"<td>{action}</td></tr>")
+    table = (f'<table><tr><th>serial</th><th>state</th><th>gmail</th>'
+             f'<th>gpt account</th><th>proxy</th><th></th></tr>'
+             f'{"".join(lines)}</table>' if lines else
+             '<p class="muted">No phones yet.</p>')
+    phones_panel = (
+        f'<div class="panel"><div class="row"><h3>Phones</h3>'
+        f'<span class="dim mono">{esc(summary)}</span></div>{table}'
+        f'<p class="dim">keeper builds the shortfall in parallel — 3 taken '
+        f'at once means 3 builds start together</p></div>')
+
+    awaiting = data.get("awaiting") or []
+    can_login = manual_login and _may(user, "may_login_accounts")
+    items = []
+    for a in awaiting:
+        source = a.get("source") or "manual"
+        who = ("panel" if source == "panel" else
+               f'manual · {esc(a.get("added_by") or "sheet")}')
+        tick = (f'<input type="checkbox" name="addresses" '
+                f'value="{esc(a["address"])}">' if can_login else "")
+        items.append(
+            f'<label class="row" style="padding:8px 10px;border-radius:6px;'
+            f'background:var(--panel2);border:1px solid var(--line2)">{tick}'
+            f'<span class="mono" style="min-width:0;overflow:hidden;'
+            f'text-overflow:ellipsis">{esc(a["address"])}</span>'
+            f'<span class="dim" style="margin-left:auto">added '
+            f'{_when(a.get("created_at"))}</span>'
+            f'<span class="badge {"panel" if source == "panel" else "manual"}">'
+            f'{who}</span></label>')
+    if can_login:
+        foot = ('<p class="dim">each ticked account boots one warm phone; '
+                'they log in in parallel</p>'
+                '<button>Log in selected</button>')
+        login_panel = (f'<form method="post" action="/accounts/login" '
+                       f'class="panel">{_csrf(user)}<div class="row">'
+                       f'<h3>Awaiting login</h3><span class="dim mono">'
+                       f'{len(awaiting)} accounts</span></div>'
+                       f'{"".join(items) or "<p class=muted>Nothing waiting.</p>"}'
+                       f'{foot}</form>')
+    else:
+        why = ("accounts log in on their own on the next pass"
+               if not manual_login else
+               "you may not log accounts in - ask an admin")
+        login_panel = (f'<div class="panel"><div class="row"><h3>Awaiting '
+                       f'login</h3><span class="dim mono">{len(awaiting)} '
+                       f'accounts</span></div>'
+                       f'{"".join(items) or "<p class=muted>Nothing waiting.</p>"}'
+                       f'<p class="dim">{why}</p></div>')
+
+    recent = data.get("recent") or []
+    tail = " ".join(
+        f'<span style="color:var(--blue)">{_when(e.get("at"))}</span> '
+        f'<span>{esc(str(e.get("kind") or ""))} {esc(str(e.get("status") or ""))}'
+        f'</span>' for e in recent)
+    footer = (f'<div class="row dim mono" style="border-top:1px solid '
+              f'var(--line2);padding-top:12px">{tail}'
+              f'<a href="/events" style="margin-left:auto">all events</a>'
+              f'</div>' if user.get("sees") == "all" else "")
+
+    body = (f'<div class="top"><h2>Dashboard</h2><span class="status">'
+            f'{_actor_bar(data)}</span></div>'
+            + _said(said, _DASH_SAID)
+            + f'<div class="grid3">{cards}</div>'
+            + f'<div class="grid2" style="grid-template-columns:minmax(0,58fr) '
+              f'minmax(0,42fr)">{phones_panel}{login_panel}</div>'
+            + footer)
+    busy = any((r.get("status") or "") == "building" for r in phones) or \
+        int((data.get("queue") or {}).get("queued") or 0) > 0
+    return page("Dashboard", body, user=user, here="/",
+                refresh=30 if busy else 0)
 
 
 _APP_MARK = {True: "✓", False: "✗", None: "?"}

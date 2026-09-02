@@ -101,10 +101,13 @@ class ResourceTable:
             conn.commit()
 
     def claim(self, kind: str, *, free: tuple[str, ...], claimed: str,
-              count_use: bool, serial: str = "") -> dict | None:
+              count_use: bool, serial: str = "",
+              row_id: int | None = None) -> dict | None:
         """Pick, mark and stamp the first free row of `kind` in one
         statement. The ordering is the sheet's contract: least-used first
-        for exits, top of the tab for credentials."""
+        for exits, top of the tab for credentials. `row_id` narrows the
+        pick to one chosen row (C6's "log in selected"): None if that row
+        is not free any more, never the next one down."""
         order = ("times_used, sheet_row NULLS LAST, id" if count_use
                  else "sheet_row NULLS LAST, id")
         bump = "times_used + 1" if count_use else "times_used"
@@ -114,13 +117,14 @@ class ResourceTable:
                 f"  SELECT id FROM resources"
                 f"  WHERE kind = %s AND error IS NULL"
                 f"    AND lower(status) = ANY(%s)"
+                f"    AND (%s::bigint IS NULL OR id = %s)"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
                 f"  times_used = {bump},"
                 f"  serial = CASE WHEN %s <> '' THEN %s ELSE r.serial END,"
                 f"  updated_at = now()"
                 f"  FROM picked WHERE r.id = picked.id RETURNING r.*",
-                (kind, list(free), claimed, serial, serial))
+                (kind, list(free), row_id, row_id, claimed, serial, serial))
             names = [d.name for d in cur.description]
             row = cur.fetchone()
             conn.commit()
@@ -227,6 +231,23 @@ class _PgPool(Pool):
                 self._held.pop(resource.store_id, None)
 
     # ------------------------------------------------------------ claiming
+    def claim_this(self, resource: Resource, serial: str = "") -> bool:
+        if resource.store_id is None:
+            return False
+        row = self._table.claim(
+            self.kind, free=tuple(self.available_statuses),
+            claimed=self.claimed_status,
+            count_use=isinstance(self, ProxyPool), serial=serial,
+            row_id=resource.store_id)
+        if row is None:
+            return False
+        resource.values.update(self._values_of(row))
+        with self._held_lock:
+            self._held[resource.store_id] = resource
+        log.info("claimed %s from %s%s (chosen by hand)", resource.label,
+                 self.tab, f" for phone {serial}" if serial else "")
+        return True
+
     def claim(self, serial: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
         the sheet's problem; here the engine hands two racers two rows."""

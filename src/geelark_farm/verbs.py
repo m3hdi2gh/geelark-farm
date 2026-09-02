@@ -266,7 +266,125 @@ def remove_proxy(book, ledger, settings, payload, client):
                     f"holds it - remove it there by hand)", None)
 
 
+# ------------------------------------------------------- the phones (C6)
+def login_accounts(book, ledger, settings, payload, client, launch=None):
+    """"Log in selected": N chosen accounts onto N warm phones, at once.
+
+    The person chose the accounts, so each is claimed by name - `claim_this`
+    - and paired with the next warm phone; the pairs become finish jobs the
+    pass launches together. An account with no warm phone left is said so
+    and left free: the Keeper builds the shortfall, and the person presses
+    the button again. Nothing here waits: the sentence says what started.
+    """
+    from . import builder
+
+    addresses = [a.strip() for a in payload.get("addresses") or [] if a.strip()]
+    if not addresses:
+        return "refused", "no account was chosen", None
+    if client is None or launch is None:
+        return "failed", "this pass cannot start phone work", None
+    warm, _gone = builder._unfinished(client, book)
+    jobs, started, unpaired, refused = [], [], [], []
+    for address in addresses:
+        resource = book.apps.find(address)
+        if resource is None:
+            refused.append(f"{address}: not in the Gpt Info tab")
+            continue
+        status = book.apps.status_of(resource)
+        if resource.error or status not in book.apps.available_statuses:
+            refused.append(f"{address}: {resource.error or status}")
+            continue
+        if not warm:
+            unpaired.append(address)
+            continue
+        phone = warm.pop(0)
+        if not book.apps.claim_this(resource, str(phone["serial"])):
+            refused.append(f"{address}: taken by another run meanwhile")
+            warm.insert(0, phone)
+            continue
+        jobs.append({"kind": "finish",
+                     "phone": {**phone, "account": resource}})
+        started.append(f"{address} -> {phone['serial']}")
+    if jobs:
+        launch(jobs)
+    bits = []
+    if started:
+        bits.append(f"logging in {len(started)} account(s) in parallel: "
+                    + ", ".join(started))
+    if unpaired:
+        bits.append(f"{len(unpaired)} left free - no warm phone for them "
+                    f"yet; the keeper is building, press again later")
+    if refused:
+        bits.append(f"{len(refused)} refused")
+    status = "done" if started else "failed"
+    return status, "; ".join(bits), {"started": started, "unpaired": unpaired,
+                                     "refused": refused}
+
+
+login_accounts.needs_launch = True
+
+
+def change_proxy(book, ledger, settings, payload, client):
+    """Put a phone on a different exit: the next free one from the pool.
+
+    The phone is stopped first - Android reads the proxy when the network
+    comes up, and GeeLark refuses the update on a phone that is starting -
+    then GeeLark is told, and only after it agreed are the two rows moved:
+    the old exit back to free, the new one spent on this serial. A phone a
+    run holds right now is refused; a run swapping exits underneath a
+    build is the one thing worse than a bad exit.
+    """
+    from . import phones as phones_mod
+    from .phones import PhoneError
+
+    serial = str(payload.get("serial") or "").strip()
+    row = next((r for r in book.phones.rows()
+                if str(r.get("Serial") or "").strip() == serial), None)
+    if row is None:
+        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
+    if row.get("Status") == book.phones.BUILDING:
+        return "refused", f"phone {serial} is being worked on right now", None
+    if client is None:
+        return "failed", "no GeeLark client on this pass", None
+    live = next((p for p in phones_mod.listing(client)
+                 if str(p.get("serialNo")) == serial), None)
+    if live is None:
+        return "failed", f"phone {serial} is not in GeeLark's list", None
+    held = ledger.get(live["id"]) if ledger is not None else None
+    if held is not None and held.is_claimed and not held.is_stale:
+        return "refused", f"phone {serial} is held by a run ({held.label})", None
+    fresh = book.proxies.claim(serial)
+    if fresh is None or fresh.proxy is None:
+        return "failed", "the Proxy tab has no free exit left", None
+    try:
+        if live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING):
+            phones_mod.stop(client, live["id"])
+            phones_mod.wait_until_stopped(client, live["id"])
+        phones_mod.set_proxy(client, live["id"], fresh.proxy)
+    except (PhoneError, ApiError) as exc:
+        log.warning("phone %s kept its exit: %s", serial, exc)
+        book.proxies.release(fresh, note=(
+            f"Phone {serial} would not take it on {_stamp()}: "
+            f"{str(exc)[:120]}"))
+        return "failed", f"GeeLark refused the change: {str(exc)[:160]}", None
+    old = book.proxies.find_by_name((row.get("Proxy") or "").strip())
+    if old is not None and old is not fresh:
+        book.proxies.release(old, note=(
+            f"Left phone {serial} on {_stamp()} - proxy changed from the "
+            f"web by {_by(payload)}."))
+    book.proxies.spend(fresh, serial=serial, note=(
+        f"On phone {serial} since {_stamp()} - changed from the web by "
+        f"{_by(payload)}."))
+    name = fresh.name or str(fresh.proxy)
+    book.phones.write(serial, Proxy=name)
+    return ("done", f"phone {serial} is on {name} now (it is stopped; it "
+                    f"reads the new exit when it next starts)",
+            {"was": (row.get("Proxy") or "").strip(), "now": name})
+
+
 VERBS = {
+    "login_accounts": login_accounts,
+    "change_proxy": change_proxy,
     "add_gmails": add_gmails,
     "add_gpt": add_gpt,
     "add_proxies": add_proxies,

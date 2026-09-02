@@ -81,8 +81,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._users_get(user)
             if path == "/":
                 scope = None if user["sees"] == "all" else user["id"]
+                query = parse_qs(self.path.partition("?")[2])
                 return self._html(200, pages.dashboard(
-                    read.snapshot(self.settings, scope), user))
+                    read.dashboard(self.settings, scope), user,
+                    said=(query.get("said") or [""])[0],
+                    manual_login=self.settings.manual_login))
             if path == "/phones":
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.phones_page(
@@ -181,6 +184,15 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._redirect("/password")
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
+            if self.path == "/accounts/login":
+                return self._login_accounts(user, form.get("addresses") or [])
+            if self.path.startswith("/phones/") and \
+                    self.path.endswith("/proxy"):
+                serial = self.path[len("/phones/"):-len("/proxy")]
+                return self._act(user, "may_change_proxy", "change_proxy",
+                                 {"serial": serial},
+                                 idem=self._minute_key(user, "proxy", serial),
+                                 back="/")
             if self.path == "/users/new":
                 return self._users_new(user, field)
             if self.path.startswith("/users/") and \
@@ -237,6 +249,21 @@ class _Handler(BaseHTTPRequestHandler):
         store_actions.enqueue(self.settings, verb=verb, payload=payload,
                               requested_by=user["id"], idem_key=idem)
         self._redirect(f"{back}?said=queued")
+
+    def _login_accounts(self, user: dict, addresses: list) -> None:
+        """"Log in selected" (C6). Only meaningful with manual login on:
+        off, the pass logs accounts in by itself and the button would
+        race it for the same rows."""
+        if not self.settings.manual_login:
+            return self._redirect("/?said=auto")
+        chosen = [a.strip() for a in addresses if a and a.strip()]
+        if not chosen:
+            return self._redirect("/?said=none")
+        return self._act(user, "may_login_accounts", "login_accounts",
+                         {"addresses": chosen},
+                         idem=self._minute_key(
+                             user, "login", ",".join(sorted(chosen))),
+                         back="/")
 
     def _minute_key(self, user: dict, verb: str, target: str) -> str:
         return f"{verb}:{target}:{user['id']}:{int(time.time()) // 60}"

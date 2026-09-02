@@ -60,6 +60,23 @@ def web(request, monkeypatch, make_settings):
                             "tries": 0, "note": "fine", "updated_at": ""}])
     monkeypatch.setattr(app_mod.read, "pools",
                         lambda s: {"counts": [], "broken": []})
+    monkeypatch.setattr(app_mod.read, "dashboard", lambda s, owner_id=None: {
+        "phones": [{"serial": "1500", "status": "ready", "state": "",
+                    "gmail": "IronHawk@gmail.com", "app_account": "h@x.com",
+                    "proxy_name": "SX27"},
+                   {"serial": "1501", "status": "app_only", "state": "",
+                    "gmail": "Stone@gmail.com", "app_account": "",
+                    "proxy_name": "SX31"}],
+        "stock": {"gmail": {"free": 12, "on_phones": 5, "used": 7},
+                  "proxy": {"free": 20, "on_phones": 14, "dead": 1},
+                  "app": {"awaiting": 2, "panel": 1, "manual": 1}},
+        "awaiting": [{"address": "arman@gmail.com", "source": "panel",
+                      "added_by": "", "created_at": None},
+                     {"address": "gpt4.avir@proton.me", "source": "web",
+                      "added_by": "mehdi", "created_at": None}],
+        "queue": {"running": 0, "queued": 0},
+        "recent": [],
+        "pulse": {"warm": 5, "target": 5, "tripped": "", "at": 0}})
     monkeypatch.setattr(app_mod.read, "events", lambda s, limit=200: [])
     monkeypatch.setattr(app_mod.read, "nav_counts",
                         lambda s: {"gmail": 3, "proxy": 2, "app": 1,
@@ -824,3 +841,87 @@ def test_every_pool_button_is_shut_while_the_mutations_flag_is_off(web):
         status, _, body = client.request(
             "POST", path, _form(csrf=client.csrf(), name="SX1", address="a"))
         assert status == 403 and "not switched on" in body, path
+
+
+# ---------------------------------------------------- C6: the dashboard
+MANUAL_ON = {"web_mutations": True, "manual_login": True}
+
+
+def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/")
+    assert status == 200
+    assert "keeper 5/5 warm" in body
+    assert "12</b>" in body and "5 on phones" in body
+    assert "IronHawk@gmail.com" in body and "SX27" in body
+    assert 'class="badge warn">warm' in body
+    assert "arman@gmail.com" in body and "gpt4.avir@proton.me" in body
+    assert "manual · mehdi" in body
+    assert "Change proxy" not in body, "mutations are off"
+    assert 'name="addresses"' not in body, "manual login is off"
+    assert "log in on their own" in body
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert body.count("Change proxy") == 2
+    assert body.count('name="addresses"') == 2
+    assert "Log in selected" in body
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_log_in_selected_is_a_no_op_while_manual_login_is_off(web,
+                                                              monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda *a, **k: pytest.fail("queued anyway"))
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/accounts/login",
+        f"csrf={client.csrf()}&addresses=a%40x.com")
+    assert status == 303 and dict(headers)["Location"] == "/?said=auto"
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_log_in_selected_queues_every_ticked_account_in_one_command(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 41)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/accounts/login",
+        f"csrf={client.csrf()}&addresses=a%40x.com&addresses=b%40x.com")
+    assert status == 303 and dict(headers)["Location"] == "/?said=queued"
+    assert got["verb"] == "login_accounts"
+    assert got["payload"]["addresses"] == ["a@x.com", "b@x.com"]
+    assert got["payload"]["by"] == "mehdi"
+
+    status, headers, _ = client.request(
+        "POST", "/accounts/login", f"csrf={client.csrf()}")
+    assert dict(headers)["Location"] == "/?said=none"
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_change_proxy_is_one_queued_command_for_that_serial(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 42)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/proxy", f"csrf={client.csrf()}")
+    assert status == 303 and dict(headers)["Location"] == "/?said=queued"
+    assert got["verb"] == "change_proxy"
+    assert got["payload"] == {"serial": "1500", "by": "mehdi"}

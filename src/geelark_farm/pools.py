@@ -400,6 +400,27 @@ class Pool:
         # with the account that arrived. That is a wait, not a loss.
         return None
 
+    def claim_this(self, resource: Resource, serial: str = "") -> bool:
+        """Take one named row rather than the first free one.
+
+        The web's "Log in selected" (C6) is a person choosing accounts, and
+        the choice is the point - so the claim has to land on that row and
+        say so if it cannot. Same lock, same live re-read and same fields as
+        `claim`; only the choosing is the caller's. False when the row is
+        not free any more, which the caller reports rather than papers over
+        with the next one down.
+        """
+        with self._claim_lock:
+            if resource.error or self.status_of(resource) not in \
+                    self.available_statuses:
+                return False
+            if not self._still_free(resource):
+                return False
+            self._set(resource, self._claim_fields(resource, serial))
+            log.info("claimed %s from %s%s (chosen by hand)", resource.label,
+                     self.tab, f" for phone {serial}" if serial else "")
+            return True
+
     def note_serial(self, resource: Resource, serial: str) -> None:
         """Say which phone this claimed row is for, once there is one.
 

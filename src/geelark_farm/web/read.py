@@ -86,6 +86,67 @@ def phones(settings: Settings, owner_id: int | None = None) -> list[dict]:
             " ORDER BY serial", (owner_id, owner_id))
 
 
+#: How each pool's status words fold into the dashboard's three numbers.
+_FOLD = {
+    "gmail": {"free": ("",), "on_phones": ("in_use", "ready"),
+              "used": ("used",)},
+    "proxy": {"free": ("", "free", "unused"),
+              "on_phones": ("on a phone", "claimed"), "dead": ("dead",)},
+}
+
+
+def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
+    """Everything the dashboard shows, in one connection: the phones, the
+    three stock cards, the accounts awaiting login, the last pass's pulse,
+    the queue and the two latest events."""
+    with Store(settings) as store:
+        phone_rows = store._rows(
+            "SELECT serial, status, state, app_installed, gmail,"
+            " app_account, proxy_name, tries, note, updated_at"
+            " FROM phones WHERE done_at IS NULL"
+            " AND (%s::bigint IS NULL OR owner_id = %s)"
+            " ORDER BY serial", (owner_id, owner_id))
+        stock = store._rows(
+            "SELECT kind, lower(status) AS status, count(*) AS c"
+            " FROM resources WHERE error IS NULL GROUP BY kind, status")
+        awaiting = store._rows(
+            "SELECT r.address, r.source, coalesce(u.username, '') AS added_by,"
+            " r.created_at FROM resources r"
+            " LEFT JOIN users u ON u.id = r.added_by"
+            " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
+            " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
+        queue = store._rows(
+            "SELECT count(*) FILTER (WHERE status = 'running') AS running,"
+            " count(*) FILTER (WHERE status = 'queued') AS queued"
+            " FROM actions")
+        recent = store._rows(
+            "SELECT at, kind, status, detail FROM events"
+            " ORDER BY id DESC LIMIT 2")
+        pulse = store._rows(
+            "SELECT value FROM service_state WHERE key = 'pass'")
+    folded = {kind: dict.fromkeys(names, 0) for kind, names in _FOLD.items()}
+    for row in stock:
+        names = _FOLD.get(row["kind"])
+        if not names:
+            continue
+        for name, words in names.items():
+            if row["status"] in words:
+                folded[row["kind"]][name] += row["c"]
+    folded["app"] = {
+        "awaiting": len(awaiting),
+        "panel": sum(1 for a in awaiting if a["source"] == "panel"),
+        "manual": sum(1 for a in awaiting if a["source"] != "panel"),
+    }
+    return {
+        "phones": phone_rows,
+        "stock": folded,
+        "awaiting": awaiting,
+        "queue": queue[0] if queue else {"running": 0, "queued": 0},
+        "recent": recent,
+        "pulse": (pulse[0]["value"] or {}) if pulse else {},
+    }
+
+
 def pools(settings: Settings) -> dict:
     """The three stock tabs as the operator reads them: counts by status,
     plus every row validation refused - the rows that looked free in the

@@ -341,7 +341,8 @@ ACTION_VERBS.update(verbs.VERBS)
 
 
 def _drain_actions(settings: Settings, book: Book, ledger,
-                   *, controls_only: bool, client: Client | None = None) -> int:
+                   *, controls_only: bool, client: Client | None = None,
+                   launch=None) -> int:
     """Execute queued web commands with THIS pass's Book and locks.
 
     Two positions, one decision each (signed off 2026-09-01): control verbs
@@ -371,8 +372,16 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                         result=f"unknown verb: {action['verb']}")
                     continue
                 try:
-                    status, result, detail = handler(
-                        book, ledger, settings, action["payload"], client)
+                    # A verb that starts phone work (C6's login) gets the
+                    # pass's launcher, so its jobs run under the same fuse
+                    # and flight as the decision's own.
+                    if getattr(handler, "needs_launch", False):
+                        status, result, detail = handler(
+                            book, ledger, settings, action["payload"], client,
+                            launch=launch)
+                    else:
+                        status, result, detail = handler(
+                            book, ledger, settings, action["payload"], client)
                 except Exception as exc:                          # noqa: BLE001
                     log.warning("web action %s (%s) failed: %s",
                                 action["id"], action["verb"], exc)
@@ -406,8 +415,38 @@ def _import_from_sheet(settings: Settings, book: Book) -> None:
                     "rows stay in the sheet until the next one", exc)
 
 
+def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
+              builds: int, finishes: int) -> None:
+    """Run one batch of jobs and tell the fuse and the flight about it.
+
+    Handed to the pool when there is one, so the pass returns; run here
+    otherwise. The same door for the decision's jobs and for the ones a
+    web command chose (C6) - what differs is only who made the list.
+    """
+    def work():
+        try:
+            for build in batch():
+                with _FUSE_LOCK:
+                    # `Breaker.record` is read-modify-write on a file with
+                    # no lock of its own. It was safe while one thread
+                    # reported after the batch returned; with workers
+                    # finishing whenever they finish, it is not.
+                    fuse.record(build)
+        finally:
+            if flight is not None:
+                flight.done_with(builds=builds, finishes=finishes)
+
+    if pool is not None and flight is not None:
+        # Counted before it is submitted, so the very next pass already
+        # knows about it - the pool may not have started a thread yet.
+        flight.took_on(builds=builds, finishes=finishes)
+        pool.submit(work)
+    else:
+        work()
+
+
 def _shadow(settings: Settings, book: Book, decision: Decision,
-            outcome: dict) -> None:
+            outcome: dict, pulse: dict | None = None) -> None:
     """Mirror this pass into the store, and say what the pass did.
 
     Sheet stays authoritative; this is the read-model the web will serve
@@ -438,6 +477,11 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
             # the Proxy Pool page can offer to add them without a call.
             store_state.put(conn, "unlisted_proxies",
                             getattr(book, "unlisted_proxies", []))
+            if pulse is not None:
+                # The numbers the pass decided from, for the dashboard's
+                # actor bar (C6): warm of target, who is waiting, whether
+                # the breaker is open - read there, never recomputed.
+                store_state.put(conn, "pass", pulse)
             conn.commit()
         acted = {k: v for k, v in (outcome or {}).items() if v}
         if decision.jobs or acted or did["closed"]:
@@ -932,6 +976,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # from now (2026-08-29).
     coming, claimed = flight.counts() if flight is not None else (0, 0)
     waiting = max(0, waiting - claimed)
+    # With manual login on (C6) nobody is "waiting" as far as the decision
+    # is concerned: an account sits in the pool until a person picks it on
+    # the dashboard, and that command - not this arithmetic - starts the
+    # finish. The real count still goes in the log line and the pulse.
+    auto_waiting = 0 if settings.manual_login else waiting
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
     # there are, the shortfall, the free slots and the pool depths.
@@ -943,13 +992,14 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     free = (slots.look(client, time.monotonic())
             if needs_slots(tripped=tripped, warm=warm,
                            target=settings.warm_stock,
-                           accounts_waiting=waiting, cap=cap, paused=paused)
+                           accounts_waiting=auto_waiting, cap=cap,
+                           paused=paused)
             else None)
     decision = decide(tripped=tripped, warm=warm,
                       target=settings.warm_stock,
                       free_slots=(free if free is None
                                   else max(0, free - coming)),
-                      accounts_waiting=waiting, cap=cap, paused=paused,
+                      accounts_waiting=auto_waiting, cap=cap, paused=paused,
                       gmails=gmails, exits=exits, coming=coming)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
@@ -975,8 +1025,25 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
-    _drain_actions(settings, book, ledger, client=client, controls_only=False)
-    _shadow(settings, book, decision, outcome)
+    def launch(jobs: list[dict]) -> None:
+        """Run finish jobs a web command chose (C6), on this pass's Book
+        and ledger, under this pass's fuse and flight - exactly as the
+        decision's own jobs run, so the next pass counts them too."""
+        def chosen():
+            return builder._run_jobs(client, settings, book, jobs,
+                                     workers=len(jobs), reporter=None,
+                                     on_ready=None, cancel=stopping,
+                                     ledger=ledger)
+        _dispatch(chosen, fuse, flight=flight, pool=pool,
+                  builds=0, finishes=len(jobs))
+
+    _drain_actions(settings, book, ledger, client=client, launch=launch,
+                   controls_only=False)
+    _shadow(settings, book, decision, outcome, pulse={
+        "warm": warm, "target": settings.warm_stock, "waiting": waiting,
+        "coming": coming, "claimed": claimed, "tripped": tripped,
+        "free_slots": free, "manual_login": settings.manual_login,
+        "paused": paused, "at": time.time()})
 
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two
@@ -1011,28 +1078,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                # a Gmail reaching two phones.
                                book=book, ledger=ledger)
 
-        def work():
-            """Run the batch and tell the fuse what came of it."""
-            try:
-                for build in batch():
-                    with _FUSE_LOCK:
-                        # `Breaker.record` is read-modify-write on a file with
-                        # no lock of its own. It was safe while one thread
-                        # reported after the batch returned; with workers
-                        # finishing whenever they finish, it is not.
-                        fuse.record(build)
-            finally:
-                if flight is not None:
-                    flight.done_with(builds=decision.build,
-                                     finishes=decision.finish)
-
-        if pool is not None and flight is not None:
-            # Counted before it is submitted, so the very next pass already
-            # knows about it - the pool may not have started a thread yet.
-            flight.took_on(builds=decision.build, finishes=decision.finish)
-            pool.submit(work)
-        else:
-            work()
+        _dispatch(batch, fuse, flight=flight, pool=pool,
+                  builds=decision.build, finishes=decision.finish)
     return decision
 
 

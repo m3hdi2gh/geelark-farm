@@ -1683,5 +1683,87 @@ def test_the_two_drain_positions_hold_their_signed_ground():
     controls = src.index("controls_only=True)")
     asked = src.index("asked = _controls(")
     main = src.index("controls_only=False)")
-    shadow = src.index("_shadow(settings, book, decision, outcome)")
+    shadow = src.index("_shadow(settings, book, decision, outcome")
     assert controls < asked < main < shadow
+
+
+# ------------------------------------------------------ C6: manual login
+def test_with_manual_login_on_the_pass_finishes_nobody_by_itself(
+        monkeypatch, make_settings, tmp_path):
+    """The switch at the end of the transition: an account in the pool is
+    not "waiting" any more - a person picks it on the dashboard, and that
+    command starts the finish. The Keeper only keeps the stock warm."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=2,
+                             max_concurrent_phones=10, manual_login=True)
+    recorder = Recorder(warm=2, free=10, waiting=2).install(monkeypatch)
+
+    decision = serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert decision.finish == 0 and recorder.built == 0
+
+    # Flag off: the same numbers finish both, exactly as before C6.
+    settings = make_settings(state_dir=tmp_path, warm_stock=2,
+                             max_concurrent_phones=10)
+    Recorder(warm=2, free=10, waiting=2).install(monkeypatch)
+
+    assert serve_mod.once(object(), settings, Fuse(),
+                          serve_mod.Slots()).finish == 2
+
+
+def test_a_web_command_launches_its_finishes_under_the_pass_fuse_and_flight(
+        monkeypatch, make_settings, tmp_path):
+    """"Log in selected" hands the pass a list of jobs; they run through the
+    same door as the decision's own, so the breaker sees their outcome and
+    the next pass counts them as in flight."""
+    from geelark_farm import builder
+
+    settings = make_settings(state_dir=tmp_path, warm_stock=1)
+    Recorder(warm=1, free=10).install(monkeypatch)
+    ran = {}
+    monkeypatch.setattr(builder, "_run_jobs",
+                        lambda c, s, b, jobs, **kw:
+                        ran.update(jobs=jobs, kw=kw) or [build(ok=False)])
+    grabbed = {}
+
+    def drain(settings_, book, ledger, *, controls_only, client=None,
+              launch=None):
+        if not controls_only:
+            grabbed["launch"] = launch
+        return 0
+
+    monkeypatch.setattr(serve_mod, "_drain_actions", drain)
+    fuse, flight = Fuse(), serve_mod.InFlight()
+    seen = {}
+
+    class Pool:
+        def submit(self, fn):
+            seen["counted_before_run"] = flight.counts()
+            fn()
+
+    serve_mod.once(object(), settings, fuse, serve_mod.Slots(),
+                   flight=flight, pool=Pool())
+    grabbed["launch"]([{"kind": "finish", "phone": {"serial": "1500"}},
+                       {"kind": "finish", "phone": {"serial": "1501"}}])
+
+    assert [j["phone"]["serial"] for j in ran["jobs"]] == ["1500", "1501"]
+    assert ran["kw"]["workers"] == 2, "in parallel"
+    assert seen["counted_before_run"] == (0, 2)
+    assert flight.counts() == (0, 0)
+    assert len(fuse.seen) == 1 and not fuse.seen[0].ok
+
+
+def test_the_pass_leaves_its_pulse_for_the_dashboard(monkeypatch,
+                                                      make_settings, tmp_path):
+    settings = make_settings(state_dir=tmp_path, warm_stock=5,
+                             store_enabled=True, manual_login=True)
+    Recorder(warm=3, free=10, waiting=1).install(monkeypatch)
+    kept = {}
+    monkeypatch.setattr(serve_mod, "_shadow",
+                        lambda s, b, d, o, pulse=None: kept.update(pulse))
+    monkeypatch.setattr(serve_mod, "_drain_actions", lambda *a, **k: 0)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert kept["warm"] == 3 and kept["target"] == 5
+    assert kept["waiting"] == 1, "the real count, not the decision's zero"
+    assert kept["manual_login"] is True and kept["tripped"] == ""

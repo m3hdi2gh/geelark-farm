@@ -73,8 +73,11 @@ class MemoryTable:
         self._rows[row_id].update(fields)
         self.updates.append((row_id, dict(fields)))
 
-    def claim(self, kind, *, free, claimed, count_use, serial=""):
+    def claim(self, kind, *, free, claimed, count_use, serial="",
+              row_id=None):
         for r in self._ordered(kind, count_use):
+            if row_id is not None and r["id"] != row_id:
+                continue
             if r["error"] is None and (r["status"] or "").lower() in free:
                 r["status"] = claimed
                 r["claimed_at"] = _now()
@@ -500,3 +503,17 @@ def test_two_threads_claiming_one_free_row_get_one_row_and_one_none(
         with table._connect() as conn:
             conn.execute("DELETE FROM resources WHERE id = %s", (row_id,))
             conn.commit()
+
+
+# ------------------------------------------------- C6: claiming by name
+def test_claim_this_takes_only_the_named_row_over_postgres_too():
+    table, pool = gmails()
+    first, second = pool._rows[0], pool._rows[1]
+
+    assert pool.claim_this(second, serial="1600") is True
+    assert second.values["Status"] == "in_use"
+    assert second.values["Phone Serial"] == "1600"
+    assert table.row(second.store_id)["status"] == "in_use"
+    assert pool.claim_this(second, serial="1601") is False, "gone already"
+    assert first.values["Status"] == "", "the top row was never touched"
+    assert pool.beat() == 1, "held like any other claim"

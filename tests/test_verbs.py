@@ -156,3 +156,142 @@ def test_the_drain_hands_the_geelark_client_to_the_handler(monkeypatch,
     serve_mod._drain_actions(settings, None, None, controls_only=False,
                              client="the client")
     assert seen == {"client": "the client"}
+
+
+# ------------------------------------------------- C6: the phone commands
+def _warm(*serials):
+    return [{"sheet_row": i + 2, "serial": s, "gmail": f"g{i}@example.com",
+             "proxy": "", "app": "yes", "status": "incomplete",
+             "phone_id": f"P{s}"} for i, s in enumerate(serials)]
+
+
+def test_claim_this_takes_the_named_row_or_says_no():
+    book = make_book(apps=2)
+    a0, a1 = book.apps._rows
+
+    assert book.apps.claim_this(a1, "1500") is True
+    assert book.apps.status_of(a1) == "in_use"
+    assert a1.values["Phone Serial"] == "1500"
+    assert book.apps.claim_this(a1, "1501") is False, "not free any more"
+    assert a0 in book.apps.available, "the next one down was not taken"
+
+
+def test_login_selected_pairs_each_chosen_account_with_a_warm_phone(
+        monkeypatch):
+    from geelark_farm import builder
+
+    book = make_book(apps=4)
+    a0, a1, a2, a3 = book.apps._rows
+    book.apps.spend(a2, serial="1400", note="already on a phone")
+    monkeypatch.setattr(builder, "_unfinished",
+                        lambda client, book_: (_warm("1500", "1501"), []))
+    launched = []
+
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"by": "mehdi", "addresses": [
+            "a0@example.com", "a1@example.com", "a2@example.com",
+            "nobody@example.com", "a3@example.com"]},
+        object(), launch=launched.append)
+
+    assert status == "done"
+    jobs = launched[0]
+    assert [(j["kind"], j["phone"]["serial"], j["phone"]["account"].label)
+            for j in jobs] == [("finish", "1500", "a0@example.com"),
+                               ("finish", "1501", "a1@example.com")]
+    assert book.apps.status_of(a0) == "in_use"
+    assert a0.values["Phone Serial"] == "1500"
+    assert book.apps.status_of(a3) == "", "no warm phone: left free"
+    assert detail["unpaired"] == ["a3@example.com"]
+    assert detail["refused"] == ["a2@example.com: ready",
+                                 "nobody@example.com: not in the Gpt Info tab"]
+    assert "logging in 2 account(s) in parallel" in said
+    assert "no warm phone" in said
+
+
+def test_login_selected_refuses_to_run_without_a_launcher(monkeypatch):
+    book = make_book(apps=1)
+    status, said, _ = verbs.login_accounts(
+        book, None, None, {"addresses": ["a0@example.com"]}, object())
+    assert status == "failed" and "cannot start" in said
+    assert book.apps.status_of(book.apps._rows[0]) == "", "nothing claimed"
+    assert serve_mod.ACTION_VERBS["login_accounts"].needs_launch is True
+
+
+def _phone_on(book, serial, proxy_name):
+    row = book.phones.start(Serial=serial, Gmail="g0@example.com",
+                            Proxy=proxy_name, Status="ready")
+    return row
+
+
+def test_change_proxy_moves_the_phone_to_the_next_free_exit(monkeypatch):
+    from geelark_farm import phones as phones_mod
+
+    book = make_book(proxies=2)
+    sx1, sx2 = book.proxies._rows
+    sx1.values["Name"], sx2.values["Name"] = "SX1", "SX2"
+    book.proxies.spend(sx1, serial="1500", note="on it")
+    _phone_on(book, "1500", "SX1")
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.RUNNING}])
+    done = []
+    monkeypatch.setattr(phones_mod, "stop",
+                        lambda client, pid: done.append(("stop", pid)))
+    monkeypatch.setattr(phones_mod, "wait_until_stopped",
+                        lambda client, pid, **k:
+                        done.append(("wait", pid)) or True)
+    monkeypatch.setattr(phones_mod, "set_proxy",
+                        lambda client, pid, proxy:
+                        done.append(("set", pid, proxy.host)))
+
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "alireza"}, object())
+
+    assert status == "done", said
+    assert done == [("stop", "P1500"), ("wait", "P1500"),
+                    ("set", "P1500", "10.0.0.1")], \
+        "stopped first, then told GeeLark"
+    assert book.proxies.status_of(sx2) == "on a phone"
+    assert sx2.values["Used By"] == "1500"
+    assert book.proxies.status_of(sx1) == "free"
+    assert "Left phone 1500" in sx1.values["Note"]
+    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
+    assert row["Proxy"] == "SX2"
+    assert detail == {"was": "SX1", "now": "SX2"}
+
+
+def test_change_proxy_gives_the_exit_back_when_geelark_refuses(monkeypatch):
+    from geelark_farm import phones as phones_mod
+
+    book = make_book(proxies=2)
+    sx1, sx2 = book.proxies._rows
+    sx1.values["Name"], sx2.values["Name"] = "SX1", "SX2"
+    book.proxies.spend(sx1, serial="1500", note="on it")
+    _phone_on(book, "1500", "SX1")
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.STOPPED}])
+
+    def refuse(client, pid, proxy):
+        raise phones_mod.PhoneError("[45004] proxy check failed")
+
+    monkeypatch.setattr(phones_mod, "set_proxy", refuse)
+
+    status, said, _ = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "alireza"}, object())
+
+    assert status == "failed" and "45004" in said
+    assert book.proxies.status_of(sx2) == "free", "given back"
+    assert book.proxies.status_of(sx1) == "on a phone", "kept"
+    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
+    assert row["Proxy"] == "SX1"
+
+
+def test_change_proxy_refuses_a_phone_a_run_is_working_on():
+    book = make_book(proxies=2)
+    book.phones.start(Serial="1500", Gmail="g0@example.com", Proxy="SX1",
+                      Status=book.phones.BUILDING)
+
+    status, said, _ = verbs.change_proxy(
+        book, None, None, {"serial": "1500"}, object())
+
+    assert status == "refused" and "worked on" in said
+    assert len(book.proxies.available) == 2, "no exit was claimed"
