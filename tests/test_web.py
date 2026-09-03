@@ -1004,7 +1004,8 @@ def test_the_requests_page_reads_as_a_story_with_a_line_per_phone(
     assert "/requests/239/retry" not in body, "done is done"
     assert "running · 1" in body and "failed · 1" in body and "all · 4" in body
     assert "mine only" in body, "an admin can narrow to their own"
-    assert app_mod.pages._clock("2026-09-01 18:06:12+00:00") in body, \n        "asked, as a clock"
+    clock = app_mod.pages._clock("2026-09-01 18:06:12+00:00")
+    assert clock in body, "asked, as a clock"
     assert "— 1m 04s" in body, "how long the failed change took"
     assert 'http-equiv="refresh"' in body
 
