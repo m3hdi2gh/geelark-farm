@@ -986,13 +986,14 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    assert "keeper 5/5 warm" in body
-    assert "12</b>" in body and "5 on phones" in body
+    assert "Everything running" in body, "one sentence, not a bar of numbers"
+    assert "Ready to deliver" in body
+    assert ">12</b>gmail" in body and ">20</b>proxies" in body, "the strip"
     assert "IronHawk@gmail.com" in body and "SX27" in body
     assert 'class="badge warn">warm' in body
     assert "arman@gmail.com" in body and "gpt4.avir@proton.me" in body
     assert "manual · mehdi" in body
-    assert "Change proxy" not in body, "mutations are off"
+    assert "Change IP" not in body, "mutations are off"
     assert 'name="addresses"' not in body, "manual login is off"
     assert "log in on their own" in body
 
@@ -1002,7 +1003,7 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert body.count("Change proxy") == 2
+    assert body.count("Change IP") == 2, "one per phone, both states"
     assert body.count('name="addresses"') == 2
     assert "Log in selected" in body
 
@@ -1106,7 +1107,7 @@ def test_describe_says_each_command_in_words():
     assert describe("add_proxies", {"rows": [{}]}) == ("Add 1 proxy", "")
     assert describe("add_proxies", {"rows": [{}, {}]}) == ("Add 2 proxies", "")
     assert describe("change_proxy", {"serial": "1549"}) == (
-        "Change proxy on 1549", "")
+        "Change IP on 1549", "")
     assert describe("remove_proxy", {"name": "SX3"}) == (
         "Remove SX3", "from the pool")
     assert describe("noop", {}) == ("Noop", "")
@@ -1920,23 +1921,30 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    assert 'class="tile bad"' in body and "nothing can be built - add rows" in body
-    assert 'class="tile warn"' in body
-    assert "fewer free exits than the 5 warm phones need" in body
-    assert "2 accounts have no phone to go to" in body
-    # the fourth row: what can go out, what waits, what is being made
-    assert "Ready to deliver" in body and "Out with somebody" in body
-    assert "Waiting for an account" in body and "Building now" in body
-    tiles = body[body.index("Ready to deliver"):]
-    assert re.search(r'Ready to deliver</div>\s*<b[^>]*>1</b>', tiles)
-    assert re.search(r'Out with somebody</div>\s*<b[^>]*>1</b>', tiles)
+    strip = body[body.index('class="strip"'):]
+    strip = strip[:strip.index("</div>")]
+    assert 'color:var(--red)">0</b>gmail' in strip
+    assert "nothing can be built until rows are added" in strip
+    assert 'color:var(--amber)">2</b>proxies' in strip
+    assert "fewer than the 5 phones the keeper keeps warm" in strip
+    assert 'color:var(--amber)">7</b>GPT accounts' in strip
+    assert "2 of them have no phone to go to" in strip
+    # the headline counts only what can be handed over right now
+    head = body[body.index("Ready to deliver"):body.index('class="strip"')]
+    assert re.search(r'class="n"[^>]*>1</div>', head), "one ready, one taken"
+    assert "1 warm phone behind them" in head and "1 building" in head
+    assert "1 out with somebody" in head
 
 
-def test_building_now_reads_quiet_when_nothing_is_being_built(web):
+def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
+    _dash(monkeypatch, phones=[{"serial": "1502", "status": "app_only",
+                                "state": ""}])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert re.search(r'Building now</div>\s*<b[^>]*>quiet</b>', body)
+    head = body[body.index("Ready to deliver"):body.index('class="strip"')]
+    assert re.search(r'class="n" style="color:var\(--dim\)">0</div>', head)
+    assert "Take one to hand it over" not in head
 
 
 def test_a_building_row_shows_its_last_log_line_and_how_long(web,
@@ -1973,9 +1981,10 @@ def test_the_keepers_warning_sits_above_the_tiles_with_the_fix_linked(
     client.login()
     _, _, body = client.request("GET", "/")
     assert "the Gmail tab has no free rows" in body
-    warn = body[body.index('class="panel warn"'):]
-    assert 'href="/pools/gmail"' in warn[:600]
-    assert body.index('class="panel warn"') < body.index('class="grid3"')
+    warn = body[body.index('class="alert warn"'):]
+    assert 'href="/pools/gmail"' in body[:body.index('class="alert warn"') + 200]
+    assert "open the Gmail pool" in warn[:400]
+    assert body.index('class="alert warn"') < body.index("Ready to deliver")
 
     _dash(monkeypatch, pulse={"warm": 2, "target": 5, "at": 0,
                               "tripped": "captcha_shown x5",
@@ -2000,9 +2009,8 @@ def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
     order = [body.index(f'href="/phones/{s}"') for s in
              ("1500", "1501", "1502", "1503")]
     assert order == sorted(order), "ready, warm, incomplete, building"
-    assert 'value="1500 · h@x.com · IronHawk@gmail.com · SX27"' in body
-    assert 'class="hand" readonly' in body
-    assert body.count('class="hand"') == 1, "only the ready phone"
+    assert 'class="hand"' not in body, "the hand-over line is on /phones/1500"
+    assert "waiting for an account" in body, "the warm row says what it lacks"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -2022,11 +2030,17 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert "taken by ali" in body and app_mod.pages._when(
+    assert 'class="dim">ali' in body and app_mod.pages._when(
         "2026-09-03 10:00:00+00") in body
     assert '/phones/1500/state' in body and 'value="taken"' in body
-    assert 'value="unused"' in body, "the taken phone offers Back"
-    assert body.count('value="done"') == 2 and body.count('value="failed"') == 2
+    assert 'value="unused"' in body and "Release" in body, \
+        "a taken phone can be let go"
+    assert body.count('value="done"') == 1, "only the taken phone closes here"
+    assert body.count('value="failed"') == 1
+    assert body.count("Change IP") == 2, "in both states, beside the rest"
+    shelf = body.index('/phones/1500/state')
+    assert shelf < body.index('/phones/1501/state'), \
+        "the shelf first, then what is out with somebody"
 
     status, headers, _ = client.request(
         "POST", "/phones/1500/state", _form(csrf=client.csrf(), state="taken"))
@@ -2104,7 +2118,7 @@ def test_the_ticker_tells_requests_and_events_as_sentences(web, monkeypatch):
             f'<span style="color:var(--blue)">running</span>') in body
     assert 'phone <a href="/phones/1551">1551</a> became ready' in body
     assert "the breaker tripped — 5 in a row: captcha_shown" in body
-    assert ('Change proxy on <a href="/phones/1549">1549</a> → '
+    assert ('Change IP on <a href="/phones/1549">1549</a> → '
             '<span style="color:var(--red)">failed</span>') in body
     foot = body[body.index("all events") - 2000:body.index("all events")]
     assert foot.index("mehdi") < foot.index("1551") < foot.index("alireza"), \
@@ -2116,7 +2130,7 @@ def test_the_switches_line_is_for_admins_only(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
     assert "WEB_MUTATIONS" in body and "POOLS_IN_PG" in body
-    assert "the console is read-only" in body
+    assert 'class="svc"' in body, "one quiet line at the foot"
     assert "accounts log in on their own" in body
 
     monkeypatch.setattr(FakeStore, "user",

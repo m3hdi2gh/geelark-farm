@@ -240,6 +240,22 @@ label.field{{align-items:stretch}}
 .subrow td{{color:var(--dim);background:rgba(255,255,255,.015)}}
 .subrow td:first-child{{border-left:2px solid var(--line)}}
 p{{margin:0}}
+.narrow{{width:100%;max-width:1060px;margin:0 auto;display:flex;
+ flex-direction:column;gap:26px}}
+.headline{{display:flex;align-items:flex-end;gap:40px;flex-wrap:wrap}}
+.headline .n{{font-family:var(--mono);font-size:56px;line-height:1;
+ font-weight:500;font-variant-numeric:tabular-nums}}
+.headline .l{{font-size:12.5px;color:var(--muted)}}
+.strip{{margin-left:auto;display:flex;gap:22px;flex-wrap:wrap;
+ font-size:13px;color:var(--muted);padding-bottom:6px}}
+.strip a{{color:var(--muted)}} .strip a:hover{{color:#fff}}
+.strip b{{font-family:var(--mono);font-weight:500;margin-right:5px}}
+.svc{{display:flex;align-items:center;gap:14px;padding-top:12px;
+ border-top:1px solid var(--line2);font-size:12px;color:#55627a}}
+.svc button{{background:none;border:0;color:var(--dim);font-size:12px;
+ font-family:inherit;cursor:pointer;padding:2px 0}}
+.svc button:hover{{color:#fff;background:none}}
+.svc .right{{margin-left:auto}}
 .alerts{{display:flex;flex-direction:column;gap:6px}}
 .alert{{display:block;padding:9px 14px;border-radius:8px;font-size:13px;
  border:1px solid;color:var(--ink)}}
@@ -587,7 +603,7 @@ CONTROLS = {
 PHONE_STATES = {
     "taken": {"label": "Take", "klass": "quiet", "sure": False,
               "text": ""},
-    "unused": {"label": "Back", "klass": "quiet", "sure": False,
+    "unused": {"label": "Release", "klass": "quiet", "sure": False,
                "text": ""},
     "done": {"label": "Done", "klass": "quiet bad", "sure": True,
              "text": "The next sync deletes the phone in GeeLark and "
@@ -759,89 +775,6 @@ def _controls(data: dict, user: dict) -> str:
         f'{esc(CONTROLS[what]["label"])}</button></form>' for what in wanted)
 
 
-def _stock_tiles(data: dict) -> str:
-    stock = data.get("stock") or {}
-    pulse = data.get("pulse") or {}
-    gmail, proxy = stock.get("gmail", {}), stock.get("proxy", {})
-    app = stock.get("app", {})
-    target = int(pulse.get("target") or 0)
-    warm = int(pulse.get("warm") or 0)
-
-    def tile(label: str, href: str, number, colour: str, sub: str,
-             klass: str, note: str) -> str:
-        why = f'<span class="dim">{esc(note)}</span>' if note else ""
-        return (f'<div class="tile {klass}"><div class="l">{esc(label)} '
-                f'<a href="{href}">open pool</a></div>'
-                f'<b style="color:var(--{colour})">{number}</b>'
-                f'<span class="muted">{sub}</span>{why}</div>')
-
-    g_free = int(gmail.get("free") or 0)
-    g_klass, g_note = "", ""
-    if g_free == 0:
-        g_klass, g_note = "bad", "nothing can be built - add rows"
-    elif g_free < target:
-        g_klass = "warn"
-        g_note = f"fewer than the {target} phones the keeper keeps warm"
-    p_free = int(proxy.get("free") or 0)
-    p_klass, p_note = "", ""
-    if p_free < target:
-        p_klass = "warn"
-        p_note = (f"fewer free exits than the {target} warm phones need"
-                  if p_free else "no free exit - the next build has nowhere "
-                                 "to go out from")
-    awaiting = int(app.get("awaiting") or 0)
-    a_klass, a_note = "", ""
-    if awaiting > warm:
-        a_klass = "warn"
-        a_note = (f"{_plural(awaiting - warm, 'account')} "
-                  f"{'has' if awaiting - warm == 1 else 'have'} no phone "
-                  f"to go to")
-    colour = {"": "green", "warn": "amber", "bad": "red"}
-    return (
-        tile("Gmail", "/pools/gmail", g_free, colour[g_klass],
-             f'free — {gmail.get("on_phones", 0)} on phones · '
-             f'{gmail.get("used", 0)} used', g_klass, g_note)
-        + tile("GPT accounts", "/pools/gpt", awaiting,
-               "amber" if a_klass else "green",
-               f'awaiting login — {app.get("panel", 0)} from panel · '
-               f'{app.get("manual", 0)} manual', a_klass, a_note)
-        + tile("Proxies", "/pools/proxy", p_free, colour[p_klass],
-               f'free — {proxy.get("on_phones", 0)} on phones · '
-               f'{proxy.get("dead", 0)} dead', p_klass, p_note))
-
-
-def _phone_tiles(data: dict) -> str:
-    phones = data.get("phones") or []
-    pulse = data.get("pulse") or {}
-    app = (data.get("stock") or {}).get("app", {})
-    taken = [r for r in phones if (r.get("state") or "") == "taken"]
-    ready = [r for r in phones if (r.get("status") or "") == "ready"
-             and (r.get("state") or "") != "taken"]
-    warm = [r for r in phones if (r.get("status") or "") == "app_only"]
-    building = [r for r in phones if (r.get("status") or "") == "building"]
-    awaiting = int(app.get("awaiting") or 0)
-    tiles = [
-        ("Ready to deliver", str(len(ready)), "green",
-         "hand over from the table below"),
-        ("Waiting for an account", str(len(warm)), "amber" if warm and
-         not awaiting else "ink",
-         f"{awaiting} awaiting login" if awaiting else
-         "app only — add GPT stock"),
-        ("Building now", str(len(building)) if building else "quiet",
-         "blue" if building else "muted",
-         f"keeper {int(pulse.get('warm') or 0)}/"
-         f"{int(pulse.get('target') or 0)} warm"),
-        ("Out with somebody", str(len(taken)), "violet",
-         "taken - the sync leaves them alone"),
-    ]
-    return "".join(
-        f'<div class="tile"><div class="l">{esc(label)}</div>'
-        f'<b style="color:var(--{colour})'
-        f'{";font-size:20px" if number == "quiet" else ""}">{number}</b>'
-        f'<span class="muted">{esc(sub)}</span></div>'
-        for label, number, colour, sub in tiles)
-
-
 def _state_form(user: dict, serial: str, state: str, back: str = "/") -> str:
     """One Take / Back / Done / Failed button; `back` is the page the
     press returns to (the dashboard, or the phone's own story)."""
@@ -852,6 +785,16 @@ def _state_form(user: dict, serial: str, state: str, back: str = "/") -> str:
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<button class="{plan["klass"]}">{esc(plan["label"])}'
             f'</button></form>')
+
+
+def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
+    """"Change IP": the phone is stopped, given the next free exit and
+    reads it when it next starts. Offered in every state a person can
+    act on - a taken phone whose exit is refused needs it most."""
+    return (f'<form method="post" class="inline" '
+            f'action="/phones/{esc(serial)}/proxy">{_csrf(user)}'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<button class="quiet">Change IP</button></form>')
 
 
 def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
@@ -867,90 +810,217 @@ def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
             _state_form(user, serial, "failed", back)]
 
 
+def _row_actions(user: dict, row: dict, back: str = "/") -> str:
+    """What one phone offers from the table.
+
+    A phone on the shelf offers the one thing anybody does with it -
+    Take - and Change IP beside it. Once it is out with somebody the row
+    turns into the three ways that ends: Release, Done, Failed. Closing
+    a phone nobody took is rarer and lives on the phone's own page, so
+    the table stays two buttons wide. A phone being built offers
+    nothing: a run is holding it.
+    """
+    building = (row.get("status") or "") == "building"
+    if building or not _may(user, "may_take_phones"):
+        actions = []
+    elif (row.get("state") or "") == "taken":
+        actions = _state_forms(user, row, back)
+    else:
+        actions = _state_forms(user, row, back)[:1]
+    if _may(user, "may_change_proxy") and not building:
+        actions.append(_change_ip_form(user, str(row.get("serial") or ""),
+                                       back))
+    return " ".join(actions)
+
+
 def _phone_rows(data: dict, user: dict) -> str:
+    """One line per phone: what it is, what is on it, and what you can do
+    with it. The hand-over line and the story live on the phone's own
+    page - this table is for seeing the shelf at a glance."""
+    # What can go out first, and inside each kind what nobody has taken:
+    # the top of this table is the shelf the headline number counts.
     phones = sorted(data.get("phones") or [],
                     key=lambda r: (_PHONE_ORDER.get(r.get("status") or "", 9),
+                                   (r.get("state") or "") == "taken",
                                    str(r.get("serial"))))
     progress = data.get("progress") or {}
-    can_change = _may(user, "may_change_proxy")
-
     lines = []
     for r in phones:
         serial = str(r.get("serial") or "")
         status = r.get("status") or ""
-        taken = (r.get("state") or "") == "taken"
         badge = _phone_badge(r)
-        if taken:
+        if (r.get("state") or "") == "taken":
             who = esc(str(r.get("owner") or "somebody"))
             when = _when(r.get("updated_at")) if r.get("updated_at") else ""
-            badge += (f'<br><span class="dim">taken by {who}'
+            badge += (f'<br><span class="dim">{who}'
                       f'{" · " + when if when else ""}</span>')
-        actions = _state_forms(user, r)
-        if status != "building":
-            if can_change:
-                actions.append(f'<form method="post" class="inline" '
-                               f'action="/phones/{esc(serial)}/proxy">'
-                               f'{_csrf(user)}<button class="quiet">Change '
-                               f'proxy</button></form>')
-        action = " ".join(actions)
         if status == "building":
             lines.append(
                 f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
                 f'<td colspan="3">{_progress(progress.get(serial))}</td>'
-                f'<td></td></tr>')
+                f'</tr>')
             continue
         account = esc(str(r.get("app_account") or "")) or \
-            '<span class="dim">—</span>'
+            '<span class="dim">waiting for an account</span>'
         lines.append(
-            f"<tr><td>{_serial_link(serial)}</td><td>{badge}</td>"
-            f"<td>{esc(str(r.get('gmail') or ''))}</td><td>{account}</td>"
-            f"<td>{esc(str(r.get('proxy_name') or ''))}</td>"
-            f"<td>{action}</td></tr>")
-        if status == "ready" and not taken:
-            hand = " · ".join(str(r.get(k) or "") for k in
-                              ("serial", "app_account", "gmail", "proxy_name"))
-            lines.append(
-                f'<tr class="subrow"><td></td><td colspan="5">'
-                f'<input class="hand" readonly value="{esc(hand)}" '
-                f'title="one line for the customer - click, copy"></td></tr>')
+            f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
+            f'<td>{account}<br><span class="dim">'
+            f'{esc(str(r.get("gmail") or ""))}</span></td>'
+            f'<td>{esc(str(r.get("proxy_name") or ""))}</td>'
+            f'<td class="act">{_row_actions(user, r)}</td></tr>')
     return "".join(lines)
+
+
+def _status_sentence(data: dict) -> str:
+    """How the farm is, in one sentence. The numbers only when they are
+    not what they should be - the alert strip carries the rest."""
+    pulse = data.get("pulse") or {}
+    if not pulse:
+        return '<span class="dim">no pass has reported yet</span>'
+    warm, target = int(pulse.get("warm") or 0), int(pulse.get("target") or 0)
+    if pulse.get("stopped"):
+        word, colour = "Stopped from the sheet", "red"
+    elif pulse.get("tripped"):
+        word, colour = "Building stopped", "red"
+    elif pulse.get("paused"):
+        word, colour = "Building paused", "amber"
+    elif warm < target:
+        word, colour = f"Building — {warm} of {target} warm", "amber"
+    else:
+        word, colour = "Everything running", "green"
+    when = _ago(pulse["at"]) if pulse.get("at") else "unknown"
+    return (f'<span style="color:var(--{colour})">●</span> {esc(word)} '
+            f'<span class="dim">·</span> last pass {esc(when)}')
+
+
+def _stock_strip(data: dict) -> str:
+    """The three pools as one line: the number, the word, and a colour
+    when there is not enough of it to keep building."""
+    stock = data.get("stock") or {}
+    pulse = data.get("pulse") or {}
+    target = int(pulse.get("target") or 0)
+    warm = int(pulse.get("warm") or 0)
+    gmail = int((stock.get("gmail") or {}).get("free") or 0)
+    proxy = int((stock.get("proxy") or {}).get("free") or 0)
+    awaiting = int((stock.get("app") or {}).get("awaiting") or 0)
+    short = f"fewer than the {target} phones the keeper keeps warm"
+    items = [
+        ("/pools/gmail", gmail, "gmail",
+         "red" if not gmail else "amber" if gmail < target else "ink",
+         "nothing can be built until rows are added" if not gmail else
+         short if gmail < target else "free to build with"),
+        ("/pools/proxy", proxy, "proxies",
+         "red" if not proxy else "amber" if proxy < target else "ink",
+         "no free exit - the next build has nowhere to go out from"
+         if not proxy else short if proxy < target else "free to build with"),
+        ("/pools/gpt", awaiting, "GPT accounts",
+         "amber" if awaiting > warm else "ink",
+         f"{awaiting - warm} of them have no phone to go to"
+         if awaiting > warm else "awaiting login"),
+    ]
+    return "".join(
+        f'<a href="{href}" title="{esc(why)}">'
+        f'<b style="color:var(--{colour})">{number}</b>{esc(word)}</a>'
+        for href, number, word, colour, why in items)
+
+
+def _service_row(data: dict, user: dict, flags: dict | None) -> str:
+    """The quiet line at the foot: the service's own controls and which
+    switches this server runs with. Admins only, and never shouted."""
+    if user.get("role") != "admin":
+        return ""
+    controls = _controls(data, user)
+    switches = ""
+    if flags:
+        bits = []
+        for key, words in _SWITCHES.items():
+            on = bool(flags.get(key))
+            bits.append(f'{words["name"]} '
+                        f'<b style="color:var(--{"green" if on else "dim"})">'
+                        f'{"on" if on else "off"}</b>')
+        switches = (f'<span class="right mono">{" · ".join(bits)}</span>')
+    if not controls and not switches:
+        return ""
+    return (f'<div class="svc"><span>Service</span>{controls}{switches}</div>')
 
 
 def dashboard(data: dict, user: dict, said: str = "",
               manual_login: bool = False,
               flags: dict | None = None) -> str:
-    """The console's front page: the keeper's warning if it has one, the
-    stock and phone tiles with their thresholds, the phones table with
-    the hand-over buttons, the accounts awaiting login, and a ticker of
-    the latest requests and events. `flags` is the switches line an
-    admin sees at the foot."""
+    """The console's front page, kept to two questions: is the farm well,
+    and what can be handed over now. One sentence of health, one number,
+    a line of stock, the phones with their own buttons. Everything that
+    is only sometimes true - the keeper's complaint, accounts waiting -
+    appears only when it is true; the rest lives on its own page."""
     pulse = data.get("pulse") or {}
     phones = data.get("phones") or []
-    counts: dict = {}
-    for r in phones:
-        counts[r.get("status") or "?"] = counts.get(r.get("status") or "?", 0) + 1
-    summary = " · ".join(f"{n} {_phone_word(k)}" for k, n in counts.items())
+    taken = [r for r in phones if (r.get("state") or "") == "taken"]
+    ready = [r for r in phones if (r.get("status") or "") == "ready"
+             and (r.get("state") or "") != "taken"]
+    warm = [r for r in phones if (r.get("status") or "") == "app_only"]
+    building = [r for r in phones if (r.get("status") or "") == "building"]
+
+    note = []
+    if ready:
+        note.append("Take one to hand it over")
+    note.append(f"{_plural(len(warm), 'warm phone')} behind them")
+    if building:
+        note.append(f"{len(building)} building")
+    if taken:
+        note.append(f"{len(taken)} out with somebody")
+    headline = (f'<div class="headline"><div>'
+                f'<div class="l">Ready to deliver</div>'
+                f'<div class="n" style="color:var('
+                f'--{"green" if ready else "dim"})">{len(ready)}</div>'
+                f'<div class="l">{esc(" · ".join(note))}</div></div>'
+                f'<div class="strip">{_stock_strip(data)}</div></div>')
+
     rows = _phone_rows(data, user)
-    table = (f'<table><tr><th>serial</th><th>state</th><th>gmail</th>'
-             f'<th>gpt account</th><th>proxy</th><th></th></tr>{rows}'
-             f'</table>' if rows else '<p class="muted">No phones yet.</p>')
+    table = (f'<table><tr><th>serial</th><th>state</th><th>account</th>'
+             f'<th>proxy</th><th></th></tr>{rows}</table>'
+             if rows else '<p class="empty">No phones yet - the keeper '
+                          'builds the shortfall on its next pass.</p>')
     hint = _need(user, "may_take_phones",
                  "taking, returning and closing phones")
-    phones_panel = (
-        f'<div class="panel"><div class="row"><h3>Phones</h3>'
-        f'<span class="dim mono">{esc(summary)}</span></div>{table}{hint}'
-        f'<p class="dim">keeper builds the shortfall in parallel — 3 taken '
-        f'at once means 3 builds start together</p></div>')
 
     warning = ""
     if pulse.get("warning"):
         href, label = _warning_link(pulse)
-        warning = (f'<div class="panel warn"><h3>Nothing is being built</h3>'
-                   f'<p>{esc(str(pulse["warning"]))}</p>'
-                   f'<p><a href="{href}">{esc(label)} →</a></p></div>')
+        warning = (f'<a class="alert warn" href="{href}">'
+                   f'{esc(str(pulse["warning"]))} — {esc(label)}</a>')
 
+    login_panel = _awaiting_panel(data, user, manual_login, pulse)
+
+    footer = ""
+    if user.get("sees") == "all":
+        footer = (f'<div class="row dim mono" style="border-top:1px solid '
+                  f'var(--line2);padding-top:12px">{_ticker(data)}'
+                  f'<a href="/events" style="margin-left:auto">all events</a>'
+                  f'</div>')
+    footer += _service_row(data, user, flags)
+
+    body = (f'<div class="narrow">'
+            f'<div class="top"><h2>Dashboard</h2>'
+            f'<span class="status">{_status_sentence(data)}</span></div>'
+            + _said(said, _DASH_SAID) + warning + headline
+            + f'<div>{table}{hint}</div>' + login_panel + footer
+            + '</div>')
+    busy = bool(building) or int(
+        (data.get("queue") or {}).get("queued") or 0) > 0
+    return page("Dashboard", body, user=user, here="/",
+                refresh=30 if busy else 0)
+
+
+def _awaiting_panel(data: dict, user: dict, manual_login: bool,
+                    pulse: dict) -> str:
+    """The accounts with nowhere to go yet - shown only when there are
+    some, or when this person could act on them. An empty panel saying
+    "nothing waiting" is a line of noise on a page that is about the
+    phones."""
     awaiting = data.get("awaiting") or []
     can_login = manual_login and _may(user, "may_login_accounts")
+    if not awaiting:
+        return ""
     warm = int(pulse.get("warm") or 0)
     items = []
     for a in awaiting:
@@ -969,59 +1039,27 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'{who}</span>'
             f'<span class="dim" style="grid-column:{2 if tick else 1}/-1">'
             f'{"added " + ago if ago else "added: no stamp"}</span></label>')
-    listed = "".join(items) or "<p class=muted>Nothing waiting.</p>"
-    if can_login:
-        if warm:
-            foot = (f'<div class="row"><span class="dim">{warm} warm '
-                    f'{"phone" if warm == 1 else "phones"} can take them; '
-                    f'each ticked account boots one</span>'
-                    f'<button class="right">Log in selected</button></div>')
-        else:
-            foot = ('<p class="dim">no warm phone is free - the keeper is '
-                    'building; there is nothing to press until one is</p>')
-        login_panel = (f'<form method="post" action="/accounts/login" '
-                       f'class="panel">{_csrf(user)}<div class="row">'
-                       f'<h3>Awaiting login</h3><span class="dim mono">'
-                       f'{len(awaiting)} accounts</span></div>{listed}{foot}'
-                       f'</form>')
-    else:
+    listed = "".join(items)
+    head = (f'<div class="row"><h3>Awaiting login</h3>'
+            f'<span class="dim mono">{_plural(len(awaiting), "account")}'
+            f'</span></div>')
+    if not can_login:
         why = ("accounts log in on their own on the next pass"
                if not manual_login else
                "you may not log accounts in - it needs the "
                "may_login_accounts permission; ask an admin")
-        login_panel = (f'<div class="panel"><div class="row"><h3>Awaiting '
-                       f'login</h3><span class="dim mono">{len(awaiting)} '
-                       f'accounts</span></div>{listed}'
-                       f'<p class="dim">{why}</p></div>')
-
-    footer = ""
-    if user.get("sees") == "all":
-        footer = (f'<div class="row dim mono" style="border-top:1px solid '
-                  f'var(--line2);padding-top:12px">{_ticker(data)}'
-                  f'<a href="/events" style="margin-left:auto">all events</a>'
-                  f'</div>')
-    if flags and user.get("role") == "admin":
-        bits = []
-        for key, words in _SWITCHES.items():
-            on = bool(flags.get(key))
-            bits.append(f'<span>{words["name"]} <b style="color:var(--'
-                        f'{"green" if on else "dim"})">{"on" if on else "off"}'
-                        f'</b> <span class="dim">— '
-                        f'{esc(words["on" if on else "off"])}</span></span>')
-        footer += (f'<div class="switches dim mono">{"".join(bits)}</div>')
-
-    body = (f'<div class="top"><h2>Dashboard</h2><span class="status">'
-            f'{_actor_bar(data)} {_controls(data, user)}</span></div>'
-            + _said(said, _DASH_SAID) + warning
-            + f'<div class="grid3">{_stock_tiles(data)}</div>'
-            + f'<div class="tiles">{_phone_tiles(data)}</div>'
-            + f'<div class="grid2" style="grid-template-columns:minmax(0,58fr) '
-              f'minmax(0,42fr)">{phones_panel}{login_panel}</div>'
-            + footer)
-    busy = any((r.get("status") or "") == "building" for r in phones) or \
-        int((data.get("queue") or {}).get("queued") or 0) > 0
-    return page("Dashboard", body, user=user, here="/",
-                refresh=30 if busy else 0)
+        return (f'<div class="panel">{head}{listed}'
+                f'<p class="dim">{why}</p></div>')
+    if warm:
+        many = _plural(warm, "warm phone")
+        foot = (f'<div class="row"><span class="dim">{many} can take them; '
+                f'each ticked account boots one</span>'
+                f'<button class="right">Log in selected</button></div>')
+    else:
+        foot = ('<p class="dim">no warm phone is free - the keeper is '
+                'building; there is nothing to press until one is</p>')
+    return (f'<form method="post" action="/accounts/login" class="panel">'
+            f'{_csrf(user)}{head}{listed}{foot}</form>')
 
 
 _APP_MARK = {True: "✓", False: "✗", None: "?"}
@@ -1230,7 +1268,7 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return _plural(len(who), "account").replace(
             str(len(who)), f"Log in {len(who)}", 1), ", ".join(who)
     if verb == "change_proxy":
-        return f"Change proxy on {p.get('serial', '?')}", ""
+        return f"Change IP on {p.get('serial', '?')}", ""
     if verb == "stop_phone":
         return f"Stop phone {p.get('serial', '?')}", ""
     if verb == "add_gmails":
@@ -3042,11 +3080,18 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
         actions = _state_forms(user, dict(phone, serial=serial), back)
         if _may(user, "may_change_proxy") and \
                 (phone.get("status") or "") != "building":
-            actions.append(f'<form method="post" class="inline" '
-                           f'action="/phones/{esc(serial)}/proxy">'
-                           f'{_csrf(user)}<input type="hidden" name="back" '
-                           f'value="{esc(back)}"><button class="quiet">'
-                           f'Change proxy</button></form>')
+            actions.append(_change_ip_form(user, serial, back))
+    hand = ""
+    if phone and (phone.get("status") or "") == "ready" \
+            and not phone.get("done_at"):
+        line = " · ".join(str(phone.get(k) or "") for k in
+                          ("serial", "app_account", "gmail", "proxy_name"))
+        hand = (f'<div class="panel"><h3>Hand over</h3>'
+                f'<input class="hand" readonly value="{esc(line)}" '
+                f'title="one line for the customer - click, copy">'
+                f'<p class="dim">click the line to select it, then copy - '
+                f'this is what the customer needs</p></div>')
+
     items = []
     for group in _fold_story(story.get("timeline") or []):
         first = group[0]
@@ -3079,7 +3124,8 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
     body = (f'<div class="top"><a href="/events" class="dim">← Events</a>'
             f'<h2>Phone {esc(serial)}</h2>{head}'
             f'<span class="status">{" ".join(actions)}</span></div>'
-            f'<div class="panel">'
+            + hand
+            + '<div class="panel">'
             + ("".join(items) or '<p class="muted">Nothing recorded about '
                                  'this phone.</p>')
             + hint
