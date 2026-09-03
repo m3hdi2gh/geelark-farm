@@ -86,7 +86,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.dashboard(
                     read.dashboard(self.settings, scope), user,
                     said=(query.get("said") or [""])[0],
-                    manual_login=self.settings.manual_login))
+                    manual_login=self.settings.manual_login,
+                    flags=self._switches()))
             if path == "/phones":
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.phones_page(
@@ -116,20 +117,30 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/needs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
+                query = parse_qs(self.path.partition("?")[2])
                 return self._html(200, pages.needs_page(
-                    read.needs(self.settings), user, _advice))
+                    read.needs(self.settings), user, _advice,
+                    said=(query.get("said") or [""])[0]))
             if path == "/pools":
                 return self._redirect("/pools/gmail")
             # The three pool pages (C5): shared stock, so everyone signed
             # in sees them; what they may DO on them is the buttons' job.
             query = parse_qs(self.path.partition("?")[2])
             first = {k: v[0] for k, v in query.items()}
+            if path == "/pools/gmail/refund.txt":
+                # The whole errored list for one seller, uncapped: the
+                # page shows a hundred at a time, the refund asks for all.
+                addresses = read.errored_addresses(
+                    self.settings, seller=first.get("seller", ""))
+                return self._text(200, "\n".join(addresses) + "\n")
             if path == "/pools/gmail":
                 return self._html(200, pages.gmail_pool_page(
                     read.gmail_pool(self.settings,
                                     view=first.get("view", "active"),
-                                    seller=first.get("seller", "")),
-                    user, said=first.get("said", "")))
+                                    seller=first.get("seller", ""),
+                                    page=_page_number(first)),
+                    user, said=first.get("said", ""), advice=_advice,
+                    show_all=first.get("all") == "1"))
             if path == "/pools/proxy":
                 from ..store import state as store_state
 
@@ -249,6 +260,15 @@ class _Handler(BaseHTTPRequestHandler):
                                  {"serial": serial},
                                  idem=self._minute_key(user, "proxy", serial),
                                  back="/")
+            if self.path.startswith("/phones/") and \
+                    self.path.endswith("/state"):
+                serial = self.path[len("/phones/"):-len("/state")]
+                return self._phone_state(user, serial, field)
+            if self.path.startswith("/service/"):
+                return self._service(user, self.path[len("/service/"):],
+                                     field)
+            if self.path in ("/needs/offer", "/needs/clear"):
+                return self._needs_post(user, field)
             if self.path == "/users/new":
                 return self._users_new(user, field)
             if self.path.startswith("/users/") and \
@@ -306,7 +326,9 @@ class _Handler(BaseHTTPRequestHandler):
         The person's name rides in the payload so the pass can write it
         into the sheet's notes. A refusal is a row too - `refused`, with
         the permission named - so the Requests page says what was asked
-        and why nothing happened, instead of a 403 nobody remembers."""
+        and why nothing happened, instead of a 403 nobody remembers.
+        `permission` is one of the users' ticks, or "admin" for the
+        service controls, which no tick grants."""
         if not self.settings.web_mutations:
             return self._html(403, pages.page(
                 "Disabled", "<h2>Actions are not switched on yet</h2>",
@@ -315,12 +337,16 @@ class _Handler(BaseHTTPRequestHandler):
         from ..store.users import may
 
         payload = dict(payload, by=user["username"], by_id=user["id"])
-        if not may(user, permission):
+        allowed = (user.get("role") == "admin" if permission == "admin"
+                   else may(user, permission))
+        if not allowed:
             store_actions.record_refused(
                 self.settings, verb=verb, payload=payload,
                 requested_by=user["id"],
-                reason=f"{user['username']} may not do this - permission "
-                       f"{permission} is off")
+                reason=f"{user['username']} may not do this - "
+                       + ("only an admin drives the service"
+                          if permission == "admin" else
+                          f"permission {permission} is off"))
             return self._redirect(f"{back}?said=refused")
         # The same button pressed twice for the same thing is one
         # request, not two the pass would refuse a minute apart.
@@ -356,6 +382,75 @@ class _Handler(BaseHTTPRequestHandler):
     def _minute_key(self, user: dict, verb: str, target: str) -> str:
         return f"{verb}:{target}:{user['id']}:{int(time.time()) // 60}"
 
+    def _switches(self) -> dict:
+        """The flags the admin's footer line lists, off Settings."""
+        return {name: bool(getattr(self.settings, name, False))
+                for name in ("web_mutations", "manual_login", "log_db",
+                             "pools_in_pg", "web_user_admin")}
+
+    # ------------------------------------------------ phones and service
+    def _phone_state(self, user: dict, serial: str, field: dict) -> None:
+        """Take / Back / Done / Failed off the dashboard's table. The two
+        that delete the phone ask once, on a page that says so."""
+        state = (field.get("state") or "").strip().lower()
+        plan = pages.PHONE_STATES.get(state)
+        if plan is None or not serial.isdigit():
+            return self._html(404, pages.page(
+                "404", "<h2>Not a State word</h2>", user=user))
+        if plan["sure"] and field.get("sure") != "1":
+            return self._html(200, pages.confirm_page(
+                user, title=f"Mark phone {serial} {state}?",
+                text=plan["text"], action=f"/phones/{serial}/state",
+                fields={"state": state, "sure": "1"},
+                button=f"Yes, phone {serial} is {state}", back="/"))
+        return self._act(user, "may_take_phones", "set_phone_state",
+                         {"serial": serial, "state": state},
+                         idem=self._minute_key(user, f"state-{state}", serial),
+                         back="/")
+
+    def _service(self, user: dict, what: str, field: dict) -> None:
+        """Pause / Resume / Clear breaker / Stop / Start: admins only, and
+        every one asks first - each changes what the next pass does to
+        every phone at once."""
+        if user.get("role") != "admin":
+            return self._html(403, pages.page(
+                "403", "<h2>Only an admin drives the service</h2>",
+                user=user))
+        plan = pages.CONTROLS.get(what)
+        if plan is None:
+            return self._html(404, pages.page(
+                "404", "<h2>Not a service control</h2>", user=user))
+        if field.get("sure") != "1":
+            return self._html(200, pages.confirm_page(
+                user, title=f"{plan['label']}?", text=plan["text"],
+                action=f"/service/{what}", fields={"sure": "1"},
+                button=f"Yes, {plan['label'].lower()}", back="/"))
+        return self._act(user, "admin", "control", {"what": what},
+                         idem=self._minute_key(user, "control", what),
+                         back="/")
+
+    def _needs_post(self, user: dict, field: dict) -> None:
+        """Offer again (a set-aside gmail or account) and Clear tries (a
+        given-up phone), off the Needs attention page."""
+        if user["sees"] != "all":
+            return self._html(403, pages.forbidden(user))
+        if self.path == "/needs/clear":
+            serial = (field.get("serial") or "").strip()
+            return self._act(user, "may_take_phones", "clear_tries",
+                             {"serial": serial},
+                             idem=self._minute_key(user, "clear", serial),
+                             back="/needs")
+        kind = (field.get("kind") or "").strip()
+        permission = pages.OFFER_PERMISSION.get(kind)
+        if permission is None:
+            return self._html(404, pages.page(
+                "404", "<h2>Nothing to offer again</h2>", user=user))
+        address = (field.get("address") or "").strip()
+        return self._act(user, permission, "offer_again",
+                         {"address": address, "kind": kind},
+                         idem=self._minute_key(user, "offer", address),
+                         back="/needs")
+
     def _pool_post(self, user: dict, field: dict) -> None:
         from . import paste
 
@@ -364,8 +459,16 @@ class _Handler(BaseHTTPRequestHandler):
             from ..store import validate
 
             known = read.known(self.settings, "gmail")
-            rows = paste.accounts(field.get("pasted", ""))
-            seller = (field.get("seller") or "").strip()
+            # The one-by-one form is the paste form with three boxes:
+            # its fields become one pasted line so both are judged by
+            # the same reader and confirmed on the same page.
+            pasted = field.get("pasted") or "\t".join(
+                (field.get(k) or "").strip()
+                for k in ("address", "password", "second")
+                if (field.get(k) or "").strip())
+            rows = paste.accounts(pasted)
+            seller = ((field.get("new_seller") or "").strip()
+                      or (field.get("seller") or "").strip())
             for row in rows:
                 try:
                     validate.gmail_row(address=row["address"],
@@ -377,7 +480,8 @@ class _Handler(BaseHTTPRequestHandler):
                     row["error"] = str(exc)
                 row["duplicate"] = row["address"].lower() in known
             return self._html(200, pages.gmail_preview(
-                rows, seller, user, idem=secrets.token_urlsafe(12)))
+                rows, seller, user, idem=secrets.token_urlsafe(12),
+                pasted=pasted, sellers=read.gmail_sellers(self.settings)))
         if path == "/pools/gmail/add":
             rows = [{"address": r["address"], "password": r["password"],
                      "secret": r["secret"], "recovery": r["recovery"]}
@@ -667,6 +771,16 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
+    def _text(self, code: int, body: str) -> None:
+        data = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
     # HEAD is GET without the body - what an uptime monitor sends. The
     # stdlib answers 501 unless told otherwise (2026-09-03, on the domain).
     do_HEAD = do_GET
@@ -697,6 +811,16 @@ def _ticks(field: dict) -> dict:
     from ..store.users import PERMISSION_COLUMNS
 
     return {c: field.get(c) == "1" for c in PERMISSION_COLUMNS}
+
+
+def _page_number(first: dict) -> int:
+    """`?page=` as a number from 1; anything else is the first page."""
+    try:
+        return max(1, int(first.get("page", "1")))
+    except ValueError:
+        log.debug("page %r is not a number; showing the first",
+                  first.get("page"))
+        return 1
 
 
 def _q(text: str) -> str:

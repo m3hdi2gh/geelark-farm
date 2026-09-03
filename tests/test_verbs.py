@@ -385,3 +385,21 @@ def test_an_account_set_aside_is_an_event_on_its_phone(monkeypatch):
     assert seen == [("account", {"run_id": "-", "build": "2",
                                  "serial": "1533", "status": "set_aside",
                                  "detail": "a0@example.com: payment_problem"})]
+
+
+def test_offer_again_reaches_the_gmail_tab_when_the_kind_says_so():
+    """The Needs attention page offers gmails again too; the kind in the
+    payload picks the tab, and without one the app tab is searched."""
+    book = make_book(gmails=1, apps=1)
+    g0 = book.gmails._rows[0]
+    book.gmails.fail(g0, "wrong_password", note="fix it")
+
+    status, said, detail = verbs.offer_again(
+        book, None, None, {"address": "g0@example.com", "kind": "gmail",
+                           "by": "mehdi"}, None)
+    assert status == "done" and detail == {"was": "wrong_password"}
+    assert g0 in book.gmails.available
+
+    status, said, _ = verbs.offer_again(
+        book, None, None, {"address": "g0@example.com", "by": "mehdi"}, None)
+    assert status == "failed" and "Gpt" in said, "no kind: the app tab"

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from geelark_farm import phones
-from geelark_farm.ledger import STALE_CLAIM_SECONDS, Ledger
+from geelark_farm.ledger import Ledger
 from geelark_farm.proxy import Proxy
 
 

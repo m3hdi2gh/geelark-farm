@@ -162,16 +162,35 @@ _FOLD = {
 
 
 def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
-    """Everything the dashboard shows, in one connection: the phones, the
-    three stock cards, the accounts awaiting login, the last pass's pulse,
-    the queue and the two latest events."""
+    """Everything the dashboard shows, in one connection: the phones (with
+    who took them and, for one being built, its last captured log line),
+    the three stock cards, the accounts awaiting login, the last pass's
+    pulse, the queue, and the two latest requests and events for the
+    ticker."""
     with Store(settings) as store:
         phone_rows = store._rows(
-            "SELECT serial, status, state, app_installed, gmail,"
-            " app_account, proxy_name, tries, note, updated_at"
-            " FROM phones WHERE done_at IS NULL"
-            " AND (%s::bigint IS NULL OR owner_id = %s)"
-            " ORDER BY serial", (owner_id, owner_id))
+            "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
+            " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
+            " u.username AS owner"
+            " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
+            " WHERE p.done_at IS NULL"
+            " AND (%s::bigint IS NULL OR p.owner_id = %s)"
+            " ORDER BY p.serial", (owner_id, owner_id))
+        building = [str(r["serial"]) for r in phone_rows
+                    if r["status"] == "building"]
+        progress = {}
+        if building:
+            # The newest line captured for each phone under construction,
+            # and when its run's first line landed - so the row can say
+            # what it is doing and for how long, without the sheet.
+            lines = store._rows(
+                "SELECT l.serial, l.logger, l.msg, l.at, l.run,"
+                " (SELECT min(f.at) FROM logs f"
+                "   WHERE f.serial = l.serial AND f.run = l.run) AS started"
+                " FROM logs l WHERE l.id IN"
+                " (SELECT max(id) FROM logs WHERE serial = ANY(%s)"
+                "   GROUP BY serial)", (building,))
+            progress = {str(r["serial"]): r for r in lines}
         stock = store._rows(
             "SELECT kind, lower(status) AS status, count(*) AS c"
             " FROM resources WHERE error IS NULL GROUP BY kind, status")
@@ -185,9 +204,16 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "SELECT count(*) FILTER (WHERE status = 'running') AS running,"
             " count(*) FILTER (WHERE status = 'queued') AS queued"
             " FROM actions")
+        # Requests are shown from their own rows (verb, payload, who), so
+        # the `request` events that mirror them would only say it twice.
         recent = store._rows(
-            "SELECT at, kind, status, detail FROM events"
-            " ORDER BY id DESC LIMIT 2")
+            "SELECT at, kind, serial, status, detail FROM events"
+            " WHERE kind <> 'request' ORDER BY id DESC LIMIT 2")
+        asked = store._rows(
+            "SELECT a.id, a.verb, a.payload, a.status, a.requested_at AS at,"
+            " u.username AS requested_by"
+            " FROM actions a JOIN users u ON u.id = a.requested_by"
+            " ORDER BY a.id DESC LIMIT 2")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
     folded = {kind: dict.fromkeys(names, 0) for kind, names in _FOLD.items()}
@@ -205,10 +231,12 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
     }
     return {
         "phones": phone_rows,
+        "progress": progress,
         "stock": folded,
         "awaiting": awaiting,
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
+        "asked": asked,
         "pulse": (pulse[0]["value"] or {}) if pulse else {},
     }
 
@@ -255,8 +283,27 @@ _GMAIL_COLUMNS = ("r.id, r.address, r.status, r.serial, r.seller,"
                   " r.recovery_email <> '' AS has_recovery, r.source")
 
 
+def _gmail_sellers(store) -> list[str]:
+    rows = store._rows(
+        "SELECT DISTINCT seller FROM resources"
+        " WHERE kind = 'gmail' AND seller <> '' ORDER BY 1")
+    return [r["seller"] for r in rows if r["seller"]]
+
+
+def gmail_sellers(settings: Settings) -> list[str]:
+    """Every seller the Gmail tab has ever named, for the add form's
+    select - a typed seller that differs by a letter is a seller the
+    promise check never matches, so the known ones are offered first."""
+    with Store(settings) as store:
+        return _gmail_sellers(store)
+
+
+def _pages(total: int, per_page: int) -> int:
+    return max(1, -(-int(total or 0) // max(1, per_page)))
+
+
 def gmail_pool(settings: Settings, view: str = "active",
-               seller: str = "") -> dict:
+               seller: str = "", page: int = 1, per_page: int = 100) -> dict:
     """The Gmail Pool page, one view at a time.
 
     `active` is the two things a person wants to know - which addresses are
@@ -264,16 +311,19 @@ def gmail_pool(settings: Settings, view: str = "active",
     the count of queued is the count of builds the stock covers. `used`
     and `errored` are the archives: `used` is history, `errored` is the
     list the seller gets asked to refund, so it carries seller, purchase
-    date and the date it failed.
+    date and the date it failed. Both archives page, `per_page` rows at a
+    time; the refund list itself comes whole from `errored_addresses`.
     """
+    page = max(1, int(page or 1))
+    per_page = max(1, int(per_page or 1))
     with Store(settings) as store:
         counts = store._rows(
             "SELECT"
             " count(*) FILTER (WHERE status = '') AS queued,"
             " count(*) FILTER (WHERE status IN ('in_use', 'ready')) AS on_phone,"
             " count(*) FILTER (WHERE status = 'used') AS used,"
-            " count(*) FILTER (WHERE NOT (status = ANY(%s))"
-            "   AND status <> %s) AS errored,"
+            " count(*) FILTER (WHERE error IS NULL"
+            "   AND NOT (status = ANY(%s)) AND status <> %s) AS errored,"
             " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
             " FROM resources WHERE kind = 'gmail'",
             (sorted(ROUTINE["gmail"]), IMPORTED))[0]
@@ -283,24 +333,40 @@ def gmail_pool(settings: Settings, view: str = "active",
             " AND NOT (status = ANY(%s)) AND status <> %s"
             " GROUP BY lower(seller) ORDER BY c DESC",
             (sorted(ROUTINE["gmail"]), IMPORTED))
+        known = _gmail_sellers(store)
         if view == "used":
             rows = store._rows(
                 f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-                " WHERE kind = 'gmail' AND status = 'used'"
-                " ORDER BY updated_at DESC LIMIT 200")
-            return {"view": view, "counts": counts, "rows": rows,
-                    "sellers": sellers}
+                " WHERE r.kind = 'gmail' AND r.status = 'used'"
+                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
+                (per_page + 1, (page - 1) * per_page))
+            return {"view": view, "counts": counts, "rows": rows[:per_page],
+                    "sellers": sellers, "known_sellers": known,
+                    "page": page, "more": len(rows) > per_page,
+                    "pages": _pages(counts["used"], per_page)}
         if view == "errored":
-            rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+            wanted = seller.lower()
+            reasons = store._rows(
+                "SELECT status, count(*) c FROM resources"
                 " WHERE kind = 'gmail' AND error IS NULL"
                 " AND NOT (status = ANY(%s)) AND status <> %s"
                 " AND (%s = '' OR lower(seller) = %s)"
-                " ORDER BY updated_at DESC LIMIT 500",
-                (sorted(ROUTINE["gmail"]), IMPORTED, seller.lower(),
-                 seller.lower()))
-            return {"view": view, "counts": counts, "rows": rows,
-                    "sellers": sellers, "seller": seller}
+                " GROUP BY status ORDER BY c DESC, status",
+                (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted))
+            rows = store._rows(
+                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+                " WHERE r.kind = 'gmail' AND r.error IS NULL"
+                " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
+                " AND (%s = '' OR lower(r.seller) = %s)"
+                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
+                (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted,
+                 per_page + 1, (page - 1) * per_page))
+            total = sum(int(r["c"]) for r in reasons)
+            return {"view": view, "counts": counts, "rows": rows[:per_page],
+                    "sellers": sellers, "seller": seller, "reasons": reasons,
+                    "total": total, "known_sellers": known,
+                    "page": page, "more": len(rows) > per_page,
+                    "pages": _pages(total, per_page)}
         on_phone = store._rows(
             f"SELECT {_GMAIL_COLUMNS}, p.status AS phone_status"
             " FROM resources r LEFT JOIN phones p"
@@ -309,13 +375,30 @@ def gmail_pool(settings: Settings, view: str = "active",
             " ORDER BY r.updated_at DESC")
         queued = store._rows(
             f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-            " WHERE kind = 'gmail' AND status = '' AND error IS NULL"
-            " ORDER BY sheet_row NULLS LAST, id")
+            " WHERE r.kind = 'gmail' AND r.status = '' AND r.error IS NULL"
+            " ORDER BY r.sheet_row NULLS LAST, r.id")
         broken = store._rows(
             "SELECT id, address, error FROM resources"
             " WHERE kind = 'gmail' AND error IS NOT NULL ORDER BY id")
     return {"view": "active", "counts": counts, "on_phone": on_phone,
-            "queued": queued, "broken": broken, "sellers": sellers}
+            "queued": queued, "broken": broken, "sellers": sellers,
+            "known_sellers": known}
+
+
+def errored_addresses(settings: Settings, seller: str = "") -> list[str]:
+    """Every errored gmail address, one seller's or everyone's, with no
+    page cap: this is the list the seller is asked to refund, and a list
+    cut at a page boundary is a refund never asked for."""
+    wanted = seller.lower()
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT address FROM resources"
+            " WHERE kind = 'gmail' AND error IS NULL AND address IS NOT NULL"
+            " AND NOT (status = ANY(%s)) AND status <> %s"
+            " AND (%s = '' OR lower(seller) = %s)"
+            " ORDER BY updated_at DESC, id",
+            (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted))
+    return [r["address"] for r in rows if r["address"]]
 
 
 def proxy_pool(settings: Settings, unlisted: list | None = None) -> dict:

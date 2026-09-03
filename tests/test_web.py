@@ -578,24 +578,38 @@ def _gmail_row(address, status="", **more):
     return row
 
 
-def _gmail_active(monkeypatch, seen=None):
+def _gmail_active(monkeypatch, seen=None, queued=None, on_phone=None):
     seen = seen if seen is not None else {}
+    known = ["egypt", "usa"]
 
-    def gmail_pool(settings, view="active", seller=""):
-        seen.update(view=view, seller=seller)
+    def gmail_pool(settings, view="active", seller="", page=1, per_page=100):
+        seen.update(view=view, seller=seller, page=page)
         counts = {"queued": 2, "on_phone": 1, "used": 5, "errored": 3,
                   "broken": 0}
         if view == "errored":
             return {"view": view, "counts": counts, "seller": seller,
                     "rows": [_gmail_row("bad1@x.com", "captcha_shown"),
                              _gmail_row("bad2@x.com", "wrong_2fa_code")],
-                    "sellers": [{"seller": "egypt", "c": 2}]}
+                    "sellers": [{"seller": "egypt", "c": 2}],
+                    "reasons": [{"status": "captcha_shown", "c": 1},
+                                {"status": "wrong_2fa_code", "c": 1}],
+                    "total": 2, "known_sellers": known,
+                    "page": page, "pages": 3, "more": page < 3}
+        if view == "used":
+            return {"view": view, "counts": counts,
+                    "rows": [_gmail_row("old@x.com", "used", serial="1490",
+                                        used_at="2026-08-30 08:00:00")],
+                    "sellers": [], "known_sellers": known,
+                    "page": page, "pages": 2, "more": page < 2}
         return {"view": "active", "counts": counts,
-                "on_phone": [_gmail_row("on@x.com", "ready", serial="1551")],
-                "queued": [_gmail_row("q1@x.com"), _gmail_row("q2@x.com")],
-                "broken": [], "sellers": []}
+                "on_phone": on_phone if on_phone is not None else
+                [_gmail_row("on@x.com", "ready", serial="1551")],
+                "queued": queued if queued is not None else
+                [_gmail_row("q1@x.com"), _gmail_row("q2@x.com")],
+                "broken": [], "sellers": [], "known_sellers": known}
 
     monkeypatch.setattr(app_mod.read, "gmail_pool", gmail_pool)
+    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: list(known))
     return seen
 
 
@@ -609,6 +623,8 @@ def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
     assert 'href="/pools/gmail" class="here"' in body
     assert '<span class="n">3</span>' in body          # gmail free count
     assert "on@x.com" in body and "1551" in body and "q2@x.com" in body
+    assert "2 queued covers the next 2 builds" in body
+    assert '<span class="badge">2 sellers</span>' in body
 
 
 def test_pool_pages_are_shared_stock_that_everyone_signed_in_sees(
@@ -650,18 +666,100 @@ def test_the_add_form_needs_the_flag_and_the_permission_together(
     narrow.login(username="narrow")
     _, _, body = narrow.request("GET", "/pools/gmail")
     assert "/pools/gmail/preview" not in body
+    assert ("Adding gmails needs the add-gmails permission - ask an admin"
+            in body), "flag on, permission off: say which one"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_add_panel_offers_a_paste_and_a_one_by_one_way_in(
+        web, monkeypatch):
+    _gmail_active(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert body.count('action="/pools/gmail/preview"') == 2, \
+        "the paste form and the one-by-one form share the preview"
+    assert 'name="pasted"' in body and 'name="address"' in body
+    assert 'name="password"' in body and 'name="second"' in body
+    assert '<option value="egypt">egypt</option>' in body
+    assert 'name="new_seller" placeholder="or a new seller"' in body
+
+
+def test_the_queued_list_folds_past_twelve_and_links_each_phone(
+        web, monkeypatch):
+    queued = [_gmail_row(f"q{i}@x.com") for i in range(15)]
+    on_phone = [_gmail_row("a@x.com", "ready", serial="1551",
+                           phone_status="ready"),
+                _gmail_row("b@x.com", "ready", serial="1552",
+                           phone_status="building"),
+                _gmail_row("c@x.com", "ready", serial="1553",
+                           phone_status="incomplete"),
+                _gmail_row("d@x.com", "in_use", serial="1554",
+                           phone_status="building")]
+    _gmail_active(monkeypatch, queued=queued, on_phone=on_phone)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert "q11@x.com" in body and "q12@x.com" not in body
+    assert '<a href="/pools/gmail?all=1">+ 3 more</a>' in body
+    assert '<a href="/phones/1551">1551</a>' in body
+    assert '<span class="badge ready">ready</span>' in body
+    assert '<span class="badge info">building</span>' in body
+    assert '<span class="badge attn">incomplete</span>' in body
+    assert '<span class="badge in_use">signing in</span>' in body
+
+    _, _, body = client.request("GET", "/pools/gmail?all=1")
+    assert "q14@x.com" in body and "more</a>" not in body
 
 
 def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
         web, monkeypatch):
     seen = _gmail_active(monkeypatch)
+    asked = {}
+
+    def errored_addresses(settings, seller=""):
+        asked["seller"] = seller
+        return ["bad1@x.com", "bad2@x.com"]
+
+    monkeypatch.setattr(app_mod.read, "errored_addresses", errored_addresses)
     client = web()
     client.login()
-    status, _, body = client.request("GET",
-                                     "/pools/gmail?view=errored&seller=egypt")
-    assert status == 200 and seen == {"view": "errored", "seller": "egypt"}
-    assert "bad1@x.com\nbad2@x.com" in body, "the refund box, one per line"
-    assert "captcha_shown" in body and "Addresses for refund (2)" in body
+    status, _, body = client.request(
+        "GET", "/pools/gmail?view=errored&seller=egypt&page=2")
+    assert status == 200
+    assert seen == {"view": "errored", "seller": "egypt", "page": 2}
+    assert "1 captcha · 1 wrong 2fa" in body, "the tally, in words"
+    assert '<span class="badge attn">captcha_shown</span>' in body
+    assert '<span class="badge bad">wrong_2fa_code</span>' in body, \
+        "a wrong secret is the seller's fault and is coloured red"
+    assert "showed a CAPTCHA" in body, "what happened, from the verdict"
+    assert "page 2 of 3" in body
+    assert 'href="/pools/gmail?view=errored&seller=egypt&page=1">← newer' \
+        in body
+    assert 'href="/pools/gmail?view=errored&seller=egypt&page=3">older' \
+        in body
+    assert 'href="/pools/gmail/refund.txt?seller=egypt">Addresses for ' \
+           'refund (2)' in body
+
+    status, headers, text = client.request(
+        "GET", "/pools/gmail/refund.txt?seller=egypt")
+    assert status == 200 and asked == {"seller": "egypt"}
+    assert dict(headers)["Content-Type"].startswith("text/plain")
+    assert text == "bad1@x.com\nbad2@x.com\n"
+
+
+def test_the_used_view_pages_and_links_the_phone(web, monkeypatch):
+    seen = _gmail_active(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/pools/gmail?view=used")
+    assert status == 200 and seen["page"] == 1
+    assert '<a href="/phones/1490">1490</a>' in body
+    assert "Aug 30 " in body, "used-at through the owner's clock"
+    assert "page 1 of 2" in body and "older →" in body
+    assert 'href="/pools/gmail?view=used&page=2"' in body
+    _, _, body = client.request("GET", "/pools/gmail?view=used&page=2")
+    assert seen["page"] == 2 and "← newer" in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -733,21 +831,57 @@ def _form(**fields) -> str:
 def test_the_gmail_preview_judges_each_pasted_row(web, monkeypatch):
     monkeypatch.setattr(app_mod.read, "known",
                         lambda s, kind: {"g0@example.com"})
+    monkeypatch.setattr(app_mod.read, "gmail_sellers",
+                        lambda s: ["egypt", "usa"])
     client = web()
     client.login()
+    pasted = ("g0@example.com\tpw\tJBSWY3DPEHPK3PXP\n"
+              "new@example.com\tpw2\n"
+              "not-an-address\tpw3")
     status, _, body = client.request(
         "POST", "/pools/gmail/preview",
-        _form(csrf=client.csrf(), seller="usa",
-              pasted="g0@example.com\tpw\tJBSWY3DPEHPK3PXP\n"
-                     "new@example.com\tpw2\n"
-                     "not-an-address\tpw3"))
+        _form(csrf=client.csrf(), seller="usa", pasted=pasted))
     assert status == 200
-    assert "already in the pool" in body
+    assert '<span class="badge bad">already in the pool</span>' in body
+    assert '<span class="badge ok">ok</span>' in body
+    assert "no address" in body or "not-an-address" in body
     carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
                         body).group(1)
     assert carried == "new@example.com\tpw2\t", \
         "only the good row travels to the confirm"
     assert "Add 1 (skip 2)" in body
+    # the paste is kept under the verdicts, seller and all, for a second go
+    kept = re.search(r'<textarea name="pasted">([^<]*)</textarea>',
+                     body).group(1)
+    assert kept == pasted
+    assert '<option value="usa" selected>usa</option>' in body
+    assert "Edit and preview again" in body
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_one_by_one_is_the_paste_form_with_three_boxes(web, monkeypatch):
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: ["egypt"])
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gmail/preview",
+        _form(csrf=client.csrf(), address="solo@example.com",
+              password="Kx82!mnQ", second="rec@example.com",
+              seller="egypt", new_seller="turkey"))
+    assert status == 200
+    carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
+                        body).group(1)
+    assert carried == "solo@example.com\tKx82!mnQ\trec@example.com"
+    assert "Add 1 (skip 0)" in body
+    assert 'name="seller" value="turkey"' in body, \
+        "a typed seller beats the one left in the select"
+    assert 'name="new_seller" placeholder="or a new seller" size="16" ' \
+           'value="turkey"' in body
+    kept = re.search(r'<textarea name="pasted">([^<]*)</textarea>',
+                     body).group(1)
+    assert kept == "solo@example.com\tKx82!mnQ\trec@example.com", \
+        "the three boxes became one line the person can still edit"
 
 
 @pytest.mark.parametrize("web", [True], indirect=True)
@@ -1242,3 +1376,388 @@ def test_head_answers_like_get_without_a_body(web):
     body = resp.read()
     assert resp.status == 200 and body == b""
     assert int(resp.getheader("Content-Length")) > 1000
+
+
+# ------------------------------------- the dashboard, second pass (C9 audit)
+def _dash(monkeypatch, **more):
+    """The dashboard's read, with the fixture's rows and whatever a test
+    wants changed on top."""
+    base = app_mod.read.dashboard(None)
+    base.update(more)
+    monkeypatch.setattr(app_mod.read, "dashboard", lambda s, owner_id=None:
+                        dict(base))
+    return base
+
+
+def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
+                                                                monkeypatch):
+    _dash(monkeypatch,
+          stock={"gmail": {"free": 0, "on_phones": 5, "used": 7},
+                 "proxy": {"free": 2, "on_phones": 14, "dead": 1},
+                 "app": {"awaiting": 7, "panel": 4, "manual": 3}},
+          phones=[{"serial": "1500", "status": "ready", "state": ""},
+                  {"serial": "1501", "status": "ready", "state": "taken",
+                   "owner": "ali"},
+                  {"serial": "1502", "status": "app_only", "state": ""},
+                  {"serial": "1503", "status": "building", "state": ""}],
+          pulse={"warm": 5, "target": 5, "tripped": "", "at": 0})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/")
+    assert status == 200
+    assert 'class="tile bad"' in body and "nothing can be built - add rows" in body
+    assert 'class="tile warn"' in body
+    assert "fewer free exits than the 5 warm phones need" in body
+    assert "2 accounts have no phone to go to" in body
+    # the fourth row: what can go out, what waits, what is being made
+    assert "Ready to deliver" in body and "Out with somebody" in body
+    assert "Waiting for an account" in body and "Building now" in body
+    tiles = body[body.index("Ready to deliver"):]
+    assert re.search(r'Ready to deliver</div>\s*<b[^>]*>1</b>', tiles)
+    assert re.search(r'Out with somebody</div>\s*<b[^>]*>1</b>', tiles)
+
+
+def test_building_now_reads_quiet_when_nothing_is_being_built(web):
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert re.search(r'Building now</div>\s*<b[^>]*>quiet</b>', body)
+
+
+def test_a_building_row_shows_its_last_log_line_and_how_long(web,
+                                                             monkeypatch):
+    import datetime as dt
+
+    started = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=96)
+    _dash(monkeypatch,
+          phones=[{"serial": "1556", "status": "building", "state": ""},
+                  {"serial": "1557", "status": "building", "state": ""}],
+          progress={"1556": {"serial": "1556", "run": "r9",
+                             "logger": "geelark_farm.flows.google_login",
+                             "msg": "typed the password, waiting for the "
+                                    "2-step screen", "at": started,
+                             "started": started}})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "google sign-in: typed the password, waiting for the 2-step screen" \
+        in body
+    assert re.search(r"· 9[6-9]s</span>", body), "elapsed since the first line"
+    assert 'colspan="3"' in body, "spans the gmail / gpt / proxy columns"
+    assert "starting" in body, "a phone with no line yet"
+    assert 'href="/phones/1556"' in body
+    assert 'http-equiv="refresh"' in body
+
+
+def test_the_keepers_warning_sits_above_the_tiles_with_the_fix_linked(
+        web, monkeypatch):
+    _dash(monkeypatch, pulse={"warm": 2, "target": 5, "tripped": "",
+                              "at": 0, "warning": "the Gmail tab has no "
+                                                  "free rows to build from"})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "the Gmail tab has no free rows" in body
+    warn = body[body.index('class="panel warn"'):]
+    assert 'href="/pools/gmail"' in warn[:600]
+    assert body.index('class="panel warn"') < body.index('class="grid3"')
+
+    _dash(monkeypatch, pulse={"warm": 2, "target": 5, "at": 0,
+                              "tripped": "captcha_shown x5",
+                              "warning": "captcha_shown x5"})
+    _, _, body = client.request("GET", "/")
+    assert 'href="/events?kind=breaker"' in body
+
+
+def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
+        web, monkeypatch):
+    _dash(monkeypatch, phones=[
+        {"serial": "1503", "status": "building", "state": ""},
+        {"serial": "1502", "status": "incomplete", "state": ""},
+        {"serial": "1501", "status": "app_only", "state": "",
+         "gmail": "Stone@gmail.com", "proxy_name": "SX31"},
+        {"serial": "1500", "status": "ready", "state": "",
+         "gmail": "IronHawk@gmail.com", "app_account": "h@x.com",
+         "proxy_name": "SX27"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    order = [body.index(f'href="/phones/{s}"') for s in
+             ("1500", "1501", "1502", "1503")]
+    assert order == sorted(order), "ready, warm, incomplete, building"
+    assert 'value="1500 · h@x.com · IronHawk@gmail.com · SX27"' in body
+    assert 'class="hand" readonly' in body
+    assert body.count('class="hand"') == 1, "only the ready phone"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[
+        {"serial": "1500", "status": "ready", "state": "",
+         "gmail": "IronHawk@gmail.com", "app_account": "h@x.com",
+         "proxy_name": "SX27"},
+        {"serial": "1501", "status": "ready", "state": "taken",
+         "owner": "ali", "updated_at": "2026-09-03 10:00:00+00"}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 61)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "taken by ali" in body and app_mod.pages._when(
+        "2026-09-03 10:00:00+00") in body
+    assert '/phones/1500/state' in body and 'value="taken"' in body
+    assert 'value="unused"' in body, "the taken phone offers Back"
+    assert body.count('value="done"') == 2 and body.count('value="failed"') == 2
+
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/state", _form(csrf=client.csrf(), state="taken"))
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=queued")
+    assert got["verb"] == "set_phone_state"
+    assert got["payload"]["serial"] == "1500"
+    assert got["payload"]["state"] == "taken" and got["payload"]["by"] == "mehdi"
+
+    got.clear()
+    status, _, body = client.request(
+        "POST", "/phones/1500/state", _form(csrf=client.csrf(), state="done"))
+    assert status == 200 and "Mark phone 1500 done?" in body
+    assert "no undo" in body and got == {}, "asked first, nothing queued"
+    status, _, _ = client.request(
+        "POST", "/phones/1500/state",
+        _form(csrf=client.csrf(), state="done", sure="1"))
+    assert status == 303 and got["payload"]["state"] == "done"
+
+    status, _, _ = client.request(
+        "POST", "/phones/1500/state", _form(csrf=client.csrf(), state="dome"))
+    assert status == 404, "a State word the sheet never had"
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_take_phones": False})
+    narrow = web()
+    narrow.login(username="narrow")
+    _, _, body = narrow.request("GET", "/")
+    assert "/phones/1500/state" not in body
+    assert "needs the may_take_phones permission" in body, \
+        "flag on, permission off: say which one"
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_awaiting_cards_say_how_long_ago_and_count_the_warm_phones(
+        web, monkeypatch):
+    import datetime as dt
+
+    ago = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=14)
+    base = _dash(monkeypatch, awaiting=[
+        {"address": "arman@gmail.com", "source": "panel", "added_by": "",
+         "created_at": ago}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "added 14m ago" in body
+    assert 'class="pick tick"' in body and ".pick:has(input:checked)" in body
+    assert "5 warm phones can take them" in body and "Log in selected" in body
+
+    base["pulse"] = {"warm": 0, "target": 5, "tripped": "", "at": 0}
+    _, _, body = client.request("GET", "/")
+    assert "Log in selected" not in body
+    assert "no warm phone is free" in body
+
+
+def test_the_ticker_tells_requests_and_events_as_sentences(web, monkeypatch):
+    _dash(monkeypatch,
+          recent=[{"at": "2026-09-01 18:04:31+00", "kind": "build_finished",
+                   "serial": "1551", "status": "ready",
+                   "detail": "ok=True gmail=x"},
+                  {"at": "2026-09-01 17:36:02+00", "kind": "breaker",
+                   "serial": "", "status": "tripped",
+                   "detail": "5 in a row: captcha_shown"}],
+          asked=[{"id": 241, "verb": "login_accounts", "status": "running",
+                  "payload": {"addresses": ["a@x.com", "b@x.com"]},
+                  "at": "2026-09-01 18:06:12+00", "requested_by": "mehdi"},
+                 {"id": 240, "verb": "change_proxy", "status": "failed",
+                  "payload": {"serial": "1549"},
+                  "at": "2026-09-01 18:02:51+00", "requested_by": "alireza"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    hhmm = app_mod.pages._clock("2026-09-01 18:06:12+00")[:5]
+    assert (f'{hhmm}</span> <b>mehdi</b> asked: Log in 2 accounts → '
+            f'<span style="color:var(--blue)">running</span>') in body
+    assert 'phone <a href="/phones/1551">1551</a> became ready' in body
+    assert "the breaker tripped — 5 in a row: captcha_shown" in body
+    assert ('Change proxy on <a href="/phones/1549">1549</a> → '
+            '<span style="color:var(--red)">failed</span>') in body
+    foot = body[body.index("all events") - 2000:body.index("all events")]
+    assert foot.index("mehdi") < foot.index("1551") < foot.index("alireza"), \
+        "newest first, requests and events interleaved by time"
+
+
+def test_the_switches_line_is_for_admins_only(web, monkeypatch):
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "WEB_MUTATIONS" in body and "POOLS_IN_PG" in body
+    assert "the console is read-only" in body
+    assert "accounts log in on their own" in body
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all"})
+    narrow = web()
+    narrow.login(username="narrow")
+    _, _, body = narrow.request("GET", "/")
+    assert "WEB_MUTATIONS" not in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_service_controls_fit_the_pulse_ask_first_and_are_admin_only(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    base = _dash(monkeypatch, pulse={"warm": 5, "target": 5, "tripped": "",
+                                     "paused": False, "at": 0})
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 71)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert 'action="/service/pause"' in body and "Pause building" in body
+    assert 'action="/service/stop"' in body
+    assert "/service/resume" not in body and "/service/clear_breaker" not in body
+
+    base["pulse"] = {"warm": 5, "target": 5, "tripped": "captcha x5",
+                     "paused": True, "at": 0}
+    _, _, body = client.request("GET", "/")
+    assert 'action="/service/resume"' in body and "Resume building" in body
+    assert 'action="/service/clear_breaker"' in body
+    assert "/service/pause" not in body
+
+    base["pulse"] = {"stopped": True, "at": 0, "tripped": ""}
+    _, _, body = client.request("GET", "/")
+    assert 'action="/service/start"' in body and "/service/stop" not in body
+
+    status, _, body = client.request(
+        "POST", "/service/pause", _form(csrf=client.csrf()))
+    assert status == 200 and "Pause building?" in body and got == {}
+    status, headers, _ = client.request(
+        "POST", "/service/pause", _form(csrf=client.csrf(), sure="1"))
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=queued")
+    assert got["verb"] == "control" and got["payload"]["what"] == "pause"
+    status, _, _ = client.request(
+        "POST", "/service/reboot", _form(csrf=client.csrf(), sure="1"))
+    assert status == 404
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_take_phones": True})
+    narrow = web()
+    narrow.login(username="narrow")
+    _, _, body = narrow.request("GET", "/")
+    assert "/service/" not in body, "no ticked permission shows them"
+    got.clear()
+    status, _, _ = narrow.request(
+        "POST", "/service/stop", _form(csrf=narrow.csrf(), sure="1"))
+    assert status == 403 and got == {}
+
+
+def test_the_rail_counts_what_needs_attention(web, monkeypatch):
+    monkeypatch.setattr(app_mod.read, "nav_counts",
+                        lambda s: {"gmail": 3, "proxy": 2, "app": 0,
+                                   "pending": 0, "needs": 4})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    rail = body[body.index('href="/needs"'):body.index('href="/events"')]
+    assert '<span class="n hot">4</span>' in rail
+
+    monkeypatch.setattr(app_mod.read, "nav_counts",
+                        lambda s: {"gmail": 3, "proxy": 2, "app": 0,
+                                   "pending": 0, "needs": 0})
+    _, _, body = client.request("GET", "/")
+    rail = body[body.index('href="/needs"'):body.index('href="/events"')]
+    assert '<span class="n">0</span>' in rail
+
+
+def _needs(monkeypatch):
+    monkeypatch.setattr(app_mod.read, "needs", lambda s: {
+        "orphaned": [], "broken": [],
+        "flagged": [{"kind": "gmail", "who": "x@y.com",
+                     "status": "wrong_password", "serial": "", "note": ""},
+                    {"kind": "app", "who": "a@y.com",
+                     "status": "payment_problem", "serial": "", "note": ""},
+                    {"kind": "proxy", "who": "SX9", "status": "change ip",
+                     "serial": "", "note": ""}],
+        "given_up": [{"serial": "1398", "status": "app_only", "tries": 3,
+                      "note": "three strikes"}]})
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_needs_offers_again_and_clears_tries_through_the_queue(web,
+                                                               monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _needs(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 81)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/needs")
+    assert status == 200
+    assert body.count('action="/needs/offer"') == 2, "gmail and app, not proxy"
+    assert 'name="kind" value="gmail"' in body and 'value="x@y.com"' in body
+    assert 'action="/needs/clear"' in body and 'value="1398"' in body
+    assert 'href="/phones/1398"' in body
+
+    status, headers, _ = client.request(
+        "POST", "/needs/offer",
+        _form(csrf=client.csrf(), kind="gmail", address="x@y.com"))
+    assert status == 303 and dict(headers)["Location"].startswith(
+        "/needs?said=queued")
+    assert got["verb"] == "offer_again"
+    assert got["payload"]["address"] == "x@y.com"
+    assert got["payload"]["kind"] == "gmail"
+
+    status, headers, _ = client.request(
+        "POST", "/needs/clear", _form(csrf=client.csrf(), serial="1398"))
+    assert status == 303 and got["verb"] == "clear_tries"
+    assert got["payload"]["serial"] == "1398"
+
+    _, _, body = client.request("GET", dict(headers)["Location"])
+    assert "#81 on Requests" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_needs_buttons_follow_each_permission_and_say_which_is_missing(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _needs(monkeypatch)
+    noted = {}
+    monkeypatch.setattr(actions_mod, "record_refused",
+                        lambda s, **k: noted.update(k) or 82)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda *a, **k: pytest.fail("queued anyway"))
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_gmail": True,
+                         "may_add_gpt": False, "may_take_phones": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/needs")
+    assert body.count('action="/needs/offer"') == 1, "gmail yes, app no"
+    assert 'name="kind" value="gmail"' in body
+    assert "offering accounts again needs the may_add_gpt permission" in body
+    assert "/needs/clear" not in body
+    assert "clearing tries needs the may_take_phones permission" in body
+
+    status, headers, _ = client.request(
+        "POST", "/needs/offer",
+        _form(csrf=client.csrf(), kind="app", address="a@y.com"))
+    assert status == 303 and dict(headers)["Location"] == "/needs?said=refused"
+    assert "may_add_gpt" in noted["reason"]

@@ -60,7 +60,7 @@ def test_every_path_it_links_to_exists():
 def test_the_status_words_it_documents_are_the_ones_the_pools_write():
     """The words are the whole contract with the operator - they read them in
     the tab and type them back into it."""
-    from geelark_farm.pools import AppPool, GmailPool, PhoneLog, ProxyPool
+    from geelark_farm.pools import AppPool, GmailPool, ProxyPool
 
     for pool in (GmailPool, ProxyPool, AppPool):
         for word in (pool.claimed_status, pool.spent_status,
