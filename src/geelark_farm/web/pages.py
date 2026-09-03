@@ -43,8 +43,8 @@ _PAGE = """<!doctype html>
  --green:#58d68d;--green-bg:#10331f;--amber:#f0c064;--amber-bg:#3a2d10;
  --red:#e0654f;--red-bg:#4d2323;--blue:#7fb4ff;--blue-bg:#16324f;--violet:#c9b8f0;
  --violet-bg:#2c1f3d;--accent:#2563c4;--accent-hi:#2f74e0;--focus:#7fb4ff;
- --sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex
- Mono',ui-monospace,monospace}}
+ --sans:'IBM Plex Sans',system-ui,sans-serif;
+ --mono:'IBM Plex Mono',ui-monospace,monospace}}
 *{{box-sizing:border-box}}
 html{{color-scheme:dark}}
 body{{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);

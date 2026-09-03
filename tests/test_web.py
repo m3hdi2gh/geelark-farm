@@ -1190,3 +1190,14 @@ def test_remove_asks_once_with_the_name_before_it_queues(web, monkeypatch):
         _form(csrf=client.csrf(), name="SX3", sure="1"))
     assert status == 303 and got["verb"] == "remove_proxy"
     assert got["payload"]["name"] == "SX3"
+
+
+def test_the_stylesheet_never_breaks_a_quoted_string_across_lines(web):
+    """A wrap that split `'IBM Plex Mono'` over two lines made the whole
+    stylesheet unparseable and every page rendered as plain text
+    (2026-09-03). CSS strings cannot contain a raw newline."""
+    _, _, body = web().request("GET", "/login")
+    style = body[body.index("<style>"):body.index("</style>")]
+    for line in style.splitlines():
+        assert line.count("'") % 2 == 0 and line.count('"') % 2 == 0, line
+    assert "'IBM Plex Mono'" in style and "'IBM Plex Sans'" in style
