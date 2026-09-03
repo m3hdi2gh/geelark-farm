@@ -18,113 +18,232 @@ from html import escape as esc
 
 #: The console's shell - the "Direction A" the owner chose on the design
 #: canvas (2026-09-01): a dark ops console, a rail of links on the left with
-#: the stock counts beside them, monospace where digits line up. One
-#: stylesheet for every page, no JavaScript, no static files.
+#: live counts, panels on a deep blue ground, IBM Plex for both faces. One
+#: string, inlined on every page: no static files, nothing to cache-bust,
+#: nothing to path-handle. Every colour is a token so a page never picks
+#: its own; every control has a visible focus state.
+#: The tab icon - the mockup's phone, inlined so no file is served.
+_FAVICON = (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='"
+    "0 0 24 24' fill='none' stroke='%234f8ef7' stroke-width='2'%3E%3Crect x"
+    "='6' y='2.5' width='12' height='19' rx='2.5'/%3E%3Cline x1='10' y1='18"
+    "' x2='14' y2='18'/%3E%3C/svg%3E"
+)
+
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} — geelark</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="icon" href="{favicon}">
+<link rel="stylesheet"
+ href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 :root{{--bg:#0f1522;--rail:#0b101b;--panel:#151d2d;--panel2:#101827;--line:#232c3f;
  --line2:#1d2636;--ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#6b7a90;
  --green:#58d68d;--green-bg:#10331f;--amber:#f0c064;--amber-bg:#3a2d10;
  --red:#e0654f;--red-bg:#4d2323;--blue:#7fb4ff;--blue-bg:#16324f;--violet:#c9b8f0;
- --violet-bg:#2c1f3d;--accent:#2563c4}}
+ --violet-bg:#2c1f3d;--accent:#2563c4;--accent-hi:#2f74e0;--focus:#7fb4ff;
+ --sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex
+ Mono',ui-monospace,monospace}}
 *{{box-sizing:border-box}}
-body{{margin:0;background:var(--bg);color:var(--ink);
- font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}}
+html{{color-scheme:dark}}
+body{{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+ font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}}
 a{{color:var(--blue);text-decoration:none}} a:hover{{color:#a8ccff}}
+:focus-visible{{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}}
+@media (prefers-reduced-motion:no-preference){{
+ a,button,.btn,input,textarea,select,tr{{transition:background-color .12s,
+  border-color .12s,color .12s}}}}
 .shell{{display:flex;min-height:100vh}}
-nav{{width:216px;flex-shrink:0;background:var(--rail);
- border-right:1px solid var(--line2);padding:20px 12px;display:flex;
- flex-direction:column;gap:4px}}
-nav .brand{{font-weight:600;font-size:15px;letter-spacing:.4px;color:#eef3fa;
- padding:4px 12px 20px}}
-nav a{{display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;
- border-radius:6px;color:#9aa7ba;font-size:14px}}
+/* ---- the rail */
+nav{{width:224px;flex-shrink:0;background:var(--rail);border-right:1px solid
+ var(--line2);
+ padding:22px 12px 16px;display:flex;flex-direction:column;gap:3px;position:sticky;
+ top:0;height:100vh}}
+nav .brand{{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
+ letter-spacing:.4px;color:#eef3fa;padding:2px 12px 22px}}
+nav .brand svg{{flex-shrink:0}}
+nav a{{display:flex;align-items:center;gap:11px;height:40px;padding:0 12px;
+ border-radius:7px;color:#9aa7ba;font-size:14px;position:relative}}
+nav a svg{{width:17px;height:17px;flex-shrink:0;opacity:.85}}
 nav a:hover{{color:#fff;background:#141c2b}}
 nav a.here{{background:#1a2334;color:#fff;font-weight:500}}
-nav a .n{{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:12px;
- color:var(--dim)}}
+nav
+ a.here::before{{content:"";position:absolute;left:-12px;top:10px;bottom:10px;width:3px;
+ border-radius:0 3px 3px 0;background:#4f8ef7}}
+nav a .n{{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--dim)}}
 nav a .n.hot{{min-width:20px;height:20px;display:flex;align-items:center;
  justify-content:center;border-radius:10px;background:var(--amber-bg);
- color:var(--amber)}}
-nav form{{margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px;
+ color:var(--amber);font-weight:500}}
+nav form{{margin-top:auto;display:flex;align-items:center;gap:10px;padding:14px 8px 0;
  border-top:1px solid var(--line2)}}
-nav form span{{color:#b9c4d4;font-size:13px}}
+nav form .av{{width:30px;height:30px;border-radius:15px;background:#24314a;display:flex;
+ align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#b9cae6;
+ flex-shrink:0;text-transform:uppercase}}
+nav form span.who{{color:#b9c4d4;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap}}
 nav form button{{margin-left:auto;background:none;border:0;color:var(--dim);
- font-size:12px;cursor:pointer;font-family:inherit}}
-main{{flex:1;min-width:0;padding:22px 28px;display:flex;flex-direction:column;gap:16px}}
-h2{{font-size:19px;font-weight:600;color:var(--bright);margin:0}}
-h3{{font-size:13px;font-weight:600;color:#c6d1e0;margin:0}}
-.top{{display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
-.top .status{{margin-left:auto;font-family:'IBM Plex Mono',monospace;
- font-size:12.5px;color:var(--muted)}}
-.panel{{background:var(--panel);border:1px solid var(--line);border-radius:8px;
- padding:16px 18px;display:flex;flex-direction:column;gap:10px}}
-.panel.warn{{background:#1c1a15;
- border-color:#57431c}} .panel.warn h3{{color:var(--amber)}}
-.panel.bad{{background:#201414;
- border-color:var(--red-bg)}} .panel.bad h3{{color:var(--red)}}
+ font-size:12px;cursor:pointer;font-family:inherit;padding:6px 8px;border-radius:5px}}
+nav form button:hover{{color:#fff;background:#141c2b}}
+/* ---- the page */
+main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
+ gap:16px}}
+main.alone{{align-items:center;justify-content:center;padding:40px 20px}}
+h2{{font-size:20px;font-weight:600;color:var(--bright);margin:0;letter-spacing:-.1px}}
+h3{{font-size:13.5px;font-weight:600;color:#c6d1e0;margin:0;display:flex;align-items:center;
+ gap:8px;flex-wrap:wrap}}
+h3 .n{{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--dim)}}
+.top{{display:flex;align-items:center;gap:14px 18px;flex-wrap:wrap;min-height:38px}}
+.top
+ .status{{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--muted);
+ display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
+.sub{{color:var(--muted);font-size:13.5px;max-width:78ch;margin-top:-8px}}
+.panel{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+ padding:16px 18px;display:flex;flex-direction:column;gap:12px}}
+.panel.warn{{background:#1c1a15;border-color:#57431c}} .panel.warn
+ h3{{color:var(--amber)}}
+.panel.bad{{background:#201414;border-color:var(--red-bg)}} .panel.bad
+ h3{{color:var(--red)}}
+.panel.ok{{border-color:#1e5b2a}} .panel.ok h3{{color:var(--green)}}
 .grid2{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
 .grid3{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}}
 .tiles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}}
-.tile{{background:var(--panel);border:1px solid var(--line);border-radius:8px;
- padding:14px 18px}}
-.tile .l{{font-size:12.5px;color:var(--muted);margin-bottom:6px}}
-.tile b{{display:block;font-family:'IBM Plex Mono',monospace;font-size:30px;
- font-weight:500}}
-table{{border-collapse:collapse;width:100%;font-family:'IBM Plex Mono',monospace;
- font-size:12.5px}}
-th{{text-align:left;padding:0 8px 6px 0;font-weight:400;font-size:12px;
- color:var(--dim);border-bottom:1px solid var(--line)}}
-td{{padding:6px 8px 6px 0;border-bottom:1px solid var(--line2);color:#b9c4d4;
+.tile{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+ padding:14px 18px;display:flex;flex-direction:column;gap:4px}}
+.tile
+ .l{{font-size:12.5px;color:var(--muted);display:flex;align-items:baseline;gap:8px}}
+.tile .l a{{margin-left:auto;font-size:12px}}
+.tile b{{display:block;font-family:var(--mono);font-size:30px;font-weight:500;
+ line-height:1.15;font-variant-numeric:tabular-nums}}
+.tile .s{{font-size:12.5px;color:var(--muted)}}
+.tile.warn{{border-color:#57431c}} .tile.bad{{border-color:var(--red-bg)}}
+/* ---- tables */
+.wrap{{overflow-x:auto}}
+table{{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12.5px;
+ font-variant-numeric:tabular-nums}}
+th{{text-align:left;padding:0 10px 8px 0;font-weight:500;font-size:11.5px;
+ letter-spacing:.4px;text-transform:uppercase;color:var(--dim);
+ border-bottom:1px solid var(--line);white-space:nowrap}}
+td{{padding:8px 10px 8px 0;border-bottom:1px solid var(--line2);color:#b9c4d4;
  vertical-align:top}}
 tr:last-child td{{border-bottom:0}}
-.pills{{display:flex;border:1px solid #2c3a52;border-radius:6px;overflow:hidden}}
-.pills a,.pills span{{padding:7px 14px;font-size:13px;color:#9aa7ba;
- font-family:'IBM Plex Sans',system-ui,sans-serif}}
+tbody tr:hover td,table tr:hover td{{background:rgba(127,180,255,.035)}}
+td.act,td:has(> form.inline){{white-space:nowrap;text-align:right;padding-right:0}}
+td .badge{{vertical-align:middle}}
+/* ---- pills, chips, badges */
+.pills{{display:flex;border:1px solid #2c3a52;border-radius:7px;overflow:hidden}}
+.pills a,.pills span{{padding:7px
+ 14px;font-size:13px;color:#9aa7ba;font-family:var(--sans);
+ border-right:1px solid #2c3a52}}
+.pills a:last-child,.pills span:last-child{{border-right:0}}
+.pills a:hover{{background:#141c2b;color:#fff}}
 .pills span,.pills a.here{{background:#1a2334;color:#fff}}
 .chips{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
-.chips a,.chips span{{padding:4px 10px;border-radius:12px;font-size:12px;
+.chips a,.chips span{{padding:4px 11px;border-radius:12px;font-size:12px;
  border:1px solid #2c3a52;color:#9aa7ba}}
+.chips a:hover{{color:#fff;border-color:#3d4f6e}}
 .chips span,.chips a.here{{background:#1a2334;color:#fff;border-color:transparent}}
-.badge{{display:inline-block;padding:1px 8px;border-radius:9px;font-size:11.5px;
- background:#1d2636;color:#9aa7ba;white-space:nowrap}}
+.badge{{display:inline-block;padding:1px 9px;border-radius:9px;font-size:11.5px;
+ background:#1d2636;color:#9aa7ba;white-space:nowrap;font-family:var(--sans);
+ font-weight:500;line-height:1.6}}
 .badge.ok,.badge.done,.badge.free,.badge.ready{{background:var(--green-bg);
  color:var(--green)}}
-.badge.warn,.badge.queued,.badge.on_phone,.badge.in_use,.badge.claimed{{background:var(--amber-bg);
- color:var(--amber)}}
+.badge.warn,.badge.queued,.badge.on_phone,.badge.in_use,.badge.claimed{{
+ background:var(--amber-bg);color:var(--amber)}}
 .badge.bad,.badge.failed,.badge.refused,.badge.dead{{background:var(--red-bg);
  color:var(--red)}}
 .badge.info,.badge.running,.badge.panel{{background:var(--blue-bg);color:var(--blue)}}
+.badge.running::before{{content:"";display:inline-block;width:6px;height:6px;
+ border-radius:3px;background:var(--blue);margin-right:6px;vertical-align:1px}}
 .badge.manual{{background:var(--violet-bg);color:var(--violet)}}
 .badge.attn{{background:#4b2a12;color:#f0a24a}}
+.badge.cancelled{{text-decoration:line-through;opacity:.8}}
+/* ---- text helpers */
 .muted{{color:var(--muted)}} .dim{{color:var(--dim);font-size:12px}}
-.mono{{font-family:'IBM Plex Mono',monospace}}
+.mono{{font-family:var(--mono)}}
+.empty{{color:var(--muted);text-align:center;padding:22px 10px;font-size:13.5px}}
 .err{{background:#2a1512;border:1px solid #57241c;color:#f0a094;padding:10px 14px;
- border-radius:6px;font-size:13px}}
+ border-radius:8px;font-size:13px}}
+.err::before,.said::before{{font-family:var(--mono);margin-right:8px;font-weight:600}}
+.err::before{{content:"!"}}
 .said{{background:#0f2b1a;border:1px solid #1e5b2a;color:#9be3b3;padding:10px 14px;
- border-radius:6px;font-size:13px}}
+ border-radius:8px;font-size:13px}}
+.said::before{{content:"✓"}}
+.hint{{color:var(--dim);font-size:12px;line-height:1.55}}
+/* ---- forms */
 input,textarea,select{{background:var(--panel2);border:1px solid #2c3a52;
- border-radius:6px;color:var(--ink);padding:9px 12px;
- font-family:'IBM Plex Mono',monospace;font-size:12.5px}}
-textarea{{width:100%;min-height:110px;line-height:1.7}}
+ border-radius:7px;color:var(--ink);padding:8px 12px;font-family:var(--mono);
+ font-size:12.5px;min-height:36px}}
+input:hover,textarea:hover{{border-color:#3d4f6e}}
+input:focus,textarea:focus,select:focus{{outline:none;border-color:var(--focus);
+ box-shadow:0 0 0 3px rgba(127,180,255,.15)}}
+textarea{{width:100%;min-height:110px;line-height:1.7;resize:vertical}}
 input::placeholder,textarea::placeholder{{color:#55627a}}
+input[type=checkbox],input[type=radio]{{min-height:0;width:16px;height:16px;
+ accent-color:var(--accent-hi);margin:0}}
 button,.btn{{cursor:pointer;background:var(--accent);color:#fff;border:0;
- border-radius:6px;padding:9px 18px;
- font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13.5px;font-weight:600}}
+ border-radius:7px;padding:9px 18px;font-family:var(--sans);font-size:13.5px;
+ font-weight:600;line-height:1.3;white-space:nowrap;display:inline-flex;
+ align-items:center;gap:6px}}
+button:hover,.btn:hover{{background:var(--accent-hi);color:#fff}}
+button:active{{transform:translateY(1px)}}
 button.quiet,.btn.quiet{{background:none;border:1px solid #2c3a52;color:#9db4d4;
- font-weight:400;padding:5px 10px;font-size:12px}}
+ font-weight:500;padding:5px 11px;font-size:12px}}
+button.quiet:hover,.btn.quiet:hover{{background:#141c2b;border-color:#3d4f6e;color:#fff}}
 button.quiet.warn{{border-color:#57431c;color:var(--amber)}}
-button.quiet.bad{{border-color:var(--red-bg);color:var(--red)}}
+button.quiet.warn:hover{{background:var(--amber-bg)}}
+button.quiet.bad{{border-color:#3a2626;color:#b98b85}}
+button.quiet.bad:hover{{background:var(--red-bg);color:#ffb3a6}}
+button.big{{height:44px;justify-content:center;width:100%;font-size:14px}}
 form.inline{{display:inline}}
 .row{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
+.row .right{{margin-left:auto}}
 label{{display:flex;gap:8px;align-items:center;font-size:13px}}
+.seg{{display:inline-flex;border:1px solid #2c3a52;border-radius:7px;overflow:hidden}}
+.seg label{{padding:6px 12px;gap:7px;cursor:pointer;border-right:1px solid #2c3a52;
+ font-size:13px}}
+.seg label:last-child{{border-right:0}}
+.seg label:has(input:checked){{background:#1a2334;color:#fff}}
+.ticks{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
+.ticks label{{align-items:flex-start;padding:9px 12px;border:1px solid var(--line2);
+ border-radius:8px;background:var(--panel2);line-height:1.4;cursor:pointer}}
+.ticks label:has(input:checked){{border-color:#2c4a7a;background:#111b2e}}
+.ticks label input{{margin-top:3px}}
+.ticks label .muted{{display:block;font-size:12px}}
+.card{{width:min(420px,100%);background:var(--panel);border:1px solid var(--line);
+ border-radius:12px;padding:28px 28px 24px;display:flex;flex-direction:column;gap:14px}}
+.card .brand{{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
+ color:#eef3fa;letter-spacing:.4px;margin-bottom:6px}}
+.card input{{width:100%}}
+.card button{{width:100%;justify-content:center;height:42px;font-size:14px}}
+.field{{display:flex;flex-direction:column;gap:5px;align-items:stretch}}
+label.field{{align-items:stretch}}
+.field span{{font-size:12.5px;color:var(--muted)}}
+.code{{font-family:var(--mono);font-size:22px;letter-spacing:1px;background:var(--panel2);
+ border:1px dashed #3d4f6e;border-radius:8px;padding:14px 18px;color:var(--bright);
+ user-select:all;text-align:center}}
+.story{{display:flex;flex-direction:column}}
+.story .item{{display:grid;grid-template-columns:150px auto 1fr;gap:12px;
+ align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line2)}}
+.story .item:last-child{{border-bottom:0}}
+.subrow td{{color:var(--dim);background:rgba(255,255,255,.015)}}
+.subrow td:first-child{{border-left:2px solid var(--line)}}
 p{{margin:0}}
+@media (max-width:900px){{
+ .shell{{flex-direction:column}}
+ nav{{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;
+  align-items:center;padding:10px 12px;gap:2px;border-right:0;
+  border-bottom:1px solid var(--line2)}}
+ nav .brand{{padding:4px 10px;width:100%}}
+ nav a{{height:34px;padding:0 10px;font-size:13px}}
+ nav a.here::before{{display:none}}
+ nav form{{margin-top:0;margin-left:auto;padding:0;border:0}}
+ main{{padding:18px 16px 40px}}
+ .grid2,.grid3,.tiles,.ticks{{grid-template-columns:1fr}}
+ .story .item{{grid-template-columns:1fr}}
+}}
 </style>{refresh}</head><body><div class="shell">{header}
-<main>{body}</main></div></body></html>"""
+<main{alone}>{body}</main></div></body></html>"""
 
 #: The rail, in the order the canvas fixed. (path, label, count-key). A
 #: count-key names a number in `user["nav"]`; the Requests one is "hot"
@@ -132,20 +251,54 @@ p{{margin:0}}
 _RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/proxy", "Proxy Pool", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
+         ("/needs", "Needs attention", ""),
          ("/events", "Events", ""), ("/users", "Users", ""))
+
+#: One line icon per rail entry - the mockup's, inlined so no file is
+#: served. Stroke uses currentColor, so the active colour applies.
+_ICON_TAG = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+             'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+             'aria-hidden="true">{}</svg>')
+_ICONS = {
+    "/": '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" '
+         'width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" '
+         'rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+    "/pools/gmail": '<path d="M4 6l8 6 8-6"/><rect x="3" y="5" width="18" '
+                    'height="14" rx="2"/>',
+    "/pools/proxy": '<circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17"/>'
+                    '<path d="M12 3c-2.5 2.4-4 5.4-4 9s1.5 6.6 4 9c2.5-2.4 4-5.4 '
+                    '4-9s-1.5-6.6-4-9z"/>',
+    "/pools/gpt": '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 '
+                  '9.5c.4-1 1.5-1.7 3-1.7 1.8 0 3 .9 3 2.2 0 2.4-3 2-3 4"/>'
+                  '<circle cx="12" cy="16.6" r="0.6" fill="currentColor"/>',
+    "/requests": '<path d="M21 12H16l-2 4h-4l-2-4H3"/><path d="M5 5h14l2 7v6a1 1 '
+                 '0 0 1-1 1H4a1 1 0 0 1-1-1v-6l2-7z"/>',
+    "/needs": '<path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" '
+              'cy="18" r="0.6" fill="currentColor"/>',
+    "/events": '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" '
+               'y2="12"/><line x1="4" y1="18" x2="14" y2="18"/>',
+    "/users": '<circle cx="9" cy="8" r="3.5"/><path d="M3.5 20c.7-3.2 2.9-5 '
+              '5.5-5s4.8 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path '
+              'd="M15.5 15.3c2.6.2 4.3 1.8 5 4.7"/>',
+}
+_BRAND_ICON = ('<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
+               'stroke="#4f8ef7" stroke-width="2" aria-hidden="true"><rect x="6" '
+               'y="2.5" width="12" height="19" rx="2.5"/><line x1="10" y1="18" '
+               'x2="14" y2="18"/></svg>')
 
 
 def page(title: str, body: str, *, user: dict | None = None,
          refresh: int = 0, here: str = "") -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
     that the next serve pass will change; zero (the default) means none.
-    `here` is the rail entry to light."""
+    `here` is the rail entry to light. Without a user there is no rail:
+    the page stands alone, centred - the sign-in card."""
     header = ""
     if user is not None:
         counts = user.get("nav") or {}
-        links = ['<nav><div class="brand">geelark farm</div>']
+        links = [f'<nav><div class="brand">{_BRAND_ICON}geelark farm</div>']
         for path, label, key in _RAIL:
-            if path == "/events" and user.get("sees") != "all":
+            if path in ("/events", "/needs") and user.get("sees") != "all":
                 continue
             if path == "/users" and not (user.get("role") == "admin"
                                          and user.get("user_admin")):
@@ -156,9 +309,12 @@ def page(title: str, body: str, *, user: dict | None = None,
                     else ""
                 n = f'<span class="n{hot}">{int(counts[key])}</span>'
             lit = ' class="here"' if path == here else ""
-            links.append(f'<a href="{path}"{lit}>{esc(label)}{n}</a>')
+            icon = _ICON_TAG.format(_ICONS.get(path, ""))
+            links.append(f'<a href="{path}"{lit}>{icon}{esc(label)}{n}</a>')
+        name = str(user.get("username") or "?")
         links.append(f'<form method="post" action="/logout">'
-                     f'<span>{esc(user["username"])}</span>'
+                     f'<span class="av">{esc(name[:1])}</span>'
+                     f'<span class="who">{esc(name)}</span>'
                      f'<input type="hidden" name="csrf" '
                      f'value="{esc(user.get("csrf", ""))}">'
                      f'<button>Log out</button></form></nav>')
@@ -166,16 +322,25 @@ def page(title: str, body: str, *, user: dict | None = None,
     tag = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
            if refresh else "")
     return _PAGE.format(title=esc(title), header=header, body=body,
-                        refresh=tag)
+                        favicon=_FAVICON, refresh=tag, alone="" if user is not None
+                        else ' class="alone"')
 
 
 def login(error: str = "") -> str:
     body = f'<p class="err">{esc(error)}</p>' if error else ""
-    body += ('<h2>Sign in</h2><form method="post" action="/login">'
-             '<p><input name="username" placeholder="username" autofocus>'
-             '</p><p><input name="password" type="password" '
-             'placeholder="password"></p>'
-             '<p><button>Sign in</button></p></form>')
+    body = (f'<div class="card"><div class="brand">{_BRAND_ICON}geelark farm'
+            f'</div><h2>Sign in</h2>{body}'
+            '<form method="post" action="/login" class="field" '
+            'style="gap:12px">'
+            '<label class="field"><span>Username</span>'
+            '<input name="username" autofocus autocomplete="username"></label>'
+            '<label class="field"><span>Password</span>'
+            '<input name="password" type="password" '
+            'autocomplete="current-password"></label>'
+            '<button>Sign in</button></form>'
+            '<p class="hint">Five wrong tries lock the name for a while. '
+            'Your first sign-in with a one-time password asks you to choose '
+            'your own.</p></div>')
     return page("Sign in", body)
 
 
@@ -307,14 +472,18 @@ def dashboard(data: dict, user: dict, said: str = "",
         tick = (f'<input type="checkbox" name="addresses" '
                 f'value="{esc(a["address"])}">' if can_login else "")
         items.append(
-            f'<label class="row" style="padding:8px 10px;border-radius:6px;'
-            f'background:var(--panel2);border:1px solid var(--line2)">{tick}'
+            f'<label style="display:grid;grid-template-columns:'
+            f'{"auto " if tick else ""}minmax(0,1fr) auto;gap:4px 10px;'
+            f'align-items:center;padding:9px 10px;border-radius:8px;'
+            f'background:var(--panel2);border:1px solid var(--line2);'
+            f'cursor:{"pointer" if tick else "default"}">{tick}'
             f'<span class="mono" style="min-width:0;overflow:hidden;'
-            f'text-overflow:ellipsis">{esc(a["address"])}</span>'
-            f'<span class="dim" style="margin-left:auto">added '
-            f'{_when(a.get("created_at"))}</span>'
+            f'text-overflow:ellipsis;white-space:nowrap">{esc(a["address"])}'
+            f'</span>'
             f'<span class="badge {"panel" if source == "panel" else "manual"}">'
-            f'{who}</span></label>')
+            f'{who}</span>'
+            f'<span class="dim" style="grid-column:{2 if tick else 1}/-1">'
+            f'added {_when(a.get("created_at"))}</span></label>')
     if can_login:
         foot = ('<p class="dim">each ticked account boots one warm phone; '
                 'they log in in parallel</p>'
@@ -376,9 +545,12 @@ def phones_page(rows: list[dict], user: dict) -> str:
             f"<td>{esc(str(r['app_account'] or ''))}</td>"
             f"<td>{esc(str(r['proxy_name'] or ''))}</td>"
             f"<td>{esc(str(r['note'] or ''))}</td></tr>")
-    body = (f"<h2>Phones ({len(rows)})</h2>"
-            f"<table>{head}{''.join(lines)}</table>")
-    return page("Phones", body, user=user)
+    body = (f'<div class="top"><h2>Phones</h2><span class="status">'
+            f'{len(rows)} in the tab</span></div>'
+            f'<div class="panel wrap"><table>{head}{"".join(lines)}</table>'
+            + ('' if rows else '<p class="empty">No phones yet.</p>')
+            + '</div>')
+    return page("Phones", body, user=user, here="/")
 
 
 def pools_page(data: dict, user: dict) -> str:
@@ -401,7 +573,11 @@ def pools_page(data: dict, user: dict) -> str:
 
 def forbidden(user: dict) -> str:
     return page("No access",
-                "<h2>This page is outside your visibility</h2>", user=user)
+                '<div class="top"><h2>This page is outside your visibility'
+                '</h2></div><p class="sub">Your account sees only its own '
+                'phones and requests. An admin can widen that on the Users '
+                'page.</p><p><a class="btn quiet" href="/">Back to the '
+                'dashboard</a></p>', user=user)
 
 
 def needs_page(data: dict, user: dict, advice) -> str:
@@ -409,57 +585,66 @@ def needs_page(data: dict, user: dict, advice) -> str:
     pages render, read decides, and the one module that may know the verdict
     table is the one assembling the data."""
     total = sum(len(v) for v in data.values())
-    body = f"<h2>Needs attention ({total})</h2>"
+    body = (f'<div class="top"><h2>Needs attention</h2><span class="status">'
+            f'{total} waiting on a person</span></div>'
+            f'<p class="sub">What the program refuses to decide on its own. '
+            f'Each block says what it is and where the fix lives.</p>')
     if not total:
-        body += "<p class=\"muted\">Nothing is waiting on anyone.</p>"
+        body += ('<div class="panel ok"><p class="empty">Nothing is waiting '
+                 'on anyone.</p></div>')
 
     if data["orphaned"]:
-        body += ("<h3>Held by a phone that no longer exists</h3>"
-                 "<p class=\"muted\">A spent credential on a phone that "
-                 "left the panel - until someone decides, it stays out of "
-                 "the pool forever. Delivered, or free again? That is "
-                 "exactly the judgement the program refuses to make.</p>"
-                 "<table><tr><th>Tab</th><th>Which</th><th>Phone</th></tr>")
-        for r in data["orphaned"]:
-            body += (f"<tr><td>{esc(r['kind'])}</td>"
-                     f"<td>{esc(str(r['who']))}</td>"
-                     f"<td>{esc(str(r['serial']))}</td></tr>")
-        body += "</table>"
+        rows = "".join(
+            f"<tr><td>{esc(r['kind'])}</td><td>{esc(str(r['who']))}</td>"
+            f"<td>{_serial_link(r['serial'])}</td></tr>"
+            for r in data["orphaned"])
+        body += (f'<div class="panel warn"><h3>Held by a phone that no longer '
+                 f'exists <span class="n">{len(data["orphaned"])}</span></h3>'
+                 f'<p class="hint">A spent credential on a phone that left '
+                 f'the panel. Delivered, or free again? That judgement is '
+                 f'yours: set the row\'s status in the sheet.</p>'
+                 f'<table><tr><th>tab</th><th>which</th><th>phone</th></tr>'
+                 f'{rows}</table></div>')
 
     if data["flagged"]:
-        body += ("<h3>Flagged - a run judged it and set it aside</h3>"
-                 "<table><tr><th>Tab</th><th>Which</th><th>Status</th>"
-                 "<th>Meaning</th></tr>")
-        for r in data["flagged"]:
-            said = advice(r["status"])
-            body += (f"<tr><td>{esc(r['kind'])}</td>"
-                     f"<td>{esc(str(r['who']))}</td>"
-                     f"<td>{esc(str(r['status']))}</td>"
-                     f"<td class=\"muted\">{esc(said)}</td></tr>")
-        body += "</table>"
+        rows = "".join(
+            f"<tr><td>{esc(r['kind'])}</td><td>{esc(str(r['who']))}</td>"
+            f"<td><span class=\"badge attn\">{esc(str(r['status']))}</span>"
+            f"</td><td class=\"muted\">{esc(advice(r['status']))}</td></tr>"
+            for r in data["flagged"])
+        body += (f'<div class="panel warn"><h3>Set aside by a run '
+                 f'<span class="n">{len(data["flagged"])}</span></h3>'
+                 f'<p class="hint">A run judged these and put them out of '
+                 f'the pool. Fix the cause, then Offer again from the pool '
+                 f'page.</p><table><tr><th>tab</th><th>which</th>'
+                 f'<th>status</th><th>meaning</th></tr>{rows}</table></div>')
 
     if data["broken"]:
-        body += ("<h3>Unusable - validation refused it</h3>"
-                 "<table><tr><th>Tab</th><th>Which</th><th>Why</th></tr>")
-        for r in data["broken"]:
-            body += (f"<tr><td>{esc(r['kind'])}</td>"
-                     f"<td>{esc(str(r['who']))}</td>"
-                     f"<td>{esc(str(r['error']))}</td></tr>")
-        body += "</table>"
+        rows = "".join(
+            f"<tr><td>{esc(r['kind'])}</td><td>{esc(str(r['who']))}</td>"
+            f"<td class=\"muted\">{esc(str(r['error']))}</td></tr>"
+            for r in data["broken"])
+        body += (f'<div class="panel bad"><h3>Refused by validation '
+                 f'<span class="n">{len(data["broken"])}</span></h3>'
+                 f'<p class="hint">These look free in the sheet and are '
+                 f'nothing: fix the cell or delete the row.</p>'
+                 f'<table><tr><th>tab</th><th>which</th><th>why</th></tr>'
+                 f'{rows}</table></div>')
 
     if data["given_up"]:
-        body += ("<h3>Given-up phones - three failures</h3>"
-                 "<p class=\"muted\">Clearing the Tries cell in the sheet "
-                 "puts them back in the queue.</p>"
-                 "<table><tr><th>Serial</th><th>Status</th><th>Tries</th>"
-                 "<th>Note</th></tr>")
-        for r in data["given_up"]:
-            body += (f"<tr><td>{esc(str(r['serial']))}</td>"
-                     f"<td>{esc(str(r['status']))}</td>"
-                     f"<td>{r['tries']}</td>"
-                     f"<td>{esc(str(r['note']))}</td></tr>")
-        body += "</table>"
-    return page("Needs attention", body, user=user)
+        rows = "".join(
+            f"<tr><td>{_serial_link(r['serial'])}</td>"
+            f"<td><span class=\"badge attn\">{esc(str(r['status']))}</span>"
+            f"</td><td>{r['tries']}</td>"
+            f"<td class=\"muted\">{esc(str(r['note']))}</td></tr>"
+            for r in data["given_up"])
+        body += (f'<div class="panel warn"><h3>Given-up phones '
+                 f'<span class="n">{len(data["given_up"])}</span></h3>'
+                 f'<p class="hint">Three failed logins each. Clearing the '
+                 f'Tries cell in the sheet puts a phone back in the queue.</p>'
+                 f'<table><tr><th>serial</th><th>status</th><th>tries</th>'
+                 f'<th>note</th></tr>{rows}</table></div>')
+    return page("Needs attention", body, user=user, here="/needs")
 
 
 #: What a `?said=` token means, spelled out where the person reads it.
@@ -708,16 +893,17 @@ _USERS_SAID = {
 
 
 def _tick(name: str, on: bool, label: str, hint: str = "") -> str:
-    hint_html = f' <span class="muted">— {esc(hint)}</span>' if hint else ""
+    hint_html = f'<span class="muted">{esc(hint)}</span>' if hint else ""
     return (f'<label><input type="checkbox" name="{esc(name)}" value="1"'
-            f'{" checked" if on else ""}> {esc(label)}{hint_html}</label>')
+            f'{" checked" if on else ""}><span>{esc(label)}{hint_html}</span>'
+            f'</label>')
 
 
 def _choice(name: str, options: tuple, current: str) -> str:
-    return "".join(
+    return '<span class="seg">' + "".join(
         f'<label><input type="radio" name="{esc(name)}" value="{esc(o)}"'
-        f'{" checked" if o == current else ""}> {esc(o)}</label> '
-        for o in options)
+        f'{" checked" if o == current else ""}> {esc(o)}</label>'
+        for o in options) + "</span>"
 
 
 def users_page(users: list[dict], selected: dict | None, user: dict,
@@ -730,15 +916,15 @@ def users_page(users: list[dict], selected: dict | None, user: dict,
     or resetting mints a one-time one that the next page shows exactly
     once."""
     csrf = esc(user.get("csrf", ""))
-    body = ""
+    body = (f'<div class="top"><h2>Users</h2><span class="status">'
+            f'{len(users)} can sign in</span></div>')
     if error:
         body += f'<p class="err">{esc(error)}</p>'
     note = _USERS_SAID.get(said, "")
     if note:
         body += f'<p class="said">{esc(note)}</p>'
-    body += f"<h2>Users ({len(users)})</h2>"
-    head = ("<tr><th>User</th><th>Role</th><th>Sees</th><th>May</th>"
-            "<th>Last seen</th><th></th></tr>")
+    head = ("<tr><th>user</th><th>role</th><th>sees</th><th>may</th>"
+            "<th>last seen</th><th></th></tr>")
     lines = []
     for u in users:
         may = ("everything" if u["role"] == "admin" else
@@ -746,50 +932,67 @@ def users_page(users: list[dict], selected: dict | None, user: dict,
                          if u.get(col)) or "nothing yet")
         state = "" if u["active"] else ' <span class="badge">deactivated</span>'
         seen = str(u.get("last_login_at") or "never")[:16]
+        chosen = selected is not None and selected["id"] == u["id"]
         lines.append(
             "<tr>"
-            f"<td>{esc(u['username'])}{state}</td>"
-            f"<td>{esc(u['role'])}</td><td>{esc(u['sees'])}</td>"
+            f"<td><b style=\"font-weight:500;color:var(--bright)\">"
+            f"{esc(u['username'])}</b>{state}</td>"
+            f"<td><span class=\"badge {'info' if u['role'] == 'admin' else ''}\">"
+            f"{esc(u['role'])}</span></td><td>{esc(u['sees'])}</td>"
             f"<td class=\"muted\">{esc(may)}</td>"
             f"<td class=\"muted\">{esc(seen)}</td>"
-            f"<td><a href=\"/users?id={u['id']}\">edit</a></td></tr>")
-    body += f"<table>{head}{''.join(lines)}</table>"
+            f"<td class=\"act\"><a class=\"btn quiet\" href=\"/users?id={u['id']}\">"
+            f"{'editing' if chosen else 'edit'}</a></td></tr>")
+    listing = (f'<div class="panel wrap"><table>{head}{"".join(lines)}'
+               f'</table></div>')
 
+    def tick_grid(current: dict) -> str:
+        return '<div class="ticks">' + "".join(
+            _tick(col, bool(current.get(col)), label, hint)
+            for col, label, hint in permissions) + "</div>"
+
+    editor = ""
     if selected is not None:
         u = selected
-        ticks = "".join(f"<p>{_tick(col, bool(u.get(col)), label, hint)}</p>"
-                        for col, label, hint in permissions)
-        body += (
-            f"<h3>Edit {esc(u['username'])}</h3>"
-            f'<form method="post" action="/users/{u["id"]}">'
-            f'<input type="hidden" name="csrf" value="{csrf}">'
-            f"<p>Role: {_choice('role', ('admin', 'operator'), u['role'])}</p>"
-            f"<p>Sees: {_choice('sees', ('all', 'own'), u['sees'])}</p>"
-            f"<p>{_tick('active', bool(u['active']), 'active')}</p>"
-            f"<p class=\"muted\">An admin may do everything below and drive "
-            f"the service; an operator may do exactly what is ticked.</p>"
-            f"{ticks}"
-            f"<p><button>Save</button></p></form>"
-            f'<form method="post" action="/users/{u["id"]}/reset">'
-            f'<input type="hidden" name="csrf" value="{csrf}">'
-            f"<p><button>Reset password</button> "
-            f"<span class=\"muted\">shows a one-time password once and "
-            f"signs them out everywhere</span></p></form>")
+        editor = (
+            f'<div class="panel"><h3>Edit {esc(u["username"])}</h3>'
+            f'<form method="post" action="/users/{u["id"]}" class="field" '
+            f'style="gap:12px"><input type="hidden" name="csrf" '
+            f'value="{csrf}">'
+            f'<div class="row"><span class="muted">Role</span>'
+            f'{_choice("role", ("admin", "operator"), u["role"])}'
+            f'<span class="muted" style="margin-left:8px">Sees</span>'
+            f'{_choice("sees", ("all", "own"), u["sees"])}'
+            f'<span style="margin-left:auto">'
+            f'{_tick("active", bool(u["active"]), "active")}</span></div>'
+            f'<p class="hint">An admin may do everything below and drive '
+            f'the service; an operator may do exactly what is ticked.</p>'
+            f'{tick_grid(u)}'
+            f'<div class="row"><button>Save</button></div></form>'
+            f'<form method="post" action="/users/{u["id"]}/reset" '
+            f'class="row"><input type="hidden" name="csrf" value="{csrf}">'
+            f'<button class="quiet warn">Reset password</button>'
+            f'<span class="hint">shows a one-time password once and signs '
+            f'them out everywhere</span></form></div>')
 
-    ticks = "".join(f"<p>{_tick(col, False, label, hint)}</p>"
-                    for col, label, hint in permissions)
-    body += (
-        "<h3>New user</h3>"
-        '<form method="post" action="/users/new">'
+    creator = (
+        '<div class="panel"><h3>New user</h3>'
+        '<form method="post" action="/users/new" class="field" '
+        'style="gap:12px">'
         f'<input type="hidden" name="csrf" value="{csrf}">'
-        '<p><input name="username" placeholder="username" '
-        'autocomplete="off"></p>'
-        f"<p>Role: {_choice('role', ('admin', 'operator'), 'operator')}</p>"
-        f"<p>Sees: {_choice('sees', ('all', 'own'), 'own')}</p>"
-        f"{ticks}"
-        "<p><button>Create</button> <span class=\"muted\">a one-time "
-        "password is shown once on the next page</span></p></form>")
-    return page("Users", body, user=user)
+        '<div class="row"><input name="username" placeholder="username" '
+        'autocomplete="off" style="width:200px">'
+        f'<span class="muted">Role</span>'
+        f'{_choice("role", ("admin", "operator"), "operator")}'
+        f'<span class="muted" style="margin-left:8px">Sees</span>'
+        f'{_choice("sees", ("all", "own"), "own")}</div>'
+        f'{tick_grid({})}'
+        '<div class="row"><button>Create</button><span class="hint">a '
+        'one-time password is shown once on the next page</span></div>'
+        '</form></div>')
+    body += listing + (f'<div class="grid2">{editor}{creator}</div>'
+                       if editor else creator)
+    return page("Users", body, user=user, here="/users")
 
 
 def one_time_page(username: str, password: str, user: dict,
@@ -798,29 +1001,35 @@ def one_time_page(username: str, password: str, user: dict,
     any later page - the person types it at their first sign-in and is
     then made to choose their own."""
     what = "created" if created else "password reset"
-    body = (f"<h2>{esc(username)} — {esc(what)}</h2>"
-            f"<p>Their one-time password, shown only now:</p>"
-            f"<p><code style=\"font-size:1.3rem\">{esc(password)}</code></p>"
-            f"<p class=\"muted\">They will be asked to choose their own the "
-            f"first time they sign in. Every open session of theirs has "
-            f"been ended.</p>"
-            f"<p><a href=\"/users\">Back to users</a></p>")
-    return page("One-time password", body, user=user)
+    body = (f'<div class="top"><h2>{esc(username)} — {esc(what)}</h2></div>'
+            f'<div class="panel ok" style="max-width:520px">'
+            f'<h3>Their one-time password, shown only now</h3>'
+            f'<div class="code">{esc(password)}</div>'
+            f'<p class="hint">Hand it over privately. They will be asked to '
+            f'choose their own the first time they sign in, and every open '
+            f'session of theirs has been ended. This page cannot be opened '
+            f'again.</p>'
+            f'<div class="row"><a class="btn quiet" href="/users">Back to '
+            f'users</a></div></div>')
+    return page("One-time password", body, user=user, here="/users")
 
 
 def password_page(user: dict, error: str = "") -> str:
     csrf = esc(user.get("csrf", ""))
-    body = f'<p class="err">{esc(error)}</p>' if error else ""
-    body += ("<h2>Choose your password</h2>"
-             "<p class=\"muted\">The one you signed in with was for one "
-             "use. Pick your own - at least 8 characters.</p>"
-             '<form method="post" action="/password">'
-             f'<input type="hidden" name="csrf" value="{csrf}">'
-             '<p><input name="password" type="password" '
-             'placeholder="new password" autofocus></p>'
-             '<p><input name="again" type="password" '
-             'placeholder="the same, again"></p>'
-             "<p><button>Save</button></p></form>")
+    err = f'<p class="err">{esc(error)}</p>' if error else ""
+    body = (f'<div class="card"><h2>Choose your password</h2>'
+            f'<p class="muted">The one you signed in with was for one use. '
+            f'Pick your own - at least 8 characters.</p>{err}'
+            f'<form method="post" action="/password" class="field" '
+            f'style="gap:12px"><input type="hidden" name="csrf" '
+            f'value="{csrf}">'
+            f'<label class="field"><span>New password</span>'
+            f'<input name="password" type="password" autofocus '
+            f'autocomplete="new-password"></label>'
+            f'<label class="field"><span>The same, again</span>'
+            f'<input name="again" type="password" '
+            f'autocomplete="new-password"></label>'
+            f'<button>Save</button></form></div>')
     return page("Choose your password", body, user=user)
 
 
@@ -1037,13 +1246,16 @@ def proxy_pool_page(data: dict, user: dict, said: str = "",
                       f'before any build takes it</p></div>')
     if data["unlisted"]:
         rows = "".join(
-            f"<tr><td class=\"mono\">{esc(u.get('host', ''))}:"
-            f"{esc(u.get('port', ''))} ({esc(u.get('username', ''))})</td>"
+            f"<tr><td class=\"mono\">{esc(str(u.get('host', '')))}:"
+            f"{esc(str(u.get('port', '')))} "
+            f"({esc(str(u.get('username', '')))})</td>"
             f"<td>" + (
                 f'<form method="post" action="/pools/proxy/adopt" '
                 f'class="inline">{_csrf(user)}'
-                f'<input type="hidden" name="host" value="{esc(u.get("host", ""))}">'
-                f'<input type="hidden" name="port" value="{esc(u.get("port", ""))}">'
+                f'<input type="hidden" name="host" '
+                f'value="{esc(str(u.get("host", "")))}">'
+                f'<input type="hidden" name="port" '
+                f'value="{esc(str(u.get("port", "")))}">'
                 f'<input type="hidden" name="username" '
                 f'value="{esc(u.get("username", ""))}">'
                 f'<button class="quiet">Add to pool</button></form>'
@@ -1534,3 +1746,22 @@ def phone_story_page(story: dict, user: dict) -> str:
               f' · <a href="/logs?phone={esc(serial)}">open its log lines'
               f'</a></p></div>')
     return page(f"Phone {serial}", body, user=user, here="/events")
+
+
+# ------------------------------------------------------------ confirming
+def confirm_page(user: dict, *, title: str, text: str, action: str,
+                 fields: dict, button: str, back: str) -> str:
+    """One question before something is taken away. The hidden fields
+    carry exactly what the first form sent, plus `sure`."""
+    hidden = "".join(
+        f'<input type="hidden" name="{esc(k)}" value="{esc(str(v))}">'
+        for k, v in fields.items())
+    body = (f'<div class="card" style="width:min(560px,100%)">'
+            f'<h2>{esc(title)}</h2><p class="muted">{esc(text)}</p>'
+            f'<form method="post" action="{esc(action)}" class="row">'
+            f'{_csrf(user)}{hidden}'
+            f'<button class="quiet bad" style="padding:9px 16px;'
+            f'font-size:13.5px">{esc(button)}</button>'
+            f'<a class="btn quiet" href="{esc(back)}" style="padding:9px 16px;'
+            f'font-size:13.5px">Keep it</a></form></div>')
+    return page(title, body, user=user, here=back)

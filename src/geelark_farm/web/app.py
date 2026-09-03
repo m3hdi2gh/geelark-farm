@@ -393,6 +393,19 @@ class _Handler(BaseHTTPRequestHandler):
             verb = {"free": "mark_proxy_free", "test": "test_proxy",
                     "remove": "remove_proxy"}[path.rsplit("/", 1)[1]]
             name = (field.get("name") or "").strip()
+            if verb == "remove_proxy" and field.get("sure") != "1":
+                # The one button on the pools that takes something away:
+                # a second page asks, with the name on it, before it queues.
+                return self._html(200, pages.confirm_page(
+                    user, title=f"Remove {name} from the pool?",
+                    text=(f"{name} leaves the Proxy tab. GeeLark's own copy "
+                          f"is not touched, so it shows up under 'held by "
+                          f"GeeLark, not in the pool' until removed there "
+                          f"by hand. A dead exit is better kept: revive it "
+                          f"at the vendor and test again."),
+                    action="/pools/proxy/remove",
+                    fields={"name": name, "sure": "1"},
+                    button=f"Yes, remove {name}", back="/pools/proxy"))
             return self._act(user, "may_add_proxy", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
                              back="/pools/proxy")

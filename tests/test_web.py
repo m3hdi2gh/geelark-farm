@@ -1167,3 +1167,26 @@ def test_the_three_are_admin_only(web, monkeypatch):
     for path in ("/events", "/logs", "/phones/1523"):
         status, _, _ = client.request("GET", path)
         assert status == 403, path
+
+
+# ---------------------------------------------- the one destructive button
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_remove_asks_once_with_the_name_before_it_queues(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 51)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/proxy/remove", _form(csrf=client.csrf(), name="SX3"))
+    assert status == 200 and "Remove SX3 from the pool?" in body
+    assert 'name="sure" value="1"' in body and "Keep it" in body
+    assert got == {}, "nothing queued until the person says so"
+
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/remove",
+        _form(csrf=client.csrf(), name="SX3", sure="1"))
+    assert status == 303 and got["verb"] == "remove_proxy"
+    assert got["payload"]["name"] == "SX3"
