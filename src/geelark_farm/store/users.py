@@ -82,9 +82,14 @@ _LISTING = (
     " FROM users")
 
 
+#: Admins first, then operators, the deactivated last - the order the
+#: Users page lists people in.
+LISTING_ORDER = " ORDER BY active DESC, (role = 'admin') DESC, username"
+
+
 def listing(settings: Settings) -> list[dict]:
     with connect(settings) as conn:
-        cur = conn.execute(_LISTING + " ORDER BY active DESC, username")
+        cur = conn.execute(_LISTING + LISTING_ORDER)
         names = [d.name for d in cur.description]
         rows = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
         conn.rollback()

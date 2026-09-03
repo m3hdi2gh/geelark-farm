@@ -125,8 +125,74 @@ def test_remove_proxy_refuses_a_row_a_phone_is_behind_and_drops_a_free_one():
 def test_every_web_verb_is_registered_with_the_drain():
     for name in ("add_gmails", "add_gpt", "add_proxies", "adopt_proxy",
                  "offer_again", "mark_proxy_free", "test_proxy",
-                 "test_all_proxies", "remove_proxy"):
+                 "test_all_proxies", "remove_proxy", "ignore_proxy"):
         assert serve_mod.ACTION_VERBS[name] is verbs.VERBS[name]
+
+
+class _Conn:
+    """A store connection that remembers nothing and commits gladly."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+    def commit(self):
+        pass
+
+
+def _fake_state(monkeypatch, kept: dict) -> dict:
+    """service_state faked: `get` answers from `kept`, `put` lands in the
+    dict this returns."""
+    import geelark_farm.store.db as db_mod
+    import geelark_farm.store.state as state_mod
+
+    written = {}
+    monkeypatch.setattr(db_mod, "connect", lambda s: _Conn())
+    monkeypatch.setattr(state_mod, "get",
+                        lambda s, key, default=None: kept.get(key, default))
+    monkeypatch.setattr(state_mod, "put",
+                        lambda conn, key, value: written.update({key: value}))
+    return written
+
+
+def test_ignore_proxy_keeps_the_triple_in_service_state(monkeypatch,
+                                                        make_settings):
+    written = _fake_state(monkeypatch, {"ignored_proxies": ["9.9.9.9:1:x"]})
+    triple = {"host": "1.2.3.4", "port": "9999", "username": "u"}
+
+    status, said, _ = verbs.ignore_proxy(
+        None, None, make_settings(store_enabled=True), triple, None)
+    assert status == "done" and "1.2.3.4:9999:u" in said
+    assert written == {"ignored_proxies": ["9.9.9.9:1:x", "1.2.3.4:9999:u"]}
+
+    written.clear()
+    status, said, _ = verbs.ignore_proxy(None, None, make_settings(), triple,
+                                         None)
+    assert status == "failed" and written == {}, "no store, nothing kept"
+
+
+def test_a_test_stamps_when_the_exit_last_answered(monkeypatch,
+                                                   make_settings):
+    import time
+
+    book = make_book(proxies=1)
+    book.proxies._rows[0].values["Name"] = "SX1"
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
+    written = _fake_state(monkeypatch, {"proxy_tests": {
+        "SX9": {"at": 1.0, "ok": False, "exit": ""}}})
+
+    status, said, _ = verbs.test_proxy(
+        book, None, make_settings(store_enabled=True), {"name": "SX1"},
+        object())
+    assert status == "done" and "exit 8.8.8.8" in said
+    stamps = written["proxy_tests"]
+    assert stamps["SX9"] == {"at": 1.0, "ok": False, "exit": ""}, \
+        "the other names' stamps are kept"
+    assert stamps["SX1"]["ok"] is True and stamps["SX1"]["exit"] == "8.8.8.8"
+    assert time.time() - stamps["SX1"]["at"] < 5
 
 
 def test_the_drain_hands_the_geelark_client_to_the_handler(monkeypatch,
@@ -403,3 +469,28 @@ def test_offer_again_reaches_the_gmail_tab_when_the_kind_says_so():
     status, said, _ = verbs.offer_again(
         book, None, None, {"address": "g0@example.com", "by": "mehdi"}, None)
     assert status == "failed" and "Gpt" in said, "no kind: the app tab"
+
+
+def test_add_gpt_takes_several_rows_and_says_what_it_skipped():
+    """The paste's confirm hands add_gpt a list, and each row is judged
+    the way the by-hand one is: the known one skipped, the bad one
+    refused with its reason, the rest appended as awaiting login."""
+    book = make_book(apps=1)                    # a0@example.com exists
+    status, said, detail = verbs.add_gpt(book, None, None, {
+        "by": "mehdi",
+        "rows": [{"address": "a0@example.com", "password": "pw",
+                  "secret": SECRET, "email_code_only": False},
+                 {"address": "new@example.com", "password": "pw",
+                  "secret": SECRET, "email_code_only": False},
+                 {"address": "nope", "password": "pw", "secret": "",
+                  "email_code_only": False}]}, None)
+
+    assert status == "done"
+    assert said == "1 account added, 1 already in the pool, 1 refused"
+    assert detail["added"] == ["new@example.com"]
+    assert detail["skipped"] == ["a0@example.com"]
+    assert detail["refused"][0].startswith("nope:")
+    added = book.apps.find("new@example.com")
+    assert added is not None and added.values["2FA Secret"] == SECRET
+    assert "Added from the web by mehdi" in added.values["Note"]
+    assert added in book.apps.available, "blank status: awaiting login"

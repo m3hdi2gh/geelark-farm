@@ -115,11 +115,19 @@ def record_refused(settings: Settings, *, verb: str, payload: dict,
     return new_id
 
 
+#: How many rows the Requests page shows at a time.
+PER_PAGE = 50
+
+
 def listing(settings: Settings, *, user_id: int,
-            everyone: bool = False, limit: int = 50,
-            view: str = "") -> list[dict]:
-    """Newest first. `everyone` is the admin's whole queue; off, only the
-    person's own rows. `view` narrows to one status (C7's pills)."""
+            everyone: bool = False, limit: int = PER_PAGE,
+            view: str = "", page: int = 1) -> list[dict]:
+    """Newest first, `limit` rows from page `page` - plus one more when an
+    older page exists, so the caller can offer it without a count. The
+    total for "page N of M" comes from `counts`, which the page reads
+    anyway for its pills. `everyone` is the admin's whole queue; off,
+    only the person's own rows. `view` narrows to one status (C7)."""
+    offset = max(0, int(page or 1) - 1) * limit
     with Store(settings) as store:
         return store._rows(
             "SELECT a.id, a.verb, a.payload, a.status, a.result, a.detail,"
@@ -128,8 +136,8 @@ def listing(settings: Settings, *, user_id: int,
             " FROM actions a JOIN users u ON u.id = a.requested_by"
             " WHERE (%s OR a.requested_by = %s)"
             " AND (%s = '' OR a.status = %s)"
-            " ORDER BY a.id DESC LIMIT %s",
-            (everyone, user_id, view, view, limit))
+            " ORDER BY a.id DESC LIMIT %s OFFSET %s",
+            (everyone, user_id, view, view, limit + 1, offset))
 
 
 def counts(settings: Settings, *, user_id: int,

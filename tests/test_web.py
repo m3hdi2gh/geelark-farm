@@ -1127,7 +1127,8 @@ def test_the_requests_page_reads_as_a_story_with_a_line_per_phone(
     status, _, body = client.request("GET", "/requests")
     assert status == 200
     assert "Log in 2 accounts" in body and "arman.tehrani88, nvd.sharifi" in body
-    assert "↳ 1549 — arman.tehrani88@gmail.com" in body
+    assert ('↳ <a href="/phones/1549">1549</a> — '
+            "arman.tehrani88@gmail.com") in body, "the serial is a link"
     assert body.count("Stop this one") == 2, "one per phone still working"
     assert body.count("/phones/1549/stop") == 1
     assert ("waits for #241 to release the phone - same phone, one at a "
@@ -1204,50 +1205,91 @@ def _c8_reads(monkeypatch):
     monkeypatch.setattr(app_mod.read, "signals", lambda s: {
         "builds": {"ok": 6, "failed": 1}, "gmail_free": 12,
         "gmail_per_day": 5.0, "gmail_days": 2.4,
-        "pulse": {"at": 0, "tripped": ""}, "last_stock": None})
+        "pulse": {"at": 0, "tripped": "", "breaker_count": 2,
+                  "breaker_limit": 5}, "last_stock": None})
     monkeypatch.setattr(app_mod.read, "events_feed",
                         lambda s, **k: {"rows": [
+                            {"id": 10, "at": "2026-09-02 18:06:12+00",
+                             "kind": "request", "run_id": "", "build": "",
+                             "serial": "", "status": "queued",
+                             "seconds": None,
+                             "detail": "#241 login_accounts: asked by mehdi"},
                             {"id": 9, "at": "2026-09-02 18:04:31+00",
                              "kind": "build_finished", "run_id": "r9",
                              "build": "1", "serial": "1551",
                              "status": "ready", "seconds": 264,
-                             "detail": "ok=True gmail=x"},
-                            {"id": 8, "at": "2026-09-02 17:36:02+00",
+                             "detail": "ok=True gmail=x@gmail.com proxy=SX3 "
+                                       "app=h@x.com"},
+                            {"id": 8, "at": "2026-09-02 17:46:07+00",
+                             "kind": "build_finished", "run_id": "r8",
+                             "build": "1", "serial": "1533",
+                             "status": "payment_problem", "seconds": 279,
+                             "detail": "ok=False gmail=y@gmail.com proxy=SX4 "
+                                       "app="},
+                            {"id": 7, "at": "2026-09-02 17:36:02+00",
                              "kind": "breaker", "run_id": "", "build": "",
                              "serial": "", "status": "cleared",
                              "seconds": None,
                              "detail": "cleared by hand from the sheet"}],
-                            "counts": {"all": 2, "builds": 1, "phones": 0,
+                            "counts": {"all": 4, "builds": 2, "phones": 0,
                                        "accounts": 0, "breaker": 1,
-                                       "requests": 0, "stock": 0,
+                                       "requests": 1, "stock": 0,
                                        "passes": 0},
-                            "page": 1, "pages": 1, "total": 2, "asked": k})
+                            "page": 1, "pages": 1, "total": 4, "asked": k,
+                            "day": k.get("day", "")})
     monkeypatch.setattr(app_mod.read, "logs", lambda s, **k: {
-        "rows": [{"at": "2026-09-02 17:41:35.2+00", "level": "WARNING",
+        "rows": [{"id": 77, "at": "2026-09-02 17:41:35.2+00",
+                  "level": "WARNING",
                   "logger": "geelark_farm.chatgpt_login", "run": "r8",
                   "build": "1", "serial": "1533",
-                  "msg": "com.android.vending is in front"}],
-        "today": 31204, "asked": k})
+                  "msg": "com.android.vending is in front"},
+                 {"id": 75, "at": "2026-09-02 17:41:30+00", "level": "INFO",
+                  "logger": "geelark_farm.builder", "run": "r8",
+                  "build": "1", "serial": "1533", "msg": "signing in"}],
+        "more": True, "today": 31204, "asked": k,
+        "loggers": ["geelark_farm.builder", "geelark_farm.chatgpt_login"]})
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: (
         None if serial != "1523" else {
             "serial": "1523",
-            "phone": {"serial": "1523", "status": "app_only", "state": "",
+            "phone": {"serial": "1523", "status": "app_only", "state": "taken",
+                      "owner": "ali", "tries": 3, "note": "",
                       "gmail": "BlazeWolf@gmail.com", "app_account": "",
                       "proxy_name": "SX3", "created_at":
-                      "2026-09-01 14:09:40+00", "done_at": None},
+                      "2026-09-01 14:09:40+00", "updated_at":
+                      "2026-09-02 09:18:00+00", "done_at": None},
             "timeline": [
                 {"at": "2026-09-01 14:09:40+00", "source": "event",
                  "kind": "phone", "status": "created", "run": "r1/1",
                  "text": "created behind SX3 for BlazeWolf@gmail.com",
                  "seconds": None},
+                {"at": "2026-09-01 14:23:00+00", "source": "event",
+                 "kind": "build_finished", "status": "payment_problem",
+                 "run": "r2/1", "seconds": 281,
+                 "text": "ok=False gmail=BlazeWolf@gmail.com proxy=SX3 app="},
+                {"at": "2026-09-01 14:33:00+00", "source": "event",
+                 "kind": "build_finished", "status": "payment_problem",
+                 "run": "r3/1", "seconds": 270,
+                 "text": "ok=False gmail=BlazeWolf@gmail.com proxy=SX3 app="},
+                {"at": "2026-09-01 14:44:00+00", "source": "event",
+                 "kind": "build_finished", "status": "payment_problem",
+                 "run": "r4/1", "seconds": 266,
+                 "text": "ok=False gmail=BlazeWolf@gmail.com proxy=SX3 app="},
+                {"at": "2026-09-01 15:00:00+00", "source": "event",
+                 "kind": "account", "status": "set_aside", "run": "r4/1",
+                 "text": "them@gmail.com: payment_problem", "seconds": None},
                 {"at": "2026-09-01 17:36:00+00", "source": "request",
                  "kind": "request", "status": "done", "run": "#229",
-                 "text": "mehdi asked: offer_again -> done: back",
+                 "id": 229, "verb": "clear_tries",
+                 "payload": {"serial": "1523"}, "requested_by": "mehdi",
+                 "result": "tries cleared",
+                 "text": "mehdi asked: clear_tries -> done: tries cleared",
                  "seconds": None},
                 {"at": "2026-09-01 17:42:00+00", "source": "artifact",
-                 "kind": "screens", "status": "app_session_unverified",
+                 "kind": "screens", "status": "failed payment_problem",
                  "run": "20260901-174200-finish1523",
-                 "text": "3 screen(s) archived", "seconds": None}]}))
+                 "folder": "20260901-174200-finish1523",
+                 "files": ["verify-lost.xml", "verify-nag.xml"],
+                 "text": "2 screen(s) archived", "seconds": None}]}))
 
 
 def test_the_events_page_has_its_signals_pills_and_phone_links(web,
@@ -1255,14 +1297,64 @@ def test_the_events_page_has_its_signals_pills_and_phone_links(web,
     _c8_reads(monkeypatch)
     client = web()
     client.login()
+    today = app_mod.pages.today()
     status, _, body = client.request("GET", "/events?kind=builds&q=1551")
     assert status == 200
     assert "builds, last hour" in body and "~2 days" in body
-    assert 'href="/events?kind=builds&q=1551" class="here"' in body
+    assert (f'href="/events?kind=builds&q=1551&day={today}" class="here"'
+            in body)
     assert "breaker · 1" in body
     assert 'href="/phones/1551"' in body
     assert "build ok" in body and "cleared by hand" in body
     assert 'href="/logs"' in body
+
+
+def test_the_events_page_reads_one_day_in_prose_and_exports_it(web,
+                                                              monkeypatch):
+    """The feed is one day at a time (today unless asked), the breaker
+    tile counts the streak, the 'what' column says it in words, the run
+    opens its log lines, and the CSV carries the same filter uncapped."""
+    from html import escape
+
+    from geelark_farm.failures import verdict
+
+    _c8_reads(monkeypatch)
+    whole = []
+    monkeypatch.setattr(app_mod.read, "events_rows",
+                        lambda s, **k: whole.append(k) or [
+                            {"at": "2026-09-02 18:04:31+00", "kind": "stock",
+                             "run_id": "", "build": "", "serial": "",
+                             "status": "gmail", "seconds": None,
+                             "detail": "24 gmails, added by mehdi"}])
+    client = web()
+    client.login()
+    today = app_mod.pages.today()
+    status, _, body = client.request("GET", "/events")
+    assert status == 200
+    assert f'name="day" value="{today}"' in body, "today unless asked"
+    assert f'day={today}" class="here">today</a>' in body
+    assert "2 of 5" in body and "in a row" in body, "the breaker's streak"
+    assert "ready — signed in as h@x.com" in body
+    assert f"payment_problem — {escape(verdict('payment_problem').seen)}" in body
+    assert 'href="/requests?hi=241">#241</a>' in body
+    assert 'href="/logs?run=r9">r9/1</a>' in body
+
+    _, _, body = client.request("GET", "/events?day=2026-09-01&kind=stock")
+    assert 'href="/events?kind=stock&q=&day=2026-09-01&page=' not in body
+    assert "<span>2026-09-01</span>" in body, "a chosen day is a lit chip"
+    assert 'href="/events.csv?kind=stock&q=&day=2026-09-01"' in body
+
+    _, _, body = client.request("GET", "/events?day=not-a-date")
+    assert f'name="day" value="{today}"' in body, "a typo reads as today"
+    _, _, body = client.request("GET", "/events?day=all")
+    assert 'day=all" class="here">all days</a>' in body
+
+    status, headers, text = client.request(
+        "GET", "/events.csv?kind=stock&q=&day=2026-09-01")
+    assert status == 200 and "text/csv" in dict(headers)["Content-Type"]
+    assert whole == [{"kind": "stock", "q": "", "day": "2026-09-01"}]
+    assert text.startswith("at,kind,run,build,serial,status,seconds,detail")
+    assert "24 gmails, added by mehdi" in text
 
 
 def test_the_logs_page_filters_and_shows_the_captured_lines(web,
@@ -1279,19 +1371,192 @@ def test_the_logs_page_filters_and_shows_the_captured_lines(web,
     assert 'value="1533"' in body
 
 
+LOG_DB_ON = {"log_db": True}
+
+
+class _FakeCapture:
+    def __init__(self, **state):
+        self.__dict__.update(state)
+
+
+@pytest.mark.parametrize("web", [LOG_DB_ON], indirect=True)
+def test_the_logs_page_says_how_the_capture_is_and_reads_older(web,
+                                                                monkeypatch):
+    """The header says whether the capture is on and what it wrote; the
+    logger is picked from a select of known names; WARNING rows are
+    tinted; 'older' reads past the newest page by id."""
+    from geelark_farm.store import logdb
+
+    _c8_reads(monkeypatch)
+    monkeypatch.setattr(logdb, "CURRENT", _FakeCapture(
+        written=31204, dropped=2, disabled=False, off_at=None, off_why=""))
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/logs?run=r8&logger=builder")
+    assert status == 200
+    assert "capture on</span> · 31,204 written · 2 dropped" in body
+    assert '<select name="logger">' in body
+    assert '<option value="geelark_farm.builder">builder</option>' in body
+    assert '<tr class="warn">' in body, "a WARNING line is tinted as a row"
+    assert 'href="/logs?level=INFO&logger=builder&run=r8&phone=&q=' \
+           '&before=75">older →</a>' in body
+    assert "nothing" not in body.split("<table>")[1].split("</table>")[0]
+
+    monkeypatch.setattr(logdb, "CURRENT", _FakeCapture(
+        written=9, dropped=0, disabled=True, off_at=1_700_000_000.0,
+        off_why="3 failed flushes in a row: cluster unreachable"))
+    _, _, body = client.request("GET", "/logs?logger_text=chatgpt")
+    assert "capture switched itself OFF at" in body
+    assert "cluster unreachable" in body and "a restart brings it back" in body
+    assert '<option value="geelark_farm.chatgpt_login">' in body
+    assert 'name="logger_text" value="chatgpt"' in body
+
+
+@pytest.mark.parametrize("web", [{}, LOG_DB_ON], indirect=True)
+def test_an_empty_log_table_says_which_nothing_it_is(web, monkeypatch):
+    from geelark_farm.store import logdb
+
+    _c8_reads(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "logs", lambda s, **k: {
+        "rows": [], "more": False, "today": 0, "loggers": []})
+    monkeypatch.setattr(logdb, "CURRENT", None)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/logs?level=ERROR&run=r8")
+    _, _, plain = client.request("GET", "/logs")
+    if "LOG_DB is not set" in body:
+        assert "nothing captured yet - LOG_DB is off" in body
+        assert "nothing captured yet - LOG_DB is off" in plain
+    else:
+        assert "nothing at ERROR for run r8" in body
+        assert "LOG_DB" not in body.split("<table>")[1]
+        assert "nothing at INFO yet" in plain
+        assert "capture not started in this process" in body
+
+
 def test_a_phone_story_joins_events_requests_and_screens(web, monkeypatch):
+    """Two lines an entry - what happened, then what it means; the same
+    failure three times in a row is one entry listing its times; the
+    screens are links; and the story closes with where the phone is."""
+    from html import escape
+
+    from geelark_farm.failures import verdict
+
     _c8_reads(monkeypatch)
     client = web()
     client.login()
     status, _, body = client.request("GET", "/phones/1523")
     assert status == 200
     assert "Phone 1523" in body and "BlazeWolf@gmail.com" in body
-    assert "created behind SX3" in body
-    assert "mehdi asked: offer_again" in body
-    assert "3 screen(s) archived" in body
+    assert "Created behind SX3 for BlazeWolf@gmail.com" in body
+    seen = verdict("payment_problem")
+    assert body.count(escape(seen.seen)) == 2, "the builds, then set aside"
+    assert escape(seen.advice) in body
+    assert "· 3 times" in body and "[r2/1]" in body and "[r4/1]" in body
+    times = app_mod.pages._hhmm("2026-09-01 14:23:00+00")
+    assert times in body and body.count("ok=False") == 0
+    assert "them@gmail.com set aside: " + escape(seen.seen) in body
+    assert "<b>mehdi</b> asked: Clear tries on 1523" in body
+    assert 'href="/requests?hi=229">#229</a>' in body
+    assert "2 screens archived" in body
+    assert ('href="/phones/1523/screens/20260901-174200-finish1523/'
+            'verify-lost.xml">verify-lost.xml</a>') in body
+    assert "Now: out with ali" in body
+    assert "Tries 3 of 3 — given up until cleared" in body
     assert 'href="/logs?phone=1523"' in body
     status, _, _ = client.request("GET", "/phones/9999")
     assert status == 404
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_story_offers_the_phone_buttons_and_returns_there(web,
+                                                              monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _c8_reads(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 63)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1523")
+    assert 'action="/phones/1523/state"' in body
+    assert 'value="unused"' in body, "taken, so it offers Back"
+    assert 'name="back" value="/phones/1523"' in body
+    assert 'action="/phones/1523/proxy"' in body
+
+    status, _, body = client.request(
+        "POST", "/phones/1523/state",
+        _form(csrf=client.csrf(), state="failed", back="/phones/1523"))
+    assert status == 200 and "Mark phone 1523 failed?" in body
+    assert 'name="back" value="/phones/1523"' in body and got == {}
+    status, headers, _ = client.request(
+        "POST", "/phones/1523/state",
+        _form(csrf=client.csrf(), state="failed", sure="1",
+              back="/phones/1523"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/phones/1523?said=queued:63"
+    assert got["verb"] == "set_phone_state"
+    status, headers, _ = client.request(
+        "POST", "/phones/1523/state",
+        _form(csrf=client.csrf(), state="taken", back="/evil"))
+    assert dict(headers)["Location"].startswith("/?said="), \
+        "a back the form made up goes to the dashboard"
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_take_phones": False})
+    narrow = web()
+    narrow.login(username="narrow")
+    _, _, body = narrow.request("GET", "/phones/1523")
+    assert "/phones/1523/state" not in body
+    assert "needs the may_take_phones permission" in body
+
+
+def test_archived_screens_are_served_only_from_their_own_folder(
+        web, monkeypatch, tmp_path, make_settings):
+    """A guarded static route: one .xml, inside artifact_dir, in a folder
+    named for this serial. Anything else - another phone's folder, a
+    walk upwards, a file that is not a screen - is a 404."""
+    import geelark_farm.web.read as read_mod
+
+    _c8_reads(monkeypatch)
+    mine = tmp_path / "20260901-174200-finish1523"
+    mine.mkdir()
+    (mine / "verify-lost.xml").write_text("<hierarchy/>", encoding="utf-8")
+    (mine / "outcome.txt").write_text("failed x\n", encoding="utf-8")
+    other = tmp_path / "20260901-174300-finish1600"
+    other.mkdir()
+    (other / "page.xml").write_text("<theirs/>", encoding="utf-8")
+    (tmp_path / "secret.xml").write_text("<root/>", encoding="utf-8")
+    real = read_mod.screen_file
+    art = make_settings(artifact_dir=tmp_path)
+    monkeypatch.setattr(app_mod.read, "screen_file",
+                        lambda s, serial, folder, name:
+                        real(art, serial, folder, name))
+    client = web()
+    client.login()
+    status, headers, text = client.request(
+        "GET", "/phones/1523/screens/20260901-174200-finish1523/"
+               "verify-lost.xml")
+    assert status == 200 and text == "<hierarchy/>"
+    assert dict(headers)["Content-Type"].startswith("text/plain")
+    for path in ("/phones/1523/screens/20260901-174300-finish1600/page.xml",
+                 "/phones/1600/screens/20260901-174200-finish1523/"
+                 "verify-lost.xml",
+                 "/phones/1523/screens/20260901-174200-finish1523/"
+                 "outcome.txt",
+                 "/phones/1523/screens/20260901-174200-finish1523/"
+                 "..%2Fsecret.xml",
+                 "/phones/1523/screens/..%2F20260901-174200-finish1523/"
+                 "verify-lost.xml",
+                 "/phones/1523/screens/20260901-174200-finish1523/"
+                 "%2E%2E%5Csecret.xml"):
+        status, _, _ = client.request("GET", path)
+        assert status == 404, path
+    assert real(art, "1523", "..", "secret.xml") is None
+    assert real(art, "1523", "20260901-174200-finish1523",
+                "../secret.xml") is None
 
 
 def test_the_three_are_admin_only(web, monkeypatch):
@@ -1301,9 +1566,71 @@ def test_the_three_are_admin_only(web, monkeypatch):
                          "sees": "own"})
     client = web()
     client.login(username="narrow")
-    for path in ("/events", "/logs", "/phones/1523"):
+    for path in ("/events", "/events.csv", "/logs", "/phones/1523",
+                 "/phones/1523/screens/x/y.xml"):
         status, _, _ = client.request("GET", path)
         assert status == 403, path
+
+
+# ------------------------------------------------------- users, as drawn
+@pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
+def test_the_users_listing_reads_as_the_mockup_and_reset_asks_first(
+        web, monkeypatch):
+    import geelark_farm.store.users as users_mod
+
+    rows = [
+        {"id": 7, "username": "mehdi", "role": "admin", "sees": "all",
+         "active": True, "must_change_password": False,
+         "last_login_at": "2026-09-03 10:00:00+00", "created_at": None,
+         **{c: False for c in users_mod.PERMISSION_COLUMNS}},
+        {"id": 9, "username": "alireza", "role": "operator", "sees": "own",
+         "active": True, "must_change_password": False,
+         "last_login_at": None, "created_at": None,
+         **{c: False for c in users_mod.PERMISSION_COLUMNS},
+         "may_add_gmail": True, "may_take_phones": True},
+        {"id": 12, "username": "sara", "role": "operator", "sees": "own",
+         "active": False, "must_change_password": False,
+         "last_login_at": None, "created_at": None,
+         **{c: False for c in users_mod.PERMISSION_COLUMNS},
+         "may_add_gpt": True},
+    ]
+    _people(monkeypatch, rows)
+    reset = []
+    monkeypatch.setattr(users_mod, "reset_password",
+                        lambda s, uid: reset.append(uid) or "once-pw")
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/users?id=9")
+    assert status == 200 and "2 can sign in" in body
+    assert '<span class="avatar">m</span>' in body
+    assert body.count('<span class="avatar">a</span>') == 2, \
+        "in the row and in the editor's header"
+    assert "everything, including the service controls" in body
+    assert ('<span class="badge">add gmail</span> '
+            '<span class="badge">take phones</span>') in body
+    assert '<span class="badge manual">admin</span>' in body
+    assert '<span class="badge info">operator</span>' in body
+    assert app_mod.pages._when("2026-09-03 10:00:00+00") in body
+    assert "never" in body
+    assert '<tr class="off">' in body
+    assert "kept for the record - their requests still carry the name" in body
+    assert "add gpt" not in body, "a deactivated person's ticks are not said"
+    assert "users are deactivated, never deleted" in body
+
+    status, _, body = client.request("POST", "/users/9/reset",
+                                     _form(csrf=client.csrf()))
+    assert status == 200 and "Reset alireza&#x27;s password?" in body
+    assert "Keep it" in body and reset == [], "asked first, nothing minted"
+    status, _, body = client.request("POST", "/users/9/reset",
+                                     _form(csrf=client.csrf(), sure="1"))
+    assert status == 200 and "once-pw" in body and reset == [9]
+
+
+def test_the_users_listing_puts_admins_first_and_the_deactivated_last():
+    from geelark_farm.store import users as users_mod
+
+    assert users_mod.LISTING_ORDER == (
+        " ORDER BY active DESC, (role = 'admin') DESC, username")
 
 
 # ---------------------------------------------- the one destructive button
@@ -1327,6 +1654,194 @@ def test_remove_asks_once_with_the_name_before_it_queues(web, monkeypatch):
         _form(csrf=client.csrf(), name="SX3", sure="1"))
     assert status == 303 and got["verb"] == "remove_proxy"
     assert got["payload"]["name"] == "SX3"
+
+
+# ------------------------------------------------------- the Proxy Pool
+def _proxy_row(name, status="free", **more):
+    row = {"id": 1, "name": name, "host": "10.0.0.1", "port": 9999,
+           "username": "u", "status": status, "serial": "",
+           "last_exit_ip": "10.0.0.1", "times_used": 2, "note": "",
+           "updated_at": "2026-09-02 10:00:00", "error": None}
+    row.update(more)
+    return row
+
+
+def _proxy_pool(monkeypatch, rows=(), needs_new_ip=(), dead=(), state=None):
+    """The proxy page's reads faked: the rows, and what the pass keeps in
+    service_state (unlisted_proxies / ignored_proxies / proxy_tests),
+    answered by key the way the real `state.get` does."""
+    import geelark_farm.store.state as state_mod
+
+    kept = dict(state or {})
+    monkeypatch.setattr(state_mod, "get",
+                        lambda s, key, default=None: kept.get(key, default))
+    rows = list(rows)
+    monkeypatch.setattr(app_mod.read, "proxy_pool",
+                        lambda s, unlisted=None: {
+                            "rows": rows,
+                            "counts": {"all": len(rows)},
+                            "needs_new_ip": list(needs_new_ip),
+                            "dead": list(dead),
+                            "unlisted": unlisted or []})
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_add_panel_offers_paste_and_one_by_one(web, monkeypatch):
+    _proxy_pool(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert body.count('action="/pools/proxy/preview"') == 2, \
+        "paste from the vendor, and one by one"
+    for box in ("host", "port", "username", "password", "name"):
+        assert f'name="{box}"' in body, box
+    # the five boxes become one pasted line, judged by the same preview
+    status, _, body = client.request(
+        "POST", "/pools/proxy/preview",
+        _form(csrf=client.csrf(), host="1.2.3.4", port="9999", username="u",
+              password="p", name="SX50"))
+    assert status == 200
+    carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
+                        body).group(1)
+    assert carried == "SX50\t1.2.3.4:9999:u:p"
+    assert "Add 1 (skip 0)" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_page_names_the_permission_it_lacks(web, monkeypatch):
+    import geelark_farm.store.users as users_mod
+
+    monkeypatch.setattr(users_mod, "may", lambda user, permission: False)
+    _proxy_pool(monkeypatch, rows=[_proxy_row("SX1")],
+                dead=[_proxy_row("SX2", "dead")],
+                state={"unlisted_proxies": [
+                    {"host": "1.2.3.4", "port": 9999, "username": "u",
+                     "password": "p"}]})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert "needs the may_add_proxy permission" in body
+    assert 'action="/pools/proxy/preview"' not in body
+    for button in ("Test all now", ">Remove<", ">Test<", ">Ignore<",
+                   "Add to pool", "Test again"):
+        assert button not in body, button
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_ignored_exits_leave_the_held_list_and_can_be_seen(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _proxy_pool(monkeypatch, state={
+        "unlisted_proxies": [
+            {"host": "1.2.3.4", "port": 9999, "username": "u", "password": "p"},
+            {"host": "5.6.7.8", "port": "1080", "username": "", "password": ""}],
+        "ignored_proxies": ["1.2.3.4:9999:u"]})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert "5.6.7.8:1080" in body and "1.2.3.4:9999 (u)" not in body
+    assert "Held by GeeLark, not in the pool — 1" in body
+    assert body.count('action="/pools/proxy/ignore"') == 1
+    assert "Ignored (1)" in body and 'href="/pools/proxy?ignored=1"' in body
+
+    _, _, body = client.request("GET", "/pools/proxy?ignored=1")
+    assert "Ignored — 1" in body and "1.2.3.4:9999:u" in body
+    assert 'action="/pools/proxy/ignore"' not in body
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 61)
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/ignore",
+        _form(csrf=client.csrf(), host="5.6.7.8", port="1080", username=""))
+    assert status == 303
+    assert dict(headers)["Location"] == "/pools/proxy?said=queued:61"
+    assert got["verb"] == "ignore_proxy"
+    assert {k: got["payload"][k] for k in ("host", "port", "username")} == {
+        "host": "5.6.7.8", "port": "1080", "username": ""}
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_last_test_column_reads_the_stamps_the_pass_kept(
+        web, monkeypatch):
+    import time
+
+    now = time.time()
+    long_note = "Google refused this exit on 1528 - change it at the " \
+                "vendor, then mark it free so a build can take it again"
+    _proxy_pool(monkeypatch, rows=[
+        _proxy_row("SX1", last_exit_ip="208.207.213.45"),
+        _proxy_row("SX2", "dead"),
+        _proxy_row("SX3", note=long_note)],
+        state={"proxy_tests": {
+            "SX1": {"at": now - 42 * 60, "ok": True, "exit": "208.207.213.45"},
+            "SX2": {"at": now - 2 * 3600, "ok": False, "exit": ""}}})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert "42m ago · ok" in body and "2h ago · dead" in body
+    assert ">never<" in body, "SX3 was never tested"
+    assert "free ones tested 42m ago" in body, "the newest free stamp"
+    assert "208.207.213.45" in body, "the exit column shows last_exit_ip"
+    assert body.count('action="/pools/proxy/test"') == 2, \
+        "a Test button beside Remove on each free row"
+    assert body.count('action="/pools/proxy/remove"') == 3
+    assert f'title="{long_note}"' in body
+    assert long_note[:59] + "…" in body and long_note not in body[
+        body.index("<table><tr><th>name</th>"):].replace(
+        f'title="{long_note}"', "")
+
+
+def test_the_side_lists_fold_behind_more_until_asked(web, monkeypatch):
+    _proxy_pool(monkeypatch, needs_new_ip=[
+        _proxy_row(f"N{i:02d}", "change ip", note="refused") for i in range(10)])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert "N07" in body and "N08" not in body
+    assert '<a href="/pools/proxy?all=1">+ 2 more</a>' in body
+    _, _, body = client.request("GET", "/pools/proxy?all=1")
+    assert "N09" in body and "more</a>" not in body
+
+
+def test_the_phone_column_links_the_serial(web, monkeypatch):
+    _proxy_pool(monkeypatch, rows=[
+        _proxy_row("SX27", "on a phone", serial="1551"),
+        _proxy_row("SX8", "change ip", serial="1528")])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy")
+    assert ('<span class="dim">on phone</span> <a href="/phones/1551">1551'
+            '</a>') in body
+    assert '<a href="/phones/1528">1528</a>' in body
+    assert "on phone</span> <a href=\"/phones/1528\"" not in body, \
+        "a refused exit names the phone without claiming to be on it"
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_put_it_back_queues_the_removed_row_again(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 71)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/restore",
+        _form(csrf=client.csrf(), name="SX3", raw="1.2.3.4:9999:u:p"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/requests?said=queued:71"
+    assert got["verb"] == "add_proxies"
+    assert got["payload"]["rows"] == [{"raw": "1.2.3.4:9999:u:p",
+                                       "name": "SX3"}]
+    assert got["idem_key"].startswith("restore:SX3:")
+
+    got.clear()
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/restore", _form(csrf=client.csrf(), name="SX3"))
+    assert dict(headers)["Location"] == "/requests?said=gone" and got == {}
 
 
 def test_the_stylesheet_never_breaks_a_quoted_string_across_lines(web):
@@ -1761,3 +2276,415 @@ def test_needs_buttons_follow_each_permission_and_say_which_is_missing(
         _form(csrf=client.csrf(), kind="app", address="a@y.com"))
     assert status == 303 and dict(headers)["Location"] == "/needs?said=refused"
     assert "may_add_gpt" in noted["reason"]
+
+
+# ------------------------------------------------- Gpt Pool and Requests
+# The paste-and-preview way in for GPT accounts, the by-hand form that
+# comes back filled in when refused, ticks on the pool page itself, the
+# set-aside section in words, the delivered archive's pager and CSV, and
+# the Requests page's pages, highlights and sub-stories.
+
+def _app_row(address, status="", **more):
+    row = {"id": 1, "address": address, "status": status, "serial": "",
+           "source": "manual", "added_by": 7, "added_by_name": "mehdi",
+           "note": "", "updated_at": "2026-09-01 18:04:00+00:00",
+           "created_at": "2026-09-01 15:02:00+00:00",
+           "email_code_only": False, "has_totp": True}
+    row.update(more)
+    return row
+
+
+def _gpt_active(monkeypatch, panel=(), manual=(), needs_human=(), broken=()):
+    monkeypatch.setattr(app_mod.read, "gpt_pool", lambda s, **k: {
+        "view": "active",
+        "counts": {"awaiting": 3, "logging_in": 1, "on_phone": 0,
+                   "delivered": 108, "needs_human": len(needs_human)},
+        "panel": list(panel), "manual": list(manual),
+        "needs_human": list(needs_human), "broken": list(broken)})
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_gpt_paste_is_previewed_row_by_row_and_confirmed_as_rows(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+    from tests.test_builder import SECRET
+
+    _gpt_active(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "known",
+                        lambda s, kind: {"dup@x.com"} if kind == "app"
+                        else set())
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 91)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert 'action="/pools/gpt/preview"' in body, "the paste box"
+    assert 'action="/pools/gpt/add"' in body, "and the by-hand form"
+
+    pasted = f"good@x.com\tpw1\t{SECRET}\ndup@x.com\tpw2\nnope\n"
+    status, _, body = client.request(
+        "POST", "/pools/gpt/preview", _form(csrf=client.csrf(), pasted=pasted))
+    assert status == 200
+    assert "preview — nothing is added yet" in body
+    assert body.count('class="badge ok">ok') == 1
+    assert "already in the pool" in body, "dup@x.com is known to the mirror"
+    assert body.count('class="badge bad"') == 2, "the duplicate and nope"
+    assert "Add 1 (skip 2)" in body
+    assert f"good@x.com\tpw1\t{SECRET}" in body, "only the good row is carried"
+    assert "dup@x.com\tpw2" not in body.split('name="rows"')[1].split(
+        "</textarea>")[0]
+    assert 'name="pasted">good@x.com' in body, "the paste stays editable"
+
+    status, headers, _ = client.request(
+        "POST", "/pools/gpt/add",
+        _form(csrf=client.csrf(), idem="k-1",
+              rows=f"good@x.com\tpw1\t{SECRET}"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/pools/gpt?said=queued:91"
+    assert got["verb"] == "add_gpt" and got["idem_key"] == "k-1"
+    assert got["payload"]["rows"] == [
+        {"address": "good@x.com", "password": "pw1", "secret": SECRET,
+         "email_code_only": False}]
+    assert got["payload"]["by"] == "mehdi"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_refused_by_hand_account_comes_back_filled_in_with_the_reason(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _gpt_active(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda *a, **k: pytest.fail("queued anyway"))
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gpt/add",
+        _form(csrf=client.csrf(), address="nope", password="pw",
+              secret="", email_code="1"))
+    assert status == 200, "the page, not a redirect that empties the form"
+    assert 'name="address" placeholder="email address" autocomplete="off" ' \
+           'value="nope"' in body
+    assert 'value="pw"' in body and 'value="1" checked' in body
+    assert '<p class="err">' in body and "nope" in body.split(
+        '<p class="err">')[1].split("</p>")[0], "the exact reason"
+    assert 'action="/pools/gpt/preview"' in body, "the paste box is still there"
+    assert "From the customer panel" in body, "and so are the pools"
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_the_gpt_pool_ticks_awaiting_rows_and_logs_them_in_from_there(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _gpt_active(monkeypatch,
+                panel=[_app_row("a@x.com", source="panel"),
+                       _app_row("b@x.com", "in_use", source="panel",
+                                serial="1550")],
+                manual=[_app_row("c@x.com")])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 92)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert body.count('type="checkbox" name="addresses"') == 2, \
+        "the two awaiting rows, not the one logging in"
+    assert 'name="addresses" value="a@x.com"' in body
+    assert 'name="addresses" value="c@x.com"' in body
+    assert 'value="b@x.com"' not in body
+    assert 'logging in — <a href="/phones/1550">1550</a>' in body
+    assert "1 awaiting · 1 logging in" in body and "1 awaiting</span>" in body
+    assert "Log in selected" in body
+    assert 'name="back" value="/pools/gpt"' in body
+    assert "log in on their own" not in body
+
+    status, headers, _ = client.request(
+        "POST", "/accounts/login",
+        _form(csrf=client.csrf(), back="/pools/gpt") + "&addresses=a%40x.com"
+        "&addresses=c%40x.com")
+    assert status == 303
+    assert dict(headers)["Location"] == "/pools/gpt?said=queued:92"
+    assert got["verb"] == "login_accounts"
+    assert got["payload"]["addresses"] == ["a@x.com", "c@x.com"]
+
+    _, headers, _ = client.request(
+        "POST", "/accounts/login", _form(csrf=client.csrf(), back="/pools/gpt"))
+    assert dict(headers)["Location"] == "/pools/gpt?said=none"
+    _, _, body = client.request("GET", "/pools/gpt?said=none")
+    assert "Tick at least one account first." in body
+
+    _, headers, _ = client.request(
+        "POST", "/accounts/login", _form(csrf=client.csrf(), back="/evil"))
+    assert dict(headers)["Location"] == "/?said=none", \
+        "only the two pages with ticks are places to go back to"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_with_manual_login_off_the_gpt_pool_says_accounts_log_in_on_their_own(
+        web, monkeypatch):
+    _gpt_active(monkeypatch, manual=[_app_row("c@x.com")])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert 'name="addresses"' not in body and "Log in selected" not in body
+    assert "accounts log in on their own on the next pass" in body
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_the_gpt_pool_names_each_permission_it_lacks(web, monkeypatch):
+    _gpt_active(monkeypatch, manual=[_app_row("c@x.com")],
+                needs_human=[_app_row("h@x.com", "payment_problem")])
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_gpt": False,
+                         "may_login_accounts": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert 'action="/pools/gpt/preview"' not in body
+    assert "adding accounts needs the may_add_gpt permission" in body
+    assert 'name="addresses"' not in body
+    assert "logging accounts in needs the may_login_accounts permission" in body
+    assert "log in on their own" not in body, "manual login is on"
+    assert "Offer again" not in body
+    assert "offering accounts again needs the may_add_gpt permission" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_needs_a_human_says_what_was_seen_and_what_to_do(web, monkeypatch):
+    from geelark_farm.failures import verdict
+
+    _gpt_active(monkeypatch, needs_human=[
+        _app_row("h@x.com", "payment_problem", source="panel",
+                 added_by_name=None, note="raw sheet note"),
+        _app_row("k@x.com", "made_up_word", note="only the note")])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert "Needs a human" in body and "2 accounts" in body
+    assert 'class="badge attn">payment_problem' in body
+    said = verdict("payment_problem")
+    assert app_mod.pages.esc(said.seen) in body
+    assert app_mod.pages.esc(said.advice) in body
+    assert "raw sheet note" not in body, "the sentence replaces the note"
+    assert "only the note" in body, "an unknown word keeps the note"
+    assert 'class="badge panel">panel' in body
+    assert 'class="badge manual">manual · mehdi' in body
+    assert body.count('action="/pools/gpt/offer"') == 2
+    assert 'name="address" value="h@x.com"' in body
+
+    _gpt_active(monkeypatch, needs_human=[_app_row("h@x.com", "captcha_shown")])
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert "1 account</span>" in body
+
+
+def test_the_delivered_view_links_phones_counts_pages_and_exports_csv(
+        web, monkeypatch):
+    seen = {}
+    stamp = "2026-09-01 18:04:00+00:00"
+
+    def gpt_pool(settings, view="active", q="", page=1, per_page=50):
+        return {"view": "delivered",
+                "counts": {"awaiting": 0, "logging_in": 0, "on_phone": 0,
+                           "delivered": 873, "needs_human": 0},
+                "rows": [_app_row("d@x.com", "delivered", serial="1542",
+                                  note="went out", updated_at=stamp)],
+                "q": q, "page": page, "more": True, "total": 61,
+                "pages": 2}
+
+    def delivered_rows(settings, q=""):
+        seen["q"] = q
+        return [{"address": "d@x.com", "serial": "1542", "updated_at": stamp,
+                 "source": "manual"},
+                {"address": "e@x.com", "serial": "", "updated_at": None,
+                 "source": "panel"}]
+
+    monkeypatch.setattr(app_mod.read, "gpt_pool", gpt_pool)
+    monkeypatch.setattr(app_mod.read, "delivered_rows", delivered_rows)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "GET", "/pools/gpt?view=delivered&q=a%20b&page=2")
+    assert status == 200
+    assert '<a href="/phones/1542">1542</a>' in body
+    assert "page 2 of 2" in body
+    assert 'href="/pools/gpt?view=delivered&q=a%20b&page=1">← newer' in body
+    assert 'href="/pools/gpt?view=delivered&q=a%20b&page=3">older →' in body
+    assert 'href="/pools/gpt/delivered.csv?q=a%20b">Export CSV' in body
+    assert '61 of 873 delivered accounts match "a b"' in body
+
+    status, headers, body = client.request(
+        "GET", "/pools/gpt/delivered.csv?q=a%20b")
+    assert status == 200 and seen == {"q": "a b"}
+    got = dict(headers)
+    assert got["Content-Type"].startswith("text/csv")
+    assert got["Content-Disposition"] == 'attachment; filename="gpt-delivered.csv"'
+    when = app_mod.pages._moment(stamp).isoformat(timespec="minutes")
+    assert body.splitlines() == ["address,serial,delivered_at,source",
+                                 f"d@x.com,1542,{when},manual",
+                                 "e@x.com,,,panel"]
+
+
+def test_describe_reads_the_service_controls_and_counts_gpt_adds():
+    from geelark_farm.web.pages import describe
+
+    assert describe("control", {"what": "pause"}) == ("Pause building", "")
+    assert describe("control", {"what": "resume"}) == ("Resume building", "")
+    assert describe("control", {"what": "clear_breaker"}) == (
+        "Clear breaker", "")
+    assert describe("control", {"what": "stop"}) == ("Stop everything", "")
+    assert describe("control", {"what": "start"}) == ("Start again", "")
+    assert describe("control", {}) == ("Control", "")
+    assert describe("add_gpt", {"rows": [{"address": "a@x.com"}]}) == (
+        "Add 1 GPT account", "a@x.com")
+    assert describe("add_gpt", {"rows": [{"address": f"u{i}@x.com"}
+                                         for i in range(8)]}) == (
+        "Add 8 GPT accounts",
+        "u0@x.com, u1@x.com, u2@x.com, u3@x.com, u4@x.com, u5@x.com …")
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_the_requests_page_pages_highlights_and_tells_the_sub_stories(
+        web, monkeypatch):
+    import datetime
+
+    import geelark_farm.store.actions as actions_mod
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ago = (now - datetime.timedelta(minutes=30)).isoformat()
+    lately = (now - datetime.timedelta(minutes=5)).isoformat()
+    rows = list(_REQUESTS) + [
+        {"id": 237, "verb": "add_gmails", "status": "done",
+         "payload": {"rows": [{}] * 3, "seller": "usa"},
+         "result": "1 gmail added, 1 already in the pool, 1 refused",
+         "detail": {"added": ["ok@x.com"], "skipped": ["dup@x.com"],
+                    "refused": ["FireHawk@x.com: seller usa accounts come "
+                                "with an authenticator key, but this one "
+                                "carries a recovery address"]},
+         "requested_at": ago, "executed_at": ago, "finished_at": ago,
+         "requested_by": "mehdi"},
+        {"id": 236, "verb": "remove_proxy", "status": "done",
+         "payload": {"name": "SX3"}, "result": "SX3 removed from the pool",
+         "detail": {"removed": {"name": "SX3", "raw": "1.2.3.4:9999:u:p",
+                                "status": "", "note": ""}},
+         "requested_at": ago, "executed_at": ago, "finished_at": ago,
+         "requested_by": "mehdi"},
+        {"id": 235, "verb": "test_all_proxies", "status": "running",
+         "payload": {}, "result": "", "detail": None,
+         "requested_at": lately, "executed_at": lately, "finished_at": None,
+         "requested_by": "mehdi"},
+    ]
+    asked = {}
+    monkeypatch.setattr(actions_mod, "listing",
+                        lambda s, **k: asked.update(k) or list(rows))
+    monkeypatch.setattr(actions_mod, "counts",
+                        lambda s, **k: {"running": 2, "queued": 1,
+                                        "done": 117, "failed": 1})
+    wanted = {}
+    monkeypatch.setattr(app_mod.read, "latest_lines",
+                        lambda s, serials: wanted.update(
+                            serials=list(serials)) or {
+                            "1549": {"serial": "1549",
+                                     "logger": "geelark_farm.chatgpt_login",
+                                     "msg": "totp accepted, reading the "
+                                            "session back\nmore",
+                                     "started": None}})
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/requests?page=2&hi=239")
+    assert status == 200
+    assert asked["page"] == 2 and asked["view"] == ""
+    assert wanted["serials"] == ["1549", "1550"], "the phones still working"
+    assert "page 2 of 3" in body, "121 rows, fifty a page"
+    assert 'href="/requests?view=&page=1">← newer' in body
+    assert "older →" not in body, "fifty-one rows would have said so"
+    assert '<tr class="hi"><td class="muted">239</td>' in body
+    assert body.count('class="hi"') == 1
+    assert 'class="live">live' in body
+    assert ("↳ FireHawk@x.com: seller usa accounts come with an authenticator "
+            "key, but this one carries a recovery address") in body
+    assert "↳ dup@x.com: already in the pool" in body
+    assert "chatgpt sign-in: totp accepted, reading the session back" in body
+    assert "more</td>" not in body, "only the first line of the message"
+    assert body.count("booting") == 1, "1550 has no line yet and says so"
+    assert "Put it back" in body
+    assert 'action="/pools/proxy/restore"' in body
+    assert 'name="raw" value="1.2.3.4:9999:u:p"' in body
+    assert 'name="name" value="SX3"' in body
+    stuck = body.count("stuck? the pass closes it after two build budgets")
+    assert stuck == 1, "#241 has run since the fixture's day; #235 for 5m"
+    row235 = body.split('<td class="muted">235</td>')[1].split("</tr>")[0]
+    assert "stuck?" not in row235
+
+    rows.extend([dict(rows[-1], id=200 - i) for i in range(48)])
+    _, _, body = client.request("GET", "/requests?view=running&mine=1")
+    assert "older →" in body and 'href="/requests?view=running&mine=1&page=2"' \
+        in body
+    assert "page 1 of 1" in body, "the pill count is what is known"
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_put_it_back_needs_the_add_proxy_permission(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: [
+        {"id": 236, "verb": "remove_proxy", "status": "done",
+         "payload": {"name": "SX3"}, "result": "SX3 removed",
+         "detail": {"removed": {"name": "SX3", "raw": "1.2.3.4:9999:u:p"}},
+         "requested_at": "2026-09-01 18:06:12+00:00",
+         "executed_at": "2026-09-01 18:06:30+00:00",
+         "finished_at": "2026-09-01 18:06:31+00:00",
+         "requested_by": "mehdi"}])
+    monkeypatch.setattr(actions_mod, "counts", lambda s, **k: {"done": 1})
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_proxy": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/requests")
+    assert "SX3 removed" in body and "Put it back" not in body
+    assert 'class="live"' not in body, "nothing pending"
+
+
+def test_a_csv_cell_that_starts_like_a_formula_opens_as_text():
+    """An event's detail or a note is free text the pass wrote; one that
+    begins with = + - or @ would run as a formula in a spreadsheet, so
+    the export writes it with a quote in front."""
+    text = app_mod._events_csv([
+        {"at": None, "kind": "stock", "run_id": "", "build": "",
+         "serial": "1551", "status": "gmail", "seconds": 12,
+         "detail": "=HYPERLINK(\"http://x\")"},
+        {"at": None, "kind": "stock", "run_id": "@r1", "build": "",
+         "serial": "", "status": "-x", "seconds": None,
+         "detail": "24 gmails, added by mehdi"}])
+    lines = text.splitlines()
+    assert lines[1].endswith(",12,\"'=HYPERLINK(\"\"http://x\"\")\"")
+    assert lines[2] == ",stock,'@r1,,,'-x,,\"24 gmails, added by mehdi\""
+    text = app_mod._delivered_csv([
+        {"address": "+d@x.com", "serial": "1542", "updated_at": None,
+         "source": "manual"}])
+    assert text.splitlines()[1] == "'+d@x.com,1542,,manual"
+
+
+def test_no_page_or_export_may_be_cached(web, monkeypatch):
+    """A one-time password shows once, a refused form comes back with
+    what was typed: no browser or proxy keeps a copy of any page."""
+    monkeypatch.setattr(app_mod.read, "delivered_rows", lambda s, q="": [])
+    client = web()
+    client.login()
+    for path in ("/", "/pools/gpt/delivered.csv"):
+        status, headers, _ = client.request("GET", path)
+        assert status == 200
+        assert dict(headers)["Cache-Control"] == "no-store", path
+
+
+def test_a_day_that_is_not_a_date_is_said_so(caplog):
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="geelark_farm.web.read"):
+        assert app_mod.read.day_bounds(object(), "not-a-date") is None
+    assert "'not-a-date' is not a day" in caplog.text

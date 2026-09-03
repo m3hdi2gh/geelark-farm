@@ -52,6 +52,11 @@ PRUNE_EVERY = 24 * 3600
 #: Record attributes that become columns rather than `extra`.
 _COLUMNS = frozenset({"run", "row", "build", "serial"})
 
+#: The Capture `install` started in this process, so the Logs page can
+#: say how the capture is doing - written, dropped, or switched off and
+#: why. None until install runs, or when the flag is off.
+CURRENT: Capture | None = None
+
 
 def _plain(value) -> str:
     return "" if value in ("", None, NO_BUILD) else str(value)
@@ -108,6 +113,9 @@ class Capture:
         self.written = 0
         self.failures = 0
         self.disabled = False
+        #: When and why it switched itself off; the Logs page says so.
+        self.off_at: float | None = None
+        self.off_why = ""
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="log-capture",
                                         daemon=True)
@@ -130,6 +138,7 @@ class Capture:
         if self.disabled:
             return
         self.disabled = True
+        self.off_at, self.off_why = time.time(), why
         logging.getLogger().removeHandler(self.handler)
         log.warning("log capture switched itself off (%s); the JSON file "
                     "on disk stays the complete record", why)
@@ -234,10 +243,27 @@ class _DroppingQueueHandler(QueueHandler):
 
 
 def install(settings: Settings) -> Capture | None:
-    """Start capturing, once per process. None when the flag is off."""
+    """Start capturing, once per process. None when the flag is off.
+    The Capture is kept in CURRENT so the Logs page can read its
+    health without a handle being threaded through serve."""
+    global CURRENT
     if not (settings.store_enabled and settings.log_db):
         return None
     capture = Capture(settings).start()
+    CURRENT = capture
     log.info("log capture on: INFO and up, batched into the store, kept "
              "%d days", KEEP_DAYS)
     return capture
+
+
+def health() -> dict | None:
+    """How the capture in this process is doing, for the Logs page:
+    None when none was installed (the flag is off, or this is not the
+    serving process); else its counts and, if it switched itself off,
+    when and why."""
+    made = CURRENT
+    if made is None:
+        return None
+    return {"on": not made.disabled, "written": made.written,
+            "dropped": made.dropped, "off_at": made.off_at,
+            "off_why": made.off_why}

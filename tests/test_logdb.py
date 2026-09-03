@@ -159,3 +159,21 @@ def test_pruning_keeps_thirty_days(capture):
 def test_install_is_a_no_op_unless_both_flags_are_on(make_settings):
     assert logdb.install(make_settings(store_enabled=True)) is None
     assert logdb.install(make_settings(log_db=True)) is None
+
+
+def test_install_keeps_the_capture_where_the_logs_page_can_read_it(
+        make_settings, monkeypatch):
+    """The page says 'capture on · N written · N dropped' off the Capture
+    install started - so install must keep it, and health must read it."""
+    monkeypatch.setattr(logdb, "CURRENT", None)
+    assert logdb.health() is None, "nothing installed, nothing to say"
+    monkeypatch.setattr(logdb.Capture, "start", lambda self: self)
+    made = logdb.install(make_settings(store_enabled=True, log_db=True))
+    assert made is not None and logdb.CURRENT is made
+    made.written, made.dropped = 31204, 2
+    assert logdb.health() == {"on": True, "written": 31204, "dropped": 2,
+                              "off_at": None, "off_why": ""}
+    made._switch_off("3 failed flushes in a row: cluster unreachable")
+    said = logdb.health()
+    assert said["on"] is False and said["off_at"] is not None
+    assert said["off_why"].startswith("3 failed flushes")

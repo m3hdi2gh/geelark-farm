@@ -178,19 +178,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " ORDER BY p.serial", (owner_id, owner_id))
         building = [str(r["serial"]) for r in phone_rows
                     if r["status"] == "building"]
-        progress = {}
-        if building:
-            # The newest line captured for each phone under construction,
-            # and when its run's first line landed - so the row can say
-            # what it is doing and for how long, without the sheet.
-            lines = store._rows(
-                "SELECT l.serial, l.logger, l.msg, l.at, l.run,"
-                " (SELECT min(f.at) FROM logs f"
-                "   WHERE f.serial = l.serial AND f.run = l.run) AS started"
-                " FROM logs l WHERE l.id IN"
-                " (SELECT max(id) FROM logs WHERE serial = ANY(%s)"
-                "   GROUP BY serial)", (building,))
-            progress = {str(r["serial"]): r for r in lines}
+        progress = _latest_lines(store, building)
         stock = store._rows(
             "SELECT kind, lower(status) AS status, count(*) AS c"
             " FROM resources WHERE error IS NULL GROUP BY kind, status")
@@ -239,6 +227,31 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "asked": asked,
         "pulse": (pulse[0]["value"] or {}) if pulse else {},
     }
+
+
+def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
+    """The newest line captured for each of these phones, and when its
+    run's first line landed - so a row can say what the phone is doing
+    and for how long, without the sheet. Empty when nothing was asked."""
+    if not serials:
+        return {}
+    lines = store._rows(
+        "SELECT l.serial, l.logger, l.msg, l.at, l.run,"
+        " (SELECT min(f.at) FROM logs f"
+        "   WHERE f.serial = l.serial AND f.run = l.run) AS started"
+        " FROM logs l WHERE l.id IN"
+        " (SELECT max(id) FROM logs WHERE serial = ANY(%s)"
+        "   GROUP BY serial)", (list(serials),))
+    return {str(r["serial"]): r for r in lines}
+
+
+def latest_lines(settings: Settings, serials: list[str]) -> dict[str, dict]:
+    """The dashboard's building-row feed, for any list of serials: the
+    Requests page reads it for the phones a running login is working."""
+    if not serials:
+        return {}
+    with Store(settings) as store:
+        return _latest_lines(store, [str(s) for s in serials])
 
 
 def pools(settings: Settings) -> dict:
@@ -435,6 +448,28 @@ _APP_COLUMNS = ("r.id, r.address, r.status, r.serial, r.source, r.added_by,"
                 " r.totp_secret <> '' AS has_totp")
 
 
+#: The delivered archive's filter, shared by the page, its count and the
+#: CSV: a search word matches the address, the phone's serial or the note.
+#: Four parameters: the word itself (empty means everything), then the
+#: ILIKE pattern three times.
+_DELIVERED_MATCH = ("r.kind = 'app' AND r.status = 'delivered'"
+                    " AND (%s = '' OR r.address ILIKE %s OR r.serial ILIKE %s"
+                    "   OR r.note ILIKE %s)")
+
+
+def delivered_rows(settings: Settings, q: str = "") -> list[dict]:
+    """The whole delivered archive that matches `q`, uncapped, for the CSV
+    export: address, serial, when it went out (updated_at - the stamp the
+    status change left) and where it came from."""
+    like = f"%{q.strip()}%"
+    with Store(settings) as store:
+        return store._rows(
+            "SELECT r.address, r.serial, r.updated_at, r.source"
+            f" FROM resources r WHERE {_DELIVERED_MATCH}"
+            " ORDER BY r.updated_at DESC, r.id DESC",
+            (q.strip(), like, like, like))
+
+
 def gpt_pool(settings: Settings, view: str = "active", q: str = "",
              page: int = 1, per_page: int = 50) -> dict:
     """The Gpt Pool page. Active = the accounts waiting for a phone, in
@@ -458,15 +493,18 @@ def gpt_pool(settings: Settings, view: str = "active", q: str = "",
             rows = store._rows(
                 f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
                 " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-                " WHERE r.kind = 'app' AND r.status = 'delivered'"
-                " AND (%s = '' OR r.address ILIKE %s OR r.serial ILIKE %s"
-                "   OR r.note ILIKE %s)"
+                f" WHERE {_DELIVERED_MATCH}"
                 " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
                 (q.strip(), like, like, like, per_page + 1,
                  (page - 1) * per_page))
+            total = store._rows(
+                f"SELECT count(*) AS n FROM resources r"
+                f" WHERE {_DELIVERED_MATCH}", (q.strip(), like, like, like))
+            n = int(total[0]["n"]) if total else 0
             more = len(rows) > per_page
             return {"view": view, "counts": counts, "rows": rows[:per_page],
-                    "q": q, "page": page, "more": more}
+                    "q": q, "page": page, "more": more, "total": n,
+                    "pages": _pages(n, per_page)}
         waiting = store._rows(
             f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
             " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
@@ -593,10 +631,42 @@ def signals(settings: Settings) -> dict:
     }
 
 
-def events_feed(settings: Settings, *, kind: str = "", q: str = "",
-                page: int = 1, per_page: int = 100) -> dict:
-    """The event table, filtered by pill and by one search word - a serial,
-    an address, a run id - newest first, with the pills' counts for today."""
+def _zone(settings: Settings):
+    """The owner's zone, for a day's boundaries. A machine without the
+    zone database keeps the fixed Tehran offset, like the pages do."""
+    import datetime
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(settings.web_tz)
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("zone %r is not available (%s); days are Tehran +03:30",
+                  settings.web_tz, exc)
+        return datetime.timezone(datetime.timedelta(hours=3, minutes=30))
+
+
+def day_bounds(settings: Settings, day: str) -> tuple | None:
+    """Midnight to midnight of `day` (YYYY-MM-DD) in the owner's zone, as
+    two aware stamps; None for anything that is not a date - "all", a
+    typo, an empty string."""
+    import datetime
+
+    try:
+        date = datetime.date.fromisoformat(str(day or ""))
+    except ValueError:
+        log.debug("%r is not a day; no bounds for it", day)
+        return None
+    start = datetime.datetime(date.year, date.month, date.day,
+                              tzinfo=_zone(settings))
+    return start, start + datetime.timedelta(days=1)
+
+
+def _events_where(settings: Settings, kind: str, q: str,
+                  day: str) -> tuple[str, list]:
+    """The feed's filter as SQL: the pill's kinds, one search word (a
+    serial, a run id, or text in the detail) and one day in the owner's
+    zone. Empty `day` means every day."""
     where, params = [], []
     if kind in KINDS:
         where.append("kind = ANY(%s)")
@@ -604,7 +674,21 @@ def events_feed(settings: Settings, *, kind: str = "", q: str = "",
     if q:
         where.append("(serial = %s OR run_id = %s OR detail ILIKE %s)")
         params += [q, q, f"%{q}%"]
-    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    bounds = day_bounds(settings, day)
+    if bounds is not None:
+        where.append("at >= %s AND at < %s")
+        params += list(bounds)
+    return ((" WHERE " + " AND ".join(where)) if where else ""), params
+
+
+def events_feed(settings: Settings, *, kind: str = "", q: str = "",
+                day: str = "", page: int = 1, per_page: int = 100) -> dict:
+    """The event table, filtered by pill, by one search word - a serial,
+    an address, a run id - and by one day, newest first, with the pills'
+    counts scoped to the same day (or to everything when `day` is not a
+    date)."""
+    clause, params = _events_where(settings, kind, q, day)
+    day_clause, day_params = _events_where(settings, "", "", day)
     offset = max(0, page - 1) * per_page
     with Store(settings) as store:
         total = store._rows(f"SELECT count(*) AS n FROM events{clause}",
@@ -613,23 +697,37 @@ def events_feed(settings: Settings, *, kind: str = "", q: str = "",
             f"SELECT id, at, kind, run_id, build, serial, status, seconds,"
             f" detail FROM events{clause} ORDER BY id DESC"
             f" LIMIT %s OFFSET %s", tuple(params) + (per_page, offset))
-        today = store._rows(
-            "SELECT kind, count(*) AS n FROM events"
-            " WHERE at > date_trunc('day', now()) GROUP BY kind")
-    by_kind = {r["kind"]: int(r["n"]) for r in today}
+        tally = store._rows(
+            f"SELECT kind, count(*) AS n FROM events{day_clause}"
+            f" GROUP BY kind", tuple(day_params))
+    by_kind = {r["kind"]: int(r["n"]) for r in tally}
     counts = {name: sum(by_kind.get(k, 0) for k in kinds)
               for name, kinds in KINDS.items()}
     counts["all"] = sum(by_kind.values())
     n = int(total[0]["n"]) if total else 0
-    return {"rows": rows, "counts": counts, "page": page,
+    return {"rows": rows, "counts": counts, "page": page, "day": day,
             "pages": max(1, -(-n // per_page)), "total": n}
 
 
+def events_rows(settings: Settings, *, kind: str = "", q: str = "",
+                day: str = "") -> list[dict]:
+    """The same feed, whole, for the CSV export: the page shows a hundred
+    at a time, the export carries everything the filter matches."""
+    clause, params = _events_where(settings, kind, q, day)
+    with Store(settings) as store:
+        return store._rows(
+            f"SELECT id, at, kind, run_id, build, serial, status, seconds,"
+            f" detail FROM events{clause} ORDER BY id DESC", tuple(params))
+
+
 def logs(settings: Settings, *, level: str = "INFO", logger: str = "",
-         run: str = "", phone: str = "", q: str = "",
+         run: str = "", phone: str = "", q: str = "", before: int = 0,
          limit: int = 200) -> dict:
     """The captured log lines, newest first, narrowed by whatever the
-    person typed. Empty filters mean "everything at INFO and up"."""
+    person typed. Empty filters mean "everything at INFO and up";
+    `before` is the id the previous page ended on, for reading older.
+    `loggers` is every name the table has seen, for the filter's select;
+    `more` says whether an older page exists."""
     where = ["level = ANY(%s)"]
     params: list = [list(_LEVELS.get(level.upper(), _LEVELS["INFO"]))]
     if logger:
@@ -644,15 +742,21 @@ def logs(settings: Settings, *, level: str = "INFO", logger: str = "",
     if q:
         where.append("msg ILIKE %s")
         params.append(f"%{q}%")
+    if before:
+        where.append("id < %s")
+        params.append(int(before))
     with Store(settings) as store:
         rows = store._rows(
-            f"SELECT at, level, logger, run, build, serial, msg FROM logs"
+            f"SELECT id, at, level, logger, run, build, serial, msg FROM logs"
             f" WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT %s",
-            tuple(params) + (limit,))
+            tuple(params) + (limit + 1,))
         today = store._rows(
             "SELECT count(*) AS n FROM logs"
             " WHERE at > date_trunc('day', now())")
-    return {"rows": rows, "today": int(today[0]["n"]) if today else 0}
+        names = store._rows("SELECT DISTINCT logger FROM logs ORDER BY 1")
+    return {"rows": rows[:limit], "more": len(rows) > limit,
+            "today": int(today[0]["n"]) if today else 0,
+            "loggers": [r["logger"] for r in names if r["logger"]]}
 
 
 def _stamp_key(value) -> str:
@@ -665,15 +769,17 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
     the serial, which is the one name all three sources use."""
     with Store(settings) as store:
         phone = store._rows(
-            "SELECT serial, status, state, gmail, app_account, proxy_name,"
-            " tries, note, created_at, updated_at, done_at FROM phones"
-            " WHERE serial = %s ORDER BY id DESC LIMIT 1", (serial,))
+            "SELECT p.serial, p.status, p.state, p.gmail, p.app_account,"
+            " p.proxy_name, p.tries, p.note, p.created_at, p.updated_at,"
+            " p.done_at, u.username AS owner"
+            " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
+            " WHERE p.serial = %s ORDER BY p.id DESC LIMIT 1", (serial,))
         events = store._rows(
             "SELECT at, kind, run_id, build, status, seconds, detail"
             " FROM events WHERE serial = %s ORDER BY id", (serial,))
         requests = store._rows(
-            "SELECT a.id, a.verb, a.status, a.result, a.requested_at,"
-            " u.username AS requested_by FROM actions a"
+            "SELECT a.id, a.verb, a.payload, a.status, a.result,"
+            " a.requested_at, u.username AS requested_by FROM actions a"
             " JOIN users u ON u.id = a.requested_by"
             " WHERE a.payload::text ILIKE %s ORDER BY a.id",
             (f"%{serial}%",))
@@ -689,7 +795,10 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
     for r in requests:
         timeline.append({"at": r["requested_at"], "source": "request",
                          "kind": "request", "status": r["status"],
-                         "run": f"#{r['id']}",
+                         "run": f"#{r['id']}", "id": r["id"],
+                         "verb": r["verb"], "payload": r["payload"] or {},
+                         "requested_by": r["requested_by"],
+                         "result": r["result"],
                          "text": f"{r['requested_by']} asked: {r['verb']}"
                                  f" -> {r['status']}: {r['result']}",
                          "seconds": None})
@@ -722,7 +831,8 @@ def _archived(root, serial: str) -> list[dict]:
             outcome_file = folder / OUTCOME_FILE
             outcome = (outcome_file.read_text(encoding="utf-8").strip()
                        .splitlines()[0] if outcome_file.is_file() else "")
-            pages = sum(1 for f in folder.iterdir() if f.suffix == ".xml")
+            files = sorted(f.name for f in folder.iterdir()
+                           if f.suffix == ".xml" and f.is_file())
             when = datetime.fromtimestamp(folder.stat().st_mtime,
                                           tz=timezone.utc)
         except (OSError, IndexError) as exc:
@@ -730,7 +840,37 @@ def _archived(root, serial: str) -> list[dict]:
             continue
         found.append({"at": when, "source": "artifact", "kind": "screens",
                       "status": outcome, "run": folder.name,
-                      "text": f"{pages} screen(s) archived in {folder.name}"
+                      "folder": folder.name, "files": files,
+                      "text": f"{len(files)} screen(s) archived in "
+                              f"{folder.name}"
                               + (f" - {outcome}" if outcome else ""),
                       "seconds": None})
     return found
+
+
+def screen_file(settings: Settings, serial: str, folder: str, name: str):
+    """The path of one archived screen, or None. Guarded three ways: the
+    folder must be one of this phone's (artifacts.serial_of), the file
+    must be one plain .xml name inside it, and the resolved path must
+    still sit under artifact_dir - so a crafted name walks nowhere."""
+    from pathlib import Path
+
+    from ..artifacts import serial_of
+
+    if not (serial and folder and name):
+        return None
+    if any(sep in folder + name for sep in ("/", "\\")) or ".." in (folder,
+                                                                     name):
+        return None
+    if not name.endswith(".xml") or serial_of(Path(folder)) != serial:
+        return None
+    root = settings.artifact_dir
+    try:
+        root = root.resolve()
+        path = (root / folder / name).resolve()
+        if root not in path.parents or not path.is_file():
+            return None
+    except OSError as exc:
+        log.debug("screen %s/%s not served (%s)", folder, name, exc)
+        return None
+    return path

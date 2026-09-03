@@ -17,7 +17,9 @@ limiting arrives with the door, not with the internet.
 
 from __future__ import annotations
 
+import csv
 import hmac
+import io
 import logging
 import secrets
 import threading
@@ -102,18 +104,28 @@ class _Handler(BaseHTTPRequestHandler):
                 view = first.get("view", "")
                 if view not in pages.REQUEST_VIEWS:
                     view = ""
+                number = _page_number(first)
+                per = store_actions.PER_PAGE
                 rows = store_actions.listing(
                     self.settings, user_id=user["id"], everyone=everyone,
-                    view=view)
+                    view=view, page=number)
+                more = len(rows) > per
+                rows = rows[:per]
                 try:
                     tally = store_actions.counts(
                         self.settings, user_id=user["id"], everyone=everyone)
                 except Exception as exc:                          # noqa: BLE001
                     log.debug("the request pills did not count (%s)", exc)
                     tally = {}
+                total = (sum(tally.values()) if not view
+                         else tally.get(view, 0))
+                hi = first.get("hi", "")
                 return self._html(200, pages.requests_page(
                     rows, user, said=first.get("said", ""), counts=tally,
-                    view=view, mine=mine))
+                    view=view, mine=mine, page=number,
+                    pages=max(1, -(-int(total or 0) // per)), more=more,
+                    hi=int(hi) if hi.isdigit() else 0,
+                    progress=self._progress_of(rows)))
             if path == "/needs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -142,49 +154,76 @@ class _Handler(BaseHTTPRequestHandler):
                     user, said=first.get("said", ""), advice=_advice,
                     show_all=first.get("all") == "1"))
             if path == "/pools/proxy":
-                from ..store import state as store_state
-
+                unlisted, ignored, tests = self._proxy_state()
+                data = read.proxy_pool(self.settings, unlisted=unlisted)
+                # What the pass keeps beside the rows (C5): the test
+                # stamps and the ignore list, merged here so the reader
+                # stays a reader of the resources table alone.
+                data["tests"] = tests
+                data["ignored"] = ignored
                 return self._html(200, pages.proxy_pool_page(
-                    read.proxy_pool(self.settings, unlisted=store_state.get(
-                        self.settings, "unlisted_proxies", [])),
-                    user, said=first.get("said", ""),
-                    state=first.get("state", ""), q=first.get("q", "")))
+                    data, user, said=first.get("said", ""),
+                    state=first.get("state", ""), q=first.get("q", ""),
+                    show_all=first.get("all") == "1",
+                    show_ignored=first.get("ignored") == "1"))
+            if path == "/pools/gpt/delivered.csv":
+                # The delivered archive, whole, for whoever reconciles it
+                # against the customer panel: the page shows fifty at a
+                # time, the export matches the same search uncapped.
+                rows = read.delivered_rows(self.settings,
+                                           q=first.get("q", ""))
+                return self._text(200, _delivered_csv(rows), kind="text/csv",
+                                  filename="gpt-delivered.csv")
             if path == "/pools/gpt":
-                try:
-                    number = max(1, int(first.get("page", "1")))
-                except ValueError:
-                    log.debug("page %r is not a number; showing the first",
-                              first.get("page"))
-                    number = 1
                 return self._html(200, pages.gpt_pool_page(
                     read.gpt_pool(self.settings,
                                   view=first.get("view", "active"),
-                                  q=first.get("q", ""), page=number),
-                    user, said=first.get("said", "")))
-            if path == "/events":
+                                  q=first.get("q", ""),
+                                  page=_page_number(first)),
+                    user, said=first.get("said", ""), explain=_explain,
+                    manual_login=self.settings.manual_login))
+            if path in ("/events", "/events.csv"):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
-                try:
-                    number = max(1, int(first.get("page", "1")))
-                except ValueError:
-                    log.debug("page %r is not a number; showing the first",
-                              first.get("page"))
-                    number = 1
                 kind, q = first.get("kind", ""), first.get("q", "").strip()
+                # One day at a time, today unless asked; "all" is every
+                # day. Anything that is not a date reads as today.
+                day = first.get("day", "").strip() or pages.today()
+                if day != "all" and read.day_bounds(self.settings,
+                                                    day) is None:
+                    day = pages.today()
+                if path == "/events.csv":
+                    rows = read.events_rows(self.settings, kind=kind, q=q,
+                                            day=day)
+                    return self._text(200, _events_csv(rows), kind="text/csv",
+                                      filename=f"events-{day}.csv")
                 return self._html(200, pages.events_page(
-                    read.events_feed(self.settings, kind=kind, q=q,
-                                     page=number),
+                    read.events_feed(self.settings, kind=kind, q=q, day=day,
+                                     page=_page_number(first)),
                     user, signals=read.signals(self.settings), kind=kind,
-                    q=q))
+                    q=q, day=day, explain=_explain))
             if path == "/logs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
                 filters = {k: first.get(k, "").strip()
-                           for k in ("logger", "run", "phone", "q")}
+                           for k in ("run", "phone", "q")}
+                # The select and the free box both name a logger; a
+                # typed name wins, since a select is often left as it was.
+                filters["logger"] = (first.get("logger_text", "").strip()
+                                     or first.get("logger", "").strip())
                 level = first.get("level", "INFO").upper() or "INFO"
+                before = first.get("before", "")
+                before = int(before) if before.isdigit() else 0
                 return self._html(200, pages.logs_page(
-                    read.logs(self.settings, level=level, **filters),
-                    user, level=level, **filters))
+                    read.logs(self.settings, level=level, before=before,
+                              **filters),
+                    user, level=level, before=before, **filters,
+                    capture=_capture_health(),
+                    log_db=bool(self.settings.log_db)))
+            if path.startswith("/phones/") and "/screens/" in path:
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                return self._screen(user, path)
             if path.startswith("/phones/"):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -194,7 +233,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if story is None:
                     return self._html(404, pages.page(
                         "404", "<h2>No such phone</h2>", user=user))
-                return self._html(200, pages.phone_story_page(story, user))
+                return self._html(200, pages.phone_story_page(
+                    story, user, explain=_explain))
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                        user=user))
         except Exception as exc:                                  # noqa: BLE001
@@ -242,7 +282,10 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path == "/accounts/login":
-                return self._login_accounts(user, form.get("addresses") or [])
+                back = field.get("back") or "/"
+                return self._login_accounts(
+                    user, form.get("addresses") or [],
+                    back=back if back in LOGIN_BACKS else "/")
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/retry"):
                 return self._retry_action(user)
@@ -259,7 +302,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._act(user, "may_change_proxy", "change_proxy",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "proxy", serial),
-                                 back="/")
+                                 back=_phone_back(field, serial))
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/state"):
                 serial = self.path[len("/phones/"):-len("/state")]
@@ -273,7 +316,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._users_new(user, field)
             if self.path.startswith("/users/") and \
                     self.path.endswith("/reset"):
-                return self._users_reset(user)
+                return self._users_reset(user, field)
             if self.path.startswith("/users/"):
                 return self._users_update(user, field)
             if self.path.startswith("/requests/") and \
@@ -364,23 +407,61 @@ class _Handler(BaseHTTPRequestHandler):
                                     requested_by=user["id"], idem_key=idem)
         self._redirect(f"{back}?said=queued:{req}")
 
-    def _login_accounts(self, user: dict, addresses: list) -> None:
-        """"Log in selected" (C6). Only meaningful with manual login on:
-        off, the pass logs accounts in by itself and the button would
-        race it for the same rows."""
+    def _login_accounts(self, user: dict, addresses: list,
+                        back: str = "/") -> None:
+        """"Log in selected" (C6), off the dashboard or the Gpt Pool -
+        `back` is whichever the ticks were on. Only meaningful with
+        manual login on: off, the pass logs accounts in by itself and
+        the button would race it for the same rows."""
         if not self.settings.manual_login:
-            return self._redirect("/?said=auto")
+            return self._redirect(f"{back}?said=auto")
         chosen = [a.strip() for a in addresses if a and a.strip()]
         if not chosen:
-            return self._redirect("/?said=none")
+            return self._redirect(f"{back}?said=none")
         return self._act(user, "may_login_accounts", "login_accounts",
                          {"addresses": chosen},
                          idem=self._minute_key(
                              user, "login", ",".join(sorted(chosen))),
-                         back="/")
+                         back=back)
+
+    def _progress_of(self, rows: list[dict]) -> dict:
+        """The latest captured log line per phone a running login is
+        working, for the Requests sub-rows. Never fatal: a page without
+        the step text still shows the phones."""
+        serials = [str(ph.get("serial") or "")
+                   for r in rows if r.get("status") == "running"
+                   and isinstance(r.get("detail"), dict)
+                   for ph in r["detail"].get("phones") or []
+                   if ph.get("ok") is None and ph.get("serial")]
+        if not serials:
+            return {}
+        try:
+            return read.latest_lines(self.settings, serials)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the phones' log lines did not load (%s)", exc)
+            return {}
 
     def _minute_key(self, user: dict, verb: str, target: str) -> str:
         return f"{verb}:{target}:{user['id']}:{int(time.time()) // 60}"
+
+    def _proxy_state(self) -> tuple[list, list, dict]:
+        """What the pass keeps about exits outside the rows: the ones
+        GeeLark holds that the tab never heard of (minus the ones a
+        person said to ignore), the ignored triples themselves, and the
+        test stamps by name. Each key is read defensively - the store
+        hands back whatever was last written, and a page must not fall
+        over a shape it did not expect."""
+        from ..store import state as store_state
+
+        held = store_state.get(self.settings, "unlisted_proxies", []) or []
+        kept = store_state.get(self.settings, "ignored_proxies", []) or []
+        ignored = [k for k in kept if isinstance(k, str)] \
+            if isinstance(kept, list) else []
+        stamps = store_state.get(self.settings, "proxy_tests", {}) or {}
+        tests = stamps if isinstance(stamps, dict) else {}
+        unlisted = [u for u in held if isinstance(u, dict)
+                    and _proxy_key(u) not in set(ignored)]
+        return unlisted, ignored, tests
 
     def _switches(self) -> dict:
         """The flags the admin's footer line lists, off Settings."""
@@ -390,23 +471,39 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------ phones and service
     def _phone_state(self, user: dict, serial: str, field: dict) -> None:
-        """Take / Back / Done / Failed off the dashboard's table. The two
-        that delete the phone ask once, on a page that says so."""
+        """Take / Back / Done / Failed off the dashboard's table or the
+        phone's own story (`back` says which). The two that delete the
+        phone ask once, on a page that says so."""
         state = (field.get("state") or "").strip().lower()
         plan = pages.PHONE_STATES.get(state)
         if plan is None or not serial.isdigit():
             return self._html(404, pages.page(
                 "404", "<h2>Not a State word</h2>", user=user))
+        back = _phone_back(field, serial)
         if plan["sure"] and field.get("sure") != "1":
             return self._html(200, pages.confirm_page(
                 user, title=f"Mark phone {serial} {state}?",
                 text=plan["text"], action=f"/phones/{serial}/state",
-                fields={"state": state, "sure": "1"},
-                button=f"Yes, phone {serial} is {state}", back="/"))
+                fields={"state": state, "sure": "1", "back": back},
+                button=f"Yes, phone {serial} is {state}", back=back))
         return self._act(user, "may_take_phones", "set_phone_state",
                          {"serial": serial, "state": state},
                          idem=self._minute_key(user, f"state-{state}", serial),
-                         back="/")
+                         back=back)
+
+    def _screen(self, user: dict, path: str) -> None:
+        """One archived screen, as the plain text it is - and only one
+        of this phone's, inside artifact_dir (read.screen_file guards
+        the path). Anything else is a 404, never a listing."""
+        serial, _, rest = path[len("/phones/"):].partition("/screens/")
+        folder, _, name = rest.partition("/")
+        found = (read.screen_file(self.settings, serial, folder, name)
+                 if serial.isdigit() else None)
+        if found is None:
+            return self._html(404, pages.page(
+                "404", "<h2>No such screen</h2>", user=user))
+        return self._text(200, found.read_text(encoding="utf-8",
+                                               errors="replace"))
 
     def _service(self, user: dict, what: str, field: dict) -> None:
         """Pause / Resume / Clear breaker / Stop / Start: admins only, and
@@ -495,7 +592,11 @@ class _Handler(BaseHTTPRequestHandler):
             from ..store import validate
 
             known = read.known(self.settings, "proxy")
-            rows = paste.proxies(field.get("pasted", ""))
+            # The one-by-one form is the paste form with five boxes: the
+            # fields become one pasted line so both are judged by the
+            # same reader and confirmed on the same page.
+            pasted = field.get("pasted") or _one_proxy_line(field)
+            rows = paste.proxies(pasted)
             for row in rows:
                 try:
                     checked = validate.proxy_row(raw=row["raw"],
@@ -539,6 +640,31 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_add_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
                              back="/pools/proxy")
+        if path == "/pools/proxy/ignore":
+            # "Ignore" on an exit GeeLark holds that the tab never heard
+            # of: the triple goes on a list the pass keeps, and the page
+            # stops reporting it. Undone by editing that list, not here.
+            triple = {k: (field.get(k) or "").strip()
+                      for k in ("host", "port", "username")}
+            if not triple["host"]:
+                return self._redirect("/pools/proxy?said=gone")
+            return self._act(user, "may_add_proxy", "ignore_proxy", triple,
+                             idem=self._minute_key(
+                                 user, "ignore", _proxy_key(triple)),
+                             back="/pools/proxy")
+        if path == "/pools/proxy/restore":
+            # "Put it back" on a done remove (Requests): the row the verb
+            # wrote into the request's detail, added again under the same
+            # name. It is tested on arrival like any other add.
+            name = (field.get("name") or "").strip()
+            raw = (field.get("raw") or "").strip()
+            if not raw:
+                return self._redirect("/requests?said=gone")
+            return self._act(user, "may_add_proxy", "add_proxies",
+                             {"rows": [{"raw": raw, "name": name}]},
+                             idem=self._minute_key(user, "restore",
+                                                   name or raw),
+                             back="/requests")
         if path == "/pools/proxy/adopt":
             from ..store import state as store_state
 
@@ -554,9 +680,40 @@ class _Handler(BaseHTTPRequestHandler):
                              idem=self._minute_key(
                                  user, "adopt", f"{held['host']}:{held['port']}"),
                              back="/pools/proxy")
+        if path == "/pools/gpt/preview":
+            from ..store import validate
+
+            known = read.known(self.settings, "app")
+            pasted = field.get("pasted") or ""
+            rows = paste.accounts(pasted)
+            for row in rows:
+                try:
+                    if row["recovery"]:
+                        raise validate.AccountError(
+                            f"{row['address']}: two addresses on one line - "
+                            f"an app account has no recovery address")
+                    validate.app_row(address=row["address"],
+                                     password=row["password"],
+                                     secret=row["secret"])
+                except (validate.AccountError, validate.ProxyError) as exc:
+                    log.debug("gpt paste row refused: %s", exc)
+                    row["error"] = str(exc)
+                row["duplicate"] = row["address"].lower() in known
+            return self._html(200, pages.gpt_preview(
+                rows, user, idem=secrets.token_urlsafe(12), pasted=pasted))
         if path == "/pools/gpt/add":
             from ..store import validate
 
+            if "rows" in field:
+                # The confirm off the preview: the good rows, as the
+                # tab-separated text the preview showed.
+                rows = [{"address": r["address"], "password": r["password"],
+                         "secret": r["secret"], "email_code_only": False}
+                        for r in paste.accounts(field.get("rows", ""))]
+                return self._act(
+                    user, "may_add_gpt", "add_gpt", {"rows": rows},
+                    idem=field.get("idem") or secrets.token_urlsafe(12),
+                    back="/pools/gpt")
             row = {"address": (field.get("address") or "").strip(),
                    "password": field.get("password") or "",
                    "secret": (field.get("secret") or "").strip(),
@@ -564,8 +721,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 validate.app_row(**row)
             except (validate.AccountError, validate.ProxyError) as exc:
+                # Back to the page with the boxes still filled and the
+                # reason beside them - a redirect would empty the form
+                # and say only "bad".
                 log.info("gpt add refused at the form: %s", exc)
-                return self._redirect("/pools/gpt?said=bad")
+                return self._html(200, pages.gpt_pool_page(
+                    read.gpt_pool(self.settings), user, explain=_explain,
+                    manual_login=self.settings.manual_login,
+                    form=row, error=str(exc)))
             return self._act(user, "may_add_gpt", "add_gpt", {"rows": [row]},
                              idem=self._minute_key(user, "add_gpt",
                                                    row["address"].lower()),
@@ -657,7 +820,10 @@ class _Handler(BaseHTTPRequestHandler):
         log.info("user id %s updated by %s", target, user["username"])
         self._redirect(f"/users?id={target}&said=saved")
 
-    def _users_reset(self, user: dict) -> None:
+    def _users_reset(self, user: dict, field: dict) -> None:
+        """Reset password asks first: the person's current password stops
+        working the moment it is pressed, and every session of theirs
+        ends."""
         if (refused := self._admin_page(user)) is not None:
             code = 404 if not self.settings.web_user_admin else 403
             return self._html(code, refused)
@@ -667,6 +833,16 @@ class _Handler(BaseHTTPRequestHandler):
         row = store_users.get(self.settings, target)
         if row is None:
             return self._redirect("/users")
+        if field.get("sure") != "1":
+            return self._html(200, pages.confirm_page(
+                user, title=f"Reset {row['username']}'s password?",
+                text=(f"{row['username']}'s current password stops working "
+                      f"and every session of theirs ends. A one-time "
+                      f"password is shown once on the next page; hand it "
+                      f"over privately and they choose their own at their "
+                      f"first sign-in."),
+                action=f"/users/{target}/reset", fields={"sure": "1"},
+                button="Yes, reset it", back=f"/users?id={target}"))
         password = store_users.reset_password(self.settings, target)
         _drop_sessions_of(target, keep=self._cookie())
         log.info("password of user id %s reset by %s", target,
@@ -766,16 +942,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Every page is signed in and some carry a secret once - a
+        # one-time password, a form handed back with what was typed -
+        # so no browser or proxy may keep a copy.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
 
-    def _text(self, code: int, body: str) -> None:
+    def _text(self, code: int, body: str, *, kind: str = "text/plain",
+              filename: str = "") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", f"{kind}; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        if filename:
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         if self.command != "HEAD":
@@ -796,6 +981,77 @@ class _Handler(BaseHTTPRequestHandler):
         log.debug("web: " + fmt, *args)
 
 
+#: Where "Log in selected" may send the person back: the two pages that
+#: carry the ticks. Anything else in the form's `back` goes to the front.
+LOGIN_BACKS = ("/", "/pools/gpt")
+
+
+#: What a spreadsheet reads as the start of a formula. A cell beginning
+#: with one is written with a quote in front, so an event's detail or a
+#: note that happens to start with `=` opens as text, never as code.
+_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value) -> str:
+    text = "" if value is None else str(value)
+    return f"'{text}" if text.startswith(_FORMULA_STARTS) else text
+
+
+def _delivered_csv(rows: list[dict]) -> str:
+    """address, serial, delivered_at, source - the stamp in the owner's
+    zone, ISO, so a spreadsheet sorts it."""
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["address", "serial", "delivered_at", "source"])
+    for r in rows:
+        moment = pages._moment(r.get("updated_at"))
+        writer.writerow([_csv_cell(v) for v in (
+            r.get("address") or "", r.get("serial") or "",
+            moment.isoformat(timespec="minutes") if moment
+            else str(r.get("updated_at") or ""),
+            r.get("source") or "")])
+    return out.getvalue()
+
+
+def _events_csv(rows: list[dict]) -> str:
+    """The feed as a spreadsheet reads it: the stamp in the owner's zone,
+    ISO, then the columns the page shows."""
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["at", "kind", "run", "build", "serial", "status",
+                     "seconds", "detail"])
+    for r in rows:
+        moment = pages._moment(r.get("at"))
+        writer.writerow([_csv_cell(v) for v in (
+            moment.isoformat(timespec="seconds") if moment
+            else str(r.get("at") or ""),
+            r.get("kind") or "", r.get("run_id") or "",
+            r.get("build") or "", r.get("serial") or "",
+            r.get("status") or "",
+            "" if r.get("seconds") is None else r["seconds"],
+            r.get("detail") or "")])
+    return out.getvalue()
+
+
+def _capture_health() -> dict | None:
+    """What the log capture in this process says about itself, or None
+    when none runs here; never fatal to the page."""
+    try:
+        from ..store import logdb
+
+        return logdb.health()
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("the capture's health did not read (%s)", exc)
+        return None
+
+
+def _phone_back(field: dict, serial: str) -> str:
+    """Where a phone button returns to: its story when the form said so,
+    the dashboard otherwise - never an address the form made up."""
+    back = str(field.get("back") or "")
+    return back if back == f"/phones/{serial}" else "/"
+
+
 def _store_down(exc: BaseException) -> bool:
     """psycopg's OperationalError, without importing psycopg here: a
     connection refused or timed out is a page, not a traceback."""
@@ -811,6 +1067,28 @@ def _ticks(field: dict) -> dict:
     from ..store.users import PERMISSION_COLUMNS
 
     return {c: field.get(c) == "1" for c in PERMISSION_COLUMNS}
+
+
+def _proxy_key(triple: dict) -> str:
+    """host:port:username - the spelling verbs.ignore_proxy writes into
+    service_state, so the page's filter and the verb's list agree."""
+    return ":".join(str(triple.get(k) or "") for k in ("host", "port",
+                                                       "username"))
+
+
+def _one_proxy_line(field: dict) -> str:
+    """The one-by-one boxes as the line a vendor would have pasted:
+    `name<TAB>host:port:user:pass`, the user and password only when
+    given. Empty when no host was typed, so a blank form previews as
+    nothing rather than as a row with an error."""
+    host = (field.get("host") or "").strip()
+    if not host:
+        return ""
+    raw = ":".join(p for p in (host, (field.get("port") or "").strip(),
+                               (field.get("username") or "").strip(),
+                               (field.get("password") or "").strip()) if p)
+    name = (field.get("name") or "").strip()
+    return f"{name}\t{raw}" if name else raw
 
 
 def _page_number(first: dict) -> int:
@@ -855,6 +1133,18 @@ def _locked_out(username: str) -> bool:
 def _note_failure(username: str) -> None:
     with _lock:
         _failures.setdefault(username, []).append(time.time())
+
+
+def _explain(status: str) -> tuple[str, str]:
+    """What a set-aside status means and what to do about it - the two
+    sentences failures.verdict holds - or two empty strings for a word
+    it never heard of, which renders as the row's own note."""
+    from ..failures import knows, verdict
+
+    if not knows(status):
+        return "", ""
+    found = verdict(status)
+    return found.seen, found.advice
 
 
 def _advice(status: str) -> str:

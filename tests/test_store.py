@@ -720,3 +720,40 @@ def test_retry_copies_a_failed_command_into_a_new_row(monkeypatch,
     monkeypatch.setattr(actions, "connect", lambda s: conn)
     assert actions.retry(make_settings(store_enabled=True), action_id=1,
                          user_id=7, is_admin=False) == "not_yours"
+
+
+def test_listing_pages_fifty_at_a_time_with_one_row_of_lookahead(
+        monkeypatch, make_settings):
+    """The Requests page asks for page N and learns whether an older page
+    exists from the extra row, not from a second count."""
+    from geelark_farm.store import actions
+
+    seen = {}
+
+    class FakeStore:
+        def __init__(self, settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def _rows(self, sql, params=()):
+            seen["sql"] = " ".join(sql.split())
+            seen["params"] = params
+            return [{"id": 1}] * (actions.PER_PAGE + 1)
+
+    monkeypatch.setattr(actions, "Store", FakeStore)
+    rows = actions.listing(make_settings(), user_id=7, everyone=True,
+                           view="failed", page=3)
+
+    assert len(rows) == actions.PER_PAGE + 1, "the caller trims the lookahead"
+    assert seen["sql"].endswith("ORDER BY a.id DESC LIMIT %s OFFSET %s")
+    assert seen["params"] == (True, 7, "failed", "failed",
+                              actions.PER_PAGE + 1, 2 * actions.PER_PAGE)
+
+    actions.listing(make_settings(), user_id=7)
+    assert seen["params"][-2:] == (actions.PER_PAGE + 1, 0), \
+        "no page means the first"
