@@ -590,8 +590,14 @@ class _Handler(BaseHTTPRequestHandler):
                                 # nothing more.
                                 "csrf": secrets.token_urlsafe(32)}
         self.send_response(303)
+        # `Secure` when the request came over TLS - the reverse proxy in
+        # front of the console (Caddy, farm.iranspoty.store) says so in
+        # X-Forwarded-Proto. Left off over the ssh tunnel, which is plain
+        # http on loopback and would otherwise never see the cookie.
+        secure = ("; Secure" if (self.headers.get("X-Forwarded-Proto") or ""
+                                 ).lower() == "https" else "")
         self.send_header("Set-Cookie",
-                         f"gf={token}; HttpOnly; SameSite=Lax; Path=/")
+                         f"gf={token}; HttpOnly; SameSite=Lax; Path=/{secure}")
         self.send_header("Location", "/")
         self.end_headers()
 

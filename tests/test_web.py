@@ -1212,3 +1212,17 @@ def test_the_pool_column_lists_are_qualified_for_their_joins():
     for cols in (read._GMAIL_COLUMNS, read._APP_COLUMNS):
         for piece in cols.split(","):
             assert piece.strip().startswith("r."), piece
+
+
+def test_the_session_cookie_is_secure_behind_the_https_proxy(web):
+    """Caddy terminates TLS on the domain and says so in X-Forwarded-Proto;
+    over the plain-http ssh tunnel the flag would hide the cookie."""
+    client = web()
+    _, headers, _ = client.request(
+        "POST", "/login", "username=mehdi&password=correct-horse",
+        headers={"X-Forwarded-Proto": "https"})
+    cookie = dict(headers)["Set-Cookie"]
+    assert "Secure" in cookie and "HttpOnly" in cookie
+    plain = web()
+    _, headers, _ = plain.login()
+    assert "Secure" not in dict(headers)["Set-Cookie"]
