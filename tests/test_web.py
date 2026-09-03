@@ -1201,3 +1201,14 @@ def test_the_stylesheet_never_breaks_a_quoted_string_across_lines(web):
     for line in style.splitlines():
         assert line.count("'") % 2 == 0 and line.count('"') % 2 == 0, line
     assert "'IBM Plex Mono'" in style and "'IBM Plex Sans'" in style
+
+
+def test_the_pool_column_lists_are_qualified_for_their_joins():
+    """Gmail Pool joins phones and Gpt Pool joins users; both tables have an
+    `id`, a `status`, an `updated_at`. An unqualified list made Postgres
+    answer "column reference is ambiguous" and the page 500 (2026-09-03)."""
+    from geelark_farm.web import read
+
+    for cols in (read._GMAIL_COLUMNS, read._APP_COLUMNS):
+        for piece in cols.split(","):
+            assert piece.strip().startswith("r."), piece

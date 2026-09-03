@@ -183,9 +183,14 @@ ROUTINE = {
 #: carries: not a verdict, so never "flagged".
 IMPORTED = "imported"
 
-_GMAIL_COLUMNS = ("id, address, status, serial, seller, purchased_on,"
-                  " used_at, note, updated_at, totp_secret <> '' AS has_totp,"
-                  " recovery_email <> '' AS has_recovery, source")
+#: Qualified with the alias `r`, because two of the queries join phones or
+#: users - both of which have an `id`, a `status`, an `updated_at` - and
+#: "column reference is ambiguous" took the Gmail Pool down (2026-09-03).
+#: Every query that uses these therefore reads `FROM resources r`.
+_GMAIL_COLUMNS = ("r.id, r.address, r.status, r.serial, r.seller,"
+                  " r.purchased_on, r.used_at, r.note, r.updated_at,"
+                  " r.totp_secret <> '' AS has_totp,"
+                  " r.recovery_email <> '' AS has_recovery, r.source")
 
 
 def gmail_pool(settings: Settings, view: str = "active",
@@ -218,14 +223,14 @@ def gmail_pool(settings: Settings, view: str = "active",
             (sorted(ROUTINE["gmail"]), IMPORTED))
         if view == "used":
             rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources"
+                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
                 " WHERE kind = 'gmail' AND status = 'used'"
                 " ORDER BY updated_at DESC LIMIT 200")
             return {"view": view, "counts": counts, "rows": rows,
                     "sellers": sellers}
         if view == "errored":
             rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources"
+                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
                 " WHERE kind = 'gmail' AND error IS NULL"
                 " AND NOT (status = ANY(%s)) AND status <> %s"
                 " AND (%s = '' OR lower(seller) = %s)"
@@ -241,7 +246,7 @@ def gmail_pool(settings: Settings, view: str = "active",
             " WHERE r.kind = 'gmail' AND r.status IN ('in_use', 'ready')"
             " ORDER BY r.updated_at DESC")
         queued = store._rows(
-            f"SELECT {_GMAIL_COLUMNS} FROM resources"
+            f"SELECT {_GMAIL_COLUMNS} FROM resources r"
             " WHERE kind = 'gmail' AND status = '' AND error IS NULL"
             " ORDER BY sheet_row NULLS LAST, id")
         broken = store._rows(
@@ -280,9 +285,9 @@ def proxy_pool(settings: Settings, unlisted: list | None = None) -> dict:
             "unlisted": unlisted or []}
 
 
-_APP_COLUMNS = ("id, address, status, serial, source, added_by, note,"
-                " updated_at, created_at, email_code_only,"
-                " totp_secret <> '' AS has_totp")
+_APP_COLUMNS = ("r.id, r.address, r.status, r.serial, r.source, r.added_by,"
+                " r.note, r.updated_at, r.created_at, r.email_code_only,"
+                " r.totp_secret <> '' AS has_totp")
 
 
 def gpt_pool(settings: Settings, view: str = "active", q: str = "",
