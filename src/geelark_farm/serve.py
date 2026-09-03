@@ -363,6 +363,16 @@ def _drain_actions(settings: Settings, book: Book, ledger,
         from .store import db as store_db
 
         with store_db.connect(settings) as conn:
+            if not controls_only:
+                # A row still `running` twice a build budget after it
+                # was taken belongs to a process that is gone. Its own
+                # guard: a fake or a failing statement here must not stop
+                # the drain.
+                try:
+                    store_actions.expire_running(
+                        conn, older_than=2 * settings.build_budget_seconds)
+                except Exception as exc:                          # noqa: BLE001
+                    log.debug("stale running rows not expired (%s)", exc)
             batch = store_actions.take_batch(conn,
                                              controls_only=controls_only)
             for action in batch:
@@ -462,6 +472,21 @@ def _settle_action(settings: Settings, action_id: int, jobs: list[dict],
     except Exception as exc:                                      # noqa: BLE001
         log.warning("web action %s could not be settled (%s); its row "
                     "stays running", action_id, exc)
+
+
+def _put_state(settings: Settings, key: str, value) -> None:
+    """One service_state key on its own short connection. Never fatal."""
+    if not settings.store_enabled:
+        return
+    try:
+        from .store import db as store_db
+        from .store import state as store_state
+
+        with store_db.connect(settings) as conn:
+            store_state.put(conn, key, value)
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("service_state %r was not written (%s)", key, exc)
 
 
 def _event(settings: Settings, kind: str, **fields) -> None:
@@ -1014,6 +1039,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     """
     from . import builder
 
+    began = time.monotonic()
     book = Book.open(settings)
     ledger = Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds)
@@ -1038,6 +1064,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
             "finished. Untick `Stop everything` to start again."))
         _show(book, settings, decision, warm=0, waiting=0, free=None,
               tripped="", failed=_failing(settings), needs="", held=True)
+        _put_state(settings, "pass", {
+            "stopped": True, "at": time.time(), "tripped": fuse.reason(),
+            "manual_login": settings.manual_login,
+            "failing": _failing(settings)})
         return decision
 
     paused = "Pause building" in asked
@@ -1126,11 +1156,22 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     _drain_actions(settings, book, ledger, client=client, launch=launch,
                    controls_only=False)
+    streak = fuse.seen() if callable(getattr(fuse, "seen", None)) else (0, [])
     _shadow(settings, book, decision, outcome, pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,
         "coming": coming, "claimed": claimed, "tripped": tripped,
         "free_slots": free, "manual_login": settings.manual_login,
-        "paused": paused, "at": time.time()})
+        "paused": paused, "at": time.time(),
+        # Why nothing is being built, in the keeper's own words, and
+        # how close the breaker is - the dashboard reads these rather
+        # than guessing from the numbers (C9 audit).
+        "warning": decision.warning or "",
+        "breaker_count": int(streak[0]), "breaker_reasons": list(streak[1]),
+        "breaker_limit": getattr(fuse, "limit", 5),
+        "failing": _failing(settings),
+        "unknown_running": len(outcome.get("unknown_running") or []),
+        "gmails_free": gmails, "exits_free": exits,
+        "took": round(time.monotonic() - began, 1)})
 
     if decision.jobs:
         # One call, one Book, one runner - never `finish_run` and `run` as two

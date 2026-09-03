@@ -1695,6 +1695,21 @@ class ServiceBoard:
             log.warning("could not untick %r on the %s tab (%s)",
                         name, SERVICE_TAB, exc)
 
+    def tick(self, name: str) -> bool:
+        """Tick one control - the web's spelling of the sheet's checkbox.
+        The pass reads it exactly as a hand would have ticked it, at the
+        top of its next turn. False if it could not."""
+        try:
+            row = self.CONTROLS.index(name) + 2
+            with self._lock:
+                self._ws.update([[True]], f"D{row}",
+                                value_input_option="USER_ENTERED")
+            return True
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not tick %r on the %s tab (%s)",
+                        name, SERVICE_TAB, exc)
+            return False
+
     def show(self, **fields: str) -> None:
         values = [[clip(str(fields.get(name, "")))] for name in self.ROWS]
         try:

@@ -47,6 +47,7 @@ def start(settings: Settings) -> ThreadingHTTPServer:
         pass
 
     Handler.settings = settings
+    pages.set_zone(settings.web_tz)
     server = ThreadingHTTPServer((settings.web_bind, settings.web_port),
                                  Handler)
     server.daemon_threads = True
@@ -185,8 +186,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.phone_story_page(story, user))
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                        user=user))
-        except Exception:                                         # noqa: BLE001
+        except Exception as exc:                                  # noqa: BLE001
             # A handler that leaks a traceback leaks whatever was in it.
+            if _store_down(exc):
+                log.warning("web: %s - the store is not answering (%s)",
+                            self.path, exc)
+                return self._html(503, pages.store_down_page())
             log.exception("web: %s failed", self.path)
             self._html(500, pages.page("Error", "<h2>Something broke - it "
                                                 "is in the server log</h2>"))
@@ -256,7 +261,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._cancel_action(user)
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                        user=user))
-        except Exception:                                         # noqa: BLE001
+        except Exception as exc:                                  # noqa: BLE001
+            if _store_down(exc):
+                log.warning("web: POST %s - the store is not answering (%s)",
+                            self.path, exc)
+                return self._html(503, pages.store_down_page(
+                    retry=(self.path, form)))
             log.exception("web: POST %s failed", self.path)
             self._html(500, pages.page("Error", "<h2>Something broke</h2>"))
 
@@ -304,7 +314,7 @@ class _Handler(BaseHTTPRequestHandler):
         from ..store import actions as store_actions
         from ..store.users import may
 
-        payload = dict(payload, by=user["username"])
+        payload = dict(payload, by=user["username"], by_id=user["id"])
         if not may(user, permission):
             store_actions.record_refused(
                 self.settings, verb=verb, payload=payload,
@@ -312,9 +322,21 @@ class _Handler(BaseHTTPRequestHandler):
                 reason=f"{user['username']} may not do this - permission "
                        f"{permission} is off")
             return self._redirect(f"{back}?said=refused")
-        store_actions.enqueue(self.settings, verb=verb, payload=payload,
-                              requested_by=user["id"], idem_key=idem)
-        self._redirect(f"{back}?said=queued")
+        # The same button pressed twice for the same thing is one
+        # request, not two the pass would refuse a minute apart.
+        needle = str(payload.get("serial") or payload.get("name")
+                     or payload.get("address") or "")
+        try:
+            twin = store_actions.pending_for(self.settings, verb=verb,
+                                             needle=needle)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("pending check skipped (%s)", exc)
+            twin = None
+        if twin is not None:
+            return self._redirect(f"{back}?said=already:{twin}")
+        req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
+                                    requested_by=user["id"], idem_key=idem)
+        self._redirect(f"{back}?said=queued:{req}")
 
     def _login_accounts(self, user: dict, addresses: list) -> None:
         """"Log in selected" (C6). Only meaningful with manual login on:
@@ -642,7 +664,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    # HEAD is GET without the body - what an uptime monitor sends. The
+    # stdlib answers 501 unless told otherwise (2026-09-03, on the domain).
+    do_HEAD = do_GET
 
     def _redirect(self, where: str) -> None:
         self.send_response(303)
@@ -653,6 +680,14 @@ class _Handler(BaseHTTPRequestHandler):
         # Into the real log, at DEBUG: request lines are tracing, and the
         # file handler keeps DEBUG while the console shows INFO.
         log.debug("web: " + fmt, *args)
+
+
+def _store_down(exc: BaseException) -> bool:
+    """psycopg's OperationalError, without importing psycopg here: a
+    connection refused or timed out is a page, not a traceback."""
+    return type(exc).__name__ == "OperationalError" or any(
+        type(c).__name__ == "OperationalError"
+        for c in (exc.__cause__, exc.__context__) if c is not None)
 
 
 def _ticks(field: dict) -> dict:

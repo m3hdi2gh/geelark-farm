@@ -103,6 +103,11 @@ STOP_POLL_SECONDS = 1.0
 #: a `reset` in a `finally` cannot.
 _run: ContextVar[str] = ContextVar("geelark_run", default=NO_BUILD)
 _build: ContextVar[int | str] = ContextVar("geelark_build", default=NO_BUILD)
+#: The phone a worker is on, once it has one. Stamped on every log record
+#: of that worker: the captured log lines carry the serial, so a page can
+#: show "what is phone 1556 doing right now" as the last line it logged -
+#: without the builder reporting anything extra.
+_serial: ContextVar[str] = ContextVar("geelark_serial", default=NO_BUILD)
 
 
 #: Where build events go, when anywhere. Injected by `serve` when the store
@@ -164,6 +169,8 @@ class BuildContextFilter(logging.Filter):
         record.build = _build.get()
         record.run = _run.get()
         record.row = record.build
+        if not getattr(record, "serial", ""):
+            record.serial = _serial.get()
         return True
 
 
@@ -808,6 +815,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
+        _serial.set(build.serial or NO_BUILD)
         # The first line of this phone's story (C8): born behind which
         # exit, for which address.
         _record_event("phone", "created", run_id=_run.get(), build=str(index),
@@ -1103,6 +1111,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         return build
 
     phone_id = build.phone_id
+    _serial.set(build.serial or NO_BUILD)
     try:
         if on_phone:
             on_phone(phone_id)
@@ -2704,6 +2713,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         finally:
             _build.reset(job_build)
             _run.reset(job_run)
+            _serial.set(NO_BUILD)
 
     def _run_job(index: int, job: dict) -> Build:
         if reporter:

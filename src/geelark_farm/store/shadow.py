@@ -82,7 +82,7 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
                         values.get("Times Used"))
             times_used = 0
         cur.execute(
-            "INSERT INTO resources (kind, sheet_row, status, host, port,"
+            "INSERT INTO resources AS r (kind, sheet_row, status, host, port,"
             " username, proxy_pass, proxy_name, last_exit_ip, note, error,"
             " serial, times_used, claimed_at)"
             " VALUES ('proxy', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
@@ -93,7 +93,15 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
             "  last_exit_ip = EXCLUDED.last_exit_ip, note = EXCLUDED.note,"
             "  error = EXCLUDED.error, serial = EXCLUDED.serial,"
             "  times_used = EXCLUDED.times_used,"
-            "  claimed_at = EXCLUDED.claimed_at, updated_at = now()",
+            "  claimed_at = EXCLUDED.claimed_at,"
+            # Stamped only when something moved: this runs every pass, and
+            # a stamp that moves every pass answers no page's "since when".
+            "  updated_at = CASE WHEN (r.status, r.proxy_name,"
+            "   r.last_exit_ip, r.note, r.error, r.serial, r.times_used,"
+            "   r.claimed_at) IS DISTINCT FROM (EXCLUDED.status,"
+            "   EXCLUDED.proxy_name, EXCLUDED.last_exit_ip, EXCLUDED.note,"
+            "   EXCLUDED.error, EXCLUDED.serial, EXCLUDED.times_used,"
+            "   EXCLUDED.claimed_at) THEN now() ELSE r.updated_at END",
             (row.sheet_row, status, proxy.host, proxy.port,
              proxy.username or "", proxy.password or "",
              (values.get("Name") or "").strip(),
@@ -105,7 +113,7 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
     if not address:
         return
     cur.execute(
-        "INSERT INTO resources (kind, sheet_row, status, address, password,"
+        "INSERT INTO resources AS r (kind, sheet_row, status, address, password,"
         " totp_secret, email_code_only, recovery_email, seller, serial,"
         " note, error, claimed_at, used_at, purchased_on)"
         " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -120,7 +128,12 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
         "  note = EXCLUDED.note,"
         "  error = EXCLUDED.error, claimed_at = EXCLUDED.claimed_at,"
         "  used_at = EXCLUDED.used_at,"
-        "  purchased_on = EXCLUDED.purchased_on, updated_at = now()",
+        "  purchased_on = EXCLUDED.purchased_on,"
+        "  updated_at = CASE WHEN (r.status, r.serial, r.note, r.error,"
+        "   r.claimed_at, r.used_at, r.seller) IS DISTINCT FROM"
+        "   (EXCLUDED.status, EXCLUDED.serial, EXCLUDED.note, EXCLUDED.error,"
+        "   EXCLUDED.claimed_at, EXCLUDED.used_at, EXCLUDED.seller)"
+        "   THEN now() ELSE r.updated_at END",
         (kind, row.sheet_row, status, address,
          creds.password if creds else "",
          creds.totp_secret if creds else "",
@@ -157,7 +170,7 @@ def _upsert_phones(cur, book) -> list[str]:
         live.append(serial)
         app_installed = _APP_MARKS.get((cells.get("App") or "").strip())
         cur.execute(
-            "INSERT INTO phones (serial, status, state, app_installed,"
+            "INSERT INTO phones AS p (serial, status, state, app_installed,"
             " gmail, app_account, proxy_name, tries, note)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (serial) WHERE done_at IS NULL"
@@ -166,7 +179,13 @@ def _upsert_phones(cur, book) -> list[str]:
             "  app_installed = EXCLUDED.app_installed,"
             "  gmail = EXCLUDED.gmail, app_account = EXCLUDED.app_account,"
             "  proxy_name = EXCLUDED.proxy_name, tries = EXCLUDED.tries,"
-            "  note = EXCLUDED.note, updated_at = now()",
+            "  note = EXCLUDED.note,"
+            "  updated_at = CASE WHEN (p.status, p.state, p.app_installed,"
+            "   p.gmail, p.app_account, p.proxy_name, p.tries, p.note)"
+            "   IS DISTINCT FROM (EXCLUDED.status, EXCLUDED.state,"
+            "   EXCLUDED.app_installed, EXCLUDED.gmail, EXCLUDED.app_account,"
+            "   EXCLUDED.proxy_name, EXCLUDED.tries, EXCLUDED.note)"
+            "   THEN now() ELSE p.updated_at END",
             (serial, (cells.get("Status") or "").strip(),
              _state_word(cells.get("State")), app_installed,
              book.phones.said(cells.get("Gmail", "")),

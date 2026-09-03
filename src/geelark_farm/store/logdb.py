@@ -53,6 +53,10 @@ PRUNE_EVERY = 24 * 3600
 _COLUMNS = frozenset({"run", "row", "build", "serial"})
 
 
+def _plain(value) -> str:
+    return "" if value in ("", None, NO_BUILD) else str(value)
+
+
 def _row(record: logging.LogRecord) -> tuple | None:
     """One record as the tuple the INSERT wants, or None to skip it."""
     if record.name == __name__:
@@ -77,7 +81,7 @@ def _row(record: logging.LogRecord) -> tuple | None:
         record.levelname, record.name,
         "" if run == NO_BUILD else str(run),
         "" if build == NO_BUILD else str(build),
-        str(getattr(record, "serial", "") or ""),
+        _plain(getattr(record, "serial", "")),
         machine(), text[:4000],
         json.dumps(extra, default=str) if extra else None,
     )

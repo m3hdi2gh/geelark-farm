@@ -770,7 +770,7 @@ def test_confirming_the_add_queues_the_rows_under_the_persons_name(
         _form(csrf=client.csrf(), seller="usa", idem="once-abc",
               rows="new@example.com\tpw2\tJBSWY3DPEHPK3PXP"))
     assert status == 303
-    assert dict(headers)["Location"] == "/pools/gmail?said=queued"
+    assert dict(headers)["Location"].startswith("/pools/gmail?said=queued")
     assert got["verb"] == "add_gmails" and got["idem_key"] == "once-abc"
     assert got["payload"]["seller"] == "usa"
     assert got["payload"]["by"] == "mehdi" and got["requested_by"] == 7
@@ -901,7 +901,7 @@ def test_log_in_selected_queues_every_ticked_account_in_one_command(
     status, headers, _ = client.request(
         "POST", "/accounts/login",
         f"csrf={client.csrf()}&addresses=a%40x.com&addresses=b%40x.com")
-    assert status == 303 and dict(headers)["Location"] == "/?said=queued"
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=queued")
     assert got["verb"] == "login_accounts"
     assert got["payload"]["addresses"] == ["a@x.com", "b@x.com"]
     assert got["payload"]["by"] == "mehdi"
@@ -922,9 +922,10 @@ def test_change_proxy_is_one_queued_command_for_that_serial(web, monkeypatch):
     client.login()
     status, headers, _ = client.request(
         "POST", "/phones/1500/proxy", f"csrf={client.csrf()}")
-    assert status == 303 and dict(headers)["Location"] == "/?said=queued"
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=queued")
     assert got["verb"] == "change_proxy"
-    assert got["payload"] == {"serial": "1500", "by": "mehdi"}
+    assert got["payload"]["serial"] == "1500"
+    assert got["payload"]["by"] == "mehdi"
 
 
 # ------------------------------------------------------ C7: Requests
@@ -1003,7 +1004,7 @@ def test_the_requests_page_reads_as_a_story_with_a_line_per_phone(
     assert "/requests/239/retry" not in body, "done is done"
     assert "running · 1" in body and "failed · 1" in body and "all · 4" in body
     assert "mine only" in body, "an admin can narrow to their own"
-    assert "18:06:12" in body, "asked, as a clock"
+    assert app_mod.pages._clock("2026-09-01 18:06:12+00:00") in body, \n        "asked, as a clock"
     assert "— 1m 04s" in body, "how long the failed change took"
     assert 'http-equiv="refresh"' in body
 
@@ -1035,7 +1036,7 @@ def test_retry_queues_a_failed_request_again(web, monkeypatch):
     status, headers, _ = client.request("POST", "/requests/238/retry",
                                         f"csrf={client.csrf()}")
     assert status == 303
-    assert dict(headers)["Location"] == "/requests?said=queued"
+    assert dict(headers)["Location"].startswith("/requests?said=queued")
     assert got == {"action_id": 238, "user_id": 7, "is_admin": True}
 
     monkeypatch.setattr(actions_mod, "retry", lambda s, **k: "not_failed")
@@ -1057,9 +1058,10 @@ def test_stop_this_one_is_one_queued_command_for_that_phone(web,
     status, headers, _ = client.request("POST", "/phones/1549/stop",
                                         f"csrf={client.csrf()}")
     assert status == 303
-    assert dict(headers)["Location"] == "/requests?said=queued"
+    assert dict(headers)["Location"].startswith("/requests?said=queued")
     assert got["verb"] == "stop_phone"
-    assert got["payload"] == {"serial": "1549", "by": "mehdi"}
+    assert got["payload"]["serial"] == "1549"
+    assert got["payload"]["by"] == "mehdi"
 
 
 # ------------------------------------------------ C8: events, logs, story
@@ -1226,3 +1228,16 @@ def test_the_session_cookie_is_secure_behind_the_https_proxy(web):
     plain = web()
     _, headers, _ = plain.login()
     assert "Secure" not in dict(headers)["Set-Cookie"]
+
+
+def test_head_answers_like_get_without_a_body(web):
+    """An uptime monitor sends HEAD; the stdlib handler said 501."""
+    import http.client
+
+    client = web()
+    conn = http.client.HTTPConnection("127.0.0.1", client.port, timeout=5)
+    conn.request("HEAD", "/login")
+    resp = conn.getresponse()
+    body = resp.read()
+    assert resp.status == 200 and body == b""
+    assert int(resp.getheader("Content-Length")) > 1000

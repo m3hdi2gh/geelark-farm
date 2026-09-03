@@ -37,15 +37,58 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
                 (verb, json.dumps(payload), requested_by, idem_key))
             new_id = cur.fetchone()[0]
             conn.commit()
-            return new_id
-        except Exception:                                         # noqa: BLE001
+        except Exception as exc:                                  # noqa: BLE001
             conn.rollback()
             cur = conn.execute("SELECT id FROM actions WHERE idem_key = %s",
                                (idem_key,))
             row = cur.fetchone()
-            if row is not None:
-                return row[0]
-            raise
+            if row is None:
+                raise
+            log.debug("enqueue of %s hit idem_key %s (%s); answering row %s",
+                      verb, idem_key, exc, row[0])
+            return row[0]
+    # Asking is an event too (C8): the dashboard ticker and the Events
+    # page say who asked for what, the moment they asked.
+    from . import events
+
+    events.emit(settings, "request", status="queued", user_id=requested_by,
+                serial=str(payload.get("serial") or ""),
+                detail=f"#{new_id} {verb}: asked by "
+                       f"{payload.get('by') or requested_by}")
+    return new_id
+
+
+def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
+    """The id of a queued or running row of this verb that names the
+    same thing (a serial, an exit, an address) - so a second press of
+    the same button says "already asked, #240" instead of queueing a
+    twin the pass would refuse a minute later."""
+    if not needle:
+        return None
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT id FROM actions WHERE verb = %s"
+            " AND status IN ('queued', 'running')"
+            " AND payload::text ILIKE %s ORDER BY id LIMIT 1",
+            (verb, f"%{needle}%"))
+    return int(rows[0]["id"]) if rows else None
+
+
+def expire_running(conn, *, older_than: float) -> int:
+    """Close rows a restart orphaned: still `running`, taken more than
+    `older_than` seconds ago, nothing ever settled them. The phones'
+    own stories say what became of the work; the row says why it is
+    not still spinning on the Requests page."""
+    cur = conn.execute(
+        "UPDATE actions SET status = 'failed', finished_at = now(),"
+        " result = 'the service restarted while this ran - see the"
+        " phones''' stories'"
+        " WHERE status = 'running'"
+        " AND executed_at < now() - make_interval(secs => %s)",
+        (float(older_than),))
+    closed = getattr(cur, "rowcount", 0) or 0
+    conn.commit()
+    return closed
 
 
 def record_refused(settings: Settings, *, verb: str, payload: dict,

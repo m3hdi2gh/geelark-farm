@@ -46,7 +46,8 @@ def snapshot(settings: Settings, owner_id: int | None = None) -> dict:
 
 
 def nav_counts(settings: Settings) -> dict:
-    """The four numbers the rail shows beside its links, one query."""
+    """The numbers the rail shows beside its links, plus the last pass's
+    pulse and the alerts it implies - one round trip, on every page."""
     with Store(settings) as store:
         rows = store._rows(
             "SELECT"
@@ -58,10 +59,71 @@ def nav_counts(settings: Settings) -> dict:
             " count(*) FILTER (WHERE kind = 'app' AND status = ''"
             "   AND error IS NULL) AS app,"
             " (SELECT count(*) FROM actions"
-            "   WHERE status IN ('queued', 'running')) AS pending"
+            "   WHERE status IN ('queued', 'running')) AS pending,"
+            " (SELECT count(*) FROM resources"
+            "   WHERE error IS NOT NULL) AS broken,"
+            " (SELECT count(*) FROM phones WHERE done_at IS NULL"
+            "   AND tries >= 3) AS given_up,"
+            " (SELECT value FROM service_state WHERE key = 'pass') AS pulse"
             " FROM resources")
-    return rows[0] if rows else {"gmail": 0, "proxy": 0, "app": 0,
-                                 "pending": 0}
+    counts = dict(rows[0]) if rows else {"gmail": 0, "proxy": 0, "app": 0,
+                                        "pending": 0, "broken": 0,
+                                        "given_up": 0, "pulse": None}
+    counts["pulse"] = counts.get("pulse") or {}
+    counts["needs"] = int(counts.get("broken") or 0) + int(
+        counts.get("given_up") or 0)
+    counts["alerts"] = alerts(counts["pulse"], counts)
+    return counts
+
+
+#: A pass older than this and every number on every page is stale.
+STALE_AFTER = 180
+
+
+def alerts(pulse: dict, counts: dict) -> list[dict]:
+    """What is wrong right now, as sentences with the page that fixes it.
+    Read off the last pass's pulse, never recomputed; empty when the
+    farm is simply running."""
+    import time as _time
+
+    found = []
+    pulse = pulse or {}
+    age = _time.time() - float(pulse.get("at") or 0) if pulse.get("at") else None
+    if pulse.get("stopped"):
+        found.append({"level": "bad", "href": "/",
+                      "text": "STOPPED from the sheet - nothing is synced, "
+                              "built or drained until Stop everything is "
+                              "unticked (or Start from the dashboard)."})
+    elif age is not None and age > STALE_AFTER:
+        minutes = int(age // 60)
+        found.append({"level": "warn", "href": "/events",
+                      "text": f"The last pass was {minutes}m ago. Every "
+                              f"number here is that old; queued requests "
+                              f"wait for the next one."})
+    if pulse.get("tripped"):
+        n, limit = pulse.get("breaker_count", 0), pulse.get("breaker_limit", 5)
+        why = ", ".join(pulse.get("breaker_reasons") or []) or "no reason recorded"
+        found.append({"level": "bad", "href": "/events?kind=builds",
+                      "text": f"The breaker is open ({n} of {limit} in a row: "
+                              f"{why}). Nothing is built until it is cleared."})
+    if pulse.get("paused"):
+        found.append({"level": "warn", "href": "/",
+                      "text": "Building is paused (Pause building is ticked)."})
+    if int(pulse.get("failing") or 0) > 0:
+        found.append({"level": "bad", "href": "/logs?level=ERROR",
+                      "text": f"{pulse['failing']} pass(es) in a row failed - "
+                              f"the log says why."})
+    if int(counts.get("gmail") or 0) == 0:
+        found.append({"level": "bad", "href": "/pools/gmail",
+                      "text": "The Gmail pool is empty. No new phone can be "
+                              "built until rows are added - building resumes "
+                              "on its own once stock arrives."})
+    if int(pulse.get("unknown_running") or 0) > 0:
+        found.append({"level": "warn", "href": "/needs",
+                      "text": f"{pulse['unknown_running']} phone(s) are running "
+                              f"that nothing accounts for - they are being "
+                              f"billed."})
+    return found
 
 
 def known(settings: Settings, kind: str) -> set[str]:

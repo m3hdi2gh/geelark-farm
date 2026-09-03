@@ -307,6 +307,9 @@ class Settings:
     #: way on first deploy, 2026-08-31). The host side of the publish is
     #: what keeps it private: compose pins it to the host's 127.0.0.1.
     web_bind: str = "127.0.0.1"
+    #: The zone the console's clocks are shown in. Every stamp in the store
+    #: is UTC; the people reading the pages are not.
+    web_tz: str = "Asia/Tehran"
     #: Stage 5: the mutation verbs. Off means every action POST answers 403
     #: and the serve drain never runs - the read-only web of stage 3,
     #: exactly.
@@ -373,6 +376,7 @@ class Settings:
                         in ("1", "true", "yes", "on"),
             web_port=_int("WEB_PORT", 8787),
             web_bind=_str("WEB_BIND", "127.0.0.1"),
+            web_tz=_str("WEB_TZ", "Asia/Tehran").strip() or "Asia/Tehran",
             web_mutations=_str("WEB_MUTATIONS", "0").strip()
                           in ("1", "true", "yes", "on"),
             web_user_admin=_str("WEB_USER_ADMIN", "0").strip()

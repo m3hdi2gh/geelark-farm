@@ -172,17 +172,17 @@ def offer_again(book, ledger, settings, payload, client):
     """Blank a set-aside account's status - the web's spelling of "clear
     the cell", with the person's name in the note."""
     address = (payload.get("address") or "").strip()
-    resource = book.apps.find(address)
+    pool = book.gmails if payload.get("kind") == "gmail" else book.apps
+    resource = pool.find(address)
     if resource is None:
-        return "failed", f"{address} is not in the Gpt Info tab", None
-    status = book.apps.status_of(resource)
-    settled = set(book.apps.available_statuses) | {
-        book.apps.claimed_status, book.apps.spent_status,
-        book.apps.retired_status}
+        return "failed", f"{address} is not in the {pool.tab} tab", None
+    status = pool.status_of(resource)
+    settled = set(pool.available_statuses) | {
+        pool.claimed_status, pool.spent_status, pool.retired_status}
     if status in settled:
         return ("refused", f"{address} is {status or 'free'}, not set "
                            f"aside - nothing to offer again", None)
-    book.apps.release(resource, note=(
+    pool.release(resource, note=(
         f"Offered again from the web by {_by(payload)} on {_stamp()} "
         f"(was {status})."))
     return "done", f"{address} is back in the pool", {"was": status}
@@ -225,6 +225,7 @@ def mark_proxy_free(book, ledger, settings, payload, client):
         f"{_stamp()}."))
     if exit_ip:
         book.proxies.record_exit(resource, exit_ip)
+    _stamp_test(settings, resource.name, True, exit_ip)
     return "done", f"{resource.name} is free again (exit {exit_ip})", None
 
 
@@ -234,6 +235,7 @@ def test_proxy(book, ledger, settings, payload, client):
         return refused
     ok, exit_ip, why = _test(book, client, resource)
     was = book.proxies.status_of(resource)
+    _stamp_test(settings, resource.name, ok, exit_ip)
     if ok:
         if was == book.proxies.dead_status:
             book.proxies.release(resource, note=(
@@ -271,9 +273,12 @@ def remove_proxy(book, ledger, settings, payload, client):
     if status in (book.proxies.spent_status, book.proxies.claimed_status):
         return ("refused", f"{resource.name} is {status} - a phone is behind "
                            f"it", None)
+    kept = {"name": resource.name,
+            "raw": (resource.values.get("Proxy String") or str(resource.proxy)),
+            "status": status, "note": resource.values.get("Note", "")}
     book.proxies.delete_row(resource)
     return ("done", f"{resource.name} removed from the pool (GeeLark still "
-                    f"holds it - remove it there by hand)", None)
+                    f"holds it - remove it there by hand)", {"removed": kept})
 
 
 # ------------------------------------------------------- the phones (C6)
@@ -410,8 +415,136 @@ def change_proxy(book, ledger, settings, payload, client):
             {"was": (row.get("Proxy") or "").strip(), "now": name})
 
 
+# ------------------------------------------------ the service (controls)
+_CONTROL = {
+    "pause": ("tick", "Pause building", "building pauses at the next pass"),
+    "resume": ("untick", "Pause building", "building resumes at the next pass"),
+    "clear_breaker": ("tick", "Clear breaker",
+                      "the breaker is cleared at the next pass"),
+    "stop": ("tick", "Stop everything",
+             "the service stops at the next pass - nothing synced, built or "
+             "finished until it is started again"),
+    "start": ("untick", "Stop everything", "the service starts again"),
+    "stop_unaccounted": ("tick", "Stop unaccounted phones",
+                         "phones nothing accounts for are stopped at the "
+                         "next quiet pass"),
+}
+
+
+def control(book, ledger, settings, payload, client):
+    """The Service tab's checkboxes, pressed from the web. Ticking is
+    all this does: the pass reads the tick at the top of its next turn
+    exactly as it reads a hand's, so the sheet and the web cannot
+    disagree about what was asked. Drained above the Stop check, so
+    "start" works while the service is stopped."""
+    what = str(payload.get("what") or "").strip()
+    plan = _CONTROL.get(what)
+    if plan is None:
+        return "refused", f"{what or '?'} is not a service control", None
+    board = getattr(book, "service", None)
+    if board is None:
+        return "failed", "the sheet has no Service tab to tick", None
+    move, name, said = plan
+    if move == "tick":
+        if not board.tick(name):
+            return "failed", f"could not tick {name} on the Service tab", None
+    else:
+        board.taken(name)
+    return ("done", f"{name} {'ticked' if move == 'tick' else 'unticked'} "
+                    f"by {_by(payload)}: {said}",
+            {"control": name, "move": move})
+
+
+# --------------------------------------------------------- phones by hand
+def set_phone_state(book, ledger, settings, payload, client):
+    """Write the State cell - taken / done / failed / (blank) - the way a
+    hand does in the sheet; the sync carries it out on the next pass.
+    A phone somebody takes is stamped with who took it in the mirror."""
+    serial = str(payload.get("serial") or "").strip()
+    state = str(payload.get("state") or "").strip().lower()
+    if state not in ("taken", "done", "failed", "", "unused"):
+        return "refused", f"{state!r} is not a State word", None
+    row = next((r for r in book.phones.rows()
+                if str(r.get("Serial") or "").strip() == serial), None)
+    if row is None:
+        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
+    if row.get("Status") == book.phones.BUILDING and state in ("done", "failed"):
+        return "refused", f"phone {serial} is being worked on right now", None
+    word = "" if state == "unused" else state
+    book.phones.write(serial, State=word)
+    if settings is not None and getattr(settings, "store_enabled", False):
+        try:
+            from .store import db as store_db
+
+            with store_db.connect(settings) as conn:
+                conn.execute(
+                    "UPDATE phones SET owner_id = %s, updated_at = now()"
+                    " WHERE serial = %s AND done_at IS NULL",
+                    (payload.get("by_id") if word == "taken" else None,
+                     serial))
+                conn.commit()
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("phone %s: owner not stamped (%s)", serial, exc)
+    meaning = {"taken": "out with somebody - the sync leaves it alone",
+               "done": "the sync deletes the phone and retires what was on it",
+               "failed": "the sync deletes the phone and frees its account",
+               "": "back on the shelf"}[word]
+    return ("done", f"phone {serial} marked {word or 'unused'} by "
+                    f"{_by(payload)}: {meaning}", {"state": word})
+
+
+def clear_tries(book, ledger, settings, payload, client):
+    """A given-up phone back in the queue: the Tries cell blanked, the
+    way the runbook says to do it by hand."""
+    serial = str(payload.get("serial") or "").strip()
+    if not book.phones.write(serial, **{book.phones.TRIES_COLUMN: ""}):
+        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
+    return ("done", f"phone {serial}: tries cleared by {_by(payload)} - it is "
+                    f"offered to the keeper again", None)
+
+
+def ignore_proxy(book, ledger, settings, payload, client):
+    """Stop reporting one exit GeeLark holds that the tab never heard of.
+    Kept in service_state, so it is a list a person can read and undo."""
+    who = ":".join(str(payload.get(k) or "") for k in ("host", "port", "username"))
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return "failed", "no store to remember it in", None
+    from .store import db as store_db
+    from .store import state as store_state
+
+    kept = list(store_state.get(settings, "ignored_proxies", []) or [])
+    if who not in kept:
+        kept.append(who)
+    with store_db.connect(settings) as conn:
+        store_state.put(conn, "ignored_proxies", kept)
+        conn.commit()
+    return "done", f"{who} is ignored - it stays in GeeLark, unreported", None
+
+
+def _stamp_test(settings, name: str, ok: bool, exit_ip: str) -> None:
+    """Remember when an exit was last tested and how it answered, for the
+    Proxy Pool's "last test" column. Never fatal."""
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import db as store_db
+        from .store import state as store_state
+
+        tests = dict(store_state.get(settings, "proxy_tests", {}) or {})
+        tests[name] = {"at": time.time(), "ok": ok, "exit": exit_ip}
+        with store_db.connect(settings) as conn:
+            store_state.put(conn, "proxy_tests", tests)
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("proxy test stamp for %s not kept (%s)", name, exc)
+
+
 VERBS = {
     "login_accounts": login_accounts,
+    "control": control,
+    "set_phone_state": set_phone_state,
+    "clear_tries": clear_tries,
+    "ignore_proxy": ignore_proxy,
     "change_proxy": change_proxy,
     "stop_phone": stop_phone,
     "add_gmails": add_gmails,

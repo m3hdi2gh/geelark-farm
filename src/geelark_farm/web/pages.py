@@ -229,6 +229,16 @@ label.field{{align-items:stretch}}
 .subrow td{{color:var(--dim);background:rgba(255,255,255,.015)}}
 .subrow td:first-child{{border-left:2px solid var(--line)}}
 p{{margin:0}}
+.alerts{{display:flex;flex-direction:column;gap:6px}}
+.alert{{display:block;padding:9px 14px;border-radius:8px;font-size:13px;
+ border:1px solid;color:var(--ink)}}
+.alert::before{{font-family:var(--mono);font-weight:600;margin-right:8px}}
+.alert.warn{{background:#1c1a15;border-color:#57431c}}
+.alert.warn::before{{content:"!";color:var(--amber)}}
+.alert.bad{{background:#201414;border-color:var(--red-bg)}}
+.alert.bad::before{{content:"!";color:var(--red)}}
+.alert:hover{{color:#fff}}
+tr.hi td{{background:rgba(127,180,255,.10)}}
 @media (max-width:900px){{
  .shell{{flex-direction:column}}
  nav{{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;
@@ -321,9 +331,24 @@ def page(title: str, body: str, *, user: dict | None = None,
         header = "".join(links)
     tag = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
            if refresh else "")
+    if user is not None:
+        body = _alert_strip(user) + body
     return _PAGE.format(title=esc(title), header=header, body=body,
                         favicon=_FAVICON, refresh=tag, alone="" if user is not None
                         else ' class="alone"')
+
+
+def _alert_strip(user: dict) -> str:
+    """What is wrong right now, on every page, one line each. Read off
+    the pulse the pass leaves (read.alerts); nothing when all is well."""
+    found = (user.get("nav") or {}).get("alerts") or []
+    if not found:
+        return ""
+    lines = "".join(
+        f'<a class="alert {esc(a.get("level", "warn"))}" '
+        f'href="{esc(a.get("href") or "/")}">{esc(a.get("text", ""))}</a>'
+        for a in found)
+    return f'<div class="alerts">{lines}</div>'
 
 
 def login(error: str = "") -> str:
@@ -352,6 +377,7 @@ _DASH_SAID = {
     "auto": "Manual login is off: accounts log in on their own on the next "
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
+    "already": "Already asked - that request is still pending:",
 }
 
 #: The Phones tab's status words as the dashboard's badge colours, and the
@@ -400,13 +426,89 @@ def _actor_bar(data: dict) -> str:
     return ' <span class="dim">·</span> '.join(bits)
 
 
-def _ago(stamp: float) -> str:
+def _ago(stamp) -> str:
+    """"14m ago", off a unix stamp or any timestamp the store hands back."""
+    if not isinstance(stamp, (int, float)):
+        moment = _as_dt(stamp)
+        if moment is None:
+            return ""
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=datetime.timezone.utc)
+        stamp = moment.timestamp()
     seconds = max(0, int(time.time() - float(stamp)))
     if seconds < 90:
         return f"{seconds}s ago"
     if seconds < 5400:
         return f"{seconds // 60}m ago"
-    return f"{seconds // 3600}h ago"
+    if seconds < 172800:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+#: The zone the clocks are shown in; `set_zone` is called once by app.start.
+_ZONE = datetime.timezone(datetime.timedelta(hours=3, minutes=30), "Tehran")
+
+
+def set_zone(name: str) -> None:
+    """Use an IANA zone for every clock on every page. A machine without
+    the zone database keeps the fixed Tehran offset rather than failing."""
+    global _ZONE
+    try:
+        from zoneinfo import ZoneInfo
+
+        _ZONE = ZoneInfo(name)
+    except Exception as exc:                                      # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "zone %r is not available (%s); clocks show Tehran +03:30", name, exc)
+
+
+def _moment(value) -> datetime.datetime | None:
+    moment = _as_dt(value)
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return moment.astimezone(_ZONE)
+
+
+def _when(value) -> str:
+    """A stamp the way a person says it: 'today 17:50', 'yesterday 02:40',
+    'Sep 1 09:12', and the year only when it is not this one."""
+    moment = _moment(value)
+    if moment is None:
+        return esc(str(value or "")[:16])
+    today = datetime.datetime.now(_ZONE).date()
+    day = moment.date()
+    if day == today:
+        return f"today {moment:%H:%M}"
+    if (today - day).days == 1:
+        return f"yesterday {moment:%H:%M}"
+    if day.year == today.year:
+        return f"{moment:%b} {moment.day} {moment:%H:%M}"
+    return f"{moment:%Y-%m-%d %H:%M}"
+
+
+def _clock(value) -> str:
+    """HH:MM:SS in the owner's zone (a bare string passes through)."""
+    moment = _moment(value)
+    if moment is None:
+        text = str(value or "")
+        return esc(text[11:19] if len(text) >= 19 else text[:19])
+    return f"{moment:%H:%M:%S}"
+
+
+def _day(value) -> str:
+    moment = _moment(value)
+    if moment is None:
+        return esc(str(value or "")[:10])
+    today = datetime.datetime.now(_ZONE).date()
+    if moment.date() == today:
+        return "today"
+    if (today - moment.date()).days == 1:
+        return "yesterday"
+    return f"{moment:%Y-%m-%d}"
 
 
 def dashboard(data: dict, user: dict, said: str = "",
@@ -656,6 +758,7 @@ _SAID = {
     "not_yours": "That request is not yours to touch.",
     "not_failed": "Only a failed request can be retried.",
     "refused": "You may not do that - ask an admin for the permission.",
+    "already": "Already asked - that request is still pending:",
 }
 
 #: The pills above the list, in order. "" is everything.
@@ -790,11 +893,6 @@ def _took(row: dict) -> str:
     if ended is None:
         return ""
     return _span((ended - started).total_seconds())
-
-
-def _clock(value) -> str:
-    text = str(value or "")
-    return esc(text[11:19] if len(text) >= 19 else text[:19])
 
 
 def requests_page(rows: list[dict], user: dict, said: str = "", *,
@@ -1049,6 +1147,7 @@ _POOL_SAID = {
     "bad": "That account was refused at the form - check the address, the "
            "password and the secret.",
     "gone": "That exit is no longer in GeeLark's list - nothing to adopt.",
+    "already": "Already asked - that request is still pending:",
 }
 
 
@@ -1063,13 +1162,17 @@ def _csrf(user: dict) -> str:
             f'value="{esc(user.get("csrf", ""))}">')
 
 
-def _when(value) -> str:
-    return esc(str(value or "")[:16])
-
-
 def _said(said: str, table: dict) -> str:
-    note = table.get(said, "")
-    return f'<p class="said">{esc(note)}</p>' if note else ""
+    """The banner for a ?said= token. `queued:241` names the request the
+    press became, and the banner links to it."""
+    word, _, req = (said or "").partition(":")
+    note = table.get(word, "")
+    if not note:
+        return ""
+    if word in ("queued", "already") and req.isdigit():
+        return (f'<p class="said">{esc(note)} <a href="/requests?hi={req}">'
+                f'#{req} on Requests</a></p>')
+    return f'<p class="said">{esc(note)}</p>'
 
 
 def _kind_2fa(row: dict) -> str:
@@ -1520,16 +1623,6 @@ def proxy_preview(rows: list[dict], user: dict, idem: str) -> str:
 
 
 # ------------------------------------------------- events, logs, story (C8)
-def _clock(value) -> str:
-    """HH:MM:SS off a timestamp, whatever type the store handed back."""
-    text = str(value or "")
-    return esc(text[11:19]) if len(text) >= 19 else esc(text)
-
-
-def _day(value) -> str:
-    return esc(str(value or "")[:10])
-
-
 def _event_badge(row: dict) -> str:
     kind, status = row.get("kind") or "", str(row.get("status") or "")
     if kind == "build_finished":
@@ -1765,3 +1858,26 @@ def confirm_page(user: dict, *, title: str, text: str, action: str,
             f'<a class="btn quiet" href="{esc(back)}" style="padding:9px 16px;'
             f'font-size:13.5px">Keep it</a></form></div>')
     return page(title, body, user=user, here=back)
+
+
+# ---------------------------------------------------------- store is down
+def store_down_page(retry: tuple | None = None) -> str:
+    """The cluster did not answer. Nothing was read or queued; say so,
+    keep what the person typed, and try again in half a minute."""
+    again = ""
+    if retry:
+        path, form = retry
+        hidden = "".join(
+            f'<input type="hidden" name="{esc(k)}" value="{esc(str(v))}">'
+            for k, vs in (form or {}).items() for v in (vs or [])
+            if k != "csrf")
+        again = (f'<form method="post" action="{esc(path)}">{hidden}'
+                 f'<p class="hint">Your form is kept here - press to send '
+                 f'it again once the store is back.</p>'
+                 f'<button class="quiet">Try again</button></form>')
+    body = (f'<div class="card" style="width:min(560px,100%)">'
+            f'<h2>The store is not answering</h2>'
+            f'<p class="muted">Nothing was read or queued. The service on '
+            f'the server keeps building from the sheet; this page retries '
+            f'in 30 seconds.</p>{again}</div>')
+    return page("Store down", body, refresh=30)
