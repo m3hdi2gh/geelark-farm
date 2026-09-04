@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import phones, screen, shell
+from .. import accounts, phones, screen, shell
 from ..accounts import Account
 from ..api import Client
 from . import router
@@ -676,7 +676,7 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
     present = shell.device_accounts(client, phone_id)
-    if account.email.lower() in present:
+    if any(accounts.same_google_account(account.email, a) for a in present):
         return Outcome("success", "already_signed_in", f"accounts: {present}")
     if present:
         # A different account on a device we are about to sign into is a
@@ -709,7 +709,11 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
         # Not strict: this is a poll, and an empty answer here means "not
         # yet". Raising over one refused `dumpsys` would end the login.
         present = shell.device_accounts(client, phone_id, strict=False)
-        if account.email.lower() in present:
+        # Compared as Google compares them, not as strings. The sheet holds
+        # `ethicishant123@gmail.com` and the device answers
+        # `ethic.ishant123@gmail.com`; a literal `in` says no to both, and did,
+        # for every build of 2026-09-04.
+        if any(accounts.same_google_account(account.email, a) for a in present):
             return Outcome("success", "signed_in",
                            f"{account.email} is on the device")
         return None

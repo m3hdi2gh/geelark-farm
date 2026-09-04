@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from geelark_farm import accounts
 from geelark_farm.accounts import AccountError, Credentials
 
 # A key pyotp accepts, from its own documentation.
@@ -159,3 +160,34 @@ def test_no_code_can_be_produced_without_a_secret():
     message = str(caught.value)
     assert "no authenticator secret" in message
     assert "a@example.com" in message, "which account is the useful half"
+
+
+# ------------------------------------- the dots that cost a day of builds
+def test_gmail_ignores_dots_and_so_does_the_comparison():
+    """The sheet holds one spelling and Google reports another.
+
+    `ethicishant123@gmail.com` and `ethic.ishant123@gmail.com` are one Google
+    account. `signed_in` compared them as strings, so every build of
+    2026-09-04 signed in perfectly, was told the address was not on the device,
+    waited out its visits and had its phone deleted underneath it with the
+    account sitting on it (builds 1707-1711).
+    """
+    assert accounts.same_google_account("ethicishant123@gmail.com",
+                                        "ethic.ishant123@gmail.com")
+    assert accounts.same_google_account("Ethicnew01@gmail.com",
+                                        "ethic.new.01@gmail.com")
+    assert accounts.same_google_account("a@gmail.com", "a@googlemail.com")
+
+
+def test_a_plus_tag_is_the_same_mailbox():
+    assert accounts.same_google_account("x+farm@gmail.com", "x@gmail.com")
+
+
+def test_two_different_accounts_stay_different():
+    assert not accounts.same_google_account("a@gmail.com", "b@gmail.com")
+
+
+def test_dots_are_folded_only_on_googles_own_domains():
+    """Everywhere else a dot is part of the name, and folding it would merge
+    two real mailboxes into one."""
+    assert not accounts.same_google_account("a.b@example.com", "ab@example.com")

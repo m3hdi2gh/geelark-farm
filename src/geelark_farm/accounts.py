@@ -40,6 +40,37 @@ BASE32_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 INVISIBLE = "​‌‍⁠﻿ ㅤ⠀᠎"
 
 
+#: Google treats these two domains as one mailbox, and both ignore dots.
+GOOGLE_DOMAINS = ("gmail.com", "googlemail.com")
+
+
+def same_google_account(one: str, other: str) -> bool:
+    """Whether two spellings are the same Google account.
+
+    Gmail ignores dots in the name and everything after a `+`, so
+    `ethicishant123@gmail.com` and `ethic.ishant123@gmail.com` are one account
+    - and Google reports the dotted spelling back whatever the sheet holds.
+
+    Comparing the two literally is why a whole day of builds signed in
+    perfectly and were recorded as failures. `signed_in` asked "is the address
+    I was given on this device", the device said `ethic.ishant123@gmail.com`,
+    the sheet said `ethicishant123@gmail.com`, and the answer was no - for four
+    and a half minutes, until the visits ran out and the phone was deleted with
+    the account sitting on it (2026-09-04, builds 1707-1711).
+    """
+    return _canonical(one) == _canonical(other)
+
+
+def _canonical(address: str) -> str:
+    name, _, domain = (address or "").strip().lower().partition("@")
+    if domain not in GOOGLE_DOMAINS:
+        return f"{name}@{domain}"
+    # Only Google's own domains, because dots and `+` mean nothing special
+    # everywhere else and folding them there would merge two real addresses.
+    name = name.partition("+")[0].replace(".", "")
+    return f"{name}@gmail.com"
+
+
 def normalize_totp_secret(raw: str) -> str:
     """Google shows the key lowercase in groups of four; base32 wants
     uppercase, unspaced and unpadded."""
