@@ -79,7 +79,10 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # deserved a name of its own rather than the `unknown_screen` four builds
     # were failed as while Google was still adding the account (2026-09-04).
     assert "stuck_on_sign_in_closed" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 20
+    # The twenty-first is `passkey_unavailable`: a dialog that will not close
+    # would leave the flow tapping OK at it for good, so it gets a name too.
+    assert "stuck_on_passkey_unavailable" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 21
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

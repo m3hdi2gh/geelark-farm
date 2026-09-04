@@ -201,6 +201,32 @@ def test_the_verify_heading_alone_does_not_claim_a_page():
     assert matched_screen(ctx).name != "2fa_security_code_prompt"
 
 
+def test_the_passkey_dead_end_is_closed_rather_than_called_unknown():
+    """Found by eye before it was found in a log.
+
+    "Try another way" now offers a passkey among the ways to verify, and on a
+    phone that has none it ends in a dialog: "There aren't any passkeys for
+    google.com on this device", with OK and "Use a different device". Neither
+    is a dismiss label, so the run sat on a dialog one tap would have closed
+    and reported `unknown_screen` (2026-09-04, build 1695).
+    """
+    ctx = context_from("google-no-passkeys.xml")
+
+    matched = matched_screen(ctx)
+    assert matched is not None, "one tap closes this"
+    assert matched.name == "passkey_unavailable"
+    assert matched.act is login.act_close_passkey_dialog
+
+
+def test_ok_is_not_a_dismiss_label():
+    """The cheap fix would have been to add "OK" to the dismiss labels, and it
+    would have been wrong: this flow taps by label wherever it finds one, and
+    OK sits on dialogs where pressing it agrees to something. The passkey
+    dialog gets its own entry so that only it is answered with OK."""
+    assert "OK" not in login.DISMISS_LABELS
+    assert "Ok" not in login.DISMISS_LABELS
+
+
 def test_the_real_email_screen_still_matches():
     """The counterweight to tightening it. Google's email page is identified by
     text unique to it, so removing "sign in" must not cost us the page itself.

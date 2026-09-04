@@ -453,6 +453,21 @@ def act_try_another_way(ctx: Context) -> Outcome | None:
     return None
 
 
+def act_close_passkey_dialog(ctx: Context) -> Outcome | None:
+    """Close Google's passkey dead end and let the method list be read again.
+
+    "OK" deliberately, never "Use a different device": there is no other
+    device, and the only way on from here is back to the list of ways to
+    verify. "OK" is also not a dismiss label and must not become one - it sits
+    on dialogs where pressing it agrees to something, and this flow taps by
+    label wherever it finds one.
+    """
+    if ctx.tap("OK"):
+        log.info("closed the passkey dialog; back to the ways to verify")
+        time.sleep(3)
+    return None
+
+
 def act_dismiss(ctx: Context) -> Outcome | None:
     tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
                                       DISMISS_LABELS)
@@ -474,6 +489,21 @@ SCREENS: list[Screen] = [
     # of waiting a little too long is seconds, and the cost of acting too early
     # is a whole login.
     Screen("loading", is_loading, act_wait, max_visits=20),
+
+    # A modal over whatever it was opened from, so it outranks the pages
+    # underneath - whose text is still in the blob and would otherwise claim
+    # the screen.
+    #
+    # "Try another way" now offers a passkey among the ways to verify, and
+    # choosing it on a phone that has none ends here: "There aren't any
+    # passkeys for google.com on this device", with OK and "Use a different
+    # device". Neither is a dismiss label, so the dialog matched nothing at all
+    # and the run reported `unknown_screen` while sitting on a dialog one tap
+    # would have closed (2026-09-04, build 1695 - seen by hand first, which is
+    # how it was found).
+    Screen("passkey_unavailable",
+           lambda c: c.has("no passkeys available", "aren't any passkeys"),
+           act_close_passkey_dialog, max_visits=3),
 
     # Google's generic stumble, which prints its own remedy. Above the acting
     # screens because the page underneath it is not the page it claims to be.
