@@ -349,6 +349,10 @@ ALTER TABLE resources ADD COLUMN IF NOT EXISTS failures         integer NOT NULL
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS customer_ready   boolean NOT NULL DEFAULT false;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS state_changed_at timestamptz;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS delivered_at     timestamptz;
+-- Taken back by the panel. Its own column rather than a status word: while
+-- the sheet is authoritative the mirror rewrites `status` every pass, so a
+-- word written here would last half a minute.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS withdrawn_at     timestamptz;
 -- The panel's own reference is the account's public id, so it must be one
 -- row exactly. Partial, like the other two identities on this table.
 CREATE UNIQUE INDEX IF NOT EXISTS resources_panel_ref

@@ -1426,6 +1426,10 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return (_CONTROL_SAID.get(what)
                 or (CONTROLS.get(what) or {}).get("label")
                 or what or "Control"), ""
+    if verb == "add_panel_account":
+        return f"Add {p.get('ref', '?')}", "from the customer panel"
+    if verb == "withdraw_panel_account":
+        return f"Withdraw {p.get('ref', '?')}", "the panel took it back"
     if verb == "edit_gmail":
         return f"Edit {p.get('address', '?')}", "in the Gmails tab"
     if verb == "remove_gmail":

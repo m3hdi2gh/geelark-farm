@@ -11,8 +11,8 @@ The state a client is told is a VIEW over the pool's own status word, never
 a second status column. While the sheet is authoritative the mirror rewrites
 `resources.status` from the Gpt Info tab every thirty seconds, so a status
 this side wrote would last half a minute; the columns this API owns are the
-ones shadow._upsert_resource does not name, and they are all this module
-writes to (it writes nothing at all - stage A is reads).
+ones shadow._upsert_resource does not name. This module only reads them -
+api_v1_write is the half that changes anything.
 
 Timestamps come out of psycopg as aware datetimes and leave here that way.
 RFC 3339 is the serializer's business, at the edge, because the console's
@@ -33,8 +33,8 @@ log = logging.getLogger(__name__)
 
 #: Every state a client can be told, in the order an account travels. The
 #: vocabulary is fixed here even where nothing can reach a word yet:
-#: `needs_code` and `withdrawn` arrive with the code path, and a client that
-#: learns them now will not need a new release to understand them.
+#: `needs_code` arrives with the code path, and a client that learns it now
+#: will not need a new release to understand it.
 API_STATES = ("queued", "waiting_customer", "blocked", "signing_in",
               "needs_code", "ready", "delivered", "needs_human",
               "invalid", "withdrawn")
@@ -48,7 +48,6 @@ _DIRECT = {
     # Written by the code path, which does not exist yet (stage D). Named
     # now so the word means the same thing on the day it is first written.
     "needs_code": "needs_code",
-    "withdrawn": "withdrawn",
 }
 
 #: What the panel may send, and what the farm can actually carry out today.
@@ -69,7 +68,7 @@ _ASKS_A_PERSON = "email_code_customer"
 _ACCOUNT_COLUMNS = (
     "r.id, r.address, r.status, r.error, r.serial, r.note, r.source,"
     " r.product, r.credential_kind, r.panel_ref, r.client_id,"
-    " r.attempts, r.failures, r.customer_ready,"
+    " r.attempts, r.failures, r.customer_ready, r.withdrawn_at,"
     " r.state_changed_at, r.delivered_at, r.created_at, r.updated_at"
 )
 
@@ -93,6 +92,11 @@ def state_of(row: dict) -> str:
     refused is `invalid` whatever its status says, because it is not stock
     and nothing will ever claim it.
     """
+    # Taken back by the panel, and its own column rather than a status
+    # word: the mirror rewrites `status` from the sheet every pass, so a
+    # word written there would last half a minute.
+    if row.get("withdrawn_at"):
+        return "withdrawn"
     if row.get("error"):
         return "invalid"
     status = str(row.get("status") or "").strip().lower()

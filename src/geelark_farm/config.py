@@ -340,6 +340,11 @@ class Settings:
     #: the verbs that hand the farm an account arrive behind their own
     #: switch, the way WEB_MUTATIONS came after WEB_ENABLED.
     web_api: bool = False
+    #: C9 stage B: and now the writing half - a client may hand the farm an
+    #: account, say a customer is ready, or take one back. Off = every one
+    #: of those is 405 and the door still reads. Needs web_api as well: this
+    #: switches on part of that door, it does not open one of its own.
+    web_api_writes: bool = False
 
 
     @classmethod
@@ -393,6 +398,8 @@ class Settings:
                          in ("1", "true", "yes", "on"),
             log_db=_str("LOG_DB", "0").strip() in ("1", "true", "yes", "on"),
             web_api=_str("WEB_API", "0").strip() in ("1", "true", "yes", "on"),
+            web_api_writes=_str("WEB_API_WRITES", "0").strip()
+                            in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

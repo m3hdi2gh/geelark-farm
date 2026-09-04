@@ -1049,6 +1049,18 @@ class _Handler(BaseHTTPRequestHandler):
     # stdlib answers 501 unless told otherwise (2026-09-03, on the domain).
     do_HEAD = do_GET
 
+    def do_DELETE(self) -> None:
+        """Only the API has anything to delete. The console says what it
+        means with a form and a confirm page, and the stdlib's own answer
+        to an unknown method is a 501 in HTML - which a client parsing
+        JSON cannot read (2026-09-05)."""
+        path = self.path.split("?")[0]
+        if path.startswith("/api/"):
+            return api_v1.dispatch(self, path)
+        self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _redirect(self, where: str) -> None:
         self.send_response(303)
         self.send_header("Location", where)

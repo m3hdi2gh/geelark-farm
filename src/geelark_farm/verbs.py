@@ -430,6 +430,96 @@ def remove_gmail(book, ledger, settings, payload, client):
             {"removed": kept})
 
 
+def _panel_row(settings, ref: str):
+    """The row the panel named, read from the store.
+
+    The credentials are fetched here rather than carried in the request:
+    a request is rendered on a page, and a password in a payload is a
+    password on a page - which is true of the console's own add today and
+    is not a thing to copy.
+    """
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return None
+    from .store import db as store_db
+
+    with store_db.connect(settings) as conn:
+        rows = conn.execute(
+            "SELECT address, password, totp_secret, email_code_only"
+            " FROM resources WHERE kind = 'app' AND panel_ref = %s",
+            (ref,)).fetchall()
+    if not rows:
+        return None
+    address, password, secret, code_only = rows[0]
+    return {"address": address or "", "password": password or "",
+            "secret": secret or "", "email_code_only": bool(code_only)}
+
+
+def _panel_broke(settings, ref: str, why: str) -> None:
+    """Say on the row itself that it never reached the tab, so the panel
+    reads `invalid` with the reason rather than a queue that never moves.
+
+    Safe to write `error` here precisely because this row has no sheet
+    twin - the append is what would have made one. Once it does have one
+    the mirror owns that column again, which is correct: the sheet's
+    verdict is the one that matters then.
+    """
+    from .store import db as store_db
+
+    try:
+        with store_db.connect(settings) as conn:
+            conn.execute("UPDATE resources SET error = %s, updated_at = now()"
+                         " WHERE kind = 'app' AND panel_ref = %s", (why, ref))
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("panel account %s: the refusal was not written (%s)",
+                    ref, exc)
+
+
+def add_panel_account(book, ledger, settings, payload, client):
+    """The panel's account, from the store into the tab the keeper reads.
+
+    The API already wrote the row - it had to, so that a GET straight
+    after the POST finds it - and this is the half only a pass may do.
+    The next mirror pass then recognises the row by its address and fills
+    in the sheet_row, keeping the id and every column the API owns.
+    """
+    ref = str(payload.get("ref") or "").strip()
+    row = _panel_row(settings, ref)
+    if row is None:
+        return "failed", f"{ref or '?'} is not a row in the store", None
+    if book.apps.find(row["address"]) is not None:
+        # Already in the tab: the mirror will adopt the store row on its
+        # next pass, so this is done, not failed.
+        return ("done", f"{row['address']} was already in the "
+                        f"{book.apps.tab} tab", {"ref": ref})
+    book.apps.append(**{
+        "Address": row["address"], "Password": row["password"],
+        "2FA Secret": row["secret"], "Status": "",
+        "Email code": "TRUE" if row["email_code_only"] else "FALSE",
+        "Note": f"From the customer panel ({ref}) on {_stamp()}."})
+    return ("done", f"{row['address']} added to the {book.apps.tab} tab "
+                    f"for {ref}", {"ref": ref, "address": row["address"]})
+
+
+def withdraw_panel_account(book, ledger, settings, payload, client):
+    """Taken back. Out of the tab if it reached it, and left in the store
+    stamped withdrawn - the panel keeps its history of what it sent."""
+    ref = str(payload.get("ref") or "").strip()
+    row = _panel_row(settings, ref)
+    if row is None:
+        return "failed", f"{ref or '?'} is not a row in the store", None
+    resource = book.apps.find(row["address"])
+    if resource is None:
+        return "done", f"{ref} was not in the tab; nothing to take out", None
+    status = book.apps.status_of(resource)
+    if status in (book.apps.claimed_status, book.apps.spent_status):
+        return ("refused", f"{row['address']} is {status} - a phone is "
+                           f"behind it", None)
+    book.apps.delete_row(resource)
+    return ("done", f"{row['address']} taken out of the {book.apps.tab} tab",
+            {"ref": ref})
+
+
 def stop_phone(book, ledger, settings, payload, client):
     """"Stop this one": the job on one phone gives up at its next step,
     the way an interrupt would, and puts back what it held."""
@@ -696,6 +786,8 @@ VERBS = {
     "edit_gmail": edit_gmail,
     "remove_gmail": remove_gmail,
     "add_gpt": add_gpt,
+    "add_panel_account": add_panel_account,
+    "withdraw_panel_account": withdraw_panel_account,
     "add_proxies": add_proxies,
     "adopt_proxy": adopt_proxy,
     "offer_again": offer_again,

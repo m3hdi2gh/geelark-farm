@@ -187,6 +187,7 @@ def account_json(row: dict) -> dict:
         "state_changed_at": rfc3339(row.get("state_changed_at")
                                     or row.get("updated_at")),
         "delivered_at": rfc3339(row.get("delivered_at")),
+        "withdrawn_at": rfc3339(row.get("withdrawn_at")),
         "updated_at": rfc3339(row.get("updated_at")),
     }
 
@@ -228,9 +229,10 @@ def dispatch(handler, path: str) -> None:
 
 
 def _serve(handler, settings, path: str) -> None:
-    if handler.command not in ("GET", "HEAD"):
-        # Stage A is reads. A write arrives with its own switch.
-        return _error(handler, 405, "not_allowed", "this door reads only")
+    # Read whatever was sent before answering anything. A body left in the
+    # socket while the reply goes out aborts the connection on Windows and
+    # confuses keep-alive everywhere else (2026-09-05).
+    handler.api_body = _drain(handler)
     token = _bearer(handler)
     prefix = token[:PREFIX_LEN]
     if not token:
@@ -247,6 +249,17 @@ def _serve(handler, settings, path: str) -> None:
     query = parse_qs(handler.path.partition("?")[2])
     first = {k: v[0] for k, v in query.items()}
     rest = path[len("/api/v1"):] if path.startswith("/api/v1") else ""
+
+    if handler.command in ("POST", "DELETE"):
+        if not getattr(settings, "web_api_writes", False):
+            return _error(handler, 405, "not_allowed",
+                          "this door reads only")
+        if client["role"] != "panel":
+            return _error(handler, 403, "forbidden",
+                          "this key may not change accounts")
+        return _write(handler, settings, client, rest)
+    if handler.command not in ("GET", "HEAD"):
+        return _error(handler, 405, "not_allowed", "no such method here")
 
     if rest == "/health":
         return _json(handler, 200, api_read.health(settings))
@@ -288,3 +301,126 @@ def mint_key() -> tuple[str, bytes, str]:
 
     token = secrets.token_urlsafe(32)
     return token, hash_key(token), token[:PREFIX_LEN]
+
+
+# ------------------------------------------------------------- the writes
+#: How much of a body this door will read. A client with something larger
+#: to say is saying it wrong, and an unbounded read on a thread per
+#: connection is a way to spend this box's memory.
+MAX_BODY = 64 * 1024
+
+
+def _drain(handler) -> bytes:
+    """Everything the client sent, read off the socket at once and kept.
+
+    Read even when the answer will not need it - a request body left
+    unread is a connection the client cannot reuse and, on Windows, one
+    the reply never reaches. Bounded: what is over the limit is read and
+    thrown away, so the socket is clean and the answer is still a 422.
+    """
+    length = int(handler.headers.get("Content-Length") or 0)
+    if length <= 0:
+        return b""
+    raw = handler.rfile.read(min(length, MAX_BODY + 1))
+    left = length - len(raw)
+    while left > 0:                          # over the limit: drain it away
+        chunk = handler.rfile.read(min(left, 64 * 1024))
+        if not chunk:
+            break
+        left -= len(chunk)
+    return raw
+
+
+def _body(handler) -> dict:
+    """The JSON a client sent, or Refused. Bounded, and an object at the
+    top level - a bare list or a number is not a request this door knows."""
+    from .api_v1_write import Refused
+
+    raw = getattr(handler, "api_body", b"")
+    if len(raw) > MAX_BODY:
+        raise Refused(f"at most {MAX_BODY} bytes", "body")
+    try:
+        got = json.loads(raw.decode("utf-8")) if raw else {}
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise Refused(f"JSON: {exc}", "body") from exc
+    if not isinstance(got, dict):
+        raise Refused("an object", "body")
+    return got
+
+
+def _write(handler, settings, client: dict, rest: str) -> None:
+    """POST and DELETE, with the idempotency wrapper around all of them.
+
+    The key is read first and answered from the store when it has been
+    seen: a retry is one request, byte for byte, which is the whole point
+    of the header. Without one the write still runs - a client that does
+    not send a key gets no protection, and saying so with a 400 would
+    stop a panel that simply has not added it yet.
+    """
+    from . import api_v1_write as api_write
+
+    key = (handler.headers.get("Idempotency-Key") or "").strip()[:200]
+    if key:
+        seen = api_write.replay(settings, client_id=client["id"], key=key)
+        if seen is not None:
+            return _json(handler, seen["status"], seen["body"],
+                         headers=(("Idempotent-Replayed", "true"),))
+    try:
+        code, body = _do_write(handler, settings, client, rest)
+    except api_write.Refused as exc:
+        return _error(handler, 422, "invalid", str(exc), field=exc.field)
+    if key and code < 500:
+        api_write.remember(settings, client_id=client["id"], key=key,
+                           method=handler.command, path=rest,
+                           status=code, body=body)
+    return _json(handler, code, body)
+
+
+def _do_write(handler, settings, client: dict, rest: str):
+    """One write, as (status, body). Raises Refused for a bad payload."""
+    from . import api_v1_write as api_write
+
+    if rest == "/accounts" and handler.command == "POST":
+        row = api_write.judge(_body(handler))
+        made = api_write.create(settings, row, client_id=client["id"])
+        if isinstance(made, str):
+            which = "ref" if made == "already_ref" else "address"
+            return 409, {"error": {
+                "code": "already_exists",
+                "message": f"an account with that {which} is already here"}}
+        api_write.enqueue(
+            settings, verb="add_panel_account", payload={"ref": row["panel_ref"]},
+            client_id=client["id"],
+            idem=f"add:{row['panel_ref']}")
+        return 201, account_json(made)
+
+    if rest.startswith("/accounts/"):
+        ref, _, tail = rest[len("/accounts/"):].partition("/")
+        row = api_read.account(settings, ref)
+        if row is None or not row.get("panel_ref"):
+            # A farm-issued ref names a row the sheet owns; the panel may
+            # read those and may not change them.
+            return 404, {"error": {"code": "not_found",
+                                   "message": "no account of yours with that ref"}}
+        panel_ref = str(row["panel_ref"])
+        if tail == "ready" and handler.command == "POST":
+            state = api_read.state_of(row)
+            if state not in ("waiting_customer", "needs_human"):
+                return 409, {"error": {"code": "invalid_state",
+                                       "message": "it is not waiting for anybody",
+                                       "state": state}}
+            api_write.mark_ready(settings, panel_ref)
+            return 202, account_json(api_read.account(settings, panel_ref))
+        if not tail and handler.command == "DELETE":
+            state = api_read.state_of(row)
+            if state in ("signing_in", "ready", "delivered", "withdrawn"):
+                return 409, {"error": {"code": "invalid_state",
+                                       "message": "too late to take it back",
+                                       "state": state}}
+            api_write.mark_withdrawn(settings, panel_ref)
+            api_write.enqueue(settings, verb="withdraw_panel_account",
+                              payload={"ref": panel_ref},
+                              client_id=client["id"],
+                              idem=f"withdraw:{panel_ref}")
+            return 200, account_json(api_read.account(settings, panel_ref))
+    return 404, {"error": {"code": "not_found", "message": "no such endpoint"}}

@@ -27,7 +27,8 @@ def _account(**more) -> dict:
            "product": "chatgpt", "credential_kind": "password_totp",
            "panel_ref": "ord_84213-a", "client_id": 1, "attempts": 0,
            "failures": 0, "customer_ready": False, "state_changed_at": None,
-           "delivered_at": None, "created_at": "2026-09-05T10:12:40+00:00",
+           "delivered_at": None, "withdrawn_at": None,
+           "created_at": "2026-09-05T10:12:40+00:00",
            "updated_at": "2026-09-05T10:12:40+00:00"}
     row.update(more)
     return row
@@ -230,6 +231,250 @@ def test_an_unknown_path_under_the_prefix_is_a_json_404(web, monkeypatch):  # no
     assert headers["Content-Type"].startswith("application/json")
 
 
+# --------------------------------------------------------------- writing
+WRITE_ON = {"web_api": True, "web_api_writes": True}
+
+
+def _wrote(monkeypatch, made=None):
+    """The write side faked at its store edge, so what the test exercises
+    is the dispatcher's own rules - judging, idempotency, and which states
+    may still be changed."""
+    import geelark_farm.web.api_v1_write as write_mod
+
+    seen = {"queued": [], "remembered": []}
+
+    def create(settings, row, *, client_id):
+        seen["created"] = row
+        return made or _account()
+
+    monkeypatch.setattr(write_mod, "create", create)
+    monkeypatch.setattr(write_mod, "enqueue",
+                        lambda s, **k: seen["queued"].append(k) or 91)
+    monkeypatch.setattr(write_mod, "mark_ready",
+                        lambda s, ref: seen.update(ready=ref))
+    monkeypatch.setattr(write_mod, "mark_withdrawn",
+                        lambda s, ref: seen.update(withdrawn=ref))
+    monkeypatch.setattr(write_mod, "replay", lambda s, **k: None)
+    monkeypatch.setattr(write_mod, "remember",
+                        lambda s, **k: seen["remembered"].append(k))
+    return seen
+
+
+def _post(client, path, body, *, key=KEY, idem=None):
+    headers = {"Authorization": f"Bearer {key}",
+               "Content-Type": "application/json"}
+    if idem:
+        headers["Idempotency-Key"] = idem
+    status, got, raw = client.request("POST", path, json.dumps(body),
+                                      headers=headers)
+    return status, dict(got), (json.loads(raw) if raw else None)
+
+
+def _delete(client, path):
+    status, got, raw = client.request(
+        "DELETE", path, "", headers={"Authorization": f"Bearer {KEY}"})
+    return status, dict(got), (json.loads(raw) if raw else None)
+
+
+@pytest.mark.parametrize("web", [API_ON], indirect=True)
+def test_writes_are_405_until_their_own_switch(web, monkeypatch):  # noqa: F811
+    """WEB_API opens the door; WEB_API_WRITES lets a client change what is
+    behind it - the shape WEB_MUTATIONS already has on the console."""
+    _client(monkeypatch)
+    _wrote(monkeypatch)
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts", {})
+    assert status == 405 and body["error"]["code"] == "not_allowed"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_bots_key_may_not_change_an_account(web, monkeypatch):  # noqa: F811
+    """The bot's whole job is one code. It reads, and it does not buy."""
+    _client(monkeypatch, role="bot")
+    _wrote(monkeypatch)
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts", {})
+    assert status == 403 and body["error"]["code"] == "forbidden"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_payload_is_judged_before_anything_is_written(web, monkeypatch):  # noqa: F811
+    """A refused payload leaves nothing behind for anybody to poll - which
+    is the difference between refused and stuck."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    good = {"ref": "ord_1", "product": "chatgpt",
+            "credential_kind": "password_totp",
+            "credentials": {"email": "a@x.com", "password": "pw"}}
+    for bad, field in (
+            ({**good, "ref": ""}, "ref"),
+            ({**good, "ref": "x" * 65}, "ref"),
+            ({**good, "product": "gemini"}, "product"),
+            ({**good, "credential_kind": "telepathy"}, "credential_kind"),
+            ({**good, "credentials": "not-an-object"}, "credentials"),
+            ({**good, "credentials": {"email": "a@x.com"}},
+             "credentials.password"),
+            ({**good, "credentials": {"email": "not-an-address",
+                                      "password": "pw"}}, "credentials"),
+            ({**good, "credentials": {"email": "a@x.com", "password": "pw",
+                                      "totp_secret": "nope!!"}},
+             "credentials")):
+        status, _, body = _post(client, "/api/v1/accounts", bad)
+        assert status == 422, bad
+        assert body["error"]["code"] == "invalid"
+        assert body["error"]["field"] == field, bad
+    assert seen["queued"] == [], "and nothing was queued for any of them"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_good_account_is_written_then_queued_for_the_sheet(
+        web, monkeypatch):  # noqa: F811
+    """Both halves: the row is born in the store so a GET straight after
+    the POST finds it, and a request carries it into the tab the keeper
+    reads - which only a pass may write."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts", {
+        "ref": "ord_84213-a", "product": "chatgpt",
+        "credential_kind": "password_totp",
+        "credentials": {"email": "arman.tehrani88@gmail.com",
+                        "password": "S9!kdm2Lqa",
+                        "totp_secret": "JBSWY3DPEHPK3PXP"}})
+    assert status == 201 and body["ref"] == "ord_84213-a"
+    assert body["state"] == "queued"
+    assert seen["created"]["address"] == "arman.tehrani88@gmail.com"
+    assert seen["queued"][0]["verb"] == "add_panel_account"
+    assert seen["queued"][0]["payload"] == {"ref": "ord_84213-a"}
+    carried = json.dumps(seen["queued"][0]["payload"])
+    assert "S9!kdm2Lqa" not in carried and "JBSWY3DP" not in carried, (
+        "a request is rendered on a page; a credential must not ride in one")
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_the_same_ref_or_address_twice_is_one_account(web, monkeypatch):  # noqa: F811
+    import geelark_farm.web.api_v1_write as write_mod
+
+    _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    body = {"ref": "ord_1", "product": "chatgpt",
+            "credential_kind": "password_totp",
+            "credentials": {"email": "a@x.com", "password": "pw"}}
+    for token, word in (("already_ref", "ref"),
+                        ("already_address", "address")):
+        monkeypatch.setattr(write_mod, "create",
+                            lambda s, row, client_id, t=token: t)
+        status, _, got = _post(client, "/api/v1/accounts", body)
+        assert status == 409 and got["error"]["code"] == "already_exists"
+        assert word in got["error"]["message"]
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_retried_key_is_answered_from_the_first_time(web, monkeypatch):  # noqa: F811
+    """The whole point of the header: a panel that retries a POST it never
+    saw the answer to must not buy the account twice."""
+    import geelark_farm.web.api_v1_write as write_mod
+
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    body = {"ref": "ord_1", "product": "chatgpt",
+            "credential_kind": "password_totp",
+            "credentials": {"email": "a@x.com", "password": "pw"}}
+    status, _, first = _post(client, "/api/v1/accounts", body, idem="k-1")
+    assert status == 201
+    assert seen["remembered"][0]["key"] == "k-1"
+
+    monkeypatch.setattr(write_mod, "replay",
+                        lambda s, **k: {"status": 201, "body": first})
+    monkeypatch.setattr(write_mod, "create",
+                        lambda s, row, client_id: pytest.fail("wrote twice"))
+    status, headers, again = _post(client, "/api/v1/accounts", body,
+                                   idem="k-1")
+    assert status == 201 and again == first
+    assert headers["Idempotent-Replayed"] == "true"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_ready_only_moves_an_account_that_is_waiting(web, monkeypatch):  # noqa: F811
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "SERVED",
+                        {"chatgpt": ("password_totp",),
+                         "claude": ("email_code_customer",)})
+    monkeypatch.setattr(read_mod, "account", lambda s, ref: _account(
+        product="claude", credential_kind="email_code_customer"))
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/ready", {})
+    assert status == 202 and seen["ready"] == "ord_84213-a"
+    assert body["ref"] == "ord_84213-a"
+
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref: _account(status="ready"))
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/ready", {})
+    assert status == 409 and body["error"]["code"] == "invalid_state"
+    assert body["error"]["state"] == "ready"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_withdrawing_stamps_the_row_and_queues_the_sheet(web, monkeypatch):  # noqa: F811
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "account", lambda s, ref: _account())
+    client = web()
+    status, _, body = _delete(client, "/api/v1/accounts/ord_84213-a")
+    assert status == 200 and seen["withdrawn"] == "ord_84213-a"
+    assert seen["queued"][0]["verb"] == "withdraw_panel_account"
+    assert body["ref"] == "ord_84213-a"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_it_is_too_late_to_take_back_a_phone_that_is_running(
+        web, monkeypatch):  # noqa: F811
+    """A phone is booked and billing against it. Taking the row out from
+    under a running sign-in is the one thing this has to refuse."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    for word in ("in_use", "ready", "delivered"):
+        monkeypatch.setattr(read_mod, "account",
+                            lambda s, ref, w=word: _account(status=w))
+        code, _, body = _delete(client, "/api/v1/accounts/ord_84213-a")
+        assert code == 409, word
+        assert body["error"]["code"] == "invalid_state"
+    assert "withdrawn" not in seen
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_the_panel_may_not_change_a_row_the_sheet_owns(web, monkeypatch):  # noqa: F811
+    """A farm_<id> ref names an account that came from the sheet. The panel
+    may read those; it did not buy them and may not take them."""
+    _wrote(monkeypatch)
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref: _account(panel_ref=None))
+    client = web()
+    code, _, body = _delete(client, "/api/v1/accounts/farm_41")
+    assert code == 404 and body["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_body_that_is_not_an_object_or_is_enormous_is_refused(
+        web, monkeypatch):  # noqa: F811
+    _wrote(monkeypatch)
+    _client(monkeypatch)
+    client = web()
+    head = {"Authorization": f"Bearer {KEY}"}
+    for raw in ("{not json", json.dumps([1, 2, 3]),
+                "x" * (api_mod.MAX_BODY + 1)):
+        status, _, body = client.request("POST", "/api/v1/accounts", raw,
+                                         headers=head)
+        assert status == 422, raw[:20]
+        assert json.loads(body)["error"]["field"] == "body"
+
+
 # ------------------------------------------------- the pure parts, alone
 def test_the_state_is_a_view_over_the_pools_own_word():
     """Every branch, because this mapping is the whole contract: a wrong
@@ -244,9 +489,13 @@ def test_the_state_is_a_view_over_the_pools_own_word():
     assert say(_account(status="", error="not an email")) == "invalid"
     assert say(_account(status="ready", error="x")) == "invalid", \
         "a row validation refused is not stock, whatever its status says"
-    # Words the code path will write, spoken before anything writes them.
+    # The word the code path will write, spoken before anything writes it.
     assert say(_account(status="needs_code")) == "needs_code"
-    assert say(_account(status="withdrawn")) == "withdrawn"
+    # Withdrawn is a column, not a status word: the mirror rewrites status
+    # from the sheet every pass, so a word written there would not last.
+    assert say(_account(withdrawn_at="2026-09-05T11:00:00+00:00")) == "withdrawn"
+    assert say(_account(status="ready",
+                        withdrawn_at="2026-09-05T11:00:00+00:00")) == "withdrawn"
 
 
 def test_a_kind_the_farm_cannot_serve_yet_is_blocked_not_queued():
