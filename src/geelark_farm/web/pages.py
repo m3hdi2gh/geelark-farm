@@ -229,8 +229,6 @@ label{{display:flex;gap:8px;align-items:center;font-size:13px}}
  border:1px solid var(--line2)}}
 .pick.tick{{grid-template-columns:auto minmax(0,1fr) auto;cursor:pointer}}
 .pick:has(input:checked){{border-color:#2c4a7a;background:#111b2e}}
-.hand{{width:100%;font-size:12px;user-select:all;min-height:30px;padding:4px 10px;
- color:var(--muted)}}
 .switches{{display:flex;gap:6px 18px;flex-wrap:wrap}}
 .card{{width:min(420px,100%);background:var(--panel);border:1px solid var(--line);
  border-radius:12px;padding:28px 28px 24px;display:flex;flex-direction:column;gap:14px}}
@@ -300,8 +298,12 @@ tr.off td{{opacity:.55}}
  font-size:12px;padding-top:2px}}
 .entry .lines{{display:flex;flex-direction:column;gap:2px;min-width:0}}
 .entry .head{{color:var(--bright)}}
-.entry.now{{background:rgba(127,180,255,.05);border-radius:8px;padding:9px 10px;
- margin-top:6px}}
+tr.now td{{background:rgba(127,180,255,.05)}}
+tr.now td:first-child{{border-radius:8px 0 0 8px}}
+tr.now td:last-child{{border-radius:0 8px 8px 0}}
+.facts{{font-family:var(--mono);font-size:13px;color:var(--ink);
+ margin-top:-10px}}
+.facts .hand{{user-select:all}}
 .live{{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
  font-size:12px;color:var(--green)}}
 .live::before{{content:"";width:8px;height:8px;border-radius:50%;
@@ -3356,12 +3358,33 @@ def _fold_story(timeline: list) -> list[list]:
 
 
 def _entry(when: str, head: str, aside: str, badge: str = "",
-           klass: str = "") -> str:
-    aside_html = f'<span class="dim">{aside}</span>' if aside else ""
-    return (f'<div class="entry{" " + klass if klass else ""}">'
-            f'<span class="when">{when}</span>{badge}'
-            f'<div class="lines"><span class="head">{head}</span>'
-            f'{aside_html}</div></div>')
+           klass: str = "", title: str = "") -> str:
+    """One line of a phone's story, as a table row: when it happened,
+    what kind of thing it was, and what happened with its explanation
+    under it. `title` is what the when cell says on hover - the other
+    times, when identical failures were folded into one row."""
+    aside_html = f'<br><span class="dim">{aside}</span>' if aside else ""
+    row = f' class="{klass}"' if klass else ""
+    hint = f' title="{esc(title)}"' if title else ""
+    return (f'<tr{row}><td class="muted mono"{hint}>{when}</td>'
+            f'<td>{badge}</td><td>{head}{aside_html}</td></tr>')
+
+
+def _phone_facts(serial: str, phone: dict) -> str:
+    """What this phone is, in one line: the account it carries, the gmail
+    under it and its exit - which is exactly what a customer is handed,
+    so triple-clicking the line copies the lot. When it was built is
+    dimmer and outside the selection: nobody is given a date."""
+    bits = [serial, str(phone.get("app_account") or ""),
+            str(phone.get("gmail") or ""),
+            str(phone.get("proxy_name") or "")]
+    line = " · ".join(b for b in bits if b)
+    built = _when(phone.get("created_at"))
+    return (f'<p class="facts"><span class="hand" title="click three times '
+            f'to select it all - this is what the customer needs">'
+            f'{esc(line)}</span>'
+            + (f' <span class="dim">· built {esc(built)}</span>'
+               if built else "") + "</p>")
 
 
 def _now_entry(phone: dict) -> str:
@@ -3395,34 +3418,17 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
     phone = story.get("phone") or {}
     serial = str(story["serial"])
     back = f"/phones/{serial}"
-    head = ""
-    if phone:
-        bits = [esc(str(phone.get("gmail") or "no gmail")),
-                esc(str(phone.get("proxy_name") or "no proxy")),
-                f"created {_when(phone.get('created_at'))}"]
-        if phone.get("app_account"):
-            bits.insert(1, esc(str(phone["app_account"])))
-        head = (f'<span>{_phone_badge(phone)}</span>'
-                f'<span class="dim mono">{" · ".join(bits)}</span>')
-        if phone.get("done_at"):
-            head += (f'<span class="badge">gone {_day(phone["done_at"])}'
-                     f'</span>')
+    head = f'<span>{_phone_badge(phone)}</span>' if phone else ""
+    if phone and phone.get("done_at"):
+        head += f'<span class="badge">gone {_day(phone["done_at"])}</span>'
     actions = []
     if phone and not phone.get("done_at"):
-        actions = _state_forms(user, dict(phone, serial=serial), back)
-        if _may(user, "may_change_proxy") and \
-                (phone.get("status") or "") != "building":
+        building = (phone.get("status") or "") == "building"
+        if not building and _may(user, "may_take_phones"):
+            actions.append(_boot_form(user, serial))
+        actions += _state_forms(user, dict(phone, serial=serial), back)
+        if _may(user, "may_change_proxy") and not building:
             actions.append(_change_ip_form(user, serial, back))
-    hand = ""
-    if phone and (phone.get("status") or "") == "ready" \
-            and not phone.get("done_at"):
-        line = " · ".join(str(phone.get(k) or "") for k in
-                          ("serial", "app_account", "gmail", "proxy_name"))
-        hand = (f'<div class="panel"><h3>Hand over</h3>'
-                f'<input class="hand" readonly value="{esc(line)}" '
-                f'title="one line for the customer - click, copy">'
-                f'<p class="dim">click the line to select it, then copy - '
-                f'this is what the customer needs</p></div>')
 
     items = []
     for group in _fold_story(story.get("timeline") or []):
@@ -3439,33 +3445,35 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
         runs = " ".join(f'<span class="dim">[{esc(str(t["run"]))}]</span>'
                         for t in group if t.get("run")
                         and t.get("source") == "event")
+        when, times = _when(first["at"]), ""
         if len(group) > 1:
-            when = (f"{_day(first['at'])} "
-                    + " · ".join(_hhmm(t["at"]) for t in group))
-            headline += (f' <span class="dim">· {len(group)} times</span>')
-        else:
-            when = f"{_day(first['at'])} {_clock(first['at'])}"
+            headline += f' <span class="dim">· {len(group)} times</span>'
+            times = f"{_day(first['at'])}: " + ", ".join(
+                _hhmm(t["at"]) for t in group)
         secs = (f' <span class="dim">· {int(first["seconds"])}s</span>'
                 if first.get("seconds") and len(group) == 1 else "")
         items.append(_entry(when, f"{headline}{secs} {runs}".strip(), aside,
-                            badge))
+                            badge, title=times))
     if phone:
         items.append(_now_entry(phone))
     hint = _need(user, "may_take_phones", "taking, returning and closing "
                                           "this phone") if phone else ""
-    body = (f'<div class="top"><a href="/events" class="dim">← Events</a>'
+    table = (f'<table><tr><th>when</th><th>what</th><th>what happened</th>'
+             f'</tr>{"".join(items)}</table>' if items else
+             '<p class="empty">Nothing recorded about this phone.</p>')
+    body = (f'<div class="narrow">'
+            f'<div class="top"><a href="/" class="dim">← Dashboard</a>'
             f'<h2>Phone {esc(serial)}</h2>{head}'
             f'<span class="status">{" ".join(actions)}</span></div>'
-            + hand
-            + '<div class="panel">'
-            + ("".join(items) or '<p class="muted">Nothing recorded about '
-                                 'this phone.</p>')
-            + hint
-            + f'<p class="dim">everything this phone went through, in order '
+            + (_phone_facts(serial, phone) if phone else "")
+            + f'<div class="panel wrap"><h3>Its story '
+              f'<span class="n">{_plural(len(items), "entry", "entries")}'
+              f'</span></h3>{table}{hint}'
+              f'<p class="dim">everything this phone went through, in order '
               f'— events, requests and archived screens joined on its serial'
               f' · <a href="/logs?phone={esc(serial)}">open its log lines'
-              f'</a></p></div>')
-    return page(f"Phone {serial}", body, user=user, here="/events")
+              f'</a></p></div></div>')
+    return page(f"Phone {serial}", body, user=user, here="/")
 
 
 # ------------------------------------------------------------ confirming

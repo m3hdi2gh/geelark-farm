@@ -1477,6 +1477,19 @@ def test_a_phone_story_joins_events_requests_and_screens(web, monkeypatch):
     assert "Now: out with ali" in body
     assert "Tries 3 of 3 — given up until cleared" in body
     assert 'href="/logs?phone=1523"' in body
+
+    # the story is a table with a title, and the row it ends on is lit
+    assert "<th>when</th><th>what</th><th>what happened</th>" in body
+    assert ">Its story <" in body and "entries</span>" in body
+    assert '<tr class="now">' in body
+    assert "2026-09-01 14:23:00" not in body, "human clocks, not stamps"
+
+    # what the phone is, in one selectable line, and no panel around it
+    assert "Hand over" not in body, "a panel for one line is not a panel"
+    assert 'class="hand"' in body and "1523 · " in body
+    assert '<a href="/" class="dim">← Dashboard</a>' in body
+    assert "← Events" not in body, "the dashboard is where you came from"
+
     status, _, _ = client.request("GET", "/phones/9999")
     assert status == 404
 
@@ -1493,6 +1506,7 @@ def test_the_story_offers_the_phone_buttons_and_returns_there(web,
     client = web()
     client.login()
     _, _, body = client.request("GET", "/phones/1523")
+    assert 'action="/phones/1523/boot"' in body, "Boot, as on the dashboard"
     assert 'action="/phones/1523/state"' in body
     assert 'value="unused"' in body, "taken, so it offers Back"
     assert 'name="back" value="/phones/1523"' in body
@@ -2135,7 +2149,6 @@ def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
     order = [body.index(f'href="/phones/{s}"') for s in
              ("1500", "1501", "1502", "1503")]
     assert order == sorted(order), "ready, warm, incomplete, building"
-    assert 'class="hand"' not in body, "the hand-over line is on /phones/1500"
     assert "waiting for an account" in body, "the warm row says what it lacks"
 
 
