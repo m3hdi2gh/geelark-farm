@@ -1874,11 +1874,11 @@ def _gmail_add(user: dict, known: list) -> str:
         f'<div class="row">{_seller_pick(known)}'
         f'<span class="dim">address, password and the secret in any order — '
         f'nothing is added until you have seen the preview</span>'
-        f'<span class="right"></span>{one}<button>Preview</button></div>'
-        f'</form>')
+        f'<span class="right"></span><button>Preview</button></div>'
+        f'</form>{one}')
 
 
-def _gmail_phone_badge(r: dict) -> str:
+def _on_phone_badge(r: dict) -> str:
     if r.get("status") == "in_use":
         return '<span class="badge in_use">signing in</span>'
     status = r.get("phone_status") or "ready"
@@ -1902,13 +1902,16 @@ GMAIL_VIEWS = {
 }
 
 
-def _gmail_pills(view: str, counts: dict) -> str:
+def _view_pills(base: str, views: dict, view: str, counts: dict) -> str:
+    """One pill per view with its count inside it; the view you are on is
+    not a link. Shared by the pools, so the row of questions reads the
+    same way on each of them."""
     out = []
-    for name, words in GMAIL_VIEWS.items():
+    for name, words in views.items():
         n = int(counts.get(name) or 0)
         inner = f'{esc(words["label"])} <span class="n">{n}</span>'
         out.append(f'<span>{inner}</span>' if name == view else
-                   f'<a href="/pools/gmail?view={name}">{inner}</a>')
+                   f'<a href="{base}?view={name}">{inner}</a>')
     return f'<div class="pills">{"".join(out)}</div>'
 
 
@@ -1977,7 +1980,7 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
             + _said(said, _POOL_SAID))
     if view == "queued":
         body += _gmail_add(user, data.get("known_sellers") or [])
-    body += _gmail_pills(view, counts)
+    body += _view_pills("/pools/gmail", GMAIL_VIEWS, view, counts)
 
     if view == "errored":
         body += _errored_filters(data, seller)
@@ -2007,7 +2010,7 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
         lines = "".join(
             f'<tr><td>{esc(r["address"])}</td>'
             f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td>{_gmail_phone_badge(r)}</td>'
+            f'<td>{_on_phone_badge(r)}</td>'
             f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
             for r in rows)
         empty = "no address is signed in on a phone right now"
@@ -2339,50 +2342,10 @@ def proxy_pool_page(data: dict, user: dict, said: str = "",
     return page("Proxy Pool", body, user=user, here="/pools/proxy")
 
 
-def _gpt_add_panel(user: dict, form: dict | None, error: str) -> str:
-    """Two ways in, like the Gmail Pool: a paste of several accounts that
-    goes through a preview, and one typed by hand that is judged on the
-    spot - refused, it comes back filled in with the reason beside it."""
-    if not _may(user, "may_add_gpt"):
-        hint = _need(user, "may_add_gpt", "adding accounts")
-        return (f'<div class="panel"><h3>Add accounts</h3>{hint}</div>'
-                if hint else "")
-    form = form or {}
-    paste = (
-        '<div class="panel"><h3>Paste several <span class="n">address, '
-        'password, secret per line</span></h3>'
-        '<form method="post" action="/pools/gpt/preview" class="field">'
-        f'{_csrf(user)}'
-        '<textarea name="pasted" placeholder="one account per line - '
-        'address, password and the 2FA secret if it has one; tab, comma '
-        'or a space between them"></textarea>'
-        '<p class="dim">the address is found by its @, the secret by its '
-        'shape, the password is what remains; nothing is added until '
-        'you confirm the preview</p>'
-        '<div class="row"><span class="right"></span>'
-        '<button>Preview</button></div></form></div>')
-    said = (f'<p class="err">{esc(error)}</p>' if error else "")
-    one = (
-        '<div class="panel"><h3>Add an account by hand</h3>'
-        '<form method="post" action="/pools/gpt/add" class="field">'
-        f'{_csrf(user)}{said}'
-        f'<input name="address" placeholder="email address" '
-        f'autocomplete="off" value="{esc(str(form.get("address") or ""))}">'
-        f'<input name="password" placeholder="password" autocomplete="off" '
-        f'value="{esc(str(form.get("password") or ""))}">'
-        f'<input name="secret" placeholder="2FA secret (optional)" '
-        f'autocomplete="off" value="{esc(str(form.get("secret") or ""))}">'
-        '<div class="row"><label><input type="checkbox" name="email_code" '
-        f'value="1"{" checked" if form.get("email_code_only") else ""}> '
-        'email-code only</label><span class="right"></span>'
-        '<button>Add</button></div>'
-        '<p class="dim">validated the way the sheet rows are - a bad '
-        '2FA secret or a malformed address is refused here, not '
-        'discovered on a phone</p></form></div>')
-    return f'<div class="grid2">{paste}{one}</div>'
-
-
 def _source_badge(r: dict) -> str:
+    """Where an account came from: the customer panel pushed it in, or a
+    person did. The name rides with the hand-added ones, so a question
+    about a row has somebody to ask."""
     source = str(r.get("source") or "manual")
     if source == "panel":
         return '<span class="badge panel">panel</span>'
@@ -2391,154 +2354,269 @@ def _source_badge(r: dict) -> str:
             f'{(" · " + esc(str(who))) if who else ""}</span>')
 
 
+def _gpt_add(user: dict, form: dict | None, error: str) -> str:
+    """The one way in, at the top of the waiting view: a box to paste the
+    accounts you bought yourself into - the panel pushes its own straight
+    to the pool - and the same thing spelled out, folded into a `details`
+    so it costs a line, not a second panel. A by-hand account is judged
+    on the spot; refused, it comes back in that fold, open, with the
+    reason under it."""
+    if not _may(user, "may_add_gpt"):
+        return _need(user, "may_add_gpt", "adding accounts")
+    form = form or {}
+    said = f'<p class="err">{esc(error)}</p>' if error else ""
+    one = (
+        f'<details class="fold"{" open" if error or form else ""}>'
+        f'<summary>add one by hand</summary>'
+        f'<form method="post" action="/pools/gpt/add" class="row" '
+        f'style="margin-top:10px">{_csrf(user)}'
+        f'<input name="address" placeholder="email address" '
+        f'autocomplete="off" value="{esc(str(form.get("address") or ""))}" '
+        f'style="flex:1;min-width:220px">'
+        f'<input name="password" placeholder="password" autocomplete="off" '
+        f'value="{esc(str(form.get("password") or ""))}">'
+        f'<input name="secret" placeholder="2FA secret (optional)" '
+        f'autocomplete="off" value="{esc(str(form.get("secret") or ""))}" '
+        f'style="flex:1;min-width:200px">'
+        f'<label class="dim"><input type="checkbox" name="email_code" '
+        f'value="1"{" checked" if form.get("email_code_only") else ""}> '
+        f'email-code only</label>'
+        f'<button class="quiet">Add</button>{said}</form></details>')
+    return (
+        f'<form method="post" action="/pools/gpt/preview" class="field">'
+        f'{_csrf(user)}'
+        f'<textarea name="pasted" placeholder="paste the accounts — one per '
+        f'line: address, password, and the 2FA secret if it has one">'
+        f'</textarea>'
+        f'<div class="row"><span class="dim">the panel puts its own accounts '
+        f'in by itself — this box is for the ones you buy — and nothing is '
+        f'added until you have seen the preview</span>'
+        f'<span class="right"></span><button>Preview</button></div>'
+        f'</form>{one}')
+
+
+#: The four views, in the order the pills read: the count each one shows
+#: is the key itself, and the sentence goes under its table.
+GPT_VIEWS = {
+    "waiting": {"label": "Waiting",
+                "sub": "the keeper takes the top one first, wherever it "
+                       "came from"},
+    "on_phone": {"label": "On a phone",
+                 "sub": "signing in now, or signed in and waiting to be "
+                        "delivered"},
+    "needs_human": {"label": "Needs a human",
+                    "sub": "offering one again blanks its status and puts it "
+                           "back with the others waiting"},
+    "delivered": {"label": "Delivered",
+                  "sub": "the search matches the address, the phone or the "
+                         "note; the export is everything that matches, not "
+                         "this page"},
+}
+
+
+def _last_sentence(text) -> str:
+    """The sentence a verdict ends on. Every one of them is written as an
+    instruction - "Fix the payment ... then blank this status to offer it
+    again" - and the paragraph in front of it is the reasoning."""
+    parts = [p.strip() for p in str(text or "").split(". ") if p.strip()]
+    return parts[-1] if parts else ""
+
+
+def _gpt_happened(row: dict, explain) -> str:
+    """What the run saw, and under it the one sentence saying what to do
+    about it. The reasoning between the two rides in the title: a table
+    is not where a person reads a paragraph. A status the verdict table
+    has never heard of keeps the row\'s own note."""
+    seen, advice = (explain(str(row.get("status") or "")) if explain
+                    else ("", ""))
+    if not seen:
+        return esc(str(row.get("note") or ""))
+    todo = _last_sentence(advice)
+    return (f'<span title="{esc(str(advice))}">{esc(seen)}</span>'
+            + (f'<br><span class="dim">{_clip(todo, 120)}</span>'
+               if todo else ""))
+
+
+def _gpt_sentence(view: str, counts: dict, data: dict, warm) -> str:
+    """The line beside the title: the one number this view is about, and
+    what it means right now. On the waiting view that is the question the
+    whole page exists for - whether there is a phone for what is queued."""
+    if view == "delivered":
+        whole = int(counts.get("delivered") or 0)
+        total = int(data["total"]) if data.get("total") is not None else whole
+        q = str(data.get("q") or "")
+        if q:
+            return f'{total} of {whole} delivered accounts match "{esc(q)}"'
+        return (f'<span class="mono">{whole}</span> delivered — the panel '
+                f'pulls each one\'s fate from here')
+    if view == "on_phone":
+        n = int(counts.get("on_phone") or 0)
+        if not n:
+            return "no account is on a phone right now"
+        return (f'<span class="mono">{n}</span> on a phone — signing in, or '
+                f'signed in and waiting to go out')
+    if view == "needs_human":
+        n = int(counts.get("needs_human") or 0)
+        if not n:
+            return "nothing has been set aside"
+        return (f'<span class="mono" style="color:var(--amber)">{n}</span> '
+                f'set aside — each one waits for a decision')
+    n = int(counts.get("waiting") or 0)
+    if not n:
+        return ("nothing is waiting — the next account the panel sends "
+                "lands here")
+    if warm is None:
+        # No pass has left a pulse, so how many phones are warm is not
+        # something this page knows. It says the number it does know.
+        return f'<span class="mono">{n}</span> waiting for a phone'
+    if warm >= n:
+        colour, tail = "green", f"{_plural(warm, 'warm phone')} can take them"
+    elif warm:
+        colour, tail = "amber", f"only {_plural(warm, 'warm phone')} free"
+    else:
+        colour, tail = "red", "no warm phone is free for them"
+    return (f'<span class="mono" style="color:var(--{colour})">{n}</span> '
+            f'waiting — {tail}')
+
+
 def gpt_pool_page(data: dict, user: dict, said: str = "", *,
                   explain=None, manual_login: bool = False,
                   form: dict | None = None, error: str = "") -> str:
-    """Active = the accounts waiting for a phone, by where they came
-    from, then the ones a run set aside for a person; Delivered = the
-    archive. `explain(status)` turns a set-aside status into (what was
-    seen, what to do) - app passes failures.verdict; pages never import
-    it. `form` and `error` are the by-hand add coming back refused."""
-    c = data["counts"]
-    view = data["view"]
-    active_n = c["awaiting"] + c["logging_in"] + c["needs_human"]
-    pills = (f'<span>Active · {active_n}</span>'
-             f'<a href="/pools/gpt?view=delivered">Delivered · '
-             f'{c["delivered"]}</a>' if view == "active" else
-             f'<a href="/pools/gpt">Active · {active_n}</a>'
-             f'<span>Delivered · {c["delivered"]}</span>')
-    body = f'<div class="top"><h2>Gpt Pool</h2><div class="pills">{pills}</div>'
-    if view == "delivered":
-        body += (f'<form method="get" action="/pools/gpt" class="inline" '
-                 f'style="margin-left:auto"><input type="hidden" name="view" '
-                 f'value="delivered"><input name="q" value="{esc(data["q"])}" '
-                 f'placeholder="search an address or a phone" size="28">'
-                 f'</form>')
-    body += "</div>" + _said(said, _POOL_SAID)
+    """One question per view, one table each.
 
-    if view == "delivered":
-        q = str(data.get("q") or "")
-        rows = "".join(
-            f"<tr><td>{esc(r['address'])}</td><td>{_source_badge(r)}</td>"
-            f"<td>{_serial_link(r['serial'])}</td>"
-            f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
-            f"<td class=\"muted\">{esc(r['note'] or '')}</td></tr>"
-            for r in data["rows"])
-        total = int(data.get("total") if data.get("total") is not None
-                    else c["delivered"])
-        count = (f'{total} of {c["delivered"]} delivered accounts match '
-                 f'"{esc(q)}"' if q else
-                 f'{c["delivered"]} delivered accounts - the panel pulls '
-                 f'each one\'s fate from here')
-        body += (f'<div class="panel"><table><tr><th>address</th><th>source'
-                 f'</th><th>phone</th><th>delivered</th><th>note</th></tr>'
-                 f'{rows}</table><div class="row"><span class="dim">{count}'
-                 f'</span><a class="btn quiet right" '
-                 f'href="/pools/gpt/delivered.csv?q={_q(q)}">Export CSV</a>'
-                 f'</div>'
-                 + _pager(f"/pools/gpt?view=delivered&q={_q(q)}",
-                          int(data.get("page") or 1),
-                          int(data.get("pages") or 1), bool(data.get("more")))
-                 + '</div>')
-        return page("Gpt Pool", body, user=user, here="/pools/gpt")
+    Waiting is the front door: how many accounts have no phone yet,
+    whether a warm phone can take them, and the box that adds more.
+    Panel and hand-added accounts share that one list with a column
+    saying where each came from, because the keeper takes the next one
+    either way. The other three views are the same page with a different
+    list - what is on a phone now, what a run set aside, and the
+    delivered archive the panel reads fates from.
 
-    body += _gpt_add_panel(user, form, error)
-
+    `explain(status)` turns a set-aside status into (what was seen, what
+    to do) - app passes failures.verdict; pages never import it. `form`
+    and `error` are the by-hand add coming back refused.
+    """
+    counts = data.get("counts") or {}
+    view = data.get("view") or "waiting"
+    if view not in GPT_VIEWS:
+        view = "waiting"
+    rows = data.get("rows") or []
+    q = str(data.get("q") or "")
+    pulse = (user.get("nav") or {}).get("pulse") or {}
+    warm = None if pulse.get("warm") is None else int(pulse["warm"])
     can_login = manual_login and _may(user, "may_login_accounts")
 
-    def account_rows(rows: list, by: bool) -> str:
-        out = []
-        for r in rows:
-            logging_in = r["status"] == "in_use"
-            state = ('<span class="badge info">logging in — '
-                     f'{_serial_link(r["serial"])}</span>'
-                     if logging_in else
-                     '<span class="badge warn">awaiting login</span>')
-            who = (f"{esc(r.get('added_by_name') or 'sheet')} · "
-                   f"{_when(r['created_at'])}" if by else _when(r["created_at"]))
-            tick = ""
-            if can_login:
-                tick = ("<td></td>" if logging_in else
-                        f'<td><input type="checkbox" name="addresses" '
-                        f'value="{esc(r["address"])}"></td>')
-            klass = ' class="muted"' if logging_in else ""
-            out.append(f"<tr{klass}>{tick}<td>{esc(r['address'])}</td>"
-                       f"<td class=\"muted\">{who}</td>"
-                       f"<td>{_kind_2fa(r)}</td><td>{state}</td></tr>")
-        return "".join(out)
+    right = ""
+    if view == "delivered":
+        right = (f'<form method="get" action="/pools/gpt" class="inline">'
+                 f'<input type="hidden" name="view" value="delivered">'
+                 f'<input name="q" value="{esc(q)}" placeholder="address or '
+                 f'phone" size="18"></form>'
+                 f'<a class="btn quiet" href="/pools/gpt/delivered.csv'
+                 f'?q={_q(q)}">Export CSV</a>')
+    body = (f'<div class="narrow">'
+            f'<div class="top"><h2>Gpt Pool</h2>'
+            f'<span class="sub" style="margin:0">'
+            f'{_gpt_sentence(view, counts, data, warm)}</span>'
+            f'<span class="status">{right}</span></div>'
+            + _said(said, _POOL_SAID))
+    if view == "waiting":
+        body += _gpt_add(user, form, error)
+    body += _view_pills("/pools/gpt", GPT_VIEWS, view, counts)
 
-    def tally(rows: list) -> str:
-        waiting = sum(1 for r in rows if r["status"] != "in_use")
-        busy = len(rows) - waiting
-        return (f"{waiting} awaiting" + (f" · {busy} logging in" if busy
-                                          else ""))
-
-    th = "<th></th>" if can_login else ""
-    tables = (f'<div class="panel"><h3><span class="badge panel">panel</span> '
-              f'From the customer panel <span class="n">'
-              f'{tally(data["panel"])}</span></h3>'
-              f'<table><tr>{th}<th>address</th><th>received</th><th>2fa</th>'
-              f'<th>state</th></tr>{account_rows(data["panel"], False)}'
-              f'</table></div>'
-              f'<div class="panel"><h3><span class="badge manual">manual'
-              f'</span> Added by hand or from the sheet <span class="n">'
-              f'{tally(data["manual"])}</span></h3>'
-              f'<table><tr>{th}<th>address</th><th>added by</th><th>2fa</th>'
-              f'<th>state</th></tr>{account_rows(data["manual"], True)}'
-              f'</table>')
-    if can_login:
-        tables = (f'<form method="post" action="/accounts/login">{_csrf(user)}'
-                  f'<input type="hidden" name="back" value="/pools/gpt">'
-                  f'{tables}<div class="row"><span class="dim">each ticked '
-                  f'account boots one warm phone and logs in there; '
-                  f'progress lands in <a href="/requests">Requests</a></span>'
-                  f'<button class="right">Log in selected</button></div>'
-                  f'</div></form>')
-    else:
-        hint = _need(user, "may_login_accounts", "logging accounts in")
-        if not manual_login:
-            hint = ('<p class="dim">accounts log in on their own on the next '
-                    'pass</p>')
-        tables += f'{hint}</div>'
-    body += tables
-
-    if data["needs_human"]:
-        n = len(data["needs_human"])
-
-        def happened(r: dict) -> str:
-            seen, advice = explain(str(r["status"])) if explain else ("", "")
-            if not seen:
-                return esc(str(r.get("note") or ""))
-            return (esc(seen)
-                    + (f' <span class="dim">— {esc(advice)}</span>'
-                       if advice else ""))
-
+    if view == "delivered":
+        head = ("<tr><th>address</th><th>phone</th><th>delivered</th>"
+                "<th>where from</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td class="muted">{_when(r["updated_at"])}</td>'
+            f'<td>{_source_badge(r)}</td></tr>' for r in rows)
+        empty = (f'nothing delivered matches "{q}"' if q else
+                 "nothing has been delivered yet")
+    elif view == "on_phone":
+        head = ("<tr><th>address</th><th>phone</th><th>state</th>"
+                "<th>since</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td>{_on_phone_badge(r)}</td>'
+            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
+            for r in rows)
+        empty = "no account is signing in or waiting to go out"
+    elif view == "needs_human":
         offer = _may(user, "may_add_gpt")
-        rows = "".join(
-            f"<tr><td>{esc(r['address'])}</td>"
-            f"<td><span class=\"badge attn\">{esc(r['status'])}</span></td>"
-            f"<td>{_source_badge(r)}</td>"
-            f"<td>{happened(r)}</td><td>" + (
+        head = ("<tr><th>address</th><th>reason</th><th>what happened</th>"
+                "<th></th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])} {_source_badge(r)}</td>'
+            f'<td>{_reason_words(str(r["status"]))}</td>'
+            f'<td class="muted">{_gpt_happened(r, explain)}</td>'
+            f'<td class="right">' + (
                 f'<form method="post" action="/pools/gpt/offer" '
                 f'class="inline">{_csrf(user)}<input type="hidden" '
                 f'name="address" value="{esc(r["address"])}">'
                 f'<button class="quiet warn">Offer again</button></form>'
-                if offer else "") + "</td></tr>"
-            for r in data["needs_human"])
-        body += (f'<div class="panel warn"><h3>Needs a human <span class="n">'
-                 f'{_plural(n, "account")}</span></h3><table><tr>'
-                 f'<th>address</th><th>status</th><th>source</th>'
-                 f'<th>what happened</th><th></th></tr>{rows}</table>'
-                 f'{_need(user, "may_add_gpt", "offering accounts again")}'
-                 f'</div>')
-    if data["broken"]:
+                if offer else "") + "</td></tr>" for r in rows)
+        empty = "nothing has been set aside for a person"
+    else:
+        th = "<th></th>" if can_login else ""
+        head = (f"<tr>{th}<th>address</th><th>where from</th><th>2fa</th>"
+                f"<th>added</th></tr>")
+        lines = "".join(
+            "<tr>" + (f'<td><input type="checkbox" name="addresses" '
+                      f'value="{esc(str(r["address"]))}"></td>'
+                      if can_login else "")
+            + f'<td>{esc(r["address"])}</td>'
+              f'<td>{_source_badge(r)}</td>'
+              f'<td>{_kind_2fa_word(r)}</td>'
+              f'<td class="muted">{_when(r.get("created_at"))}</td></tr>'
+            for r in rows)
+        empty = ("nothing is waiting - paste the accounts you bought above, "
+                 "or wait for the panel to send its next one")
+
+    table = (f'<table>{head}{lines}</table>' if lines else
+             f'<p class="empty">{esc(empty)}</p>')
+    base = f"/pools/gpt?view={view}&q={_q(q)}"
+    pager = (_pager(base, int(data.get("page") or 1),
+                    int(data.get("pages") or 1), bool(data.get("more")))
+             if int(data.get("pages") or 1) > 1 or data.get("more") else "")
+    foot = f'<p class="dim">{esc(GPT_VIEWS[view]["sub"])}</p>'
+    if view == "needs_human":
+        foot = (foot if rows else "") + _need(user, "may_add_gpt",
+                                              "offering accounts again")
+    elif view == "waiting":
+        if can_login:
+            foot = ('<div class="row"><span class="dim">each ticked account '
+                    'boots one warm phone and logs in there; the progress '
+                    'of each one lands in <a href="/requests">Requests</a>'
+                    '</span><button class="right">Log in selected</button>'
+                    '</div>')
+        elif manual_login:
+            foot += _need(user, "may_login_accounts", "logging accounts in")
+        else:
+            foot = ('<p class="dim">accounts log in on their own on the next '
+                    'pass — the keeper takes the top one as soon as a phone '
+                    'is warm</p>')
+    panel = f'<div class="panel wrap">{table}{foot}{pager}</div>'
+    if view == "waiting" and can_login:
+        panel = (f'<form method="post" action="/accounts/login">{_csrf(user)}'
+                 f'<input type="hidden" name="back" value="/pools/gpt">'
+                 f'{panel}</form>')
+    body += panel
+
+    if view == "needs_human" and data.get("broken"):
         broken = "".join(
-            f"<tr><td>{esc(r['address'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['error'])}</td></tr>"
+            f'<tr><td>{esc(r.get("address") or "")}</td>'
+            f'<td class="muted">{esc(r.get("error") or "")}</td></tr>'
             for r in data["broken"])
-        body += (f'<div class="panel bad"><h3>Refused by validation — '
-                 f'{len(data["broken"])}</h3><table>{broken}</table></div>')
-    return page("Gpt Pool", body, user=user, here="/pools/gpt")
+        body += (f'<div class="panel bad"><h3>Refused before the pool '
+                 f'<span class="n">{len(data["broken"])}</span></h3>'
+                 f'<p class="hint">these rows were never stock: the sheet '
+                 f'has them, validation would not take them. Fix the cell, '
+                 f'or ask whoever sold them for the money back.</p>'
+                 f'<table>{broken}</table></div>')
+    return page("Gpt Pool", body + "</div>", user=user, here="/pools/gpt")
 
 
 # ----------------------------------------------------------- previews

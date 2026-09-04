@@ -176,7 +176,7 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/pools/gpt":
                 return self._html(200, pages.gpt_pool_page(
                     read.gpt_pool(self.settings,
-                                  view=first.get("view", "active"),
+                                  view=first.get("view", "waiting"),
                                   q=first.get("q", ""),
                                   page=_page_number(first)),
                     user, said=first.get("said", ""), explain=_explain,

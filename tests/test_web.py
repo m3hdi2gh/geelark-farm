@@ -810,11 +810,11 @@ def test_the_proxy_page_offers_to_adopt_what_geelark_holds(web, monkeypatch):
 def test_the_gpt_delivered_view_searches_and_pages(web, monkeypatch):
     seen = {}
 
-    def gpt_pool(settings, view="active", q="", page=1, per_page=50):
+    def gpt_pool(settings, view="waiting", q="", page=1, per_page=50):
         seen.update(view=view, q=q, page=page)
         return {"view": "delivered",
-                "counts": {"awaiting": 0, "logging_in": 0, "on_phone": 0,
-                           "delivered": 108, "needs_human": 0},
+                "counts": {"waiting": 0, "on_phone": 0, "needs_human": 0,
+                           "delivered": 108},
                 "rows": [{"id": 1, "address": "d@x.com", "status": "delivered",
                           "serial": "1542", "source": "manual",
                           "added_by": None, "added_by_name": None,
@@ -2327,13 +2327,30 @@ def _app_row(address, status="", **more):
     return row
 
 
-def _gpt_active(monkeypatch, panel=(), manual=(), needs_human=(), broken=()):
-    monkeypatch.setattr(app_mod.read, "gpt_pool", lambda s, **k: {
-        "view": "active",
-        "counts": {"awaiting": 3, "logging_in": 1, "on_phone": 0,
-                   "delivered": 108, "needs_human": len(needs_human)},
-        "panel": list(panel), "manual": list(manual),
-        "needs_human": list(needs_human), "broken": list(broken)})
+def _gpt_active(monkeypatch, waiting=(), on_phone=(), needs_human=(),
+                broken=(), seen=None):
+    """read.gpt_pool as the page now asks for it: one view, one list of
+    rows, and the counts every pill shows. Panel and hand-added accounts
+    share the waiting list - `source` is what tells them apart."""
+    seen = seen if seen is not None else {}
+    lists = {"waiting": list(waiting), "on_phone": list(on_phone),
+             "needs_human": list(needs_human)}
+    counts = {"waiting": len(lists["waiting"]),
+              "on_phone": len(lists["on_phone"]),
+              "needs_human": len(lists["needs_human"]),
+              "delivered": 108, "broken": len(broken)}
+
+    def gpt_pool(settings, view="waiting", q="", page=1, per_page=50):
+        seen.update(view=view, q=q, page=page)
+        rows = lists.get(view, [])
+        out = {"view": view, "counts": counts, "rows": rows, "q": q,
+               "page": page, "more": False, "total": len(rows), "pages": 1}
+        if view == "needs_human":
+            out["broken"] = list(broken)
+        return out
+
+    monkeypatch.setattr(app_mod.read, "gpt_pool", gpt_pool)
+    return seen
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -2404,19 +2421,22 @@ def test_a_refused_by_hand_account_comes_back_filled_in_with_the_reason(
     assert '<p class="err">' in body and "nope" in body.split(
         '<p class="err">')[1].split("</p>")[0], "the exact reason"
     assert 'action="/pools/gpt/preview"' in body, "the paste box is still there"
-    assert "From the customer panel" in body, "and so are the pools"
+    assert '<details class="fold" open>' in body, "the fold it was typed in"
+    assert '<div class="pills">' in body, "and the four views"
 
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
-def test_the_gpt_pool_ticks_awaiting_rows_and_logs_them_in_from_there(
+def test_the_gpt_pool_ticks_waiting_rows_and_logs_them_in_from_there(
         web, monkeypatch):
+    """One list for both sources, ticks on it, and one button. What is
+    already on a phone is a different question and a different view."""
     import geelark_farm.store.actions as actions_mod
 
     _gpt_active(monkeypatch,
-                panel=[_app_row("a@x.com", source="panel"),
-                       _app_row("b@x.com", "in_use", source="panel",
-                                serial="1550")],
-                manual=[_app_row("c@x.com")])
+                waiting=[_app_row("a@x.com", source="panel"),
+                         _app_row("c@x.com")],
+                on_phone=[_app_row("b@x.com", "in_use", source="panel",
+                                   serial="1550")])
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 92)
@@ -2424,16 +2444,21 @@ def test_the_gpt_pool_ticks_awaiting_rows_and_logs_them_in_from_there(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/pools/gpt")
-    assert body.count('type="checkbox" name="addresses"') == 2, \
-        "the two awaiting rows, not the one logging in"
+    assert body.count('type="checkbox" name="addresses"') == 2
     assert 'name="addresses" value="a@x.com"' in body
     assert 'name="addresses" value="c@x.com"' in body
-    assert 'value="b@x.com"' not in body
-    assert 'logging in — <a href="/phones/1550">1550</a>' in body
-    assert "1 awaiting · 1 logging in" in body and "1 awaiting</span>" in body
+    assert 'value="b@x.com"' not in body, "what is on a phone has its own view"
+    assert 'class="badge panel">panel' in body, "one list, one where-from"
+    assert "manual · mehdi" in body
+    assert "2</span> waiting" in body, "the sentence, not a bar of numbers"
     assert "Log in selected" in body
     assert 'name="back" value="/pools/gpt"' in body
     assert "log in on their own" not in body
+
+    _, _, body = client.request("GET", "/pools/gpt?view=on_phone")
+    assert "b@x.com" in body and '<a href="/phones/1550">1550</a>' in body
+    assert 'class="badge in_use">signing in' in body
+    assert 'name="pasted"' not in body, "the add box belongs to Waiting"
 
     status, headers, _ = client.request(
         "POST", "/accounts/login",
@@ -2457,9 +2482,78 @@ def test_the_gpt_pool_ticks_awaiting_rows_and_logs_them_in_from_there(
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_waiting_sentence_answers_whether_a_phone_can_take_them(
+        web, monkeypatch):
+    """The one question the front door exists for. With no pass to read a
+    pulse from, the page says the number it knows and claims nothing
+    about phones."""
+    _gpt_active(monkeypatch, waiting=[_app_row("a@x.com"),
+                                      _app_row("b@x.com")])
+    nav = {"gmail": 3, "proxy": 2, "app": 2, "pending": 0}
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert "2</span> waiting for a phone" in body, "no pulse, no claim"
+
+    for warm, tail in ((6, "6 warm phones can take them"),
+                       (1, "only 1 warm phone free"),
+                       (0, "no warm phone is free for them")):
+        monkeypatch.setattr(
+            app_mod.read, "nav_counts",
+            lambda s, w=warm: dict(nav, pulse={"warm": w, "target": 5,
+                                               "tripped": "", "at": 0}))
+        _, _, body = client.request("GET", "/pools/gpt")
+        assert f"waiting — {tail}" in body, warm
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_what_happened_shows_the_instruction_not_the_paragraph(
+        web, monkeypatch):
+    """A verdict's advice is a paragraph of reasoning that ends in one
+    instruction. The table shows the instruction; the reasoning rides in
+    the title, where it costs no rows."""
+    from geelark_farm.failures import verdict
+
+    _gpt_active(monkeypatch,
+                needs_human=[_app_row("h@x.com", "payment_problem")])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gpt?view=needs_human")
+    said = verdict("payment_problem")
+    esc = app_mod.pages.esc
+    assert esc(said.seen) in body
+    assert esc(said.advice.split(". ")[-1]) in body, "what to do about it"
+    assert f'title="{esc(said.advice)}"' in body, "the whole of it, on hover"
+    middle = esc(said.advice.split(". ")[1])
+    assert body.count(middle) == 1, \
+        "the reasoning is in the title alone, not loose in the cell"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_by_hand_folds_are_not_forms_inside_forms(web, monkeypatch):
+    """A form inside a form is not HTML: the parser drops the inner tag,
+    and its button then submits the outer one. Both pools' by-hand folds
+    shipped that way (2026-09-04)."""
+    import re
+
+    _gmail_active(monkeypatch)
+    _gpt_active(monkeypatch, waiting=[_app_row("a@x.com")])
+    client = web()
+    client.login()
+    for path in ("/pools/gmail", "/pools/gpt"):
+        status, _, body = client.request("GET", path)
+        assert status == 200, path
+        assert "<summary>add one by hand</summary>" in body, path
+        depth = 0
+        for token in re.findall(r"</?form", body):
+            depth += 1 if token == "<form" else -1
+            assert depth in (0, 1), f"{path}: a form inside a form"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_with_manual_login_off_the_gpt_pool_says_accounts_log_in_on_their_own(
         web, monkeypatch):
-    _gpt_active(monkeypatch, manual=[_app_row("c@x.com")])
+    _gpt_active(monkeypatch, waiting=[_app_row("c@x.com")])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/pools/gpt")
@@ -2469,7 +2563,7 @@ def test_with_manual_login_off_the_gpt_pool_says_accounts_log_in_on_their_own(
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
 def test_the_gpt_pool_names_each_permission_it_lacks(web, monkeypatch):
-    _gpt_active(monkeypatch, manual=[_app_row("c@x.com")],
+    _gpt_active(monkeypatch, waiting=[_app_row("c@x.com")],
                 needs_human=[_app_row("h@x.com", "payment_problem")])
     monkeypatch.setattr(FakeStore, "user",
                         {"id": 9, "username": "narrow", "role": "operator",
@@ -2483,6 +2577,8 @@ def test_the_gpt_pool_names_each_permission_it_lacks(web, monkeypatch):
     assert 'name="addresses"' not in body
     assert "logging accounts in needs the may_login_accounts permission" in body
     assert "log in on their own" not in body, "manual login is on"
+
+    _, _, body = client.request("GET", "/pools/gpt?view=needs_human")
     assert "Offer again" not in body
     assert "offering accounts again needs the may_add_gpt permission" in body
 
@@ -2497,9 +2593,9 @@ def test_needs_a_human_says_what_was_seen_and_what_to_do(web, monkeypatch):
         _app_row("k@x.com", "made_up_word", note="only the note")])
     client = web()
     client.login()
-    _, _, body = client.request("GET", "/pools/gpt")
-    assert "Needs a human" in body and "2 accounts" in body
-    assert 'class="badge attn">payment_problem' in body
+    _, _, body = client.request("GET", "/pools/gpt?view=needs_human")
+    assert "Needs a human" in body and "2</span> set aside" in body
+    assert "payment problem" in body, "the reason in words, not the token"
     said = verdict("payment_problem")
     assert app_mod.pages.esc(said.seen) in body
     assert app_mod.pages.esc(said.advice) in body
@@ -2510,9 +2606,12 @@ def test_needs_a_human_says_what_was_seen_and_what_to_do(web, monkeypatch):
     assert body.count('action="/pools/gpt/offer"') == 2
     assert 'name="address" value="h@x.com"' in body
 
-    _gpt_active(monkeypatch, needs_human=[_app_row("h@x.com", "captcha_shown")])
-    _, _, body = client.request("GET", "/pools/gpt")
-    assert "1 account</span>" in body
+    _gpt_active(monkeypatch, needs_human=[_app_row("h@x.com", "captcha_shown")],
+                broken=[{"id": 4, "address": "gpt9@aytack",
+                         "error": "the address is not an email"}])
+    _, _, body = client.request("GET", "/pools/gpt?view=needs_human")
+    assert "1</span> set aside" in body
+    assert "Refused before the pool" in body and "gpt9@aytack" in body
 
 
 def test_the_delivered_view_links_phones_counts_pages_and_exports_csv(
@@ -2520,10 +2619,10 @@ def test_the_delivered_view_links_phones_counts_pages_and_exports_csv(
     seen = {}
     stamp = "2026-09-01 18:04:00+00:00"
 
-    def gpt_pool(settings, view="active", q="", page=1, per_page=50):
+    def gpt_pool(settings, view="waiting", q="", page=1, per_page=50):
         return {"view": "delivered",
-                "counts": {"awaiting": 0, "logging_in": 0, "on_phone": 0,
-                           "delivered": 873, "needs_human": 0},
+                "counts": {"waiting": 0, "on_phone": 0, "needs_human": 0,
+                           "delivered": 873},
                 "rows": [_app_row("d@x.com", "delivered", serial="1542",
                                   note="went out", updated_at=stamp)],
                 "q": q, "page": page, "more": True, "total": 61,

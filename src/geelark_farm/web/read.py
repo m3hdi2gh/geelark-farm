@@ -479,60 +479,92 @@ def delivered_rows(settings: Settings, q: str = "") -> list[dict]:
             (q.strip(), like, like, like))
 
 
-def gpt_pool(settings: Settings, view: str = "active", q: str = "",
+#: The Gpt Pool's four views, and the count each pill shows.
+GPT_VIEWS = {"waiting": "waiting", "on_phone": "on_phone",
+             "needs_human": "needs_human", "delivered": "delivered"}
+
+
+def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
              page: int = 1, per_page: int = 50) -> dict:
-    """The Gpt Pool page. Active = the accounts waiting for a phone, in
-    two sections by where they came from, plus the ones a run set aside
-    for a person. Delivered = the archive the customer panel pulls fates
-    from, searchable by address or phone."""
+    """The Gpt Pool page, one list at a time.
+
+    Four views, one table each: `waiting` is the front door - every
+    account that has no phone yet, in the order the keeper claims them;
+    `on_phone` is what is signing in now or signed in and waiting to go
+    out; `needs_human` is what a run set aside, with the rows validation
+    refused underneath; `delivered` is the archive the customer panel
+    pulls each fate from, searchable by address, phone or note.
+
+    Panel and hand-added accounts share the waiting list - `source` says
+    which is which - because the keeper takes the next one either way.
+    """
+    view = GPT_VIEWS.get(view, "waiting")
+    page = max(1, int(page or 1))
+    per_page = max(1, int(per_page or 1))
+    skip = (page - 1) * per_page
     with Store(settings) as store:
         counts = store._rows(
             "SELECT"
             " count(*) FILTER (WHERE status = '' AND error IS NULL)"
-            "   AS awaiting,"
-            " count(*) FILTER (WHERE status = 'in_use') AS logging_in,"
-            " count(*) FILTER (WHERE status = 'ready') AS on_phone,"
+            "   AS waiting,"
+            " count(*) FILTER (WHERE status IN ('in_use', 'ready'))"
+            "   AS on_phone,"
             " count(*) FILTER (WHERE status = 'delivered') AS delivered,"
             " count(*) FILTER (WHERE error IS NULL AND NOT (status = ANY(%s))"
-            "   AND status <> %s) AS needs_human"
+            "   AND status <> %s) AS needs_human,"
+            " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
             " FROM resources WHERE kind = 'app'",
             (sorted(ROUTINE["app"]), IMPORTED))[0]
+        out = {"view": view, "counts": counts, "q": q, "page": page}
         if view == "delivered":
             like = f"%{q.strip()}%"
             rows = store._rows(
                 f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
                 " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
                 f" WHERE {_DELIVERED_MATCH}"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (q.strip(), like, like, like, per_page + 1,
-                 (page - 1) * per_page))
-            total = store._rows(
-                f"SELECT count(*) AS n FROM resources r"
+                " ORDER BY r.updated_at DESC, r.id DESC LIMIT %s OFFSET %s",
+                (q.strip(), like, like, like, per_page + 1, skip))
+            found = store._rows(
+                "SELECT count(*) AS n FROM resources r"
                 f" WHERE {_DELIVERED_MATCH}", (q.strip(), like, like, like))
-            n = int(total[0]["n"]) if total else 0
-            more = len(rows) > per_page
-            return {"view": view, "counts": counts, "rows": rows[:per_page],
-                    "q": q, "page": page, "more": more, "total": n,
-                    "pages": _pages(n, per_page)}
-        waiting = store._rows(
-            f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
-            " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-            " WHERE r.kind = 'app' AND r.error IS NULL"
-            " AND r.status IN ('', 'in_use')"
-            " ORDER BY r.status DESC, r.sheet_row NULLS LAST, r.id")
-        needs_human = store._rows(
-            f"SELECT {_APP_COLUMNS} FROM resources r"
-            " WHERE r.kind = 'app' AND r.error IS NULL"
-            " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
-            " ORDER BY r.updated_at DESC",
-            (sorted(ROUTINE["app"]), IMPORTED))
-        broken = store._rows(
-            "SELECT id, address, error FROM resources"
-            " WHERE kind = 'app' AND error IS NOT NULL ORDER BY id")
-    panel = [r for r in waiting if r["source"] == "panel"]
-    manual = [r for r in waiting if r["source"] != "panel"]
-    return {"view": "active", "counts": counts, "panel": panel,
-            "manual": manual, "needs_human": needs_human, "broken": broken}
+            total = int(found[0]["n"]) if found else 0
+        elif view == "on_phone":
+            rows = store._rows(
+                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name,"
+                " p.status AS phone_status"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                " LEFT JOIN phones p"
+                "   ON p.serial = r.serial AND p.done_at IS NULL"
+                " WHERE r.kind = 'app' AND r.status IN ('in_use', 'ready')"
+                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
+                (per_page + 1, skip))
+            total = int(counts["on_phone"])
+        elif view == "needs_human":
+            rows = store._rows(
+                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                " WHERE r.kind = 'app' AND r.error IS NULL"
+                " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
+                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
+                (sorted(ROUTINE["app"]), IMPORTED, per_page + 1, skip))
+            total = int(counts["needs_human"])
+            # The rows validation refused ride with them: they are not
+            # stock, nobody can use them, and they are the same kind of
+            # thing to decide about.
+            out["broken"] = store._rows(
+                "SELECT id, address, error FROM resources"
+                " WHERE kind = 'app' AND error IS NOT NULL ORDER BY id")
+        else:
+            rows = store._rows(
+                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
+                " ORDER BY r.sheet_row NULLS LAST, r.id LIMIT %s OFFSET %s",
+                (per_page + 1, skip))
+            total = int(counts["waiting"])
+    out.update(rows=rows[:per_page], more=len(rows) > per_page, total=total,
+               pages=_pages(total, per_page))
+    return out
 
 
 def events(settings: Settings, limit: int = 200) -> list[dict]:
