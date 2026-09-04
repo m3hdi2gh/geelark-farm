@@ -119,6 +119,19 @@ def record_refused(settings: Settings, *, verb: str, payload: dict,
 PER_PAGE = 50
 
 
+def one(settings: Settings, action_id: int) -> dict | None:
+    """One request by id, for a page that is waiting on it - the Boot
+    button's new tab watches its own row until the pass settles it."""
+    with connect(settings) as conn:
+        rows = conn.execute(
+            "SELECT id, verb, status, result, detail, requested_by"
+            " FROM actions WHERE id = %s", (int(action_id),)).fetchall()
+    if not rows:
+        return None
+    return dict(zip(("id", "verb", "status", "result", "detail",
+                     "requested_by"), rows[0], strict=True))
+
+
 def listing(settings: Settings, *, user_id: int,
             everyone: bool = False, limit: int = PER_PAGE,
             view: str = "", page: int = 1) -> list[dict]:

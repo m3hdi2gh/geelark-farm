@@ -88,8 +88,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.dashboard(
                     read.dashboard(self.settings, scope), user,
                     said=(query.get("said") or [""])[0],
-                    manual_login=self.settings.manual_login,
-                    flags=self._switches()))
+                    manual_login=self.settings.manual_login))
             if path == "/phones":
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.phones_page(
@@ -222,6 +221,28 @@ class _Handler(BaseHTTPRequestHandler):
                     user, level=level, before=before, **filters,
                     capture=_capture_health(),
                     log_db=bool(self.settings.log_db)))
+            if path.startswith("/phones/") and path.endswith("/live"):
+                # Boot's new tab. The live-view URL is the answer to the
+                # start call, so it can only exist once the pass has made
+                # it; the ?said= the press redirected here with names the
+                # request to wait on.
+                from ..store import actions as store_actions
+
+                serial = path[len("/phones/"):-len("/live")]
+                said = first.get("said", "")
+                _, _, req = said.partition(":")
+                row = None
+                if req.isdigit():
+                    try:
+                        row = store_actions.one(self.settings, int(req))
+                    except Exception as exc:                      # noqa: BLE001
+                        log.debug("boot %s: request not read (%s)", req, exc)
+                if row and row.get("status") == "done":
+                    url = (row.get("detail") or {}).get("url")
+                    if url:
+                        return self._redirect(str(url))
+                return self._html(200, pages.live_page(
+                    serial, user, said=said, row=row))
             if path.startswith("/phones/") and "/screens/" in path:
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -291,6 +312,15 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/retry"):
                 return self._retry_action(user)
+            if self.path.startswith("/phones/") and \
+                    self.path.endswith("/boot"):
+                # One press: start the phone in GeeLark, take it, and hand
+                # the live-view link to the tab that is waiting for it.
+                serial = self.path[len("/phones/"):-len("/boot")]
+                return self._act(user, "may_take_phones", "boot_phone",
+                                 {"serial": serial},
+                                 idem=self._minute_key(user, "boot", serial),
+                                 back=f"/phones/{serial}/live")
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/stop"):
                 serial = self.path[len("/phones/"):-len("/stop")]

@@ -193,10 +193,21 @@ button:active{{transform:translateY(1px)}}
 button.quiet,.btn.quiet{{background:none;border:1px solid #2c3a52;color:#9db4d4;
  font-weight:500;padding:5px 11px;font-size:12px}}
 button.quiet:hover,.btn.quiet:hover{{background:#141c2b;border-color:#3d4f6e;color:#fff}}
-button.quiet.warn{{border-color:#57431c;color:var(--amber)}}
-button.quiet.warn:hover{{background:var(--amber-bg)}}
-button.quiet.bad{{border-color:#3a2626;color:#b98b85}}
-button.quiet.bad:hover{{background:var(--red-bg);color:#ffb3a6}}
+button.quiet.warn,.btn.quiet.warn{{border-color:#57431c;color:var(--amber)}}
+button.quiet.warn:hover,.btn.quiet.warn:hover{{background:var(--amber-bg);
+ color:#ffd89a}}
+button.quiet.bad,.btn.quiet.bad{{border-color:#4d2323;color:var(--red)}}
+button.quiet.bad:hover,.btn.quiet.bad:hover{{background:var(--red-bg);
+ color:#ffb3a6}}
+button.quiet.ok,.btn.quiet.ok{{border-color:#1d4530;color:var(--green)}}
+button.quiet.ok:hover,.btn.quiet.ok:hover{{background:var(--green-bg);
+ color:#8ff0b5}}
+button.quiet.go,.btn.quiet.go{{border-color:#22406e;color:var(--blue)}}
+button.quiet.go:hover,.btn.quiet.go:hover{{background:var(--blue-bg);
+ color:#c6dcff}}
+button.quiet.live,.btn.quiet.live{{border-color:#3a2c55;color:var(--violet)}}
+button.quiet.live:hover,.btn.quiet.live:hover{{background:var(--violet-bg);
+ color:#e2d8ff}}
 button.big{{height:44px;justify-content:center;width:100%;font-size:14px}}
 form.inline{{display:inline}}
 .row{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
@@ -245,11 +256,20 @@ p{{margin:0}}
 .headline{{display:flex;align-items:flex-end;gap:40px;flex-wrap:wrap}}
 .headline .n{{font-family:var(--mono);font-size:56px;line-height:1;
  font-weight:500;font-variant-numeric:tabular-nums}}
-.headline .l{{font-size:12.5px;color:var(--muted)}}
-.strip{{margin-left:auto;display:flex;gap:22px;flex-wrap:wrap;
- font-size:13px;color:var(--muted);padding-bottom:6px}}
-.strip a{{color:var(--muted)}} .strip a:hover{{color:#fff}}
-.strip b{{font-family:var(--mono);font-weight:500;margin-right:5px}}
+.headline .l{{font-size:12.5px;color:var(--muted);letter-spacing:.3px}}
+.tally{{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;
+ color:var(--muted);margin-top:12px}}
+.tally b{{font-family:var(--mono);font-weight:600;margin-right:5px;
+ font-variant-numeric:tabular-nums}}
+.strip{{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}}
+.strip a{{display:flex;flex-direction:column;align-items:center;gap:4px;
+ min-width:92px;padding:10px 14px;border-radius:10px;color:var(--muted);
+ border:1px solid transparent}}
+.strip a:hover{{background:var(--panel2);border-color:var(--line);
+ color:var(--bright)}}
+.strip b{{font-family:var(--mono);font-size:21px;font-weight:500;
+ line-height:1;font-variant-numeric:tabular-nums}}
+.strip i{{font-style:normal;font-size:11.5px;letter-spacing:.3px}}
 .svc{{display:flex;align-items:center;gap:14px;padding-top:12px;
  border-top:1px solid var(--line2);font-size:12px;color:#55627a}}
 .svc button{{background:none;border:0;color:var(--dim);font-size:12px;
@@ -607,11 +627,11 @@ CONTROLS = {
 #: The sheet's State words a person can give a phone from the table, and
 #: what each costs - the two that delete something ask first.
 PHONE_STATES = {
-    "taken": {"label": "Take", "klass": "quiet", "sure": False,
+    "taken": {"label": "Take", "klass": "quiet go", "sure": False,
               "text": ""},
     "unused": {"label": "Release", "klass": "quiet", "sure": False,
                "text": ""},
-    "done": {"label": "Done", "klass": "quiet bad", "sure": True,
+    "done": {"label": "Done", "klass": "quiet ok", "sure": True,
              "text": "The next sync deletes the phone in GeeLark and "
                      "retires the gmail and the account on it as "
                      "delivered. There is no undo: the phone is gone."},
@@ -800,7 +820,21 @@ def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
     return (f'<form method="post" class="inline" '
             f'action="/phones/{esc(serial)}/proxy">{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<button class="quiet">Change IP</button></form>')
+            f'<button class="quiet warn">Change IP</button></form>')
+
+
+def _boot_form(user: dict, serial: str) -> str:
+    """"Boot": start the phone in GeeLark, take it, and watch the screen.
+
+    The live-view URL is the answer to the start call and exists nowhere
+    else, so the press cannot hand one over on the spot. It opens a new
+    tab instead (`target`), and that tab waits for the pass and then goes
+    to the screen itself - this one stays on the dashboard.
+    """
+    return (f'<form method="post" class="inline" target="_blank" '
+            f'action="/phones/{esc(serial)}/boot">{_csrf(user)}'
+            f'<button class="quiet live" title="start it, take it, and '
+            f'watch the screen in a new tab">Boot</button></form>')
 
 
 def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
@@ -827,15 +861,15 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     nothing: a run is holding it.
     """
     building = (row.get("status") or "") == "building"
-    if building or not _may(user, "may_take_phones"):
-        actions = []
-    elif (row.get("state") or "") == "taken":
-        actions = _state_forms(user, row, back)
-    else:
-        actions = _state_forms(user, row, back)[:1]
+    serial = str(row.get("serial") or "")
+    actions = []
+    if not building and _may(user, "may_take_phones"):
+        actions.append(_boot_form(user, serial))
+        actions += (_state_forms(user, row, back)
+                    if (row.get("state") or "") == "taken"
+                    else _state_forms(user, row, back)[:1])
     if _may(user, "may_change_proxy") and not building:
-        actions.append(_change_ip_form(user, str(row.get("serial") or ""),
-                                       back))
+        actions.append(_change_ip_form(user, serial, back))
     return " ".join(actions)
 
 
@@ -894,9 +928,25 @@ def _status_sentence(data: dict) -> str:
         word, colour = f"Building — {warm} of {target} warm", "amber"
     else:
         word, colour = "Everything running", "green"
-    when = _ago(pulse["at"]) if pulse.get("at") else "unknown"
-    return (f'<span style="color:var(--{colour})">●</span> {esc(word)} '
-            f'<span class="dim">·</span> last pass {esc(when)}')
+    # How long ago the pass ran is not a thing to read on every page:
+    # when it is late the alert strip says so in a sentence, and the pass
+    # itself is on its way out.
+    return f'<span style="color:var(--{colour})">●</span> {esc(word)}'
+
+
+def _tally(warm: list, taken: list, incomplete: list,
+           building: list) -> str:
+    """The rest of the shelf beside the headline number, each count in
+    the colour its badge wears. Warm is always printed - it is what the
+    ready number will be made of - and the other three only when they
+    are not zero, so a healthy farm reads as two words."""
+    items = [(len(warm), "warm", "amber"),
+             (len(taken), "taken", "violet"),
+             (len(incomplete), "incomplete", "red"),
+             (len(building), "building", "blue")]
+    return "".join(
+        f'<span><b style="color:var(--{colour})">{n}</b>{esc(word)}</span>'
+        for n, word, colour in items if n or word == "warm")
 
 
 def _stock_strip(data: dict) -> str:
@@ -919,14 +969,15 @@ def _stock_strip(data: dict) -> str:
          "red" if not proxy else "amber" if proxy < target else "ink",
          "no free exit - the next build has nowhere to go out from"
          if not proxy else short if proxy < target else "free to build with"),
-        ("/pools/gpt", awaiting, "GPT accounts",
+        ("/pools/gpt", awaiting, "GPT",
          "amber" if awaiting > warm else "ink",
          f"{awaiting - warm} of them have no phone to go to"
          if awaiting > warm else "awaiting login"),
     ]
     return "".join(
         f'<a href="{href}" title="{esc(why)}">'
-        f'<b style="color:var(--{colour})">{number}</b>{esc(word)}</a>'
+        f'<b style="color:var(--{colour})">{number}</b>'
+        f'<i>{esc(word)}</i></a>'
         for href, number, word, colour, why in items)
 
 
@@ -951,8 +1002,7 @@ def _service_row(data: dict, user: dict, flags: dict | None) -> str:
 
 
 def dashboard(data: dict, user: dict, said: str = "",
-              manual_login: bool = False,
-              flags: dict | None = None) -> str:
+              manual_login: bool = False) -> str:
     """The console's front page, kept to two questions: is the farm well,
     and what can be handed over now. One sentence of health, one number,
     a line of stock, the phones with their own buttons. Everything that
@@ -961,24 +1011,21 @@ def dashboard(data: dict, user: dict, said: str = "",
     pulse = data.get("pulse") or {}
     phones = data.get("phones") or []
     taken = [r for r in phones if (r.get("state") or "") == "taken"]
-    ready = [r for r in phones if (r.get("status") or "") == "ready"
-             and (r.get("state") or "") != "taken"]
-    warm = [r for r in phones if (r.get("status") or "") == "app_only"]
+    # A phone somebody is holding is counted once, as theirs: it is not
+    # also warm stock, however warm it happens to be.
+    shelf = [r for r in phones if (r.get("state") or "") != "taken"]
+    ready = [r for r in shelf if (r.get("status") or "") == "ready"]
+    warm = [r for r in shelf if (r.get("status") or "") == "app_only"]
+    incomplete = [r for r in shelf
+                  if (r.get("status") or "") == "incomplete"]
     building = [r for r in phones if (r.get("status") or "") == "building"]
 
-    note = []
-    if ready:
-        note.append("Take one to hand it over")
-    note.append(f"{_plural(len(warm), 'warm phone')} behind them")
-    if building:
-        note.append(f"{len(building)} building")
-    if taken:
-        note.append(f"{len(taken)} out with somebody")
     headline = (f'<div class="headline"><div>'
                 f'<div class="l">Ready to deliver</div>'
                 f'<div class="n" style="color:var('
                 f'--{"green" if ready else "dim"})">{len(ready)}</div>'
-                f'<div class="l">{esc(" · ".join(note))}</div></div>'
+                f'<div class="tally">'
+                f'{_tally(warm, taken, incomplete, building)}</div></div>'
                 f'<div class="strip">{_stock_strip(data)}</div></div>')
 
     rows = _phone_rows(data, user)
@@ -1003,7 +1050,6 @@ def dashboard(data: dict, user: dict, said: str = "",
                   f'var(--line2);padding-top:12px">{_ticker(data)}'
                   f'<a href="/events" style="margin-left:auto">all events</a>'
                   f'</div>')
-    footer += _service_row(data, user, flags)
 
     body = (f'<div class="narrow">'
             f'<div class="top"><h2>Dashboard</h2>'
@@ -1015,6 +1061,50 @@ def dashboard(data: dict, user: dict, said: str = "",
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Dashboard", body, user=user, here="/",
                 refresh=30 if busy else 0)
+
+
+def live_page(serial: str, user: dict, said: str = "",
+              row: dict | None = None) -> str:
+    """The tab Boot opens.
+
+    The live-view URL is the answer to a call only the pass makes, so
+    this tab waits on the request it queued and goes to the screen the
+    moment it lands. A refusal or a failure is said here in words - a
+    tab that opens and stays blank is worse than no tab.
+    """
+    row = row or {}
+    status = str(row.get("status") or "")
+    result = str(row.get("result") or "")
+    wait = 0
+    if said == "refused":
+        title, note, colour = ("Not allowed",
+                               "You may not boot phones - ask an admin.",
+                               "red")
+    elif said == "off":
+        title, note, colour = ("Actions are not switched on yet",
+                               "Nothing was queued.", "amber")
+    elif status in ("failed", "refused", "cancelled"):
+        title, note, colour = (f"{serial} did not start",
+                               result or "the request did not go through",
+                               "red")
+    elif status == "done":
+        title, note, colour = (f"{serial} started",
+                               result or "GeeLark gave no live-view link "
+                               "back for it", "green")
+    else:
+        title, note, colour, wait = (
+            f"Starting {serial}",
+            "the keeper picks this up on its next pass, within about half "
+            "a minute - this tab goes to the screen by itself",
+            "amber", 3)
+    body = (f'<div class="card" style="width:min(520px,100%);'
+            f'text-align:center">'
+            f'<div class="brand" style="justify-content:center">'
+            f'{_BRAND_ICON}geelark farm</div>'
+            f'<h2 style="color:var(--{colour})">{esc(title)}</h2>'
+            f'<p class="muted">{esc(note)}</p>'
+            f'<a class="btn quiet" href="/">Back to the dashboard</a></div>')
+    return page(f"Boot {serial}", body, user=user, here="/", refresh=wait)
 
 
 def _awaiting_panel(data: dict, user: dict, manual_login: bool,
@@ -1304,6 +1394,8 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return (_CONTROL_SAID.get(what)
                 or (CONTROLS.get(what) or {}).get("label")
                 or what or "Control"), ""
+    if verb == "boot_phone":
+        return f"Boot phone {p.get('serial', '?')}", "start it and take it"
     if verb == "set_phone_state":
         return (f"Mark phone {p.get('serial', '?')} "
                 f"{p.get('state') or 'unused'}"), ""

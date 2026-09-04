@@ -456,6 +456,75 @@ def control(book, ledger, settings, payload, client):
 
 
 # --------------------------------------------------------- phones by hand
+def _stamp_owner(settings, serial: str, by_id) -> None:
+    """Who is holding the phone, written into the mirror - the sheet has
+    no column for it. Never fatal: the State cell is the record, this is
+    only the name beside it."""
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import db as store_db
+
+        with store_db.connect(settings) as conn:
+            conn.execute(
+                "UPDATE phones SET owner_id = %s, updated_at = now()"
+                " WHERE serial = %s AND done_at IS NULL", (by_id, serial))
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s: owner not stamped (%s)", serial, exc)
+
+
+def boot_phone(book, ledger, settings, payload, client):
+    """"Boot": start the phone in GeeLark and take it, in one press.
+
+    The live-view URL exists only as the answer to /phone/start - GeeLark
+    has no endpoint that hands one out for a phone already running - so
+    starting it is what produces the link, and the link rides in this
+    action's detail for the page waiting on it.
+
+    Starting a phone bills it, and somebody watching a screen is holding
+    that phone, so this writes State=taken in the same breath: the sync
+    then leaves it alone until they say Done, Failed or Release.
+    """
+    from . import phones as phones_mod
+    from .phones import PhoneError
+
+    serial = str(payload.get("serial") or "").strip()
+    row = next((r for r in book.phones.rows()
+                if str(r.get("Serial") or "").strip() == serial), None)
+    if row is None:
+        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
+    if row.get("Status") == book.phones.BUILDING:
+        return "refused", f"phone {serial} is being worked on right now", None
+    if client is None:
+        return "failed", "no GeeLark client on this pass", None
+    live = next((p for p in phones_mod.listing(client)
+                 if str(p.get("serialNo")) == serial), None)
+    if live is None:
+        return "failed", f"phone {serial} is not in GeeLark's list", None
+    held = ledger.get(live["id"]) if ledger is not None else None
+    if held is not None and held.is_claimed and not held.is_stale:
+        return "refused", f"phone {serial} is held by a run ({held.label})", None
+    try:
+        # One attempt, not the builder's four: a capacity refusal here
+        # would sleep half a minute inside the drain, and the person is
+        # watching a tab that can simply be pressed again.
+        url = phones_mod.start(client, live["id"], attempts=1)
+    except phones_mod.PhoneCapacityError:
+        return ("failed", f"GeeLark has no machine free for {serial} right "
+                          f"now - press Boot again in a minute", None)
+    except (PhoneError, ApiError) as exc:
+        return "failed", f"phone {serial} would not start: {exc}", None
+    book.phones.write(serial, State="taken")
+    _stamp_owner(settings, serial, payload.get("by_id"))
+    if not url:
+        return ("done", f"phone {serial} started and taken by "
+                        f"{_by(payload)} - GeeLark gave no live-view link "
+                        f"back", {"state": "taken"})
+    return ("done", f"phone {serial} started and taken by {_by(payload)}",
+            {"state": "taken", "url": url})
+
+
 def set_phone_state(book, ledger, settings, payload, client):
     """Write the State cell - taken / done / failed / (blank) - the way a
     hand does in the sheet; the sync carries it out on the next pass.
@@ -472,19 +541,8 @@ def set_phone_state(book, ledger, settings, payload, client):
         return "refused", f"phone {serial} is being worked on right now", None
     word = "" if state == "unused" else state
     book.phones.write(serial, State=word)
-    if settings is not None and getattr(settings, "store_enabled", False):
-        try:
-            from .store import db as store_db
-
-            with store_db.connect(settings) as conn:
-                conn.execute(
-                    "UPDATE phones SET owner_id = %s, updated_at = now()"
-                    " WHERE serial = %s AND done_at IS NULL",
-                    (payload.get("by_id") if word == "taken" else None,
-                     serial))
-                conn.commit()
-        except Exception as exc:                                  # noqa: BLE001
-            log.warning("phone %s: owner not stamped (%s)", serial, exc)
+    _stamp_owner(settings, serial,
+                 payload.get("by_id") if word == "taken" else None)
     meaning = {"taken": "out with somebody - the sync leaves it alone",
                "done": "the sync deletes the phone and retires what was on it",
                "failed": "the sync deletes the phone and frees its account",
@@ -543,6 +601,7 @@ VERBS = {
     "login_accounts": login_accounts,
     "control": control,
     "set_phone_state": set_phone_state,
+    "boot_phone": boot_phone,
     "clear_tries": clear_tries,
     "ignore_proxy": ignore_proxy,
     "change_proxy": change_proxy,

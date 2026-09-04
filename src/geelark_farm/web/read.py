@@ -93,7 +93,7 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
         found.append({"level": "bad", "href": "/",
                       "text": "STOPPED from the sheet - nothing is synced, "
                               "built or drained until Stop everything is "
-                              "unticked (or Start from the dashboard)."})
+                              "unticked."})
     elif age is not None and age > STALE_AFTER:
         minutes = int(age // 60)
         found.append({"level": "warn", "href": "/events",

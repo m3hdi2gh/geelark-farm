@@ -291,6 +291,69 @@ def _phone_on(book, serial, proxy_name):
     return row
 
 
+def test_boot_starts_the_phone_takes_it_and_keeps_the_live_link(monkeypatch):
+    """One press does both halves: GeeLark is asked to start, which is the
+    only thing that produces a live-view URL, and the phone is written
+    taken - somebody watching a screen is holding it."""
+    from geelark_farm import phones as phones_mod
+
+    book = make_book(proxies=1)
+    _phone_on(book, "1500", "SX1")
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.STOPPED}])
+    started = []
+    monkeypatch.setattr(phones_mod, "start", lambda client, pid, **k:
+                        started.append(pid) or "https://phone.geelark.com/i?t=1")
+
+    status, said, detail = verbs.boot_phone(
+        book, None, None, {"serial": "1500", "by": "mehdi"}, object())
+
+    assert status == "done", said
+    assert started == ["P1500"]
+    assert detail == {"state": "taken",
+                      "url": "https://phone.geelark.com/i?t=1"}
+    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
+    assert row["State"] == "taken", "started means taken"
+
+
+def test_boot_says_so_when_geelark_will_not_start_the_phone(monkeypatch):
+    from geelark_farm import phones as phones_mod
+
+    book = make_book(proxies=1)
+    _phone_on(book, "1500", "SX1")
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.STOPPED}])
+
+    def refuse(client, pid, **k):
+        raise phones_mod.PhoneError("[43043] no capacity")
+
+    monkeypatch.setattr(phones_mod, "start", refuse)
+
+    status, said, detail = verbs.boot_phone(
+        book, None, None, {"serial": "1500", "by": "mehdi"}, object())
+
+    assert status == "failed" and "no capacity" in said
+    assert detail is None
+    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
+    assert row["State"] != "taken", "a phone that never started is not taken"
+
+    # A capacity refusal is not retried here. The builder waits four times
+    # over half a minute for a machine; inside the drain that is a whole
+    # pass spent asleep, and the person is watching a tab they can press
+    # again.
+    asked = {}
+
+    def busy(client, pid, **k):
+        asked.update(k)
+        raise phones_mod.PhoneCapacityError("[43043] no capacity")
+
+    monkeypatch.setattr(phones_mod, "start", busy)
+    status, said, _ = verbs.boot_phone(
+        book, None, None, {"serial": "1500", "by": "mehdi"}, object())
+    assert asked == {"attempts": 1}
+    assert status == "failed" and "press Boot again" in said
+
+
 def test_change_proxy_moves_the_phone_to_the_next_free_exit(monkeypatch):
     from geelark_farm import phones as phones_mod
 

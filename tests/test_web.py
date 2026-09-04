@@ -998,7 +998,9 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     assert status == 200
     assert "Everything running" in body, "one sentence, not a bar of numbers"
     assert "Ready to deliver" in body
-    assert ">12</b>gmail" in body and ">20</b>proxies" in body, "the strip"
+    assert ">12</b><i>gmail</i>" in body, "the strip, one cell per pool"
+    assert ">20</b><i>proxies</i>" in body
+    assert "last pass" not in body, "the pass's clock is the alert strip's job"
     assert "IronHawk@gmail.com" in body and "SX27" in body
     assert 'class="badge warn">warm' in body
     assert "arman@gmail.com" in body and "gpt4.avir@proton.me" in body
@@ -2019,17 +2021,21 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     assert status == 200
     strip = body[body.index('class="strip"'):]
     strip = strip[:strip.index("</div>")]
-    assert 'color:var(--red)">0</b>gmail' in strip
+    assert 'color:var(--red)">0</b><i>gmail</i>' in strip
     assert "nothing can be built until rows are added" in strip
-    assert 'color:var(--amber)">2</b>proxies' in strip
+    assert 'color:var(--amber)">2</b><i>proxies</i>' in strip
     assert "fewer than the 5 phones the keeper keeps warm" in strip
-    assert 'color:var(--amber)">7</b>GPT accounts' in strip
+    assert 'color:var(--amber)">7</b><i>GPT</i>' in strip
     assert "2 of them have no phone to go to" in strip
-    # the headline counts only what can be handed over right now
+    # the headline counts only what can be handed over right now, and the
+    # rest of the shelf reads beside it, each in its badge's colour
     head = body[body.index("Ready to deliver"):body.index('class="strip"')]
     assert re.search(r'class="n"[^>]*>1</div>', head), "one ready, one taken"
-    assert "1 warm phone behind them" in head and "1 building" in head
-    assert "1 out with somebody" in head
+    assert 'color:var(--amber)">1</b>warm' in head
+    assert 'color:var(--violet)">1</b>taken' in head
+    assert 'color:var(--blue)">1</b>building' in head
+    assert "incomplete" not in head, "a count nobody has is not printed"
+    assert "behind them" not in head, "counts, not a sentence about them"
 
 
 def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
@@ -2221,51 +2227,145 @@ def test_the_ticker_tells_requests_and_events_as_sentences(web, monkeypatch):
         "newest first, requests and events interleaved by time"
 
 
-def test_the_switches_line_is_for_admins_only(web, monkeypatch):
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
+    """The live-view URL is the answer to the start call, so the press
+    cannot hand one over on the spot. It opens a tab that watches its own
+    request and goes to the screen when it lands."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[
+        {"serial": "1500", "status": "ready", "state": "",
+         "gmail": "IronHawk@gmail.com", "app_account": "h@x.com",
+         "proxy_name": "SX27"}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 71)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert "WEB_MUTATIONS" in body and "POOLS_IN_PG" in body
-    assert 'class="svc"' in body, "one quiet line at the foot"
-    assert "accounts log in on their own" in body
+    assert 'action="/phones/1500/boot"' in body and "Boot" in body
+    assert 'target="_blank"' in body, "the dashboard tab stays where it is"
 
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "all"})
-    narrow = web()
-    narrow.login(username="narrow")
-    _, _, body = narrow.request("GET", "/")
-    assert "WEB_MUTATIONS" not in body
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/boot", _form(csrf=client.csrf()))
+    assert status == 303
+    assert dict(headers)["Location"] == "/phones/1500/live?said=queued:71"
+    assert got["verb"] == "boot_phone" and got["payload"]["serial"] == "1500"
+
+    row = {"id": 71, "verb": "boot_phone", "status": "queued", "result": "",
+           "detail": None, "requested_by": 1}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    status, _, body = client.request(
+        "GET", "/phones/1500/live?said=queued:71")
+    assert status == 200 and "Starting 1500" in body
+    assert 'http-equiv="refresh"' in body, "the tab checks back by itself"
+
+    row.update(status="done", result="phone 1500 started and taken by mehdi",
+               detail={"state": "taken",
+                       "url": "https://phone.geelark.com/i?t=abc"})
+    status, headers, _ = client.request(
+        "GET", "/phones/1500/live?said=queued:71")
+    assert status == 303
+    assert dict(headers)["Location"] == "https://phone.geelark.com/i?t=abc"
+
+    row.update(status="failed", result="phone 1500 would not start: "
+                                       "[43043] no capacity", detail=None)
+    status, _, body = client.request(
+        "GET", "/phones/1500/live?said=queued:71")
+    assert status == 200 and "1500 did not start" in body
+    assert "no capacity" in body and 'http-equiv="refresh"' not in body
+
+
+def test_the_boot_tab_says_a_refusal_rather_than_sitting_blank(web,
+                                                               monkeypatch):
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=refused")
+    assert "Not allowed" in body and "ask an admin" in body
+    assert 'http-equiv="refresh"' not in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_service_controls_fit_the_pulse_ask_first_and_are_admin_only(
+def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
+    """Green finishes well, red finishes badly, blue is the ordinary next
+    step, violet starts a phone and amber repairs one."""
+    _dash(monkeypatch, phones=[
+        {"serial": "1500", "status": "ready", "state": ""},
+        {"serial": "1501", "status": "ready", "state": "taken",
+         "owner": "ali"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    for klass, label in (("quiet go", "Take"), ("quiet", "Release"),
+                         ("quiet ok", "Done"), ("quiet bad", "Failed"),
+                         ("quiet warn", "Change IP")):
+        assert f'class="{klass}">{label}<' in body, label
+    assert 'class="quiet live"' in body and ">Boot<" in body
+
+
+def test_the_dashboard_no_longer_carries_the_service_line(web, monkeypatch):
+    """Pausing the service and reading the flags are a settings question,
+    not a front-page one; they leave together and come back on a page of
+    their own. The row itself still renders - it has somewhere to go."""
+    _dash(monkeypatch, pulse={"warm": 5, "target": 5, "tripped": "",
+                              "paused": False, "at": 0})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "WEB_MUTATIONS" not in body and "POOLS_IN_PG" not in body
+    assert 'class="svc"' not in body and "/service/" not in body
+    assert "accounts log in on their own" in body, "that line stays"
+
+
+def test_the_service_row_fits_the_pulse_and_is_admin_only():
+    """The Settings page's parts, tested where they live. Which controls
+    are offered follows the pulse: a running service is paused or
+    stopped, a tripped one is resumed and cleared, a stopped one starts."""
+    admin = {"id": 1, "username": "mehdi", "role": "admin", "csrf": "x",
+             "mutations": True}
+    flags = {"web_mutations": True, "manual_login": False, "log_db": True,
+             "pools_in_pg": False, "web_user_admin": True}
+
+    running = {"pulse": {"warm": 5, "target": 5, "tripped": "",
+                         "paused": False, "at": 0}}
+    row = app_mod.pages._service_row(running, admin, flags)
+    assert 'action="/service/pause"' in row and "Pause building" in row
+    assert 'action="/service/stop"' in row
+    assert "/service/resume" not in row and "/service/clear_breaker" not in row
+    assert "WEB_MUTATIONS" in row and "POOLS_IN_PG" in row
+
+    tripped = {"pulse": {"warm": 5, "target": 5, "tripped": "captcha x5",
+                         "paused": True, "at": 0}}
+    row = app_mod.pages._service_row(tripped, admin, flags)
+    assert 'action="/service/resume"' in row and "Resume building" in row
+    assert 'action="/service/clear_breaker"' in row and "/service/pause" not in row
+
+    stopped = {"pulse": {"stopped": True, "at": 0, "tripped": ""}}
+    row = app_mod.pages._service_row(stopped, admin, flags)
+    assert 'action="/service/start"' in row and "/service/stop" not in row
+
+    operator = {"id": 9, "username": "narrow", "role": "operator",
+                "csrf": "x", "mutations": True}
+    assert app_mod.pages._service_row(running, operator, flags) == "", \
+        "no ticked permission shows them"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_service_buttons_still_ask_once_and_are_admin_only(
         web, monkeypatch):
+    """The route outlives the row: a Settings page will post to it, and
+    the confirm and the 403 are what make it safe to."""
     import geelark_farm.store.actions as actions_mod
 
-    base = _dash(monkeypatch, pulse={"warm": 5, "target": 5, "tripped": "",
-                                     "paused": False, "at": 0})
+    _dash(monkeypatch)
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 71)
     client = web()
     client.login()
-    _, _, body = client.request("GET", "/")
-    assert 'action="/service/pause"' in body and "Pause building" in body
-    assert 'action="/service/stop"' in body
-    assert "/service/resume" not in body and "/service/clear_breaker" not in body
-
-    base["pulse"] = {"warm": 5, "target": 5, "tripped": "captcha x5",
-                     "paused": True, "at": 0}
-    _, _, body = client.request("GET", "/")
-    assert 'action="/service/resume"' in body and "Resume building" in body
-    assert 'action="/service/clear_breaker"' in body
-    assert "/service/pause" not in body
-
-    base["pulse"] = {"stopped": True, "at": 0, "tripped": ""}
-    _, _, body = client.request("GET", "/")
-    assert 'action="/service/start"' in body and "/service/stop" not in body
-
     status, _, body = client.request(
         "POST", "/service/pause", _form(csrf=client.csrf()))
     assert status == 200 and "Pause building?" in body and got == {}
@@ -2282,8 +2382,6 @@ def test_service_controls_fit_the_pulse_ask_first_and_are_admin_only(
                          "sees": "all", "may_take_phones": True})
     narrow = web()
     narrow.login(username="narrow")
-    _, _, body = narrow.request("GET", "/")
-    assert "/service/" not in body, "no ticked permission shows them"
     got.clear()
     status, _, _ = narrow.request(
         "POST", "/service/stop", _form(csrf=narrow.csrf(), sure="1"))
