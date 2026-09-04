@@ -372,7 +372,17 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                     store_actions.expire_running(
                         conn, older_than=2 * settings.build_budget_seconds)
                 except Exception as exc:                          # noqa: BLE001
-                    log.debug("stale running rows not expired (%s)", exc)
+                    # A statement that fails leaves the transaction
+                    # aborted, and everything after it on this
+                    # connection fails too. Rolling back is what stops
+                    # one broken guard taking the whole queue with it -
+                    # it did, silently, for a day (2026-09-04), which is
+                    # also why this is a warning and no longer a debug.
+                    log.warning("stale running rows not expired (%s)", exc)
+                    try:
+                        conn.rollback()
+                    except Exception as also:                     # noqa: BLE001
+                        log.debug("the rollback failed too (%s)", also)
             batch = store_actions.take_batch(conn,
                                              controls_only=controls_only)
             for action in batch:

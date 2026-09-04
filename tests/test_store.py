@@ -757,3 +757,43 @@ def test_listing_pages_fifty_at_a_time_with_one_row_of_lookahead(
     actions.listing(make_settings(), user_id=7)
     assert seen["params"][-2:] == (actions.PER_PAGE + 1, 0), \
         "no page means the first"
+
+
+def test_every_sql_statement_has_balanced_quotes():
+    """An apostrophe inside a statement has to be doubled, and one too
+    many closes the literal early.
+
+    `see the phones\'\'\' stories` did exactly that: Postgres answered
+    "syntax error at or near stories", the failed statement left the
+    transaction aborted, and a guard that swallowed the exception without
+    rolling back handed the poisoned connection to the rest of the drain.
+    Every queued button waited a day for a pass that could no longer take
+    a batch (2026-09-04). The unit test for that statement passed
+    throughout: its connection was a fake that never parsed anything.
+
+    Adjacent string literals are folded by the parser, so this reads each
+    statement the way psycopg receives it; an f-string is checked on its
+    literal parts, which is where a hand-typed apostrophe lands.
+    """
+    import re
+
+    # Capitals on purpose: every statement here is written in them, and a
+    # docstring opening "With the pools in the store..." is not SQL.
+    looks_sql = re.compile(r"\s*(SELECT|INSERT|UPDATE|DELETE|WITH)\b")
+    seen = 0
+    for path in sorted(SRC.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value
+            elif isinstance(node, ast.JoinedStr):
+                text = "".join(bit.value for bit in node.values
+                               if isinstance(bit, ast.Constant))
+            else:
+                continue
+            if not looks_sql.match(text):
+                continue
+            seen += 1
+            assert text.count("'") % 2 == 0, (
+                f"{path.name}:{node.lineno} closes a quoted string early: "
+                f"{text[:90]}")
+    assert seen > 40, f"only {seen} statements walked - the walk is broken"

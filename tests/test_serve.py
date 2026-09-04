@@ -1587,8 +1587,15 @@ def test_a_stopped_pass_does_not_claim_to_have_read_the_new_numbers(
 
 # ------------------------------------------------------------- the drain
 class _DrainConn:
-    """connect() as the drain sees it: a context manager and nothing else -
-    take_batch and finish are patched, so nobody executes SQL here."""
+    """connect() as the drain sees it: a context manager that counts its
+    rollbacks - take_batch and finish are patched, so nobody executes SQL
+    here."""
+
+    def __init__(self):
+        self.rolled_back = 0
+
+    def rollback(self):
+        self.rolled_back += 1
 
     def __enter__(self):
         return self
@@ -1639,6 +1646,42 @@ def test_the_drain_runs_a_noop_and_records_done(monkeypatch, make_settings):
 
     assert did == 1
     assert finished == [(1, "done", "did nothing, successfully")]
+
+
+def test_a_failing_guard_rolls_back_before_the_batch_is_taken(
+        monkeypatch, make_settings, caplog):
+    """A statement that fails leaves the transaction aborted, and every
+    statement after it on that connection fails too.
+
+    The stale-row guard swallowed its exception and handed the poisoned
+    connection to take_batch, which then answered "current transaction is
+    aborted" on every pass. Nothing the console queued ran for a day, and
+    the only trace was a debug line nobody prints (2026-09-04).
+    """
+    import logging
+
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.store.db as db_mod
+
+    finished = _drain_world(monkeypatch, [
+        {"id": 6, "verb": "noop", "payload": {}, "requested_by": 7}])
+    conn = _DrainConn()
+    monkeypatch.setattr(db_mod, "connect", lambda s: conn)
+
+    def boom(conn, *, older_than):
+        raise RuntimeError('syntax error at or near "stories"')
+
+    monkeypatch.setattr(actions_mod, "expire_running", boom)
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    with caplog.at_level(logging.WARNING):
+        did = serve_mod._drain_actions(settings, None, None,
+                                       controls_only=False)
+
+    assert conn.rolled_back == 1, "the aborted transaction was left open"
+    assert did == 1 and finished == [(6, "done", "did nothing, successfully")]
+    assert any("stale running rows not expired" in r.getMessage()
+               for r in caplog.records), "and it says so out loud, not at debug"
 
 
 def test_an_unknown_verb_is_refused_not_crashed(monkeypatch, make_settings):

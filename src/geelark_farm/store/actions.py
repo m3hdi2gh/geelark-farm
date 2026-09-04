@@ -82,7 +82,7 @@ def expire_running(conn, *, older_than: float) -> int:
     cur = conn.execute(
         "UPDATE actions SET status = 'failed', finished_at = now(),"
         " result = 'the service restarted while this ran - see the"
-        " phones''' stories'"
+        " phones'' stories'"
         " WHERE status = 'running'"
         " AND executed_at < now() - make_interval(secs => %s)",
         (float(older_than),))
