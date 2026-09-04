@@ -241,7 +241,10 @@ def health(settings: Settings) -> dict:
             " FROM resources")
     counts = dict(rows[0]) if rows else {"accounts": 0, "pulse": None}
     pulse = counts.get("pulse") or {}
+    from .api_v1 import NOT_MEASURED
+
     return {"ok": True,
             "served": {name: list(kinds) for name, kinds in SERVED.items()},
+            "not_measured": list(NOT_MEASURED),
             "accounts": int(counts.get("accounts") or 0),
             "warm_phones": int(pulse.get("warm") or 0)}

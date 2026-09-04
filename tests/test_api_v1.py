@@ -118,12 +118,15 @@ def test_health_says_which_kinds_are_actually_served(web, monkeypatch):  # noqa:
     _client(monkeypatch)
     monkeypatch.setattr(read_mod, "health", lambda s: {
         "ok": True, "served": {"chatgpt": ["password_totp"], "claude": []},
+        "not_measured": list(api_mod.NOT_MEASURED),
         "accounts": 312, "warm_phones": 6})
     client = web()
     status, _, body = _get(client, "/api/v1/health")
     assert status == 200 and body["ok"] is True
     assert body["served"] == {"chatgpt": ["password_totp"], "claude": []}
     assert body["warm_phones"] == 6
+    assert "attempts" in body["not_measured"], \
+        "a client can tell not-counted from counted-and-none"
 
 
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
@@ -520,6 +523,22 @@ def test_an_account_whose_code_comes_from_a_person_waits_for_them(
     row = _account(product="claude", credential_kind="email_code_customer")
     assert read_mod.state_of(row) == "waiting_customer"
     assert read_mod.state_of(dict(row, customer_ready=True)) == "queued"
+
+
+@pytest.mark.parametrize("web", [API_ON], indirect=True)
+def test_a_number_nothing_counts_is_null_and_not_a_zero(web,  # noqa: F811
+                                                        monkeypatch):
+    """0 says "this account has never been on a phone". null says "we are
+    not counting". They are different claims, and only one of them is
+    true while the build flow does not touch these columns."""
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref: _account(attempts=3, failures=1))
+    client = web()
+    _, _, body = _get(client, "/api/v1/accounts/ord_84213-a")
+    assert body["attempts"] is None and body["failures"] is None
+    assert set(api_mod.NOT_MEASURED) == {"attempts", "failures",
+                                         "delivered_at"}
 
 
 def test_every_account_has_a_ref_including_the_ones_older_than_the_panel():

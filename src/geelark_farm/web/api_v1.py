@@ -175,8 +175,13 @@ def account_json(row: dict) -> dict:
         "state": state,
         "email": row.get("address"),
         "phone": str(row.get("serial") or "") or None,
-        "attempts": int(row.get("attempts") or 0),
-        "failures": int(row.get("failures") or 0),
+        # null, not 0. Nothing in the farm counts these yet - the columns
+        # are there and the build flow will fill them - and a 0 would tell
+        # the panel this account has never been on a phone, which is a
+        # different claim from "we are not counting". /health says which
+        # fields are in that state, so a client can branch on it.
+        "attempts": _measured(row, "attempts"),
+        "failures": _measured(row, "failures"),
         "reason": (str(row.get("status") or "")
                    if state == "needs_human" else None),
         "reason_text": _reason_text(row) if state == "needs_human" else None,
@@ -190,6 +195,17 @@ def account_json(row: dict) -> dict:
         "withdrawn_at": rfc3339(row.get("withdrawn_at")),
         "updated_at": rfc3339(row.get("updated_at")),
     }
+
+
+#: Columns the schema has and nothing yet writes. Published as null
+#: rather than as their zero, and named in /health so a client can tell
+#: "not counted" from "counted, and it is none".
+NOT_MEASURED = ("attempts", "failures", "delivered_at")
+
+
+def _measured(row: dict, field: str):
+    """The number, or None while nothing is counting it."""
+    return None if field in NOT_MEASURED else int(row.get(field) or 0)
 
 
 def _reason_text(row: dict) -> str:

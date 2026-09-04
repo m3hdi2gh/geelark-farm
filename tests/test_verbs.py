@@ -365,6 +365,140 @@ def test_removing_a_gmail_keeps_the_row_it_removed():
     assert detail["removed"]["Password"] == "pw"
 
 
+# ------------------------------------------- the panel's two verbs (C9)
+# These run unattended against the live Gpt Info tab the first time a
+# panel POSTs an account, so they are tested against the real AppPool over
+# a fake worksheet - the same bargain every other verb here strikes.
+
+def _in_the_store(monkeypatch, **more):
+    """The row api_v1_write already wrote. The store edge is faked; the
+    pool underneath it is the real one."""
+    row = {"address": "panel1@example.com", "password": "pw-panel",
+           "secret": SECRET, "email_code_only": False}
+    row.update(more)
+    monkeypatch.setattr(verbs, "_panel_row", lambda settings, ref: row)
+    return row
+
+
+def test_a_panel_account_goes_from_the_store_into_the_tab(monkeypatch):
+    """The half only a pass may do. The API already wrote the row - so a
+    GET straight after the POST finds it - and this is what makes the
+    keeper able to see it at all."""
+    book = make_book(apps=1)
+    _in_the_store(monkeypatch)
+
+    status, said, detail = verbs.add_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "done", said
+    assert detail == {"ref": "ord_1", "address": "panel1@example.com"}
+    added = book.apps.find("panel1@example.com")
+    assert added is not None, "it reached the tab"
+    assert added.values["Password"] == "pw-panel"
+    assert added.values["2FA Secret"] == SECRET
+    assert added.values["Status"] == "", "free stock, for the keeper to claim"
+    assert "ord_1" in added.values["Note"], "the note names the order"
+    assert added in book.apps.available
+
+
+def test_a_panel_account_already_in_the_tab_is_done_not_failed(monkeypatch):
+    """A request can be drained twice - a retry, a restart mid-pass. The
+    second run must not append a duplicate, and must not read as a
+    failure either: the account is where it was asked to be."""
+    book = make_book(apps=1)
+    _in_the_store(monkeypatch, address="a0@example.com")
+
+    status, said, _ = verbs.add_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "done" and "already in" in said
+    assert len(book.apps._rows) == 1, "no duplicate row"
+
+
+def test_a_panel_account_the_store_never_had_is_failed(monkeypatch):
+    monkeypatch.setattr(verbs, "_panel_row", lambda settings, ref: None)
+    book = make_book(apps=1)
+
+    status, said, detail = verbs.add_panel_account(
+        book, None, None, {"ref": "ord_missing", "by": "panel"}, None)
+
+    assert status == "failed" and "not a row in the store" in said
+    assert detail is None
+    assert len(book.apps._rows) == 1, "nothing was appended"
+
+
+def test_an_account_the_tab_would_not_take_says_so_on_the_row(monkeypatch):
+    """The panel reads accounts, not requests. A failure only the request
+    knows about leaves the account reading `queued` forever, with nothing
+    ever going to claim it."""
+    book = make_book(apps=1)
+    _in_the_store(monkeypatch)
+    broke = {}
+    monkeypatch.setattr(verbs, "_panel_broke",
+                        lambda settings, ref, why: broke.update(ref=ref,
+                                                                why=why))
+
+    def refuse(**fields):
+        raise RuntimeError("the tab is full")
+
+    monkeypatch.setattr(book.apps, "append", refuse)
+    status, said, _ = verbs.add_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "failed" and "the tab is full" in said
+    assert broke["ref"] == "ord_1" and "the tab is full" in broke["why"]
+
+
+def test_withdrawing_takes_the_row_out_of_the_tab(monkeypatch):
+    book = make_book(apps=2)
+    _in_the_store(monkeypatch, address="a0@example.com")
+
+    status, said, detail = verbs.withdraw_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "done" and "taken out" in said
+    assert detail == {"ref": "ord_1"}
+    assert book.apps.find("a0@example.com") is None
+    assert len(book.apps._rows) == 1, "and only that one"
+
+
+def test_withdrawing_refuses_a_row_a_phone_is_behind(monkeypatch):
+    """The one thing this has to refuse: a phone is booked and billing
+    against the account, and taking its row out from under a running
+    sign-in is worse than telling the panel it is too late."""
+    book = make_book(apps=2)
+    a0 = book.apps._rows[0]
+    book.apps.claim_this(a0, "1500")
+    _in_the_store(monkeypatch, address="a0@example.com")
+
+    status, said, _ = verbs.withdraw_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "refused" and "a phone is behind it" in said
+    assert book.apps.find("a0@example.com") is not None, "still there"
+
+
+def test_withdrawing_one_that_never_reached_the_tab_is_done(monkeypatch):
+    """Withdrawn between the POST and the pass that would have added it.
+    Nothing to take out is the asked-for state, not a failure."""
+    book = make_book(apps=1)
+    _in_the_store(monkeypatch, address="never-arrived@example.com")
+
+    status, said, _ = verbs.withdraw_panel_account(
+        book, None, None, {"ref": "ord_1", "by": "panel"}, None)
+
+    assert status == "done" and "nothing to take out" in said
+
+
+def test_both_panel_verbs_are_reachable_from_the_drain():
+    """Registered, and the same object the drain would run - the pin the
+    other verbs already carry."""
+    import geelark_farm.serve as serve_mod
+
+    for name in ("add_panel_account", "withdraw_panel_account"):
+        assert serve_mod.ACTION_VERBS[name] is verbs.VERBS[name]
+
+
 def test_boot_starts_the_phone_takes_it_and_keeps_the_live_link(monkeypatch):
     """One press does both halves: GeeLark is asked to start, which is the
     only thing that produces a live-view URL, and the phone is written

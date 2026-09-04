@@ -492,11 +492,18 @@ def add_panel_account(book, ledger, settings, payload, client):
         # next pass, so this is done, not failed.
         return ("done", f"{row['address']} was already in the "
                         f"{book.apps.tab} tab", {"ref": ref})
-    book.apps.append(**{
-        "Address": row["address"], "Password": row["password"],
-        "2FA Secret": row["secret"], "Status": "",
-        "Email code": "TRUE" if row["email_code_only"] else "FALSE",
-        "Note": f"From the customer panel ({ref}) on {_stamp()}."})
+    try:
+        book.apps.append(**{
+            "Address": row["address"], "Password": row["password"],
+            "2FA Secret": row["secret"], "Status": "",
+            "Email code": "TRUE" if row["email_code_only"] else "FALSE",
+            "Note": f"From the customer panel ({ref}) on {_stamp()}."})
+    except Exception as exc:                                      # noqa: BLE001
+        # The request will say failed, but the panel reads accounts, not
+        # requests - so the row itself has to say it too, or it reads
+        # `queued` forever while nothing is ever going to claim it.
+        _panel_broke(settings, ref, f"could not be added to the tab: {exc}")
+        return "failed", f"{row['address']} was not added: {exc}", None
     return ("done", f"{row['address']} added to the {book.apps.tab} tab "
                     f"for {ref}", {"ref": ref, "address": row["address"]})
 
