@@ -2079,6 +2079,20 @@ def test_the_stylesheet_never_breaks_a_quoted_string_across_lines(web):
     assert "'IBM Plex Mono'" in style and "'IBM Plex Sans'" in style
 
 
+def test_a_pill_is_a_direct_child_or_its_count_becomes_one(web):
+    """`.pills span` matched the count inside each pill as well as the
+    pill itself, so every count wore the background, the padding and the
+    divider of the pill around it - four boxes inside four boxes, which
+    is what the row looked like (2026-09-04)."""
+    _, _, body = web().request("GET", "/login")
+    style = body[body.index("<style>"):body.index("</style>")]
+    # Comments out first: one of them names the selector this refuses.
+    rules = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
+    assert ".pills>a" in rules and ".pills>span" in rules
+    assert ".pills a," not in rules and ".pills span" not in rules, \
+        "a pill is a direct child; anything inside one is not a pill"
+
+
 def test_the_pool_column_lists_are_qualified_for_their_joins():
     """Gmail Pool joins phones and Gpt Pool joins users; both tables have an
     `id`, a `status`, an `updated_at`. An unqualified list made Postgres

@@ -134,14 +134,18 @@ td.act,td:has(> form.inline){{white-space:nowrap;text-align:right;padding-right:
 td.num{{text-align:right}}
 td .badge{{vertical-align:middle}}
 /* ---- pills, chips, badges */
-.pills{{display:flex;border:1px solid #2c3a52;border-radius:7px;overflow:hidden}}
-.pills a,.pills span{{padding:7px
- 14px;font-size:13px;color:#9aa7ba;font-family:var(--sans);
- border-right:1px solid #2c3a52}}
-.pills a:last-child,.pills span:last-child{{border-right:0}}
-.pills a:hover{{background:#141c2b;color:#fff}}
-.pills span,.pills a.here{{background:#1a2334;color:#fff}}
-.pills .n{{font-family:var(--mono);font-size:12px;margin-left:7px;
+.pills{{display:flex;border:1px solid #2c3a52;border-radius:7px;
+ overflow:hidden;align-items:stretch}}
+/* Direct children only. `.pills span` also matched the count inside each
+   pill, which then wore the background, the padding and the divider of
+   the pill around it - four boxes inside four boxes (2026-09-04). */
+.pills>a,.pills>span{{display:inline-flex;align-items:center;gap:9px;
+ padding:8px 15px;font-size:13px;line-height:1.2;color:var(--muted);
+ font-family:var(--sans);border-right:1px solid #2c3a52}}
+.pills>a:last-child,.pills>span:last-child{{border-right:0}}
+.pills>a:hover{{background:#141c2b;color:var(--bright)}}
+.pills>span,.pills>a.here{{background:#1a2334;color:var(--bright)}}
+.pills .n{{font-family:var(--mono);font-size:12px;color:var(--dim);
  font-variant-numeric:tabular-nums}}
 .figure{{font-family:var(--mono);font-size:20px;font-weight:600;
  line-height:1;font-variant-numeric:tabular-nums;vertical-align:-1px}}
