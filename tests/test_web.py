@@ -996,8 +996,8 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    assert "Everything running" in body, "one sentence, not a bar of numbers"
-    assert "Ready to deliver" in body
+    assert "Stocked \u2014 5 of 5 phones warm" in body, \
+        "what the keeper is doing, not a mood"
     assert ">12</b><i>gmail</i>" in body, "the strip, one cell per pool"
     assert ">20</b><i>proxies</i>" in body
     assert "last pass" not in body, "the pass's clock is the alert strip's job"
@@ -2019,7 +2019,7 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    strip = body[body.index('class="strip"'):]
+    strip = body[body.index('class="strip pools"'):]
     strip = strip[:strip.index("</div>")]
     assert 'color:var(--red)">0</b><i>gmail</i>' in strip
     assert "nothing can be built until rows are added" in strip
@@ -2027,15 +2027,38 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     assert "fewer than the 5 phones the keeper keeps warm" in strip
     assert 'color:var(--amber)">7</b><i>GPT</i>' in strip
     assert "2 of them have no phone to go to" in strip
-    # the headline counts only what can be handed over right now, and the
-    # rest of the shelf reads beside it, each in its badge's colour
-    head = body[body.index("Ready to deliver"):body.index('class="strip"')]
-    assert re.search(r'class="n"[^>]*>1</div>', head), "one ready, one taken"
-    assert 'color:var(--amber)">1</b>warm' in head
-    assert 'color:var(--violet)">1</b>taken' in head
-    assert 'color:var(--blue)">1</b>building' in head
+    # the shelf reads as one row of counts, the same size as the pools it
+    # faces, in the order a phone travels
+    head = body[body.index('class="strip"'):body.index('class="strip pools"')]
+    assert 'color:var(--blue)">1</b><i>building</i>' in head
+    assert 'color:var(--amber)">1</b><i>warm</i>' in head
+    assert 'color:var(--green)">1</b><i>ready</i>' in head, "one of two taken"
+    assert 'color:var(--violet)">1</b><i>taken</i>' in head
     assert "incomplete" not in head, "a count nobody has is not printed"
-    assert "behind them" not in head, "counts, not a sentence about them"
+    assert head.index("building") < head.index("warm") < head.index("ready") \
+        < head.index("taken"), "the order a phone travels"
+
+
+def test_the_keeper_sentence_says_what_it_is_doing_in_every_state():
+    """Five states, read top to bottom - the order is the point: a
+    stopped service must never read as "building" because its numbers
+    happen to be short."""
+    say = app_mod.pages._keeper_words
+    assert say({"stopped": True, "warm": 0, "target": 5}) == (
+        "Stopped from the sheet — nothing is running", "red")
+    assert say({"tripped": "captcha x5", "warm": 2, "target": 5}) == (
+        "Stopped by the breaker — nothing is being built", "red")
+    assert say({"paused": True, "warm": 2, "target": 5}) == (
+        "Paused — nothing new is being built", "amber")
+    assert say({"warm": 2, "target": 5}) == (
+        "Building — 2 of 5 phones warm", "amber")
+    assert say({"warm": 6, "target": 5}) == (
+        "Stocked — 6 of 5 phones warm", "green")
+    assert say({"stopped": True, "paused": True, "tripped": "x",
+                "warm": 0, "target": 5})[1] == "red", "stopped wins"
+    quiet = app_mod.pages._status_sentence({"pulse": {}})
+    assert quiet == '<span class="dim">no pass has reported yet</span>', \
+        "and a farm nothing has reported on claims nothing"
 
 
 def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
@@ -2044,9 +2067,10 @@ def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    head = body[body.index("Ready to deliver"):body.index('class="strip"')]
-    assert re.search(r'class="n" style="color:var\(--dim\)">0</div>', head)
-    assert "Take one to hand it over" not in head
+    head = body[body.index('class="strip"'):body.index('class="strip pools"')]
+    assert 'color:var(--green)">0</b><i>ready</i>' in head, \
+        "a zero on the shelf is the news, so it is always printed"
+    assert 'color:var(--amber)">1</b><i>warm</i>' in head
 
 
 def test_a_building_row_shows_its_last_log_line_and_how_long(web,
@@ -2086,7 +2110,7 @@ def test_the_keepers_warning_sits_above_the_tiles_with_the_fix_linked(
     warn = body[body.index('class="alert warn"'):]
     assert 'href="/pools/gmail"' in body[:body.index('class="alert warn"') + 200]
     assert "open the Gmail pool" in warn[:400]
-    assert body.index('class="alert warn"') < body.index("Ready to deliver")
+    assert body.index('class="alert warn"') < body.index('class="strip"')
 
     _dash(monkeypatch, pulse={"warm": 2, "target": 5, "at": 0,
                               "tripped": "captcha_shown x5",

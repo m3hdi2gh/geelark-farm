@@ -91,11 +91,11 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
  gap:16px}}
 main.alone{{align-items:center;justify-content:center;padding:40px 20px}}
-h2{{font-size:20px;font-weight:600;color:var(--bright);margin:0;letter-spacing:-.1px}}
+h2{{font-size:25px;font-weight:600;color:var(--bright);margin:0;letter-spacing:-.3px}}
 h3{{font-size:13.5px;font-weight:600;color:#c6d1e0;margin:0;display:flex;align-items:center;
  gap:8px;flex-wrap:wrap}}
 h3 .n{{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--dim)}}
-.top{{display:flex;align-items:center;gap:14px 18px;flex-wrap:wrap;min-height:38px}}
+.top{{display:flex;align-items:center;gap:14px 18px;flex-wrap:wrap;min-height:42px}}
 .top
  .status{{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--muted);
  display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
@@ -253,21 +253,15 @@ label.field{{align-items:stretch}}
 p{{margin:0}}
 .narrow{{width:100%;max-width:1060px;margin:0 auto;display:flex;
  flex-direction:column;gap:26px}}
-.headline{{display:flex;align-items:flex-end;gap:40px;flex-wrap:wrap}}
-.headline .n{{font-family:var(--mono);font-size:56px;line-height:1;
- font-weight:500;font-variant-numeric:tabular-nums}}
-.headline .l{{font-size:12.5px;color:var(--muted);letter-spacing:.3px}}
-.tally{{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;
- color:var(--muted);margin-top:12px}}
-.tally b{{font-family:var(--mono);font-weight:600;margin-right:5px;
- font-variant-numeric:tabular-nums}}
-.strip{{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}}
-.strip a{{display:flex;flex-direction:column;align-items:center;gap:4px;
- min-width:92px;padding:10px 14px;border-radius:10px;color:var(--muted);
- border:1px solid transparent}}
+.headline{{display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap}}
+.strip{{display:flex;gap:2px;flex-wrap:wrap}}
+.strip.pools{{margin-left:auto}}
+.strip a,.strip span{{display:flex;flex-direction:column;align-items:center;
+ gap:5px;min-width:88px;padding:10px 14px;border-radius:10px;
+ color:var(--muted);border:1px solid transparent}}
 .strip a:hover{{background:var(--panel2);border-color:var(--line);
  color:var(--bright)}}
-.strip b{{font-family:var(--mono);font-size:21px;font-weight:500;
+.strip b{{font-family:var(--mono);font-size:27px;font-weight:500;
  line-height:1;font-variant-numeric:tabular-nums}}
 .strip i{{font-style:normal;font-size:11.5px;letter-spacing:.3px}}
 .svc{{display:flex;align-items:center;gap:14px;padding-top:12px;
@@ -917,36 +911,38 @@ def _status_sentence(data: dict) -> str:
     pulse = data.get("pulse") or {}
     if not pulse:
         return '<span class="dim">no pass has reported yet</span>'
-    warm, target = int(pulse.get("warm") or 0), int(pulse.get("target") or 0)
-    if pulse.get("stopped"):
-        word, colour = "Stopped from the sheet", "red"
-    elif pulse.get("tripped"):
-        word, colour = "Building stopped", "red"
-    elif pulse.get("paused"):
-        word, colour = "Building paused", "amber"
-    elif warm < target:
-        word, colour = f"Building — {warm} of {target} warm", "amber"
-    else:
-        word, colour = "Everything running", "green"
+    word, colour = _keeper_words(pulse)
     # How long ago the pass ran is not a thing to read on every page:
     # when it is late the alert strip says so in a sentence, and the pass
     # itself is on its way out.
     return f'<span style="color:var(--{colour})">●</span> {esc(word)}'
 
 
-def _tally(warm: list, taken: list, incomplete: list,
-           building: list) -> str:
-    """The rest of the shelf beside the headline number, each count in
-    the colour its badge wears. Warm is always printed - it is what the
-    ready number will be made of - and the other three only when they
-    are not zero, so a healthy farm reads as two words."""
-    items = [(len(warm), "warm", "amber"),
-             (len(taken), "taken", "violet"),
-             (len(incomplete), "incomplete", "red"),
-             (len(building), "building", "blue")]
+#: The shelf, in the order a phone travels: what is being made, what is
+#: warm, what can go out, what went out, and what wants a look. Each
+#: count wears the colour of its badge in the table below.
+_SHELF = [("building", "blue", "being made right now"),
+          ("warm", "amber", "built and waiting for an account"),
+          ("ready", "green", "an account is signed in - hand it over"),
+          ("taken", "violet", "out with somebody"),
+          ("incomplete", "red", "something on it did not finish")]
+
+
+def _shelf_strip(counts: dict) -> str:
+    """The phones as one row of counts, the same size and shape as the
+    pools facing them: the two things a person counts on this page are
+    phones and stock, so they read as one pair.
+
+    Ready and warm are always printed - they are the shelf, and a zero
+    there is the news. The other three only when they are not zero, so a
+    quiet farm is three cells wide.
+    """
     return "".join(
-        f'<span><b style="color:var(--{colour})">{n}</b>{esc(word)}</span>'
-        for n, word, colour in items if n or word == "warm")
+        f'<span title="{esc(why)}">'
+        f'<b style="color:var(--{colour})">{int(counts.get(word) or 0)}</b>'
+        f'<i>{esc(word)}</i></span>'
+        for word, colour, why in _SHELF
+        if counts.get(word) or word in ("ready", "warm"))
 
 
 def _stock_strip(data: dict) -> str:
@@ -981,6 +977,22 @@ def _stock_strip(data: dict) -> str:
         for href, number, word, colour, why in items)
 
 
+#: What the keeper is doing, by the pulse it left: the word, its colour,
+#: and whether the numbers belong in it. Read top to bottom - the first
+#: that fits wins, so a stopped service never reads as "building".
+def _keeper_words(pulse: dict) -> tuple[str, str]:
+    warm, target = int(pulse.get("warm") or 0), int(pulse.get("target") or 0)
+    if pulse.get("stopped"):
+        return "Stopped from the sheet — nothing is running", "red"
+    if pulse.get("tripped"):
+        return "Stopped by the breaker — nothing is being built", "red"
+    if pulse.get("paused"):
+        return "Paused — nothing new is being built", "amber"
+    if warm < target:
+        return f"Building — {warm} of {target} phones warm", "amber"
+    return f"Stocked — {warm} of {target} phones warm", "green"
+
+
 def _service_row(data: dict, user: dict, flags: dict | None) -> str:
     """The quiet line at the foot: the service's own controls and which
     switches this server runs with. Admins only, and never shouted."""
@@ -1013,20 +1025,18 @@ def dashboard(data: dict, user: dict, said: str = "",
     taken = [r for r in phones if (r.get("state") or "") == "taken"]
     # A phone somebody is holding is counted once, as theirs: it is not
     # also warm stock, however warm it happens to be.
-    shelf = [r for r in phones if (r.get("state") or "") != "taken"]
-    ready = [r for r in shelf if (r.get("status") or "") == "ready"]
-    warm = [r for r in shelf if (r.get("status") or "") == "app_only"]
-    incomplete = [r for r in shelf
+    free = [r for r in phones if (r.get("state") or "") != "taken"]
+    ready = [r for r in free if (r.get("status") or "") == "ready"]
+    warm = [r for r in free if (r.get("status") or "") == "app_only"]
+    incomplete = [r for r in free
                   if (r.get("status") or "") == "incomplete"]
     building = [r for r in phones if (r.get("status") or "") == "building"]
 
-    headline = (f'<div class="headline"><div>'
-                f'<div class="l">Ready to deliver</div>'
-                f'<div class="n" style="color:var('
-                f'--{"green" if ready else "dim"})">{len(ready)}</div>'
-                f'<div class="tally">'
-                f'{_tally(warm, taken, incomplete, building)}</div></div>'
-                f'<div class="strip">{_stock_strip(data)}</div></div>')
+    shelf = {"ready": len(ready), "warm": len(warm), "taken": len(taken),
+             "incomplete": len(incomplete), "building": len(building)}
+    headline = (f'<div class="headline">'
+                f'<div class="strip">{_shelf_strip(shelf)}</div>'
+                f'<div class="strip pools">{_stock_strip(data)}</div></div>')
 
     rows = _phone_rows(data, user)
     table = (f'<table><tr><th>serial</th><th>state</th><th>account</th>'
