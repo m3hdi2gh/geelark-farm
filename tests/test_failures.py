@@ -73,7 +73,13 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # became a screen that types the address on the row (2026-08-29).
     assert "stuck_on_email_code_entry" in reported
     assert "stuck_on_recovery_email_confirm" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 19
+    # The twentieth is `sign_in_closed`, which is not a page at all: the device
+    # saying the add-account UI is no longer in front. Running its visits out
+    # means the consent was accepted and the account never arrived, and that
+    # deserved a name of its own rather than the `unknown_screen` four builds
+    # were failed as while Google was still adding the account (2026-09-04).
+    assert "stuck_on_sign_in_closed" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 20
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

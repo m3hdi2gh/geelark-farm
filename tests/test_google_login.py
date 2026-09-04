@@ -767,6 +767,53 @@ def test_back_out_of_the_sign_in_is_noticed_and_undone():
     assert "com.google.android.gms" in login.SIGN_IN_PACKAGES
 
 
+def test_the_launcher_after_the_consent_is_waited_out_not_called_unknown(
+        monkeypatch):
+    """The end of the sign-in is not the end of the work.
+
+    `am start ADD_ACCOUNT_SETTINGS` runs as its own task, so accepting the
+    consent finishes the activity and Android drops to the launcher while
+    Google is still adding the account. Phone 1675's account log put
+    thirty-five seconds between `action_called_account_add` and
+    `action_account_add`; the router gives up on an unmatched screen after
+    about fifteen. Four builds that had entered the address, the password, a
+    fresh authenticator code and both consents were failed as `unknown_screen`
+    with a screenful of app icons in the archive, and the phone was deleted
+    underneath them (2026-09-04, builds 1678-81).
+    """
+    monkeypatch.setattr(login.shell, "foreground_package",
+                        lambda *a, **k: "com.miui.home")
+    ctx = context_from("android-home-screen.xml")
+
+    matched = matched_screen(ctx)
+    assert matched is not None, "the launcher is no longer a mystery"
+    assert matched.name == "sign_in_closed"
+    # Waiting, not restarting: reopening the flow here aborts the add that is
+    # being waited for.
+    assert matched.act is login.act_wait_for_the_account
+
+
+def test_a_page_google_is_still_drawing_is_not_the_sign_in_closing(monkeypatch):
+    """The counterweight. While Settings or Play services is in front, an
+    unrecognised page is a page nobody has written an entry for yet - a task,
+    and it must keep saying so rather than being waited out for a minute."""
+    monkeypatch.setattr(login.shell, "foreground_package",
+                        lambda *a, **k: "com.google.android.gms")
+    ctx = context_from("android-home-screen.xml")
+
+    assert matched_screen(ctx) is None
+
+
+def test_a_device_that_will_not_say_what_is_in_front_claims_nothing(
+        monkeypatch):
+    """`foreground_package` answers "" on any doubt, and a guess here would
+    park a real unknown screen for a minute and then name it wrongly."""
+    monkeypatch.setattr(login.shell, "foreground_package", lambda *a, **k: "")
+    ctx = context_from("android-home-screen.xml")
+
+    assert matched_screen(ctx) is None
+
+
 # ------------------------------ signed in, and not recognised (2026-08-10)
 def test_voice_mode_is_still_the_chat_screen():
     """Both rows walked the whole path - welcome, email, password, code,

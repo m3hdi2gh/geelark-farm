@@ -287,6 +287,31 @@ def act_go_back(ctx: Context) -> Outcome | None:
     return None
 
 
+def sign_in_closed(ctx: Context) -> bool:
+    """Whether the add-account UI is no longer the app in front.
+
+    Asked of the device, never of the screen: a page this flow does not
+    recognise looks exactly the same whether Google has drawn something new or
+    Google is not on screen at all. An empty answer is "cannot tell", and this
+    must not claim a page on a guess - so it says no.
+    """
+    front = shell.foreground_package(ctx.client, ctx.phone_id)
+    return bool(front) and not any(front.startswith(p)
+                                   for p in SIGN_IN_PACKAGES)
+
+
+def act_wait_for_the_account(ctx: Context) -> Outcome | None:
+    """Do nothing but let Google finish. The account arrives, or it does not.
+
+    Deliberately not `open_add_account`: reopening the flow here would abort
+    the very thing being waited for. The only other action available is to
+    wait, and `is_done` is polling the device the whole time.
+    """
+    log.info("the sign-in has closed; waiting for the account to land")
+    time.sleep(5)
+    return None
+
+
 def act_account_picker(ctx: Context) -> Outcome | None:
     """The "Add an account" type list - choose Google."""
     if ctx.tap("Google"):
@@ -562,6 +587,26 @@ SCREENS: list[Screen] = [
            lambda c: screen.find_first(c.elements, DISMISS_LABELS,
                                        clickable_only=True) is not None,
            act_dismiss, max_visits=8),
+
+    # Last, so the device is only asked about a page nothing else claimed.
+    #
+    # Google's consent is the end of the sign-in, not the end of the work:
+    # `am start ADD_ACCOUNT_SETTINGS` runs as its own task, so when the consent
+    # is accepted the activity finishes and Android drops to the launcher -
+    # while Google is still adding the account. Phone 1675's own account log
+    # puts thirty-five seconds between `action_called_account_add` and
+    # `action_account_add`; the router declares an unknown screen after three
+    # unmatched looks, which is about fifteen. So a sign-in that had done
+    # everything right was failed as `unknown_screen` with a screenful of app
+    # icons in its archive, and the builder deleted the phone underneath it
+    # saying nothing had ever been signed into it (2026-09-04, builds 1678-81).
+    #
+    # Waiting is the whole action. `is_done` polls the device every eight
+    # seconds throughout, so the account landing ends this at once; only an
+    # account that never lands runs the visits out, and then it fails as
+    # `stuck_on_sign_in_closed` - which names what happened.
+    Screen("sign_in_closed", sign_in_closed, act_wait_for_the_account,
+           max_visits=8),
 ]
 
 
