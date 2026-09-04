@@ -423,11 +423,48 @@ def errored_addresses(settings: Settings, seller: str = "") -> list[str]:
     return [r["address"] for r in rows if r["address"]]
 
 
-def proxy_pool(settings: Settings, unlisted: list | None = None) -> dict:
-    """The Proxy Pool page: the rows that need a hand first, then all of
-    them. `unlisted` is what the last pass found GeeLark holding that the
-    tab never heard of - kept by the pass in service_state, passed in by
-    the caller so this module stays a reader of two tables."""
+#: The Proxy Pool's four views, and the count each pill shows.
+PROXY_VIEWS = {"free": "free", "on_phone": "on_phone",
+               "needs_hand": "needs_hand", "all": "all"}
+
+
+def proxy_bucket(status) -> str:
+    """The one word a status files under. `claimed` sits with `on a phone`
+    because both mean an exit a build is holding; anything the pool never
+    wrote is `other`, which only the All view shows."""
+    word = str(status or "").lower()
+    if word in ("", "free", "unused"):
+        return "free"
+    if word in ("on a phone", "claimed"):
+        return "on_phone"
+    if word == "change ip":
+        return "needs_new_ip"
+    if word == "dead":
+        return "dead"
+    return "other"
+
+
+def proxy_pool(settings: Settings, view: str = "free", q: str = "",
+               page: int = 1, per_page: int = 50,
+               unlisted: list | None = None) -> dict:
+    """The Proxy Pool page, one list at a time.
+
+    Four views, one table each: `free` is the stock a build takes and the
+    page's front door, `on_phone` is what a build is holding, `needs_hand`
+    is every kind of trouble in one list - an exit that wants a new IP, a
+    dead one, and the exits GeeLark holds that the pool never heard of -
+    and `all` is the escape hatch, searchable.
+
+    `unlisted` is what the last pass found GeeLark holding; the pass keeps
+    it in service_state and the caller passes it in, so this module stays
+    a reader of the resources table alone. The pool is one row per phone,
+    so every row comes back in one query and the views are cut from it -
+    four queries would cost more than the whole table.
+    """
+    view = PROXY_VIEWS.get(view, "free")
+    page = max(1, int(page or 1))
+    per_page = max(1, int(per_page or 1))
+    strays = list(unlisted or [])
     with Store(settings) as store:
         rows = store._rows(
             "SELECT r.id, r.proxy_name AS name, r.host, r.port, r.username,"
@@ -435,21 +472,40 @@ def proxy_pool(settings: Settings, unlisted: list | None = None) -> dict:
             " r.updated_at, r.error"
             " FROM resources r WHERE r.kind = 'proxy'"
             " ORDER BY r.sheet_row NULLS LAST, r.id")
-    by_status: dict[str, list] = {}
+    buckets: dict[str, list] = {}
     for r in rows:
-        word = (r["status"] or "").lower()
-        key = ("free" if word in ("", "free", "unused") else
-               "on_phone" if word == "on a phone" else
-               "claimed" if word == "claimed" else
-               "needs_new_ip" if word == "change ip" else
-               "dead" if word == "dead" else "other")
-        by_status.setdefault(key, []).append(r)
-    counts = {k: len(v) for k, v in by_status.items()}
-    counts["all"] = len(rows)
-    return {"rows": rows, "counts": counts,
-            "needs_new_ip": by_status.get("needs_new_ip", []),
-            "dead": by_status.get("dead", []),
-            "unlisted": unlisted or []}
+        r["bucket"] = proxy_bucket(r["status"])
+        buckets.setdefault(r["bucket"], []).append(r)
+    trouble = buckets.get("needs_new_ip", []) + buckets.get("dead", [])
+    counts = {"free": len(buckets.get("free", [])),
+              "on_phone": len(buckets.get("on_phone", [])),
+              "needs_new_ip": len(buckets.get("needs_new_ip", [])),
+              "dead": len(buckets.get("dead", [])),
+              "strays": len(strays),
+              "needs_hand": len(trouble) + len(strays),
+              "all": len(rows)}
+    out = {"view": view, "counts": counts, "q": q, "page": page,
+           "strays": [], "more": False, "pages": 1}
+    if view == "needs_hand":
+        # Never paged: this is the work list, and a page boundary through
+        # it is a job nobody sees.
+        out.update(rows=trouble, strays=strays,
+                   total=counts["needs_hand"])
+        return out
+    if view == "all":
+        wanted = rows
+        if q.strip():
+            needle = q.strip().lower()
+            wanted = [r for r in rows if needle in
+                      f"{r['name'] or ''} {r['host'] or ''} "
+                      f"{r['serial'] or ''}".lower()]
+    else:
+        wanted = buckets.get(view, [])
+    skip = (page - 1) * per_page
+    out.update(rows=wanted[skip:skip + per_page], total=len(wanted),
+               more=len(wanted) > skip + per_page,
+               pages=_pages(len(wanted), per_page))
+    return out
 
 
 _APP_COLUMNS = ("r.id, r.address, r.status, r.serial, r.source, r.added_by,"

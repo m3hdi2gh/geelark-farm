@@ -2075,23 +2075,9 @@ def _errored_filters(data: dict, seller: str) -> str:
             f'<div class="row right" style="gap:14px">{reasons}</div></div>')
 
 
-_PROXY_STATE = {"free": "free", "on a phone": "on_phone", "claimed": "claimed",
-                "change ip": "attn", "dead": "dead", "": "free",
-                "unused": "free", "imported": "info"}
-
-PROXY_SHOWN = 8
-
 #: A note longer than this is clipped in the table; the rest rides in the
 #: cell's title, so a hover reads it whole.
 NOTE_CHARS = 60
-
-
-def _proxy_bucket(status) -> str:
-    """The chip a status word files under: free / on_phone / claimed /
-    needs_new_ip / dead, or `other` for a word the pool never wrote."""
-    key = _PROXY_STATE.get((status or "").lower(), "info")
-    return {"free": "free", "on_phone": "on_phone", "claimed": "claimed",
-            "attn": "needs_new_ip", "dead": "dead"}.get(key, "other")
 
 
 def _last_test(tests: dict, name: str) -> str:
@@ -2104,6 +2090,17 @@ def _last_test(tests: dict, name: str) -> str:
     return f"{ago} · {'ok' if stamp.get('ok') else 'dead'}"
 
 
+def _test_words(tests: dict, name: str) -> str:
+    """The same answer, coloured: a table of exits is read for the odd one
+    out, and the odd one out is the exit that failed."""
+    said = _last_test(tests, name)
+    if said == "never":
+        return '<span class="dim">never</span>'
+    colour = "green" if said.endswith("ok") else "red"
+    return (f'<span class="mono" style="color:var(--{colour});'
+            f'font-size:12px">{esc(said)}</span>')
+
+
 def _clip(text, limit: int = NOTE_CHARS) -> str:
     """Escaped, cut at `limit` with the whole text in a title attribute
     when it was longer."""
@@ -2114,232 +2111,324 @@ def _clip(text, limit: int = NOTE_CHARS) -> str:
             f'</span>')
 
 
-def _fold(rows: list, show_all: bool) -> tuple[list, str]:
-    """The rows to show and the '+ N more' line (empty when all fit)."""
-    shown = rows if show_all else rows[:PROXY_SHOWN]
-    if len(rows) <= len(shown):
-        return shown, ""
-    return shown, (f'<p class="dim"><a href="/pools/proxy?all=1">'
-                   f'+ {len(rows) - len(shown)} more</a></p>')
+#: What each bucket is called on the page, and the colour it wears. The
+#: buckets themselves are read.proxy_bucket's answer, carried on the row.
+_BUCKET_WORDS = {"free": ("free", "green"),
+                 "on_phone": ("on a phone", "blue"),
+                 "needs_new_ip": ("needs a new IP", "amber"),
+                 "dead": ("dead", "red"),
+                 "other": ("", "dim")}
+
+#: The four views, in the order the pills read: the count each one shows
+#: is the key itself, and the sentence goes under its table.
+PROXY_VIEWS = {
+    "free": {"label": "Free",
+             "sub": "a build takes the top one and gives it back when the "
+                    "phone is done"},
+    "on_phone": {"label": "On a phone",
+                 "sub": "held by a build - an exit comes back here on its "
+                        "own when the phone is finished or deleted"},
+    "needs_hand": {"label": "Needs a hand",
+                   "sub": "nothing here is thrown away on its own - a dead "
+                          "exit is kept until you say otherwise"},
+    "all": {"label": "All",
+            "sub": "every exit the pool has ever been told about, newest "
+                   "sheet row first"},
+}
 
 
-def _proxy_add_panel(user: dict) -> str:
-    """Two ways in: the vendor's list pasted, or one exit typed field by
-    field. Both post to the same preview, so both are judged by the same
-    reader and confirmed on the same page."""
+def _proxy_word(r: dict) -> str:
+    """The state, in words and in colour - the row's own status when it is
+    a word the pool never wrote."""
+    bucket = str(r.get("bucket") or "other")
+    word, colour = _BUCKET_WORDS.get(bucket, ("", "dim"))
+    word = word or str(r.get("status") or "")
+    if colour == "dim":
+        return f'<span class="dim" style="white-space:nowrap">{esc(word)}</span>'
+    return (f'<span style="color:var(--{colour});font-size:12.5px;'
+            f'white-space:nowrap">{esc(word)}</span>')
+
+
+def _proxy_add(user: dict) -> str:
+    """The one way in, at the top of the free view: the vendor's list
+    pasted, and the same thing typed field by field - folded into a
+    `details` so it costs a line, not a second panel. Both go through the
+    same preview, so both are judged by the same reader."""
     if not _may(user, "may_add_proxy"):
-        if not user.get("mutations"):
-            return ""
-        return (f'<div class="panel"><h3>Add proxies</h3>'
-                f'{_need(user, "may_add_proxy", "Adding proxies")}</div>')
-    paste = (
-        '<div class="panel"><h3>Add proxies <span class="n">paste from the '
-        'vendor</span></h3>'
-        '<form method="post" action="/pools/proxy/preview" class="field">'
-        f'{_csrf(user)}'
-        '<textarea name="pasted" placeholder="host:port:user:pass, one '
-        'per line - or a name first, then the string"></textarea>'
-        '<p class="dim">names are handed out in order (SX43, SX44 …) '
-        'unless a name column is pasted; each is tested by the pass '
-        'before it joins the pool</p>'
-        '<div class="row"><span class="right"></span><button>Preview'
-        '</button></div></form></div>')
+        return _need(user, "may_add_proxy", "adding proxies")
     one = (
-        '<div class="panel"><h3>One by one</h3>'
-        '<form method="post" action="/pools/proxy/preview" class="field">'
+        f'<details class="fold"><summary>add one by hand</summary>'
+        f'<form method="post" action="/pools/proxy/preview" class="row" '
+        f'style="margin-top:10px">{_csrf(user)}'
+        f'<input name="host" placeholder="host" autocomplete="off" '
+        f'style="flex:1;min-width:160px">'
+        f'<input name="port" placeholder="port" autocomplete="off" size="6">'
+        f'<input name="username" placeholder="user" autocomplete="off">'
+        f'<input name="password" placeholder="pass" autocomplete="off">'
+        f'<input name="name" placeholder="name (optional)" '
+        f'autocomplete="off" size="12">'
+        f'<button class="quiet">Preview</button></form></details>')
+    return (
+        f'<form method="post" action="/pools/proxy/preview" class="field">'
         f'{_csrf(user)}'
-        '<input name="host" placeholder="host" autocomplete="off">'
-        '<input name="port" placeholder="port" autocomplete="off" size="6">'
-        '<input name="username" placeholder="user" autocomplete="off">'
-        '<input name="password" placeholder="pass" autocomplete="off">'
-        '<input name="name" placeholder="name (optional - SX43)" '
-        'autocomplete="off">'
-        '<div class="row"><span class="right"></span><button>Preview'
-        '</button></div>'
-        '<p class="dim">the same preview judges it - a typo is caught '
-        'before anything is queued</p>'
-        '</form></div>')
-    return f'<div class="grid2">{paste}{one}</div>'
+        f'<textarea name="pasted" placeholder="paste from the vendor — '
+        f'host:port:user:pass, one per line"></textarea>'
+        f'<div class="row"><span class="dim">names are handed out in order '
+        f'(SX43, SX44 …) unless a name column is pasted, and each one is '
+        f'tested before it joins the pool</span>'
+        f'<span class="right"></span><button>Preview</button></div>'
+        f'</form>{one}')
+
+
+def _back_field(back: str) -> str:
+    """Which view the button was pressed on, so the banner comes back to
+    it. The handler only honours a value it already knows."""
+    return (f'<input type="hidden" name="back" value="{esc(back)}">'
+            if back else "")
 
 
 def _proxy_button(user: dict, action: str, name: str, label: str,
-                  klass: str = "") -> str:
+                  klass: str = "", back: str = "") -> str:
     """One quiet button posting a proxy's name, or nothing when this
     person may not press it."""
     if not _may(user, "may_add_proxy"):
         return ""
     return (f'<form method="post" action="{esc(action)}" class="inline">'
             f'{_csrf(user)}<input type="hidden" name="name" '
-            f'value="{esc(name or "")}"><button class="quiet {klass}">'
-            f'{esc(label)}</button></form>')
+            f'value="{esc(name or "")}">{_back_field(back)}'
+            f'<button class="quiet {klass}">{esc(label)}</button></form>')
 
 
-def _held_row(user: dict, u: dict) -> str:
-    who = (f"{esc(str(u.get('host', '')))}:{esc(str(u.get('port', '')))} "
-           f"({esc(str(u.get('username', '')))})")
+def _stray_who(u: dict) -> str:
+    return (f"{str(u.get('host', ''))}:{str(u.get('port', ''))} "
+            f"({str(u.get('username', ''))})")
+
+
+def _stray_buttons(user: dict, u: dict, back: str = "") -> str:
+    """Add to pool / Ignore, both carrying the exit's three fields - the
+    stray has no name to post, because the pool has never named it."""
+    if not _may(user, "may_add_proxy"):
+        return ""
     hidden = "".join(
         f'<input type="hidden" name="{k}" value="{esc(str(u.get(k, "")))}">'
         for k in ("host", "port", "username"))
-    buttons = ""
-    if _may(user, "may_add_proxy"):
-        buttons = (
-            f'<form method="post" action="/pools/proxy/adopt" class="inline">'
+    hidden += _back_field(back)
+    return (f'<form method="post" action="/pools/proxy/adopt" class="inline">'
             f'{_csrf(user)}{hidden}<button class="quiet">Add to pool'
             f'</button></form> '
             f'<form method="post" action="/pools/proxy/ignore" '
             f'class="inline">{_csrf(user)}{hidden}<button class="quiet">'
             f'Ignore</button></form>')
-    return f'<tr><td class="mono">{who}</td><td>{buttons}</td></tr>'
 
 
-def proxy_pool_page(data: dict, user: dict, said: str = "",
-                    state: str = "", q: str = "", *, show_all: bool = False,
-                    show_ignored: bool = False) -> str:
-    """The Proxy Pool: the rows that need a hand first (a new IP, held by
-    GeeLark, dead), then every row. `tests` and `ignored` come from what
-    the pass keeps in service_state, merged in by the caller; the header
-    says when the free ones were last tested off the newest stamp."""
-    c = data["counts"]
+def _trouble_row(user: dict, r: dict, tests: dict, back: str) -> str:
+    """One line of the work list: what kind of trouble, where, what
+    happened with the one sentence that answers it, and the button that
+    is that answer."""
+    bucket = str(r.get("bucket") or "")
+    name = str(r.get("name") or "")
+    where = f"{str(r.get('host') or '')}:{str(r.get('port') or '')}"
+    if bucket == "dead":
+        said = _last_test(tests, name)
+        seen = ("never tested" if said == "never"
+                else f"failed its last test {said}")
+        seen += f", dead since {_when(r.get('updated_at'))}"
+        advice = "revive it at the vendor and test again, or remove it"
+        buttons = (_proxy_button(user, "/pools/proxy/test", name,
+                                 "Test again", back=back)
+                   + " " + _proxy_button(user, "/pools/proxy/remove", name,
+                                         "Remove", "bad", back=back))
+    else:
+        seen = (str(r.get("note") or "") or
+                "a build asked for a new IP on this exit")
+        advice = ("change the IP in the vendor's panel, then free it here - "
+                  "it is re-tested before any build takes it")
+        buttons = _proxy_button(user, "/pools/proxy/free", name,
+                                "IP changed — free it", "warn", back=back)
+    phone = (f' <span class="dim">on</span> {_serial_link(r.get("serial"))}'
+             if r.get("serial") else "")
+    return (f'<tr><td>{esc(name)}<br>{_proxy_word(r)}</td>'
+            f'<td class="muted">{esc(where)}{phone}</td>'
+            f'<td>{_clip(seen, 90)}<br><span class="dim">{esc(advice)}</span>'
+            f'</td><td class="right">{buttons}</td></tr>')
+
+
+def _stray_row(user: dict, u: dict, back: str) -> str:
+    return (f'<tr><td><span class="dim">not in the pool</span></td>'
+            f'<td class="mono muted">{esc(_stray_who(u))}</td>'
+            f'<td>GeeLark holds this exit and the pool has never heard of '
+            f'it<br><span class="dim">yours to decide: add it, or ignore it '
+            f'so it stops being reported</span></td>'
+            f'<td class="right">{_stray_buttons(user, u, back)}</td></tr>')
+
+
+def _proxy_sentence(view: str, counts: dict, data: dict, tested: str) -> str:
+    """The line beside the title: the one number this view is about. On
+    the free view it is the question the page exists for - are there
+    working exits for the builds that come next."""
+    if view == "on_phone":
+        n = int(counts.get("on_phone") or 0)
+        return (f'<span class="mono">{n}</span> on a phone right now'
+                if n else "no exit is on a phone right now")
+    if view == "needs_hand":
+        n = int(counts.get("needs_hand") or 0)
+        if not n:
+            return "nothing needs a hand"
+        exits = int(counts.get("needs_new_ip") or 0) + int(
+            counts.get("dead") or 0)
+        strays = int(counts.get("strays") or 0)
+        parts = []
+        if exits:
+            parts.append(_plural(exits, "exit"))
+        if strays:
+            parts.append(_plural(strays, "stray"))
+        return (f'<span class="mono" style="color:var(--amber)">{n}</span> '
+                f'need a hand — {" and ".join(parts)}')
+    if view == "all":
+        whole = int(counts.get("all") or 0)
+        q = str(data.get("q") or "")
+        if q:
+            return (f'{int(data.get("total") or 0)} of {whole} rows match '
+                    f'"{esc(q)}"')
+        return (f'<span class="mono">{whole}</span> rows — every exit the '
+                f'pool has ever been told about')
+    n = int(counts.get("free") or 0)
+    if not n:
+        return ('<span style="color:var(--red)">0 free</span> — no build can '
+                'take an exit until one comes back or is added')
+    return (f'<span class="mono" style="color:var(--green)">{n}</span> free — '
+            f'{esc(tested)}')
+
+
+def proxy_pool_page(data: dict, user: dict, said: str = "", *,
+                    q: str = "", show_ignored: bool = False) -> str:
+    """One question per view, one table each.
+
+    Free is the front door: how many exits a build can take, when they
+    were last tested, and the box that adds more. Needs a hand is the
+    one that used to be three panels - an exit wanting a new IP, a dead
+    one, and an exit GeeLark holds that the pool never heard of are all
+    the same thing to a person: a job, with one button that answers it.
+
+    `tests` and `ignored` come from what the pass keeps in service_state,
+    merged into `data` by the caller.
+    """
+    counts = data.get("counts") or {}
+    view = data.get("view") or "free"
+    if view not in PROXY_VIEWS:
+        view = "free"
+    rows = data.get("rows") or []
     tests = data.get("tests") or {}
     ignored = list(data.get("ignored") or [])
-    free_names = [r["name"] for r in data["rows"]
-                  if _proxy_bucket(r["status"]) == "free" and r["name"]]
+    free_names = [r.get("name") for r in rows if r.get("bucket") == "free"]
     newest = max((float(tests[n]["at"]) for n in free_names
                   if isinstance(tests.get(n), dict) and tests[n].get("at")),
                  default=None)
-    tested = (f"free ones tested {_ago(newest)}" if newest
-              else "free ones not tested yet")
-    body = (f'<div class="top"><h2>Proxy Pool</h2>'
-            f'<span class="mono muted">{c["all"]} rows — '
-            f'{c.get("free", 0)} free · {c.get("on_phone", 0)} on phones · '
-            f'{c.get("needs_new_ip", 0)} need a new IP · '
-            f'{c.get("dead", 0)} dead</span>'
-            f'<span class="dim">{esc(tested)}</span>')
-    if _may(user, "may_add_proxy"):
-        body += (f'<form method="post" action="/pools/proxy/test-all" '
-                 f'class="inline" style="margin-left:auto">{_csrf(user)}'
-                 f'<button class="quiet">Test all now</button></form>')
-    body += "</div>" + _said(said, _POOL_SAID)
-    body += _proxy_add_panel(user)
+    tested = (f"every one tested {_ago(newest)}" if newest
+              else "not tested yet")
+    here = ("/pools/proxy" if view == "free"
+            else f"/pools/proxy?view={view}")
 
-    panels = []
-    if data["needs_new_ip"]:
-        shown, more = _fold(list(data["needs_new_ip"]), show_all)
-        rows = "".join(
-            f"<tr><td>{esc(r['name'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['host'] or '')} — "
-            f"{_clip(r['note'])}</td><td>"
-            + _proxy_button(user, "/pools/proxy/free", r["name"],
-                            "IP changed — mark free", "warn")
-            + "</td></tr>" for r in shown)
-        panels.append(f'<div class="panel warn"><h3>Needs a new IP — '
-                      f'{len(data["needs_new_ip"])}</h3><table>{rows}'
-                      f'</table>{more}<p class="dim">change the IP in the '
-                      f'vendor\'s panel first; marking free re-tests it '
-                      f'before any build takes it</p>'
-                      f'{_need(user, "may_add_proxy", "Marking free")}'
-                      f'</div>')
-    if show_ignored:
-        rows = "".join(f'<tr><td class="mono">{esc(who)}</td></tr>'
-                       for who in ignored)
-        panels.append(f'<div class="panel"><h3>Ignored — {len(ignored)}'
-                      f'</h3><table>{rows}</table><p class="dim">held by '
-                      f'GeeLark and left there unreported (host:port:user); '
-                      f'the list lives in service_state under '
-                      f'ignored_proxies. <a href="/pools/proxy">Back to the '
-                      f'held list</a></p></div>')
-    elif data["unlisted"] or ignored:
-        shown, more = _fold(list(data["unlisted"]), show_all)
-        rows = "".join(_held_row(user, u) for u in shown)
-        seen = (f'<p class="dim">Ignored ({len(ignored)}) · '
-                f'<a href="/pools/proxy?ignored=1">see them</a></p>'
-                if ignored else "")
-        panels.append(f'<div class="panel"><h3>Held by GeeLark, not in the '
-                      f'pool — {len(data["unlisted"])}</h3><table>{rows}'
-                      f'</table>{more}<p class="dim">reported, never added on '
-                      f'its own - which of them belong here is your call; '
-                      f'Ignore stops one being reported</p>{seen}'
-                      f'{_need(user, "may_add_proxy", "Adding or ignoring")}'
-                      f'</div>')
-    if data["dead"]:
-        shown, more = _fold(list(data["dead"]), show_all)
-        rows = "".join(
-            f"<tr><td>{esc(r['name'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['host'] or '')}:"
-            f"{esc(str(r['port'] or ''))} — since {_when(r['updated_at'])}"
-            f" · last test {esc(_last_test(tests, r['name']))}</td><td>"
-            + _proxy_button(user, "/pools/proxy/test", r["name"],
-                            "Test again")
-            + "</td></tr>" for r in shown)
-        panels.append(f'<div class="panel bad"><h3>Dead — '
-                      f'{len(data["dead"])}</h3><table>{rows}</table>{more}'
-                      f'<p class="dim">kept, never removed on its own - '
-                      f'revive it at the vendor and test again</p>'
-                      f'{_need(user, "may_add_proxy", "Testing")}</div>')
-    if panels:
-        body += "".join(panels)
+    right = ""
+    if view == "free" and _may(user, "may_add_proxy"):
+        right = (f'<form method="post" action="/pools/proxy/test-all" '
+                 f'class="inline">{_csrf(user)}<button class="quiet">'
+                 f'Test all now</button></form>')
+    elif view == "all":
+        right = (f'<form method="get" action="/pools/proxy" class="inline">'
+                 f'<input type="hidden" name="view" value="all">'
+                 f'<input name="q" value="{esc(q)}" placeholder="name, host '
+                 f'or phone" size="20"></form>')
+    body = (f'<div class="narrow">'
+            f'<div class="top"><h2>Proxy Pool</h2>'
+            f'<span class="sub" style="margin:0">'
+            f'{_proxy_sentence(view, counts, data, tested)}</span>'
+            f'<span class="status">{right}</span></div>'
+            + _said(said, _POOL_SAID))
+    if view == "free":
+        body += _proxy_add(user)
+    body += _view_pills("/pools/proxy", PROXY_VIEWS, view, counts)
 
-    chips = [(f'<span>all · {c["all"]}</span>' if not state else
-              f'<a href="/pools/proxy">all · {c["all"]}</a>')]
-    for key, label in {"free": "free", "on_phone": "on a phone",
-                       "claimed": "claimed", "needs_new_ip": "needs new IP",
-                       "dead": "dead"}.items():
-        n = c.get(key, 0)
-        chips.append(f'<span>{label} · {n}</span>' if state == key else
-                     f'<a href="/pools/proxy?state={key}">{label} · {n}</a>')
-    shown = []
-    for r in data["rows"]:
-        bucket = _proxy_bucket(r["status"])
-        if state and bucket != state:
-            continue
-        hay = f"{r['name']} {r['host']} {r['serial']}".lower()
-        if q and q.lower() not in hay:
-            continue
-        shown.append(r)
+    if view == "needs_hand" and show_ignored:
+        lines = "".join(f'<tr><td class="mono">{esc(str(who))}</td></tr>'
+                        for who in ignored)
+        table = (f'<table>{lines}</table>' if lines else
+                 '<p class="empty">nothing is ignored</p>')
+        return page("Proxy Pool", body + (
+            f'<div class="panel wrap"><h3>Ignored <span class="n">'
+            f'{len(ignored)}</span></h3>{table}<p class="dim">held by '
+            f'GeeLark and left there unreported (host:port:user); the list '
+            f'lives in service_state under ignored_proxies. '
+            f'<a href="/pools/proxy?view=needs_hand">Back to the work list'
+            f'</a></p></div></div>'), user=user, here="/pools/proxy")
 
-    def phone_cell(r: dict) -> str:
-        link = _serial_link(r["serial"])
-        if r["serial"] and _proxy_bucket(r["status"]) in ("on_phone",
-                                                          "claimed"):
-            return f'<span class="dim">on phone</span> {link}'
-        return link
+    if view == "needs_hand":
+        head = ("<tr><th>what</th><th>host</th><th>what happened</th>"
+                "<th></th></tr>")
+        lines = ("".join(_trouble_row(user, r, tests, here) for r in rows)
+                 + "".join(_stray_row(user, u, here)
+                           for u in (data.get("strays") or [])))
+        empty = "every exit is either free or on a phone - nothing to decide"
+    elif view == "on_phone":
+        head = ("<tr><th>name</th><th>host</th><th>phone</th><th>state</th>"
+                "<th>since</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
+            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
+            f'{esc(str(r.get("port") or ""))}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td>{_proxy_word(r)}</td>'
+            f'<td class="muted">{_when(r.get("updated_at"))}</td></tr>'
+            for r in rows)
+        empty = "no exit is on a phone right now"
+    elif view == "all":
+        head = ("<tr><th>name</th><th>host</th><th>state</th><th>phone</th>"
+                "<th>exit ip</th><th>last test</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
+            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
+            f'{esc(str(r.get("port") or ""))}</td>'
+            f'<td>{_proxy_word(r)}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
+            f'</td><td>{_test_words(tests, str(r.get("name") or ""))}</td>'
+            f'</tr>' for r in rows)
+        empty = (f'nothing matches "{q}"' if q else "the pool is empty")
+    else:
+        head = ("<tr><th>name</th><th>host</th><th>exit ip</th><th>uses</th>"
+                "<th>last test</th><th></th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
+            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
+            f'{esc(str(r.get("port") or ""))}</td>'
+            f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
+            f'</td><td class="muted num">{esc(str(r.get("times_used") or 0))}'
+            f'</td><td>{_test_words(tests, str(r.get("name") or ""))}</td>'
+            f'<td class="right">'
+            + _proxy_button(user, "/pools/proxy/test",
+                            str(r.get("name") or ""), "Test", back=here)
+            + " "
+            + _proxy_button(user, "/pools/proxy/remove",
+                            str(r.get("name") or ""), "Remove", "bad",
+                            back=here)
+            + "</td></tr>" for r in rows)
+        empty = ("no exit is free - every one is on a phone, or waiting for "
+                 "you under Needs a hand")
 
-    def buttons(r: dict) -> str:
-        bucket = _proxy_bucket(r["status"])
-        if bucket == "free":
-            return (_proxy_button(user, "/pools/proxy/test", r["name"], "Test")
-                    + " " + _proxy_button(user, "/pools/proxy/remove",
-                                          r["name"], "Remove", "bad"))
-        if bucket in ("dead", "needs_new_ip"):
-            return _proxy_button(user, "/pools/proxy/remove", r["name"],
-                                 "Remove", "bad")
-        return ""
-
-    rows = "".join(
-        f"<tr><td>{esc(r['name'] or '')}</td>"
-        f"<td class=\"muted\">{esc(r['host'] or '')}:"
-        f"{esc(str(r['port'] or ''))}</td>"
-        f"<td><span class=\"badge "
-        f"{_PROXY_STATE.get((r['status'] or '').lower(), 'info')}\">"
-        f"{esc(r['status'] or 'free')}</span></td>"
-        f"<td class=\"muted mono\">{esc(r['last_exit_ip'] or '')}</td>"
-        f"<td>{phone_cell(r)}</td>"
-        f"<td class=\"muted num\">{esc(str(r['times_used'] or 0))}</td>"
-        f"<td class=\"muted\">{esc(_last_test(tests, r['name']))}</td>"
-        f"<td class=\"muted\">{_clip(r['note'])}</td>"
-        f"<td>{buttons(r)}</td></tr>" for r in shown)
-    body += (f'<div class="panel"><div class="row"><h3>All proxies</h3>'
-             f'<div class="chips">{"".join(chips)}</div>'
-             f'<form method="get" action="/pools/proxy" class="inline" '
-             f'style="margin-left:auto">'
-             f'<input type="hidden" name="state" value="{esc(state)}">'
-             f'<input name="q" value="{esc(q)}" placeholder="name, host or '
-             f'phone" size="22"></form></div>'
-             f'<table><tr><th>name</th><th>host</th><th>state</th><th>exit'
-             f'</th><th>phone</th><th>uses</th><th>last test</th><th>note'
-             f'</th><th></th></tr>{rows}</table>'
-             f'{_need(user, "may_add_proxy", "Testing or removing")}</div>')
-    return page("Proxy Pool", body, user=user, here="/pools/proxy")
+    table = (f'<table>{head}{lines}</table>' if lines else
+             f'<p class="empty">{esc(empty)}</p>')
+    base = f"/pools/proxy?view={view}&q={_q(q)}"
+    pager = (_pager(base, int(data.get("page") or 1),
+                    int(data.get("pages") or 1), bool(data.get("more")))
+             if int(data.get("pages") or 1) > 1 or data.get("more") else "")
+    foot = f'<p class="dim">{esc(PROXY_VIEWS[view]["sub"])}</p>'
+    if view == "needs_hand" and ignored:
+        foot = (f'<p class="dim">{esc(PROXY_VIEWS[view]["sub"])} · '
+                f'<a href="/pools/proxy?view=needs_hand&ignored=1">'
+                f'{_plural(len(ignored), "ignored exit")}</a></p>')
+    foot += _need(user, "may_add_proxy", "Testing, freeing or removing")
+    body += f'<div class="panel wrap">{table}{foot}{pager}</div>'
+    return page("Proxy Pool", body + "</div>", user=user, here="/pools/proxy")
 
 
 def _source_badge(r: dict) -> str:

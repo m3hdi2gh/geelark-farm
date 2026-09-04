@@ -154,7 +154,11 @@ class _Handler(BaseHTTPRequestHandler):
                     user, said=first.get("said", ""), advice=_advice))
             if path == "/pools/proxy":
                 unlisted, ignored, tests = self._proxy_state()
-                data = read.proxy_pool(self.settings, unlisted=unlisted)
+                data = read.proxy_pool(self.settings,
+                                       view=first.get("view", "free"),
+                                       q=first.get("q", ""),
+                                       page=_page_number(first),
+                                       unlisted=unlisted)
                 # What the pass keeps beside the rows (C5): the test
                 # stamps and the ignore list, merged here so the reader
                 # stays a reader of the resources table alone.
@@ -162,8 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
                 data["ignored"] = ignored
                 return self._html(200, pages.proxy_pool_page(
                     data, user, said=first.get("said", ""),
-                    state=first.get("state", ""), q=first.get("q", ""),
-                    show_all=first.get("all") == "1",
+                    q=first.get("q", ""),
                     show_ignored=first.get("ignored") == "1"))
             if path == "/pools/gpt/delivered.csv":
                 # The delivered archive, whole, for whoever reconciles it
@@ -389,7 +392,7 @@ class _Handler(BaseHTTPRequestHandler):
                        + ("only an admin drives the service"
                           if permission == "admin" else
                           f"permission {permission} is off"))
-            return self._redirect(f"{back}?said=refused")
+            return self._redirect(_said_url(back, "refused"))
         # The same button pressed twice for the same thing is one
         # request, not two the pass would refuse a minute apart.
         needle = str(payload.get("serial") or payload.get("name")
@@ -401,10 +404,10 @@ class _Handler(BaseHTTPRequestHandler):
             log.debug("pending check skipped (%s)", exc)
             twin = None
         if twin is not None:
-            return self._redirect(f"{back}?said=already:{twin}")
+            return self._redirect(_said_url(back, f"already:{twin}"))
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
                                     requested_by=user["id"], idem_key=idem)
-        self._redirect(f"{back}?said=queued:{req}")
+        self._redirect(_said_url(back, f"queued:{req}"))
 
     def _login_accounts(self, user: dict, addresses: list,
                         back: str = "/") -> None:
@@ -416,7 +419,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect(f"{back}?said=auto")
         chosen = [a.strip() for a in addresses if a and a.strip()]
         if not chosen:
-            return self._redirect(f"{back}?said=none")
+            return self._redirect(_said_url(back, "none"))
         return self._act(user, "may_login_accounts", "login_accounts",
                          {"addresses": chosen},
                          idem=self._minute_key(
@@ -619,6 +622,7 @@ class _Handler(BaseHTTPRequestHandler):
             verb = {"free": "mark_proxy_free", "test": "test_proxy",
                     "remove": "remove_proxy"}[path.rsplit("/", 1)[1]]
             name = (field.get("name") or "").strip()
+            back = _proxy_back(field)
             if verb == "remove_proxy" and field.get("sure") != "1":
                 # The one button on the pools that takes something away:
                 # a second page asks, with the name on it, before it queues.
@@ -630,15 +634,15 @@ class _Handler(BaseHTTPRequestHandler):
                           f"by hand. A dead exit is better kept: revive it "
                           f"at the vendor and test again."),
                     action="/pools/proxy/remove",
-                    fields={"name": name, "sure": "1"},
-                    button=f"Yes, remove {name}", back="/pools/proxy"))
+                    fields={"name": name, "sure": "1", "back": back},
+                    button=f"Yes, remove {name}", back=back))
             return self._act(user, "may_add_proxy", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
-                             back="/pools/proxy")
+                             back=back)
         if path == "/pools/proxy/test-all":
             return self._act(user, "may_add_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
-                             back="/pools/proxy")
+                             back=_proxy_back(field))
         if path == "/pools/proxy/ignore":
             # "Ignore" on an exit GeeLark holds that the tab never heard
             # of: the triple goes on a list the pass keeps, and the page
@@ -646,11 +650,12 @@ class _Handler(BaseHTTPRequestHandler):
             triple = {k: (field.get(k) or "").strip()
                       for k in ("host", "port", "username")}
             if not triple["host"]:
-                return self._redirect("/pools/proxy?said=gone")
+                return self._redirect(
+                    _said_url(_proxy_back(field), "gone"))
             return self._act(user, "may_add_proxy", "ignore_proxy", triple,
                              idem=self._minute_key(
                                  user, "ignore", _proxy_key(triple)),
-                             back="/pools/proxy")
+                             back=_proxy_back(field))
         if path == "/pools/proxy/restore":
             # "Put it back" on a done remove (Requests): the row the verb
             # wrote into the request's detail, added again under the same
@@ -674,11 +679,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self.settings, "unlisted_proxies", []) or []
                 if all(str(u.get(k, "")) == wanted[k] for k in wanted)), None)
             if held is None:
-                return self._redirect("/pools/proxy?said=gone")
+                return self._redirect(
+                    _said_url(_proxy_back(field), "gone"))
             return self._act(user, "may_add_proxy", "adopt_proxy", held,
                              idem=self._minute_key(
                                  user, "adopt", f"{held['host']}:{held['port']}"),
-                             back="/pools/proxy")
+                             back=_proxy_back(field))
         if path == "/pools/gpt/preview":
             from ..store import validate
 
@@ -983,6 +989,23 @@ class _Handler(BaseHTTPRequestHandler):
 #: Where "Log in selected" may send the person back: the two pages that
 #: carry the ticks. Anything else in the form's `back` goes to the front.
 LOGIN_BACKS = ("/", "/pools/gpt")
+
+#: Where a proxy button may send a person back to. Somebody who pressed
+#: "Test again" on the work list wants the work list back, not the free
+#: shelf; anything not named here is the shelf.
+PROXY_BACKS = ("/pools/proxy", "/pools/proxy?view=needs_hand",
+               "/pools/proxy?view=on_phone", "/pools/proxy?view=all")
+
+
+def _proxy_back(field: dict) -> str:
+    return (field.get("back") or "").strip() if (
+        field.get("back") or "").strip() in PROXY_BACKS else "/pools/proxy"
+
+
+def _said_url(back: str, said: str) -> str:
+    """The banner appended to wherever the button was pressed - with & when
+    that place already carries a view."""
+    return f"{back}{'&' if '?' in back else '?'}said={said}"
 
 
 #: What a spreadsheet reads as the start of a formula. A cell beginning
