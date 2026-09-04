@@ -652,6 +652,38 @@ class Pool:
                         what=f"{self.tab} row {resource.sheet_row}")
         self._note_held(resource, fields)
 
+    def edit_cells(self, resource: Resource, **fields: str) -> str:
+        """Write named cells on one row - the console's row editor.
+
+        A hand editing a spreadsheet cell, with the same power to break a
+        row, so the caller checks two things first: that nothing is on the
+        row, and that what it is about to write still validates.
+
+        Answers "" when the row reads back, and the reason it does not
+        otherwise - the tab's own judgement, which is where that rule
+        lives; a caller that cannot accept a broken row writes the old
+        cells back.
+
+        The row is re-read into this Book afterwards, not left until the
+        next pass. A build later in THIS pass can claim the row it just
+        edited, and a Resource still holding the old credentials would
+        have it sign in with the password that was replaced a second ago.
+        """
+        self._set(resource, dict(fields))
+        try:
+            self._interpret(resource)
+        except Exception as exc:                                  # noqa: BLE001
+            # The cells are written; the sheet is the record. What this
+            # Book thinks of the row no longer matters for the rest of
+            # the pass, because nothing may claim a row it cannot read -
+            # and the caller is handed the reason, which is the tab's own
+            # rule and the only place it is written down.
+            resource.credentials = None
+            log.warning("%s row %s was written but does not read back (%s)",
+                        self.tab, resource.sheet_row, exc)
+            return str(exc)
+        return ""
+
     def _note_held(self, resource: Resource, fields: dict[str, str]) -> None:
         """Follow the row in and out of this process's keeping.
 

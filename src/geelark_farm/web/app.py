@@ -145,12 +145,14 @@ class _Handler(BaseHTTPRequestHandler):
                     self.settings, seller=first.get("seller", ""))
                 return self._text(200, "\n".join(addresses) + "\n")
             if path == "/pools/gmail":
+                editing = first.get("edit", "")
                 return self._html(200, pages.gmail_pool_page(
                     read.gmail_pool(self.settings,
                                     view=first.get("view", "queued"),
                                     seller=first.get("seller", ""),
                                     page=_page_number(first)),
-                    user, said=first.get("said", ""), advice=_advice))
+                    user, said=first.get("said", ""), advice=_advice,
+                    editing=int(editing) if editing.isdigit() else 0))
             if path == "/pools/proxy":
                 unlisted, ignored, tests = self._proxy_state()
                 data = read.proxy_pool(self.settings,
@@ -620,6 +622,38 @@ class _Handler(BaseHTTPRequestHandler):
                               "seller": (field.get("seller") or "").strip()},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
                              back="/pools/gmail")
+        if path == "/pools/gmail/edit":
+            # The row editor: the address names the row, everything else
+            # is what it should say now. Judged by the verb against the
+            # same rule a pasted row is judged by.
+            address = (field.get("address") or "").strip()
+            return self._act(
+                user, "may_add_gmail", "edit_gmail",
+                {"address": address,
+                 "new_address": (field.get("new_address") or "").strip(),
+                 "password": field.get("password") or "",
+                 "secret": (field.get("secret") or "").strip(),
+                 "seller": (field.get("seller") or "").strip(),
+                 "purchased": (field.get("purchased") or "").strip()},
+                idem=self._minute_key(user, "edit_gmail", address),
+                back=_gmail_back(field))
+        if path == "/pools/gmail/remove":
+            address = (field.get("address") or "").strip()
+            back = _gmail_back(field)
+            if field.get("sure") != "1":
+                return self._html(200, pages.confirm_page(
+                    user, title=f"Remove {address} from the pool?",
+                    text=("The row leaves the Gmails tab. Nothing else is "
+                          "touched - Google still has the account, and the "
+                          "request keeps the row so it can be put back."),
+                    action="/pools/gmail/remove",
+                    fields={"address": address, "sure": "1", "back": back},
+                    button=f"Yes, remove {address}", back=back))
+            return self._act(user, "may_add_gmail", "remove_gmail",
+                             {"address": address},
+                             idem=self._minute_key(user, "remove_gmail",
+                                                   address),
+                             back=back)
         if path == "/pools/proxy/preview":
             from ..store import validate
 
@@ -1019,6 +1053,18 @@ class _Handler(BaseHTTPRequestHandler):
 #: Where "Log in selected" may send the person back: the two pages that
 #: carry the ticks. Anything else in the form's `back` goes to the front.
 LOGIN_BACKS = ("/", "/pools/gpt")
+
+#: Where a gmail button may send a person back to - the view it was
+#: pressed on, so the banner lands where the row is.
+GMAIL_BACKS = tuple(["/pools/gmail"] + [f"/pools/gmail?view={v}"
+                                        for v in ("queued", "on_phone",
+                                                  "used", "errored")])
+
+
+def _gmail_back(field: dict) -> str:
+    asked = (field.get("back") or "").strip()
+    return asked if asked in GMAIL_BACKS else "/pools/gmail"
+
 
 #: Where a proxy button may send a person back to. Somebody who pressed
 #: "Test again" on the work list wants the work list back, not the free

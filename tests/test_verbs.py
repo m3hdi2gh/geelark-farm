@@ -291,6 +291,80 @@ def _phone_on(book, serial, proxy_name):
     return row
 
 
+def test_editing_a_gmail_writes_the_cells_and_is_judged_first(monkeypatch):
+    """The row editor is a hand in the spreadsheet, so it is judged the
+    way a pasted row is: a secret that is neither a key nor an address
+    never reaches the cell."""
+    from tests.test_builder import SECRET
+
+    book = make_book(gmails=1)
+    g0 = book.gmails._rows[0]
+    g0.values.update({"Address": "old@example.com", "Password": "old",
+                      "Secret": SECRET, "Seller": "usa"})
+
+    status, said, detail = verbs.edit_gmail(
+        book, None, None, {"address": "g0@example.com",
+                           "new_address": "new@example.com",
+                           "password": "fresh", "secret": "back@example.com",
+                           "seller": "egypt", "purchased": "2026-09-04",
+                           "by": "mehdi"}, None)
+
+    assert status == "done", said
+    assert g0.values["Address"] == "new@example.com"
+    assert g0.values["Password"] == "fresh"
+    assert g0.values["Secret"] == "back@example.com"
+    assert g0.values["Seller"] == "egypt"
+    assert "Address" in detail["changed"] and "Password" in detail["changed"]
+
+    # Garbage never reaches the cell: Credentials judges it first.
+    status, said, _ = verbs.edit_gmail(
+        book, None, None, {"address": "new@example.com",
+                           "new_address": "new@example.com",
+                           "password": "fresh", "secret": "nope!!",
+                           "seller": "egypt", "by": "mehdi"}, None)
+    assert status == "refused", said
+    assert g0.values["Secret"] == "back@example.com", "the cell is untouched"
+
+    # And what only the tab knows - this seller promises a recovery
+    # address, so a key here reads back as broken - is written, refused
+    # and put straight back.
+    status, said, _ = verbs.edit_gmail(
+        book, None, None, {"address": "new@example.com",
+                           "new_address": "new@example.com",
+                           "password": "fresh", "secret": SECRET,
+                           "seller": "egypt", "by": "mehdi"}, None)
+    assert status == "refused" and "Seller column" in said
+    assert g0.values["Secret"] == "back@example.com", "rolled back"
+    assert g0.credentials is not None, "and the row still reads"
+
+
+def test_a_gmail_a_phone_is_behind_is_neither_edited_nor_removed():
+    book = make_book(gmails=1)
+    g0 = book.gmails._rows[0]
+    book.gmails.claim()
+
+    for verb in (verbs.edit_gmail, verbs.remove_gmail):
+        status, said, _ = verb(book, None, None,
+                               {"address": "g0@example.com",
+                                "secret": "", "by": "mehdi"}, None)
+        assert status == "refused" and "a phone is behind it" in said
+    assert g0 in book.gmails._rows
+
+
+def test_removing_a_gmail_keeps_the_row_it_removed():
+    book = make_book(gmails=1)
+    g0 = book.gmails._rows[0]
+    g0.values["Password"] = "pw"
+
+    status, said, detail = verbs.remove_gmail(
+        book, None, None, {"address": "g0@example.com", "by": "mehdi"}, None)
+
+    assert status == "done" and "removed from the pool" in said
+    assert g0 not in book.gmails._rows
+    assert detail["removed"]["Address"] == "g0@example.com"
+    assert detail["removed"]["Password"] == "pw"
+
+
 def test_boot_starts_the_phone_takes_it_and_keeps_the_live_link(monkeypatch):
     """One press does both halves: GeeLark is asked to start, which is the
     only thing that produces a live-view URL, and the phone is written

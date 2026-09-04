@@ -573,7 +573,9 @@ def _gmail_row(address, status="", **more):
     row = {"id": 1, "address": address, "status": status, "serial": "",
            "seller": "egypt", "purchased_on": "2026-08-30", "used_at": "",
            "note": "", "updated_at": "2026-09-02 10:00:00", "has_totp": True,
-           "has_recovery": False, "source": "sheet", "phone_status": "ready"}
+           "has_recovery": False, "source": "sheet", "phone_status": "ready",
+           "password": "pw", "totp_secret": "JBSWY3DPEHPK3PXP",
+           "recovery_email": ""}
     row.update(more)
     return row
 
@@ -626,8 +628,10 @@ def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
     assert 'href="/pools/gmail" class="here"' in body
     assert '<span class="n">3</span>' in body          # gmail free count
     assert "q1@x.com" in body and "q2@x.com" in body, "queued is the default"
-    assert "2</span> free — enough for the next 2 builds" in body
-    assert "Queued <span class=\"n\">2</span>" in body, "the four pills"
+    assert '<b class="figure" style="color:var(--green)">2</b> free' in body
+    assert "enough for the next 2 builds" in body
+    assert 'Queued<span class="n" style="color:var(--green)">2</span>' in body, \
+        "four pills, each count in the colour of what the view holds"
     assert 'href="/pools/gmail?view=errored"' in body
 
     _, _, body = client.request("GET", "/pools/gmail?view=on_phone")
@@ -678,17 +682,124 @@ def test_the_add_form_needs_the_flag_and_the_permission_together(
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_queued_row_shows_its_secret_and_password_and_can_be_edited(
+        web, monkeypatch):
+    """Everything the sheet keeps about an account, in the row: the value
+    it answers a challenge with and which kind that is, the password, and
+    the two buttons that change or remove it."""
+    import geelark_farm.store.actions as actions_mod
+
+    _gmail_active(monkeypatch, queued=[
+        _gmail_row("key@x.com", id=11, password="pw-one",
+                   totp_secret="JBSWY3DPEHPK3PXP", recovery_email=""),
+        _gmail_row("rec@x.com", id=12, password="pw-two", has_totp=False,
+                   has_recovery=True, totp_secret="",
+                   recovery_email="backup@x.com"),
+        _gmail_row("bare@x.com", id=13, password="", has_totp=False,
+                   totp_secret="", recovery_email="")])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert "<th>secret</th><th>password</th>" in body, "named, not '2fa'"
+    assert "JBSWY3DPEHPK3PXP" in body and ">authenticator<" in body
+    assert "backup@x.com" in body and ">recovery<" in body
+    assert ">no second factor<" in body, "and the row to notice is loud"
+    assert "pw-one" in body and "pw-two" in body
+    assert 'href="/pools/gmail?view=queued&edit=11">Edit</a>' in body
+    assert body.count('action="/pools/gmail/remove"') == 3
+
+    # Edit draws that one row as a form, over every column
+    _, _, body = client.request("GET", "/pools/gmail?view=queued&edit=12")
+    assert '<tr class="editrow">' in body and 'colspan="6"' in body
+    assert 'name="new_address" value="rec@x.com"' in body
+    assert 'name="password" value="pw-two"' in body
+    assert 'name="secret" value="backup@x.com"' in body
+    assert 'name="seller" value="egypt"' in body
+    assert 'name="purchased" value="2026-08-30"' in body
+    assert '<datalist id="sellers">' in body, "the sellers already known"
+    assert body.count('href="/pools/gmail?view=queued">Cancel</a>') == 1
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 81)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/edit",
+        _form(csrf=client.csrf(), address="rec@x.com",
+              new_address="rec2@x.com", password="pw-new",
+              secret="other@x.com", seller="usa", purchased="2026-09-01",
+              back="/pools/gmail?view=queued"))
+    assert status == 303
+    assert dict(headers)["Location"] == \
+        "/pools/gmail?view=queued&said=queued:81"
+    assert got["verb"] == "edit_gmail"
+    assert got["payload"]["address"] == "rec@x.com"
+    assert got["payload"]["new_address"] == "rec2@x.com"
+    assert got["payload"]["secret"] == "other@x.com"
+    assert got["payload"]["purchased"] == "2026-09-01"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_removing_a_gmail_asks_once_with_the_address(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _gmail_active(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 82)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gmail/remove",
+        _form(csrf=client.csrf(), address="q1@x.com",
+              back="/pools/gmail?view=queued"))
+    assert status == 200 and "Remove q1@x.com from the pool?" in body
+    assert got == {}, "nothing queued until the person says so"
+
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/remove",
+        _form(csrf=client.csrf(), address="q1@x.com", sure="1",
+              back="/pools/gmail?view=queued"))
+    assert status == 303
+    assert dict(headers)["Location"] == \
+        "/pools/gmail?view=queued&said=queued:82"
+    assert got["verb"] == "remove_gmail"
+    assert got["payload"]["address"] == "q1@x.com"
+
+    _, headers, _ = client.request(
+        "POST", "/pools/gmail/remove",
+        _form(csrf=client.csrf(), address="q1@x.com", sure="1",
+              back="/evil"))
+    assert dict(headers)["Location"] == "/pools/gmail?said=queued:82", \
+        "only the pool's own views are places to come back to"
+
+
+def test_a_reader_without_the_permission_gets_no_row_buttons(web,
+                                                             monkeypatch):
+    _gmail_active(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_gmail": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert ">Edit</a>" not in body and ">Remove<" not in body
+    assert "<th>password</th><th>purchased</th></tr>" in body, \
+        "the columns still read; only the column of buttons goes"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_the_add_panel_offers_a_paste_and_a_one_by_one_way_in(
         web, monkeypatch):
     _gmail_active(monkeypatch)
     client = web()
     client.login()
     _, _, body = client.request("GET", "/pools/gmail")
-    assert body.count('action="/pools/gmail/preview"') == 2, \
-        "the paste box and the folded one-by-one share the preview"
-    assert "<summary>add one by hand</summary>" in body, "folded, not a panel"
-    assert 'name="pasted"' in body and 'name="address"' in body
-    assert 'name="password"' in body and 'name="second"' in body
+    assert body.count('action="/pools/gmail/preview"') == 1, \
+        "one way in: a line typed into the box is the same keystrokes"
+    assert "add one by hand" not in body
+    assert 'name="pasted"' in body and 'class="addbox"' in body
     assert '<option value="egypt">egypt</option>' in body
     assert 'name="new_seller" placeholder="or a new seller"' in body
 
@@ -2752,10 +2863,11 @@ def test_the_by_hand_folds_are_not_forms_inside_forms(web, monkeypatch):
     _gpt_active(monkeypatch, waiting=[_app_row("a@x.com")])
     client = web()
     client.login()
+    _, _, body = client.request("GET", "/pools/gpt")
+    assert "<summary>add one by hand</summary>" in body, "the gpt fold"
     for path in ("/pools/gmail", "/pools/gpt"):
         status, _, body = client.request("GET", path)
         assert status == 200, path
-        assert "<summary>add one by hand</summary>" in body, path
         depth = 0
         for token in re.findall(r"</?form", body):
             depth += 1 if token == "<form" else -1

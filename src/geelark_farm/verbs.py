@@ -344,6 +344,92 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
 login_accounts.needs_launch = True
 
 
+def _gmail_row(book, payload):
+    """The row this command names, or the refusal that says why not.
+
+    A row a phone is behind is not stock to edit or tidy away: the build
+    signed into it minutes ago and the sheet is what it will be read from
+    again.
+    """
+    address = (payload.get("address") or "").strip()
+    resource = book.gmails.find(address)
+    if resource is None:
+        return None, ("failed", f"{address or '?'} is not in the "
+                                f"{book.gmails.tab} tab", None)
+    status = book.gmails.status_of(resource)
+    if status in (book.gmails.claimed_status, book.gmails.spent_status):
+        return None, ("refused", f"{address} is {status} - a phone is behind "
+                                 f"it", None)
+    return resource, None
+
+
+def edit_gmail(book, ledger, settings, payload, client):
+    """The row editor: whatever cells the person changed, written back.
+
+    Judged the way a pasted row is judged, before anything is written - a
+    secret that is neither a base32 key nor an address, or an address that
+    is not one, is refused here rather than discovered on a phone. Blank
+    means blank on purpose: an account with no second factor is a real
+    thing this pool has always carried.
+    """
+    from .accounts import AccountError, Credentials, normalize_totp_secret
+
+    resource, refused = _gmail_row(book, payload)
+    if refused:
+        return refused
+    was = dict(resource.values)
+    secret = str(payload.get("secret") or "").strip()
+    recovery = secret if "@" in secret else ""
+    address = str(payload.get("new_address") or "").strip() or str(
+        payload.get("address") or "").strip()
+    try:
+        Credentials(
+            email=address,
+            password=str(payload.get("password") or ""),
+            totp_secret="" if recovery else normalize_totp_secret(secret),
+            recovery_email=recovery,
+        ).validate(what="gmail:")
+    except AccountError as exc:
+        return "refused", str(exc), None
+    cells = {"Address": address,
+             "Password": str(payload.get("password") or ""),
+             book.gmails.SECRET_COLUMN: secret,
+             "Seller": str(payload.get("seller") or "").strip()}
+    purchased = str(payload.get("purchased") or "").strip()
+    if purchased:
+        cells["Purchase Date"] = purchased
+    # Written, then read back by the tab's own rule - which knows things
+    # `Credentials` does not, like a Seller that promises a recovery
+    # address. A row that will not read back is put straight back the way
+    # it was: half an edit is a row nothing can claim.
+    problem = book.gmails.edit_cells(resource, **cells)
+    if problem:
+        book.gmails.edit_cells(resource, **{name: str(was.get(name, ""))
+                                            for name in cells})
+        return "refused", problem, None
+    changed = [name for name, value in cells.items()
+               if str(was.get(name, "")) != value]
+    return ("done", f"{address} edited by {_by(payload)}"
+                    + (f" ({', '.join(changed)})" if changed
+                       else " - nothing was different"),
+            {"changed": changed})
+
+
+def remove_gmail(book, ledger, settings, payload, client):
+    """Out of the pool. The row it removed rides in the detail, so
+    Requests can put it back the way a removed proxy can."""
+    resource, refused = _gmail_row(book, payload)
+    if refused:
+        return refused
+    address = str(resource.values.get("Address") or "")
+    kept = {name: str(resource.values.get(name) or "")
+            for name in ("Address", "Password", book.gmails.SECRET_COLUMN,
+                         "Seller", "Purchase Date")}
+    book.gmails.delete_row(resource)
+    return ("done", f"{address} removed from the pool by {_by(payload)}",
+            {"removed": kept})
+
+
 def stop_phone(book, ledger, settings, payload, client):
     """"Stop this one": the job on one phone gives up at its next step,
     the way an interrupt would, and puts back what it held."""
@@ -607,6 +693,8 @@ VERBS = {
     "change_proxy": change_proxy,
     "stop_phone": stop_phone,
     "add_gmails": add_gmails,
+    "edit_gmail": edit_gmail,
+    "remove_gmail": remove_gmail,
     "add_gpt": add_gpt,
     "add_proxies": add_proxies,
     "adopt_proxy": adopt_proxy,

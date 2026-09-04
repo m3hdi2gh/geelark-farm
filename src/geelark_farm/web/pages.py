@@ -141,6 +141,19 @@ td .badge{{vertical-align:middle}}
 .pills a:last-child,.pills span:last-child{{border-right:0}}
 .pills a:hover{{background:#141c2b;color:#fff}}
 .pills span,.pills a.here{{background:#1a2334;color:#fff}}
+.pills .n{{font-family:var(--mono);font-size:12px;margin-left:7px;
+ font-variant-numeric:tabular-nums}}
+.figure{{font-family:var(--mono);font-size:20px;font-weight:600;
+ line-height:1;font-variant-numeric:tabular-nums;vertical-align:-1px}}
+.addbox{{background:var(--panel2);border:1px solid var(--line2);
+ border-radius:12px;padding:14px;display:flex;flex-direction:column;
+ gap:11px}}
+.addbox textarea{{background:var(--bg)}}
+tr.editrow td{{background:rgba(127,180,255,.05)}}
+tr.editrow form{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
+tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
+ min-height:32px;padding:4px 9px}}
+.secret{{display:flex;flex-direction:column;gap:3px}}
 .chips{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
 .chips a,.chips span{{padding:4px 11px;border-radius:12px;font-size:12px;
  border:1px solid #2c3a52;color:#9aa7ba}}
@@ -1406,6 +1419,10 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return (_CONTROL_SAID.get(what)
                 or (CONTROLS.get(what) or {}).get("label")
                 or what or "Control"), ""
+    if verb == "edit_gmail":
+        return f"Edit {p.get('address', '?')}", "in the Gmails tab"
+    if verb == "remove_gmail":
+        return f"Remove {p.get('address', '?')}", "from the Gmails tab"
     if verb == "boot_phone":
         return f"Boot phone {p.get('serial', '?')}", "start it and take it"
     if verb == "set_phone_state":
@@ -1950,27 +1967,19 @@ def _pager(base: str, page: int, pages: int, more: bool) -> str:
 
 def _gmail_add(user: dict, known: list) -> str:
     """The one way in, at the top of the queued view: a box to paste the
-    seller's sheet into, the seller beside it, and one button. Typing a
-    single account is the same form with the fields spelled out - folded
-    into a `details` so it costs a line, not a second panel."""
+    seller's sheet into, the seller beside it, and one button.
+
+    One way, not two. Typing a single account by hand was a second form
+    saying the same thing to the same preview, and a line pasted into the
+    box is the same keystrokes without the second form.
+    """
     if not _may(user, "may_add_gmail"):
         if not user.get("mutations"):
             return ""
         return ('<p class="hint">Adding gmails needs the add-gmails '
                 'permission - ask an admin.</p>')
-    one = (
-        '<details class="fold"><summary>add one by hand</summary>'
-        '<form method="post" action="/pools/gmail/preview" class="row" '
-        f'style="margin-top:10px">{_csrf(user)}'
-        '<input name="address" placeholder="address" autocomplete="off" '
-        'style="flex:1;min-width:220px">'
-        '<input name="password" placeholder="password" autocomplete="off">'
-        '<input name="second" placeholder="authenticator secret or recovery '
-        'address" autocomplete="off" style="flex:1;min-width:220px">'
-        f'{_seller_pick(known)}<button class="quiet">Preview</button>'
-        '</form></details>')
     return (
-        f'<form method="post" action="/pools/gmail/preview" class="field">'
+        f'<form method="post" action="/pools/gmail/preview" class="addbox">'
         f'{_csrf(user)}'
         f'<textarea name="pasted" placeholder="paste from the seller\'s '
         f'sheet — one account per line; tab or comma between the columns">'
@@ -1979,7 +1988,7 @@ def _gmail_add(user: dict, known: list) -> str:
         f'<span class="dim">address, password and the secret in any order — '
         f'nothing is added until you have seen the preview</span>'
         f'<span class="right"></span><button>Preview</button></div>'
-        f'</form>{one}')
+        f'</form>')
 
 
 def _on_phone_badge(r: dict) -> str:
@@ -1993,14 +2002,14 @@ def _on_phone_badge(r: dict) -> str:
 #: The four views, in the order the pills read: the count each one shows
 #: is the key itself, and the sentence goes under its table.
 GMAIL_VIEWS = {
-    "queued": {"label": "Queued",
+    "queued": {"label": "Queued", "tone": "green",
                "sub": "the keeper claims from the top of this list"},
-    "on_phone": {"label": "On a phone",
+    "on_phone": {"label": "On a phone", "tone": "blue",
                  "sub": "signed in right now - the phone's row says how it "
                         "is getting on"},
     "used": {"label": "Used",
              "sub": "retired with the phone they were delivered on"},
-    "errored": {"label": "Errored",
+    "errored": {"label": "Errored", "tone": "red",
                 "sub": "an errored address never re-enters the pool - this "
                        "list exists so the seller pays it back"},
 }
@@ -2013,7 +2022,10 @@ def _view_pills(base: str, views: dict, view: str, counts: dict) -> str:
     out = []
     for name, words in views.items():
         n = int(counts.get(name) or 0)
-        inner = f'{esc(words["label"])} <span class="n">{n}</span>'
+        tone = words.get("tone") or ""
+        paint = f' style="color:var(--{tone})"' if tone and n else ""
+        inner = (f'{esc(words["label"])}'
+                 f'<span class="n"{paint}>{n}</span>')
         out.append(f'<span>{inner}</span>' if name == view else
                    f'<a href="{base}?view={name}">{inner}</a>')
     return f'<div class="pills">{"".join(out)}</div>'
@@ -2024,11 +2036,12 @@ def _gmail_stock(counts: dict) -> str:
     covers - the one number this page exists to keep above zero."""
     free = int(counts.get("queued") or 0)
     if not free:
-        return ('<span style="color:var(--red)">0 free</span> — no phone can '
-                'be built until rows are added')
-    return (f'<span class="mono" style="color:var(--green)">{free}</span> free '
-            f'— enough for the next {free} '
-            f'{"build" if free == 1 else "builds"}')
+        return ('<b class="figure" style="color:var(--red)">0</b> free '
+                '<span class="dim">— no phone can be built until rows are '
+                'added</span>')
+    return (f'<b class="figure" style="color:var(--green)">{free}</b> free '
+            f'<span class="dim">— enough for the next {free} '
+            f'{"build" if free == 1 else "builds"}</span>')
 
 
 def _kind_2fa_word(row: dict) -> str:
@@ -2045,6 +2058,79 @@ def _kind_2fa_word(row: dict) -> str:
     return '<span style="color:var(--red);font-size:12px">password only</span>'
 
 
+def _secret_cell(r: dict) -> str:
+    """What the account answers a challenge with, and which kind that is.
+
+    One column, because the sheet keeps one: a key is base32 and an
+    address has an @, so the value already says which it is. The word
+    under it says the same thing in English, and is the loud half - a
+    row with nothing to answer with is the one to notice.
+    """
+    if r.get("recovery_email"):
+        value, word, colour = str(r["recovery_email"]), "recovery", "amber"
+    elif r.get("totp_secret"):
+        value, word, colour = str(r["totp_secret"]), "authenticator", "green"
+    else:
+        value, word, colour = "", "no second factor", "red"
+    shown = (f'<span class="hand">{_clip(value, 26)}</span>' if value
+             else '<span class="dim">—</span>')
+    return (f'<div class="secret">{shown}<span style="color:var(--{colour});'
+            f'font-size:11.5px">{esc(word)}</span></div>')
+
+
+def _pass_cell(r: dict) -> str:
+    """The password, selectable on its own so it can be copied without
+    the rest of the row coming with it."""
+    value = str(r.get("password") or "")
+    return (f'<span class="hand">{esc(value)}</span>' if value
+            else '<span class="dim">—</span>')
+
+
+def _gmail_actions(user: dict, r: dict, view: str) -> str:
+    """Edit and Remove on one row. Edit is a link, because the row it
+    opens is this same page with one row drawn as a form - no state to
+    keep, and a reload leaves it open where it was."""
+    if not _may(user, "may_add_gmail"):
+        return ""
+    back = f"/pools/gmail?view={view}"
+    address = str(r.get("address") or "")
+    return (f'<a class="btn quiet go" href="{back}&edit={int(r["id"])}">'
+            f'Edit</a> '
+            f'<form method="post" action="/pools/gmail/remove" class="inline">'
+            f'{_csrf(user)}<input type="hidden" name="address" '
+            f'value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<button class="quiet bad">Remove</button></form>')
+
+
+def _gmail_edit_row(user: dict, r: dict, view: str, columns: int) -> str:
+    """One row, drawn as a form across the whole table: every cell the
+    sheet keeps about this account, in the order it reads. The seller is
+    a free box with the known names offered - a seller nobody has typed
+    yet is a real thing, and a select cannot say one."""
+    back = f"/pools/gmail?view={view}"
+    address = str(r.get("address") or "")
+    secret = str(r.get("recovery_email") or r.get("totp_secret") or "")
+    return (f'<tr class="editrow"><td colspan="{columns}">'
+            f'<form method="post" action="/pools/gmail/edit">{_csrf(user)}'
+            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<input name="new_address" value="{esc(address)}" size="26" '
+            f'autocomplete="off" placeholder="address">'
+            f'<input name="password" value="{esc(str(r.get("password") or ""))}"'
+            f' size="14" autocomplete="off" placeholder="password">'
+            f'<input name="secret" value="{esc(secret)}" size="26" '
+            f'autocomplete="off" placeholder="key or recovery address">'
+            f'<input name="seller" value="{esc(str(r.get("seller") or ""))}" '
+            f'size="9" list="sellers" autocomplete="off" placeholder="seller">'
+            f'<input name="purchased" '
+            f'value="{esc(str(r.get("purchased_on") or ""))}" size="10" '
+            f'autocomplete="off" placeholder="YYYY-MM-DD">'
+            f'<button class="quiet ok">Save</button>'
+            f'<a class="btn quiet" href="{back}">Cancel</a>'
+            f'</form></td></tr>')
+
+
 def _reason_words(status: str) -> str:
     colour = "red" if status in _BLAME_RED else "amber"
     return (f'<span style="color:var(--{colour});font-size:12.5px">'
@@ -2059,12 +2145,16 @@ def _why(row: dict, advice) -> str:
 
 
 def gmail_pool_page(data: dict, user: dict, said: str = "", *,
-                    advice=None) -> str:
+                    advice=None, editing: int = 0) -> str:
     """One question per view, one table each.
 
     Queued is the front door: how much stock there is, and the box that
     adds more. The other three are the same page with a different list -
     what is signed in now, what was spent, and what the seller owes back.
+
+    `editing` is the id of the one row drawn as a form instead of cells -
+    the console's row editor, which is this same page with one line
+    swapped, so a reload leaves it open where it was.
     """
     counts = data.get("counts") or {}
     view = data.get("view") or "queued"
@@ -2119,18 +2209,29 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
             for r in rows)
         empty = "no address is signed in on a phone right now"
     else:
-        head = ("<tr><th>address</th><th>seller</th><th>2fa</th>"
-                "<th>purchased</th></tr>")
+        acts = "<th></th>" if _may(user, "may_add_gmail") else ""
+        head = (f"<tr><th>address</th><th>seller</th><th>secret</th>"
+                f"<th>password</th><th>purchased</th>{acts}</tr>")
+        columns = 5 + (1 if acts else 0)
         lines = "".join(
-            f'<tr><td>{esc(r["address"])}</td>'
-            f'<td class="muted">{esc(r.get("seller") or "")}</td>'
-            f'<td>{_kind_2fa_word(r)}</td>'
-            f'<td class="muted">{esc(r.get("purchased_on") or "")}</td></tr>'
+            _gmail_edit_row(user, r, view, columns)
+            if editing and int(r.get("id") or 0) == editing else
+            (f'<tr><td><span class="hand">{esc(r["address"])}</span></td>'
+             f'<td class="muted">{esc(r.get("seller") or "")}</td>'
+             f'<td>{_secret_cell(r)}</td>'
+             f'<td class="muted">{_pass_cell(r)}</td>'
+             f'<td class="muted">{esc(r.get("purchased_on") or "")}</td>'
+             + (f'<td class="act">{_gmail_actions(user, r, view)}</td>'
+                if acts else "") + "</tr>")
             for r in rows)
         empty = ("the pool is empty - paste a seller's sheet above and "
                  "nothing else has to happen")
     table = (f'<table>{head}{lines}</table>' if lines else
              f'<p class="empty">{esc(empty)}</p>')
+    if editing:
+        table += ('<datalist id="sellers">' + "".join(
+            f'<option value="{esc(str(name))}">'
+            for name in (data.get("known_sellers") or [])) + "</datalist>")
     base = f"/pools/gmail?view={view}&seller={_q(seller)}"
     pager = (_pager(base, int(data.get("page") or 1),
                     int(data.get("pages") or 1), bool(data.get("more")))
@@ -2226,13 +2327,13 @@ _BUCKET_WORDS = {"free": ("free", "green"),
 #: The four views, in the order the pills read: the count each one shows
 #: is the key itself, and the sentence goes under its table.
 PROXY_VIEWS = {
-    "free": {"label": "Free",
+    "free": {"label": "Free", "tone": "green",
              "sub": "a build takes the top one and gives it back when the "
                     "phone is done"},
-    "on_phone": {"label": "On a phone",
+    "on_phone": {"label": "On a phone", "tone": "blue",
                  "sub": "held by a build - an exit comes back here on its "
                         "own when the phone is finished or deleted"},
-    "needs_hand": {"label": "Needs a hand",
+    "needs_hand": {"label": "Needs a hand", "tone": "amber",
                    "sub": "nothing here is thrown away on its own - a dead "
                           "exit is kept until you say otherwise"},
     "all": {"label": "All",
@@ -2591,13 +2692,13 @@ def _gpt_add(user: dict, form: dict | None, error: str) -> str:
 #: The four views, in the order the pills read: the count each one shows
 #: is the key itself, and the sentence goes under its table.
 GPT_VIEWS = {
-    "waiting": {"label": "Waiting",
+    "waiting": {"label": "Waiting", "tone": "green",
                 "sub": "the keeper takes the top one first, wherever it "
                        "came from"},
-    "on_phone": {"label": "On a phone",
+    "on_phone": {"label": "On a phone", "tone": "blue",
                  "sub": "signing in now, or signed in and waiting to be "
                         "delivered"},
-    "needs_human": {"label": "Needs a human",
+    "needs_human": {"label": "Needs a human", "tone": "red",
                     "sub": "offering one again blanks its status and puts it "
                            "back with the others waiting"},
     "delivered": {"label": "Delivered",

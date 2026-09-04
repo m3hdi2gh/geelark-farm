@@ -292,6 +292,7 @@ IMPORTED = "imported"
 #: Every query that uses these therefore reads `FROM resources r`.
 _GMAIL_COLUMNS = ("r.id, r.address, r.status, r.serial, r.seller,"
                   " r.purchased_on, r.used_at, r.note, r.updated_at,"
+                  " r.password, r.totp_secret, r.recovery_email,"
                   " r.totp_secret <> '' AS has_totp,"
                   " r.recovery_email <> '' AS has_recovery, r.source")
 
