@@ -1219,6 +1219,10 @@ def test_a_phone_with_nothing_signed_into_it_is_deleted(device, settings,
     Google account on it. `finish` refuses such a phone by name, so leaving it
     costs a plan slot and puts a row in the tab that reads `incomplete` with an
     empty Gmail column. Two of those prompted this (2026-08-14)."""
+    # The discard now asks the device before throwing a phone away, so a
+    # test of that path has to say what the device answers.
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: [])
     deleted = []
     monkeypatch.setattr(builder.phones, "delete",
                         lambda c, ids, ledger=None: deleted.extend(ids))
@@ -1260,6 +1264,11 @@ def test_a_phone_that_cannot_be_deleted_is_recorded_the_ordinary_way(
         device, settings, monkeypatch, drive):
     """Half-deleting it - row dropped, device still there - is the one outcome
     worse than keeping it."""
+    # The discard now asks the device before throwing a phone away, so a
+    # test of that path has to say what the device answers.
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: [])
+
     def refuse(*a, **k):
         raise RuntimeError("GeeLark said no")
     monkeypatch.setattr(builder.phones, "delete", refuse)
@@ -1895,6 +1904,10 @@ def test_every_finished_phone_leaves_a_history_row(device, settings, drive):
 def test_a_discarded_phone_is_history_too(device, settings, monkeypatch, drive):
     """A phone created and thrown away cost real minutes; without a row it
     never happened, and 'why is the bill bigger than the tab' has no answer."""
+    # The discard now asks the device before throwing a phone away, so a
+    # test of that path has to say what the device answers.
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: [])
     monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
     book = make_book(gmails=1)
 
@@ -1903,6 +1916,67 @@ def test_a_discarded_phone_is_history_too(device, settings, monkeypatch, drive):
     rows = history_rows(book)
     assert [r["Event"] for r in rows] == ["discarded"]
     assert "nothing was ever signed into it" in rows[0]["Note"]
+
+
+def test_a_phone_that_is_signed_in_after_all_is_not_deleted(
+        device, settings, monkeypatch, drive):
+    """The flow's verdict is what the run saw while it was watching.
+
+    Google adds the account after its own consent closes, and it takes as long
+    as it takes. Every phone that outlived a `stuck_on_sign_in_closed` failure
+    on 2026-09-04 was found later holding the account it was supposed to have,
+    with nothing in the device's own account history but the add - so the ones
+    this path did delete were deleted signed in (builds 1694-1705).
+    """
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: ["late@example.com"])
+    book = make_book(gmails=1)
+
+    drive(book, settings, google=[Outcome("unknown", "stuck_on_sign_in_closed")])
+
+    assert deleted == [], "it was signed in; deleting is the one thing that "\
+                          "cannot be taken back"
+    assert [r["Event"] for r in history_rows(book)] != ["discarded"]
+
+
+def test_a_device_that_will_not_answer_keeps_its_phone(
+        device, settings, monkeypatch, drive):
+    """Asked strictly, so "the command did not run" cannot read as "nothing is
+    on it". A phone kept in error is a row somebody closes; a phone deleted in
+    error is a Gmail, a proxy and the minutes spent on both."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+
+    def refuses(client, phone_id, strict=True):
+        raise builder.shell.ShellError("the phone would not run it")
+
+    monkeypatch.setattr(builder.shell, "device_accounts", refuses)
+    book = make_book(gmails=1)
+
+    drive(book, settings, google=[Outcome("unknown", "stuck_on_sign_in_closed")])
+
+    assert deleted == []
+
+
+def test_a_phone_with_nothing_on_it_is_still_discarded(
+        device, settings, monkeypatch, drive):
+    """The counterweight. A phone nothing was signed into still costs minutes,
+    and keeping every one of them is how the bill grows without a tab."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: [])
+    book = make_book(gmails=1)
+
+    drive(book, settings, google=[Outcome("fatal", "wrong_password")])
+
+    assert deleted, "nothing on it, so it goes"
+    assert [r["Event"] for r in history_rows(book)] == ["discarded"]
 
 
 def test_applying_a_mark_is_history(monkeypatch):

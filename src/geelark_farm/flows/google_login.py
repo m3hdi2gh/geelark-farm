@@ -635,8 +635,14 @@ SCREENS: list[Screen] = [
     # seconds throughout, so the account landing ends this at once; only an
     # account that never lands runs the visits out, and then it fails as
     # `stuck_on_sign_in_closed` - which names what happened.
+    # Generous on purpose. Eight visits is about ninety seconds, and ninety
+    # seconds is not how long Google takes: every phone that outlived one of
+    # these failures was later found holding its account. Waiting costs the
+    # per-minute billing of a phone that is already running; giving up early
+    # costs the phone, the Gmail and the proxy together. The login budget
+    # bounds it either way.
     Screen("sign_in_closed", sign_in_closed, act_wait_for_the_account,
-           max_visits=8),
+           max_visits=25),
 ]
 
 

@@ -1024,6 +1024,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # the phone, and the next run's sync sees it either way.
         discarded = (phone_id and not gmail_signed_in
                      and build.status != "interrupted"
+                     and not _signed_in_after_all(client, build)
                      and _discard(client, book, ledger, build))
         # By serial, not by the row number `start` handed back ten minutes ago.
         # Any sibling discarding its phone deletes a row, and every row below it
@@ -1039,6 +1040,37 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
                           phone_id, exc)
             ledger.release(phone_id, note=build.status)
+
+
+def _signed_in_after_all(client: Client, build: Build) -> bool:
+    """Ask the device itself, once, before throwing the phone away.
+
+    The flow's verdict is what the run saw while it was watching. Google adds
+    the account after its own consent closes, and it takes as long as it takes:
+    every phone that survived a `stuck_on_sign_in_closed` failure on 2026-09-04
+    was found later holding the account it was supposed to have, with nothing
+    in the device's own account history but the add. The ones that did not
+    survive were deleted by this path, signed in, on the strength of a verdict
+    that was already out of date when it was written.
+
+    Deleting is the one thing here that cannot be undone: a phone kept in error
+    is a row somebody closes, and a phone deleted in error is a Gmail, a proxy
+    and the minutes spent on both. So this is asked strictly, and anything that
+    is not a clear "there is nothing on it" keeps the phone.
+    """
+    try:
+        present = shell.device_accounts(client, build.phone_id, strict=True)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s could not say whether it is signed in (%s), so "
+                    "it is kept rather than deleted",
+                    build.serial or build.phone_id, exc)
+        return True
+    if not present:
+        return False
+    log.warning("phone %s is signed in as %s after all - the run gave up "
+                "before Google finished. Keeping it.",
+                build.serial or build.phone_id, ", ".join(present))
+    return True
 
 
 def _discard(client: Client, book: Book, ledger: Ledger,
