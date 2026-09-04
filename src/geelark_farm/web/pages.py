@@ -256,6 +256,12 @@ p{{margin:0}}
  font-family:inherit;cursor:pointer;padding:2px 0}}
 .svc button:hover{{color:#fff;background:none}}
 .svc .right{{margin-left:auto}}
+details.fold{{display:inline}}
+details.fold summary{{cursor:pointer;color:var(--dim);font-size:12px;
+ list-style:none;padding:5px 0}}
+details.fold summary::-webkit-details-marker{{display:none}}
+details.fold summary:hover{{color:#fff}}
+details.fold[open]{{display:block;width:100%}}
 .alerts{{display:flex;flex-direction:column;gap:6px}}
 .alert{{display:block;padding:9px 14px;border-radius:8px;font-size:13px;
  border:1px solid;color:var(--ink)}}
@@ -1838,45 +1844,38 @@ def _pager(base: str, page: int, pages: int, more: bool) -> str:
             f'{" ".join(nav)}</div>')
 
 
-def _gmail_add_panel(user: dict, known: list) -> str:
-    """Two ways in: a paste of the seller's sheet, or one account typed
-    field by field. Both post to the same preview, so both are judged
-    by the same validation and confirmed on the same page."""
+def _gmail_add(user: dict, known: list) -> str:
+    """The one way in, at the top of the queued view: a box to paste the
+    seller's sheet into, the seller beside it, and one button. Typing a
+    single account is the same form with the fields spelled out - folded
+    into a `details` so it costs a line, not a second panel."""
     if not _may(user, "may_add_gmail"):
         if not user.get("mutations"):
             return ""
-        return ('<div class="panel"><h3>Add gmails</h3>'
-                '<p class="dim">Adding gmails needs the add-gmails '
-                'permission - ask an admin</p></div>')
-    paste = (
-        '<div class="panel"><h3>Add gmails <span class="n">paste from the '
-        'seller\'s sheet</span></h3>'
-        '<form method="post" action="/pools/gmail/preview" class="field">'
-        f'{_csrf(user)}'
-        '<textarea name="pasted" placeholder="paste straight from the '
-        'seller\'s sheet - one account per line; tab or comma between '
-        'the columns"></textarea>'
-        '<p class="dim">the address is found by its @, the secret by its '
-        'shape, the password is what remains; nothing is added until '
-        'you confirm the preview</p>'
-        f'<div class="row">{_seller_pick(known)}'
-        '<span class="dim">purchase date stamps automatically</span>'
-        '<span class="right"></span><button>Preview</button></div>'
-        '</form></div>')
+        return ('<p class="hint">Adding gmails needs the add-gmails '
+                'permission - ask an admin.</p>')
     one = (
-        '<div class="panel"><h3>One by one</h3>'
-        '<form method="post" action="/pools/gmail/preview" class="field">'
-        f'{_csrf(user)}'
-        '<input name="address" placeholder="address" autocomplete="off">'
+        '<details class="fold"><summary>add one by hand</summary>'
+        '<form method="post" action="/pools/gmail/preview" class="row" '
+        f'style="margin-top:10px">{_csrf(user)}'
+        '<input name="address" placeholder="address" autocomplete="off" '
+        'style="flex:1;min-width:220px">'
         '<input name="password" placeholder="password" autocomplete="off">'
-        '<input name="second" placeholder="authenticator secret or '
-        'recovery address" autocomplete="off">'
+        '<input name="second" placeholder="authenticator secret or recovery '
+        'address" autocomplete="off" style="flex:1;min-width:220px">'
+        f'{_seller_pick(known)}<button class="quiet">Preview</button>'
+        '</form></details>')
+    return (
+        f'<form method="post" action="/pools/gmail/preview" class="field">'
+        f'{_csrf(user)}'
+        f'<textarea name="pasted" placeholder="paste from the seller\'s '
+        f'sheet — one account per line; tab or comma between the columns">'
+        f'</textarea>'
         f'<div class="row">{_seller_pick(known)}'
-        '<span class="right"></span><button>Preview</button></div>'
-        '<p class="dim">the same preview judges it - a typo is caught '
-        'before anything is queued</p>'
-        '</form></div>')
-    return f'<div class="grid2">{paste}{one}</div>'
+        f'<span class="dim">address, password and the secret in any order — '
+        f'nothing is added until you have seen the preview</span>'
+        f'<span class="right"></span>{one}<button>Preview</button></div>'
+        f'</form>')
 
 
 def _gmail_phone_badge(r: dict) -> str:
@@ -1887,132 +1886,196 @@ def _gmail_phone_badge(r: dict) -> str:
             f'{esc(_phone_word(status))}</span>')
 
 
-def gmail_pool_page(data: dict, user: dict, said: str = "", *,
-                    advice=None, show_all: bool = False) -> str:
-    """Active = on a phone / queued; Used and Errored are the archives.
-    Errored carries seller, purchase and failure dates and a link to the
-    plain-text list of addresses - the one the seller is asked to
-    refund. `advice` turns a status token into the sentence a person
-    would say (app passes failures.verdict; pages never import it)."""
-    c = data["counts"]
-    view = data["view"]
-    known = list(data.get("known_sellers") or [])
-    pills = "".join(
-        (f'<span>{v.capitalize()} · {n}</span>' if view == v else
-         f'<a href="/pools/gmail?view={v}">{v.capitalize()} · {n}</a>')
-        for v, n in {"active": c["queued"] + c["on_phone"],
-                     "used": c["used"], "errored": c["errored"]}.items())
-    body = (f'<div class="top"><h2>Gmail Pool</h2><div class="pills">{pills}'
-            f'</div><span class="status">{c["queued"]} queued covers the '
-            f'next {c["queued"]} builds <span class="badge">'
-            f'{_plural(len(known), "seller")}</span></span></div>')
-    body += _said(said, _POOL_SAID)
+#: The four views, in the order the pills read: the count each one shows
+#: is the key itself, and the sentence goes under its table.
+GMAIL_VIEWS = {
+    "queued": {"label": "Queued",
+               "sub": "the keeper claims from the top of this list"},
+    "on_phone": {"label": "On a phone",
+                 "sub": "signed in right now - the phone's row says how it "
+                        "is getting on"},
+    "used": {"label": "Used",
+             "sub": "retired with the phone they were delivered on"},
+    "errored": {"label": "Errored",
+                "sub": "an errored address never re-enters the pool - this "
+                       "list exists so the seller pays it back"},
+}
 
-    if view == "used":
-        rows = "".join(
-            f"<tr><td>{esc(r['address'])}</td><td>{_serial_link(r['serial'])}"
-            f"</td><td class=\"muted\">{_when(r['used_at'])}</td>"
-            f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['note'] or '')}</td></tr>"
-            for r in data["rows"])
-        body += (f'<div class="panel"><h3>Used — {c["used"]}</h3><table>'
-                 f'<tr><th>address</th><th>phone</th><th>used</th>'
-                 f'<th>seller</th><th>note</th></tr>{rows}</table>'
-                 + _pager("/pools/gmail?view=used", int(data.get("page") or 1),
-                          int(data.get("pages") or 1), bool(data.get("more")))
-                 + '</div>')
-        return page("Gmail Pool", body, user=user, here="/pools/gmail")
+
+def _gmail_pills(view: str, counts: dict) -> str:
+    out = []
+    for name, words in GMAIL_VIEWS.items():
+        n = int(counts.get(name) or 0)
+        inner = f'{esc(words["label"])} <span class="n">{n}</span>'
+        out.append(f'<span>{inner}</span>' if name == view else
+                   f'<a href="/pools/gmail?view={name}">{inner}</a>')
+    return f'<div class="pills">{"".join(out)}</div>'
+
+
+def _gmail_stock(counts: dict) -> str:
+    """The sentence beside the title: how much stock there is and what it
+    covers - the one number this page exists to keep above zero."""
+    free = int(counts.get("queued") or 0)
+    if not free:
+        return ('<span style="color:var(--red)">0 free</span> — no phone can '
+                'be built until rows are added')
+    return (f'<span class="mono" style="color:var(--green)">{free}</span> free '
+            f'— enough for the next {free} '
+            f'{"build" if free == 1 else "builds"}')
+
+
+def _kind_2fa_word(row: dict) -> str:
+    """The same four answers as the badge, as coloured words: a table of
+    a hundred rows is easier to read when only the odd one out is loud."""
+    if row.get("has_totp"):
+        return '<span class="dim">authenticator</span>'
+    if row.get("has_recovery"):
+        return ('<span style="color:var(--amber);font-size:12px">'
+                'recovery address</span>')
+    if row.get("email_code_only"):
+        return ('<span style="color:var(--amber);font-size:12px">'
+                'email code</span>')
+    return '<span style="color:var(--red);font-size:12px">password only</span>'
+
+
+def _reason_words(status: str) -> str:
+    colour = "red" if status in _BLAME_RED else "amber"
+    return (f'<span style="color:var(--{colour});font-size:12.5px">'
+            f'{esc(_reason_word(status))}</span>')
+
+
+def _why(row: dict, advice) -> str:
+    """What Google said, in a sentence - the row's own note when the
+    verdict table has never heard of the reason."""
+    said = advice(str(row.get("status") or "")) if advice else ""
+    return esc(said or str(row.get("note") or ""))
+
+
+def gmail_pool_page(data: dict, user: dict, said: str = "", *,
+                    advice=None) -> str:
+    """One question per view, one table each.
+
+    Queued is the front door: how much stock there is, and the box that
+    adds more. The other three are the same page with a different list -
+    what is signed in now, what was spent, and what the seller owes back.
+    """
+    counts = data.get("counts") or {}
+    view = data.get("view") or "queued"
+    sub = (GMAIL_VIEWS.get(view) or {}).get("sub", "")
+    rows = data.get("rows") or []
+    seller = str(data.get("seller") or "")
+
+    right = ""
+    if view == "errored" and int(data.get("total") or 0):
+        where = f"?seller={_q(seller)}" if seller else ""
+        right = (f'<a class="btn" href="/pools/gmail/refund.txt{where}">'
+                 f'Copy {int(data["total"])} addresses</a>')
+    body = (f'<div class="narrow">'
+            f'<div class="top"><h2>Gmail Pool</h2>'
+            f'<span class="sub" style="margin:0">{_gmail_stock(counts)}</span>'
+            f'<span class="status">{right}</span></div>'
+            + _said(said, _POOL_SAID))
+    if view == "queued":
+        body += _gmail_add(user, data.get("known_sellers") or [])
+    body += _gmail_pills(view, counts)
 
     if view == "errored":
-        chosen = data.get("seller", "")
-        chips = [(f'<span>all sellers · {c["errored"]}</span>' if not chosen
-                  else f'<a href="/pools/gmail?view=errored">all sellers · '
-                       f'{c["errored"]}</a>')]
-        for s in data["sellers"]:
-            name = s["seller"] or "(no seller)"
-            if chosen and chosen.lower() == (s["seller"] or ""):
-                chips.append(f'<span>{esc(name)} · {s["c"]}</span>')
-            else:
-                chips.append(f'<a href="/pools/gmail?view=errored&seller='
-                             f'{_q(s["seller"] or "")}">{esc(name)} · '
-                             f'{s["c"]}</a>')
-        tally = " · ".join(
-            f'{t["c"]} {esc(_reason_word(str(t["status"])))}'
-            for t in data.get("reasons") or [])
-        total = int(data.get("total") or len(data["rows"]))
+        body += _errored_filters(data, seller)
+        head = ("<tr><th>address</th><th>reason</th><th>what happened</th>"
+                "<th>failed</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td>{_reason_words(str(r["status"]))}</td>'
+            f'<td class="muted">{_why(r, advice)}</td>'
+            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
+            for r in rows)
+        empty = ("nothing has failed for this seller" if seller else
+                 "nothing has been refused by Google")
+    elif view == "used":
+        head = ("<tr><th>address</th><th>phone</th><th>used</th>"
+                "<th>seller</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td class="muted">{_when(r.get("used_at") or r["updated_at"])}'
+            f'</td><td class="muted">{esc(r.get("seller") or "")}</td></tr>'
+            for r in rows)
+        empty = "nothing has been retired yet"
+    elif view == "on_phone":
+        head = ("<tr><th>address</th><th>phone</th><th>state</th>"
+                "<th>since</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td>{_serial_link(r.get("serial"))}</td>'
+            f'<td>{_gmail_phone_badge(r)}</td>'
+            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
+            for r in rows)
+        empty = "no address is signed in on a phone right now"
+    else:
+        head = ("<tr><th>address</th><th>seller</th><th>2fa</th>"
+                "<th>purchased</th></tr>")
+        lines = "".join(
+            f'<tr><td>{esc(r["address"])}</td>'
+            f'<td class="muted">{esc(r.get("seller") or "")}</td>'
+            f'<td>{_kind_2fa_word(r)}</td>'
+            f'<td class="muted">{esc(r.get("purchased_on") or "")}</td></tr>'
+            for r in rows)
+        empty = ("the pool is empty - paste a seller's sheet above and "
+                 "nothing else has to happen")
+    table = (f'<table>{head}{lines}</table>' if lines else
+             f'<p class="empty">{esc(empty)}</p>')
+    base = f"/pools/gmail?view={view}&seller={_q(seller)}"
+    pager = (_pager(base, int(data.get("page") or 1),
+                    int(data.get("pages") or 1), bool(data.get("more")))
+             if int(data.get("pages") or 1) > 1 or data.get("more") else "")
+    body += (f'<div class="panel wrap">{table}'
+             f'<p class="dim">{esc(sub)}</p>{pager}</div>')
 
-        def happened(r: dict) -> str:
-            said_ = advice(str(r["status"])) if advice else ""
-            return said_ or str(r.get("note") or "")
-
-        rows = "".join(
-            f"<tr><td>{esc(r['address'])}</td>"
-            f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['purchased_on'] or '')}</td>"
-            f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
-            f"<td>{_reason_badge(str(r['status']))}</td>"
-            f"<td class=\"muted\">{esc(happened(r))}</td></tr>"
-            for r in data["rows"])
-        refund = (f'/pools/gmail/refund.txt?seller={_q(chosen)}' if chosen
-                  else '/pools/gmail/refund.txt')
-        base = f"/pools/gmail?view=errored&seller={_q(chosen)}"
-        body += (f'<div class="row"><div class="chips">{"".join(chips)}'
-                 f'</div><span class="dim right">{tally}</span></div>'
-                 f'<div class="panel"><table><tr><th>address</th>'
-                 f'<th>seller</th><th>purchased</th><th>failed on</th>'
-                 f'<th>reason</th><th>what happened</th></tr>{rows}</table>'
-                 f'<div class="row"><p class="dim">an errored address never '
-                 f're-enters the pool - this list exists so the seller pays '
-                 f'it back</p><a class="btn quiet" href="{refund}">'
-                 f'Addresses for refund ({total}) →</a></div>'
-                 + _pager(base, int(data.get("page") or 1),
-                          int(data.get("pages") or 1), bool(data.get("more")))
-                 + '</div>')
-        return page("Gmail Pool", body, user=user, here="/pools/gmail")
-
-    body += _gmail_add_panel(user, known)
-
-    on_phone = "".join(
-        f"<tr><td>{esc(r['address'])}</td><td>{_serial_link(r['serial'])}</td>"
-        f"<td>{_gmail_phone_badge(r)}</td>"
-        f"<td class=\"muted\">{_when(r['updated_at'])}</td>"
-        f"<td class=\"muted\">{esc(r['seller'] or '')}</td></tr>"
-        for r in data["on_phone"])
-    waiting = list(data["queued"])
-    shown = waiting if show_all else waiting[:QUEUED_SHOWN]
-    queued = "".join(
-        f"<tr><td>{esc(r['address'])}</td>"
-        f"<td class=\"muted\">{esc(r['seller'] or '')}</td>"
-        f"<td class=\"muted\">{esc(r['purchased_on'] or '')}</td>"
-        f"<td>{_kind_2fa(r)}</td></tr>"
-        for r in shown)
-    more = ""
-    if len(waiting) > len(shown):
-        more = (f'<p class="dim"><a href="/pools/gmail?all=1">'
-                f'+ {len(waiting) - len(shown)} more</a></p>')
-    body += (f'<div class="panel"><h3>On a phone — {c["on_phone"]}</h3>'
-             f'<table><tr><th>address</th><th>phone</th><th>state</th>'
-             f'<th>since</th><th>seller</th></tr>{on_phone}</table></div>'
-             f'<div class="panel"><h3>Queued — {c["queued"]}'
-             f' <span class="dim">the keeper claims from the top</span></h3>'
-             f'<table><tr><th>address</th><th>seller</th><th>purchased</th>'
-             f'<th>2fa</th></tr>{queued}</table>{more}</div>')
-    if data["broken"]:
+    if view == "errored" and data.get("broken"):
         broken = "".join(
-            f"<tr><td>{esc(r['address'] or '')}</td>"
-            f"<td class=\"muted\">{esc(r['error'])}</td></tr>"
+            f'<tr><td>{esc(r.get("address") or "")}</td>'
+            f'<td class="muted">{esc(r.get("error") or "")}</td></tr>'
             for r in data["broken"])
-        body += (f'<div class="panel bad"><h3>Refused by validation — '
-                 f'{len(data["broken"])}</h3><table>{broken}</table></div>')
-    return page("Gmail Pool", body, user=user, here="/pools/gmail")
+        body += (f'<div class="panel bad"><h3>Refused before the pool '
+                 f'<span class="n">{len(data["broken"])}</span></h3>'
+                 f'<p class="hint">these rows were never stock: the sheet '
+                 f'has them, validation would not take them. Fix the cell '
+                 f'or ask for them back too.</p>'
+                 f'<table>{broken}</table></div>')
+    return page("Gmail Pool", body + "</div>", user=user,
+                here="/pools/gmail")
+
+
+def _errored_filters(data: dict, seller: str) -> str:
+    """Two rows of chips: which seller sold them, and what Google said.
+    Both narrow the same list, so the refund button always matches what
+    is on screen."""
+    counts = data.get("counts") or {}
+    chips = [(f'<span>all sellers <span class="n">'
+              f'{int(counts.get("errored") or 0)}</span></span>' if not seller
+              else f'<a href="/pools/gmail?view=errored">all sellers '
+                   f'<span class="n">{int(counts.get("errored") or 0)}</span>'
+                   f'</a>')]
+    for s in data.get("sellers") or []:
+        name = s["seller"] or "(no seller)"
+        inner = f'{esc(name)} <span class="n">{s["c"]}</span>'
+        chips.append(f'<span>{inner}</span>'
+                     if seller and seller.lower() == (s["seller"] or "")
+                     else f'<a href="/pools/gmail?view=errored&seller='
+                          f'{_q(s["seller"] or "")}">{inner}</a>')
+    reasons = "".join(
+        f'<span class="dim">{esc(_reason_word(str(r["status"])))} '
+        f'<b class="mono" style="color:var('
+        f'--{"red" if str(r["status"]) in _BLAME_RED else "amber"})">'
+        f'{r["c"]}</b></span>' for r in (data.get("reasons") or []))
+    return (f'<div class="row"><div class="chips">{"".join(chips)}</div>'
+            f'<div class="row right" style="gap:14px">{reasons}</div></div>')
 
 
 _PROXY_STATE = {"free": "free", "on a phone": "on_phone", "claimed": "claimed",
                 "change ip": "attn", "dead": "dead", "": "free",
                 "unused": "free", "imported": "info"}
 
-#: How many rows each of the Proxy Pool's side lists shows before it folds
-#: the rest behind "+ N more" (?all=1 unfolds every list at once).
 PROXY_SHOWN = 8
 
 #: A note longer than this is clipped in the table; the rest rides in the

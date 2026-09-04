@@ -148,11 +148,10 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/pools/gmail":
                 return self._html(200, pages.gmail_pool_page(
                     read.gmail_pool(self.settings,
-                                    view=first.get("view", "active"),
+                                    view=first.get("view", "queued"),
                                     seller=first.get("seller", ""),
                                     page=_page_number(first)),
-                    user, said=first.get("said", ""), advice=_advice,
-                    show_all=first.get("all") == "1"))
+                    user, said=first.get("said", ""), advice=_advice))
             if path == "/pools/proxy":
                 unlisted, ignored, tests = self._proxy_state()
                 data = read.proxy_pool(self.settings, unlisted=unlisted)

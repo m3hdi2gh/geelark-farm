@@ -315,24 +315,29 @@ def _pages(total: int, per_page: int) -> int:
     return max(1, -(-int(total or 0) // max(1, per_page)))
 
 
-def gmail_pool(settings: Settings, view: str = "active",
-               seller: str = "", page: int = 1, per_page: int = 100) -> dict:
-    """The Gmail Pool page, one view at a time.
+#: The Gmail Pool's four views, and the count each pill shows.
+GMAIL_VIEWS = {"queued": "queued", "on_phone": "on_phone", "used": "used",
+               "errored": "errored"}
 
-    `active` is the two things a person wants to know - which addresses are
-    on a phone right now, and how many are queued behind them - split so
-    the count of queued is the count of builds the stock covers. `used`
-    and `errored` are the archives: `used` is history, `errored` is the
-    list the seller gets asked to refund, so it carries seller, purchase
-    date and the date it failed. Both archives page, `per_page` rows at a
-    time; the refund list itself comes whole from `errored_addresses`.
+
+def gmail_pool(settings: Settings, view: str = "queued",
+               seller: str = "", page: int = 1, per_page: int = 100) -> dict:
+    """The Gmail Pool page, one list at a time.
+
+    Four views, one table each: `queued` is the stock the keeper claims
+    from and the page's front door, `on_phone` is what is signed in right
+    now, `used` is history and `errored` is the list the seller is asked
+    to refund. Every view pages; the refund list itself comes whole from
+    `errored_addresses`, because a list cut at a page boundary is a
+    refund never asked for.
     """
+    view = GMAIL_VIEWS.get(view, "queued")
     page = max(1, int(page or 1))
     per_page = max(1, int(per_page or 1))
     with Store(settings) as store:
         counts = store._rows(
             "SELECT"
-            " count(*) FILTER (WHERE status = '') AS queued,"
+            " count(*) FILTER (WHERE status = '' AND error IS NULL) AS queued,"
             " count(*) FILTER (WHERE status IN ('in_use', 'ready')) AS on_phone,"
             " count(*) FILTER (WHERE status = 'used') AS used,"
             " count(*) FILTER (WHERE error IS NULL"
@@ -347,19 +352,35 @@ def gmail_pool(settings: Settings, view: str = "active",
             " GROUP BY lower(seller) ORDER BY c DESC",
             (sorted(ROUTINE["gmail"]), IMPORTED))
         known = _gmail_sellers(store)
-        if view == "used":
+        out = {"view": view, "counts": counts, "sellers": sellers,
+               "known_sellers": known, "seller": seller, "page": page}
+        skip = (page - 1) * per_page
+        if view == "queued":
+            rows = store._rows(
+                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+                " WHERE r.kind = 'gmail' AND r.status = '' AND r.error IS NULL"
+                " ORDER BY r.sheet_row NULLS LAST, r.id"
+                " LIMIT %s OFFSET %s", (per_page + 1, skip))
+            total = counts["queued"]
+        elif view == "on_phone":
+            rows = store._rows(
+                f"SELECT {_GMAIL_COLUMNS}, p.status AS phone_status"
+                " FROM resources r LEFT JOIN phones p"
+                "   ON p.serial = r.serial AND p.done_at IS NULL"
+                " WHERE r.kind = 'gmail' AND r.status IN ('in_use', 'ready')"
+                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
+                (per_page + 1, skip))
+            total = counts["on_phone"]
+        elif view == "used":
             rows = store._rows(
                 f"SELECT {_GMAIL_COLUMNS} FROM resources r"
                 " WHERE r.kind = 'gmail' AND r.status = 'used'"
                 " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (per_page + 1, (page - 1) * per_page))
-            return {"view": view, "counts": counts, "rows": rows[:per_page],
-                    "sellers": sellers, "known_sellers": known,
-                    "page": page, "more": len(rows) > per_page,
-                    "pages": _pages(counts["used"], per_page)}
-        if view == "errored":
+                (per_page + 1, skip))
+            total = counts["used"]
+        else:
             wanted = seller.lower()
-            reasons = store._rows(
+            out["reasons"] = store._rows(
                 "SELECT status, count(*) c FROM resources"
                 " WHERE kind = 'gmail' AND error IS NULL"
                 " AND NOT (status = ANY(%s)) AND status <> %s"
@@ -373,29 +394,17 @@ def gmail_pool(settings: Settings, view: str = "active",
                 " AND (%s = '' OR lower(r.seller) = %s)"
                 " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
                 (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted,
-                 per_page + 1, (page - 1) * per_page))
-            total = sum(int(r["c"]) for r in reasons)
-            return {"view": view, "counts": counts, "rows": rows[:per_page],
-                    "sellers": sellers, "seller": seller, "reasons": reasons,
-                    "total": total, "known_sellers": known,
-                    "page": page, "more": len(rows) > per_page,
-                    "pages": _pages(total, per_page)}
-        on_phone = store._rows(
-            f"SELECT {_GMAIL_COLUMNS}, p.status AS phone_status"
-            " FROM resources r LEFT JOIN phones p"
-            "   ON p.serial = r.serial AND p.done_at IS NULL"
-            " WHERE r.kind = 'gmail' AND r.status IN ('in_use', 'ready')"
-            " ORDER BY r.updated_at DESC")
-        queued = store._rows(
-            f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-            " WHERE r.kind = 'gmail' AND r.status = '' AND r.error IS NULL"
-            " ORDER BY r.sheet_row NULLS LAST, r.id")
-        broken = store._rows(
-            "SELECT id, address, error FROM resources"
-            " WHERE kind = 'gmail' AND error IS NOT NULL ORDER BY id")
-    return {"view": "active", "counts": counts, "on_phone": on_phone,
-            "queued": queued, "broken": broken, "sellers": sellers,
-            "known_sellers": known}
+                 per_page + 1, skip))
+            total = sum(int(r["c"]) for r in out["reasons"])
+            # The rows validation refused live here too: they are not
+            # stock, nobody can use them, and the seller hears about
+            # them in the same breath as the ones Google refused.
+            out["broken"] = store._rows(
+                "SELECT id, address, error FROM resources"
+                " WHERE kind = 'gmail' AND error IS NOT NULL ORDER BY id")
+    out.update(rows=rows[:per_page], more=len(rows) > per_page, total=total,
+               pages=_pages(total, per_page))
+    return out
 
 
 def errored_addresses(settings: Settings, seller: str = "") -> list[str]:

@@ -579,37 +579,40 @@ def _gmail_row(address, status="", **more):
 
 
 def _gmail_active(monkeypatch, seen=None, queued=None, on_phone=None):
+    """read.gmail_pool as the page now asks for it: one view, one list of
+    rows, and the counts every pill shows."""
     seen = seen if seen is not None else {}
     known = ["egypt", "usa"]
+    counts = {"queued": 2, "on_phone": 1, "used": 5, "errored": 3,
+              "broken": 0}
 
-    def gmail_pool(settings, view="active", seller="", page=1, per_page=100):
+    def gmail_pool(settings, view="queued", seller="", page=1, per_page=100):
         seen.update(view=view, seller=seller, page=page)
-        counts = {"queued": 2, "on_phone": 1, "used": 5, "errored": 3,
-                  "broken": 0}
+        out = {"view": view, "counts": counts, "seller": seller,
+               "sellers": [{"seller": "egypt", "c": 2}],
+               "known_sellers": known, "page": page, "pages": 1,
+               "more": False, "total": counts.get(view, 0)}
         if view == "errored":
-            return {"view": view, "counts": counts, "seller": seller,
-                    "rows": [_gmail_row("bad1@x.com", "captcha_shown"),
-                             _gmail_row("bad2@x.com", "wrong_2fa_code")],
-                    "sellers": [{"seller": "egypt", "c": 2}],
-                    "reasons": [{"status": "captcha_shown", "c": 1},
-                                {"status": "wrong_2fa_code", "c": 1}],
-                    "total": 2, "known_sellers": known,
-                    "page": page, "pages": 3, "more": page < 3}
-        if view == "used":
-            return {"view": view, "counts": counts,
-                    "rows": [_gmail_row("old@x.com", "used", serial="1490",
+            out.update(
+                rows=[_gmail_row("bad1@x.com", "captcha_shown"),
+                      _gmail_row("bad2@x.com", "wrong_2fa_code")],
+                reasons=[{"status": "captcha_shown", "c": 1},
+                         {"status": "wrong_2fa_code", "c": 1}],
+                broken=[], total=2, pages=3, more=page < 3)
+        elif view == "used":
+            out.update(rows=[_gmail_row("old@x.com", "used", serial="1490",
                                         used_at="2026-08-30 08:00:00")],
-                    "sellers": [], "known_sellers": known,
-                    "page": page, "pages": 2, "more": page < 2}
-        return {"view": "active", "counts": counts,
-                "on_phone": on_phone if on_phone is not None else
-                [_gmail_row("on@x.com", "ready", serial="1551")],
-                "queued": queued if queued is not None else
-                [_gmail_row("q1@x.com"), _gmail_row("q2@x.com")],
-                "broken": [], "sellers": [], "known_sellers": known}
+                       pages=2, more=page < 2)
+        elif view == "on_phone":
+            out["rows"] = (on_phone if on_phone is not None else
+                           [_gmail_row("on@x.com", "ready", serial="1551")])
+        else:
+            out["rows"] = (queued if queued is not None else
+                           [_gmail_row("q1@x.com"), _gmail_row("q2@x.com")])
+        return out
 
     monkeypatch.setattr(app_mod.read, "gmail_pool", gmail_pool)
-    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: list(known))
+    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: known)
     return seen
 
 
@@ -622,9 +625,13 @@ def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
     assert status == 200
     assert 'href="/pools/gmail" class="here"' in body
     assert '<span class="n">3</span>' in body          # gmail free count
-    assert "on@x.com" in body and "1551" in body and "q2@x.com" in body
-    assert "2 queued covers the next 2 builds" in body
-    assert '<span class="badge">2 sellers</span>' in body
+    assert "q1@x.com" in body and "q2@x.com" in body, "queued is the default"
+    assert "2</span> free — enough for the next 2 builds" in body
+    assert "Queued <span class=\"n\">2</span>" in body, "the four pills"
+    assert 'href="/pools/gmail?view=errored"' in body
+
+    _, _, body = client.request("GET", "/pools/gmail?view=on_phone")
+    assert "on@x.com" in body and '<a href="/phones/1551">1551</a>' in body
 
 
 def test_pool_pages_are_shared_stock_that_everyone_signed_in_sees(
@@ -678,16 +685,17 @@ def test_the_add_panel_offers_a_paste_and_a_one_by_one_way_in(
     client.login()
     _, _, body = client.request("GET", "/pools/gmail")
     assert body.count('action="/pools/gmail/preview"') == 2, \
-        "the paste form and the one-by-one form share the preview"
+        "the paste box and the folded one-by-one share the preview"
+    assert "<summary>add one by hand</summary>" in body, "folded, not a panel"
     assert 'name="pasted"' in body and 'name="address"' in body
     assert 'name="password"' in body and 'name="second"' in body
     assert '<option value="egypt">egypt</option>' in body
     assert 'name="new_seller" placeholder="or a new seller"' in body
 
 
-def test_the_queued_list_folds_past_twelve_and_links_each_phone(
-        web, monkeypatch):
-    queued = [_gmail_row(f"q{i}@x.com") for i in range(15)]
+def test_each_view_shows_one_list_and_pages_it(web, monkeypatch):
+    """Four views, one table each - the queued stock, what is signed in,
+    what was spent, what the seller owes back."""
     on_phone = [_gmail_row("a@x.com", "ready", serial="1551",
                            phone_status="ready"),
                 _gmail_row("b@x.com", "ready", serial="1552",
@@ -696,20 +704,29 @@ def test_the_queued_list_folds_past_twelve_and_links_each_phone(
                            phone_status="incomplete"),
                 _gmail_row("d@x.com", "in_use", serial="1554",
                            phone_status="building")]
-    _gmail_active(monkeypatch, queued=queued, on_phone=on_phone)
+    seen = _gmail_active(monkeypatch, on_phone=on_phone)
     client = web()
     client.login()
-    _, _, body = client.request("GET", "/pools/gmail")
-    assert "q11@x.com" in body and "q12@x.com" not in body
-    assert '<a href="/pools/gmail?all=1">+ 3 more</a>' in body
+
+    _, _, body = client.request("GET", "/pools/gmail?view=on_phone&page=2")
+    assert seen == {"view": "on_phone", "seller": "", "page": 2}
     assert '<a href="/phones/1551">1551</a>' in body
     assert '<span class="badge ready">ready</span>' in body
     assert '<span class="badge info">building</span>' in body
     assert '<span class="badge attn">incomplete</span>' in body
     assert '<span class="badge in_use">signing in</span>' in body
+    assert 'name="pasted"' not in body, "the add box belongs to Queued"
 
-    _, _, body = client.request("GET", "/pools/gmail?all=1")
-    assert "q14@x.com" in body and "more</a>" not in body
+    _, _, body = client.request("GET", "/pools/gmail?view=queued")
+    assert "q1@x.com" in body and "the keeper claims from the top" in body
+
+
+def test_an_empty_pool_says_what_to_do_about_it(web, monkeypatch):
+    _gmail_active(monkeypatch, queued=[])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/gmail")
+    assert "paste a seller&#x27;s sheet above" in body
 
 
 def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
@@ -728,9 +745,10 @@ def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
         "GET", "/pools/gmail?view=errored&seller=egypt&page=2")
     assert status == 200
     assert seen == {"view": "errored", "seller": "egypt", "page": 2}
-    assert "1 captcha · 1 wrong 2fa" in body, "the tally, in words"
-    assert '<span class="badge attn">captcha_shown</span>' in body
-    assert '<span class="badge bad">wrong_2fa_code</span>' in body, \
+    assert "captcha <b" in body and "wrong 2fa <b" in body, \
+        "the tally, in words"
+    assert 'color:var(--amber);font-size:12.5px">captcha</span>' in body
+    assert 'color:var(--red);font-size:12.5px">wrong 2fa</span>' in body, \
         "a wrong secret is the seller's fault and is coloured red"
     assert "showed a CAPTCHA" in body, "what happened, from the verdict"
     assert "page 2 of 3" in body
@@ -738,8 +756,8 @@ def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
         in body
     assert 'href="/pools/gmail?view=errored&seller=egypt&page=3">older' \
         in body
-    assert 'href="/pools/gmail/refund.txt?seller=egypt">Addresses for ' \
-           'refund (2)' in body
+    assert 'href="/pools/gmail/refund.txt?seller=egypt">Copy 2 addresses' \
+        in body
 
     status, headers, text = client.request(
         "GET", "/pools/gmail/refund.txt?seller=egypt")
@@ -756,8 +774,9 @@ def test_the_used_view_pages_and_links_the_phone(web, monkeypatch):
     assert status == 200 and seen["page"] == 1
     assert '<a href="/phones/1490">1490</a>' in body
     assert "Aug 30 " in body, "used-at through the owner's clock"
+    assert "retired with the phone" in body
     assert "page 1 of 2" in body and "older →" in body
-    assert 'href="/pools/gmail?view=used&page=2"' in body
+    assert 'href="/pools/gmail?view=used&seller=&page=2"' in body
     _, _, body = client.request("GET", "/pools/gmail?view=used&page=2")
     assert seen["page"] == 2 and "← newer" in body
 
