@@ -10,7 +10,7 @@ Commands are grouped by what they are for:
   running unattended     serve, breaker
   the console            ui
   what the sheet holds   pools
-  the sheet's successor  store-init, store-ping
+  the sheet's successor  store-init, store-ping, api-client
   setup and credentials  verify, ping, plan, proxy
   phone lifecycle        phones, create, delete, start, stop, reap
   device diagnostics     dump, tap, shell, type, screenshot
@@ -168,6 +168,15 @@ def build_parser() -> argparse.ArgumentParser:
                                    "prompted, never taken as an argument")
     sub.add_parser("store-ping",
                    help="one SELECT 1 against the store's cluster")
+    p_api_client = sub.add_parser(
+        "api-client",
+        help="mint a bearer key for the customer panel or the Telegram "
+             "bot; the key is printed once and only its hash is kept"
+    )
+    p_api_client.add_argument("name", help="what to call this client")
+    p_api_client.add_argument("--role", default="panel",
+                              choices=("panel", "bot"),
+                              help="which endpoints the key may call")
 
     sub.add_parser("ping", help="verify API credentials and list phones")
     sub.add_parser("verify",
@@ -959,6 +968,36 @@ def cmd_install(settings: Settings, args) -> int:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
 
 
+def cmd_api_client(settings: Settings, args) -> int:
+    """Mint a key for the panel or the bot, and print it once.
+
+    The token is never stored - only its hash is - so this is the one
+    moment it exists in a form anybody can copy. Print it, hand it over,
+    and if it is lost, mint another and deactivate this one.
+
+    Usable before WEB_API is turned on, the way store-init is usable
+    before STORE_ENABLED: the key is the preparation, the flag is the
+    opt-in.
+    """
+    from . import store as store_mod
+    from .web.api_v1 import mint_key
+
+    token, digest, prefix = mint_key()
+    with store_mod.db.connect(settings) as conn:
+        cur = conn.execute(
+            "INSERT INTO api_clients (name, role, key_hash, key_prefix)"
+            " VALUES (%s, %s, %s, %s)"
+            " ON CONFLICT (name) DO UPDATE SET key_hash = EXCLUDED.key_hash,"
+            "  key_prefix = EXCLUDED.key_prefix, active = true"
+            " RETURNING id", (args.name, args.role, digest, prefix))
+        client_id = cur.fetchone()[0]
+        conn.commit()
+    print(f"client {args.name!r} ({args.role}) is id {client_id}")
+    print(f"key: {token}")
+    print("Copy it now - it is hashed here and cannot be shown again.")
+    return 0
+
+
 def cmd_store_init(settings: Settings, args) -> int:
     """Prepare a box to opt in: apply the schema, optionally seed the admin.
 
@@ -1195,6 +1234,7 @@ def main(argv: list[str] | None = None) -> int:
         "finish": cmd_finish,
         "pools": cmd_pools,
         "store-init": cmd_store_init,
+        "api-client": cmd_api_client,
         "store-ping": cmd_store_ping,
     }
     handler = handlers.get(args.command)

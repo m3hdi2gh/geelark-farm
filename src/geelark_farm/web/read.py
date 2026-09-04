@@ -199,8 +199,9 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " WHERE kind <> 'request' ORDER BY id DESC LIMIT 2")
         asked = store._rows(
             "SELECT a.id, a.verb, a.payload, a.status, a.requested_at AS at,"
-            " u.username AS requested_by"
-            " FROM actions a JOIN users u ON u.id = a.requested_by"
+            " coalesce(u.username, c.name, '?') AS requested_by"
+            " FROM actions a LEFT JOIN users u ON u.id = a.requested_by"
+            " LEFT JOIN api_clients c ON c.id = a.client_id"
             " ORDER BY a.id DESC LIMIT 2")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
@@ -877,8 +878,10 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
             " FROM events WHERE serial = %s ORDER BY id", (serial,))
         requests = store._rows(
             "SELECT a.id, a.verb, a.payload, a.status, a.result,"
-            " a.requested_at, u.username AS requested_by FROM actions a"
-            " JOIN users u ON u.id = a.requested_by"
+            " a.requested_at,"
+            " coalesce(u.username, c.name, '?') AS requested_by"
+            " FROM actions a LEFT JOIN users u ON u.id = a.requested_by"
+            " LEFT JOIN api_clients c ON c.id = a.client_id"
             " WHERE a.payload::text ILIKE %s ORDER BY a.id",
             (f"%{serial}%",))
     if not phone and not events:

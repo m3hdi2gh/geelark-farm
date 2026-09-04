@@ -290,3 +290,133 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS logs_at ON logs (at);
 CREATE INDEX IF NOT EXISTS logs_run_at ON logs (run, at) WHERE run <> '';
 CREATE INDEX IF NOT EXISTS logs_serial_at ON logs (serial, at) WHERE serial <> '';
+
+-- ------------------------------------------------- the panel API, rev 9 (C9)
+-- The customer panel and the Telegram bot, as rows. Two clients, one door:
+-- the panel hands the farm accounts and asks what became of them, the bot
+-- hands over the one thing only a person can supply - an emailed code.
+--
+-- A key is a random 32-byte token, not a chosen password, so it is hashed
+-- with plain SHA-256 rather than the scrypt the users table uses: there is
+-- nothing to brute-force in 256 bits of entropy, and this hash is computed
+-- on EVERY request where a password's is computed twice a day. `key_prefix`
+-- is the first characters of the token, kept so a person can tell two keys
+-- apart on a page without the page ever holding one.
+CREATE TABLE IF NOT EXISTS api_clients (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name           text NOT NULL UNIQUE,
+    role           text NOT NULL CHECK (role IN ('panel', 'bot')),
+    key_hash       bytea NOT NULL,
+    key_prefix     text NOT NULL DEFAULT '',
+    webhook_url    text NOT NULL DEFAULT '',
+    webhook_secret text NOT NULL DEFAULT '',
+    active         boolean NOT NULL DEFAULT true,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    last_seen_at   timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS api_clients_key ON api_clients (key_hash);
+
+-- What the panel owns about an account, beside what the sheet owns.
+--
+-- Every one of these is absent from both of shadow._upsert_resource's
+-- statements - its INSERT column list and its DO UPDATE SET list - which is
+-- what makes them safe: an unlisted column takes its DEFAULT once, on
+-- insert, and is never assigned again. That is the same ground `owner_id`
+-- stands on, and shadow.py's own docstring says why it must ("a mirror that
+-- reset it would un-assign somebody's phone every thirty seconds").
+--
+-- Every one also has a DEFAULT or is nullable, deliberately. The mirror
+-- inserts without naming them, so a NOT NULL with no default would abort
+-- the whole mirror transaction - and serve.py swallows that as one warning
+-- while the dashboard silently freezes on stale numbers.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS product          text NOT NULL DEFAULT '';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS credential_kind  text NOT NULL DEFAULT '';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS panel_ref        text;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS client_id        bigint REFERENCES api_clients(id);
+-- Google backup codes, single-use, in the order they were given. jsonb
+-- rather than text[] because the pools already carry jsonb and one array
+-- type is one less thing for a reader to know.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS backup_codes     jsonb;
+-- How many phones this account has been put on, and how many of those
+-- phones failed under it. Both only ever go up; the panel is told them
+-- without asking for anything extra.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS attempts         integer NOT NULL DEFAULT 0;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS failures         integer NOT NULL DEFAULT 0;
+-- Only ever consulted for a credential_kind whose code comes from a person:
+-- until the panel says the customer is ready to answer, the account is held
+-- out of the pool rather than put on a phone that would sit billing while
+-- nobody typed a code.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS customer_ready   boolean NOT NULL DEFAULT false;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS state_changed_at timestamptz;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS delivered_at     timestamptz;
+-- The panel's own reference is the account's public id, so it must be one
+-- row exactly. Partial, like the other two identities on this table.
+CREATE UNIQUE INDEX IF NOT EXISTS resources_panel_ref
+    ON resources (panel_ref) WHERE panel_ref IS NOT NULL;
+-- The API's list is a keyset walk over (updated_at, id): every field it
+-- publishes is inside the mirror's own IS DISTINCT FROM guard, so a stamp
+-- that moved means something the panel can see moved.
+CREATE INDEX IF NOT EXISTS resources_api_cursor
+    ON resources (kind, updated_at, id);
+
+-- A client's Idempotency-Key and the answer it got, so a retry is one
+-- request rather than two accounts. Pruned by age, not by hand.
+CREATE TABLE IF NOT EXISTS api_idempotency (
+    client_id  bigint NOT NULL REFERENCES api_clients(id) ON DELETE CASCADE,
+    key        text NOT NULL,
+    method     text NOT NULL,
+    path       text NOT NULL,
+    status     integer NOT NULL,
+    body       jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (client_id, key)
+);
+
+-- The one thing that cannot wait for a pass. A code lives minutes, and its
+-- consumer is a sign-in flow already stopped at a text box on a phone, so
+-- POST /code writes here and the flow reads here - the only write in this
+-- program that does not become a queued request.
+--
+-- ON DELETE CASCADE because a resources row is hard-deleted by "remove from
+-- the pool" (verbs.remove_gmail, verbs.remove_proxy); without it that button
+-- would start raising the day the first code arrives.
+CREATE TABLE IF NOT EXISTS code_inbox (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    resource_id bigint NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    code        text NOT NULL,
+    client_id   bigint REFERENCES api_clients(id),
+    received_at timestamptz NOT NULL DEFAULT now(),
+    expires_at  timestamptz NOT NULL,
+    consumed_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS code_inbox_waiting
+    ON code_inbox (resource_id, received_at) WHERE consumed_at IS NULL;
+
+-- One row per event per client, with its own retry clock. A delivery that
+-- gives up stays here and shows on Needs attention rather than vanishing.
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    client_id  bigint NOT NULL REFERENCES api_clients(id) ON DELETE CASCADE,
+    event      jsonb NOT NULL,
+    attempts   integer NOT NULL DEFAULT 0,
+    next_at    timestamptz NOT NULL DEFAULT now(),
+    status     text NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'delivered', 'gave_up')),
+    last_error text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS webhook_due
+    ON webhook_deliveries (next_at) WHERE status = 'pending';
+
+-- --------------------------------------------------- actions, rev 9 (C9)
+-- A request can now come from a machine. `requested_by` drops NOT NULL and
+-- `client_id` names the client instead; `source` says which without a join,
+-- and defaults to 'console' so every row already in the table is right.
+--
+-- Done here, in the deploy where nothing writes a client_id yet, because
+-- the three JOIN users that resolve the asker's name have to become LEFT
+-- JOINs in the same change - and the deploy where that is discovered is the
+-- one where the Requests page silently loses rows.
+ALTER TABLE actions ADD COLUMN IF NOT EXISTS source    text NOT NULL DEFAULT 'console';
+ALTER TABLE actions ADD COLUMN IF NOT EXISTS client_id bigint REFERENCES api_clients(id);
+ALTER TABLE actions ALTER COLUMN requested_by DROP NOT NULL;

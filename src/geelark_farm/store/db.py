@@ -86,7 +86,7 @@ def ensure_schema(settings: Settings) -> None:
 #: is additive-only while the sheet is still authoritative, and a real
 #: migration story is stage 7's problem, not stage 1's. What this buys now
 #: is one queryable fact: which code last touched the schema.
-SCHEMA_REV = "8"
+SCHEMA_REV = "9"
 
 
 class Store:

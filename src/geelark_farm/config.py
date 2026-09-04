@@ -334,6 +334,12 @@ class Settings:
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
+    #: C9: the read-only /api/v1 door for the customer panel and the
+    #: Telegram bot, on the console's own listener behind a bearer key.
+    #: Off = those paths are 404, and the console is unchanged. Reads only:
+    #: the verbs that hand the farm an account arrive behind their own
+    #: switch, the way WEB_MUTATIONS came after WEB_ENABLED.
+    web_api: bool = False
 
 
     @classmethod
@@ -386,6 +392,7 @@ class Settings:
             manual_login=_str("MANUAL_LOGIN", "0").strip()
                          in ("1", "true", "yes", "on"),
             log_db=_str("LOG_DB", "0").strip() in ("1", "true", "yes", "on"),
+            web_api=_str("WEB_API", "0").strip() in ("1", "true", "yes", "on"),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),

@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 from ..config import Settings
-from . import pages, read
+from . import api_v1, pages, read
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             path = self.path.split("?")[0]
+            # The machine-facing door, before the session gate: an API
+            # client has a bearer key and no cookie, and api_v1 owns its
+            # own auth, its own errors and its own 404-when-switched-off.
+            if path.startswith("/api/"):
+                return api_v1.dispatch(self, path)
             if path == "/login":
                 return self._html(200, pages.login())
             user = self._user()
@@ -274,6 +279,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            # Before the body is read and before the CSRF gate: an API
+            # client sends JSON and no cookie, and the console's form
+            # handling would answer it with a redirect.
+            if self.path.split("?")[0].startswith("/api/"):
+                return api_v1.dispatch(self, self.path.split("?")[0])
             length = int(self.headers.get("Content-Length") or 0)
             form = parse_qs(self.rfile.read(length).decode("utf-8"))
             field = {k: v[0] for k, v in form.items()}

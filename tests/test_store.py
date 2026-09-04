@@ -118,6 +118,76 @@ def test_the_schema_carries_the_decisions_it_encodes():
     assert "CHECK (sees IN ('all', 'own'))" in sql
 
 
+def test_the_mirror_never_names_a_column_the_panel_api_owns():
+    """These ten columns are safe on `resources` for exactly one reason:
+    shadow._upsert_resource does not name them, in either its INSERT column
+    list or its DO UPDATE SET list, so an unlisted column takes its DEFAULT
+    once and is never assigned again. That is the ground owner_id already
+    stands on, and shadow.py says why in its own docstring.
+
+    The day one of them is added to either statement it begins reverting to
+    the Gpt Info tab's picture every thirty seconds, with no error and no
+    event - which is why this is a test and not a comment (2026-09-05)."""
+    shadow = (SRC / "store" / "shadow.py").read_text(encoding="utf-8")
+    for column in ("product", "credential_kind", "panel_ref", "client_id",
+                   "backup_codes", "attempts", "failures", "customer_ready",
+                   "state_changed_at", "delivered_at"):
+        assert column not in shadow, (
+            f"the mirror now names {column}; the sheet would own it and it "
+            f"would revert every pass")
+
+
+def test_every_resources_column_survives_an_insert_that_ignores_it():
+    """The mirror inserts a sheet row without naming any column added after
+    it was written, so each of them must have a DEFAULT or be nullable. A
+    NOT NULL with neither aborts the whole mirror transaction - and serve
+    swallows that as one warning while the console freezes on stale numbers,
+    which is a bad afternoon to diagnose."""
+    for line in schema_text().splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith("ALTER TABLE RESOURCES ADD COLUMN"):
+            continue
+        if "NOT NULL" in stripped.upper():
+            assert "DEFAULT" in stripped.upper(), (
+                f"the mirror cannot insert past this: {stripped!r}")
+
+
+def test_the_panel_api_tables_are_there_and_shaped_for_their_hazards():
+    """Each of the four carries one decision worth a test."""
+    sql = schema_text()
+    # a key is a minted token, not a chosen password: sha256, no scrypt
+    assert "CREATE TABLE IF NOT EXISTS api_clients" in sql
+    assert "key_hash       bytea NOT NULL" in sql
+    assert "CHECK (role IN ('panel', 'bot'))" in sql
+    # a resources row is hard-deleted by "remove from the pool"; without the
+    # cascade that button starts raising the day the first code arrives
+    assert ("resource_id bigint NOT NULL REFERENCES resources(id)"
+            " ON DELETE CASCADE") in sql
+    # one answer per client per key, so a retry is one request
+    assert "PRIMARY KEY (client_id, key)" in sql
+    # a delivery that gives up stays, to be shown rather than lost
+    assert "CHECK (status IN ('pending', 'delivered', 'gave_up'))" in sql
+    # the panel's reference is the account's public id: one row exactly
+    assert "resources_panel_ref" in sql and "WHERE panel_ref IS NOT NULL" in sql
+
+
+def test_a_request_may_come_from_a_machine():
+    """requested_by drops NOT NULL and client_id names the client instead.
+    Done in the deploy where nothing writes one yet, because the three
+    JOIN users that resolve the asker's name have to become LEFT JOINs in
+    the same change - and the deploy where that is discovered is the one
+    where the Requests page silently loses rows."""
+    sql = schema_text()
+    assert "ALTER TABLE actions ALTER COLUMN requested_by DROP NOT NULL;" in sql
+    assert "ALTER TABLE actions ADD COLUMN IF NOT EXISTS client_id" in sql
+    src = (SRC / "store" / "actions.py").read_text(encoding="utf-8")
+    web = (SRC / "web" / "read.py").read_text(encoding="utf-8")
+    assert "JOIN users u ON u.id = a.requested_by" not in src.replace(
+        "LEFT JOIN users u ON u.id = a.requested_by", "")
+    assert "JOIN users u ON u.id = a.requested_by" not in web.replace(
+        "LEFT JOIN users u ON u.id = a.requested_by", "")
+
+
 def test_the_users_table_hashes_with_scrypt_parameters_beside_the_hash():
     """So the parameters can be raised later without invalidating anyone -
     and so nobody can 'simplify' the table into storing something weaker."""

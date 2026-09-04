@@ -145,8 +145,9 @@ def listing(settings: Settings, *, user_id: int,
         return store._rows(
             "SELECT a.id, a.verb, a.payload, a.status, a.result, a.detail,"
             " a.requested_at, a.executed_at, a.finished_at,"
-            " u.username AS requested_by"
-            " FROM actions a JOIN users u ON u.id = a.requested_by"
+            " coalesce(u.username, c.name, '?') AS requested_by"
+            " FROM actions a LEFT JOIN users u ON u.id = a.requested_by"
+            " LEFT JOIN api_clients c ON c.id = a.client_id"
             " WHERE (%s OR a.requested_by = %s)"
             " AND (%s = '' OR a.status = %s)"
             " ORDER BY a.id DESC LIMIT %s OFFSET %s",
