@@ -328,10 +328,39 @@ class Pool:
 
     @property
     def available(self) -> list[Resource]:
-        """Usable rows, in sheet order. Order is the whole contract: "the first
-        usable one" is what the operator sees when they look at the tab."""
-        return [r for r in self._rows
+        """Usable rows, untried ones first and in sheet order within that.
+
+        Sheet order is the contract: "the first usable one" is what the
+        operator sees when they look at the tab. A row that has never been
+        claimed carries no stamp, sorts ahead of every row that has one, and
+        so keeps that contract exactly - on a tab nobody has built from, this
+        is the old order, row for row.
+
+        What moves is the row a build took and gave back. `release` blanks the
+        status but deliberately leaves `Claimed` written, so such a row is the
+        only kind that is free *and* stamped - and without this it went
+        straight back to the top of the pile and was handed to the next phone,
+        and the one after that. A failure that judges the device rather than
+        the credential returns the row untouched by design, so nothing in the
+        status ever broke the tie: one Gmail met a Google screen this flow did
+        not recognise and was tried five times in twenty minutes, which is
+        what opened the breaker (2026-09-04). Behind the untried rows it gets
+        its turn again, after the stock that has not had one.
+
+        Oldest stamp first among the stamped, so this is a queue and not a
+        blacklist: a row set aside an hour ago comes back before one set aside
+        a minute ago, and nothing is retired that a person did not retire.
+        """
+        free = [r for r in self._rows
                 if not r.error and self.status_of(r) in self.available_statuses]
+        if not self.claimed_at_column:
+            return free
+        # The stamp is compared as text, never parsed. It is written by
+        # `claim` in a fixed format that sorts correctly as a string, an
+        # unstamped row's "" sorts before all of them, and a cell somebody
+        # typed by hand sorts somewhere harmless instead of raising.
+        return sorted(free, key=lambda r: (
+            (r.values.get(self.claimed_at_column) or "").strip(), r.sheet_row))
 
     @property
     def broken(self) -> list[Resource]:

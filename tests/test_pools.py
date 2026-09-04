@@ -1209,6 +1209,46 @@ def stamp(seconds_ago):
                          time.localtime(time.time() - seconds_ago))
 
 
+def test_a_row_a_build_gave_back_waits_behind_the_untried_ones():
+    """The loop this closes cost a morning of stock.
+
+    A failure that judges the device rather than the credential releases the
+    row untouched: blank status, `Claimed` still written. Handing out the first
+    usable row in sheet order then gave that same row to the next phone, and
+    the one after it - one Gmail met a Google page the flow did not recognise
+    and was tried five times in twenty minutes, which opened the breaker
+    (2026-09-04). A stamped row goes behind the stock that has not had a turn.
+    """
+    pool = claimed_pool([
+        claimed_row("tried@example.com", when=stamp(300), status=""),
+        claimed_row("untried@example.com", status=""),
+    ])
+    assert [r.credentials.email for r in pool.available] == [
+        "untried@example.com", "tried@example.com"]
+
+
+def test_among_rows_that_were_tried_the_longest_ago_one_goes_first():
+    """A queue, not a blacklist. Nothing here retires a row - it takes its turn
+    behind the others, and the row waiting longest is at the front of that."""
+    pool = claimed_pool([
+        claimed_row("recent@example.com", when=stamp(60), status=""),
+        claimed_row("older@example.com", when=stamp(7200), status=""),
+    ])
+    assert [r.credentials.email for r in pool.available] == [
+        "older@example.com", "recent@example.com"]
+
+
+def test_a_tab_nobody_has_built_from_is_still_in_sheet_order():
+    """The contract this must not break: "the first usable one" is what the
+    operator sees at the top of the tab. Untried rows carry no stamp, so on a
+    fresh tab the order is the old one, row for row."""
+    pool = claimed_pool([claimed_row("first@example.com", status=""),
+                         claimed_row("second@example.com", status=""),
+                         claimed_row("third@example.com", status="")])
+    assert [r.credentials.email for r in pool.available] == [
+        "first@example.com", "second@example.com", "third@example.com"]
+
+
 def test_claiming_records_when():
     """Without it `in_use` says only "somebody took this", and the only way
     back was a hand on the console."""

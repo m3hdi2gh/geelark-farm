@@ -159,6 +159,48 @@ def test_the_security_code_page_asks_for_another_way():
     assert matched_screen(ctx).act is login.act_try_another_way
 
 
+def test_the_google_app_code_challenge_is_the_same_security_code_page():
+    """The g.co/sc challenge, reworded, and the rewording cost a morning.
+
+    Google stopped sending people to g.co/sc and now walks them through its own
+    app: "Verify it's you", then Google app > Settings > Security > Choose an
+    account to get your code. None of the three phrasings this entry matched on
+    survives that rewrite, so the page fell past every screen in the list to
+    `dismissable` - which is exactly what the second assertion below shows is
+    waiting for it. Eight presses of NEXT against an empty code box later the
+    row failed as `stuck_on_dismissable`, a reason that blames the device, so
+    nothing was written to the Gmail, the row stayed free, and the next pass
+    took it again. Five of those in a row opened the breaker (2026-09-04).
+
+    The fixture is that capture, from the build that tripped it.
+    """
+    ctx = context_from("google-verify-its-you-app-code.xml")
+
+    assert ctx.has("choose an account to get your code")
+    # Nothing older matched, which is why it fell through at all.
+    assert not ctx.has("g.co/sc", "get a code to sign in",
+                       "get your security code")
+    # And this is what caught it instead: the page carries a NEXT button, and
+    # "Next" is a dismiss label. Without the entry above, this test is the
+    # whole failure.
+    assert screen.find_first(ctx.elements, login.DISMISS_LABELS,
+                             clickable_only=True) is not None
+
+    matched = matched_screen(ctx)
+    assert matched.name == "2fa_security_code_prompt"
+    assert matched.act is login.act_try_another_way
+
+
+def test_the_verify_heading_alone_does_not_claim_a_page():
+    """The counterweight. "Verify it's you" heads half of Google's challenge
+    pages, so matching on it would take screens that belong to other entries -
+    the reason the entry above is written from the instruction lines instead.
+    """
+    ctx = context_from("google-verify-chooser.xml")
+    assert ctx.has("verify it's you")
+    assert matched_screen(ctx).name != "2fa_security_code_prompt"
+
+
 def test_the_real_email_screen_still_matches():
     """The counterweight to tightening it. Google's email page is identified by
     text unique to it, so removing "sign in" must not cost us the page itself.

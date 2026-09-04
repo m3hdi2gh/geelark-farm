@@ -507,11 +507,28 @@ SCREENS: list[Screen] = [
     # back into the normal path. Confirmed by hand on 2026-08-06: one tap, then
     # the flow finished the sign-in unaided.
     #
+    # The last three phrasings are the same challenge reworded: Google stopped
+    # sending people to g.co/sc and now walks them through its own app -
+    # "Verify it's you", then Google app > Settings > Security > Choose an
+    # account to get your code. None of the older three appears on it, so it
+    # fell past every entry here to `dismissable`, which found the page's NEXT
+    # button, pressed it against an empty code box eight times and gave up as
+    # `stuck_on_dismissable`. That reason blames the device, so nothing was
+    # written to the Gmail row, the row stayed free, the next pass took it
+    # again - and five of those in a row opened the breaker (2026-09-04).
+    #
+    # Matched on the instruction lines rather than on "verify it's you", which
+    # is the heading of half of Google's challenge pages and would swallow
+    # screens that belong to other entries.
+    #
     # Ranked below the authenticator entry for the usual reason: if a screen
     # ever offers both, taking the authenticator is always right.
     Screen("2fa_security_code_prompt",
            lambda c: (c.has("get a code to sign in", "g.co/sc",
-                            "get your security code")
+                            "get your security code",
+                            "choose an account to get your code",
+                            "select the security tab",
+                            "choose your account, if it is not already")
                       and not authenticator_offered(c)),
            act_try_another_way, max_visits=2),
 
