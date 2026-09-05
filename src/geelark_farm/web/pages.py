@@ -1989,8 +1989,11 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
              else user.get("role") == "admin")
     # Short but not empty: the card says so in amber, under its number,
     # in the words the title used to keep for a hover.
+    # Gmail only: "fewer than the phones the keeper keeps warm" is a fact
+    # about Gmails, since each phone spends one. An exit is reused.
     short = (f'<p class="railnote warn">{esc(why[:1].upper() + why[1:])}</p>'
-             if colour == "amber" and count and not alerts else "")
+             if kind == "gmail" and colour == "amber" and count and not alerts
+             else "")
     add = (f'<button type="button" class="go small" data-pool="{kind}">'
            f'Manage</button>' if opens
            else '<span class="lock">admin</span>' if not meta["manage"]
