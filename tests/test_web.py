@@ -2218,7 +2218,10 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     assert 'color:var(--amber)">7</b><span class="t">GPT accounts' in card
     # Proxies are the admin's pool, so the row says so instead of
     # offering a way in that leads nowhere for an operator.
-    assert 'class="lock">admin<' in card
+    # An admin gets the proxy pool's door; the `admin` lock is what an
+    # operator sees in its place (one door per card, 2026-09-05).
+    assert 'data-pool="proxy">Manage</button>' in card
+    assert 'class="lock">admin<' not in card
     # And with mutations off there is no add door at all - the same rule
     # every other button on this console follows.
     assert 'class="addfold"' not in card
@@ -3446,8 +3449,17 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
+    # An empty Gmail pool is the case the form is for - an address bought
+    # this morning is in no pool - so the form stays and the hint says so.
+    assert 'action="/phones/build"' in body
+    assert "The Gmail pool is empty" in body
+    assert 'placeholder="a new address"' in body
+
+    _dash(monkeypatch, stock={"gmail": {"free": 3}, "proxy": {"free": 0},
+                              "app": {"awaiting": 2}})
+    _, _, body = client.request("GET", "/")
     assert 'action="/phones/build"' not in body
-    assert "There is no Gmail to build with" in body
+    assert "There is no free exit to build with" in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3467,7 +3479,8 @@ def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
     assert 'action="/pools/gpt/preview"' in body
     # The card carries the button and the manager carries the form, so a
     # card whose button opens nothing is the one thing to refuse.
-    assert 'data-pool="gmail" data-open="add"' in body
+    assert 'data-pool="gmail">Manage</button>' in body
+    assert "Manage all" not in body, "one door per card, not two"
     assert '<div class="ov" id="poolov"' in body
     # And where it returns to, so confirming does not land on a page the
     # person who pressed it may not have.

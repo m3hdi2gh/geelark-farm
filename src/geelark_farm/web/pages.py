@@ -141,7 +141,11 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .pool .queue li+li{{border-top:1px solid var(--line2)}}
 .pool .queue .t{{font-family:var(--mono);color:var(--muted);overflow:hidden;
  text-overflow:ellipsis;white-space:nowrap}}
+.pool .queue .t{{flex:1;min-width:0}}
 .pool .queue .tag{{margin-left:auto;font-size:11px;color:var(--dim);
+ white-space:nowrap}}
+.pool .queue form{{margin-left:auto;display:inline;flex-shrink:0}}
+.pool .queue form button{{padding:2px 8px;font-size:11px;border-radius:5px;
  white-space:nowrap}}
 .pool .railnote{{margin:0;padding:9px 15px;font-size:11.5px;color:var(--dim);
  border-top:1px solid var(--line2)}}
@@ -1609,10 +1613,18 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
 def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
                why: str, user: dict, manual_login: bool = False) -> str:
     meta = _POOL_KINDS[kind]
-    may_add = bool(meta["add"]) and _may(user, meta["add"])
-    add = (f'<button type="button" class="go small" data-pool="{kind}" '
-           f'data-open="add">+ add</button>' if may_add
-           else '<span class="lock">admin</span>' if not meta["add"]
+    # One door. `+ add` and `Manage all` opened the same manager, one
+    # focused on the paste box and one on the search, and two buttons that
+    # go to the same place read as two places (the operator, 2026-09-05).
+    # The paste box is the first thing in the manager anyway.
+    #
+    # The proxy pool is the admin's: they get the door, an operator gets
+    # the word that says whose it is.
+    opens = (_may(user, meta["manage"]) if meta["manage"]
+             else user.get("role") == "admin")
+    add = (f'<button type="button" class="go small" data-pool="{kind}">'
+           f'Manage</button>' if opens
+           else '<span class="lock">admin</span>' if not meta["manage"]
            else "")
     return (
         f'<section class="pool" title="{esc(why)}">'
@@ -1620,8 +1632,6 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
         f'{_pool_queue(kind, rows, user, manual_login)}'
-        f'<button type="button" class="more" data-pool="{kind}">'
-        f'Manage all {_plural(len(rows), "row")} &rarr;</button>'
         f'</section>')
 
 
@@ -1881,22 +1891,28 @@ def _build_card(data: dict, user: dict) -> str:
     stock = data.get("stock") or {}
     free = int((stock.get("gmail") or {}).get("free") or 0)
     exits = int((stock.get("proxy") or {}).get("free") or 0)
-    if not free or not exits:
-        # Nothing to build with. Said rather than offered: a form that can
+    if not exits:
+        # No way out for a phone. Said rather than offered: a form that can
         # only be refused is worse than a sentence saying why.
-        missing = "Gmail" if not free else "free exit"
-        return (f'<div class="panel"><h3>Build a phone by hand</h3>'
-                f'<p class="dim">There is no {missing} to build with, so '
-                f'there is nothing to ask for yet.</p></div>')
+        return ('<div class="panel"><h3>Build a phone by hand</h3>'
+                '<p class="dim">There is no free exit to build with, so '
+                'there is nothing to ask for yet.</p></div>')
+    # An empty Gmail pool is not "nothing to build with": the box takes an
+    # address the pool has never seen, and an account bought this morning
+    # is exactly what this form is for. The hint says so instead of the
+    # form hiding (2026-09-05).
+    hint = ("The Gmail pool is empty - type an address and its password "
+            "below, and the phone is built on it." if not free else
+            "Pick one from the pool or type an address that is not in it "
+            "yet. Leave a box empty and the keeper takes the next in line.")
     return (
         f'<div class="panel"><h3>Build a phone by hand</h3>'
-        f'<p class="dim" style="margin:-6px 0 0">Pick one from the pool or '
-        f'type an address that is not in it yet. Leave a box empty and the '
-        f'keeper takes the next in line.</p>'
+        f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
         f'<label>Gmail'
-        + _free_picker("gmail", choose.get("gmails"), NEXT_FREE)
+        + _free_picker("gmail", choose.get("gmails"),
+                       NEXT_FREE if free else "a new address")
         + '</label>'
         + '<label>Exit'
         + _free_picker("proxy_name", choose.get("proxies"), NEXT_FREE)
