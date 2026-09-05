@@ -28,6 +28,7 @@ def test_a_sheet_copy_is_read_whatever_its_column_order():
     assert rows[0]["secret"] == "NZ3ICRAWHHS3EZEN4KQQT2HXWQJMUSS5"
     assert rows[1] == {"address": "b@x.com", "recovery": "",
                        "password": "them@hmD:72&93$#", "secret": "",
+                       "unread": [],
                        "line": "them@hmD:72&93$#\tb@x.com"}, \
         "a colon in a password is a colon, not a delimiter"
     assert rows[2]["recovery"] == "rec@x.com" and rows[2]["password"] == "pw3"

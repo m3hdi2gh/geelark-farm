@@ -3918,3 +3918,25 @@ def test_a_set_aside_row_carries_free_and_a_free_one_does_not(web, monkeypatch):
     assert ">Free<" in doors("stuck@gmail.com")
     assert 'action="/pools/gmail/free"' not in doors("free@gmail.com")
     assert 'action="/pools/gmail/free"' not in doors("busy@gmail.com")
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_preview_shows_every_piece_in_full_and_refuses_what_it_could_not_read(
+        web, monkeypatch):
+    """A person checking a paste has to see what is about to be written -
+    the password, the whole key - and a line with a piece the reader
+    could not place is refused with that piece named, not trimmed."""
+    _dash(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: [])
+    client = web()
+    client.login()
+    _, _, body = client.request(
+        "POST", "/pools/gmail/preview",
+        _form(csrf=client.csrf(), back="/",
+              pasted="ok@x.com pw1 xpui mde3 bpjl iulh qiuq 6uri bxe3 72wj\n"
+                     "odd@x.com pw2 stray"))
+    assert "pw1" in body and "XPUIMDE3BPJLIULHQIUQ6URIBXE372WJ" in body
+    assert "········" not in body
+    assert "not understood: stray" in body
+    assert ">Add 1 (skip 1)<" in body

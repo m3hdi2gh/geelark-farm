@@ -36,10 +36,46 @@ def _split(line: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+#: One group of an authenticator key the way Google shows it - `fioi p2yx
+#: bzu7 gax3` - four base32 characters. A line split on plain spaces turns
+#: the key into eight of these, none of which is a key on its own.
+_GROUP = re.compile(r"^[A-Za-z2-7]{4}$")
+
+
+def _regroup(tokens: list[str]) -> tuple[str, list[str]]:
+    """Find a key that arrived as spaced groups and put it back together.
+
+    Returns the key (unspaced, uppercased) and the tokens that were not
+    part of it. The run has to be at least four groups of exactly four,
+    which is what Google prints and what a password never looks like -
+    `chaobuoisang` is twelve letters, and one token, and stays a password.
+    Eleven Gmails went into the pool with no secret because their keys
+    were pasted this way and the reader quietly threw the groups away
+    (2026-09-06).
+    """
+    best, at = 0, -1
+    run = 0
+    for i, tok in enumerate(tokens + [""]):
+        if _GROUP.match(tok):
+            run += 1
+            continue
+        if run > best:
+            best, at = run, i - run
+        run = 0
+    if best < 4:
+        return "", list(tokens)
+    key = "".join(tokens[at:at + best]).upper()
+    return key, tokens[:at] + tokens[at + best:]
+
+
 def accounts(text: str) -> list[dict]:
-    """One dict per non-empty line: address, password, secret, recovery.
+    """One dict per non-empty line: address, password, secret, recovery,
+    and `unread` - the pieces of the line nothing here could place.
     Missing pieces are empty strings; the row is kept so the preview can
-    say what is wrong with it rather than silently dropping it."""
+    say what is wrong with it rather than silently dropping it, and a
+    piece that was not understood is said the same way - a key that is
+    thrown away without a word is a phone that stops at the 2-step
+    screen a week later."""
     rows = []
     for raw in (text or "").splitlines():
         parts = _split(raw)
@@ -50,12 +86,15 @@ def accounts(text: str) -> list[dict]:
         secret = next((p for p in rest
                        if _BASE32.match(p) and not p.isdigit()), "")
         rest = [p for p in rest if p != secret]
+        if not secret:
+            secret, rest = _regroup(rest)
         password = rest[0] if rest else ""
         rows.append({
             "address": emails[0] if emails else "",
             "recovery": emails[1] if len(emails) > 1 else "",
             "password": password,
             "secret": secret.replace(" ", "").upper() if secret else "",
+            "unread": rest[1:] + emails[2:],
             "line": raw.strip(),
         })
     return rows

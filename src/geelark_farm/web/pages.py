@@ -4646,13 +4646,35 @@ def _verdict_badge(row: dict) -> str:
         return '<span class="badge bad">already in the pool</span>'
     if row.get("error"):
         return f'<span class="badge bad">{esc(row["error"])}</span>'
+    if row.get("unread"):
+        # Refused, not trimmed: a piece the reader could not place is a
+        # line the person meant differently, and adding what was
+        # understood would add it wrong without a word.
+        return (f'<span class="badge bad">not understood: '
+                f'{esc(", ".join(row["unread"]))}</span>')
     return '<span class="badge ok">ok</span>'
 
 
+def _good(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if not r.get("error") and not r.get("duplicate")
+            and not r.get("unread")]
+
+
 def _second_factor(row: dict) -> str:
+    """The second factor, in full: a person checking a paste has to see
+    the key they pasted, not a word for it (the operator, 2026-09-06)."""
     if row.get("recovery"):
-        return "recovery"
-    return "authenticator" if row.get("secret") else "—"
+        return f'recovery: <span class="mono">{esc(row["recovery"])}</span>'
+    if row.get("secret"):
+        return f'<span class="mono">{esc(row["secret"])}</span>'
+    return "—"
+
+
+def _shown_password(row: dict) -> str:
+    """The password as pasted - it is theirs, and a preview that hides
+    what it is about to write is not a preview."""
+    return (f'<span class="mono">{esc(row["password"])}</span>'
+            if row.get("password") else "—")
 
 
 def gmail_preview(rows: list[dict], seller: str, user: dict,
@@ -4662,10 +4684,10 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
     """The verdicts, the confirm, and the paste kept in an editable box
     underneath - a typo is fixed there and previewed again, not pasted
     from scratch."""
-    good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
+    good = _good(rows)
     lines = "".join(
         f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
-        f"<td class=\"muted\">{'········' if r.get('password') else '—'}</td>"
+        f"<td class=\"muted\">{_shown_password(r)}</td>"
         f"<td class=\"muted\">{_second_factor(r)}</td>"
         f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
     carried = "\n".join(
@@ -4705,12 +4727,12 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
     """The Gpt Pool's paste, judged row by row the way the by-hand form
     judges one; the good rows ride into the confirm as the same
     tab-separated text, and the paste stays in a box underneath."""
-    good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
+    good = _good(rows)
     lines = "".join(
         f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
-        f"<td class=\"muted\">{'········' if r.get('password') else '—'}</td>"
-        f"<td class=\"muted\">{'authenticator' if r.get('secret') else '—'}"
-        f"</td><td>{_verdict_badge(r)}</td></tr>" for r in rows)
+        f"<td class=\"muted\">{_shown_password(r)}</td>"
+        f"<td class=\"muted\">{_second_factor(r)}</td>"
+        f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
     carried = "\n".join(
         f"{r['address']}\t{r['password']}\t{r.get('secret') or ''}"
         for r in good)
