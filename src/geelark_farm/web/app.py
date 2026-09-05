@@ -37,7 +37,11 @@ SESSION_HOURS = 12
 LOCKOUT_AFTER = 5
 LOCKOUT_SECONDS = 600
 
-_sessions: dict[str, dict] = {}
+#: Sessions live in the store (`store.sessions`), because this process
+#: restarts on every deploy and a seat kept here does not survive one.
+#: The lockout counter stays in memory on purpose: it is a few minutes of
+#: "try later", and a restart forgiving it costs less than a table row per
+#: wrong password.
 _failures: dict[str, list[float]] = {}
 _lock = threading.Lock()
 
@@ -318,12 +322,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(403, pages.page("403", "<h2>Bad origin</h2>"))
             user = self._user()
             if self.path == "/logout":
-                token = self._cookie()
-                with _lock:
-                    _sessions.pop(token, None)
+                from ..store import sessions as store_sessions
+
+                store_sessions.end(self.settings, self._cookie())
                 return self._redirect("/login")
             if self.path == "/password":
-                return self._password_post(user, field, entry)
+                return self._password_post(user, field)
             if user.get("must_change_password"):
                 return self._redirect("/password")
             if (user.get("role") != "admin"
@@ -980,7 +984,7 @@ class _Handler(BaseHTTPRequestHandler):
                 permissions=_ticks(field), by=user["id"])
         except ValueError as exc:
             return self._redirect(f"/users?id={target}&error={_q(str(exc))}")
-        _drop_sessions_of(target, keep=self._cookie())
+        _drop_sessions_of(self.settings, target, keep=self._cookie())
         log.info("user id %s updated by %s", target, user["username"])
         self._redirect(f"/users?id={target}&said=saved")
 
@@ -1008,13 +1012,13 @@ class _Handler(BaseHTTPRequestHandler):
                 action=f"/users/{target}/reset", fields={"sure": "1"},
                 button="Yes, reset it", back=f"/users?id={target}"))
         password = store_users.reset_password(self.settings, target)
-        _drop_sessions_of(target, keep=self._cookie())
+        _drop_sessions_of(self.settings, target, keep=self._cookie())
         log.info("password of user id %s reset by %s", target,
                  user["username"])
         self._html(200, pages.one_time_page(row["username"], password, user,
                                             created=False))
 
-    def _password_post(self, user: dict, field: dict, entry: dict) -> None:
+    def _password_post(self, user: dict, field: dict) -> None:
         from ..store import users as store_users
 
         new = field.get("password") or ""
@@ -1025,8 +1029,9 @@ class _Handler(BaseHTTPRequestHandler):
             store_users.set_password(self.settings, user["id"], new)
         except ValueError as exc:
             return self._html(200, pages.password_page(user, str(exc)))
-        with _lock:
-            entry["user"]["must_change_password"] = False
+        # `set_password` clears must_change_password in the row itself,
+        # and the row is read fresh on the next request - so there is no
+        # second copy here to patch any more.
         log.info("user %s chose a password", user["username"])
         self._redirect("/")
 
@@ -1045,16 +1050,15 @@ class _Handler(BaseHTTPRequestHandler):
             _note_failure(username)
             return self._html(200, pages.login(
                 "The username or password is not right"))
-        token = secrets.token_urlsafe(32)
+        from ..store import sessions as store_sessions
+
         with _lock:
             _failures.pop(username, None)
-            _sessions[token] = {"user": row,
-                                "until": time.time() + SESSION_HOURS * 3600,
-                                # One CSRF token per session, checked on
-                                # every POST but /login. Dies with the
-                                # process like the session - a re-login,
-                                # nothing more.
-                                "csrf": secrets.token_urlsafe(32)}
+        # One CSRF token per session, checked on every POST but /login,
+        # and stored beside the seat rather than in this process - so a
+        # deploy no longer turns every open page into a stale form.
+        token, _csrf = store_sessions.start(self.settings, row["id"],
+                                            hours=SESSION_HOURS)
         self.send_response(303)
         # `Secure` when the request came over TLS - the reverse proxy in
         # front of the console (Caddy, farm.iranspoty.store) says so in
@@ -1068,13 +1072,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _entry(self) -> dict | None:
-        token = self._cookie()
-        with _lock:
-            entry = _sessions.get(token)
-            if entry is None or entry["until"] < time.time():
-                _sessions.pop(token, None)
-                return None
-            return entry
+        """The seat behind the cookie, or None.
+
+        The user row comes back fresh on every request rather than frozen
+        at login, so a permission taken away takes effect on the next
+        click instead of waiting for the session to be ended by hand.
+        """
+        from ..store import sessions as store_sessions
+
+        return store_sessions.find(self.settings, self._cookie())
 
     def _user(self) -> dict | None:
         entry = self._entry()
@@ -1312,18 +1318,25 @@ def _q(text: str) -> str:
     return quote(text, safe="")
 
 
-def _drop_sessions_of(user_id: int, *, keep: str = "") -> int:
-    """End every session this person holds, except the one token given
-    (an admin editing themselves keeps their own seat). A permission
-    change or a reset must not leave a stale session acting on old
-    rights, and there is no second copy of the user row to refresh."""
-    dropped = 0
-    with _lock:
-        for token, entry in list(_sessions.items()):
-            if entry["user"].get("id") == user_id and token != keep:
-                _sessions.pop(token, None)
-                dropped += 1
-    return dropped
+def _drop_sessions_of(settings, user_id: int, *, keep: str = "") -> int:
+    """End every seat this person holds, except the one token given (an
+    admin editing themselves keeps their own chair).
+
+    The rights half of this is now handled by reading the user row fresh
+    on every request. What is left is the half that was always about
+    seats rather than staleness: a password reset must put every other
+    browser out, and a deactivated account must stop being able to click.
+    Never fatal - a reset that could not reach the store is still a reset,
+    and saying so beats failing the page.
+    """
+    from ..store import sessions as store_sessions
+
+    try:
+        return store_sessions.end_all_of(settings, user_id, keep=keep)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not end the other sessions of user %s (%s)",
+                    user_id, exc)
+        return 0
 
 
 def _locked_out(username: str) -> bool:

@@ -86,7 +86,7 @@ def ensure_schema(settings: Settings) -> None:
 #: is additive-only while the sheet is still authoritative, and a real
 #: migration story is stage 7's problem, not stage 1's. What this buys now
 #: is one queryable fact: which code last touched the schema.
-SCHEMA_REV = "10"
+SCHEMA_REV = "14"
 
 
 class Store:
@@ -291,11 +291,32 @@ class Store:
 
     # ---------------------------------------------------------- plumbing
     def _rows(self, sql: str, params: tuple = ()) -> list[dict]:
+        """One statement, read. **Never a write** - see `_write`."""
         with self._conn.cursor() as cur:
             cur.execute(sql, params)
             names = [d.name for d in cur.description]
             out = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
         self._conn.rollback()      # reads leave no transaction behind
+        return out
+
+    def _write(self, sql: str, params: tuple = ()) -> list[dict]:
+        """One statement, committed. `RETURNING` rows come back like `_rows`.
+
+        The mirror image of `_rows`, and the reason it exists: a write sent
+        through that one is executed, has its `RETURNING` row read out, and
+        is then rolled back - so the caller is handed a fresh id for a row
+        that does not exist. Ten statements went that way and every one of
+        them looked like it had worked: `set_state` answered True while the
+        phone stayed `unused`, and `wanted.ask` handed back an id for a
+        build nobody had asked for (2026-09-05). Nothing raised, nothing
+        logged, and the console's Done button did nothing at all.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
+            out = ([dict(zip([d.name for d in cur.description], r,
+                             strict=True)) for r in cur.fetchall()]
+                   if cur.description else [])
+        self._conn.commit()
         return out
 
     # ------------------------------------------------------------ health

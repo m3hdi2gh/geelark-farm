@@ -976,3 +976,114 @@ def test_the_upserts_hand_back_the_row_they_touched():
     shadow_src = (SRC / "store" / "shadow.py").read_text(encoding="utf-8")
 
     assert shadow_src.count("RETURNING r.id") == 2, "both upserts"
+
+
+# ------------------------------------------------- reads read, writes write
+class _CountingConn:
+    """A connection that says whether it was committed or rolled back."""
+
+    def __init__(self, description=None, rows=()):
+        self.committed = self.rolled_back = 0
+        self.sql: list[str] = []
+        self._description = description
+        self._rows = list(rows)
+
+    def cursor(self):
+        conn = self
+
+        class Cur:
+            description = conn._description
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @staticmethod
+            def execute(sql, params=()):
+                conn.sql.append(sql)
+
+            @staticmethod
+            def fetchall():
+                return conn._rows
+
+        return Cur()
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+    def close(self):
+        pass
+
+
+def _store_on(conn, monkeypatch, make_settings):
+    from geelark_farm.store import db
+
+    monkeypatch.setattr(db, "connect", lambda s: conn)
+    return db.Store(make_settings())
+
+
+def test_a_read_leaves_no_transaction_behind(monkeypatch, make_settings):
+    class Col:
+        name = "id"
+
+    conn = _CountingConn(description=[Col()], rows=[(7,)])
+
+    got = _store_on(conn, monkeypatch, make_settings)._rows("SELECT 1")
+
+    assert got == [{"id": 7}]
+    assert (conn.committed, conn.rolled_back) == (0, 1)
+
+
+def test_a_write_is_committed_and_hands_back_what_it_returned(
+        monkeypatch, make_settings):
+    """`_rows` rolls back, so a write sent through it is executed, has its
+    RETURNING row read out, and is then thrown away - the caller gets a
+    fresh id for a row that does not exist. `set_state` answered True while
+    the phone stayed `unused`, and `wanted.ask` handed back an id for a
+    build nobody had asked for (2026-09-05)."""
+    class Col:
+        name = "id"
+
+    conn = _CountingConn(description=[Col()], rows=[(41,)])
+
+    got = _store_on(conn, monkeypatch, make_settings)._write(
+        "UPDATE phones SET state = %s RETURNING id", ("done",))
+
+    assert got == [{"id": 41}]
+    assert (conn.committed, conn.rolled_back) == (1, 0)
+
+
+def test_a_write_with_nothing_to_return_does_not_fetch(monkeypatch,
+                                                       make_settings):
+    """A DELETE has no `description`. Asking such a cursor for rows raises
+    in psycopg, so a write without RETURNING must not be fetched at all."""
+    conn = _CountingConn(description=None)
+
+    got = _store_on(conn, monkeypatch, make_settings)._write("DELETE FROM x")
+
+    assert got == []
+    assert conn.committed == 1
+
+
+def test_no_write_is_sent_through_the_reading_helper():
+    """The whole class, in one sweep. `_rows` ends in a rollback, so any
+    statement that changes something has to go through `_write` - and the
+    difference is invisible at the call site, which is exactly why ten of
+    them were wrong at once and nothing raised."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    reading = re.compile(r'_rows\(\s*\n?\s*(?:f?")(INSERT|UPDATE|DELETE|WITH)',
+                         re.I)
+    wrong = [f"{path}:{text[:m.start()].count(chr(10)) + 1} {m.group(1)}"
+             for path in sorted(root.rglob("*.py"))
+             for text in [path.read_text(encoding="utf-8")]
+             for m in reading.finditer(text)]
+
+    assert not wrong, "these writes are rolled back: " + "; ".join(wrong)

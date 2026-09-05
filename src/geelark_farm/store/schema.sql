@@ -486,3 +486,27 @@ CREATE INDEX IF NOT EXISTS wanted_queued
 -- no longer reaches the page it guarded. A permission nothing reads is a
 -- checkbox that lies to whoever sets it.
 ALTER TABLE users DROP COLUMN IF EXISTS may_add_proxy;
+
+-- ---------------------------------------------- sessions, rev 14 (C14)
+-- Who is logged in.
+--
+-- This lived in a module-level dict, which works exactly until the process
+-- restarts - and the process restarts on every deploy, so every change to
+-- the code signed everybody out and the operator had to log in again to
+-- see it (2026-09-05).
+--
+-- The token is stored as its sha256 and never in the clear, so a copy of
+-- this database is not a drawer full of live seats. The raw token exists
+-- in the browser's cookie and nowhere else, which is the shape the
+-- password columns already have.
+--
+-- ON DELETE CASCADE because a deleted user must not keep a seat, and there
+-- is no version of that question worth asking at read time.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash text PRIMARY KEY,
+    user_id    bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    csrf       text NOT NULL,
+    until      timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS sessions_of_user ON sessions (user_id);

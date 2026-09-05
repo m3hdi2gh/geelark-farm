@@ -81,8 +81,43 @@ def web(request, monkeypatch, make_settings):
     monkeypatch.setattr(app_mod.read, "nav_counts",
                         lambda s: {"gmail": 3, "proxy": 2, "app": 1,
                                    "pending": 0})
-    # every test gets clean auth state
-    monkeypatch.setattr(app_mod, "_sessions", {})
+    # every test gets clean auth state. Sessions live in the store now, so
+    # what is faked is that module rather than a dict on the handler - the
+    # seam is "a seat is kept somewhere", and where is `test_sessions`.
+    _seats: dict[str, dict] = {}
+
+    def _start(settings, user_id, *, hours):
+        token = f"t{len(_seats) + 1}"
+        # The row itself, not a copy: the real `find` reads it fresh from
+        # the table on every request, so a change made in place must show
+        # through the seat - while a *different* person signing in later
+        # must not reach back and change this one.
+        _seats[token] = {"user_id": user_id, "row": FakeStore.user,
+                         "csrf": f"c{len(_seats) + 1}"}
+        return token, _seats[token]["csrf"]
+
+    def _find(settings, token):
+        seat = _seats.get(token or "")
+        if seat is None:
+            return None
+        return {"user": dict(seat["row"]), "csrf": seat["csrf"]}
+
+    def _end(settings, token):
+        _seats.pop(token or "", None)
+
+    def _end_all_of(settings, user_id, *, keep=""):
+        gone = [t for t, seat in _seats.items()
+                if seat["user_id"] == user_id and t != keep]
+        for token in gone:
+            _seats.pop(token)
+        return len(gone)
+
+    from geelark_farm.store import sessions as store_sessions
+
+    monkeypatch.setattr(store_sessions, "start", _start)
+    monkeypatch.setattr(store_sessions, "find", _find)
+    monkeypatch.setattr(store_sessions, "end", _end)
+    monkeypatch.setattr(store_sessions, "end_all_of", _end_all_of)
     monkeypatch.setattr(app_mod, "_failures", {})
 
     overrides = getattr(request, "param", None)
@@ -544,8 +579,15 @@ def test_a_one_time_password_buys_only_the_page_to_replace_it(web,
                         {"id": 9, "username": "narrow", "role": "operator",
                          "sees": "own", "must_change_password": True})
     chosen = []
-    monkeypatch.setattr(users_mod, "set_password",
-                        lambda s, uid, pw: chosen.append((uid, pw)))
+
+    def _chose(settings, uid, pw):
+        chosen.append((uid, pw))
+        # What the real one does, and the reason the handler no longer
+        # patches a copy: `set_password` clears the flag in the row, and
+        # the row is read again on the next request.
+        FakeStore.user["must_change_password"] = False
+
+    monkeypatch.setattr(users_mod, "set_password", _chose)
     client = web()
     client.login(username="narrow")
     status, headers, _ = client.request("GET", "/")

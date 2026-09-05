@@ -109,7 +109,7 @@ class PgPhoneLog(PhoneLog):
                 fields["App"], None))
         placeholders = ", ".join(["%s"] * len(columns))
         with Store(self._settings) as store:
-            rows = store._rows(
+            rows = store._write(
                 f"INSERT INTO phones ({', '.join(columns)})"
                 f" VALUES ({placeholders}) RETURNING id", tuple(values))
         return int(rows[0]["id"])
@@ -131,7 +131,7 @@ class PgPhoneLog(PhoneLog):
         if not sets:
             return
         with Store(self._settings) as store:
-            store._rows(
+            store._write(
                 f"UPDATE phones SET {', '.join(sets)}, updated_at = now()"
                 f" WHERE id = %s RETURNING id", (*values, int(sheet_row)))
 
@@ -142,7 +142,7 @@ class PgPhoneLog(PhoneLog):
         if not sheet_rows:
             return
         with Store(self._settings) as store:
-            store._rows(
+            store._write(
                 "UPDATE phones SET done_at = now(), updated_at = now()"
                 " WHERE id = ANY(%s) AND done_at IS NULL RETURNING id",
                 ([int(r) for r in sheet_rows],))

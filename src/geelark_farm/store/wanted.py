@@ -31,7 +31,7 @@ def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
         requested_by: int | None = None) -> int:
     """Write one wish. Returns its id, which is what the page says back."""
     with Store(settings) as store:
-        rows = store._rows(
+        rows = store._write(
             "INSERT INTO wanted_builds"
             " (gmail, proxy_name, install_app, app_account, requested_by)"
             " VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -53,7 +53,7 @@ def take(settings: Settings, limit: int = 2) -> list[dict]:
     a few passes rather than all at the cost of the shortfall.
     """
     with Store(settings) as store:
-        return store._rows(
+        return store._write(
             "UPDATE wanted_builds SET status = 'running'"
             " WHERE id IN (SELECT id FROM wanted_builds"
             "              WHERE status = 'queued'"
@@ -69,7 +69,7 @@ def settle(settings: Settings, wanted_id: int, *, ok: bool,
     reported as failed because the row saying so could not be written."""
     try:
         with Store(settings) as store:
-            store._rows(
+            store._write(
                 "UPDATE wanted_builds SET status = %s, serial = %s,"
                 " detail = %s, ended_at = now() WHERE id = %s RETURNING id",
                 ("done" if ok else "failed", serial, detail[:400],
@@ -99,7 +99,7 @@ def release_stale(settings: Settings, older_than_minutes: int = 45) -> int:
     `in_use`, and the same fix.
     """
     with Store(settings) as store:
-        rows = store._rows(
+        rows = store._write(
             "UPDATE wanted_builds SET status = 'queued'"
             " WHERE status = 'running'"
             "   AND created_at < now() - (interval '1 minute' * %s)"

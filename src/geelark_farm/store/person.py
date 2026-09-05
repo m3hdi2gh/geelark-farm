@@ -62,7 +62,7 @@ def set_state(settings: Settings, serial: str, state: str) -> bool:
     """Write what a person said. False if there is no live phone by that
     serial, which is what the caller says back rather than guessing."""
     with Store(settings) as store:
-        rows = store._rows(
+        rows = store._write(
             "UPDATE phones SET state = %s, updated_at = now()"
             " WHERE serial = %s AND done_at IS NULL RETURNING id",
             (state, str(serial).strip()))
@@ -79,7 +79,7 @@ def count_try(settings: Settings, serial: str) -> int:
     if not wanted:
         return 0
     with Store(settings) as store:
-        rows = store._rows(
+        rows = store._write(
             "UPDATE phones SET tries = tries + 1, updated_at = now()"
             " WHERE serial = %s AND done_at IS NULL RETURNING tries",
             (wanted,))
@@ -89,7 +89,7 @@ def count_try(settings: Settings, serial: str) -> int:
 def clear_tries(settings: Settings, serial: str) -> bool:
     """Put a given-up phone back in the queue."""
     with Store(settings) as store:
-        rows = store._rows(
+        rows = store._write(
             "UPDATE phones SET tries = 0, updated_at = now()"
             " WHERE serial = %s AND done_at IS NULL RETURNING id",
             (str(serial).strip(),))
