@@ -875,14 +875,23 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     a phone nobody took is rarer and lives on the phone's own page, so
     the table stays two buttons wide. A phone being built offers
     nothing: a run is holding it.
+
+    Boot is one of the two ways a phone becomes taken - it starts it and
+    takes it in one press - so it belongs to a phone nobody holds, and
+    goes as soon as one does. Offering it on a taken row is offering to
+    take a phone that is already taken, which is the row it is already
+    on. Its other half, opening the screen again, is on the phone's own
+    page, one click away on the serial, and that page keeps Boot for as
+    long as the phone is alive.
     """
     building = (row.get("status") or "") == "building"
     serial = str(row.get("serial") or "")
+    taken = (row.get("state") or "") == "taken"
     actions = []
     if not building and _may(user, "may_take_phones"):
-        actions.append(_boot_form(user, serial))
-        actions += (_state_forms(user, row, back)
-                    if (row.get("state") or "") == "taken"
+        if not taken:
+            actions.append(_boot_form(user, serial))
+        actions += (_state_forms(user, row, back) if taken
                     else _state_forms(user, row, back)[:1])
     if _may(user, "may_change_proxy") and not building:
         actions.append(_change_ip_form(user, serial, back))

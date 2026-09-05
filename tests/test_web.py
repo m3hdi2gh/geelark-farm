@@ -2468,6 +2468,38 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
     assert 'class="quiet live"' in body and ">Boot<" in body
 
 
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_taken_phone_offers_no_boot_until_it_is_released(web, monkeypatch):
+    """Boot starts a phone and takes it in one press, so it belongs to a
+    phone nobody holds. On a taken row it offers to take what is already
+    taken, and the row it would produce is the row it is already on."""
+    _dash(monkeypatch, phones=[{"serial": "1501", "status": "ready",
+                                "state": "taken", "owner": "ali"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert ">Boot<" not in body, "it is already taken"
+    # The three ways being taken ends are still there, so the row is not
+    # simply emptier - it is the right shape for where the phone is.
+    for label in ("Release", "Done", "Failed"):
+        assert f">{label}<" in body, label
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_phone_on_the_shelf_still_offers_boot(web, monkeypatch):
+    """The counterweight: taking a phone by booting it is the whole point
+    of the button, and that is what a shelf row is for."""
+    _dash(monkeypatch, phones=[{"serial": "1500", "status": "ready",
+                                "state": ""}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert ">Boot<" in body
+    assert 'action="/phones/1500/boot"' in body
+
+
 def test_the_dashboard_no_longer_carries_the_service_line(web, monkeypatch):
     """Pausing the service and reading the flags are a settings question,
     not a front-page one; they leave together and come back on a page of
