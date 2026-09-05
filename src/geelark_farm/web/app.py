@@ -899,6 +899,35 @@ class _Handler(BaseHTTPRequestHandler):
                              idem=self._minute_key(user, "add_gpt",
                                                    row["address"].lower()),
                              back="/pools/gpt")
+        if path == "/pools/gpt/edit":
+            # The GPT twin of the Gmail row editor, judged by its own verb
+            # against the rule a pasted row is judged by.
+            address = (field.get("address") or "").strip()
+            return self._act(
+                user, "may_add_gpt", "edit_app",
+                {"address": address,
+                 "new_address": (field.get("new_address") or "").strip(),
+                 "password": field.get("password") or "",
+                 "secret": (field.get("secret") or "").strip()},
+                idem=self._minute_key(user, "edit_app", address),
+                back=_add_back(field, "/pools/gpt"))
+        if path == "/pools/gpt/remove":
+            address = (field.get("address") or "").strip()
+            back = _add_back(field, "/pools/gpt")
+            if field.get("sure") != "1":
+                return self._html(200, pages.confirm_page(
+                    user, title=f"Remove {address} from the pool?",
+                    text=("The row leaves the Gpt tab. Nothing else is "
+                          "touched, and the request keeps the row so it can "
+                          "be put back."),
+                    action="/pools/gpt/remove",
+                    fields={"address": address, "sure": "1", "back": back},
+                    button=f"Yes, remove {address}", back=back))
+            return self._act(user, "may_add_gpt", "remove_app",
+                             {"address": address},
+                             idem=self._minute_key(user, "remove_app",
+                                                   address),
+                             back=back)
         if path == "/pools/gpt/offer":
             address = (field.get("address") or "").strip()
             return self._act(user, "may_add_gpt", "offer_again",
@@ -1437,6 +1466,7 @@ _OPERATOR_POSTS = (
     "/pools/gmail/preview", "/pools/gmail/add",
     "/pools/gmail/edit", "/pools/gmail/remove",
     "/pools/gpt/preview", "/pools/gpt/add",
+    "/pools/gpt/edit", "/pools/gpt/remove",
 )
 
 

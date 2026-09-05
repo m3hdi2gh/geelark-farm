@@ -1484,8 +1484,9 @@ def _add_fold(user: dict, kind: str) -> str:
 #: about what a pool is called or which door adds to it.
 #:
 #: `edit` and `remove` are the endpoints that exist, not the ones that
-#: ought to: only Gmail has both today, and a button that leads nowhere
-#: is worse than no button.
+#: ought to. Both account pools have both; proxies have neither here,
+#: because that pool is the admin's - and a button that leads nowhere is
+#: worse than no button.
 _POOL_KINDS = {
     "gmail": {
         "name": "Gmail", "under": "free in the pool", "one": "address",
@@ -1501,7 +1502,7 @@ _POOL_KINDS = {
         "one": "account",
         "add": "may_add_gpt", "manage": "may_add_gpt",
         "preview": "/pools/gpt/preview",
-        "edit": "", "remove": "",
+        "edit": "/pools/gpt/edit", "remove": "/pools/gpt/remove",
         "how": ("address, password, then the 2fa secret - one account per "
                 "line, tabs or commas between"),
         "columns": ("Address", "Status", "On phone", "Note"),
@@ -1703,7 +1704,8 @@ def _pool_add_box(kind: str, user: dict) -> str:
             f'what it read</span></div></form>')
 
 
-def _pool_row_doors(kind: str, row: dict, user: dict) -> str:
+def _pool_row_doors(kind: str, row: dict, user: dict,
+                    manual_login: bool = False) -> str:
     """Edit and Remove for one row, where those doors exist.
 
     Remove asks first - the confirm page the pool tabs already use - so
@@ -1714,6 +1716,9 @@ def _pool_row_doors(kind: str, row: dict, user: dict) -> str:
     if not address or not meta["manage"] or not _may(user, meta["manage"]):
         return ""
     doors = []
+    if kind == "gpt" and (row.get("state") or "") == "free" \
+            and _may_send(user, manual_login):
+        doors.append(_send_form(user, address))
     if meta["edit"]:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
@@ -1748,16 +1753,20 @@ def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
         f'placeholder="address" autocomplete="off">'
         f'<input name="password" placeholder="password - blank leaves it" '
         f'autocomplete="off" type="password">'
-        f'<input name="secret" placeholder="2fa secret or recovery address" '
-        f'autocomplete="off">'
-        f'<input name="seller" value="{esc(str(row.get("seller") or ""))}" '
-        f'placeholder="seller" autocomplete="off">'
-        f'<button class="go">Save</button>'
-        f'<button type="button" class="quiet" data-shut="1">Cancel</button>'
-        f'</form></td></tr>')
+        + (f'<input name="secret" placeholder="2fa secret or recovery '
+           f'address" autocomplete="off">'
+           f'<input name="seller" value="{esc(str(row.get("seller") or ""))}" '
+           f'placeholder="seller" autocomplete="off">'
+           if kind == "gmail" else
+           '<input name="secret" placeholder="2fa secret - blank for none" '
+           'autocomplete="off">')
+        + '<button class="go">Save</button>'
+        '<button type="button" class="quiet" data-shut="1">Cancel</button>'
+        '</form></td></tr>')
 
 
-def _pool_table(kind: str, rows: list[dict], user: dict) -> str:
+def _pool_table(kind: str, rows: list[dict], user: dict,
+                manual_login: bool = False) -> str:
     meta = _POOL_KINDS[kind]
     head = "".join(f"<th>{esc(c)}</th>" for c in meta["columns"])
     doors = bool(meta["manage"]) and _may(user, meta["manage"])
@@ -1768,7 +1777,7 @@ def _pool_table(kind: str, rows: list[dict], user: dict) -> str:
         drawn = "".join(
             f'<td>{_state_pill(cell) if i == 1 else esc(cell)}</td>'
             for i, cell in enumerate(cells))
-        last = (f"<td>{_pool_row_doors(kind, row, user)}</td>"
+        last = (f"<td>{_pool_row_doors(kind, row, user, manual_login)}</td>"
                 if doors else "")
         lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}">'
                      f'{drawn}{last}</tr>')
@@ -1784,7 +1793,8 @@ def _pool_table(kind: str, rows: list[dict], user: dict) -> str:
             f'Nothing matches that.</td></tr></tbody></table>')
 
 
-def _pool_manager(data: dict, user: dict) -> str:
+def _pool_manager(data: dict, user: dict,
+                  manual_login: bool = False) -> str:
     """One pool, full size, without leaving the page.
 
     Everything a person does to a pool is here: what is in it, a search
@@ -1823,7 +1833,8 @@ def _pool_manager(data: dict, user: dict) -> str:
             f'aria-pressed="true">all</button>{chips}'
             f'<span class="dim mono tally">{_plural(len(rows), "row")}</span>'
             f'</div>'
-            f'<div class="tscroll">{_pool_table(kind, rows, user)}</div>'
+            f'<div class="tscroll">'
+            f'{_pool_table(kind, rows, user, manual_login)}</div>'
             f'</div></section>')
     return f'<div class="ov" id="poolov" hidden>{"".join(sheets)}</div>'
 
@@ -2102,7 +2113,8 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'{_who_and_out(user)}</div>'
             f'<div class="desk"><div class="deskmain">{main}</div>'
             f'<aside class="side">{side}</aside></div>'
-            f'</div>' + _pool_manager(data, user) + _DASH_SCRIPT)
+            f'</div>' + _pool_manager(data, user, manual_login)
+            + _DASH_SCRIPT)
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Instance manager", body, user=user, here="/",

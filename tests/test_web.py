@@ -1198,9 +1198,10 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
     client.login()
     _, _, body = client.request("GET", "/")
     assert body.count("Change IP") == 2, "one per phone, both states"
-    # One send per waiting account, on its own row in the GPT card - the
+    # One send per waiting account, on its own row - once in the GPT
+    # card's queue and once on the same row inside the manager. The
     # tick-and-send list stood in a panel of its own and went with it.
-    assert body.count('name="addresses"') == 1
+    assert body.count('name="addresses"') == 2
     assert "&rarr; phone" in body
     assert "Log in selected" not in body
 
@@ -3581,7 +3582,7 @@ def test_the_manager_holds_every_row_and_opens_shut(web, monkeypatch):
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_a_gmail_row_carries_both_doors_and_a_proxy_row_carries_none(
+def test_both_account_rows_carry_both_doors_and_a_proxy_row_carries_none(
         web, monkeypatch):
     """Only the endpoints that exist are drawn. A button that leads
     nowhere is worse than no button."""
@@ -3594,6 +3595,10 @@ def test_a_gmail_row_carries_both_doors_and_a_proxy_row_carries_none(
     gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
     assert 'action="/pools/gmail/edit"' in gmail
     assert 'action="/pools/gmail/remove"' in gmail
+    gpt = ov[ov.index('data-sheet="gpt"'):ov.index('data-sheet="proxy"')]
+    assert 'action="/pools/gpt/edit"' in gpt
+    assert 'action="/pools/gpt/remove"' in gpt
+    assert 'name="seller"' not in gpt, "a GPT row has no seller to edit"
     proxy = ov[ov.index('data-sheet="proxy"'):]
     assert "/pools/proxy/remove" not in proxy, "proxies are the admin's"
 

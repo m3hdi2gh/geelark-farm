@@ -351,6 +351,65 @@ def test_a_gmail_a_phone_is_behind_is_neither_edited_nor_removed():
     assert g0 in book.gmails._rows
 
 
+def test_a_gpt_row_is_edited_and_judged_like_a_gmail_one():
+    """The GPT pool had no editor and no remove, so the manager could draw
+    neither door for it. Same shape as the Gmail pair, same rule."""
+    from tests.test_builder import SECRET
+
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    address = a0.values["Address"]
+    a0.values.update({"Password": "old", "2FA Secret": ""})
+
+    status, said, detail = verbs.edit_app(
+        book, None, None, {"address": address,
+                           "new_address": "new@example.com",
+                           "password": "fresh", "secret": SECRET,
+                           "by": "mehdi"}, None)
+    assert status == "done", said
+    assert a0.values["Address"] == "new@example.com"
+    assert a0.values["Password"] == "fresh"
+    assert a0.values["2FA Secret"] == SECRET
+    assert "Address" in detail["changed"]
+
+    status, said, _ = verbs.edit_app(
+        book, None, None, {"address": "new@example.com",
+                           "new_address": "new@example.com",
+                           "password": "fresh", "secret": "nope!!",
+                           "by": "mehdi"}, None)
+    assert status == "refused", said
+    assert a0.values["2FA Secret"] == SECRET, "the cell is untouched"
+
+
+def test_a_gpt_row_a_phone_is_behind_is_neither_edited_nor_removed():
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    address = a0.values["Address"]
+    book.apps.claim()
+
+    for verb in (verbs.edit_app, verbs.remove_app):
+        status, said, _ = verb(book, None, None,
+                               {"address": address, "secret": "",
+                                "by": "mehdi"}, None)
+        assert status == "refused" and "a phone is behind it" in said
+    assert a0 in book.apps._rows
+
+
+def test_removing_a_gpt_row_keeps_what_it_removed():
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    address = a0.values["Address"]
+    a0.values["Password"] = "pw"
+
+    status, said, detail = verbs.remove_app(
+        book, None, None, {"address": address, "by": "mehdi"}, None)
+
+    assert status == "done" and "removed from the pool" in said
+    assert a0 not in book.apps._rows
+    assert detail["removed"]["Address"] == address
+    assert detail["removed"]["Password"] == "pw"
+
+
 def test_removing_a_gmail_keeps_the_row_it_removed():
     book = make_book(gmails=1)
     g0 = book.gmails._rows[0]
@@ -797,7 +856,7 @@ def test_the_stock_verbs_answer_in_the_request_that_asked():
     from geelark_farm import verbs
 
     for verb in ("add_gmails", "add_gpt", "offer_again", "edit_gmail",
-                 "remove_gmail", "build_by_hand",
+                 "remove_gmail", "edit_app", "remove_app", "build_by_hand",
                  # These two joined when the person channel left the tab:
                  # Take, Done, Failed and Release are the buttons an
                  # operator presses all day, and they were the last ones

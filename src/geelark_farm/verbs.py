@@ -517,6 +517,81 @@ def remove_gmail(book, ledger, settings, payload, client):
             {"removed": kept})
 
 
+def _app_row(book, payload):
+    """The GPT row this command names, or the refusal that says why not.
+
+    Same rule as `_gmail_row`, for the same reason: a row a phone is
+    behind, or one already delivered, is not stock to edit or tidy away.
+    """
+    address = (payload.get("address") or "").strip()
+    resource = book.apps.find(address)
+    if resource is None:
+        return None, ("failed", f"{address or '?'} is not in the "
+                                f"{book.apps.tab} tab", None)
+    status = book.apps.status_of(resource)
+    if status in (book.apps.claimed_status, book.apps.spent_status,
+                  book.apps.retired_status):
+        return None, ("refused", f"{address} is {status} - a phone is behind "
+                                 f"it", None)
+    return resource, None
+
+
+def edit_app(book, ledger, settings, payload, client):
+    """The GPT row editor - `edit_gmail`, for the other account pool.
+
+    Judged before anything is written, the way a pasted row is: an address
+    that is not one, or a secret that is not base32, is refused here rather
+    than discovered on a phone. A blank secret is a real thing this pool
+    carries - an account with no second factor - and stays blank.
+    """
+    from .accounts import AccountError, Credentials, normalize_totp_secret
+
+    resource, refused = _app_row(book, payload)
+    if refused:
+        return refused
+    was = dict(resource.values)
+    secret = str(payload.get("secret") or "").strip()
+    address = str(payload.get("new_address") or "").strip() or str(
+        payload.get("address") or "").strip()
+    try:
+        Credentials(
+            email=address,
+            password=str(payload.get("password") or ""),
+            totp_secret=normalize_totp_secret(secret),
+        ).validate(what="app account:")
+    except AccountError as exc:
+        return "refused", str(exc), None
+    cells = {"Address": address,
+             "Password": str(payload.get("password") or ""),
+             "2FA Secret": secret}
+    problem = book.apps.edit_cells(resource, **cells)
+    if problem:
+        book.apps.edit_cells(resource, **{name: str(was.get(name, ""))
+                                          for name in cells})
+        return "refused", problem, None
+    changed = [name for name, value in cells.items()
+               if str(was.get(name, "")) != value]
+    return ("done", f"{address} edited by {_by(payload)}"
+                    + (f" ({', '.join(changed)})" if changed
+                       else " - nothing was different"),
+            {"changed": changed})
+
+
+def remove_app(book, ledger, settings, payload, client):
+    """Out of the pool. The row rides in the detail so Requests can put
+    it back, the way a removed Gmail or proxy can."""
+    resource, refused = _app_row(book, payload)
+    if refused:
+        return refused
+    address = str(resource.values.get("Address") or "")
+    kept = {name: str(resource.values.get(name) or "")
+            for name in ("Address", "Password", "2FA Secret",
+                         book.apps.EMAIL_CODE_COLUMN)}
+    book.apps.delete_row(resource)
+    return ("done", f"{address} removed from the pool by {_by(payload)}",
+            {"removed": kept})
+
+
 def _panel_row(settings, ref: str):
     """The row the panel named, read from the store.
 
@@ -966,6 +1041,8 @@ VERBS = {
     "build_by_hand": build_by_hand,
     "edit_gmail": edit_gmail,
     "remove_gmail": remove_gmail,
+    "edit_app": edit_app,
+    "remove_app": remove_app,
     "add_gpt": add_gpt,
     "add_panel_account": add_panel_account,
     "withdraw_panel_account": withdraw_panel_account,
