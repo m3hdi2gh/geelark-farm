@@ -153,6 +153,8 @@ class Context(router.Context):
     captcha_tries: int = 0
     #: The tick box is tapped once per flow; tapping it again unticks it.
     captcha_ticked: bool = False
+    #: Whether a grid this cannot place has already been saved once.
+    captcha_unplaced: bool = False
 
 
 # --------------------------------------------------------------- primitives
@@ -243,9 +245,19 @@ _CAPTCHA_NEEDLES = ("confirm you're not a robot", "i'm not a robot",
 _GRID_VERIFY = ("Verify", "Skip", "Next")
 
 
-#: The line that closes the challenge's heading. Everything between the
-#: "Select all …" line and this one is the name of the thing to find.
-_GRID_TAIL = "click verify"
+#: The lines that close the challenge's heading. Everything between the
+#: "Select all …" line and one of these is the name of the thing to find.
+#: Two wordings, one per grid shape: the 3x3 that refreshes says "click
+#: verify once there are none left", the one-shot 4x4 says "if there are
+#: none, click skip". Matching only the first read the whole rest of the
+#: page into the question and left the heading's real foot unfound, which
+#: is what put the grid rectangle out of reach (2026-09-05, phone 1793).
+_GRID_TAIL = ("click verify", "click skip", "if there are none")
+
+
+def _is_tail(text: str) -> bool:
+    low = (text or "").lower()
+    return any(needle in low for needle in _GRID_TAIL)
 
 
 def _grid_instruction(ctx: Context) -> str:
@@ -267,7 +279,7 @@ def _grid_instruction(ctx: Context) -> str:
         return ""
     words = [labels[start]]
     for text in labels[start + 1:start + 4]:
-        if not text.strip() or _GRID_TAIL in text.lower():
+        if not text.strip() or _is_tail(text):
             break
         words.append(text.strip())
     return " ".join(words)
@@ -305,6 +317,22 @@ def _tile_points(rect: tuple[int, int, int, int], size: int,
     return points
 
 
+def _button_row(ctx: Context, *, below: int) -> list[int]:
+    """The challenge's own button row - the first real button under the
+    heading - which is where the tiles stop.
+
+    Found by class and position rather than by wording. Reading it off a
+    label matched `Verify` against the page's `Verify it's you` heading,
+    which sits *above* the grid: the floor came out higher than the
+    ceiling, every grid was called unplaceable, and seven of them went by
+    untouched before the phone gave up (2026-09-05, phone 1793).
+    """
+    tops = [box[1] for el in ctx.elements
+            if el.clickable and "button" in (el.cls or "").lower()
+            and (box := _box(el)) and box[1] > below]
+    return [0, min(tops)] if tops else []
+
+
 def _box(el) -> list[int]:
     """An element's bounds as [left, top, right, bottom], or []."""
     nums = [int(n) for n in re.findall(r"-?\d+", el.bounds if el else "")]
@@ -338,12 +366,13 @@ def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
         return None
     after = labels[[el for el, _ in labels].index(ask) + 1:]
     subject = next((el for el, t in after if t.strip()), None)
-    tail = next((el for el, t in after if _GRID_TAIL in t), None)
-    buttons = screen.find_first(ctx.elements, _GRID_VERIFY)
+    tail = next((el for el, t in after if _is_tail(t)), None)
     side = _box(subject)
     head = _box(tail) or _box(subject)
-    floor = _box(buttons)
-    if not side or not head or not floor:
+    if not side or not head:
+        return None
+    floor = _button_row(ctx, below=head[3])
+    if not floor:
         return None
     left, right = side[0], side[2]
     top = head[3]
@@ -395,6 +424,19 @@ def _grab_grid_b64(ctx: Context,
     return base64.b64encode(data).decode("ascii")
 
 
+#: How many visits the captcha screen gets. Mostly spent waiting, which
+#: is why it is generous; `act_captcha` gives up one short of it, so the
+#: build ends on `captcha_shown` and never on the router's own phrase.
+CAPTCHA_VISITS = 14
+
+
+def _captcha_gave_up(ctx: Context, said: str) -> Outcome:
+    path = ctx.save("captcha_shown")
+    return Outcome("fatal", "captcha_shown",
+                   f"{said}; {FATAL_ADVICE['captcha_shown']}",
+                   artifacts=[path] if path else [])
+
+
 def _captcha_present(ctx: Context) -> bool:
     return bool(getattr(ctx, "solver_key", "")) and ctx.has(*_CAPTCHA_NEEDLES)
 
@@ -414,11 +456,16 @@ def act_captcha(ctx: Context) -> Outcome | None:
     # not an attempt. Three attempts is what the operator asked for, and
     # three attempts is what this is - not three glances at the page.
     if ctx.captcha_tries >= ctx.captcha_max:
-        path = ctx.save("captcha_shown")
-        return Outcome("fatal", "captcha_shown",
-                       f"the captcha was not solved in {ctx.captcha_max} "
-                       f"tries; {FATAL_ADVICE['captcha_shown']}",
-                       artifacts=[path] if path else [])
+        return _captcha_gave_up(
+            ctx, f"the captcha was not solved in {ctx.captcha_max} tries")
+    # The other way out. Most visits here are waiting - for reCAPTCHA to
+    # decide, or on a grid this cannot place - and waiting was unbounded:
+    # the screen simply ran out of visits and the router reported
+    # `stuck_on_captcha`, a phrase about the tool rather than the answer
+    # the operator asked for (2026-09-05, phones 1793 and 1795). One visit
+    # short of the budget, this says the same thing the limit says.
+    if ctx.seen.get("captcha", 0) >= CAPTCHA_VISITS - 1:
+        return _captcha_gave_up(ctx, "the captcha never cleared")
     instruction = _grid_instruction(ctx)
     if not instruction:
         # The tick box. Tapped once and once only: a second tap unticks
@@ -440,9 +487,12 @@ def act_captcha(ctx: Context) -> Outcome | None:
         return None
     rect = _grid_rect(ctx)
     if rect is None:
-        # A grid we cannot place. Saved for the record, left to the limit -
-        # never a tap on coordinates guessed from nothing.
-        ctx.save("captcha_grid_unplaced")
+        # A grid we cannot place. Never a tap on coordinates guessed from
+        # nothing - but saved once, not once a visit: seven copies of one
+        # screen is the same evidence seven times (2026-09-05, phone 1793).
+        if not ctx.captcha_unplaced:
+            ctx.captcha_unplaced = True
+            ctx.save("captcha_grid_unplaced")
         return None
     image = _grab_grid_b64(ctx, rect)
     if image is None:
@@ -731,7 +781,8 @@ SCREENS: list[Screen] = [
     # only reached at all when a solver key is set (else `fatal` above has
     # already claimed it). Its own visit budget is one past the attempt
     # limit, so the act's own guard is what ends it, with the right word.
-    Screen("captcha", _captcha_present, act_captcha, max_visits=14),
+    Screen("captcha", _captcha_present, act_captcha,
+           max_visits=CAPTCHA_VISITS),
 
     # Ranked above every screen that acts, and below fatal only because a page
     # that says the sign-in cannot proceed says so whether or not it is still

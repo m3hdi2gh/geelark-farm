@@ -172,3 +172,54 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     assert g.act_captcha(c) is None
     # Tile 8 of a 3x3 is the bottom-right; of a 4x4 it would be mid-left.
     assert tapped == [(565, 679)]
+
+
+def _skip_grid_ctx(**kw):
+    """The other grid shape, off a real phone (2026-09-05, build 1793): a
+    one-shot 4x4 whose heading ends "If there are none, click skip"."""
+    import pathlib
+    xml = pathlib.Path("tests/fixtures/google-captcha-grid-skip.xml")
+    els = screen.parse(xml.read_text(encoding="utf-8", errors="replace"))
+    return ctx(els, **kw), els
+
+
+def test_the_grid_is_placed_under_the_pages_own_verify_it_is_you_heading():
+    """The floor of the grid is the challenge's button row, found by class
+    and position. Found by wording, "Verify" matched the page's own
+    `Verify it's you` heading - which sits above the grid - so the floor
+    came out higher than the ceiling and every grid was called unplaceable.
+    Seven went by untouched before the phone gave up (build 1793)."""
+    c, _ = _skip_grid_ctx()
+    assert g._grid_rect(c) == (84, 198, 662, 776)
+
+
+def test_the_heading_ends_at_click_skip_as_well_as_at_click_verify():
+    """Two wordings, one per grid shape. Matching only "click verify" read
+    the rest of the page into the question."""
+    c, _ = _skip_grid_ctx()
+    assert g._grid_instruction(c) == "Select all squares with stairs"
+    from geelark_farm import capsolver
+
+    assert capsolver.question_id(g._grid_instruction(c)) == "/m/01lynh"
+
+
+def test_a_grid_that_cannot_be_placed_is_saved_once_and_not_once_a_visit():
+    saved = []
+    c, _ = _grid_ctx()
+    c.save = lambda name: saved.append(name)
+    c.elements = [el("Select all images with", "[84,89][314,118]"),
+                  el("crosswalks", "[84,115][662,171]")]
+    for _ in range(4):
+        assert g.act_captcha(c) is None
+    assert saved == ["captcha_grid_unplaced"]
+
+
+def test_waiting_ends_in_the_operators_captcha_error_not_the_routers_phrase():
+    """A captcha that never clears used to run the screen out of visits, and
+    the build was reported `stuck_on_captcha` - a phrase about the tool, not
+    the answer that was asked for (builds 1793 and 1795)."""
+    c, _ = _skip_grid_ctx(seen={"captcha": g.CAPTCHA_VISITS - 1})
+    out = g.act_captcha(c)
+    assert out is not None and out.kind == "fatal"
+    assert out.reason == "captcha_shown"
+    assert "never cleared" in out.detail
