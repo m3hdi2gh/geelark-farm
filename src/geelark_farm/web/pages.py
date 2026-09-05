@@ -799,6 +799,13 @@ def page(title: str, body: str, *, user: dict | None = None,
     tag = (f'<noscript><meta http-equiv="refresh" content="{int(refresh)}">'
            f'</noscript><meta name="gf-refresh" content="{int(refresh)}">'
            if refresh else "")
+    # Which build of the console drew this page. The script compares it on
+    # every swap and reloads outright when it changes, so a deploy reaches
+    # an open tab by itself - a page that swaps its body forever never
+    # fetches a new script otherwise (2026-09-06).
+    from ..config import revision
+
+    tag += f'<meta name="gf-rev" content="{esc(revision())}">'
     if user is not None:
         body = _alert_strip(user) + body
     # `alone` is what widens the page when nothing is beside it - the
@@ -1810,6 +1817,12 @@ _DASH_SCRIPT = """
   function swapMain(doc){
     var fresh = doc.querySelector('main'), here = document.querySelector('main');
     if (!fresh || !here) { location.reload(); return; }
+    // A newer console than this page's: take it whole, script and all.
+    var mine = document.querySelector('meta[name="gf-rev"]');
+    var theirs = doc.querySelector('meta[name="gf-rev"]');
+    if (mine && theirs && mine.content !== theirs.content) {
+      location.reload(); return;
+    }
     var kept = openKind;
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
@@ -2769,7 +2782,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Instance manager", body, user=quiet, here="/",
-                refresh=10 if busy else 30)
+                refresh=10 if busy else 15)
 
 
 def live_page(serial: str, user: dict, said: str = "",

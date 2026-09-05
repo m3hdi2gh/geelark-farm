@@ -3867,7 +3867,10 @@ def test_the_dashboard_keeps_itself_current_even_when_idle(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert '<meta name="gf-refresh" content="30">' in body
+    assert '<meta name="gf-refresh" content="15">' in body
+    # And which build drew it, so a deploy reaches an open tab by itself.
+    assert 'name="gf-rev" content="' in body
+    assert 'meta[name="gf-rev"]' in body[body.index("<script>"):]
 
     _dash(monkeypatch, phones=[{"serial": "1503", "status": "building",
                                 "state": ""}])
