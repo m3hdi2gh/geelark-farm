@@ -383,6 +383,9 @@ tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
  z-index:60;box-shadow:0 12px 34px rgba(0,0,0,.5);
  transition:opacity .4s,transform .4s}}
 .said.toast.gone{{opacity:0;transform:translate(-50%,8px)}}
+.said.toast form{{display:inline;margin-left:10px}}
+.said.toast form button{{padding:3px 10px;font-size:12px;color:var(--blue);
+ border-color:#22406e}}
 .hint{{color:var(--dim);font-size:12px;line-height:1.55}}
 /* ---- forms */
 input,textarea,select{{background:var(--panel2);border:1px solid #2c3a52;
@@ -862,6 +865,10 @@ _DASH_SAID = {
     #: asked for it - there is nothing left for a
     #: pass to do.
     "done": "Done - it is already in.",
+    "removed-gmail": "Removed - the row is out of the Gmail pool.",
+    "removed-gpt": "Removed - the row is out of the GPT pool.",
+    "gone": "That cannot be undone any more - the request that removed it "
+            "kept nothing to put back.",
     "queued": "Queued - the next pass (within ~30s) carries it out; watch "
               "Requests.",
     "refused": "You may not do that - ask an admin for the permission.",
@@ -1546,8 +1553,10 @@ _DASH_SCRIPT = """
           .replace(/[?&]$/, '');
         history.replaceState(null, '', location.pathname + clean + location.hash);
       }
-      setTimeout(function(){ said.classList.add('gone'); }, 3800);
-      setTimeout(function(){ said.remove(); }, 4400);
+      // One with a button in it - Undo - waits long enough to be pressed.
+      var stay = said.querySelector('form') ? 9000 : 3800;
+      setTimeout(function(){ said.classList.add('gone'); }, stay);
+      setTimeout(function(){ said.remove(); }, stay + 600);
     }
 
     // The credentials for a brand-new address, opened the moment one is
@@ -1951,7 +1960,7 @@ _POOL_KINDS = {
     "gmail": {
         "name": "Gmail", "under": "free in the pool", "one": "address",
         "add": "may_add_gmail", "manage": "may_add_gmail",
-        "preview": "/pools/gmail/preview",
+        "preview": "/pools/gmail/preview", "free": "/pools/gmail/free",
         "edit": "/pools/gmail/edit", "remove": "/pools/gmail/remove",
         "how": ("address, password, then the 2fa secret or the recovery "
                 "address - one account per line, tabs or commas between"),
@@ -1961,7 +1970,7 @@ _POOL_KINDS = {
         "name": "GPT accounts", "under": "waiting for a phone",
         "one": "account",
         "add": "may_add_gpt", "manage": "may_add_gpt",
-        "preview": "/pools/gpt/preview",
+        "preview": "/pools/gpt/preview", "free": "/pools/gpt/free",
         "edit": "/pools/gpt/edit", "remove": "/pools/gpt/remove",
         "how": ("address, password, then the 2fa secret - one account per "
                 "line, tabs or commas between"),
@@ -1970,7 +1979,7 @@ _POOL_KINDS = {
     "proxy": {
         "name": "Proxies", "under": "free IPs", "one": "IP",
         "add": "", "manage": "",
-        "preview": "/pools/proxy/preview",
+        "preview": "/pools/proxy/preview", "free": "",
         "edit": "", "remove": "/pools/proxy/remove",
         "how": "host:port:username:password - one exit per line",
         "columns": ("Name", "Status", "Host", "Exit IP", "Used", "On phone"),
@@ -2235,9 +2244,19 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     if not address or not meta["manage"] or not _may(user, meta["manage"]):
         return ""
     doors = []
-    if kind == "gpt" and (row.get("state") or "") != "on a phone" \
+    state = str(row.get("state") or "")
+    if kind == "gpt" and state != "on a phone" \
             and _may_send(user, manual_login):
         doors.append(_send_form(user, address))
+    # A row a run set aside gets Free: one press, back on the shelf, and
+    # nothing else on the row touched (the operator, 2026-09-06).
+    if meta.get("free") and state not in ("free", "on a phone"):
+        doors.append(
+            f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
+            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="/">'
+            f'<button class="quiet ok" title="back on the shelf, as it is">'
+            f'Free</button></form>')
     if meta["edit"]:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
@@ -2701,7 +2720,7 @@ def dashboard(data: dict, user: dict, said: str = "",
              f'With me</button></span></div>')
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
-    main = (_said(said, _DASH_SAID) + warning + tools
+    main = (_said(said, _DASH_SAID, user) + warning + tools
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
             + _build_card(data, user))
@@ -3558,13 +3577,22 @@ def _csrf(user: dict) -> str:
             f'value="{esc(user.get("csrf", ""))}">')
 
 
-def _said(said: str, table: dict) -> str:
+def _said(said: str, table: dict, user: dict | None = None) -> str:
     """The banner for a ?said= token. `queued:241` names the request the
-    press became, and the banner links to it."""
+    press became, and the banner links to it. `removed-gmail:241` names
+    the remove, and the banner carries Undo - which puts the row back from
+    what that request kept."""
     word, _, req = (said or "").partition(":")
     note = table.get(word, "")
     if not note:
         return ""
+    if word.startswith("removed-") and req.isdigit() and user is not None:
+        kind = word[len("removed-"):]
+        return (f'<p class="said toast undo">{esc(note)} '
+                f'<form method="post" action="/pools/{esc(kind)}/undo" '
+                f'class="inline">{_csrf(user)}'
+                f'<input type="hidden" name="req" value="{req}">'
+                f'<button class="quiet">Undo</button></form></p>')
     # `toast`: the script moves it to the corner and lets it go after a
     # few seconds, and takes `?said=` off the address so a refresh does
     # not say it again. Without the script it is the banner it always was.

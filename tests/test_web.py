@@ -3796,6 +3796,69 @@ def test_a_building_row_can_be_called_off(web, monkeypatch):
     assert status == 303 and dict(headers)["Location"].startswith("/?said=")
 
 
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_remove_can_be_undone_from_the_toast(web, monkeypatch):
+    """A remove says "removed" and names the pool; the toast for it carries
+    Undo, and Undo puts the row back from what the request kept - through
+    the pool's own add verb, judged the way a paste is."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 41)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/remove",
+        _form(csrf=client.csrf(), address="free@gmail.com", sure="1",
+              back="/"))
+    assert status == 303
+    # Queued rather than run here (runs_inline is off), so "queued"; the
+    # word only changes when the verb answered in the request.
+    assert dict(headers)["Location"].startswith("/?said=queued:41")
+
+    _, _, body = client.request("GET", "/?said=removed-gmail:41")
+    toast = body[body.index('class="said toast undo"'):]
+    toast = toast[:toast.index("</p>")]
+    assert 'action="/pools/gmail/undo"' in toast
+    assert 'name="req" value="41"' in toast and ">Undo<" in toast
+
+    monkeypatch.setattr(actions_mod, "one", lambda s, i: {
+        "id": i, "verb": "remove_gmail", "status": "done", "result": "",
+        "requested_by": 7,
+        "detail": {"removed": {"Address": "free@gmail.com", "Password": "pw",
+                               "Secret": "back@x.com", "Seller": "dalir",
+                               "Purchase Date": "2026-09-01"}}})
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/undo", _form(csrf=client.csrf(), req="41"))
+    assert status == 303
+    assert got[-1]["verb"] == "add_gmails"
+    row = got[-1]["payload"]["rows"][0]
+    assert row["address"] == "free@gmail.com" and row["password"] == "pw"
+    assert row["recovery"] == "back@x.com" and row["secret"] == ""
+    assert got[-1]["payload"]["seller"] == "dalir"
+    assert got[-1]["idem_key"] == "undo-41"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_undo_puts_back_only_what_a_remove_kept(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: pytest.fail("nothing to put back"))
+    monkeypatch.setattr(actions_mod, "one", lambda s, i: {
+        "id": i, "verb": "edit_gmail", "status": "done", "result": "",
+        "requested_by": 7, "detail": {"changed": ["Seller"]}})
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/undo", _form(csrf=client.csrf(), req="41"))
+    assert status == 303 and dict(headers)["Location"] == "/?said=gone"
+
+
 def test_the_dashboard_keeps_itself_current_even_when_idle(web, monkeypatch):
     """A build that starts after the page was opened must show up without
     a hand on F5: ten seconds while building, thirty otherwise."""
@@ -3824,3 +3887,31 @@ def test_the_tabs_cross_is_not_an_address(web, monkeypatch):
     row = row[:row.index("</tr>")]
     assert "✗" not in row
     assert "no Gmail on it" in row
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_set_aside_row_carries_free_and_a_free_one_does_not(web, monkeypatch):
+    _dash(monkeypatch, pool_rows={
+        "gmail": [{"id": 1, "address": "stuck@gmail.com",
+                   "status": "captcha_shown", "seller": "", "serial": "",
+                   "note": "", "error": None, "state": "captcha_shown"},
+                  {"id": 2, "address": "free@gmail.com", "status": "",
+                   "seller": "", "serial": "", "note": "", "error": None,
+                   "state": "free"},
+                  {"id": 3, "address": "busy@gmail.com", "status": "in_use",
+                   "seller": "", "serial": "1500", "note": "", "error": None,
+                   "state": "on a phone"}],
+        "gpt": [], "proxy": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    ov = body[body.index('id="poolov"'):]
+
+    def doors(address):
+        start = ov.index(f'<td>{address}</td>')
+        return ov[start:ov.index("</tr>", start)]
+
+    assert 'action="/pools/gmail/free"' in doors("stuck@gmail.com")
+    assert ">Free<" in doors("stuck@gmail.com")
+    assert 'action="/pools/gmail/free"' not in doors("free@gmail.com")
+    assert 'action="/pools/gmail/free"' not in doors("busy@gmail.com")

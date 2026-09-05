@@ -929,3 +929,34 @@ def test_a_named_phone_is_the_only_one_offered_to_the_account(monkeypatch):
                            "serial": "1999", "by": "mehdi"},
         client=object(), launch=launched.append)
     assert status == "refused" and "1999" in said
+
+
+def test_free_puts_a_set_aside_row_back_as_it_is():
+    """One press where the editor was three, and nothing else on the row
+    is touched - the editor rewrites every cell it shows."""
+    book = make_book(gmails=1)
+    g0 = book.gmails._rows[0]
+    address = g0.values["Address"]
+    book.gmails.set_aside(g0, reason="captcha_shown", note="Google challenged")
+    g0.values["Status"] = "captcha_shown"
+    password = g0.values.get("Password")
+
+    status, said, _ = verbs.free_gmail(
+        book, None, None, {"address": address, "by": "mehdi"}, None)
+    assert status == "done" and "back on the shelf" in said
+    assert book.gmails.status_of(g0) == ""
+    assert g0.values.get("Password") == password
+
+    status, said, _ = verbs.free_gmail(
+        book, None, None, {"address": address, "by": "mehdi"}, None)
+    assert status == "done" and "already free" in said
+
+
+def test_free_refuses_a_row_a_phone_is_behind():
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    address = a0.values["Address"]
+    book.apps.claim()
+    status, said, _ = verbs.free_app(
+        book, None, None, {"address": address, "by": "mehdi"}, None)
+    assert status == "refused" and "a phone is behind it" in said

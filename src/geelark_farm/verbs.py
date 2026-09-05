@@ -542,6 +542,34 @@ def _restate(pool, resource, payload) -> list[str]:
     return [pool.status_column]
 
 
+def free_gmail(book, ledger, settings, payload, client):
+    """"Free": a row a run set aside goes back on the shelf, as it is.
+
+    One press where the editor was three - open, choose free, save - and
+    nothing else on the row is touched, which the editor could not promise
+    (it rewrites every cell it shows). A row a phone is behind is refused
+    the way it is everywhere else (the operator, 2026-09-06).
+    """
+    resource, refused = _gmail_row(book, payload)
+    if refused:
+        return refused
+    if book.gmails.status_of(resource) == "":
+        return "done", f"{payload.get('address')} is already free", None
+    book.gmails.release(resource, note=f"Put back on the shelf by {_by(payload)}.")
+    return "done", f"{payload.get('address')} is back on the shelf", None
+
+
+def free_app(book, ledger, settings, payload, client):
+    """`free_gmail`, for the GPT pool."""
+    resource, refused = _app_row(book, payload)
+    if refused:
+        return refused
+    if book.apps.status_of(resource) == "":
+        return "done", f"{payload.get('address')} is already free", None
+    book.apps.release(resource, note=f"Put back on the shelf by {_by(payload)}.")
+    return "done", f"{payload.get('address')} is back on the shelf", None
+
+
 def remove_gmail(book, ledger, settings, payload, client):
     """Out of the pool. The row it removed rides in the detail, so
     Requests can put it back the way a removed proxy can."""
@@ -1084,6 +1112,8 @@ VERBS = {
     "remove_gmail": remove_gmail,
     "edit_app": edit_app,
     "remove_app": remove_app,
+    "free_gmail": free_gmail,
+    "free_app": free_app,
     "add_gpt": add_gpt,
     "add_panel_account": add_panel_account,
     "withdraw_panel_account": withdraw_panel_account,

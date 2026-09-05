@@ -455,7 +455,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -------------------------------------------------------------- pools
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
-             *, idem: str, back: str) -> None:
+             *, idem: str, back: str, said_word: str = "done") -> None:
         """Queue one command, or record that it was refused.
 
         The person's name rides in the payload so the pass can write it
@@ -498,7 +498,7 @@ class _Handler(BaseHTTPRequestHandler):
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
                                     requested_by=user["id"], idem_key=idem)
         if self._ran_it_now(verb, payload, req):
-            return self._redirect(_said_url(back, f"done:{req}"))
+            return self._redirect(_said_url(back, f"{said_word}:{req}"))
         self._redirect(_said_url(back, f"queued:{req}"))
 
     def _ran_it_now(self, verb: str, payload: dict, req: int) -> bool:
@@ -532,6 +532,53 @@ class _Handler(BaseHTTPRequestHandler):
             # was queued would be a lie in the other direction.
             log.warning("%s ran but could not be settled (%s)", verb, exc)
         return True
+
+    def _undo_remove(self, user: dict, kind: str, field: dict) -> None:
+        """Put back the row a remove took out, from what that request kept.
+
+        A remove records the cells it removed in its detail - it always
+        has, so Requests could put a row back by hand. This is the same
+        thing pressed from the toast: the request is read, its cells
+        become one row for the pool's own add verb, and the add runs the
+        way a paste would, judged by the same reader. Nothing the remove
+        did not keep can come back, and nothing that is not a remove of
+        this person's - or an admin's view of one - is undone.
+        """
+        from ..store import actions as store_actions
+
+        want = {"gmail": ("remove_gmail", "may_add_gmail", "add_gmails"),
+                "gpt": ("remove_app", "may_add_gpt", "add_gpt")}.get(kind)
+        req = str(field.get("req") or "").strip()
+        if want is None or not req.isdigit():
+            return self._redirect("/?said=none")
+        verb, permission, add_verb = want
+        try:
+            row = store_actions.one(self.settings, int(req))
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("undo: could not read request %s (%s)", req, exc)
+            row = None
+        kept = ((row or {}).get("detail") or {}).get("removed") or {}
+        if (row is None or row.get("verb") != verb
+                or row.get("status") != "done" or not kept.get("Address")):
+            return self._redirect("/?said=gone")
+        if user.get("role") != "admin" and row.get("requested_by") != user["id"]:
+            return self._redirect("/?said=refused")
+        secret = str(kept.get("Secret") or kept.get("2FA Secret") or "").strip()
+        if kind == "gmail":
+            payload = {"rows": [{"address": kept["Address"],
+                                 "password": kept.get("Password") or "",
+                                 "secret": "" if "@" in secret else secret,
+                                 "recovery": secret if "@" in secret else ""}],
+                       "seller": str(kept.get("Seller") or "").strip()}
+        else:
+            payload = {"rows": [{"address": kept["Address"],
+                                 "password": kept.get("Password") or "",
+                                 "secret": secret,
+                                 "email_code_only": str(
+                                     kept.get("Email code") or ""
+                                 ).strip().upper() == "TRUE"}]}
+        return self._act(user, permission, add_verb, payload,
+                         idem=f"undo-{req}", back="/")
 
     def _login_accounts(self, user: dict, addresses: list,
                         back: str = "/", serial: str = "") -> None:
@@ -747,10 +794,21 @@ class _Handler(BaseHTTPRequestHandler):
                     fields={"address": address, "sure": "1", "back": back},
                     button=f"Yes, remove {address}", back=back))
             return self._act(user, "may_add_gmail", "remove_gmail",
-                             {"address": address},
+                             {"address": address}, said_word="removed-gmail",
                              idem=self._minute_key(user, "remove_gmail",
                                                    address),
                              back=back)
+        if path in ("/pools/gmail/undo", "/pools/gpt/undo"):
+            return self._undo_remove(user, path.split("/")[2], field)
+        if path in ("/pools/gmail/free", "/pools/gpt/free"):
+            kind = path.split("/")[2]
+            permission, verb = (("may_add_gmail", "free_gmail")
+                                if kind == "gmail" else
+                                ("may_add_gpt", "free_app"))
+            address = (field.get("address") or "").strip()
+            return self._act(user, permission, verb, {"address": address},
+                             idem=self._minute_key(user, verb, address),
+                             back=_add_back(field, f"/pools/{kind}"))
         if path == "/pools/proxy/preview":
             from ..store import validate
 
@@ -926,7 +984,7 @@ class _Handler(BaseHTTPRequestHandler):
                     fields={"address": address, "sure": "1", "back": back},
                     button=f"Yes, remove {address}", back=back))
             return self._act(user, "may_add_gpt", "remove_app",
-                             {"address": address},
+                             {"address": address}, said_word="removed-gpt",
                              idem=self._minute_key(user, "remove_app",
                                                    address),
                              back=back)
@@ -1466,9 +1524,11 @@ def _operator_may_get(path: str) -> bool:
 _OPERATOR_POSTS = (
     "/logout", "/password", "/accounts/login", "/phones/build",
     "/pools/gmail/preview", "/pools/gmail/add",
-    "/pools/gmail/edit", "/pools/gmail/remove",
+    "/pools/gmail/edit", "/pools/gmail/remove", "/pools/gmail/undo",
+    "/pools/gmail/free",
     "/pools/gpt/preview", "/pools/gpt/add",
-    "/pools/gpt/edit", "/pools/gpt/remove",
+    "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
+    "/pools/gpt/free",
 )
 
 
