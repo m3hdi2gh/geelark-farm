@@ -188,22 +188,30 @@ def _upsert_phones(cur, book) -> list[str]:
             continue
         live.append(serial)
         app_installed = _APP_MARKS.get((cells.get("App") or "").strip())
+        # `state` and `tries` are named on the way in and never on the way
+        # back: a row born here takes whatever the tab said once, and from
+        # then on the person channel is this table's (C3, 2026-09-05).
+        #
+        # This is the `owner_id` rule, applied to the two cells a human
+        # actually writes. The mirror runs every thirty seconds; one that
+        # carried these would undo somebody's Done half a minute after
+        # they pressed it, with no error and no event - which is the worst
+        # kind of bug this codebase knows how to make.
         cur.execute(
             "INSERT INTO phones AS p (serial, status, state, app_installed,"
             " gmail, app_account, proxy_name, tries, note)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (serial) WHERE done_at IS NULL"
             " DO UPDATE SET status = EXCLUDED.status,"
-            "  state = EXCLUDED.state,"
             "  app_installed = EXCLUDED.app_installed,"
             "  gmail = EXCLUDED.gmail, app_account = EXCLUDED.app_account,"
-            "  proxy_name = EXCLUDED.proxy_name, tries = EXCLUDED.tries,"
+            "  proxy_name = EXCLUDED.proxy_name,"
             "  note = EXCLUDED.note,"
-            "  updated_at = CASE WHEN (p.status, p.state, p.app_installed,"
-            "   p.gmail, p.app_account, p.proxy_name, p.tries, p.note)"
-            "   IS DISTINCT FROM (EXCLUDED.status, EXCLUDED.state,"
+            "  updated_at = CASE WHEN (p.status, p.app_installed,"
+            "   p.gmail, p.app_account, p.proxy_name, p.note)"
+            "   IS DISTINCT FROM (EXCLUDED.status,"
             "   EXCLUDED.app_installed, EXCLUDED.gmail, EXCLUDED.app_account,"
-            "   EXCLUDED.proxy_name, EXCLUDED.tries, EXCLUDED.note)"
+            "   EXCLUDED.proxy_name, EXCLUDED.note)"
             "   THEN now() ELSE p.updated_at END",
             (serial, (cells.get("Status") or "").strip(),
              _state_word(cells.get("State")), app_installed,

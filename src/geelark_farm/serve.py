@@ -1096,6 +1096,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                detail="cleared by hand from the sheet")
     _import_from_sheet(settings, book)
     outcome = builder.sync_sheet(client, book, ledger,
+                                 settings=settings,
                                  probe_proxies=probe_proxies,
                                  artifact_dir=settings.artifact_dir,
                                  stale_claim_seconds=settings.stale_claim_seconds)

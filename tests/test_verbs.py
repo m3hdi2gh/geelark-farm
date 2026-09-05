@@ -786,7 +786,7 @@ def test_a_verb_that_writes_the_workbook_never_runs_in_a_web_request():
     board through `getattr`, which no attribute scan would ever see."""
     from geelark_farm import verbs
 
-    for verb in ("set_phone_state", "clear_tries", "control"):
+    for verb in ("control",):
         assert not verbs.runs_inline(verb), verb
 
 
@@ -797,7 +797,12 @@ def test_the_stock_verbs_answer_in_the_request_that_asked():
     from geelark_farm import verbs
 
     for verb in ("add_gmails", "add_gpt", "offer_again", "edit_gmail",
-                 "remove_gmail", "build_by_hand"):
+                 "remove_gmail", "build_by_hand",
+                 # These two joined when the person channel left the tab:
+                 # Take, Done, Failed and Release are the buttons an
+                 # operator presses all day, and they were the last ones
+                 # still waiting on a pass (C3).
+                 "set_phone_state", "clear_tries"):
         assert verbs.runs_inline(verb), verb
 
 

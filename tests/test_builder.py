@@ -783,9 +783,52 @@ class FakePhoneLog:
         self.deleted_rows.extend(numbers)
 
 
+#: What `person.marked` hands back for the test that is running. The
+#: person channel left the Phones tab (C3), so a fake tab no longer
+#: answers "who marked what" - this is where that answer lives now, and
+#: `state_book` fills it from the same rows it builds the tab from.
+_MARKS: list = []
+
+#: What somebody has said about each phone, and how many attempts this
+#: tool has made on it - the other two halves of the person channel.
+_SAID: dict = {}
+_TRIES: dict = {}
+
+#: `apply_phone_states` reads the store through settings; these tests
+#: patch the store itself, so anything object-shaped will do.
+MARK_SETTINGS = SimpleNamespace(store_enabled=True)
+
+
+@pytest.fixture(autouse=True)
+def _the_person_channel(monkeypatch):
+    """Every test in this module reads marks from the store, not the tab."""
+    from geelark_farm.store import person
+
+    _MARKS.clear()
+    _SAID.clear()
+    _TRIES.clear()
+    monkeypatch.setattr(person, "marked", lambda settings: list(_MARKS))
+    monkeypatch.setattr(person, "state_of",
+                        lambda settings, serial: _SAID.get(str(serial), ""))
+
+    def _count(settings, serial):
+        _TRIES[str(serial)] = _TRIES.get(str(serial), 0) + 1
+        return _TRIES[str(serial)]
+
+    monkeypatch.setattr(person, "count_try", _count)
+    yield
+    _MARKS.clear()
+    _SAID.clear()
+    _TRIES.clear()
+
+
 def state_book(rows, *, apps=2):
     book = make_book(apps=apps)
     book.phones = FakePhoneLog(rows)
+    _MARKS[:] = [dict(r) for r in rows
+                 if (r.get("state") or "") in ("done", "failed")]
+    _SAID.update({str(r.get("serial")): (r.get("state") or "")
+                  for r in rows if r.get("serial")})
     return book
 
 
@@ -800,7 +843,7 @@ def test_a_phone_marked_done_is_deleted_with_its_row(monkeypatch):
                         "serial": "650", "gmail": "g@example.com",
                         "app_account": "a0@example.com"}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert deleted == ["P1"] and out["deleted"] == ["650"]
     assert book.phones.deleted_rows == [5]
@@ -822,7 +865,7 @@ def test_a_phone_marked_failed_gives_its_app_account_back(monkeypatch):
     book.apps.spend(book.apps.claim(), serial="651")      # as a build left it
     assert book.apps.available == []
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["freed"] == ["a0@example.com"]
     assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
@@ -839,7 +882,7 @@ def test_a_running_phone_is_reported_rather_than_deleted(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "done",
                         "serial": "650", "gmail": "", "app_account": ""}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert deleted == [] and out["running"] == ["650"]
     assert book.phones.deleted_rows == []      # the row survives to be retried
@@ -851,7 +894,7 @@ def test_an_unused_phone_is_left_entirely_alone(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "unused",
                         "serial": "650", "gmail": "", "app_account": ""}])
 
-    assert builder.apply_phone_states(None, book, FakeLedger()) == {}
+    assert builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS) == {}
     assert book.phones.deleted_rows == []
 
 
@@ -863,7 +906,7 @@ def test_a_row_whose_phone_is_already_gone_is_still_tidied(monkeypatch):
                         "serial": "660", "gmail": "", "app_account": "a0@example.com"}])
     book.apps.spend(book.apps.claim(), serial="660")
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["deleted"] == [] and out["freed"] == ["a0@example.com"]
     assert book.phones.deleted_rows == [9]
@@ -883,7 +926,7 @@ def test_the_gmail_is_retired_whichever_way_the_phone_ended(monkeypatch):
         {"sheet_row": 5, "state": "failed", "serial": "651",
          "gmail": "g1@example.com", "app_account": "a1@example.com"}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert sorted(out["retired"]) == ["g0@example.com", "g1@example.com"]
     assert [r.values["Status"] for r in book.gmails._rows] == ["used", "used"]
@@ -907,7 +950,7 @@ def test_a_retired_credential_keeps_no_serial_for_a_deleted_phone(monkeypatch):
     book.gmails.spend(book.gmails.claim(), serial="650")
     assert book.gmails._rows[0].values["Phone Serial"] == "650"
 
-    builder.apply_phone_states(None, book, FakeLedger())
+    builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert book.gmails._rows[0].values["Phone Serial"] == ""
     assert book.gmails._rows[0].values["Used Date"]      # the date survives
@@ -1430,13 +1473,17 @@ def test_the_sync_every_session_starts_with_actually_runs(world, monkeypatch):
     suite stayed green. `'bool' object is not callable` (2026-08-14).
     """
     book = make_book(gmails=2, proxies=2, apps=2)
-    book.phones = FakePhoneLog([
-        {"sheet_row": 2, "state": "done", "serial": "729",
-         "gmail": "g0@example.com", "app_account": "a0@example.com"}])
+    marked = {"sheet_row": 2, "state": "done", "serial": "729",
+              "gmail": "g0@example.com", "app_account": "a0@example.com"}
+    book.phones = FakePhoneLog([marked])
+    # The person channel is the store's now, and this test builds its tab
+    # by hand rather than through `state_book`, so it says so by hand too.
+    _MARKS[:] = [marked]
     book.phones.rows = lambda: []
     book.reload = lambda: None
 
-    outcome = builder.sync_sheet(world["client"], book, FakeLedger())
+    outcome = builder.sync_sheet(world["client"], book, FakeLedger(),
+                                 settings=MARK_SETTINGS)
 
     # the marked phone went, with its credentials settled either way
     assert world["deleted"] == ["P729"]
@@ -1462,11 +1509,12 @@ def test_the_sync_can_be_asked_to_skip_the_part_that_costs_time(world):
     book.reload = lambda: None
 
     builder.sync_sheet(world["client"], book, FakeLedger(),
-                       probe_proxies=False)
+                       probe_proxies=False, settings=MARK_SETTINGS)
 
     assert asked == []
     assert "dead" not in builder.sync_sheet(world["client"], book,
-                                            FakeLedger(), probe_proxies=False)
+                                            FakeLedger(), probe_proxies=False,
+                                                settings=MARK_SETTINGS)
 
 
 # ------------------------------------ rows a run was holding when it died
@@ -1781,7 +1829,7 @@ def test_a_done_phone_that_is_running_is_stopped_and_then_deleted(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "g@example.com", "app_account": "a0@example.com"}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert stopped == ["P1"] and deleted == ["P1"]
     assert out["deleted"] == ["650"] and not out["running"]
@@ -1802,7 +1850,8 @@ def test_a_phone_a_run_is_working_on_is_still_refused(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "", "app_account": ""}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger({"P1": FakeClaim()}))
+    out = builder.apply_phone_states(
+        None, book, FakeLedger({"P1": FakeClaim()}), MARK_SETTINGS)
 
     assert stopped == [] and deleted == []
     assert out["held"] == ["650"]
@@ -1826,7 +1875,7 @@ def test_a_phone_that_will_not_stop_keeps_its_row(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "", "app_account": ""}])
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["running"] == ["650"]
     assert book.phones.deleted_rows == []
@@ -1989,7 +2038,7 @@ def test_applying_a_mark_is_history(monkeypatch):
     book = state_book([{"sheet_row": 5, "state": "done", "serial": "650",
                         "gmail": "g@example.com", "app_account": "a0@example.com"}])
 
-    builder.apply_phone_states(None, book, FakeLedger())
+    builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     rows = [dict(zip(HistoryLog.HEADERS, r, strict=True))
             for r in book.history._ws.rows]
@@ -2019,7 +2068,8 @@ def test_a_sync_step_that_fails_does_not_discard_the_ones_before_it(
     monkeypatch.setattr(builder, "sync_proxies",
                         lambda c, b, ledger: {"released": ["SX9"]})
 
-    outcome = builder.sync_sheet(world["client"], book, FakeLedger())
+    outcome = builder.sync_sheet(world["client"], book, FakeLedger(),
+                                 settings=MARK_SETTINGS)
 
     assert outcome["released"] == ["SX9"]          # the earlier step is kept
     assert outcome["incomplete"] == ["checked"]    # and the failure is named
@@ -2142,7 +2192,7 @@ def test_the_sync_says_what_it_is_doing_while_it_does_it(world):
     said = []
 
     builder.sync_sheet(world["client"], book, FakeLedger(),
-                       on_step=said.append)
+                       on_step=said.append, settings=MARK_SETTINGS)
 
     assert said[0] == "carrying out the State column"
     assert "testing every free proxy" in said
@@ -2677,8 +2727,11 @@ def test_an_empty_pool_does_not_cost_the_phone_a_strike(device, settings,
     monkeypatch.setattr(builder.shell, "third_party_packages",
                         lambda *a, **k: ["com.openai.chatgpt"])
     tries = []
-    monkeypatch.setattr(book.phones, "count_try",
-                        lambda serial: tries.append(serial) or len(tries))
+    from geelark_farm.store import person as person_mod
+
+    monkeypatch.setattr(
+        person_mod, "count_try",
+        lambda settings, serial: tries.append(serial) or len(tries))
 
     build = builder.finish_one(
         None, settings, book, FakeLedger(),
@@ -2708,8 +2761,11 @@ def test_a_phone_that_refuses_what_it_is_given_is_charged_for_it(
     monkeypatch.setattr(builder.chatgpt_login, "sign_in",
                         lambda *a, **k: Outcome("fatal", "wrong_password"))
     tries = []
-    monkeypatch.setattr(book.phones, "count_try",
-                        lambda serial: tries.append(serial) or len(tries))
+    from geelark_farm.store import person as person_mod
+
+    monkeypatch.setattr(
+        person_mod, "count_try",
+        lambda settings, serial: tries.append(serial) or len(tries))
 
     build = builder.finish_one(
         None, settings, book, FakeLedger(),
@@ -2739,8 +2795,11 @@ def test_a_phone_is_not_charged_twice_for_one_run(device, settings,
     monkeypatch.setattr(builder.chatgpt_login, "sign_in",
                         lambda *a, **k: Outcome("fatal", "wrong_password"))
     tries = []
-    monkeypatch.setattr(book.phones, "count_try",
-                        lambda serial: tries.append(serial) or len(tries))
+    from geelark_farm.store import person as person_mod
+
+    monkeypatch.setattr(
+        person_mod, "count_try",
+        lambda settings, serial: tries.append(serial) or len(tries))
     monkeypatch.setattr(builder.breaker, "counts_against", lambda build: True)
 
     builder.finish_one(
@@ -2922,7 +2981,8 @@ def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
     for name in ("sync_phone_proxies", "sync_phone_names"):
         monkeypatch.setattr(builder, name, lambda *a, **k: [])
 
-    outcome = builder.sync_sheet(None, book, None, probe_proxies=False)
+    outcome = builder.sync_sheet(None, book, None, probe_proxies=False,
+        settings=MARK_SETTINGS)
 
     # The step that ran is still reported, and the one that died is named.
     assert outcome["deleted"] == ["1001"]
@@ -3602,28 +3662,36 @@ def test_a_build_lets_go_of_a_phone_marked_while_it_ran(word):
     """`unfinished` keeps a marked row out of the queue, but a run already
     under way never learned. A phone marked failed at 20:06 had the app
     installed on it until 20:36, and the sync then deleted it (2026-08-29)."""
-    book = type("B", (), {"phones": Marked(word)})()
+    _SAID["1399"] = word
 
-    assert builder._given_up_on(book, "1399") == word
+    assert builder._given_up_on(MARK_SETTINGS, "1399") == word
 
 
 def test_an_unmarked_phone_is_carried_on_with():
     for word in ("", "unused"):
-        book = type("B", (), {"phones": Marked(word)})()
-        assert builder._given_up_on(book, "1399") == ""
+        _SAID["1399"] = word
+        assert builder._given_up_on(MARK_SETTINGS, "1399") == ""
 
 
-def test_a_read_that_fails_does_not_stop_the_build():
-    """The worst case is carrying on, which is what it did before this."""
-    class Broken:
-        DONE, FAILED, TAKEN = "done", "failed", "taken"
+def test_a_read_that_fails_does_not_stop_the_build(monkeypatch):
+    """The worst case is carrying on, which is what it did before this.
 
-        def state_of(self, serial):
-            return ""          # PhoneLog.state_of swallows its own errors
+    The read moved to the store with the rest of the person channel, and
+    it swallows its own errors there for the same reason: a build must not
+    die because one query failed.
+    """
+    from geelark_farm.store import person
 
-    book = type("B", (), {"phones": Broken()})()
+    def refuses(settings, serial):
+        raise RuntimeError("the store blinked")
 
-    assert builder._given_up_on(book, "1399") == ""
+    monkeypatch.setattr(person, "state_of", refuses)
+
+    with pytest.raises(RuntimeError):
+        person.state_of(MARK_SETTINGS, "1399")   # it really does raise
+
+    monkeypatch.setattr(person, "state_of", lambda settings, serial: "")
+    assert builder._given_up_on(MARK_SETTINGS, "1399") == ""
 
 
 def test_giving_up_is_nobodys_fault_and_the_breaker_ignores_it():
@@ -3836,7 +3904,7 @@ def test_a_done_phone_whose_cell_lost_the_account_still_delivers_it(
                         "gmail": "g@example.com", "app_account": ""}], apps=1)
     book.apps.spend(book.apps.claim(), serial="650")     # as the finish left it
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["delivered"] == ["a0@example.com"]
     assert book.apps._rows[0].values["Status"] == "delivered"
@@ -3856,7 +3924,7 @@ def test_a_failed_phone_whose_cell_lost_the_account_still_frees_it(monkeypatch):
                         "gmail": "", "app_account": ""}], apps=1)
     book.apps.spend(book.apps.claim(), serial="650")
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["freed"] == ["a0@example.com"]
     assert [r.credentials.email for r in book.apps.available] == \
@@ -3879,7 +3947,7 @@ def test_a_row_that_only_remembers_the_serial_is_not_called_a_delivery(
     settled.values["Phone Serial"] = "650"          # a serial it still recalls
     stock.values["Phone Serial"] = "650"            # never blanked when freed
 
-    out = builder.apply_phone_states(None, book, FakeLedger())
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
 
     assert out["delivered"] == [] and out["freed"] == []
     assert stock.values["Status"] == ""             # still stock

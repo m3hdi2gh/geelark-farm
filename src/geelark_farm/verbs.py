@@ -795,6 +795,28 @@ def boot_phone(book, ledger, settings, payload, client):
             {"state": "taken", "url": url})
 
 
+def _is_building(settings, serial: str) -> bool:
+    """Whether a run is holding this phone right now.
+
+    Asked of the store rather than of the tab, now that the tab is not
+    where the answer lives. Closing a phone mid-build is refused for the
+    same reason it always was: the run would go on spending minutes on a
+    phone somebody has already written off.
+    """
+    from .store.db import Store
+
+    try:
+        with Store(settings) as store:
+            rows = store._rows(
+                "SELECT status FROM phones"
+                " WHERE serial = %s AND done_at IS NULL", (str(serial),))
+    except Exception:                                             # noqa: BLE001
+        # Unknown is not "no": refusing to close a phone because the store
+        # blinked is the safe way round, and the person can press again.
+        return True
+    return bool(rows) and (rows[0]["status"] or "") == "building"
+
+
 def set_phone_state(book, ledger, settings, payload, client):
     """Write the State cell - taken / done / failed / (blank) - the way a
     hand does in the sheet; the sync carries it out on the next pass.
@@ -803,14 +825,13 @@ def set_phone_state(book, ledger, settings, payload, client):
     state = str(payload.get("state") or "").strip().lower()
     if state not in ("taken", "done", "failed", "", "unused"):
         return "refused", f"{state!r} is not a State word", None
-    row = next((r for r in book.phones.rows()
-                if str(r.get("Serial") or "").strip() == serial), None)
-    if row is None:
-        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
-    if row.get("Status") == book.phones.BUILDING and state in ("done", "failed"):
-        return "refused", f"phone {serial} is being worked on right now", None
+    from .store import person
+
     word = "" if state == "unused" else state
-    book.phones.write(serial, State=word)
+    if word in ("done", "failed") and _is_building(settings, serial):
+        return "refused", f"phone {serial} is being worked on right now", None
+    if not person.set_state(settings, serial, word):
+        return "failed", f"phone {serial or '?'} is not on the farm", None
     _stamp_owner(settings, serial,
                  payload.get("by_id") if word == "taken" else None)
     meaning = {"taken": "out with somebody - the sync leaves it alone",
@@ -824,9 +845,11 @@ def set_phone_state(book, ledger, settings, payload, client):
 def clear_tries(book, ledger, settings, payload, client):
     """A given-up phone back in the queue: the Tries cell blanked, the
     way the runbook says to do it by hand."""
+    from .store import person
+
     serial = str(payload.get("serial") or "").strip()
-    if not book.phones.write(serial, **{book.phones.TRIES_COLUMN: ""}):
-        return "failed", f"phone {serial or '?'} is not in the Phones tab", None
+    if not person.clear_tries(settings, serial):
+        return "failed", f"phone {serial or '?'} is not on the farm", None
     return ("done", f"phone {serial}: tries cleared by {_by(payload)} - it is "
                     f"offered to the keeper again", None)
 

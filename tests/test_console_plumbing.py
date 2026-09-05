@@ -191,19 +191,31 @@ def test_the_service_tab_can_be_ticked_from_code():
 
 
 # --------------------------------------------------------- phones by hand
-def test_a_phone_can_be_marked_taken_done_or_failed_from_the_web():
+def test_a_phone_can_be_marked_taken_done_or_failed_from_the_web(monkeypatch):
+    """What a person says about a phone is written to the store now, not to
+    the tab: that is what made this button answer in the request that
+    pressed it instead of waiting for a pass (C3)."""
+    from geelark_farm.store import person
+
+    said_about: dict = {}
+    monkeypatch.setattr(
+        person, "set_state",
+        lambda settings, serial, state: (
+            said_about.update({serial: state}) or True) if serial == "1500"
+        else False)
+    monkeypatch.setattr(verbs, "_is_building", lambda settings, serial: False)
     book = make_book()
-    book.phones.start(Serial="1500", Gmail="g0@example.com", Status="ready")
+
     status, said, detail = verbs.set_phone_state(
         book, None, None, {"serial": "1500", "state": "taken", "by": "ali"},
         None)
     assert status == "done" and detail == {"state": "taken"}
-    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
-    assert row["State"] == "taken"
+    assert said_about["1500"] == "taken"
+
     verbs.set_phone_state(book, None, None, {"serial": "1500",
                                              "state": "unused"}, None)
-    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
-    assert row["State"] == ""
+    assert said_about["1500"] == "", "unused is the blank cell it always was"
+
     assert verbs.set_phone_state(book, None, None, {"serial": "1500",
                                                     "state": "lost"},
                                  None)[0] == "refused"
@@ -221,17 +233,24 @@ def test_marking_a_building_phone_done_is_refused():
     assert status == "refused" and "worked on" in said
 
 
-def test_clearing_tries_puts_a_given_up_phone_back():
-    book = make_book(phone_headers=[*__import__("tests.test_pools",
-                                                fromlist=["x"]).PHONE_HEADERS,
-                                    "Tries"])
-    book.phones.start(Serial="1500", Gmail="g0@example.com", Tries="3")
+def test_clearing_tries_puts_a_given_up_phone_back(monkeypatch):
+    """How often this tool has tried a phone is the store's now, with the
+    rest of the person channel (C3)."""
+    from geelark_farm.store import person
+
+    cleared: list = []
+    monkeypatch.setattr(
+        person, "clear_tries",
+        lambda settings, serial: cleared.append(serial) or serial == "1500")
+    book = make_book()
+
     status, said, _ = verbs.clear_tries(book, None, None,
                                         {"serial": "1500", "by": "mehdi"},
                                         None)
-    assert status == "done"
-    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
-    assert row["Tries"] == ""
+
+    assert status == "done" and cleared == ["1500"]
+    assert verbs.clear_tries(book, None, None, {"serial": "9"},
+                             None)[0] == "failed"
 
 
 def test_offer_again_reaches_the_gmail_tab_too():

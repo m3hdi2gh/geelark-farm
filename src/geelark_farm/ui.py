@@ -947,14 +947,16 @@ def pools_view(settings: Settings) -> Panel:
                  padding=(1, 2))
 
 
-def marks_preview(book: Book) -> tuple[list[dict], list]:
+def marks_preview(book: Book, settings) -> tuple[list[dict], list]:
     """What `Apply what I marked` would do, before it does any of it.
 
     Deleting a phone is the one irreversible thing this console can be asked
     to do, and it was reachable only as a side effect of starting a build -
     where it happened before the first line of output.
     """
-    marked = book.phones.marked()
+    from .store import person
+
+    marked = person.marked(settings)
     lines: list = []
     for row in marked:
         done = row["state"] == book.phones.DONE
@@ -1234,6 +1236,7 @@ def sync_on_startup(settings: Settings) -> None:
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
+                settings=settings,
                 artifact_dir=settings.artifact_dir,
                 stale_claim_seconds=settings.stale_claim_seconds,
                 on_step=lambda doing: spinner.update(f"{doing}..."))
@@ -1559,7 +1562,7 @@ def apply_marks(settings: Settings) -> None:
     previewed here and nothing else waits on the answer.
     """
     book = Book.open(settings)
-    marked, lines = marks_preview(book)
+    marked, lines = marks_preview(book, settings)
     apply = False
     if marked:
         console.print(Panel(Group(*lines), title="what the State column asks for",
@@ -1585,6 +1588,7 @@ def apply_marks(settings: Settings) -> None:
     show_sync(builder.sync_sheet(build_client(settings), book,
                                  Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
+                                 settings=settings,
                                  apply_marks=apply,
                                  artifact_dir=settings.artifact_dir,
                                  stale_claim_seconds=settings.stale_claim_seconds))

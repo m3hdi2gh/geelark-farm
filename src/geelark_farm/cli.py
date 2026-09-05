@@ -877,6 +877,7 @@ def cmd_pools(settings: Settings, args) -> int:
     for label, items in ({} if args.no_sync else builder.sync_sheet(
             client, book, Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
+            settings=settings,
             # A report does not delete phones. `geelark build` carries out the
             # State column, and the console does after showing what it will do.
             apply_marks=False)).items():

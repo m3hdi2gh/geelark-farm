@@ -544,7 +544,7 @@ def _sign_into_app(session: _Session) -> Build | None:
         # spends most of its minutes, so it is where a row marked mid-run has
         # to be noticed - and an account claimed for a phone about to be
         # deleted is the one cost worth a read of the tab to avoid.
-        marked = _given_up_on(s.book, s.build.serial)
+        marked = _given_up_on(s.settings, s.build.serial)
         if marked:
             return s.finish("given_up_on",
                             f"somebody wrote {marked!r} in its State while "
@@ -1001,7 +1001,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
         # ----------------------------------------------------- the install
         check_cancelled()
-        marked = _given_up_on(book, build.serial)
+        marked = _given_up_on(settings, build.serial)
         if marked:
             return finish("given_up_on",
                           f"somebody wrote {marked!r} in its State while this "
@@ -1393,7 +1393,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # where the run concludes the phone is the fault; this is the same
         # conclusion, spent (2026-08-30).
         if breaker.counts_against(build) or _refused_what_it_was_given(session):
-            _count_try(book, build)
+            _count_try(settings, book, build)
         _write_row(book, build)
         try:
             phones.stop(client, phone_id)
@@ -1686,7 +1686,7 @@ def attempts_of(build: Build) -> list[str]:
             for email, reason, service in build.tried]
 
 
-def _given_up_on(book: Book, serial: str) -> str:
+def _given_up_on(settings: Settings, serial: str) -> str:
     """The word somebody has written in this phone's State, if any.
 
     Checked at the few places a build is about to spend real time, because a
@@ -1700,9 +1700,11 @@ def _given_up_on(book: Book, serial: str) -> str:
     """
     if not serial:
         return ""
-    state = book.phones.state_of(serial)
-    return state if state in (book.phones.DONE, book.phones.FAILED,
-                              book.phones.TAKEN) else ""
+    from .store import person
+
+    state = person.state_of(settings, serial)
+    return state if state in (person.DONE, person.FAILED,
+                              person.TAKEN) else ""
 
 
 def _phone_status(build: Build) -> str | None:
@@ -1809,14 +1811,16 @@ def _note_on_row(book: Book, serial: str, **fields: str) -> None:
                     "than is true", what, serial, exc)
 
 
-def _count_try(book: Book, build: Build) -> None:
+def _count_try(settings: Settings, book: Book, build: Build) -> None:
     """Tally one failed finish, and say so on the row when it is the last one.
 
     Never raises: it is called from a `finally`, where an exception replaces
     the value the function was about to return.
     """
     try:
-        made = book.phones.count_try(build.serial)
+        from .store import person
+
+        made = person.count_try(settings, build.serial)
     except Exception as exc:                                      # noqa: BLE001
         log.warning("could not count the attempt on %s (%s)", build.serial, exc)
         return
@@ -1996,8 +2000,8 @@ def _settle_before_deleting(client: Client, phone_id: str, serial: str,
     return False
 
 
-def apply_phone_states(client: Client, book: Book,
-                       ledger: Ledger) -> dict[str, list[str]]:
+def apply_phone_states(client: Client, book: Book, ledger: Ledger,
+                       settings: Settings) -> dict[str, list[str]]:
     """Carry out what the operator wrote in the Phones tab's `State` column.
 
     `Status` is what a run concluded about a phone. `State` is the other
@@ -2024,7 +2028,9 @@ def apply_phone_states(client: Client, book: Book,
     Neither is ever left pointing at the deleted phone. A stale serial is how
     thirteen proxies sat out of the pool for days without anyone noticing.
     """
-    marked = book.phones.marked()
+    from .store import person
+
+    marked = person.marked(settings)
     if not marked:
         return {}
 
@@ -2140,6 +2146,7 @@ STEP_NAMES = {
 
 
 def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
+               settings: Settings,
                apply_marks: bool = True,
                probe_proxies: bool = True,
                on_step: Callable[[str], None] | None = None,
@@ -2220,7 +2227,8 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
 
     outcome: dict[str, list[str]] = {}
     if apply_marks:
-        step("marks", lambda: apply_phone_states(client, book, ledger))
+        step("marks",
+             lambda: apply_phone_states(client, book, ledger, settings))
     # Before the reload, because both read the Phones tab and this one is what
     # frees a row the last run died holding.
     step("abandoned", lambda: settle_abandoned(client, book, ledger))
@@ -3116,7 +3124,7 @@ def run(client: Client, settings: Settings, *, count: int,
     ledger = ledger if ledger is not None else Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds)
     if not dry_run and not synced:
-        sync_sheet(client, book, ledger,
+        sync_sheet(client, book, ledger, settings=settings,
                    artifact_dir=settings.artifact_dir,
                    stale_claim_seconds=settings.stale_claim_seconds)
 
@@ -3205,7 +3213,7 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
         # A finish reuses the phone's own exit and only takes a free one if
         # it has to swap, so the pool check is worth its seconds here too -
         # that is the run that discovers a swap has nowhere to go.
-        sync_sheet(client, book, ledger,
+        sync_sheet(client, book, ledger, settings=settings,
                    artifact_dir=settings.artifact_dir,
                    stale_claim_seconds=settings.stale_claim_seconds)
     pending, gone = _unfinished(client, book)

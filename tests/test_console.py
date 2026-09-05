@@ -24,6 +24,27 @@ from geelark_farm.gsheet import SheetError
 from geelark_farm.ledger import Ledger
 from geelark_farm.ui import Snapshot
 
+#: `marks_preview` reads what people marked out of the store now; these
+#: tests patch the store itself, so anything object-shaped will do.
+MARKS = SimpleNamespace(store_enabled=True)
+
+
+@pytest.fixture(autouse=True)
+def _the_person_channel(monkeypatch):
+    """What people marked lives in the store now, not on the tab a
+    `FakeBook` fakes - so the fake answers through the channel."""
+    from geelark_farm.store import person
+
+    monkeypatch.setattr(
+        person, "marked",
+        lambda settings: [dict(r) for r in _MARKED])
+    yield
+    _MARKED.clear()
+
+
+#: Filled by the test that is running, the way `FakeBook` used to be.
+_MARKED: list = []
+
 SRC = pathlib.Path(ui.__file__)
 
 
@@ -124,14 +145,16 @@ def test_the_preview_says_what_each_mark_costs_before_anything_is_deleted():
     """Deleting a phone is the one irreversible thing here, and it used to
     happen as a side effect of starting a build, before its first line of
     output."""
-    book = FakeBook([
+    rows = [
         {"sheet_row": 5, "state": "done", "serial": "684",
          "gmail": "g@example.com", "app_account": "a@example.com"},
         {"sheet_row": 9, "state": "failed", "serial": "691",
          "gmail": "h@example.com", "app_account": "b@example.com"},
-    ])
+    ]
+    _MARKED[:] = rows
+    book = FakeBook(rows)
 
-    marked, lines = ui.marks_preview(book)
+    marked, lines = ui.marks_preview(book, MARKS)
     text = rendered(Group(*lines))
 
     assert len(marked) == 2
@@ -145,7 +168,7 @@ def test_the_preview_says_what_each_mark_costs_before_anything_is_deleted():
 
 
 def test_the_preview_of_an_unmarked_sheet_asks_for_nothing():
-    marked, lines = ui.marks_preview(FakeBook([]))
+    marked, lines = ui.marks_preview(FakeBook([]), MARKS)
 
     assert marked == [] and lines == []
 
