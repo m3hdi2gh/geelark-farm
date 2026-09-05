@@ -16,6 +16,24 @@ import pytest
 
 import geelark_farm.web.app as app_mod
 
+#: What `read.pool_rows` hands the manager: one free row and one held,
+#: per pool, which is enough for every question the sheet asks - a card
+#: with something under it, a chip with something to filter, and a row
+#: with the two doors on it.
+FAKE_POOL_ROWS = {
+    "gmail": [{"id": 1, "address": "free@gmail.com", "status": "",
+               "seller": "dalir", "serial": "", "note": "", "error": None,
+               "state": "free"},
+              {"id": 2, "address": "busy@gmail.com", "status": "in_use",
+               "seller": "dalir", "serial": "1500", "note": "", "error": None,
+               "state": "on a phone"}],
+    "gpt": [{"id": 3, "address": "waiting@x.com", "status": "", "serial": "",
+             "note": "", "error": None, "state": "free"}],
+    "proxy": [{"id": 4, "address": "SX7", "status": "", "host": "1.2.3.4",
+               "port": 1080, "exit_ip": "5.6.7.8", "times_used": 2,
+               "serial": "", "note": "", "error": None, "state": "free"}],
+}
+
 
 class FakeStore:
     """check_login the way the real one answers: a row, or one None."""
@@ -76,6 +94,7 @@ def web(request, monkeypatch, make_settings):
                       "added_by": "mehdi", "created_at": None}],
         "queue": {"running": 0, "queued": 0},
         "recent": [],
+        "pool_rows": FAKE_POOL_ROWS,
         "pulse": {"warm": 5, "target": 5, "tripped": "", "at": 0}})
     monkeypatch.setattr(app_mod.read, "events", lambda s, limit=200: [])
     monkeypatch.setattr(app_mod.read, "nav_counts",
@@ -733,13 +752,20 @@ def test_an_operator_cannot_post_to_a_page_they_no_longer_have(
     client.login(username="narrow")
     token = client.csrf()
 
+    # Proxies are the admin's pool - an operator's power over an exit is
+    # Change IP on one phone - so this door is shut whatever the person
+    # can do with the two pools they own.
     status, _, body = client.request(
-        "POST", "/pools/gmail/remove", _form(csrf=token, address="a@x.com"))
+        "POST", "/pools/proxy/remove", _form(csrf=token, name="SX7"))
     assert status == 403 and "Nothing was changed" in body
 
     # The doors that stayed open are the ones the dashboard posts through:
-    # adding stock moved onto it, and it posts where it always did. What
-    # the preview then makes of the paste is that handler's business.
+    # adding stock moved onto it, and so did editing and removing a Gmail
+    # row, because that is where a person now works on that pool. What the
+    # handler then makes of the request is its own business.
+    status, _, body = client.request(
+        "POST", "/pools/gmail/remove", _form(csrf=token, address="a@x.com"))
+    assert status != 403 and "Nothing was changed" not in body
     status, _, body = client.request(
         "POST", "/pools/gmail/preview", _form(csrf=token, pasted="a@x.com"))
     assert status != 403 and "Nothing was changed" not in body
@@ -2177,11 +2203,9 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    # The pools are a card in the rail now, one row each, and each row
-    # still wears the colour of how short it is and says the consequence.
-    card = body[body.index("<h3>Supply</h3>"):]
-    card = card[:card.index("</div><div class=\"panel\"") if
-                "</div><div class=\"panel\"" in card else len(card)]
+    # One card per pool in the rail now, each wearing the colour of how
+    # short it is and saying the consequence where a hand can reach it.
+    card = body[body.index('<section class="pool"'):]
     assert 'color:var(--red)">0</b><span class="t">Gmail' in card
     assert "nothing can be built until rows are added" in card
     assert 'color:var(--amber)">2</b><span class="t">Proxies' in card
@@ -3340,18 +3364,21 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
 def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
         web, monkeypatch):
     """The pool tabs went with the rail, so `+ add` cannot be a link to one
-    any more. It opens on the page an operator has and posts to the same
-    preview the tab always posted to - only the door moved."""
+    any more. It opens the manager on the page an operator has, and that
+    posts to the same preview the tab always posted to - only the door
+    moved."""
     _dash(monkeypatch)
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
 
-    card = body[body.index("<h3>Supply</h3>"):]
-    card = card[:card.index("</div><div")] if "</div><div" in card else card
-    assert body.count('class="addfold"') == 2, "Gmail and GPT, not proxies"
+    assert body.count('class="addbox"') == 2, "Gmail and GPT, not proxies"
     assert 'action="/pools/gmail/preview"' in body
     assert 'action="/pools/gpt/preview"' in body
+    # The card carries the button and the manager carries the form, so a
+    # card whose button opens nothing is the one thing to refuse.
+    assert 'data-pool="gmail" data-open="add"' in body
+    assert '<div class="ov" id="poolov"' in body
     # And where it returns to, so confirming does not land on a page the
     # person who pressed it may not have.
     assert 'name="back" value="/"' in body
@@ -3424,3 +3451,92 @@ def test_a_command_the_runner_refuses_still_goes_to_the_queue(web,
         _form(csrf=client.csrf(), rows="a@x.com\tpw", seller="Nima"))
 
     assert dict(headers)["Location"].endswith("said=queued:502")
+
+
+# --------------------------------------------- the pool manager (2026-09-05)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_each_pool_card_lists_what_its_number_counts(web, monkeypatch):
+    """The count answers "how many" and was the whole card. The list under
+    it answers the question a person actually had next - which ones - and
+    that was two pages away."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    card = body[body.index('<section class="pool"'):]
+    assert "free@gmail.com" in card, "the free row is under its own count"
+    assert 'class="queue"' in card
+    # And only the free ones: a row on a phone is not stock, and a card
+    # that lists it is a card that promises what it cannot hand over.
+    queue = card[card.index('class="queue"'):card.index("</ul>")]
+    assert "busy@gmail.com" not in queue
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_manager_holds_every_row_and_opens_shut(web, monkeypatch):
+    """All three sheets ride in the one response - the rows are read for
+    the cards anyway - so the manager cannot fail to open."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    ov = body[body.index('<div class="ov" id="poolov"'):]
+    for kind in ("gmail", "gpt", "proxy"):
+        assert f'data-sheet="{kind}" hidden' in ov, kind
+    # The held row the card would not list is here, because this is the
+    # working list rather than the shelf.
+    assert "busy@gmail.com" in ov
+    assert 'id="poolov" hidden' in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_gmail_row_carries_both_doors_and_a_proxy_row_carries_none(
+        web, monkeypatch):
+    """Only the endpoints that exist are drawn. A button that leads
+    nowhere is worse than no button."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    ov = body[body.index('<div class="ov" id="poolov"'):]
+    gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
+    assert 'action="/pools/gmail/edit"' in gmail
+    assert 'action="/pools/gmail/remove"' in gmail
+    proxy = ov[ov.index('data-sheet="proxy"'):]
+    assert "/pools/proxy/remove" not in proxy, "proxies are the admin's"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_doors_need_the_same_permission_adding_does(web, monkeypatch):
+    """Being able to add a row and not fix a typo in it was the odd half,
+    so both doors ride on `may_add_gmail` - and without it, neither is
+    drawn."""
+    _dash(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_gmail": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/")
+
+    assert 'action="/pools/gmail/edit"' not in body
+    assert 'action="/pools/gmail/remove"' not in body
+    # The rows are still listed: seeing the pool is not changing it.
+    assert "free@gmail.com" in body
+
+
+def test_the_manager_never_lists_a_row_that_is_finished_with():
+    """A `used` Gmail and a `delivered` account are the archive, and the
+    pool tabs keep them. This is the working list: everything here is
+    something somebody still has a decision about."""
+    import inspect
+
+    from geelark_farm.web import read
+
+    body = inspect.getsource(read._pool_rows)
+    assert "status <> 'used'" in body
+    assert "status <> 'delivered'" in body
+    assert body.count("on_sheet") == 3, "all three, the same rule as the rest"

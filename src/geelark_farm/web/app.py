@@ -1169,9 +1169,9 @@ LOGIN_BACKS = ("/", "/pools/gpt")
 
 #: Where a gmail button may send a person back to - the view it was
 #: pressed on, so the banner lands where the row is.
-GMAIL_BACKS = tuple(["/pools/gmail"] + [f"/pools/gmail?view={v}"
-                                        for v in ("queued", "on_phone",
-                                                  "used", "errored")])
+GMAIL_BACKS = tuple(["/", "/pools/gmail"] + [f"/pools/gmail?view={v}"
+                                            for v in ("queued", "on_phone",
+                                                      "used", "errored")])
 
 
 def _gmail_back(field: dict) -> str:
@@ -1182,7 +1182,7 @@ def _gmail_back(field: dict) -> str:
 #: Where a proxy button may send a person back to. Somebody who pressed
 #: "Test again" on the work list wants the work list back, not the free
 #: shelf; anything not named here is the shelf.
-PROXY_BACKS = ("/pools/proxy", "/pools/proxy?view=needs_hand",
+PROXY_BACKS = ("/", "/pools/proxy", "/pools/proxy?view=needs_hand",
                "/pools/proxy?view=on_phone", "/pools/proxy?view=all")
 
 
@@ -1409,11 +1409,17 @@ def _operator_may_get(path: str) -> bool:
 #:
 #: Written as its own list rather than derived from the GET one, because
 #: the two answer different questions and a POST that slips through is a
-#: row written, not a page seen. Editing and removing rows are not here:
-#: those belong to the tab, and the tab belongs to an admin.
+#: row written, not a page seen.
+#:
+#: Editing and removing a Gmail row are here now, because the manager the
+#: dashboard opens is where a person works on that pool - the operator
+#: asked for exactly that. They are still gated by `may_add_gmail`, which
+#: is the permission that already decided who may put rows in; being able
+#: to add a row and not fix a typo in it was the odd half.
 _OPERATOR_POSTS = (
     "/logout", "/password", "/accounts/login", "/phones/build",
     "/pools/gmail/preview", "/pools/gmail/add",
+    "/pools/gmail/edit", "/pools/gmail/remove",
     "/pools/gpt/preview", "/pools/gpt/add",
 )
 

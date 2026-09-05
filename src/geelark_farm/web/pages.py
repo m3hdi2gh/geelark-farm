@@ -87,6 +87,69 @@ nav form span.who{{color:#b9c4d4;font-size:13px;overflow:hidden;text-overflow:el
 nav form button{{margin-left:auto;background:none;border:0;color:var(--dim);
  font-size:12px;cursor:pointer;font-family:inherit;padding:6px 8px;border-radius:5px}}
 nav form button:hover{{color:#fff;background:#141c2b}}
+/* ---- the pool cards on the rail, and the manager they open */
+.pool{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+ overflow:hidden}}
+.pool>header{{display:flex;align-items:center;gap:11px;padding:13px 15px 11px}}
+.pool>header b{{font-family:var(--mono);font-size:27px;line-height:1;
+ font-weight:500;letter-spacing:-.5px;font-variant-numeric:tabular-nums;
+ min-width:34px}}
+.pool>header .t{{display:flex;flex-direction:column;font-size:13.5px;
+ font-weight:600;color:#c6d1e0;line-height:1.25}}
+.pool>header .t i{{font-style:normal;font-size:11.5px;font-weight:400;
+ color:var(--dim)}}
+.pool>header .go,.pool>header .lock{{margin-left:auto}}
+.go.small{{padding:5px 11px;font-size:12.5px}}
+.pool .queue{{list-style:none;margin:0;padding:0;border-top:1px solid var(--line2)}}
+.pool .queue li{{display:flex;align-items:center;gap:8px;padding:6px 15px;
+ font-size:12px}}
+.pool .queue li+li{{border-top:1px solid var(--line2)}}
+.pool .queue .t{{font-family:var(--mono);color:var(--muted);overflow:hidden;
+ text-overflow:ellipsis;white-space:nowrap}}
+.pool .queue .tag{{margin-left:auto;font-size:11px;color:var(--dim);
+ white-space:nowrap}}
+.pool .railnote{{margin:0;padding:9px 15px;font-size:11.5px;color:var(--dim);
+ border-top:1px solid var(--line2)}}
+.pool .more{{display:block;width:100%;background:none;border:0;
+ border-top:1px solid var(--line2);color:var(--blue);padding:9px;
+ cursor:pointer;font:inherit;font-size:12px}}
+.pool .more:hover{{background:#141c2b;color:#a8ccff}}
+.ov{{position:fixed;inset:0;background:rgba(4,7,13,.72);display:flex;
+ align-items:center;justify-content:center;padding:24px;z-index:40}}
+[hidden]{{display:none!important}}
+.ov .sheet{{background:var(--panel);border:1px solid var(--line);
+ border-radius:12px;width:min(940px,100%);max-height:88vh;display:flex;
+ flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.55)}}
+.ov .sheet>header{{display:flex;align-items:center;gap:12px;padding:15px 18px;
+ border-bottom:1px solid var(--line)}}
+.ov .sheet>header h3{{font-size:16px}}
+.ov .sheet .x{{margin-left:auto;background:none;border:0;color:var(--muted);
+ font-size:22px;line-height:1;cursor:pointer;padding:0 4px}}
+.ov .sheet .x:hover{{color:var(--bright)}}
+.sheetbody{{overflow:auto;padding:15px 18px}}
+.addbox{{background:var(--panel2);border:1px solid var(--line);
+ border-radius:9px;padding:12px;margin-bottom:14px}}
+.addbox label{{display:block;font-size:11px;letter-spacing:.6px;
+ text-transform:uppercase;color:var(--dim);margin-bottom:7px}}
+.addbox textarea{{width:100%}}
+.addbox .addrow{{display:flex;align-items:center;gap:10px;margin-top:9px;
+ font-size:11.5px}}
+.filters{{display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+ margin-bottom:10px}}
+.filters .poolfind{{min-width:190px}}
+.filters .tally{{margin-left:auto;font-size:11.5px}}
+.filters .pill{{background:var(--panel2);border:1px solid var(--line);
+ color:var(--muted);padding:4px 11px;border-radius:999px;cursor:pointer;
+ font:inherit;font-size:12px}}
+.filters .pill[aria-pressed=true]{{background:var(--blue-bg);
+ border-color:#2c4d80;color:#a8ccff}}
+table.pooltable td{{vertical-align:middle}}
+table.pooltable .doors{{display:flex;gap:6px;justify-content:flex-end}}
+table.pooltable .doors form{{display:inline}}
+tr.editrow>td{{background:var(--panel2)}}
+tr.editrow form{{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
+ padding:4px 0}}
+tr.editrow input{{min-width:150px;flex:1}}
 /* ---- the page */
 main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
  gap:16px}}
@@ -1204,6 +1267,82 @@ _DASH_SCRIPT = """
     });
   }
 
+
+  // The pool manager. Every sheet is already on the page, shut; this only
+  // decides which one is showing and which rows inside it are.
+  var ov = document.getElementById('poolov');
+  if (ov) {
+    var sheets = ov.querySelectorAll('.sheet');
+    var shut = function(){
+      ov.hidden = true;
+      sheets.forEach(function(el){ el.hidden = true; });
+      ov.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
+    };
+    var show = function(kind, focusAdd){
+      sheets.forEach(function(el){ el.hidden = el.dataset.sheet !== kind; });
+      ov.hidden = false;
+      var open = ov.querySelector('.sheet[data-sheet="' + kind + '"]');
+      if (!open) return;
+      var box = open.querySelector(focusAdd ? 'textarea' : '.poolfind');
+      if (box) box.focus();
+    };
+    document.addEventListener('click', function(e){
+      var opener = e.target.closest('[data-pool]');
+      if (opener && !opener.dataset.edit) {
+        show(opener.dataset.pool, opener.dataset.open === 'add');
+        return;
+      }
+      if (e.target.closest('[data-shut]') || e.target === ov) { shut(); return; }
+      var edit = e.target.closest('[data-edit]');
+      if (!edit) return;
+      var sheet = edit.closest('.sheet');
+      var want = edit.dataset.edit;
+      sheet.querySelectorAll('.editrow').forEach(function(el){
+        el.hidden = el.dataset.for !== want || !el.hidden;
+      });
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && !ov.hidden) shut();
+    });
+    // Search and the state chips, one sift per sheet. An edit row follows
+    // the row it belongs to: hiding a row and leaving its editor open is
+    // an editor with nothing above it.
+    sheets.forEach(function(sheet){
+      var find = sheet.querySelector('.poolfind');
+      var chips = sheet.querySelectorAll('.filters .pill');
+      var body = sheet.querySelectorAll('tbody tr:not(.none):not(.editrow)');
+      var none = sheet.querySelector('tbody tr.none');
+      var tally = sheet.querySelector('.tally');
+      var want = '';
+      var sift = function(){
+        var q = (find ? find.value : '').trim().toLowerCase(), shown = 0;
+        body.forEach(function(tr){
+          var hit = (!q || tr.textContent.toLowerCase().indexOf(q) >= 0)
+                 && (!want || tr.dataset.state === want);
+          tr.hidden = !hit;
+          if (hit) shown++;
+          var editor = tr.nextElementSibling;
+          if (editor && editor.classList.contains('editrow') && !hit)
+            editor.hidden = true;
+        });
+        if (none) none.hidden = shown > 0;
+        if (tally) tally.textContent = shown === body.length
+          ? shown + (shown === 1 ? ' row' : ' rows')
+          : shown + ' of ' + body.length + ' shown';
+      };
+      if (find) find.addEventListener('input', sift);
+      chips.forEach(function(chip){
+        chip.addEventListener('click', function(){
+          want = chip.dataset.chip;
+          chips.forEach(function(c){
+            c.setAttribute('aria-pressed', String(c === chip));
+          });
+          sift();
+        });
+      });
+    });
+  }
+
   document.addEventListener('click', function(e){
     var el = e.target.closest('.cp');
     if (!el) return;
@@ -1259,17 +1398,140 @@ def _add_fold(user: dict, kind: str) -> str:
             f'<button class="go">Preview</button></form></details>')
 
 
+#: The three pools, described once. Everything the rail and the manager
+#: draw comes from here, so a card and its manager can never disagree
+#: about what a pool is called or which door adds to it.
+#:
+#: `edit` and `remove` are the endpoints that exist, not the ones that
+#: ought to: only Gmail has both today, and a button that leads nowhere
+#: is worse than no button.
+_POOL_KINDS = {
+    "gmail": {
+        "name": "Gmail", "under": "free in the pool", "one": "address",
+        "add": "may_add_gmail", "manage": "may_add_gmail",
+        "preview": "/pools/gmail/preview",
+        "edit": "/pools/gmail/edit", "remove": "/pools/gmail/remove",
+        "how": ("address, password, then the 2fa secret or the recovery "
+                "address - one account per line, tabs or commas between"),
+        "columns": ("Address", "Status", "Seller", "On phone"),
+    },
+    "gpt": {
+        "name": "GPT accounts", "under": "waiting for a phone",
+        "one": "account",
+        "add": "may_add_gpt", "manage": "may_add_gpt",
+        "preview": "/pools/gpt/preview",
+        "edit": "", "remove": "",
+        "how": ("address, password, then the 2fa secret - one account per "
+                "line, tabs or commas between"),
+        "columns": ("Address", "Status", "On phone", "Note"),
+    },
+    "proxy": {
+        "name": "Proxies", "under": "free exits", "one": "exit",
+        "add": "", "manage": "",
+        "preview": "/pools/proxy/preview",
+        "edit": "", "remove": "/pools/proxy/remove",
+        "how": "host:port:username:password - one exit per line",
+        "columns": ("Name", "Status", "Exit IP", "Used by"),
+    },
+}
+
+#: What a row's state word is called on the chips, in the order they read.
+#: Taken from the states `read.pool_rows` writes, so a word the reader has
+#: never seen still gets a chip rather than disappearing from the list.
+_POOL_CHIPS = ("free", "on a phone", "broken")
+
+
+def _pool_cells(kind: str, row: dict) -> list[str]:
+    """One pool row, in the columns that pool's card names."""
+    state = str(row.get("state") or "")
+    if kind == "proxy":
+        host = str(row.get("host") or "")
+        port = row.get("port")
+        where = f"{host}:{port}" if host and port else host
+        return [str(row.get("address") or where or "?"), state,
+                str(row.get("exit_ip") or "-"),
+                str(row.get("serial") or "-")]
+    if kind == "gpt":
+        return [str(row.get("address") or ""), state,
+                str(row.get("serial") or "-"),
+                str(row.get("note") or row.get("error") or "-")]
+    return [str(row.get("address") or ""), state,
+            str(row.get("seller") or "-"), str(row.get("serial") or "-")]
+
+
+def _state_pill(state: str) -> str:
+    """A row's state in the badge the rest of the console already wears.
+
+    `attn` for anything else on purpose: a word this reader has never
+    seen - a new verdict, a status typed by hand - is a row somebody
+    has to look at, and colouring it as ordinary would hide exactly
+    the row that is not.
+    """
+    colour = ("free" if state == "free" else
+              "bad" if state in ("broken", "dead") else
+              "on_phone" if state == "on a phone" else "attn")
+    return f'<span class="badge {colour}">{esc(state or "-")}</span>'
+
+
+def _pool_queue(kind: str, rows: list[dict]) -> str:
+    """What is actually free, under the number that counts it.
+
+    Four of them and no more: a rail that scrolls is a second page, and
+    the number above already answers "how many". This answers the other
+    question a person has at a glance - which ones.
+    """
+    free = [r for r in rows if (r.get("state") or "") == "free"]
+    if not free:
+        held = len(rows)
+        return (f'<p class="railnote">Nothing free. '
+                f'{_plural(held, "row")} held or set aside.</p>' if held
+                else '<p class="railnote">The pool is empty.</p>')
+    items = []
+    for row in free[:4]:
+        label = str(row.get("address") or "?")
+        aside = str(row.get("seller") or "") if kind == "gmail" else ""
+        items.append(f'<li><span class="t" title="{esc(label)}">'
+                     f'{esc(label)}</span>'
+                     f'<span class="tag">{esc(aside)}</span></li>')
+    return f'<ul class="queue">{"".join(items)}</ul>'
+
+
+def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
+               why: str, user: dict) -> str:
+    meta = _POOL_KINDS[kind]
+    may_add = bool(meta["add"]) and _may(user, meta["add"])
+    add = (f'<button type="button" class="go small" data-pool="{kind}" '
+           f'data-open="add">+ add</button>' if may_add
+           else '<span class="lock">admin</span>' if not meta["add"]
+           else "")
+    return (
+        f'<section class="pool" title="{esc(why)}">'
+        f'<header><b style="color:var(--{colour})">{count}</b>'
+        f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
+        f'{add}</header>'
+        f'{_pool_queue(kind, rows)}'
+        f'<button type="button" class="more" data-pool="{kind}">'
+        f'Manage all {_plural(len(rows), "row")} &rarr;</button>'
+        f'</section>')
+
+
 def _supply_card(data: dict, user: dict) -> str:
-    """The three pools, stacked, with the way to add to two of them.
+    """The three pools, stacked, each showing what is actually in it.
 
     Vertical rather than across the top, because stock is something a
     person checks and occasionally tops up - it is not what they are
     watching. Standing it on its side gives the table the whole width and
     costs the stock nothing: three numbers read as well in a column.
 
+    Under each number, the rows the number counts - four of them. The
+    count answers "how many" and was the whole card; the list answers the
+    question a person actually had next, which is "which ones", and it
+    was two pages away. Everything else is behind Manage, because a rail
+    that scrolls is a second page nobody reads.
+
     Proxies carry no `+`: keeping that pool alive is the admin's job, and
     an operator's power over an exit is Change IP on one phone. A button
-    that leads nowhere is worse than no button, so the row says who owns
+    that leads nowhere is worse than no button, so the card says who owns
     it instead.
     """
     stock = data.get("stock") or {}
@@ -1286,38 +1548,175 @@ def _supply_card(data: dict, user: dict) -> str:
     # what the label sweep is written to catch - rightly, because the next
     # reader has to guess which position means which.
     rows = [
-        {"kind": "gmail", "count": gmail, "name": "Gmail",
-         "under": "free in the pool",
+        {"kind": "gmail", "count": gmail,
          "colour": ("red" if not gmail else "amber" if gmail < target
                     else "bright"),
          "why": ("nothing can be built until rows are added" if not gmail
                  else short if gmail < target else "free to build with")},
-        {"kind": "gpt", "count": awaiting, "name": "GPT accounts",
-         "under": "waiting for a phone",
+        {"kind": "gpt", "count": awaiting,
          "colour": "amber" if awaiting > warm else "bright",
          "why": (f"{awaiting - warm} of them have no phone to go to"
                  if awaiting > warm else "awaiting login")},
     ]
-    parts = []
-    for row in rows:
-        parts.append(
-            f'<div class="stockrow" title="{esc(row["why"])}">'
-            f'<b style="color:var(--{row["colour"]})">{row["count"]}</b>'
-            f'<span class="t">{esc(row["name"])}'
-            f'<i>{esc(row["under"])}</i></span>'
-            f'{_add_fold(user, row["kind"])}</div>')
-    proxy_colour = ("red" if not proxy else "amber" if proxy < target
-                    else "bright")
-    proxy_why = ("no free exit - the next build has nowhere to go out from"
+    rows.append(
+        {"kind": "proxy", "count": proxy,
+         "colour": ("red" if not proxy else "amber" if proxy < target
+                    else "bright"),
+         "why": ("no free exit - the next build has nowhere to go out from"
                  if not proxy else short if proxy < target
-                 else "free to build with")
-    parts.append(
-        f'<div class="stockrow" title="{esc(proxy_why)}">'
-        f'<b style="color:var(--{proxy_colour})">{proxy}</b>'
-        f'<span class="t">Proxies<i>free exits</i></span>'
-        f'<span class="lock">admin</span></div>')
+                 else "free to build with")})
 
-    return f'<div class="panel"><h3>Supply</h3>{"".join(parts)}</div>'
+    listed = data.get("pool_rows") or {}
+    return "".join(
+        _pool_card(row["kind"], row["count"], listed.get(row["kind"]) or [],
+                   row["colour"], row["why"], user)
+        for row in rows)
+
+
+def _pool_add_box(kind: str, user: dict) -> str:
+    """The paste box, inside the manager rather than folded into the card.
+
+    Same door as before - `/pools/<kind>/preview`, which shows what it
+    read and asks before writing. What changed is only where it is: a
+    fold on a card is a form you open on top of the thing you were
+    reading, and this is a place to stand while you work on one pool.
+    """
+    meta = _POOL_KINDS[kind]
+    if not meta["add"] or not _may(user, meta["add"]):
+        return ""
+    return (f'<form class="addbox" method="post" action="{meta["preview"]}">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<label for="paste-{kind}">Add to the pool</label>'
+            f'<textarea id="paste-{kind}" name="pasted" rows="3" '
+            f'spellcheck="false" placeholder="{esc(meta["how"])}"></textarea>'
+            f'<div class="addrow"><button class="go">Preview</button>'
+            f'<span class="dim">nothing is written until you have seen '
+            f'what it read</span></div></form>')
+
+
+def _pool_row_doors(kind: str, row: dict, user: dict) -> str:
+    """Edit and Remove for one row, where those doors exist.
+
+    Remove asks first - the confirm page the pool tabs already use - so
+    the one destructive thing here cannot happen on a mis-click.
+    """
+    meta = _POOL_KINDS[kind]
+    address = str(row.get("address") or "")
+    if not address or not meta["manage"] or not _may(user, meta["manage"]):
+        return ""
+    doors = []
+    if meta["edit"]:
+        doors.append(
+            f'<button type="button" class="quiet" data-edit="{esc(address)}"'
+            f' data-pool="{kind}">Edit</button>')
+    if meta["remove"]:
+        doors.append(
+            f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
+            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="/">'
+            f'<button class="quiet bad">Remove</button></form>')
+    return f'<div class="doors">{"".join(doors)}</div>'
+
+
+def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
+    """The editor for one row, rendered shut beneath it.
+
+    Server-rendered rather than built by the script, so the values are
+    escaped once by the same helper everything else on this page uses -
+    and so the form is the pool tab's own form, field for field.
+    """
+    meta = _POOL_KINDS[kind]
+    if not meta["edit"] or not _may(user, meta["manage"]):
+        return ""
+    address = str(row.get("address") or "")
+    return (
+        f'<tr class="editrow" data-for="{esc(address)}" hidden>'
+        f'<td colspan="{span}">'
+        f'<form method="post" action="{meta["edit"]}">{_csrf(user)}'
+        f'<input type="hidden" name="address" value="{esc(address)}">'
+        f'<input type="hidden" name="back" value="/">'
+        f'<input name="new_address" value="{esc(address)}" '
+        f'placeholder="address" autocomplete="off">'
+        f'<input name="password" placeholder="password - blank leaves it" '
+        f'autocomplete="off" type="password">'
+        f'<input name="secret" placeholder="2fa secret or recovery address" '
+        f'autocomplete="off">'
+        f'<input name="seller" value="{esc(str(row.get("seller") or ""))}" '
+        f'placeholder="seller" autocomplete="off">'
+        f'<button class="go">Save</button>'
+        f'<button type="button" class="quiet" data-shut="1">Cancel</button>'
+        f'</form></td></tr>')
+
+
+def _pool_table(kind: str, rows: list[dict], user: dict) -> str:
+    meta = _POOL_KINDS[kind]
+    head = "".join(f"<th>{esc(c)}</th>" for c in meta["columns"])
+    doors = bool(meta["manage"]) and _may(user, meta["manage"])
+    span = len(meta["columns"]) + (1 if doors else 0)
+    lines = []
+    for row in rows:
+        cells = _pool_cells(kind, row)
+        drawn = "".join(
+            f'<td>{_state_pill(cell) if i == 1 else esc(cell)}</td>'
+            for i, cell in enumerate(cells))
+        last = (f"<td>{_pool_row_doors(kind, row, user)}</td>"
+                if doors else "")
+        lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}">'
+                     f'{drawn}{last}</tr>')
+        if doors:
+            lines.append(_pool_edit_row(kind, row, user, span))
+    if not lines:
+        return ('<p class="empty">Nothing in this pool that anybody still '
+                'has a decision about.</p>')
+    return (f'<table class="pooltable"><thead><tr>{head}'
+            f'{"<th></th>" if doors else ""}</tr></thead>'
+            f'<tbody>{"".join(lines)}'
+            f'<tr class="none" hidden><td colspan="{span}">'
+            f'Nothing matches that.</td></tr></tbody></table>')
+
+
+def _pool_manager(data: dict, user: dict) -> str:
+    """One pool, full size, without leaving the page.
+
+    Everything a person does to a pool is here: what is in it, a search
+    over all of it, the states as chips, the paste box, and the two doors
+    on each row. The pool tabs still exist and still hold the archive -
+    what left this page was the need to go there for the working list.
+
+    Rendered shut, all three of them, rather than fetched: the rows are
+    already read for the cards, the whole page is one response, and a
+    manager that needs a second request is a manager that can fail to
+    open.
+    """
+    listed = data.get("pool_rows") or {}
+    if not listed:
+        return ""
+    sheets = []
+    for kind, meta in _POOL_KINDS.items():
+        rows = listed.get(kind) or []
+        chips = " ".join(
+            f'<button type="button" class="pill" data-chip="{esc(word)}" '
+            f'aria-pressed="false">{esc(word)}</button>'
+            for word in _POOL_CHIPS)
+        sheets.append(
+            f'<section class="sheet" data-sheet="{kind}" hidden>'
+            f'<header><h3>{esc(meta["name"])}</h3>'
+            f'<span class="dim">spent and delivered rows are not listed'
+            f'</span>'
+            f'<button type="button" class="x" data-shut="1" '
+            f'aria-label="Close">&times;</button></header>'
+            f'<div class="sheetbody">'
+            f'{_pool_add_box(kind, user)}'
+            f'<div class="filters">'
+            f'<input type="search" class="poolfind" placeholder="search"'
+            f' autocomplete="off">'
+            f'<button type="button" class="pill" data-chip="" '
+            f'aria-pressed="true">all</button>{chips}'
+            f'<span class="dim mono tally">{_plural(len(rows), "row")}</span>'
+            f'</div>'
+            f'<div class="tscroll">{_pool_table(kind, rows, user)}</div>'
+            f'</div></section>')
+    return f'<div class="ov" id="poolov" hidden>{"".join(sheets)}</div>'
 
 
 #: What a blank picker means, said the same way in all three.
@@ -1569,7 +1968,7 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'{_who_and_out(user)}</div>'
             f'<div class="desk"><div class="deskmain">{main}</div>'
             f'<aside class="side">{side}</aside></div>'
-            f'</div>' + _DASH_SCRIPT)
+            f'</div>' + _pool_manager(data, user) + _DASH_SCRIPT)
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Instance manager", body, user=user, here="/",

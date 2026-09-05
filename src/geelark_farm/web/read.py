@@ -234,6 +234,10 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " ORDER BY a.id DESC LIMIT 2")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
+        # The manager's lists, read on the same connection the rest of
+        # this page uses: the cards need the free rows anyway, and the
+        # whole page is one response.
+        pools_listed = _pool_rows(store)
     folded = {kind: dict.fromkeys(names, 0) for kind, names in _FOLD.items()}
     for row in stock:
         names = _FOLD.get(row["kind"])
@@ -251,6 +255,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "phones": phone_rows,
         "progress": progress,
         "stock": folded,
+        "pool_rows": pools_listed,
         "awaiting": awaiting,
         "stopped": stopped,
         "choose": choose,
@@ -351,6 +356,83 @@ def _pages(total: int, per_page: int) -> int:
 #: The Gmail Pool's four views, and the count each pill shows.
 GMAIL_VIEWS = {"queued": "queued", "on_phone": "on_phone", "used": "used",
                "errored": "errored"}
+
+
+#: How many rows of one pool the dashboard's manager will hold. Well past
+#: what a live pool ever carries, and a ceiling rather than a page: this
+#: list is searched in the browser, and a search that quietly stops at a
+#: boundary is worse than one that says it stopped.
+POOL_LIMIT = 300
+
+
+def pool_rows(settings: Settings) -> dict:
+    with Store(settings) as store:
+        return _pool_rows(store)
+
+
+def _pool_rows(store) -> dict:
+    """Every row of the three pools that somebody still has a decision
+    about, for the manager the dashboard opens.
+
+    **Spent rows are not here.** A `used` Gmail and a `delivered` account
+    are finished - the pool page keeps them because that is the archive,
+    and this is the working list. Proxies have no spent state at all: an
+    exit goes back on the shelf, so all of them are here.
+
+    Only what is still on a tab, the same rule every other count on this
+    page follows. A row that left is history, and nobody edits history.
+    """
+    rows = {
+            "gmail": store._rows(
+                "SELECT id, address, status, coalesce(seller, '') AS seller,"
+                " coalesce(note, '') AS note, error, updated_at,"
+                " coalesce(serial, '') AS serial"
+                " FROM resources WHERE kind = 'gmail' AND on_sheet"
+                "   AND status <> 'used'"
+                " ORDER BY sheet_row NULLS LAST, id LIMIT %s",
+                (POOL_LIMIT,)),
+            "gpt": store._rows(
+                "SELECT id, address, status, coalesce(serial, '') AS serial,"
+                " coalesce(note, '') AS note, error, updated_at"
+                " FROM resources WHERE kind = 'app' AND on_sheet"
+                "   AND status <> 'delivered'"
+                " ORDER BY sheet_row NULLS LAST, id LIMIT %s",
+                (POOL_LIMIT,)),
+            "proxy": store._rows(
+                "SELECT id, coalesce(proxy_name, '') AS address, status,"
+                " coalesce(host, '') AS host, port,"
+                " coalesce(last_exit_ip, '') AS exit_ip, times_used,"
+                " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
+                " error, updated_at"
+                " FROM resources WHERE kind = 'proxy' AND on_sheet"
+                " ORDER BY times_used, sheet_row NULLS LAST, id LIMIT %s",
+                (POOL_LIMIT,)),
+    }
+    for kind, listed in rows.items():
+        for row in listed:
+            # One word for what the row is, whatever column carried it.
+            # An unreadable row is `broken` whatever its status says -
+            # that is the thing about it a person has to act on.
+            row["state"] = _pool_state(kind, row)
+    return rows
+
+
+#: What a pool row's status means, in the one word the manager sorts and
+#: filters by. The pool pages spell the same four as views; this is the
+#: same decision, taken once, for a list that shows every view at once.
+def _pool_state(kind: str, row: dict) -> str:
+    if row.get("error"):
+        return "broken"
+    status = (row.get("status") or "").strip().lower()
+    if kind == "proxy":
+        if status in ("", "free", "unused"):
+            return "free"
+        return "on a phone" if status in ("in_use", "on a phone") else status
+    if status == "":
+        return "free"
+    if status in ("in_use", "ready"):
+        return "on a phone"
+    return status
 
 
 def gmail_pool(settings: Settings, view: str = "queued",
