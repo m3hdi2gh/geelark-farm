@@ -149,6 +149,10 @@ nav form button:hover{{color:#fff;background:#141c2b}}
  white-space:nowrap}}
 .pool .railnote{{margin:0;padding:9px 15px;font-size:11.5px;color:var(--dim);
  border-top:1px solid var(--line2)}}
+.pool .railnote.bad,.pool .railnote.warn{{font-weight:500}}
+.pool .railnote.bad{{color:var(--red)}} .pool .railnote.warn{{color:var(--amber)}}
+.pool .railnote.bad::before,.pool .railnote.warn::before{{content:"! ";
+ font-family:var(--mono);font-weight:600}}
 .pool .more{{display:block;width:100%;background:none;border:0;
  border-top:1px solid var(--line2);color:var(--blue);padding:9px;
  cursor:pointer;font:inherit;font-size:12px}}
@@ -1681,7 +1685,7 @@ def _may_send(user: dict, manual_login: bool) -> bool:
 
 
 def _pool_queue(kind: str, rows: list[dict], user: dict,
-                manual_login: bool) -> str:
+                manual_login: bool, quiet: bool = False) -> str:
     """What is actually free, under the number that counts it.
 
     Four of them and no more: a rail that scrolls is a second page, and
@@ -1690,6 +1694,8 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
     """
     free = [r for r in rows if (r.get("state") or "") == "free"]
     if not free:
+        if quiet:
+            return ""                # the card's alert has already said it
         held = len(rows)
         return (f'<p class="railnote">Nothing free. '
                 f'{_plural(held, "row")} held or set aside.</p>' if held
@@ -1709,7 +1715,8 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
 
 
 def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
-               why: str, user: dict, manual_login: bool = False) -> str:
+               why: str, user: dict, manual_login: bool = False,
+               alerts: list[dict] | None = None) -> str:
     meta = _POOL_KINDS[kind]
     # One door. `+ add` and `Manage all` opened the same manager, one
     # focused on the paste box and one on the search, and two buttons that
@@ -1729,11 +1736,28 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<header><b style="color:var(--{colour})">{count}</b>'
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
-        f'{_pool_queue(kind, rows, user, manual_login)}'
+        f'{_pool_alerts(alerts or [])}'
+        f'{_pool_queue(kind, rows, user, manual_login, quiet=bool(alerts))}'
         f'</section>')
 
 
-def _supply_card(data: dict, user: dict, manual_login: bool = False) -> str:
+def _pool_alerts(alerts: list[dict]) -> str:
+    """What the pass said about this pool, in its own card: the lead
+    sentence, in the colour of how bad it is. The whole sentence is one
+    hover away, and the count above it is the rest of the story."""
+    lines = []
+    for a in alerts:
+        text = str(a.get("text") or "")
+        lead = text.partition(". ")[0].rstrip(".")
+        # The whole sentence a hover away - only when there is more of it.
+        more = f' title="{esc(text)}"' if lead != text.rstrip(".") else ""
+        lines.append(f'<p class="railnote {esc(a.get("level", "warn"))}"'
+                     f'{more}>{esc(lead)}</p>')
+    return "".join(lines)
+
+
+def _supply_card(data: dict, user: dict, manual_login: bool = False,
+                 alerts: dict | None = None) -> str:
     """The three pools, stacked, each showing what is actually in it.
 
     Vertical rather than across the top, because stock is something a
@@ -1787,7 +1811,8 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False) -> str:
     listed = data.get("pool_rows") or {}
     return "".join(
         _pool_card(row["kind"], row["count"], listed.get(row["kind"]) or [],
-                   row["colour"], row["why"], user, manual_login)
+                   row["colour"], row["why"], user, manual_login,
+                   (alerts or {}).get(row["kind"]) or [])
         for row in rows)
 
 
@@ -2222,13 +2247,24 @@ def dashboard(data: dict, user: dict, said: str = "",
     # "Awaiting login" listed the accounts with no phone. That is the GPT
     # card's number and the list underneath it, which is where a person
     # looking for stock now looks.
-    side = _supply_card(data, user, manual_login)
-
-    # The alert strip inside the page column, not above it: the page's
-    # first line, the width of the page, with the rest under it. `page()`
-    # is told nothing is left for it to add.
+    alerts = (user.get("nav") or {}).get("alerts") or []
+    pooled = {kind: [a for a in alerts
+                     if str(a.get("href") or "").startswith(f"/pools/{kind}")]
+              for kind in _POOL_KINDS}
+    rest = [a for a in alerts
+            if not str(a.get("href") or "").startswith("/pools/")]
     quiet = dict(user, nav=dict(user.get("nav") or {}, alerts=[]))
-    body = (f'<div class="wide">{_alert_strip(user)}'
+    strip = _alert_strip(dict(user, nav=dict(user.get("nav") or {},
+                                             alerts=rest)))
+    side = _supply_card(data, user, manual_login, pooled)
+
+    # An alert about a pool is said in that pool's card, one line, where
+    # the number it is about already is - a page-wide strip for "the Gmail
+    # pool is empty" beside a card whose count is a red zero said it twice
+    # (the operator, 2026-09-05). What is left for the strip is what has
+    # no card: the breaker, a late pass, an error in the log. `page()` is
+    # told nothing is left for it to add.
+    body = (f'<div class="wide">{strip}'
             f'<div class="top"><h2>Instance manager</h2>'
             f'<span class="status">{_status_sentence(data)}</span>'
             f'{_who_and_out(user)}</div>'

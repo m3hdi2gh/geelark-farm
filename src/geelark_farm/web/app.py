@@ -90,16 +90,12 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/password":
                 return self._html(200, pages.password_page(user))
             if user.get("role") != "admin" and not _operator_may_get(path):
-                # Said rather than 404'd: a person who followed their own
-                # bookmark deserves to know the page moved away from them
-                # rather than to wonder whether the console is broken.
-                return self._html(403, pages.page(
-                    "Not your page",
-                    '<div class="narrow"><h2>That page belongs to an '
-                    'admin</h2><p class="dim">Everything you need is on '
-                    'the dashboard: the phones, the stock, the accounts '
-                    'waiting, and building one by hand. '
-                    '<a href="/">Back to it</a>.</p></div>', user=user))
+                # Straight back to the one page they have. This used to be
+                # a page of its own saying whose the page was, and every
+                # link that landed an operator there - an alert, an old
+                # bookmark - was one more page between them and the work
+                # (the operator, 2026-09-05: "this page is superfluous").
+                return self._redirect("/")
             if path == "/users":
                 return self._users_get(user)
             if path == "/":

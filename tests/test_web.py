@@ -236,9 +236,9 @@ def test_an_own_scoped_user_is_kept_out_of_the_farm_pages(web, monkeypatch):
     client = web()
     client.login(username="narrow")
     status, _, _ = client.request("GET", "/events")
-    assert status == 403
+    assert status == 303  # sent home, not shown a wall
     status, _, _ = client.request("GET", "/needs")
-    assert status == 403
+    assert status == 303  # sent home, not shown a wall
 
 
 def test_logout_needs_the_token_and_then_works(web):
@@ -437,7 +437,7 @@ def test_needs_page_is_scope_gated_like_the_other_farm_pages(web,
     client = web()
     client.login(username="narrow")
     status, _, _ = client.request("GET", "/needs")
-    assert status == 403
+    assert status == 303  # sent home, not shown a wall
 
 
 def test_a_status_the_verdict_table_never_heard_of_renders_as_data(web,
@@ -500,10 +500,10 @@ def test_the_users_page_is_admin_only(web, monkeypatch):
     client = web()
     client.login(username="narrow")
     status, _, _ = client.request("GET", "/users")
-    assert status == 403
+    assert status == 303  # sent home, not shown a wall
     status, _, _ = client.request("POST", "/users/new",
                                   f"csrf={client.csrf()}&username=x")
-    assert status == 403
+    assert status == 403, "a refused POST stays a refusal"
 
 
 @pytest.mark.parametrize("web", [ADMIN_ON], indirect=True)
@@ -718,9 +718,8 @@ def test_an_operator_has_the_dashboard_and_one_phone_and_nothing_else(
 
     for path in ("/pools/gmail", "/pools/proxy", "/pools/gpt", "/pools",
                  "/requests", "/needs", "/events", "/logs", "/phones"):
-        status, _, body = client.request("GET", path)
-        assert status == 403, path
-        assert "belongs to an admin" in body, path
+        status, headers, _ = client.request("GET", path)
+        assert status == 303 and dict(headers)["Location"] == "/", path
 
     # What is theirs: the dashboard, and one phone reached from it.
     assert client.request("GET", "/")[0] == 200
@@ -1782,7 +1781,10 @@ def test_the_three_are_admin_only(web, monkeypatch):
     for path in ("/events", "/events.csv", "/logs", "/phones/1523",
                  "/phones/1523/screens/x/y.xml"):
         status, _, _ = client.request("GET", path)
-        assert status == 403, path
+        # A page that is not theirs sends them home; a phone that is not
+        # theirs is refused by the page itself, in its own words.
+        want = 403 if path.startswith("/phones/") else 303
+        assert status == want, path
 
 
 # ------------------------------------------------------- users, as drawn
@@ -2317,11 +2319,12 @@ def test_the_keepers_warning_is_said_once_above_the_title(
     client.login()
     _, _, body = client.request("GET", "/")
     assert body.count("the Gmail tab has no free rows") == 1
-    # The one that stayed is the strip's, above the title.
+    # And the one place it is said is the Gmail card, not a strip: the
+    # card's count is the rest of the story, and a strip beside it said
+    # the same thing twice (2026-09-05).
     where = body.index("the Gmail tab has no free rows")
-    assert body.rindex('class="alerts"', 0, where) < where
-    assert where < body.index("<h2>Instance manager")
-    assert body.count('class="alert warn"') == 1
+    assert body.rindex('<section class="pool"', 0, where) < where
+    assert 'class="alert warn"' not in body
 
 
 def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
