@@ -498,7 +498,41 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect(_said_url(back, f"already:{twin}"))
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
                                     requested_by=user["id"], idem_key=idem)
+        if self._ran_it_now(verb, payload, req):
+            return self._redirect(_said_url(back, f"done:{req}"))
         self._redirect(_said_url(back, f"queued:{req}"))
+
+    def _ran_it_now(self, verb: str, payload: dict, req: int) -> bool:
+        """Do the work here, in the request that asked for it.
+
+        The queue existed because only the pass could write the sheet.
+        With the pools in the store that is no longer true of stock, and
+        waiting up to thirty seconds to be told a pasted account was
+        accepted is the difference between a tool and a form.
+
+        Still a row in `actions`, written first and settled after: the
+        Requests page is the record of what was asked and by whom, and a
+        command that skipped it would be one nobody could audit. What
+        changes is who runs it and when, not whether it is written down.
+
+        The work itself is in `runner`, outside this package, because the
+        web may not import the book - see that module's first paragraph.
+        """
+        from ..runner import run_now
+        from ..store import actions as store_actions
+
+        outcome = run_now(self.settings, verb, payload)
+        if outcome is None:
+            return False
+        status, said, detail = outcome
+        try:
+            store_actions.settle(self.settings, req, status=status,
+                                 result=said, detail=detail)
+        except Exception as exc:                                  # noqa: BLE001
+            # The work is done; only the record of it failed. Saying it
+            # was queued would be a lie in the other direction.
+            log.warning("%s ran but could not be settled (%s)", verb, exc)
+        return True
 
     def _login_accounts(self, user: dict, addresses: list,
                         back: str = "/") -> None:

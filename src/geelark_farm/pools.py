@@ -1977,6 +1977,29 @@ def missing_tabs(tabs) -> list[str]:
             if name not in tabs]
 
 
+class _NotOpened:
+    """Stands where a sheet tab would be on a book that never opened one.
+
+    Raises rather than returning None, and says which tab: a verb that
+    reaches for the Phones tab from the web process is a verb somebody
+    classified wrong, and the difference between finding that in a test
+    and finding it in production is whether it says so or quietly does
+    half its work.
+    """
+
+    def __init__(self, tab: str):
+        self._tab = tab
+
+    def __getattr__(self, name: str):
+        raise RuntimeError(
+            f"this book has no {self._tab} tab - it was opened for the pools "
+            f"alone, and {self._tab}.{name} needs the workbook. A verb that "
+            f"reaches here belongs on the pass, not in a web request.")
+
+    def __bool__(self) -> bool:
+        return False
+
+
 class Book:
     """The workbook and its four tabs, sharing one lock.
 
@@ -2005,6 +2028,30 @@ class Book:
         #: to keep, and every caller checks before writing.
         self.service = service
         self._lock = lock or threading.Lock()
+
+    @classmethod
+    def pools_only(cls, settings) -> Book:
+        """The three pools and nothing else, without opening the workbook.
+
+        `Book.open` takes about six seconds against Google, which is fine
+        once a pass and impossible on every click. With the pools in the
+        store there is nothing to open for a verb that only touches stock:
+        this hands back the same three objects the pass would use, over
+        the same table, and a tab-shaped hole where the workbook was.
+
+        Not a cache and not a second view: `ResourceTable` locks in
+        Postgres, so two of these racing for one row is the same
+        `FOR UPDATE SKIP LOCKED` the pass relies on. That is the whole
+        reason this is safe and a second sheet Book would not be.
+        """
+        settings.require_store()
+        from .store.pgpool import PgAppPool, PgGmailPool, PgProxyPool, ResourceTable
+
+        table = ResourceTable(settings)
+        book = cls(gmails=PgGmailPool(table), proxies=PgProxyPool(table),
+                   apps=PgAppPool(table), phones=_NotOpened("Phones"))
+        book.reload()
+        return book
 
     def record_history(self, **fields: str) -> None:
         """Append one event to the History tab, if this workbook has one.

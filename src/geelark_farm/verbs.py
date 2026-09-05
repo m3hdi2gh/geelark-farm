@@ -867,6 +867,69 @@ def _stamp_test(settings, name: str, ok: bool, exit_ip: str) -> None:
         log.debug("proxy test stamp for %s not kept (%s)", name, exc)
 
 
+#: The only halves of the book a verb may touch and still answer inside
+#: the request that asked for it. Stock lives in Postgres now, and reaching
+#: it costs milliseconds; everything else in the book is the workbook, and
+#: opening that is about six seconds against Google - fine once a pass,
+#: absurd on every click.
+_POOLS = ("gmails", "apps", "proxies")
+
+#: Book methods that are not a tab. `reload` re-reads the three pools,
+#: which with the pools in the store is three Postgres queries.
+_BOOK_METHODS = ("reload", "beat")
+
+#: The workbook halves, named however a verb spells them. `control`
+#: reaches the Service board with `getattr(book, "service")`, which no
+#: scan of `book.<name>` would ever see - and that is the same blind spot
+#: a blacklist of attribute names has.
+_WORKBOOK = ("phones", "history", "service")
+
+
+def runs_inline(verb: str) -> bool:
+    """Whether this verb can answer in the request that asked for it.
+
+    Closed by default and derived from the verb's own source, rather than
+    listed. A list is a second place to remember, and the verb that gets
+    forgotten is the one that then blocks a web request for six seconds or
+    drives a phone from it.
+
+    Two rules, both of which have to hold:
+
+    - every `book.<something>` it names is one of the three pools. The
+      Phones tab, the History tab and the Service board are the workbook.
+    - it does not name `client` at all. That is GeeLark: booting a phone,
+      testing an exit, deleting a profile - seconds to minutes of somebody
+      else's network, which a person waiting on a form should not hold.
+
+    Written as "may touch only these" rather than "must not touch those"
+    on purpose. The first draft was the second shape and it called four
+    verbs instant that were not - the Service board, the account logins
+    and both proxy tests - because each reached the world by a spelling
+    the list had not thought of. A closed rule is wrong in the safe
+    direction: the worst it does is leave something on the queue, which is
+    where everything was yesterday.
+    """
+    import inspect
+    import re
+
+    found = VERBS.get(verb)
+    if found is None:
+        return False
+    try:
+        source = inspect.getsource(found)
+    except (OSError, TypeError):                                  # pragma: no cover
+        return False
+    # Past the signature, so the parameter names in it are not evidence.
+    body = source.partition(chr(10))[2]
+    if re.search(r"\bclient\b", body):
+        return False
+    if any(re.search(rf'"{half}"|\bbook\.{half}\b', body)
+           for half in _WORKBOOK):
+        return False
+    return all(name in _POOLS + _BOOK_METHODS
+               for name in re.findall(r"\bbook\.(\w+)", body))
+
+
 VERBS = {
     "login_accounts": login_accounts,
     "control": control,

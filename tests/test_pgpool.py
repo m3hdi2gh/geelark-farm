@@ -373,8 +373,16 @@ def test_the_importer_says_why_a_bad_row_stays_behind():
 # ------------------------------------------------------------ the switch
 def test_the_pools_reach_the_store_only_inside_the_flag():
     """The trunk rule, for this module: pools.py names the store package
-    nowhere at module level, and the one import it makes sits inside the
-    `pools_in_pg` branch of Book.open."""
+    nowhere at module level, and every import it makes of the store is
+    reached only after something has said the store is there.
+
+    Written as the rule rather than as a position in the file. It used to
+    assert that the one import came after the words `if
+    settings.pools_in_pg:`, which held while there was exactly one - and
+    then `Book.pools_only` added a second, above it, guarded by
+    `require_store()` instead. The test was right that a rule was at
+    stake and wrong about what the rule was.
+    """
     import ast
     import pathlib
 
@@ -385,9 +393,21 @@ def test_the_pools_reach_the_store_only_inside_the_flag():
         if isinstance(node, ast.ImportFrom) and node.module and \
                 "store" in node.module:
             raise AssertionError("pools.py imports the store at module level")
-    assert "if settings.pools_in_pg:" in src
-    assert src.index("if settings.pools_in_pg:") < src.index(
-        "from .store.pgpool import")
+
+    # Every store import is inside a function, and that function says so
+    # first - either by testing the flag or by demanding the store.
+    guards = ("if settings.pools_in_pg:", "settings.require_store()")
+    found = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = ast.get_source_segment(src, node) or ""
+        if "from .store" not in body:
+            continue
+        found += 1
+        assert any(guard in body for guard in guards), (
+            f"{node.name} imports the store without saying it is there")
+    assert found, "no function imports the store, so this proves nothing"
 
 
 def test_the_mirror_leaves_the_resources_alone_once_they_are_the_pool():

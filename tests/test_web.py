@@ -3329,3 +3329,56 @@ def test_the_add_door_needs_the_permission(web, monkeypatch):
 
     assert 'action="/pools/gmail/preview"' in body
     assert 'action="/pools/gpt/preview"' not in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_stock_command_answers_in_the_request_that_asked(web, monkeypatch):
+    """Stage 2, end to end. The row is still written - the Requests page is
+    the record of what was asked and by whom - but the work happens here
+    and the banner says it is already in, not that it is queued."""
+    import geelark_farm.runner as runner_mod
+    import geelark_farm.store.actions as actions_mod
+
+    _gmail_active(monkeypatch)
+    enqueued, settled = {}, {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: enqueued.update(k) or 501)
+    monkeypatch.setattr(actions_mod, "settle",
+                        lambda s, i, **k: settled.update(dict(k, id=i)))
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda s, verb, payload: ("done", "1 gmail added",
+                                                  {"added": ["a@x.com"]}))
+    client = web()
+    client.login()
+
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/add",
+        _form(csrf=client.csrf(), rows="a@x.com\tpw", seller="Nima"))
+
+    assert status == 303
+    assert dict(headers)["Location"].endswith("said=done:501")
+    assert enqueued["verb"] == "add_gmails", "still written down"
+    assert settled["status"] == "done" and settled["id"] == 501
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_command_the_runner_refuses_still_goes_to_the_queue(web,
+                                                              monkeypatch):
+    """The fallback is the queue, which is where everything was before
+    this existed - so the worst the instant path can do is be no faster."""
+    import geelark_farm.runner as runner_mod
+    import geelark_farm.store.actions as actions_mod
+
+    _gmail_active(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 502)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(runner_mod, "run_now", lambda s, verb, payload: None)
+    client = web()
+    client.login()
+
+    _, headers, _ = client.request(
+        "POST", "/pools/gmail/add",
+        _form(csrf=client.csrf(), rows="a@x.com\tpw", seller="Nima"))
+
+    assert dict(headers)["Location"].endswith("said=queued:502")

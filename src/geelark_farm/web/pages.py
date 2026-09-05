@@ -614,6 +614,11 @@ def login(error: str = "") -> str:
 
 
 _DASH_SAID = {
+    #: Stock lives in the store now, so a command
+    #: that only touches it runs in the request that
+    #: asked for it - there is nothing left for a
+    #: pass to do.
+    "done": "Done - it is already in.",
     "queued": "Queued - the next pass (within ~30s) carries it out; watch "
               "Requests.",
     "refused": "You may not do that - ask an admin for the permission.",
@@ -1828,6 +1833,11 @@ def needs_page(data: dict, user: dict, advice, said: str = "") -> str:
 #: What a `?said=` token means, spelled out where the person reads it.
 #: An unknown token renders as nothing - the address bar is user input.
 _SAID = {
+    #: Stock lives in the store now, so a command
+    #: that only touches it runs in the request that
+    #: asked for it - there is nothing left for a
+    #: pass to do.
+    "done": "Done - it is already in.",
     "queued": "Queued - the next pass (within ~30s) will run it.",
     "cancelled": "Cancelled - it never ran.",
     "too_late": "Too late - a pass had already taken it; see its row below.",
@@ -2341,6 +2351,11 @@ def password_page(user: dict, error: str = "") -> str:
 # themselves are shared stock and everyone signed in sees them.
 
 _POOL_SAID = {
+    #: Stock lives in the store now, so a command
+    #: that only touches it runs in the request that
+    #: asked for it - there is nothing left for a
+    #: pass to do.
+    "done": "Done - it is already in.",
     "queued": "Queued - the next pass (within ~30s) carries it out; watch "
               "Requests.",
     "refused": "You may not do that - ask an admin for the permission.",

@@ -2305,3 +2305,19 @@ def test_a_tab_made_before_the_controls_still_gets_its_column():
 
     assert tab.col_count == 4
     assert any(a1 == "A1:D1" for a1, _ in tab.updates)
+
+
+def test_a_pools_only_book_has_no_workbook_and_says_so():
+    """`Book.open` costs about six seconds against Google. A verb that
+    only touches stock needs none of it - and if one reaches for the
+    Phones tab anyway, it must say which tab and why rather than quietly
+    doing half its work."""
+    from geelark_farm.pools import _NotOpened
+
+    hole = _NotOpened("Phones")
+
+    assert not hole
+    with pytest.raises(RuntimeError) as refused:
+        hole.write("1523", State="taken")
+    assert "no Phones tab" in str(refused.value)
+    assert "belongs on the pass" in str(refused.value)

@@ -765,3 +765,45 @@ def test_add_gpt_takes_several_rows_and_says_what_it_skipped():
     assert added is not None and added.values["2FA Secret"] == SECRET
     assert "Added from the web by mehdi" in added.values["Note"]
     assert added in book.apps.available, "blank status: awaiting login"
+
+
+# ------------------------------- what may answer inside a web request (C3)
+def test_a_verb_that_drives_a_phone_never_runs_in_a_web_request():
+    """`client` is GeeLark: booting a phone, testing an exit, deleting a
+    profile - seconds to minutes of somebody else's network. A person
+    waiting on a form must not be holding it."""
+    from geelark_farm import verbs
+
+    for verb in ("boot_phone", "change_proxy", "login_accounts",
+                 "test_proxy", "test_all_proxies", "adopt_proxy"):
+        assert not verbs.runs_inline(verb), verb
+
+
+def test_a_verb_that_writes_the_workbook_never_runs_in_a_web_request():
+    """Opening the workbook is about six seconds against Google - fine
+    once a pass, absurd on every click. `control` is the one that proves
+    the rule has to read more than `book.<name>`: it reaches the Service
+    board through `getattr`, which no attribute scan would ever see."""
+    from geelark_farm import verbs
+
+    for verb in ("set_phone_state", "clear_tries", "control"):
+        assert not verbs.runs_inline(verb), verb
+
+
+def test_the_stock_verbs_answer_in_the_request_that_asked():
+    """The point of the whole change: adding accounts, judging one that
+    stopped, asking for a phone by hand - none of these needs a pass any
+    more, and none of them should make somebody wait for one."""
+    from geelark_farm import verbs
+
+    for verb in ("add_gmails", "add_gpt", "offer_again", "edit_gmail",
+                 "remove_gmail", "build_by_hand"):
+        assert verbs.runs_inline(verb), verb
+
+
+def test_an_unknown_verb_is_never_run_inline():
+    """Closed by default: the fallback is the queue, which is where
+    everything was before this existed."""
+    from geelark_farm import verbs
+
+    assert not verbs.runs_inline("no_such_verb")
