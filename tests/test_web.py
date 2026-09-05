@@ -1109,8 +1109,10 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     assert status == 200
     assert "Stocked \u2014 5 of 5 phones warm" in body, \
         "what the keeper is doing, not a mood"
-    assert ">12</b><i>gmail</i>" in body, "the strip, one cell per pool"
-    assert ">20</b><i>proxies</i>" in body
+    # The pools stand on their side in the rail now, one row each.
+    assert ">12</b><span class=\"t\">Gmail" in body, "one row per pool"
+    assert ">20</b><span class=\"t\">Proxies" in body
+    assert "Instance manager" in body, "the page says what it is"
     assert "last pass" not in body, "the pass's clock is the alert strip's job"
     assert "IronHawk@gmail.com" in body and "SX27" in body
     assert 'class="badge warn">warm' in body
@@ -2158,24 +2160,25 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     client.login()
     status, _, body = client.request("GET", "/")
     assert status == 200
-    strip = body[body.index('class="strip pools"'):]
-    strip = strip[:strip.index("</div>")]
-    assert 'color:var(--red)">0</b><i>gmail</i>' in strip
-    assert "nothing can be built until rows are added" in strip
-    assert 'color:var(--amber)">2</b><i>proxies</i>' in strip
-    assert "fewer than the 5 phones the keeper keeps warm" in strip
-    assert 'color:var(--amber)">7</b><i>GPT</i>' in strip
-    assert "2 of them have no phone to go to" in strip
-    # the shelf reads as one row of counts, the same size as the pools it
-    # faces, in the order a phone travels
-    head = body[body.index('class="strip"'):body.index('class="strip pools"')]
-    assert 'color:var(--blue)">1</b><i>building</i>' in head
-    assert 'color:var(--amber)">1</b><i>warm</i>' in head
-    assert 'color:var(--green)">1</b><i>ready</i>' in head, "one of two taken"
-    assert 'color:var(--violet)">1</b><i>taken</i>' in head
-    assert "incomplete" not in head, "a count nobody has is not printed"
-    assert head.index("building") < head.index("warm") < head.index("ready") \
-        < head.index("taken"), "the order a phone travels"
+    # The pools are a card in the rail now, one row each, and each row
+    # still wears the colour of how short it is and says the consequence.
+    card = body[body.index("<h3>Supply</h3>"):]
+    card = card[:card.index("</div><div class=\"panel\"") if
+                "</div><div class=\"panel\"" in card else len(card)]
+    assert 'color:var(--red)">0</b><span class="t">Gmail' in card
+    assert "nothing can be built until rows are added" in card
+    assert 'color:var(--amber)">2</b><span class="t">Proxies' in card
+    assert "fewer than the 5 phones the keeper keeps warm" in card
+    assert 'color:var(--amber)">7</b><span class="t">GPT accounts' in card
+    # Proxies are the admin's pool, so the row says so instead of
+    # offering a `+` that leads nowhere for an operator.
+    assert 'class="lock">admin<' in card
+    assert card.count('class="plus"') == 2, "Gmail and GPT, not proxies"
+    assert "2 of them have no phone to go to" in card
+    # The row of shelf counts above the table is gone: the table below is
+    # already grouped by state, and a page should not say a number twice.
+    assert "<i>building</i>" not in body
+    assert "<i>taken</i>" not in body
 
 
 def test_the_keeper_sentence_says_what_it_is_doing_in_every_state():
@@ -2206,10 +2209,11 @@ def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    head = body[body.index('class="strip"'):body.index('class="strip pools"')]
-    assert 'color:var(--green)">0</b><i>ready</i>' in head, \
-        "a zero on the shelf is the news, so it is always printed"
-    assert 'color:var(--amber)">1</b><i>warm</i>' in head
+    # The counts strip is gone, so a farm with nothing ready says it where
+    # it is true: in the sentence, and in the table.
+    assert "<i>ready</i>" not in body, "the counts strip is gone"
+    assert 'class="badge warn">warm' in body, "the one phone it does have"
+    assert 'class="badge ok">ready' not in body, "and nothing that is ready"
 
 
 def test_a_building_row_shows_its_last_log_line_and_how_long(web,
@@ -2249,7 +2253,7 @@ def test_the_keepers_warning_sits_above_the_tiles_with_the_fix_linked(
     warn = body[body.index('class="alert warn"'):]
     assert 'href="/pools/gmail"' in body[:body.index('class="alert warn"') + 200]
     assert "open the Gmail pool" in warn[:400]
-    assert body.index('class="alert warn"') < body.index('class="strip"')
+    assert body.index('class="alert warn"') < body.index("<table")
 
     _dash(monkeypatch, pulse={"warm": 2, "target": 5, "at": 0,
                               "tripped": "captcha_shown x5",
@@ -2272,9 +2276,13 @@ def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
     client.login()
     _, _, body = client.request("GET", "/")
     order = [body.index(f'href="/phones/{s}"') for s in
-             ("1500", "1501", "1502", "1503")]
-    assert order == sorted(order), "ready, warm, incomplete, building"
+             ("1500", "1501", "1503")]
+    assert order == sorted(order), "ready, warm, building"
     assert "waiting for an account" in body, "the warm row says what it lacks"
+    # The incomplete one is not on the shelf at all: it stands under the
+    # table, where it cannot be mistaken for something to hand over.
+    assert body.index("<table") < body.index('class="didnot"')
+    assert body.index('class="didnot"') < body.index('href="/phones/1502"')
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -2360,33 +2368,28 @@ def test_awaiting_cards_say_how_long_ago_and_count_the_warm_phones(
     assert "no warm phone is free" in body
 
 
-def test_the_ticker_tells_requests_and_events_as_sentences(web, monkeypatch):
+def test_the_dashboard_carries_no_events(web, monkeypatch):
+    """Events are a developer's line on an operator's page.
+
+    The ticker read well and told the truth, and it still went: this page
+    is what somebody handing out phones sees all day, and the last thing
+    the breaker said is not one of the two questions they came with. The
+    events page keeps all of it, and the rail keeps the way there.
+    """
     _dash(monkeypatch,
           recent=[{"at": "2026-09-01 18:04:31+00", "kind": "build_finished",
                    "serial": "1551", "status": "ready",
-                   "detail": "ok=True gmail=x"},
-                  {"at": "2026-09-01 17:36:02+00", "kind": "breaker",
-                   "serial": "", "status": "tripped",
-                   "detail": "5 in a row: captcha_shown"}],
+                   "detail": "ok=True gmail=x"}],
           asked=[{"id": 241, "verb": "login_accounts", "status": "running",
                   "payload": {"addresses": ["a@x.com", "b@x.com"]},
-                  "at": "2026-09-01 18:06:12+00", "requested_by": "mehdi"},
-                 {"id": 240, "verb": "change_proxy", "status": "failed",
-                  "payload": {"serial": "1549"},
-                  "at": "2026-09-01 18:02:51+00", "requested_by": "alireza"}])
+                  "at": "2026-09-01 18:06:12+00", "requested_by": "mehdi"}])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    hhmm = app_mod.pages._clock("2026-09-01 18:06:12+00")[:5]
-    assert (f'{hhmm}</span> <b>mehdi</b> asked: Log in 2 accounts → '
-            f'<span style="color:var(--blue)">running</span>') in body
-    assert 'phone <a href="/phones/1551">1551</a> became ready' in body
-    assert "the breaker tripped — 5 in a row: captcha_shown" in body
-    assert ('Change IP on <a href="/phones/1549">1549</a> → '
-            '<span style="color:var(--red)">failed</span>') in body
-    foot = body[body.index("all events") - 2000:body.index("all events")]
-    assert foot.index("mehdi") < foot.index("1551") < foot.index("alireza"), \
-        "newest first, requests and events interleaved by time"
+
+    assert "all events" not in body
+    assert "became ready" not in body
+    assert "asked: Log in 2 accounts" not in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

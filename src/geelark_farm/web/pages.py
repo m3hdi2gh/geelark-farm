@@ -268,6 +268,60 @@ label.field{{align-items:stretch}}
 p{{margin:0}}
 .narrow{{width:100%;max-width:1060px;margin:0 auto;display:flex;
  flex-direction:column;gap:26px}}
+/* The dashboard is two columns: what an operator watches on the left,
+   what they reach for on the right. Everything else on the console keeps
+   the single centred column. */
+.wide{{width:100%;max-width:1340px;margin:0 auto;display:flex;
+ flex-direction:column;gap:20px}}
+.desk{{display:grid;grid-template-columns:minmax(0,1fr) 314px;gap:30px;
+ align-items:start}}
+.deskmain{{display:flex;flex-direction:column;gap:20px;min-width:0}}
+/* The table scrolls inside its own column rather than taking the page
+   sideways with it - the rail has to stay where it was put. */
+.tscroll{{overflow-x:auto}}
+.side{{position:sticky;top:18px;display:flex;flex-direction:column;gap:14px}}
+.side .panel{{padding:0;gap:0;overflow:hidden}}
+.side h3{{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;
+ color:var(--dim);padding:13px 15px;border-bottom:1px solid var(--line2);
+ background:var(--panel2);display:flex;align-items:center;gap:8px;margin:0}}
+.side h3 .ct{{margin-left:auto;font-family:var(--mono);color:var(--muted);
+ letter-spacing:0}}
+.stockrow{{display:flex;align-items:center;gap:11px;padding:12px 15px;
+ border-bottom:1px solid var(--line2)}}
+.stockrow b{{font-family:var(--mono);font-size:19px;font-weight:500;
+ font-variant-numeric:tabular-nums;width:34px;flex:none;line-height:1.1}}
+.stockrow .t{{font-size:12.5px;color:var(--ink);line-height:1.35}}
+.stockrow .t i{{display:block;font-style:normal;font-size:11px;color:var(--dim)}}
+.stockrow .plus{{margin-left:auto;border:1px solid var(--line);border-radius:6px;
+ color:var(--muted);font-size:11px;padding:7px 9px}}
+.stockrow .plus:hover{{color:var(--blue);border-color:#2c4a7a;
+ background:var(--blue-bg)}}
+.stockrow .lock{{margin-left:auto;font-size:10.5px;color:#54627a;
+ letter-spacing:.5px;text-transform:uppercase}}
+.failrow{{display:flex;align-items:center;gap:8px;padding:11px 15px;
+ background:var(--red-bg);color:var(--red);font-size:11.5px;line-height:1.45}}
+.failrow:hover{{filter:brightness(1.25)}}
+.failrow b{{font-family:var(--mono)}}
+.failrow .arrow{{margin-left:auto;opacity:.6}}
+/* A phone that did not finish is not stock, so it does not stand in the
+   shelf. It still costs a slot and an exit, so it does not vanish either. */
+.didnot{{border:1px solid var(--line2);border-left:2px solid var(--red-bg);
+ border-radius:9px;background:var(--panel2);overflow:hidden}}
+.didnot h3{{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;
+ color:#c07f6d;padding:12px 15px;border-bottom:1px solid var(--line2);
+ display:flex;align-items:center;gap:8px;margin:0}}
+.didnot h3 .why{{margin-left:auto;text-transform:none;letter-spacing:0;
+ font-size:11.5px;color:var(--dim)}}
+.didnot .r{{display:flex;align-items:center;gap:16px;padding:11px 15px;
+ border-bottom:1px solid var(--line2)}}
+.didnot .r:last-child{{border-bottom:0}}
+.didnot .r .body{{flex:1;min-width:0;font-size:12.5px}}
+.didnot .r .body .why{{color:var(--red)}}
+.didnot .r .act{{margin-left:auto;display:flex;gap:5px}}
+@media (max-width:1180px){{
+ .desk{{display:flex;flex-direction:column}}
+ .side{{position:static}}
+}}
 .headline{{display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap}}
 .strip{{display:flex;gap:2px;flex-wrap:wrap}}
 .strip.pools{{margin-left:auto}}
@@ -781,21 +835,6 @@ def _request_sentence(a: dict) -> tuple[str, str]:
             colour)
 
 
-def _ticker(data: dict) -> str:
-    items = []
-    for e in data.get("recent") or []:
-        text, colour = _event_sentence(e)
-        items.append((e.get("at"), text, colour))
-    for a in data.get("asked") or []:
-        text, colour = _request_sentence(a)
-        items.append((a.get("at"), text, colour))
-    items.sort(key=lambda t: (_as_dt(t[0]) or datetime.datetime.min).replace(
-        tzinfo=None), reverse=True)
-    return " ".join(
-        f'<span><span style="color:var(--{colour})">{_hhmm(at)}</span> '
-        f'{text}</span>' for at, text, colour in items)
-
-
 def _controls(data: dict, user: dict) -> str:
     """The service buttons in the actor bar - admins only, and only the
     ones that make sense for the pulse."""
@@ -1011,6 +1050,102 @@ def _stock_strip(data: dict) -> str:
 #: What the keeper is doing, by the pulse it left: the word, its colour,
 #: and whether the numbers belong in it. Read top to bottom - the first
 #: that fits wins, so a stopped service never reads as "building".
+def _supply_card(data: dict, user: dict) -> str:
+    """The three pools, stacked, with the way to add to two of them.
+
+    Vertical rather than across the top, because stock is something a
+    person checks and occasionally tops up - it is not what they are
+    watching. Standing it on its side gives the table the whole width and
+    costs the stock nothing: three numbers read as well in a column.
+
+    Proxies carry no `+`: keeping that pool alive is the admin's job, and
+    an operator's power over an exit is Change IP on one phone. A button
+    that leads nowhere is worse than no button, so the row says who owns
+    it instead.
+    """
+    stock = data.get("stock") or {}
+    pulse = data.get("pulse") or {}
+    target = int(pulse.get("target") or 0)
+    warm = int(pulse.get("warm") or 0)
+    gmail = int((stock.get("gmail") or {}).get("free") or 0)
+    proxy = int((stock.get("proxy") or {}).get("free") or 0)
+    awaiting = int((stock.get("app") or {}).get("awaiting") or 0)
+    short = f"fewer than the {target} phones the keeper keeps warm"
+
+    rows = [
+        (gmail, "Gmail", "free in the pool", "/pools/gmail",
+         "red" if not gmail else "amber" if gmail < target else "bright",
+         "nothing can be built until rows are added" if not gmail
+         else short if gmail < target else "free to build with"),
+        (awaiting, "GPT accounts", "waiting for a phone", "/pools/gpt",
+         "amber" if awaiting > warm else "bright",
+         f"{awaiting - warm} of them have no phone to go to"
+         if awaiting > warm else "awaiting login"),
+    ]
+    parts = []
+    for number, name, under, href, colour, why in rows:
+        parts.append(
+            f'<div class="stockrow" title="{esc(why)}">'
+            f'<b style="color:var(--{colour})">{number}</b>'
+            f'<span class="t">{esc(name)}<i>{esc(under)}</i></span>'
+            f'<a class="plus" href="{href}">+ add</a></div>')
+    proxy_colour = ("red" if not proxy else "amber" if proxy < target
+                    else "bright")
+    proxy_why = ("no free exit - the next build has nowhere to go out from"
+                 if not proxy else short if proxy < target
+                 else "free to build with")
+    parts.append(
+        f'<div class="stockrow" title="{esc(proxy_why)}">'
+        f'<b style="color:var(--{proxy_colour})">{proxy}</b>'
+        f'<span class="t">Proxies<i>free exits</i></span>'
+        f'<span class="lock">admin</span></div>')
+
+    # Only when there is one to make. A row reading "0 need a decision" is
+    # a line of noise on a page that is about the phones.
+    needs = int((user.get("nav") or {}).get("needs") or 0)
+    if needs and user.get("sees") == "all":
+        parts.append(
+            f'<a class="failrow" href="/needs"><b>{needs}</b>&nbsp;'
+            f'{"accounts" if needs != 1 else "account"} stopped and need '
+            f'{"a decision" if needs == 1 else "a decision"}'
+            f'<span class="arrow">&rsaquo;</span></a>')
+    return f'<div class="panel"><h3>Supply</h3>{"".join(parts)}</div>'
+
+
+def _did_not_finish(rows: list[dict], user: dict) -> str:
+    """Phones that never warmed all the way, kept out of the shelf.
+
+    They are not stock: something on them stopped, and offering one to a
+    customer beside a ready phone is offering a phone that does not work.
+    They are not nothing either - each holds a profile slot and an exit -
+    so they sit under the table with what went wrong and the two things
+    worth doing to one.
+    """
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        serial = str(r.get("serial") or "")
+        why = (esc(str(r.get("note") or r.get("error") or ""))
+               or "it stopped before it was ready")
+        gmail = esc(str(r.get("gmail") or ""))
+        acts = []
+        if _may(user, "may_take_phones"):
+            acts.append(_boot_form(user, serial))
+        if _may(user, "may_change_proxy"):
+            acts.append(_change_ip_form(user, serial))
+        lines.append(
+            f'<div class="r">{_serial_link(serial)}'
+            f'<span class="body"><span class="why">{why}</span><br>'
+            f'<span class="dim mono">{gmail}</span></span>'
+            f'<span class="dim mono">{esc(str(r.get("proxy_name") or ""))}'
+            f'</span><span class="act">{" ".join(acts)}</span></div>')
+    return (f'<div class="didnot"><h3>Did not finish '
+            f'<span class="ct mono">{len(rows)}</span>'
+            f'<span class="why">not stock &mdash; it never warmed all the '
+            f'way</span></h3>{"".join(lines)}</div>')
+
+
 def _keeper_words(pulse: dict) -> tuple[str, str]:
     warm, target = int(pulse.get("warm") or 0), int(pulse.get("target") or 0)
     if pulse.get("stopped"):
@@ -1046,30 +1181,35 @@ def _service_row(data: dict, user: dict, flags: dict | None) -> str:
 
 def dashboard(data: dict, user: dict, said: str = "",
               manual_login: bool = False) -> str:
-    """The console's front page, kept to two questions: is the farm well,
-    and what can be handed over now. One sentence of health, one number,
-    a line of stock, the phones with their own buttons. Everything that
-    is only sometimes true - the keeper's complaint, accounts waiting -
-    appears only when it is true; the rest lives on its own page."""
+    """The console's front page: what an operator watches, and what they
+    reach for, side by side.
+
+    The left column is the spine - the phones, and nothing competing with
+    them. The right is the things a person reaches for: what stock is
+    left, and the accounts with no phone yet. Standing those on their
+    side rather than across the top is what gives the table its width.
+
+    The shelf counts that used to sit above the table are gone: the table
+    is already grouped, and a page should not say a number twice. So are
+    the events - a developer's line on an operator's page. Everything
+    that is only sometimes true still appears only when it is true.
+    """
     pulse = data.get("pulse") or {}
     phones = data.get("phones") or []
-    taken = [r for r in phones if (r.get("state") or "") == "taken"]
-    # A phone somebody is holding is counted once, as theirs: it is not
-    # also warm stock, however warm it happens to be.
+    # A phone somebody is holding is theirs, whatever state it is in, so
+    # it is never also one of these. The counts that used to be drawn
+    # from the rest of this are gone with the strip that showed them.
     free = [r for r in phones if (r.get("state") or "") != "taken"]
-    ready = [r for r in free if (r.get("status") or "") == "ready"]
-    warm = [r for r in free if (r.get("status") or "") == "app_only"]
     incomplete = [r for r in free
                   if (r.get("status") or "") == "incomplete"]
     building = [r for r in phones if (r.get("status") or "") == "building"]
 
-    shelf = {"ready": len(ready), "warm": len(warm), "taken": len(taken),
-             "incomplete": len(incomplete), "building": len(building)}
-    headline = (f'<div class="headline">'
-                f'<div class="strip">{_shelf_strip(shelf)}</div>'
-                f'<div class="strip pools">{_stock_strip(data)}</div></div>')
-
-    rows = _phone_rows(data, user)
+    # A phone that did not finish leaves the table: it is not stock, and
+    # standing it beside a ready one is offering a customer a phone that
+    # does not work. It goes under the table with what went wrong.
+    on_the_shelf = [r for r in phones
+                    if (r.get("status") or "") != "incomplete"]
+    rows = _phone_rows(dict(data, phones=on_the_shelf), user)
     table = (f'<table><tr><th>serial</th><th>state</th><th>account</th>'
              f'<th>proxy</th><th></th></tr>{rows}</table>'
              if rows else '<p class="empty">No phones yet - the keeper '
@@ -1083,24 +1223,24 @@ def dashboard(data: dict, user: dict, said: str = "",
         warning = (f'<a class="alert warn" href="{href}">'
                    f'{esc(str(pulse["warning"]))} — {esc(label)}</a>')
 
-    login_panel = _awaiting_panel(data, user, manual_login, pulse)
+    tools = (f'<div class="row"><h3>Phones</h3>'
+             f'<span class="dim mono">{_plural(len(on_the_shelf), "phone")}'
+             f'</span></div>')
+    main = (_said(said, _DASH_SAID) + warning + tools
+            + f'<div><div class="tscroll">{table}</div>{hint}</div>'
+            + _did_not_finish(incomplete, user))
+    side = _supply_card(data, user) + _awaiting_panel(
+        data, user, manual_login, pulse)
 
-    footer = ""
-    if user.get("sees") == "all":
-        footer = (f'<div class="row dim mono" style="border-top:1px solid '
-                  f'var(--line2);padding-top:12px">{_ticker(data)}'
-                  f'<a href="/events" style="margin-left:auto">all events</a>'
-                  f'</div>')
-
-    body = (f'<div class="narrow">'
-            f'<div class="top"><h2>Dashboard</h2>'
+    body = (f'<div class="wide">'
+            f'<div class="top"><h2>Instance manager</h2>'
             f'<span class="status">{_status_sentence(data)}</span></div>'
-            + _said(said, _DASH_SAID) + warning + headline
-            + f'<div>{table}{hint}</div>' + login_panel + footer
-            + '</div>')
+            f'<div class="desk"><div class="deskmain">{main}</div>'
+            f'<aside class="side">{side}</aside></div>'
+            f'</div>')
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
-    return page("Dashboard", body, user=user, here="/",
+    return page("Instance manager", body, user=user, here="/",
                 refresh=30 if busy else 0)
 
 
