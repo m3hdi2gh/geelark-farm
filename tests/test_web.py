@@ -3744,3 +3744,26 @@ def test_a_chosen_phone_rides_in_the_login_request(web, monkeypatch):
     client.request("POST", "/accounts/login",
                    _form(csrf=client.csrf(), addresses="a@x.com", serial="1500"))
     assert got.get("payload", {}).get("serial") == "1500"
+
+
+def test_the_browsers_own_refresh_lives_inside_noscript(web, monkeypatch):
+    """A meta refresh fires once parsed, whether or not the script later
+    removes the tag - and it fired under an open manager and wiped the
+    paste in it (2026-09-05). So the browser's refresh is for browsers
+    without the script only, and the script reads the interval off a
+    plain meta and refreshes by a quiet swap that waits for a quiet
+    moment."""
+    _dash(monkeypatch, phones=[{"serial": "1503", "status": "building",
+                                "state": ""}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    head = body[:body.index("<body")]
+    assert '<noscript><meta http-equiv="refresh" content="30"></noscript>' in head
+    assert '<meta name="gf-refresh" content="30">' in head
+    # Never a live one: the script cannot cancel it once it is parsed.
+    assert head.count('http-equiv="refresh"') == 1
+    script = body[body.index("<script>"):body.index("</script>")]
+    assert "meta[name=\"gf-refresh\"]" in script
+    assert "reloadWhenSettled" in script

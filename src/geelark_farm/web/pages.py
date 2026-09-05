@@ -778,7 +778,15 @@ def page(title: str, body: str, *, user: dict | None = None,
                      f'value="{esc(user.get("csrf", ""))}">'
                      f'<button>Log out</button></form></nav>')
         header = "".join(links)
-    tag = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
+    # The refresh the browser does by itself lives inside <noscript>: once
+    # parsed, a meta refresh fires whether or not the script later removes
+    # the tag, and it fired under an open manager and wiped the paste in it
+    # (the operator, 2026-09-05: "it crashes back to the main page"). With
+    # the script running, the interval is read off a plain meta and the
+    # refresh is a quiet swap that waits until nobody is mid-way through
+    # something.
+    tag = (f'<noscript><meta http-equiv="refresh" content="{int(refresh)}">'
+           f'</noscript><meta name="gf-refresh" content="{int(refresh)}">'
            if refresh else "")
     if user is not None:
         body = _alert_strip(user) + body
@@ -1577,13 +1585,28 @@ _DASH_SCRIPT = """
 
     // The page refreshes itself while a phone builds. With the script
     // here, that is a quiet swap rather than a reload.
-    var meta = document.querySelector('meta[http-equiv="refresh"]');
+    var meta = document.querySelector('meta[name="gf-refresh"]');
     if (meta) {
       var every = parseInt(meta.getAttribute('content'), 10) || 30;
-      meta.remove();
       clearTimeout(init.timer);
-      init.timer = setTimeout(function(){ reload(); }, every * 1000);
+      init.timer = setTimeout(reloadWhenSettled, every * 1000);
     }
+  }
+
+  // Not while somebody is in the middle of something. A refresh that lands
+  // while the manager is open, or while a box is being typed in, wipes
+  // what they were doing - which read as the page crashing back to the
+  // start (the operator, 2026-09-05). It waits, and tries again shortly.
+  function settled(){
+    var o = ov();
+    var typing = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(
+      (document.activeElement || {}).tagName) >= 0;
+    return !(o && !o.hidden) && !typing;
+  }
+  function reloadWhenSettled(){
+    if (settled()) { reload(); return; }
+    clearTimeout(init.timer);
+    init.timer = setTimeout(reloadWhenSettled, 5000);
   }
 
   // ------------------------------------------------------ the manager
