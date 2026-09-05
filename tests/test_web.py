@@ -2364,7 +2364,7 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
          "gmail": "IronHawk@gmail.com", "app_account": "h@x.com",
          "proxy_name": "SX27"},
         {"serial": "1501", "status": "ready", "state": "taken",
-         "owner": "ali", "updated_at": "2026-09-03 10:00:00+00"}])
+         "owner": "mehdi", "updated_at": "2026-09-03 10:00:00+00"}])
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 61)
@@ -2374,14 +2374,16 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     # Who has it sits under the badge; when it last changed has its own
     # column now, and saying it twice was the page saying a number twice.
     # Whose it is rides as a second pill beside the status, not under it.
-    assert 'class="badge manual">With ali' in body
+    assert 'class="badge manual">With you' in body
     assert app_mod.pages._ago("2026-09-03 10:00:00+00") in body
     assert '/phones/1500/state' in body and 'value="taken"' in body
     assert 'value="unused"' in body and "Release" in body, \
         "a taken phone can be let go"
     assert body.count('value="done"') == 1, "only the taken phone closes here"
     assert body.count('value="failed"') == 1
-    assert body.count("Change IP") == 2, "in both states, beside the rest"
+    # Only on the free phone: a phone you hold comes back first - Done,
+    # Failed, Release - and its exit is changed once it is back.
+    assert body.count("Change IP") == 1, "on the free phone only"
     shelf = body.index('/phones/1500/state')
     assert shelf < body.index('/phones/1501/state'), \
         "the shelf first, then what is out with somebody"
@@ -2536,7 +2538,7 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
     _dash(monkeypatch, phones=[
         {"serial": "1500", "status": "ready", "state": ""},
         {"serial": "1501", "status": "ready", "state": "taken",
-         "owner": "ali"}])
+         "owner": "mehdi"}])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
@@ -2554,12 +2556,30 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_phone_somebody_else_holds_offers_only_their_name(web, monkeypatch):
+    """The three ways a phone comes back belong to the person holding it.
+    Offering them to anybody else is offering to act on a phone that is
+    not theirs (the contract, 2026-09-05)."""
+    _dash(monkeypatch, phones=[{"serial": "1501", "status": "ready",
+                                "state": "taken", "owner": "ali"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    start = body.index('href="/phones/1501"')
+    row = body[start:body.index("</tr>", start)]
+    assert '<span class="age">with ali</span>' in row
+    for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
+        assert f">{label}<" not in row, label
+    assert 'class="badge manual">With ali' in row
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_a_taken_phone_offers_no_boot_until_it_is_released(web, monkeypatch):
     """Boot starts a phone and takes it in one press, so it belongs to a
     phone nobody holds. On a taken row it offers to take what is already
     taken, and the row it would produce is the row it is already on."""
     _dash(monkeypatch, phones=[{"serial": "1501", "status": "ready",
-                                "state": "taken", "owner": "ali"}])
+                                "state": "taken", "owner": "mehdi"}])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")

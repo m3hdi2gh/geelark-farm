@@ -196,6 +196,51 @@ tr.editrow>td{{background:var(--panel2)}}
 tr.editrow form{{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
  padding:4px 0}}
 tr.editrow input{{min-width:150px;flex:1}}
+/* ---- polish, from the contract (2026-09-05): nothing here changes what a
+   thing does; each rule is what makes the page feel finished. */
+::selection{{background:var(--blue-bg);color:#fff}}
+*{{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}}
+*::-webkit-scrollbar{{width:8px;height:8px}}
+*::-webkit-scrollbar-thumb{{background:var(--line2);border-radius:8px}}
+.mono,.serial,.addr,.age,.pool>header b,.queue .t,.queue .tag,.status{{
+ font-variant-numeric:tabular-nums}}
+button:active,.btn:active{{transform:translateY(1px)}}
+input,select,textarea{{color-scheme:dark}}
+input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
+ box-shadow:0 0 0 3px var(--blue-bg)}}
+.slab thead th,.pooltable thead th{{position:sticky;top:0;z-index:1}}
+.slab th.num,.slab td.num{{text-align:right}}
+.slab tbody tr:hover .addr{{color:var(--ink)}}
+.status .live{{animation:breathe 1.6s ease-in-out infinite;display:inline-block}}
+@keyframes breathe{{50%{{opacity:.35}}}}
+.slab .badge.info::before{{animation:blink 1.2s ease-in-out infinite}}
+@keyframes blink{{50%{{opacity:.2}}}}
+.slab td.progress{{position:relative;padding-bottom:14px}}
+.slab td.progress::after{{content:"";position:absolute;left:15px;right:15px;
+ bottom:8px;height:2px;background:linear-gradient(90deg,transparent,var(--blue),
+ transparent);background-size:40% 100%;animation:slide 1.6s linear infinite}}
+@keyframes slide{{from{{background-position:-40% 0}}to{{background-position:140% 0}}}}
+.pool>header .go{{background:transparent;color:var(--blue);
+ border:1px solid #2c4d80}}
+.pool>header .go:hover{{background:var(--blue-bg);border-color:var(--blue)}}
+.pool .queue li:hover{{background:#141c2b}}
+.byhand .field input,.byhand button.go{{height:38px}}
+.byhand.js details.newone[open]{{display:flex;flex-wrap:wrap;gap:10px;
+ align-items:center;padding:10px 12px;background:var(--panel2);
+ border:1px dashed #2c4d80;border-radius:8px}}
+.byhand.js details.newone[open] summary{{display:none}}
+.byhand details.newone .lead{{font-size:12px;color:var(--dim)}}
+.byhand details.newone input{{margin:0;width:200px}}
+.filters .sellerpick{{background:var(--panel2);border:1px solid var(--line);
+ color:var(--ink);border-radius:7px;padding:6px 10px;font:12.5px var(--mono)}}
+.filters .poolfind{{flex:1}}
+.addbox .addrow .seller{{min-width:230px}}
+@media (prefers-reduced-motion:no-preference){{
+ .ov{{animation:fade .16s ease-out}} .ov .sheet{{animation:rise .18s ease-out}}
+ .said.toast.up{{animation:rise .18s ease-out}}
+ @keyframes fade{{from{{opacity:0}}}}
+ @keyframes rise{{from{{opacity:0;transform:translateY(8px)}}}}
+}}
 /* ---- the page */
 main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
  gap:16px}}
@@ -1201,13 +1246,20 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     building = (row.get("status") or "") == "building"
     serial = str(row.get("serial") or "")
     taken = (row.get("state") or "") == "taken"
+    owner = str(row.get("owner") or "")
+    mine = taken and owner and owner == str(user.get("username") or "")
+    if taken and not mine:
+        # Somebody else's. The three ways a phone comes back belong to the
+        # person holding it; offering them here is offering to act on a
+        # phone that is not yours (the contract, 2026-09-05).
+        return f'<span class="age">with {esc(owner or "somebody")}</span>'
     actions = []
     if not building and _may(user, "may_take_phones"):
         if not taken:
             actions.append(_boot_form(user, serial))
         actions += (_state_forms(user, row, back) if taken
                     else _state_forms(user, row, back)[:1])
-    if _may(user, "may_change_proxy") and not building:
+    if _may(user, "may_change_proxy") and not building and not taken:
         actions.append(_change_ip_form(user, serial, back))
     return " ".join(actions)
 
@@ -1241,7 +1293,8 @@ def _phone_rows(data: dict, user: dict) -> str:
             lines.append(
                 f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
                 f'<td>{badge}</td>'
-                f'<td colspan="5">{_progress(progress.get(serial))}</td>'
+                f'<td colspan="5" class="progress">'
+                f'{_progress(progress.get(serial))}</td>'
                 f'</tr>')
             continue
         lines.append(
@@ -1280,7 +1333,9 @@ def _status_sentence(data: dict) -> str:
     # How long ago the pass ran is not a thing to read on every page:
     # when it is late the alert strip says so in a sentence, and the pass
     # itself is on its way out.
-    return f'<span style="color:var(--{colour})">●</span> {esc(word)}'
+    live = " live" if word.startswith("Building") else ""
+    return (f'<span class="dot{live}" style="color:var(--{colour})">●</span> '
+            f'{esc(word)}')
 
 
 #: The shelf, in the order a phone travels: what is being made, what is
@@ -1442,14 +1497,23 @@ _DASH_SCRIPT = """
       var list = document.getElementById(box.getAttribute('list'));
       if (!list || !fold) return;
       box.addEventListener('input', function(){
-        var anyNew = Array.prototype.some.call(
-          document.querySelectorAll('.byhand input[list]'), function(b){
-            var l = document.getElementById(b.getAttribute('list'));
-            var w = b.value.trim().toLowerCase();
-            return w && l && !Array.prototype.some.call(l.options, function(o){
-              return o.value.toLowerCase() === w; });
+        var isNew = function(b){
+          var l = document.getElementById(b.getAttribute('list'));
+          var w = b.value.trim().toLowerCase();
+          var fresh = !!w && !!l && !Array.prototype.some.call(l.options,
+            function(o){ return o.value.toLowerCase() === w; });
+          b.classList.toggle('new', fresh);
+          return fresh;
+        };
+        var open = false;
+        document.querySelectorAll('.byhand input[list]').forEach(function(b){
+          var fresh = isNew(b);
+          fold.querySelectorAll('[data-for="' + b.name + '"]').forEach(function(i){
+            i.hidden = !fresh;
           });
-        fold.open = anyNew;
+          if (fresh) open = true;
+        });
+        fold.open = open;
       });
     });
 
@@ -1458,16 +1522,16 @@ _DASH_SCRIPT = """
     // an editor with nothing above it.
     document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
       var find = sheet.querySelector('.poolfind');
-      var chips = sheet.querySelectorAll('.filters .pill');
+      var seller = sheet.querySelector('.sellerpick');
       var body = sheet.querySelectorAll('tbody tr:not(.none):not(.editrow)');
       var none = sheet.querySelector('tbody tr.none');
       var tally = sheet.querySelector('.tally');
-      var want = '';
       var sift = function(){
         var q = (find ? find.value : '').trim().toLowerCase(), shown = 0;
+        var who = seller ? seller.value : '';
         body.forEach(function(tr){
           var hit = (!q || tr.textContent.toLowerCase().indexOf(q) >= 0)
-                 && (!want || tr.dataset.state === want);
+                 && (!who || tr.dataset.seller === who);
           tr.hidden = !hit;
           if (hit) shown++;
           var editor = tr.nextElementSibling;
@@ -1480,15 +1544,7 @@ _DASH_SCRIPT = """
           : shown + ' of ' + body.length + ' shown';
       };
       if (find) find.addEventListener('input', sift);
-      chips.forEach(function(chip){
-        chip.addEventListener('click', function(){
-          want = chip.dataset.chip;
-          chips.forEach(function(c){
-            c.setAttribute('aria-pressed', String(c === chip));
-          });
-          sift();
-        });
-      });
+      if (seller) seller.addEventListener('change', sift);
     });
 
     // The page refreshes itself while a phone builds. With the script
@@ -1503,11 +1559,13 @@ _DASH_SCRIPT = """
   }
 
   // ------------------------------------------------------ the manager
-  var openKind = null;
+  var openKind = null, opener = null;
   function ov(){ return document.getElementById('poolov'); }
   function shut(){
     var o = ov(); if (!o) return;
     o.hidden = true; openKind = null;
+    if (opener && document.contains(opener)) opener.focus();
+    opener = null;
     o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
     o.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
   }
@@ -1524,9 +1582,10 @@ _DASH_SCRIPT = """
   }
 
   document.addEventListener('click', function(e){
-    var opener = e.target.closest('[data-pool]');
-    if (opener && !opener.dataset.edit) {
-      show(opener.dataset.pool, opener.dataset.open === 'add');
+    var door = e.target.closest('[data-pool]');
+    if (door && !door.dataset.edit) {
+      opener = door;
+      show(door.dataset.pool, door.dataset.open === 'add');
       return;
     }
     var o = ov();
@@ -1563,7 +1622,13 @@ _DASH_SCRIPT = """
   });
   document.addEventListener('keydown', function(e){
     var o = ov();
-    if (e.key === 'Escape' && o && !o.hidden) shut();
+    if (e.key === 'Escape' && o && !o.hidden) { shut(); return; }
+    var typing = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(
+      (document.activeElement || {}).tagName) >= 0;
+    if (e.key === '/' && o && !o.hidden && !typing) {
+      var box = o.querySelector('.sheet:not([hidden]) .poolfind');
+      if (box) { e.preventDefault(); box.focus(); }
+    }
   });
 
   // A sheet can show a page of its own - the preview of a paste, the
@@ -1702,7 +1767,7 @@ _POOL_KINDS = {
         "edit": "/pools/gmail/edit", "remove": "/pools/gmail/remove",
         "how": ("address, password, then the 2fa secret or the recovery "
                 "address - one account per line, tabs or commas between"),
-        "columns": ("Address", "Status", "Seller", "On phone"),
+        "columns": ("Address", "Status", "2FA", "Seller", "On phone"),
     },
     "gpt": {
         "name": "GPT accounts", "under": "waiting for a phone",
@@ -1712,7 +1777,7 @@ _POOL_KINDS = {
         "edit": "/pools/gpt/edit", "remove": "/pools/gpt/remove",
         "how": ("address, password, then the 2fa secret - one account per "
                 "line, tabs or commas between"),
-        "columns": ("Address", "Status", "On phone", "Note"),
+        "columns": ("Address", "Status", "On phone"),
     },
     "proxy": {
         "name": "Proxies", "under": "free exits", "one": "exit",
@@ -1720,7 +1785,7 @@ _POOL_KINDS = {
         "preview": "/pools/proxy/preview",
         "edit": "", "remove": "/pools/proxy/remove",
         "how": "host:port:username:password - one exit per line",
-        "columns": ("Name", "Status", "Exit IP", "Used by"),
+        "columns": ("Name", "Status", "Host", "Exit IP", "Used", "On phone"),
     },
 }
 
@@ -1737,18 +1802,22 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
         host = str(row.get("host") or "")
         port = row.get("port")
         where = f"{host}:{port}" if host and port else host
-        return [str(row.get("address") or where or "?"), state,
+        return [str(row.get("address") or where or "?"), state, where or "-",
                 str(row.get("exit_ip") or "-"),
+                str(row.get("times_used") if row.get("times_used") is not None
+                    else "-"),
                 str(row.get("serial") or "-")]
     if kind == "gpt":
+        # No Note column: what it held rides on the status pill's hover,
+        # and the room goes to the buttons (the contract, 2026-09-05).
         return [str(row.get("address") or ""), state,
-                str(row.get("serial") or "-"),
-                str(row.get("note") or row.get("error") or "-")]
+                str(row.get("serial") or "-")]
     return [str(row.get("address") or ""), state,
+            str(row.get("second") or "-"),
             str(row.get("seller") or "-"), str(row.get("serial") or "-")]
 
 
-def _state_pill(state: str) -> str:
+def _state_pill(state: str, note: str = "") -> str:
     """A row's state in the badge the rest of the console already wears.
 
     `attn` for anything else on purpose: a word this reader has never
@@ -1759,7 +1828,8 @@ def _state_pill(state: str) -> str:
     colour = ("free" if state == "free" else
               "bad" if state in ("broken", "dead") else
               "on_phone" if state == "on a phone" else "attn")
-    return f'<span class="badge {colour}">{esc(state or "-")}</span>'
+    title = f' title="{esc(note)}"' if note else ""
+    return f'<span class="badge {colour}"{title}>{esc(state or "-")}</span>'
 
 
 def _send_form(user: dict, address: str, back: str = "/") -> str:
@@ -1829,6 +1899,10 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
     # the word that says whose it is.
     opens = (_may(user, meta["manage"]) if meta["manage"]
              else user.get("role") == "admin")
+    # Short but not empty: the card says so in amber, under its number,
+    # in the words the title used to keep for a hover.
+    short = (f'<p class="railnote warn">{esc(why[:1].upper() + why[1:])}</p>'
+             if colour == "amber" and count and not alerts else "")
     add = (f'<button type="button" class="go small" data-pool="{kind}">'
            f'Manage</button>' if opens
            else '<span class="lock">admin</span>' if not meta["manage"]
@@ -1838,7 +1912,7 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<header><b style="color:var(--{colour})">{count}</b>'
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
-        f'{_pool_alerts(alerts or [])}'
+        f'{_pool_alerts(alerts or [])}{short}'
         f'{_pool_queue(kind, rows, user, manual_login, quiet=bool(alerts))}'
         f'</section>')
 
@@ -1918,7 +1992,7 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False,
         for row in rows)
 
 
-def _pool_add_box(kind: str, user: dict) -> str:
+def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
     """The paste box, inside the manager rather than folded into the card.
 
     Same door as before - `/pools/<kind>/preview`, which shows what it
@@ -1934,9 +2008,22 @@ def _pool_add_box(kind: str, user: dict) -> str:
             f'<label for="paste-{kind}">Add to the pool</label>'
             f'<textarea id="paste-{kind}" name="pasted" rows="3" '
             f'spellcheck="false" placeholder="{esc(meta["how"])}"></textarea>'
-            f'<div class="addrow"><button class="go">Preview</button>'
+            f'<div class="addrow">{_seller_field(kind, rows or [])}'
+            f'<button class="go">Preview</button>'
             f'<span class="dim">nothing is written until you have seen '
             f'what it read</span></div></form>')
+
+
+def _seller_field(kind: str, rows: list[dict]) -> str:
+    """One field, pick or new: the sellers already in the pool drop down,
+    and a name that is not there yet is simply typed."""
+    if kind != "gmail":
+        return ""
+    options = "".join(f'<option value="{esc(s)}">' for s in _sellers_of(rows))
+    return (f'<input name="seller" list="sellers-known" class="mono seller"'
+            f' placeholder="seller - pick or type a new one"'
+            f' autocomplete="off"><datalist id="sellers-known">{options}'
+            f'</datalist>')
 
 
 def _pool_row_doors(kind: str, row: dict, user: dict,
@@ -1951,7 +2038,7 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     if not address or not meta["manage"] or not _may(user, meta["manage"]):
         return ""
     doors = []
-    if kind == "gpt" and (row.get("state") or "") == "free" \
+    if kind == "gpt" and (row.get("state") or "") != "on a phone" \
             and _may_send(user, manual_login):
         doors.append(_send_form(user, address))
     if meta["edit"]:
@@ -2009,12 +2096,14 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
     lines = []
     for row in rows:
         cells = _pool_cells(kind, row)
+        note = str(row.get("note") or row.get("error") or "")
         drawn = "".join(
-            f'<td>{_state_pill(cell) if i == 1 else esc(cell)}</td>'
+            f'<td>{_state_pill(cell, note) if i == 1 else esc(cell)}</td>'
             for i, cell in enumerate(cells))
         last = (f"<td>{_pool_row_doors(kind, row, user, manual_login)}</td>"
                 if doors else "")
-        lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}">'
+        lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}"'
+                     f' data-seller="{esc(str(row.get("seller") or ""))}">'
                      f'{drawn}{last}</tr>')
         if doors:
             lines.append(_pool_edit_row(kind, row, user, span))
@@ -2026,6 +2115,27 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
             f'<tbody>{"".join(lines)}'
             f'<tr class="none" hidden><td colspan="{span}">'
             f'Nothing matches that.</td></tr></tbody></table>')
+
+
+def _sellers_of(rows: list[dict]) -> list[str]:
+    seen = {str(r.get("seller") or "").strip() for r in rows}
+    return sorted(s for s in seen if s)
+
+
+def _seller_filter(kind: str, rows: list[dict]) -> str:
+    """The seller picker beside the search - Gmail only, the one pool
+    that has sellers. Each option says how many rows are that seller's."""
+    if kind != "gmail":
+        return ""
+    sellers = _sellers_of(rows)
+    if not sellers:
+        return ""
+    options = "".join(
+        f'<option value="{esc(s)}">{esc(s)} · '
+        f'{sum(1 for r in rows if str(r.get("seller") or "").strip() == s)}'
+        f'</option>' for s in sellers)
+    return (f'<select class="sellerpick" aria-label="Seller">'
+            f'<option value="">every seller</option>{options}</select>')
 
 
 def _pool_manager(data: dict, user: dict,
@@ -2048,10 +2158,6 @@ def _pool_manager(data: dict, user: dict,
     sheets = []
     for kind, meta in _POOL_KINDS.items():
         rows = listed.get(kind) or []
-        chips = " ".join(
-            f'<button type="button" class="pill" data-chip="{esc(word)}" '
-            f'aria-pressed="false">{esc(word)}</button>'
-            for word in _POOL_CHIPS)
         sheets.append(
             f'<section class="sheet" data-sheet="{kind}" hidden>'
             f'<header><h3>{esc(meta["name"])}</h3>'
@@ -2060,13 +2166,11 @@ def _pool_manager(data: dict, user: dict,
             f'<button type="button" class="x" data-shut="1" '
             f'aria-label="Close">&times;</button></header>'
             f'<div class="sheetbody">'
-            f'{_pool_add_box(kind, user)}'
+            f'{_pool_add_box(kind, user, rows)}'
             f'<div class="filters">'
-            f'<input type="search" class="poolfind" placeholder="search"'
-            f' autocomplete="off">'
-            f'<button type="button" class="pill" data-chip="" '
-            f'aria-pressed="true">all</button>{chips}'
-            f'<span class="dim mono tally">{_plural(len(rows), "row")}</span>'
+            f'<input type="search" class="poolfind" autocomplete="off"'
+            f' placeholder="search {_plural(len(rows), "row")}">'
+            f'{_seller_filter(kind, rows)}'
             f'</div>'
             f'<div class="tscroll">'
             f'{_pool_table(kind, rows, user, manual_login)}</div>'
@@ -2154,12 +2258,14 @@ def _build_card(data: dict, user: dict) -> str:
         # needed. Without the script it is a fold, and still there.
         '<details class="fold newone" id="newone"><summary>credentials, '
         'for an address the pool does not have yet</summary>'
+        '<span class="lead">New address - the pool needs its</span>'
         '<input name="gmail_password" placeholder="Gmail password" '
-        'autocomplete="off">'
+        'autocomplete="off" type="password" data-for="gmail">'
         '<input name="gmail_secret" placeholder="2fa secret or recovery '
-        'address - optional" autocomplete="off">'
+        'address - optional" autocomplete="off" data-for="gmail">'
         '<input name="app_password" placeholder="GPT password" '
-        'autocomplete="off"></details>'
+        'autocomplete="off" type="password" data-for="app_account">'
+        '</details>'
         '</form></div>')
 
 

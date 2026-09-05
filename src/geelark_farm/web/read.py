@@ -386,7 +386,12 @@ def _pool_rows(store) -> dict:
             "gmail": store._rows(
                 "SELECT id, address, status, coalesce(seller, '') AS seller,"
                 " coalesce(note, '') AS note, error, updated_at,"
-                " coalesce(serial, '') AS serial"
+                " coalesce(serial, '') AS serial,"
+                # Which second factor the row carries, as a word - never
+                # the secret itself, which has no business on a page.
+                " CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
+                "      WHEN coalesce(recovery_email, '') <> '' THEN 'recovery'"
+                "      ELSE '' END AS second"
                 " FROM resources WHERE kind = 'gmail' AND on_sheet"
                 "   AND status <> 'used'"
                 " ORDER BY sheet_row NULLS LAST, id LIMIT %s",
