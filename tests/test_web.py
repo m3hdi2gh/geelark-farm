@@ -1198,9 +1198,12 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
     _, _, body = client.request("GET", "/")
     assert body.count("Change IP") == 2, "one per phone, both states"
     # One send per waiting account, on its own row - once in the GPT
-    # card's queue and once on the same row inside the manager. The
-    # tick-and-send list stood in a panel of its own and went with it.
-    assert body.count('name="addresses"') == 2
+    # card's queue and once on the same row inside the manager - and each
+    # opens the chooser, which lists the one phone that can take an
+    # account (1501: app only, nobody's). The tick-and-send list stood in
+    # a panel of its own and went with it.
+    assert body.count("data-choose=") == 2
+    assert body.count('name="serial" value="1501"') == 1
     assert "&rarr; phone" in body
     assert "Log in selected" not in body
 
@@ -3316,9 +3319,13 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     for forbidden in ("XMLHttpRequest", "innerHTML", "document.write",
                       "action ="):
         assert forbidden not in script, forbidden
+    # Three, and only these: the page's own forms, the page itself, and
+    # the phone link a serial is - the drawer fetches what the link would
+    # have opened.
     calls = re.findall(r"fetch\(([^,)]+)", script)
     assert calls and all(c.strip() in ("form.action",
-                                       "location.pathname + location.search")
+                                       "location.pathname + location.search",
+                                       "href")
                          for c in calls), calls
     # The one real submit is the fallback when the network fails.
     assert script.count(".submit(") == 1
@@ -3677,3 +3684,63 @@ def test_the_manager_never_lists_a_row_that_is_finished_with():
     assert "status <> 'used'" in body
     assert "status <> 'delivered'" in body
     assert body.count("on_sheet") == 3, "all three, the same rule as the rest"
+
+
+# ---------------------------------------------- the contract, slice B
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_the_manager_carries_the_chooser_and_the_drawer_shut(web, monkeypatch):
+    """Which phone an account goes to is chosen, not taken from the top;
+    and a serial opens the phone's page here rather than leaving. Both
+    ride in the one response, shut, like the pool sheets."""
+    _dash(monkeypatch, phones=[
+        {"serial": "1500", "status": "app_only", "state": "", "gmail": "",
+         "app_account": "", "proxy_name": "SX27"},
+        {"serial": "1501", "status": "app_only", "state": "taken",
+         "owner": "ali", "app_account": "", "proxy_name": "SX1"},
+        {"serial": "1502", "status": "ready", "state": "",
+         "app_account": "h@x.com", "proxy_name": "SX2"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    send = body[body.index('data-sheet="send" hidden'):]
+    send = send[:send.index("</section>")]
+    assert 'name="serial" value="1500"' in send, "warm and nobody's"
+    assert 'value="1501"' not in send, "somebody holds it"
+    assert 'value="1502"' not in send, "it already has an account"
+    assert 'data-sheet="phone" hidden' in body
+    assert "[data-drawer]" in body or 'data-drawer' in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_editor_offers_the_rows_status(web, monkeypatch):
+    """free, set aside, or the word it has - and greyed when a phone is
+    behind the row, because the phone decides that one."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    ov = body[body.index('id="poolov"'):]
+    free_row = ov[ov.index('data-for="free@gmail.com"'):]
+    free_row = free_row[:free_row.index("</tr>")]
+    assert '<select name="state">' in free_row
+    assert '<option value="free" selected>' in free_row
+    assert '<option value="set aside">' in free_row
+    held_row = ov[ov.index('data-for="busy@gmail.com"'):]
+    held_row = held_row[:held_row.index("</tr>")]
+    assert '<select name="state" disabled' in held_row
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_a_chosen_phone_rides_in_the_login_request(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: got.update(k) or 5)
+    client = web()
+    client.login()
+    client.request("POST", "/accounts/login",
+                   _form(csrf=client.csrf(), addresses="a@x.com", serial="1500"))
+    assert got.get("payload", {}).get("serial") == "1500"

@@ -231,6 +231,25 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand.js details.newone[open] summary{{display:none}}
 .byhand details.newone .lead{{font-size:12px;color:var(--dim)}}
 .byhand details.newone input{{margin:0;width:200px}}
+.ov .sheet.narrow{{width:min(520px,100%)}}
+.ov .sheet.drawer{{position:fixed;right:0;top:0;bottom:0;width:min(480px,100%);
+ max-height:none;border-radius:0;border-right:0}}
+.ov .sheet.drawer .narrow{{width:auto;max-width:none}}
+.ov .sheet.drawer .top{{display:none}}
+.ov .sheet.drawer .acts{{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}}
+.pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
+ border-bottom:1px solid var(--line2)}}
+.pickrow:last-child{{border-bottom:0}}
+.pickrow .serial{{min-width:56px;font-weight:500}}
+.statepick{{display:flex;flex-direction:column;gap:4px;font-size:10.5px;
+ letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}}
+.statepick select{{background:var(--panel2);border:1px solid var(--line);
+ color:var(--ink);border-radius:7px;padding:7px 10px;font:12.5px var(--mono)}}
+.statepick select:disabled{{opacity:.5}}
+@media (prefers-reduced-motion:no-preference){{
+ .ov .sheet.drawer{{animation:slidein .2s ease-out}}
+ @keyframes slidein{{from{{transform:translateX(24px);opacity:0}}}}
+}}
 .filters .sellerpick{{background:var(--panel2);border:1px solid var(--line);
  color:var(--ink);border-radius:7px;padding:6px 10px;font:12.5px var(--mono)}}
 .filters .poolfind{{flex:1}}
@@ -1563,7 +1582,8 @@ _DASH_SCRIPT = """
   function ov(){ return document.getElementById('poolov'); }
   function shut(){
     var o = ov(); if (!o) return;
-    o.hidden = true; openKind = null;
+    o.hidden = true; openKind = null; drawerHref = null;
+    o.classList.remove('right');
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
     o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
@@ -1586,6 +1606,36 @@ _DASH_SCRIPT = """
     if (door && !door.dataset.edit) {
       opener = door;
       show(door.dataset.pool, door.dataset.open === 'add');
+      return;
+    }
+    // -> phone: choose the phone rather than take the next one. The row's
+    // own form still works without this (the next warm phone).
+    var choose = e.target.closest('[data-choose]');
+    if (choose) {
+      var o2 = ov(), sheet2 = o2 && o2.querySelector('.sheet[data-sheet="send"]');
+      if (sheet2) {
+        e.preventDefault();
+        opener = choose;
+        sheet2.querySelectorAll('input[name=addresses]').forEach(function(i){
+          i.value = choose.dataset.choose;
+        });
+        var hint = sheet2.querySelector('[data-hint]');
+        if (hint) hint.textContent = choose.dataset.choose;
+        o2.querySelectorAll('.sheet').forEach(function(el){
+          el.hidden = el !== sheet2;
+        });
+        o2.hidden = false; openKind = 'send';
+        return;
+      }
+    }
+    // A serial opens the phone's page in a drawer, here, rather than
+    // leaving the dashboard for it.
+    var link = e.target.closest(
+      '#phones a[href^="/phones/"], .slab a[href^="/phones/"]');
+    if (link && !e.ctrlKey && !e.metaKey && link.target !== '_blank') {
+      e.preventDefault();
+      opener = link;
+      openDrawer(link.href);
       return;
     }
     var o = ov();
@@ -1631,6 +1681,42 @@ _DASH_SCRIPT = """
     }
   });
 
+  // The phone's own page, in a drawer. Its forms post like any other
+  // and land back on the dashboard, which reopens the drawer refreshed.
+  var drawerHref = null;
+  function openDrawer(href){
+    var o = ov(); if (!o) return;
+    var sheet = o.querySelector('.sheet[data-sheet="phone"]');
+    if (!sheet) { location.assign(href); return; }
+    drawerHref = href;
+    fetch(href, {credentials: 'same-origin'})
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        var doc = parse(html), main = doc.querySelector('main');
+        if (!main) { location.assign(href); return; }
+        var h2 = main.querySelector('.top h2');
+        var acts = main.querySelector('.top .status');
+        sheet.querySelector('[data-title]').textContent = h2 ? h2.textContent : '';
+        var head = main.querySelector('.top > span');
+        var hint = sheet.querySelector('[data-hint]');
+        hint.replaceChildren.apply(
+          hint, head ? Array.prototype.slice.call(head.childNodes) : []);
+        var body = sheet.querySelector('[data-drawer]');
+        var nodes = [];
+        if (acts) { acts.className = 'acts'; nodes.push(acts); }
+        Array.prototype.slice.call(main.children).forEach(function(n){
+          if (n.matches('script')) return;
+          nodes.push(n);
+        });
+        body.replaceChildren.apply(body, nodes);
+        o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = el !== sheet; });
+        o.classList.add('right');
+        o.hidden = false; openKind = 'phone';
+        var first = body.querySelector('button'); if (first) first.focus();
+      })
+      .catch(function(){ location.assign(href); });
+  }
+
   // A sheet can show a page of its own - the preview of a paste, the
   // "are you sure" of a remove - in place of its list, and come back.
   function restoreSheet(sheet){
@@ -1663,7 +1749,8 @@ _DASH_SCRIPT = """
     });
     here.replaceChildren.apply(here, nodes);
     init();
-    if (kept) show(kept, false);
+    if (kept === 'phone' && drawerHref) openDrawer(drawerHref);
+    else if (kept && kept !== 'send') show(kept, false);
   }
   function reload(){
     fetch(location.pathname + location.search, {credentials: 'same-origin'})
@@ -1848,8 +1935,9 @@ def _send_form(user: dict, address: str, back: str = "/") -> str:
             f'{_csrf(user)}'
             f'<input type="hidden" name="addresses" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<button class="quiet send" title="sign this account into '
-            f'the next warm phone">&rarr; phone</button></form>')
+            f'<button class="quiet send" data-choose="{esc(address)}" '
+            f'title="sign this account into a phone">&rarr; phone</button>'
+            f'</form>')
 
 
 def _may_send(user: dict, manual_login: bool) -> bool:
@@ -2082,9 +2170,31 @@ def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
            if kind == "gmail" else
            '<input name="secret" placeholder="2fa secret - blank for none" '
            'autocomplete="off">')
+        + _state_choice(row)
         + '<button class="go">Save</button>'
         '<button type="button" class="quiet" data-shut="1">Cancel</button>'
         '</form></td></tr>')
+
+
+def _state_choice(row: dict) -> str:
+    """Status, in the editor: free (back on the shelf), set aside (not to
+    be handed out, by hand), or the word the row has now. A row a phone is
+    behind shows the field greyed with a note - the phone decides that one,
+    or two things would be writing the same cell."""
+    state = str(row.get("state") or "")
+    held = state == "on a phone"
+    words = ["free", "set aside"]
+    if state not in ("free", "set_aside", "set aside"):
+        words.append(state)
+    def picked(w: str) -> str:
+        return (" selected" if w == state
+                or (w == "set aside" and state == "set_aside") else "")
+    options = "".join(
+        f'<option value="{esc(w)}"{picked(w)}>{esc(w)}</option>' for w in words)
+    off = (' disabled title="a phone is behind this row - the phone decides"'
+           if held else "")
+    return (f'<label class="statepick"><span>status</span>'
+            f'<select name="state"{off}>{options}</select></label>')
 
 
 def _pool_table(kind: str, rows: list[dict], user: dict,
@@ -2175,7 +2285,50 @@ def _pool_manager(data: dict, user: dict,
             f'<div class="tscroll">'
             f'{_pool_table(kind, rows, user, manual_login)}</div>'
             f'</div></section>')
+    if _may_send(user, manual_login):
+        sheets.append(_send_sheet(data, user))
+    sheets.append(
+        '<section class="sheet drawer" data-sheet="phone" hidden>'
+        '<header><h3 class="mono" data-title></h3><span class="hint" data-hint>'
+        '</span><button type="button" class="x" data-shut="1" '
+        'aria-label="Close">&times;</button></header>'
+        '<div class="sheetbody" data-drawer></div></section>')
     return f'<div class="ov" id="poolov" hidden>{"".join(sheets)}</div>'
+
+
+def _send_sheet(data: dict, user: dict) -> str:
+    """Which phone an account goes to: the phones that can take one, each
+    with its status and exit and one Send. Only `app_only` phones nobody
+    holds - a phone that already has an account is not a place to put a
+    second one, and a phone somebody holds is theirs.
+
+    The address is filled in by the script from the row that was pressed;
+    without the script the row's own button sends to the next warm phone,
+    which is what it always did.
+    """
+    able = [p for p in (data.get("phones") or [])
+            if (p.get("status") or "") == "app_only"
+            and not p.get("app_account") and (p.get("state") or "") != "taken"]
+    rows = "".join(
+        f'<form method="post" class="pickrow" action="/accounts/login">'
+        f'{_csrf(user)}<input type="hidden" name="addresses" value="">'
+        f'<input type="hidden" name="serial" value="{esc(str(p["serial"]))}">'
+        f'<input type="hidden" name="back" value="/">'
+        f'<span class="serial mono">{esc(str(p["serial"]))}</span>'
+        f'{_phone_badge(p)}<span class="age">{esc(str(p.get("proxy_name") or ""))}'
+        f'</span><button class="go small" style="margin-left:auto">Send</button>'
+        f'</form>' for p in able)
+    body = (f'<div class="slab">{rows}</div>' if rows else
+            '<p class="empty">No phone can take an account right now - '
+            'every one of them already has one, or is still building.</p>')
+    return (f'<section class="sheet narrow" data-sheet="send" hidden>'
+            f'<header><h3>Send to a phone</h3><span class="hint mono" '
+            f'data-hint></span><button type="button" class="x" data-shut="1" '
+            f'aria-label="Close">&times;</button></header>'
+            f'<div class="sheetbody">{body}'
+            f'<p class="dim" style="margin:0;font-size:12px">The phone is '
+            f'booted and the account signed into the app on it. It shows as '
+            f'<b>Ready</b> when done.</p></div></section>')
 
 
 #: What a blank picker means, said the same way in all three.

@@ -871,3 +871,61 @@ def test_an_unknown_verb_is_never_run_inline():
     from geelark_farm import verbs
 
     assert not verbs.runs_inline("no_such_verb")
+
+
+def test_the_editor_can_free_a_row_or_set_it_aside():
+    """The status field in the row editor: free is release - back on the
+    shelf, serial cleared; set aside is a word in the pool's own column."""
+    book = make_book(gmails=1)
+    g0 = book.gmails._rows[0]
+    address = g0.values["Address"]
+
+    status, said, detail = verbs.edit_gmail(
+        book, None, None, {"address": address, "new_address": address,
+                           "password": g0.values.get("Password", "pw") or "pw",
+                           "secret": "", "seller": g0.values.get("Seller", ""),
+                           "state": "set aside", "by": "mehdi"}, None)
+    assert status == "done", said
+    assert book.gmails.status_of(g0) == "set_aside"
+    assert "Status" in detail["changed"]
+
+    status, said, detail = verbs.edit_gmail(
+        book, None, None, {"address": address, "new_address": address,
+                           "password": g0.values.get("Password", "pw") or "pw",
+                           "secret": "", "seller": g0.values.get("Seller", ""),
+                           "state": "free", "by": "mehdi"}, None)
+    assert status == "done", said
+    assert book.gmails.status_of(g0) == ""
+
+    # The word it already has is not a change.
+    status, said, detail = verbs.edit_gmail(
+        book, None, None, {"address": address, "new_address": address,
+                           "password": g0.values.get("Password", "pw") or "pw",
+                           "secret": "", "seller": g0.values.get("Seller", ""),
+                           "state": "free", "by": "mehdi"}, None)
+    assert "Status" not in detail["changed"]
+
+
+def test_a_named_phone_is_the_only_one_offered_to_the_account(monkeypatch):
+    """The chooser names the phone. Named, it is the one used; a name that
+    is not a warm phone is a refusal in words, not the next one in line."""
+    from geelark_farm import builder
+
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    warm = [{"serial": "1500"}, {"serial": "1501"}]
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (list(warm), []))
+    launched = []
+
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"addresses": [a0.values["Address"]],
+                           "serial": "1501", "by": "mehdi"},
+        client=object(), launch=launched.append)
+    assert status == "running", said
+    assert detail["phones"][0]["serial"] == "1501"
+
+    status, said, _ = verbs.login_accounts(
+        book, None, None, {"addresses": [a0.values["Address"]],
+                           "serial": "1999", "by": "mehdi"},
+        client=object(), launch=launched.append)
+    assert status == "refused" and "1999" in said

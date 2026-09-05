@@ -386,6 +386,16 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
     if client is None or launch is None:
         return "failed", "this pass cannot start phone work", None
     warm, _gone = builder._unfinished(client, book)
+    # The console's chooser names the phone; the old tick-and-send did not.
+    # Named, that phone is the only one offered - and a name that is not a
+    # warm phone is a refusal in words, not the next phone in line.
+    chosen = str(payload.get("serial") or "").strip()
+    if chosen:
+        warm = [p for p in warm if str(p.get("serial")) == chosen]
+        if not warm:
+            return ("refused", f"phone {chosen} cannot take an account right "
+                               f"now - it is not warm, or somebody holds it",
+                    None)
     jobs, started, unpaired, refused = [], [], [], []
     for address in addresses:
         resource = book.apps.find(address)
@@ -496,10 +506,40 @@ def edit_gmail(book, ledger, settings, payload, client):
         return "refused", problem, None
     changed = [name for name, value in cells.items()
                if str(was.get(name, "")) != value]
+    changed += _restate(book.gmails, resource, payload)
     return ("done", f"{address} edited by {_by(payload)}"
                     + (f" ({', '.join(changed)})" if changed
                        else " - nothing was different"),
             {"changed": changed})
+
+
+#: What the editor may set a row's status to, and the word the pool writes.
+#: `free` is `release` - back on the shelf, serial cleared. `set aside` is
+#: a row a person does not want handed out, said in the pool's own column
+#: so every reader sees it the way it sees a run's verdict.
+_RESTATE = {"free": "", "set aside": "set_aside"}
+
+
+def _restate(pool, resource, payload) -> list[str]:
+    """Apply the editor's status choice, if it made one. Returns the list
+    of what changed - empty when the choice was the row's current word.
+
+    A row a phone is behind never reaches here: `_gmail_row`/`_app_row`
+    refuse it first, and the editor greys the field for the same reason.
+    """
+    want = str(payload.get("state") or "").strip().lower()
+    if want not in _RESTATE:
+        return []
+    now = pool.status_of(resource)
+    if now == _RESTATE[want]:
+        return []
+    note = f"{want} by {_by(payload)}"
+    if want == "free":
+        pool.release(resource, note=note)
+    else:
+        pool.edit_cells(resource, **{pool.status_column: _RESTATE[want],
+                                     pool.note_column: note})
+    return [pool.status_column]
 
 
 def remove_gmail(book, ledger, settings, payload, client):
@@ -571,6 +611,7 @@ def edit_app(book, ledger, settings, payload, client):
         return "refused", problem, None
     changed = [name for name, value in cells.items()
                if str(was.get(name, "")) != value]
+    changed += _restate(book.apps, resource, payload)
     return ("done", f"{address} edited by {_by(payload)}"
                     + (f" ({', '.join(changed)})" if changed
                        else " - nothing was different"),

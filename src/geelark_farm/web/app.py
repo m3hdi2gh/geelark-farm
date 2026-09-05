@@ -367,7 +367,8 @@ class _Handler(BaseHTTPRequestHandler):
                 back = field.get("back") or "/"
                 return self._login_accounts(
                     user, form.get("addresses") or [],
-                    back=back if back in LOGIN_BACKS else "/")
+                    back=back if back in LOGIN_BACKS else "/",
+                    serial=(field.get("serial") or "").strip())
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/retry"):
                 return self._retry_action(user)
@@ -533,7 +534,7 @@ class _Handler(BaseHTTPRequestHandler):
         return True
 
     def _login_accounts(self, user: dict, addresses: list,
-                        back: str = "/") -> None:
+                        back: str = "/", serial: str = "") -> None:
         """"Log in selected" (C6), off the dashboard or the Gpt Pool -
         `back` is whichever the ticks were on. Only meaningful with
         manual login on: off, the pass logs accounts in by itself and
@@ -543,8 +544,11 @@ class _Handler(BaseHTTPRequestHandler):
         chosen = [a.strip() for a in addresses if a and a.strip()]
         if not chosen:
             return self._redirect(_said_url(back, "none"))
+        payload = {"addresses": chosen}
+        if serial:
+            payload["serial"] = serial            # the chooser named a phone
         return self._act(user, "may_login_accounts", "login_accounts",
-                         {"addresses": chosen},
+                         payload,
                          idem=self._minute_key(
                              user, "login", ",".join(sorted(chosen))),
                          back=back)
@@ -726,7 +730,8 @@ class _Handler(BaseHTTPRequestHandler):
                  "password": field.get("password") or "",
                  "secret": (field.get("secret") or "").strip(),
                  "seller": (field.get("seller") or "").strip(),
-                 "purchased": (field.get("purchased") or "").strip()},
+                 "purchased": (field.get("purchased") or "").strip(),
+                 "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_gmail", address),
                 back=_gmail_back(field))
         if path == "/pools/gmail/remove":
@@ -904,7 +909,8 @@ class _Handler(BaseHTTPRequestHandler):
                 {"address": address,
                  "new_address": (field.get("new_address") or "").strip(),
                  "password": field.get("password") or "",
-                 "secret": (field.get("secret") or "").strip()},
+                 "secret": (field.get("secret") or "").strip(),
+                 "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_app", address),
                 back=_add_back(field, "/pools/gpt"))
         if path == "/pools/gpt/remove":
