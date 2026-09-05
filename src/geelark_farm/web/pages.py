@@ -403,25 +403,30 @@ p{{margin:0}}
  border-radius:6px;color:var(--ink);font:400 11.5px/1.6 var(--mono);
  padding:8px 9px;resize:vertical;width:100%}}
 .addfold textarea:focus{{outline:none;border-color:#3a5c96}}
-.byhand{{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;
+.byhand{{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;
  padding-top:4px}}
-.byhand label{{display:flex;flex-direction:column;gap:5px;font-size:10.5px;
- letter-spacing:.7px;text-transform:uppercase;color:var(--dim);
- flex:1 1 200px}}
-.byhand label.tick{{flex:0 0 auto;flex-direction:row;align-items:center;
- gap:8px;font-size:12.5px;letter-spacing:0;text-transform:none;
- color:var(--ink);padding-bottom:8px}}
+/* Three boxes, the tick and the button on one line, left to right and no
+   wider than their words. Stretched to fill, the row read as four things
+   scattered across a page; this reads as one sentence. */
+.byhand label{{display:flex;flex-direction:column;align-items:flex-start;
+ gap:5px;font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;
+ color:var(--dim);flex:0 0 auto;text-align:left}}
+.byhand label input{{width:220px}}
+.byhand label.tick{{flex-direction:row;align-items:center;gap:8px;
+ font-size:12.5px;letter-spacing:0;text-transform:none;color:var(--ink);
+ padding-bottom:9px}}
 .byhand label.tick input{{accent-color:var(--accent);width:15px;height:15px}}
 .byhand select,.byhand input[type=text],.byhand input:not([type]){{
  background:var(--panel2);border:1px solid var(--line);border-radius:7px;
  color:var(--ink);font:400 12.5px/1 var(--mono);padding:9px 10px;
  font-family:var(--mono);min-width:0}}
 .byhand select:focus,.byhand input:focus{{outline:none;border-color:#3a5c96}}
-.byhand details.newone{{flex:1 1 100%;font-size:12px;color:var(--dim)}}
+.byhand button.go{{padding:9px 18px;align-self:flex-end;margin-bottom:1px}}
+.byhand details.newone{{flex:1 1 100%;order:10;font-size:12px;
+ color:var(--dim)}}
 .byhand details.newone summary{{cursor:pointer;padding:2px 0}}
-.byhand details.newone input{{margin:8px 8px 0 0;min-width:220px}}
-.byhand p{{flex:1 1 100%;font-size:11px;line-height:1.5;margin:0}}
-.byhand button.go{{padding:9px 16px;align-self:flex-end}}
+.byhand details.newone input{{margin:8px 8px 0 0;width:220px}}
+.byhand p{{flex:1 1 100%;order:11;font-size:11px;line-height:1.5;margin:0}}
 .stopped h3 .ct{{margin-left:auto;font-family:var(--mono);color:var(--red);
  letter-spacing:0}}
 .stopped details.fold{{padding:0 15px 12px}}
@@ -1894,7 +1899,7 @@ def _build_card(data: dict, user: dict) -> str:
     if not exits:
         # No way out for a phone. Said rather than offered: a form that can
         # only be refused is worse than a sentence saying why.
-        return ('<div class="panel"><h3>Build a phone by hand</h3>'
+        return ('<div class="panel"><h3>Build one now</h3>'
                 '<p class="dim">There is no free exit to build with, so '
                 'there is nothing to ask for yet.</p></div>')
     # An empty Gmail pool is not "nothing to build with": the box takes an
@@ -1906,7 +1911,7 @@ def _build_card(data: dict, user: dict) -> str:
             "Pick one from the pool or type an address that is not in it "
             "yet. Leave a box empty and the keeper takes the next in line.")
     return (
-        f'<div class="panel"><h3>Build a phone by hand</h3>'
+        f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
@@ -1922,6 +1927,7 @@ def _build_card(data: dict, user: dict) -> str:
         + '<label>GPT account'
         + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
         + '</label>'
+        '<button class="go">Build</button>'
         # Only an address the pool has never heard of needs these. Folded
         # rather than appearing as you type: a field you find out about
         # after pressing the button is a field that arrived too late.
@@ -1933,7 +1939,6 @@ def _build_card(data: dict, user: dict) -> str:
         'address - optional" autocomplete="off">'
         '<input name="app_password" placeholder="GPT password" '
         'autocomplete="off"></details>'
-        '<button class="go">Build it</button>'
         '<p class="dim">This spends one phone, one exit and one Gmail. '
         'The next pass starts it.</p>'
         '</form></div>')
