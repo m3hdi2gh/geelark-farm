@@ -247,6 +247,19 @@ def _grid_instruction(ctx: Context) -> str:
     return ""
 
 
+def _robot_checkbox(ctx: Context):
+    """The reCAPTCHA tick box itself, not the words beside it.
+
+    A CheckBox whose label says "not a robot" - the words on their own are
+    a TextView the same page also carries, and tapping prose does nothing.
+    """
+    for el in ctx.elements:
+        if ("checkbox" in (el.cls or "").lower()
+                and "not a robot" in (el.label or "").lower()):
+            return el
+    return None
+
+
 def _tile_points(rect: tuple[int, int, int, int], size: int,
                  indices: list[int]) -> list[tuple[int, int]]:
     """The device point at the centre of each named tile of a `size`x`size`
@@ -342,11 +355,19 @@ def act_captcha(ctx: Context) -> Outcome | None:
                        artifacts=[path] if path else [])
     instruction = _grid_instruction(ctx)
     if not instruction:
-        # Just the checkbox. A tap is the whole move; the page re-reads and
-        # either passes or opens a grid on the next visit.
-        for label in ("I'm not a robot", "not a robot", "Verify", "Next"):
-            if ctx.tap(label):
-                break
+        # Just the checkbox, which is two moves and not one: tick it, then
+        # submit the form it sits on. Read from a real screen (2026-09-06):
+        # `I'm not a robot` is a CheckBox at [58,541][106,588] and NEXT is
+        # a separate button at the foot of the page.
+        #
+        # The tick is only tapped while it is empty. Tapping "the checkbox"
+        # on the second visit unticks what the first visit ticked, and the
+        # flow would do that until the limit and call the captcha unsolved.
+        box = _robot_checkbox(ctx)
+        if box is not None and not box.checked:
+            screen.tap_element(ctx.client, ctx.phone_id, box)
+            return None
+        submit(ctx)
         return None
     rect = _grid_rect(ctx)
     if rect is None:

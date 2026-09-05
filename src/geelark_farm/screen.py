@@ -61,6 +61,10 @@ class Element:
     enabled: bool
     focused: bool
     password: bool
+    #: A CheckBox that is already ticked. Nothing else here can tell one
+    #: from an empty box, so a flow that taps "the checkbox" a second time
+    #: unticks what it just ticked (2026-09-06, the reCAPTCHA screen).
+    checked: bool = False
 
     @property
     def label(self) -> str:
@@ -155,6 +159,7 @@ def parse(xml: str) -> list[Element]:
             enabled=node.get("enabled") != "false",
             focused=node.get("focused") == "true",
             password=node.get("password") == "true",
+            checked=node.get("checked") == "true",
         ))
     return elements
 

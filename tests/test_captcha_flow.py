@@ -42,12 +42,17 @@ def test_a_captcha_is_fatal_without_a_key_and_handled_with_one():
     assert g._fatal_reason(ctx(els, key="K")) is None
 
 
-def test_the_checkbox_is_tapped_and_the_page_re_read():
-    taps = []
-    c = ctx([el("I'm not a robot", "[40,300][320,380]")],
-            seen={"captcha": 1}, taps=taps)
+def test_the_words_alone_are_never_tapped_as_a_tick_box(monkeypatch):
+    """"I'm not a robot" is also prose on that page, and tapping prose does
+    nothing. Only a CheckBox is ticked; with none on screen the form is
+    submitted instead of poking at text."""
+    tapped, submitted = [], []
+    monkeypatch.setattr(g.screen, "tap_element",
+                        lambda client, pid, el: tapped.append(el.label))
+    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    c = ctx([el("I'm not a robot", "[40,300][320,380]")], seen={"captcha": 1})
     assert g.act_captcha(c) is None
-    assert "I'm not a robot" in taps
+    assert tapped == [] and submitted == [True]
 
 
 def test_the_limit_turns_into_the_captcha_fatal():
@@ -91,3 +96,33 @@ def test_a_grid_that_cannot_be_placed_is_never_tapped(monkeypatch):
                         lambda *a: called.append("tap"))
     assert g.act_captcha(c) is None
     assert called == [], "nothing solved, nothing tapped"
+
+
+def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
+    """From the screen a build actually met (tests/fixtures): the tick is a
+    CheckBox and NEXT is a separate button. Tapping "the checkbox" twice
+    unticks what the first tap ticked, so the box is only tapped while it
+    is empty and the second visit submits instead."""
+    import pathlib
+
+    xml = pathlib.Path("tests/fixtures/google-captcha-checkbox.xml")
+    els = screen.parse(xml.read_text(encoding="utf-8", errors="replace"))
+    box = g._robot_checkbox(ctx(els))
+    assert box is not None and box.clickable and not box.checked
+    assert box.centre == (82, 564), "the tick box, not the words beside it"
+
+    tapped, submitted = [], []
+    c = ctx(els, seen={"captcha": 1})
+    monkeypatch.setattr(g.screen, "tap_element",
+                        lambda client, pid, el: tapped.append(el.centre))
+    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    assert g.act_captcha(c) is None
+    assert tapped == [(82, 564)] and submitted == []
+
+    # Second visit, box now ticked: submit rather than untick it.
+    ticked = [screen.Element(**{**el.__dict__, "checked": True})
+              if el is box else el for el in els]
+    c2 = ctx(ticked, seen={"captcha": 2})
+    tapped.clear()
+    assert g.act_captcha(c2) is None
+    assert tapped == [] and submitted == [True]
