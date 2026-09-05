@@ -425,10 +425,33 @@ def _grab_grid_b64(ctx: Context,
         buf = io.BytesIO()
         grid.save(buf, format="PNG")
         data = buf.getvalue()
+        _keep(ctx, "captcha-screen.png", shot)
+        _keep(ctx, "captcha-grid.png", grid)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("could not crop the captcha grid (%s)", exc)
         return None
     return base64.b64encode(data).decode("ascii")
+
+
+def _keep(ctx: Context, name: str, image) -> None:
+    """Put a picture beside the build's other artifacts, once.
+
+    The view hierarchy says where the tiles are; only the picture says what
+    was actually sent. Four builds handed CapSolver a grid and got back an
+    answer about a single image, and there was no way to tell a bad crop
+    from a bad answer without seeing the crop (2026-09-05).
+    """
+    if not ctx.artifact_dir:
+        return
+    path = ctx.artifact_dir / name
+    if path.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path, format="PNG")
+        ctx.saved.append(str(path))
+    except OSError as exc:
+        log.warning("could not keep %s (%s)", name, exc)
 
 
 def _screen_width(ctx: Context) -> int:
