@@ -2388,9 +2388,23 @@ class StrandBook:
         return log
 
 
+#: What GeeLark answers for a phone in the farm's own group, and for one
+#: that is in no group at all - the object comes back either way, with
+#: every field empty for the second.
+IN_GROUP = {"id": "g1", "name": "automation", "remark": ""}
+NO_GROUP = {"id": "", "name": "", "remark": ""}
+
+
 def stranded(monkeypatch, *, live, phone_rows, gmail_serial=None,
-             app_serial=None):
-    listing = [{"id": f"P{s}", "serialNo": s} for s in live]
+             app_serial=None, theirs=(), ungrouped=()):
+    """`live` are the farm's phones; `theirs` belong to somebody else on the
+    same shared account. `ungrouped` are the farm's own, but outside the
+    group - which is the case that says the group signal is broken."""
+    listing = [{"id": f"P{s}", "serialNo": s,
+                "group": NO_GROUP if s in ungrouped else IN_GROUP}
+               for s in live]
+    listing += [{"id": f"P{s}", "serialNo": s, "group": NO_GROUP}
+                for s in theirs]
     monkeypatch.setattr(builder.phones, "listing", lambda c: listing)
     book = make_book(gmails=1, proxies=1, apps=1)
     if gmail_serial is not None:
@@ -2460,6 +2474,51 @@ def test_an_app_account_is_reported_and_not_touched(monkeypatch):
 
     assert outcome["stranded_waiting"]
     assert book.apps.status_of(book.apps._rows[0]) == book.apps.spent_status
+
+
+def test_a_phone_outside_the_farms_group_is_not_reported(monkeypatch):
+    """The GeeLark account is shared. Every phone this farm makes is created
+    with `profileGroup: automation`; the operator's own carry no group, and
+    reporting them made a warning nobody could ever clear - which is the same
+    as no warning (2026-08-29). Three of his sat in that line for a day."""
+    _, outcome = stranded(monkeypatch, live=[], phone_rows=[],
+                          theirs=["1741", "1742", "1743"])
+
+    assert "unknown_phones" not in outcome
+
+
+def test_a_phone_in_the_group_with_no_row_is_still_reported(monkeypatch):
+    """The filter narrows whose phones are looked at, not whether an orphan
+    of ours is reported - one running unseen bills by the minute."""
+    _, outcome = stranded(monkeypatch, live=["964"], phone_rows=[],
+                          theirs=["1743"])
+
+    assert outcome["unknown_phones"] == ["964"]
+
+
+def test_the_group_is_distrusted_when_one_of_ours_is_outside_it(monkeypatch):
+    """The signal is checked before it is trusted, in the one way that costs
+    nothing: a phone we hold a row for must be in the group, because we put
+    it there at creation. If it is not, the group means something other than
+    what this reads into it, and the old behaviour is the safe one - a phone
+    of ours running unseen is the failure that matters here."""
+    _, outcome = stranded(monkeypatch, live=["964", "965"],
+                          phone_rows=[{"Serial": "964"}],
+                          ungrouped=["964"], theirs=["1743"])
+
+    assert outcome["unknown_phones"] == ["1743", "965"]
+
+
+def test_a_phone_with_no_group_object_at_all_is_not_ours(monkeypatch):
+    """A listing that answers no `group` key, rather than an empty one.
+    Read as 'not in the group', never as an error."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "1743"}])
+    book = make_book(gmails=1, proxies=1, apps=1)
+
+    outcome = builder.strand_check(None, StrandBook(book, []))
+
+    assert "unknown_phones" not in outcome
 
 
 def test_a_credential_already_settled_is_not_touched_again(monkeypatch):

@@ -2605,6 +2605,25 @@ def free_abandoned_claims(book: Book, older_than: float) -> list[str]:
     return freed
 
 
+#: The GeeLark profile group every phone this farm creates is put in, at
+#: creation, by `phones.create`. The account is shared with other people,
+#: and this is what tells a phone of ours from one of theirs.
+FARM_GROUP = "automation"
+
+
+def _in_the_farms_group(phone: dict) -> bool:
+    """Whether GeeLark says this phone is in the farm's own group.
+
+    The listing answers `group` as an object - `{"id", "name", "remark"}` -
+    and a phone with no group answers the object with every field empty
+    rather than answering nothing, so this reads the name and compares it.
+    """
+    group = phone.get("group") or {}
+    if not isinstance(group, dict):
+        return False
+    return str(group.get("name") or "").strip().casefold() == FARM_GROUP
+
+
 def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
     """Two ways the sheet and the panel come apart, both of which cost stock.
 
@@ -2629,13 +2648,44 @@ def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
     `freed` are a judgement about whether it ever got a fair device, and
     guessing wrong either retires an account that was never used or frees one
     that is with a customer.
+
+    **The account is shared**, so most of what `/v1/phone/list` returns was
+    made by somebody else. Every phone this farm creates is created with
+    `profileGroup: automation`; theirs carry no group at all, and on the
+    seventeen orphans of 2026-09-04 that signal was right about all of them.
+    A phone outside the group is not reported, because a warning nobody can
+    ever clear is the same as no warning (2026-08-29) - and these three were
+    the operator's own.
+
+    The signal is checked before it is trusted, in the one way that costs
+    nothing: a phone we *do* hold a row for must be in the group, because
+    we put it there at creation. If any of ours is not, the group means
+    something different from what this reads into it, and everything is
+    reported the way it was before. It degrades to the old behaviour rather
+    than to silence - the failure that matters here is a phone of ours
+    running unseen and billing by the minute.
     """
     listing = phones.listing(client)
     alive = {str(p.get("serialNo") or "") for p in listing}
     known = {str(row.get("Serial") or "").strip() for row in book.phones.rows()}
     outcome: dict[str, list[str]] = {}
 
-    unknown = sorted(s for s in alive if s and s not in known)
+    ours = [p for p in listing if str(p.get("serialNo") or "") in known]
+    trusted = all(_in_the_farms_group(p) for p in ours)
+    if not trusted:
+        log.warning("%d phone(s) with a row are not in the %r group, so the "
+                    "group says nothing about whose a phone is; reporting "
+                    "every unaccounted phone",
+                    sum(1 for p in ours if not _in_the_farms_group(p)),
+                    FARM_GROUP)
+    theirs = {str(p.get("serialNo") or "") for p in listing
+              if trusted and not _in_the_farms_group(p)}
+    if theirs:
+        log.debug("%d phone(s) on the account are outside the %r group and "
+                  "are not ours: %s", len(theirs), FARM_GROUP,
+                  ", ".join(sorted(theirs)))
+
+    unknown = sorted(s for s in alive if s and s not in known | theirs)
     if unknown:
         outcome["unknown_phones"] = unknown
         # Which of them are running, separately, because the two are different
