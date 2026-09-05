@@ -475,3 +475,14 @@ CREATE TABLE IF NOT EXISTS wanted_builds (
 );
 CREATE INDEX IF NOT EXISTS wanted_queued
     ON wanted_builds (created_at) WHERE status = 'queued';
+
+-- ------------------------------------------------- users, rev 13 (C13)
+-- `may_add_proxy` goes, because nothing can read it any more.
+--
+-- An operator has one page now - the dashboard - and the Proxy tab is not
+-- on it: keeping that pool alive is the admin's job, and an operator's
+-- power over an exit is Change IP on one phone. An admin passes every tick
+-- implicitly, so the column could only ever have said no to somebody who
+-- no longer reaches the page it guarded. A permission nothing reads is a
+-- checkbox that lies to whoever sets it.
+ALTER TABLE users DROP COLUMN IF EXISTS may_add_proxy;

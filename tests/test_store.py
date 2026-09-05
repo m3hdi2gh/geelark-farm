@@ -705,8 +705,15 @@ def test_may_answers_for_admins_operators_and_nobody():
 
 def test_the_permission_vocabulary_matches_the_schema():
     """PERMISSIONS is the page's list and the schema's columns - two copies
-    of six names, held together here so a seventh cannot be added to one
-    and forgotten in the other."""
+    of the same names, held together here so one cannot be added to a list
+    and forgotten in the other, or dropped from the schema and left on the
+    Users page as a tick that does nothing.
+
+    `may_add_proxy` went that second way on 2026-09-05: an operator's whole
+    day became the dashboard, the Proxy tab is not on it, and an admin
+    passes every tick implicitly - so the column could only ever have said
+    no to somebody who no longer reaches the page it guarded.
+    """
     import pathlib
     import re
 
@@ -714,8 +721,10 @@ def test_the_permission_vocabulary_matches_the_schema():
 
     ddl = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
         encoding="utf-8")
-    in_schema = set(re.findall(r"ADD COLUMN IF NOT EXISTS (may_\w+)", ddl))
-    assert in_schema == set(users.PERMISSION_COLUMNS)
+    added = set(re.findall(r"ADD COLUMN IF NOT EXISTS (may_\w+)", ddl))
+    dropped = set(re.findall(r"DROP COLUMN IF EXISTS (may_\w+)", ddl))
+    assert added - dropped == set(users.PERMISSION_COLUMNS)
+    assert "may_add_proxy" in dropped, "and it is gone from the page too"
 
 
 def test_an_admin_cannot_lock_themselves_out(monkeypatch, make_settings):

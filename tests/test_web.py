@@ -638,18 +638,74 @@ def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
     assert "on@x.com" in body and '<a href="/phones/1551">1551</a>' in body
 
 
-def test_pool_pages_are_shared_stock_that_everyone_signed_in_sees(
+def test_an_operator_has_the_dashboard_and_one_phone_and_nothing_else(
         web, monkeypatch):
-    """Stock is shared; what a person may DO on it is the buttons' job."""
+    """The design's last requirement, and the one that made the rest of it
+    necessary: an operator's whole day is the dashboard, so the pages that
+    are somebody keeping the farm reading it are not theirs.
+
+    Hiding the rail is not access. A link that is not drawn is still a URL,
+    and an operator who once had these pages has them bookmarked - so this
+    is the half of that decision that holds.
+    """
     _gmail_active(monkeypatch)
     monkeypatch.setattr(FakeStore, "user",
                         {"id": 9, "username": "narrow", "role": "operator",
                          "sees": "own"})
     client = web()
     client.login(username="narrow")
+
+    for path in ("/pools/gmail", "/pools/proxy", "/pools/gpt", "/pools",
+                 "/requests", "/needs", "/events", "/logs", "/phones"):
+        status, _, body = client.request("GET", path)
+        assert status == 403, path
+        assert "belongs to an admin" in body, path
+
+    # What is theirs: the dashboard, and one phone reached from it.
+    assert client.request("GET", "/")[0] == 200
+    # Whether this particular phone is theirs is the `sees` rule's answer,
+    # and a different question - what matters here is that the gate above
+    # is not the thing standing in the way.
+    _, _, story = client.request("GET", "/phones/1523")
+    assert "belongs to an admin" not in story
+    # And the rail is not drawn either, so nothing advertises what they
+    # may not have.
+    _, _, body = client.request("GET", "/")
+    assert ">Gmail Pool<" not in body and ">Events<" not in body
+    assert ">Dashboard<" in body
+
+
+def test_an_operator_cannot_post_to_a_page_they_no_longer_have(
+        web, monkeypatch):
+    """The GET gate and the POST gate answer different questions, and a
+    POST that slips through is a row written rather than a page seen."""
+    _gmail_active(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own", "may_add_gmail": True})
+    client = web()
+    client.login(username="narrow")
+    token = client.csrf()
+
+    status, _, body = client.request(
+        "POST", "/pools/gmail/remove", _form(csrf=token, address="a@x.com"))
+    assert status == 403 and "Nothing was changed" in body
+
+    # The doors that stayed open are the ones the dashboard posts through:
+    # adding stock moved onto it, and it posts where it always did. What
+    # the preview then makes of the paste is that handler's business.
+    status, _, body = client.request(
+        "POST", "/pools/gmail/preview", _form(csrf=token, pasted="a@x.com"))
+    assert status != 403 and "Nothing was changed" not in body
+
+
+def test_an_admin_keeps_every_page(web, monkeypatch):
+    """The counterweight. Taking the console away from an operator must
+    not take it away from the person who runs it."""
+    _gmail_active(monkeypatch)
+    client = web()
+    client.login()
     assert client.request("GET", "/pools/gmail")[0] == 200
-    status, headers, _ = client.request("GET", "/pools")
-    assert status == 303 and dict(headers)["Location"] == "/pools/gmail"
 
 
 def test_buttons_stay_hidden_until_the_flag_and_the_permission_agree(
@@ -659,26 +715,6 @@ def test_buttons_stay_hidden_until_the_flag_and_the_permission_agree(
     client.login()
     _, _, body = client.request("GET", "/pools/gmail")
     assert "/pools/gmail/preview" not in body, "flag off: no form"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_add_form_needs_the_flag_and_the_permission_together(
-        web, monkeypatch):
-    _gmail_active(monkeypatch)
-    admin = web()
-    admin.login()
-    _, _, body = admin.request("GET", "/pools/gmail")
-    assert "/pools/gmail/preview" in body
-
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "own", "may_add_gmail": False})
-    narrow = web()
-    narrow.login(username="narrow")
-    _, _, body = narrow.request("GET", "/pools/gmail")
-    assert "/pools/gmail/preview" not in body
-    assert ("Adding gmails needs the add-gmails permission - ask an admin"
-            in body), "flag on, permission off: say which one"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -773,20 +809,6 @@ def test_removing_a_gmail_asks_once_with_the_address(web, monkeypatch):
               back="/evil"))
     assert dict(headers)["Location"] == "/pools/gmail?said=queued:82", \
         "only the pool's own views are places to come back to"
-
-
-def test_a_reader_without_the_permission_gets_no_row_buttons(web,
-                                                             monkeypatch):
-    _gmail_active(monkeypatch)
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "all", "may_add_gmail": False})
-    client = web()
-    client.login(username="narrow")
-    _, _, body = client.request("GET", "/pools/gmail")
-    assert ">Edit</a>" not in body and ">Remove<" not in body
-    assert "<th>password</th><th>purchased</th></tr>" in body, \
-        "the columns still read; only the column of buttons goes"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -1032,32 +1054,6 @@ def test_confirming_the_add_queues_the_rows_under_the_persons_name(
     assert got["payload"]["rows"] == [{
         "address": "new@example.com", "password": "pw2",
         "secret": "JBSWY3DPEHPK3PXP", "recovery": ""}]
-
-
-@pytest.mark.parametrize("web", [True], indirect=True)
-def test_a_refusal_is_written_down_with_the_missing_permission(
-        web, monkeypatch):
-    import geelark_farm.store.actions as actions_mod
-    import geelark_farm.store.users as users_mod
-
-    monkeypatch.setattr(users_mod, "may", lambda user, permission: False)
-    monkeypatch.setattr(actions_mod, "enqueue",
-                        lambda *a, **k: pytest.fail("queued anyway"))
-    noted = {}
-
-    def record_refused(settings, *, verb, payload, requested_by, reason):
-        noted.update(verb=verb, payload=payload, reason=reason)
-        return 32
-
-    monkeypatch.setattr(actions_mod, "record_refused", record_refused)
-    client = web()
-    client.login()
-    status, headers, _ = client.request(
-        "POST", "/pools/proxy/test", _form(csrf=client.csrf(), name="SX1"))
-    assert status == 303
-    assert dict(headers)["Location"] == "/pools/proxy?said=refused"
-    assert noted["verb"] == "test_proxy" and noted["payload"]["name"] == "SX1"
-    assert "may_add_proxy" in noted["reason"]
 
 
 @pytest.mark.parametrize("web", [True], indirect=True)
@@ -1878,31 +1874,6 @@ def test_the_proxy_add_panel_offers_paste_and_one_by_one(web, monkeypatch):
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_proxy_page_names_the_permission_it_lacks(web, monkeypatch):
-    import geelark_farm.store.users as users_mod
-
-    monkeypatch.setattr(users_mod, "may", lambda user, permission: False)
-    _proxy_pool(monkeypatch, rows=[_proxy_row("SX1"),
-                                   _proxy_row("SX2", "dead")],
-                state={"unlisted_proxies": [
-                    {"host": "1.2.3.4", "port": 9999, "username": "u",
-                     "password": "p"}]})
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy")
-    assert "needs the may_add_proxy permission" in body
-    assert 'action="/pools/proxy/preview"' not in body
-    for button in ("Test all now", ">Remove<", ">Test<"):
-        assert button not in body, button
-
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert "needs the may_add_proxy permission" in body
-    for button in (">Ignore<", "Add to pool", "Test again",
-                   "IP changed"):
-        assert button not in body, button
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_ignored_exits_leave_the_held_list_and_can_be_seen(web, monkeypatch):
     import geelark_farm.store.actions as actions_mod
 
@@ -2171,9 +2142,11 @@ def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
     assert "fewer than the 5 phones the keeper keeps warm" in card
     assert 'color:var(--amber)">7</b><span class="t">GPT accounts' in card
     # Proxies are the admin's pool, so the row says so instead of
-    # offering a `+` that leads nowhere for an operator.
+    # offering a way in that leads nowhere for an operator.
     assert 'class="lock">admin<' in card
-    assert card.count('class="plus"') == 2, "Gmail and GPT, not proxies"
+    # And with mutations off there is no add door at all - the same rule
+    # every other button on this console follows.
+    assert 'class="addfold"' not in card
     assert "2 of them have no phone to go to" in card
     # The row of shelf counts above the table is gone: the table below is
     # already grouped by state, and a page should not say a number twice.
@@ -2652,43 +2625,6 @@ def test_needs_offers_again_and_clears_tries_through_the_queue(web,
     assert "#81 on Requests" in body
 
 
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_needs_buttons_follow_each_permission_and_say_which_is_missing(
-        web, monkeypatch):
-    import geelark_farm.store.actions as actions_mod
-
-    _needs(monkeypatch)
-    noted = {}
-    monkeypatch.setattr(actions_mod, "record_refused",
-                        lambda s, **k: noted.update(k) or 82)
-    monkeypatch.setattr(actions_mod, "enqueue",
-                        lambda *a, **k: pytest.fail("queued anyway"))
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "all", "may_add_gmail": True,
-                         "may_add_gpt": False, "may_take_phones": False})
-    client = web()
-    client.login(username="narrow")
-    _, _, body = client.request("GET", "/needs")
-    assert body.count('action="/needs/offer"') == 1, "gmail yes, app no"
-    assert 'name="kind" value="gmail"' in body
-    assert "offering accounts again needs the may_add_gpt permission" in body
-    assert "/needs/clear" not in body
-    assert "clearing tries needs the may_take_phones permission" in body
-
-    status, headers, _ = client.request(
-        "POST", "/needs/offer",
-        _form(csrf=client.csrf(), kind="app", address="a@y.com"))
-    assert status == 303 and dict(headers)["Location"] == "/needs?said=refused"
-    assert "may_add_gpt" in noted["reason"]
-
-
-# ------------------------------------------------- Gpt Pool and Requests
-# The paste-and-preview way in for GPT accounts, the by-hand form that
-# comes back filled in when refused, ticks on the pool page itself, the
-# set-aside section in words, the delivered archive's pager and CSV, and
-# the Requests page's pages, highlights and sub-stories.
-
 def _app_row(address, status="", **more):
     row = {"id": 1, "address": address, "status": status, "serial": "",
            "source": "manual", "added_by": 7, "added_by_name": "mehdi",
@@ -2934,28 +2870,6 @@ def test_with_manual_login_off_the_gpt_pool_says_accounts_log_in_on_their_own(
     assert "accounts log in on their own on the next pass" in body
 
 
-@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
-def test_the_gpt_pool_names_each_permission_it_lacks(web, monkeypatch):
-    _gpt_active(monkeypatch, waiting=[_app_row("c@x.com")],
-                needs_human=[_app_row("h@x.com", "payment_problem")])
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "all", "may_add_gpt": False,
-                         "may_login_accounts": False})
-    client = web()
-    client.login(username="narrow")
-    _, _, body = client.request("GET", "/pools/gpt")
-    assert 'action="/pools/gpt/preview"' not in body
-    assert "adding accounts needs the may_add_gpt permission" in body
-    assert 'name="addresses"' not in body
-    assert "logging accounts in needs the may_login_accounts permission" in body
-    assert "log in on their own" not in body, "manual login is on"
-
-    _, _, body = client.request("GET", "/pools/gpt?view=needs_human")
-    assert "Offer again" not in body
-    assert "offering accounts again needs the may_add_gpt permission" in body
-
-
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_needs_a_human_says_what_was_seen_and_what_to_do(web, monkeypatch):
     from geelark_farm.failures import verdict
@@ -3130,29 +3044,6 @@ def test_the_requests_page_pages_highlights_and_tells_the_sub_stories(
     assert "older →" in body and 'href="/requests?view=running&mine=1&page=2"' \
         in body
     assert "page 1 of 1" in body, "the pill count is what is known"
-
-
-@pytest.mark.parametrize("web", [True], indirect=True)
-def test_put_it_back_needs_the_add_proxy_permission(web, monkeypatch):
-    import geelark_farm.store.actions as actions_mod
-
-    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: [
-        {"id": 236, "verb": "remove_proxy", "status": "done",
-         "payload": {"name": "SX3"}, "result": "SX3 removed",
-         "detail": {"removed": {"name": "SX3", "raw": "1.2.3.4:9999:u:p"}},
-         "requested_at": "2026-09-01 18:06:12+00:00",
-         "executed_at": "2026-09-01 18:06:30+00:00",
-         "finished_at": "2026-09-01 18:06:31+00:00",
-         "requested_by": "mehdi"}])
-    monkeypatch.setattr(actions_mod, "counts", lambda s, **k: {"done": 1})
-    monkeypatch.setattr(FakeStore, "user",
-                        {"id": 9, "username": "narrow", "role": "operator",
-                         "sees": "all", "may_add_proxy": False})
-    client = web()
-    client.login(username="narrow")
-    _, _, body = client.request("GET", "/requests")
-    assert "SX3 removed" in body and "Put it back" not in body
-    assert 'class="live"' not in body, "nothing pending"
 
 
 def test_a_csv_cell_that_starts_like_a_formula_opens_as_text():
@@ -3397,3 +3288,40 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
 
     assert 'action="/phones/build"' not in body
     assert "There is no Gmail to build with" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
+        web, monkeypatch):
+    """The pool tabs went with the rail, so `+ add` cannot be a link to one
+    any more. It opens on the page an operator has and posts to the same
+    preview the tab always posted to - only the door moved."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    card = body[body.index("<h3>Supply</h3>"):]
+    card = card[:card.index("</div><div")] if "</div><div" in card else card
+    assert body.count('class="addfold"') == 2, "Gmail and GPT, not proxies"
+    assert 'action="/pools/gmail/preview"' in body
+    assert 'action="/pools/gpt/preview"' in body
+    # And where it returns to, so confirming does not land on a page the
+    # person who pressed it may not have.
+    assert 'name="back" value="/"' in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_add_door_needs_the_permission(web, monkeypatch):
+    """A door somebody may not walk through is not drawn for them."""
+    _dash(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_add_gmail": True,
+                         "may_add_gpt": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/")
+
+    assert 'action="/pools/gmail/preview"' in body
+    assert 'action="/pools/gpt/preview"' not in body

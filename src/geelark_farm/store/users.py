@@ -21,14 +21,12 @@ import secrets
 from ..config import Settings
 from .db import connect
 
-#: The six things an operator may be allowed to do, in the order the Users
+#: The five things an operator may be allowed to do, in the order the Users
 #: page lists them: (column, label, what it unlocks). An admin has all of
 #: them implicitly and drives the service besides.
 PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("may_add_gmail", "add gmails", "the Gmail Pool add form"),
     ("may_add_gpt", "add GPT accounts", "the manual section of Gpt Pool"),
-    ("may_add_proxy", "add proxies",
-     "and answer the unlisted / needs-new-IP lists"),
     ("may_login_accounts", "log accounts in",
      "select accounts and boot warm phones for them"),
     ("may_change_proxy", "change a phone's proxy", ""),

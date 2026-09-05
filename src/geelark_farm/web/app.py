@@ -85,6 +85,17 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._redirect("/password")
             if path == "/password":
                 return self._html(200, pages.password_page(user))
+            if user.get("role") != "admin" and not _operator_may_get(path):
+                # Said rather than 404'd: a person who followed their own
+                # bookmark deserves to know the page moved away from them
+                # rather than to wonder whether the console is broken.
+                return self._html(403, pages.page(
+                    "Not your page",
+                    '<div class="narrow"><h2>That page belongs to an '
+                    'admin</h2><p class="dim">Everything you need is on '
+                    'the dashboard: the phones, the stock, the accounts '
+                    'waiting, and building one by hand. '
+                    '<a href="/">Back to it</a>.</p></div>', user=user))
             if path == "/users":
                 return self._users_get(user)
             if path == "/":
@@ -315,6 +326,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._password_post(user, field, entry)
             if user.get("must_change_password"):
                 return self._redirect("/password")
+            if (user.get("role") != "admin"
+                    and not _operator_may_post(self.path)):
+                # A refusal, not a redirect: a form that quietly does
+                # nothing is how somebody comes to believe they pressed it.
+                return self._html(403, pages.page(
+                    "Not yours to do",
+                    '<div class="narrow"><h2>That belongs to an admin</h2>'
+                    '<p class="dim">Nothing was changed. '
+                    '<a href="/">Back to the dashboard</a>.</p></div>',
+                    user=user))
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path == "/phones/build":
@@ -650,7 +671,8 @@ class _Handler(BaseHTTPRequestHandler):
                 row["duplicate"] = row["address"].lower() in known
             return self._html(200, pages.gmail_preview(
                 rows, seller, user, idem=secrets.token_urlsafe(12),
-                pasted=pasted, sellers=read.gmail_sellers(self.settings)))
+                pasted=pasted, sellers=read.gmail_sellers(self.settings),
+                back=_add_back(field, "/pools/gmail")))
         if path == "/pools/gmail/add":
             rows = [{"address": r["address"], "password": r["password"],
                      "secret": r["secret"], "recovery": r["recovery"]}
@@ -659,7 +681,7 @@ class _Handler(BaseHTTPRequestHandler):
                              {"rows": rows,
                               "seller": (field.get("seller") or "").strip()},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
-                             back="/pools/gmail")
+                             back=_add_back(field, "/pools/gmail"))
         if path == "/pools/gmail/edit":
             # The row editor: the address names the row, everything else
             # is what it should say now. Judged by the verb against the
@@ -715,7 +737,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/pools/proxy/add":
             rows = [{"raw": r["raw"], "name": r["name"]}
                     for r in paste.proxies(field.get("rows", ""))]
-            return self._act(user, "may_add_proxy", "add_proxies",
+            return self._act(user, "admin", "add_proxies",
                              {"rows": rows},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
                              back="/pools/proxy")
@@ -738,11 +760,11 @@ class _Handler(BaseHTTPRequestHandler):
                     action="/pools/proxy/remove",
                     fields={"name": name, "sure": "1", "back": back},
                     button=f"Yes, remove {name}", back=back))
-            return self._act(user, "may_add_proxy", verb, {"name": name},
+            return self._act(user, "admin", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
                              back=back)
         if path == "/pools/proxy/test-all":
-            return self._act(user, "may_add_proxy", "test_all_proxies", {},
+            return self._act(user, "admin", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
                              back=_proxy_back(field))
         if path == "/pools/proxy/ignore":
@@ -754,7 +776,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not triple["host"]:
                 return self._redirect(
                     _said_url(_proxy_back(field), "gone"))
-            return self._act(user, "may_add_proxy", "ignore_proxy", triple,
+            return self._act(user, "admin", "ignore_proxy", triple,
                              idem=self._minute_key(
                                  user, "ignore", _proxy_key(triple)),
                              back=_proxy_back(field))
@@ -766,7 +788,7 @@ class _Handler(BaseHTTPRequestHandler):
             raw = (field.get("raw") or "").strip()
             if not raw:
                 return self._redirect("/requests?said=gone")
-            return self._act(user, "may_add_proxy", "add_proxies",
+            return self._act(user, "admin", "add_proxies",
                              {"rows": [{"raw": raw, "name": name}]},
                              idem=self._minute_key(user, "restore",
                                                    name or raw),
@@ -783,7 +805,7 @@ class _Handler(BaseHTTPRequestHandler):
             if held is None:
                 return self._redirect(
                     _said_url(_proxy_back(field), "gone"))
-            return self._act(user, "may_add_proxy", "adopt_proxy", held,
+            return self._act(user, "admin", "adopt_proxy", held,
                              idem=self._minute_key(
                                  user, "adopt", f"{held['host']}:{held['port']}"),
                              back=_proxy_back(field))
@@ -807,7 +829,8 @@ class _Handler(BaseHTTPRequestHandler):
                     row["error"] = str(exc)
                 row["duplicate"] = row["address"].lower() in known
             return self._html(200, pages.gpt_preview(
-                rows, user, idem=secrets.token_urlsafe(12), pasted=pasted))
+                rows, user, idem=secrets.token_urlsafe(12), pasted=pasted,
+                back=_add_back(field, "/pools/gpt")))
         if path == "/pools/gpt/add":
             from ..store import validate
 
@@ -820,7 +843,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._act(
                     user, "may_add_gpt", "add_gpt", {"rows": rows},
                     idem=field.get("idem") or secrets.token_urlsafe(12),
-                    back="/pools/gpt")
+                    back=_add_back(field, "/pools/gpt"))
             row = {"address": (field.get("address") or "").strip(),
                    "password": field.get("password") or "",
                    "secret": (field.get("secret") or "").strip(),
@@ -1293,6 +1316,67 @@ def _explain(status: str) -> tuple[str, str]:
         return "", ""
     found = verdict(status)
     return found.seen, found.advice
+
+
+#: Where an add flow may return to. Two places, both real pages: the tab
+#: it belongs to, and the dashboard - which is where an operator started,
+#: because the tab is not theirs any more.
+#:
+#: A whitelist rather than the field: `back` rides through a preview and a
+#: confirm in a hidden input, and an open redirect is what that shape is
+#: for if nobody checks it.
+_ADD_BACKS = ("/", "/pools/gmail", "/pools/gpt")
+
+
+def _add_back(field, default: str) -> str:
+    want = (field.get("back") or "").strip()
+    return want if want in _ADD_BACKS else default
+
+
+#: The pages an operator has, whatever they type in the bar.
+#:
+#: Hiding the rail is not access: a link that is not drawn is still a URL,
+#: and an operator who once had these pages has them bookmarked. So the
+#: rail and this list are the same decision written twice, and this is the
+#: half that holds.
+#:
+#: The dashboard, the password page, and one phone - its story, the tab
+#: Boot opens, and the screens in that story. Clicking a serial is the one
+#: place the design sends an operator off the dashboard.
+_OPERATOR_PAGES = ("/", "/password")
+
+
+def _operator_may_get(path: str) -> bool:
+    if path in _OPERATOR_PAGES:
+        return True
+    return path.startswith("/phones/") and path != "/phones"
+
+
+#: What an operator may post, which is not the same list.
+#:
+#: The pages went and the doors did not: adding stock is on the dashboard
+#: now, and it posts to the same endpoints the Gmail and Gpt tabs always
+#: did - a paste, a preview, a confirm. The permission on each still
+#: decides, so this list says which doors exist for an operator, not who
+#: may walk through them.
+#:
+#: Written as its own list rather than derived from the GET one, because
+#: the two answer different questions and a POST that slips through is a
+#: row written, not a page seen. Editing and removing rows are not here:
+#: those belong to the tab, and the tab belongs to an admin.
+_OPERATOR_POSTS = (
+    "/logout", "/password", "/accounts/login", "/phones/build",
+    "/pools/gmail/preview", "/pools/gmail/add",
+    "/pools/gpt/preview", "/pools/gpt/add",
+)
+
+
+def _operator_may_post(path: str) -> bool:
+    if path in _OPERATOR_POSTS:
+        return True
+    # One phone: boot it, take it, hand it back, change its exit.
+    return path.startswith("/phones/") and path.rsplit("/", 1)[-1] in (
+        "boot", "state", "proxy", "stop")
 
 
 def _advice(status: str) -> str:

@@ -279,6 +279,16 @@ p{{margin:0}}
 /* The table scrolls inside its own column rather than taking the page
    sideways with it - the rail has to stay where it was put. */
 .tscroll{{overflow-x:auto}}
+.addfold{{margin-left:auto}}
+.addfold summary{{list-style:none;cursor:pointer}}
+.addfold summary::-webkit-details-marker{{display:none}}
+.addfold[open]{{margin-left:0;width:100%;padding-top:10px}}
+.addfold[open] summary{{display:inline-block;margin-bottom:8px}}
+.addfold form{{display:flex;flex-direction:column;gap:8px}}
+.addfold textarea{{background:var(--panel2);border:1px solid var(--line);
+ border-radius:6px;color:var(--ink);font:400 11.5px/1.6 var(--mono);
+ padding:8px 9px;resize:vertical;width:100%}}
+.addfold textarea:focus{{outline:none;border-color:#3a5c96}}
 .byhand{{display:flex;flex-direction:column;gap:10px;padding-top:6px}}
 .byhand label{{display:flex;flex-direction:column;gap:5px;font-size:12px;
  color:var(--muted)}}
@@ -472,6 +482,21 @@ _BRAND_ICON = ('<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
                'x2="14" y2="18"/></svg>')
 
 
+#: Who the whole console belongs to.
+#:
+#: An operator's day is the dashboard: the shelf, the stock, the accounts
+#: with nowhere to go, and the one phone they are building by hand. The
+#: pool tabs, the request log and the event feed are how somebody keeping
+#: the farm reads it, and every one of them is a page an operator can be
+#: given a wrong idea by and cannot act on.
+#:
+#: On the role rather than on `sees`, because `sees` answers a different
+#: question - whose phones - and an operator with `sees = all` is a person
+#: who may look at everybody's shelf, not a person who runs the farm.
+def _keeps_the_console(user: dict) -> bool:
+    return (user or {}).get("role") == "admin"
+
+
 def page(title: str, body: str, *, user: dict | None = None,
          refresh: int = 0, here: str = "") -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
@@ -483,6 +508,12 @@ def page(title: str, body: str, *, user: dict | None = None,
         counts = user.get("nav") or {}
         links = [f'<nav><div class="brand">{_BRAND_ICON}geelark farm</div>']
         for path, label, key in _RAIL:
+            # An operator has one page, so there is nowhere for a rail to
+            # go. Everything they do is on it, and a rail of links that
+            # all refuse them is worse than no rail: it spends the width
+            # to advertise what they may not have.
+            if not _keeps_the_console(user) and path != "/":
+                continue
             if path in ("/events", "/needs") and user.get("sees") != "all":
                 continue
             if path == "/users" and not (user.get("role") == "admin"
@@ -1157,6 +1188,39 @@ _DASH_SCRIPT = """
 </script>"""
 
 
+#: Adding stock, from the page an operator actually has.
+#:
+#: The pool tabs went with the rail, so `+ add` cannot be a link to one any
+#: more - it opens here instead, and posts to the same preview the tab
+#: always posted to. Nothing about the flow changed: paste, see what each
+#: line will do, confirm. Only the door moved, and `back` carries where it
+#: was opened from so confirming returns here rather than to a page the
+#: person who pressed it may not have.
+#:
+#: `<details>` rather than script, for the reason everything else on this
+#: page is: if the one exception never loads, this still opens.
+_ADD_WORDS = {
+    "gmail": ("may_add_gmail", "/pools/gmail/preview",
+              "address, password, then the 2fa secret or the recovery "
+              "address - one account per line, tabs or commas between"),
+    "gpt": ("may_add_gpt", "/pools/gpt/preview",
+            "address, password, then the 2fa secret - one account per "
+            "line, tabs or commas between"),
+}
+
+
+def _add_fold(user: dict, kind: str) -> str:
+    permission, where, how = _ADD_WORDS[kind]
+    if not _may(user, permission):
+        return ""
+    return (f'<details class="addfold"><summary class="plus">+ add</summary>'
+            f'<form method="post" action="{where}">{_csrf(user)}'
+            f'<input type="hidden" name="back" value="/">'
+            f'<textarea name="pasted" rows="4" spellcheck="false" '
+            f'placeholder="{esc(how)}"></textarea>'
+            f'<button class="go">Preview</button></form></details>')
+
+
 def _supply_card(data: dict, user: dict) -> str:
     """The three pools, stacked, with the way to add to two of them.
 
@@ -1179,23 +1243,31 @@ def _supply_card(data: dict, user: dict) -> str:
     awaiting = int((stock.get("app") or {}).get("awaiting") or 0)
     short = f"fewer than the {target} phones the keeper keeps warm"
 
+    # Dicts rather than tuples: the pool's key and its label are the same
+    # word in two spellings, and side by side in a tuple that is exactly
+    # what the label sweep is written to catch - rightly, because the next
+    # reader has to guess which position means which.
     rows = [
-        (gmail, "Gmail", "free in the pool", "/pools/gmail",
-         "red" if not gmail else "amber" if gmail < target else "bright",
-         "nothing can be built until rows are added" if not gmail
-         else short if gmail < target else "free to build with"),
-        (awaiting, "GPT accounts", "waiting for a phone", "/pools/gpt",
-         "amber" if awaiting > warm else "bright",
-         f"{awaiting - warm} of them have no phone to go to"
-         if awaiting > warm else "awaiting login"),
+        {"kind": "gmail", "count": gmail, "name": "Gmail",
+         "under": "free in the pool",
+         "colour": ("red" if not gmail else "amber" if gmail < target
+                    else "bright"),
+         "why": ("nothing can be built until rows are added" if not gmail
+                 else short if gmail < target else "free to build with")},
+        {"kind": "gpt", "count": awaiting, "name": "GPT accounts",
+         "under": "waiting for a phone",
+         "colour": "amber" if awaiting > warm else "bright",
+         "why": (f"{awaiting - warm} of them have no phone to go to"
+                 if awaiting > warm else "awaiting login")},
     ]
     parts = []
-    for number, name, under, href, colour, why in rows:
+    for row in rows:
         parts.append(
-            f'<div class="stockrow" title="{esc(why)}">'
-            f'<b style="color:var(--{colour})">{number}</b>'
-            f'<span class="t">{esc(name)}<i>{esc(under)}</i></span>'
-            f'<a class="plus" href="{href}">+ add</a></div>')
+            f'<div class="stockrow" title="{esc(row["why"])}">'
+            f'<b style="color:var(--{row["colour"]})">{row["count"]}</b>'
+            f'<span class="t">{esc(row["name"])}'
+            f'<i>{esc(row["under"])}</i></span>'
+            f'{_add_fold(user, row["kind"])}</div>')
     proxy_colour = ("red" if not proxy else "amber" if proxy < target
                     else "bright")
     proxy_why = ("no free exit - the next build has nowhere to go out from"
@@ -1915,7 +1987,7 @@ def _put_back(user: dict, row: dict) -> str:
     kept = detail.get("removed")
     if (row.get("verb") != "remove_proxy" or row.get("status") != "done"
             or not isinstance(kept, dict) or not kept.get("raw")
-            or not _may(user, "may_add_proxy")):
+            or not _keeps_the_console(user)):
         return ""
     return (f'<form method="post" class="inline" action="/pools/proxy/restore">'
             f'{_csrf(user)}<input type="hidden" name="name" '
@@ -2066,7 +2138,6 @@ def _choice(name: str, options: tuple, current: str) -> str:
 _PERMISSION_SHORT = {
     "may_add_gmail": "add gmail",
     "may_add_gpt": "add gpt",
-    "may_add_proxy": "add proxies",
     "may_login_accounts": "log in",
     "may_change_proxy": "change proxy",
     "may_take_phones": "take phones",
@@ -2742,8 +2813,8 @@ def _proxy_add(user: dict) -> str:
     pasted, and the same thing typed field by field - folded into a
     `details` so it costs a line, not a second panel. Both go through the
     same preview, so both are judged by the same reader."""
-    if not _may(user, "may_add_proxy"):
-        return _need(user, "may_add_proxy", "adding proxies")
+    if not _keeps_the_console(user):
+        return ""
     one = (
         f'<details class="fold"><summary>add one by hand</summary>'
         f'<form method="post" action="/pools/proxy/preview" class="row" '
@@ -2779,7 +2850,7 @@ def _proxy_button(user: dict, action: str, name: str, label: str,
                   klass: str = "", back: str = "") -> str:
     """One quiet button posting a proxy's name, or nothing when this
     person may not press it."""
-    if not _may(user, "may_add_proxy"):
+    if not _keeps_the_console(user):
         return ""
     return (f'<form method="post" action="{esc(action)}" class="inline">'
             f'{_csrf(user)}<input type="hidden" name="name" '
@@ -2795,7 +2866,7 @@ def _stray_who(u: dict) -> str:
 def _stray_buttons(user: dict, u: dict, back: str = "") -> str:
     """Add to pool / Ignore, both carrying the exit's three fields - the
     stray has no name to post, because the pool has never named it."""
-    if not _may(user, "may_add_proxy"):
+    if not _keeps_the_console(user):
         return ""
     hidden = "".join(
         f'<input type="hidden" name="{k}" value="{esc(str(u.get(k, "")))}">'
@@ -2918,7 +2989,7 @@ def proxy_pool_page(data: dict, user: dict, said: str = "", *,
             else f"/pools/proxy?view={view}")
 
     right = ""
-    if view == "free" and _may(user, "may_add_proxy"):
+    if view == "free" and _keeps_the_console(user):
         right = (f'<form method="post" action="/pools/proxy/test-all" '
                  f'class="inline">{_csrf(user)}<button class="quiet">'
                  f'Test all now</button></form>')
@@ -3014,7 +3085,6 @@ def proxy_pool_page(data: dict, user: dict, said: str = "", *,
         foot = (f'<p class="dim">{esc(PROXY_VIEWS[view]["sub"])} · '
                 f'<a href="/pools/proxy?view=needs_hand&ignored=1">'
                 f'{_plural(len(ignored), "ignored exit")}</a></p>')
-    foot += _need(user, "may_add_proxy", "Testing, freeing or removing")
     body += f'<div class="panel wrap">{table}{foot}{pager}</div>'
     return page("Proxy Pool", body + "</div>", user=user, here="/pools/proxy")
 
@@ -3317,7 +3387,8 @@ def _second_factor(row: dict) -> str:
 
 def gmail_preview(rows: list[dict], seller: str, user: dict,
                   idem: str, *, pasted: str = "",
-                  sellers: list | None = None) -> str:
+                  sellers: list | None = None,
+                  back: str = "/pools/gmail") -> str:
     """The verdicts, the confirm, and the paste kept in an editable box
     underneath - a typo is fixed there and previewed again, not pasted
     from scratch."""
@@ -3337,18 +3408,21 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
             f'<form method="post" action="/pools/gmail/add" class="panel">'
             f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
             f'<input type="hidden" name="seller" value="{esc(seller)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
             f'<div class="row"><span class="dim">seller: '
             f'{esc(seller or "(none)")} · purchase date stamps automatically'
             f'</span><span class="right"></span>'
-            f'<a class="btn quiet" href="/pools/gmail">Back</a>'
+            f'<a class="btn quiet" href="{esc(back)}">Back</a>'
             + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
                f'</button>' if good else
                '<span class="badge bad">nothing to add</span>')
             + '</div></form>'
             f'<div class="panel"><h3>Edit and preview again</h3>'
             f'<form method="post" action="/pools/gmail/preview" class="field">'
-            f'{_csrf(user)}<textarea name="pasted">{esc(pasted)}</textarea>'
+            f'{_csrf(user)}'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<textarea name="pasted">{esc(pasted)}</textarea>'
             f'<div class="row">{_seller_pick(list(sellers or []), seller)}'
             f'<span class="right"></span>'
             f'<button class="quiet">Preview again</button></div>'
@@ -3357,7 +3431,7 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
 
 
 def gpt_preview(rows: list[dict], user: dict, idem: str, *,
-                pasted: str = "") -> str:
+                pasted: str = "", back: str = "/pools/gpt") -> str:
     """The Gpt Pool's paste, judged row by row the way the by-hand form
     judges one; the good rows ride into the confirm as the same
     tab-separated text, and the paste stays in a box underneath."""
@@ -3376,17 +3450,20 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
             f'</th><th>2fa</th><th>verdict</th></tr>{lines}</table></div>'
             f'<form method="post" action="/pools/gpt/add" class="panel">'
             f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
             f'<div class="row"><span class="dim">each lands in the Gpt Info '
             f'tab as awaiting login</span><span class="right"></span>'
-            f'<a class="btn quiet" href="/pools/gpt">Back</a>'
+            f'<a class="btn quiet" href="{esc(back)}">Back</a>'
             + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
                f'</button>' if good else
                '<span class="badge bad">nothing to add</span>')
             + '</div></form>'
             f'<div class="panel"><h3>Edit and preview again</h3>'
             f'<form method="post" action="/pools/gpt/preview" class="field">'
-            f'{_csrf(user)}<textarea name="pasted">{esc(pasted)}</textarea>'
+            f'{_csrf(user)}'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<textarea name="pasted">{esc(pasted)}</textarea>'
             f'<div class="row"><span class="right"></span>'
             f'<button class="quiet">Preview again</button></div>'
             f'</form></div>')
