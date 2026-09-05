@@ -2190,13 +2190,22 @@ class Book:
             gmails, proxies, apps = (PgGmailPool(table), PgProxyPool(table),
                                      PgAppPool(table))
             sheet_pools = (sheet_gmails, sheet_proxies, sheet_apps)
+            # C3: the last three tabs go with them. Subclasses, so the
+            # thirty-odd callers keep the vocabulary they have always used
+            # and none of them has to learn a column name.
+            from .store.pgphones import PgHistory, PgPhoneLog, PgServiceBoard
+
+            phone_log = PgPhoneLog(settings)
+            history = PgHistory(settings)
+            service = PgServiceBoard(settings)
+        else:
+            phone_log = PhoneLog(tabs[PHONES_TAB],
+                                 ensure_columns(tabs[PHONES_TAB],
+                                                PhoneLog.APP_COLUMN,
+                                                PhoneLog.TRIES_COLUMN), lock)
 
         pools = cls(
-            gmails=gmails, proxies=proxies, apps=apps,
-            phones=PhoneLog(tabs[PHONES_TAB],
-                            ensure_columns(tabs[PHONES_TAB],
-                                           PhoneLog.APP_COLUMN,
-                                           PhoneLog.TRIES_COLUMN), lock),
+            gmails=gmails, proxies=proxies, apps=apps, phones=phone_log,
             lists=tabs.get(LISTS_TAB), history=history, lock=lock,
             service=service, sheet_pools=sheet_pools,
         )

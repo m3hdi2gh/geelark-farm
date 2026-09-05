@@ -584,7 +584,8 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
 
         with store_db.connect(settings) as conn:
             did = store_shadow.write_shadow(
-                conn, book, resources=not settings.pools_in_pg)
+                conn, book, resources=not settings.pools_in_pg,
+                phones=not settings.pools_in_pg)
             # What the sync learned that belongs to no row (C5): the
             # proxies GeeLark holds that the tab never heard of, kept so
             # the Proxy Pool page can offer to add them without a call.

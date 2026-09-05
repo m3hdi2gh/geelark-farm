@@ -32,14 +32,20 @@ log = logging.getLogger(__name__)
 _APP_MARKS = {"✓": True, "✗": False}
 
 
-def write_shadow(conn, book, *, resources: bool = True) -> dict:
+def write_shadow(conn, book, *, resources: bool = True,
+                 phones: bool = True) -> dict:
     """One pass's mirror, in one transaction. Returns what it did, for the
     pass event. Raises to the caller, who treats the store like the board:
     never fatal to the pass.
 
     `resources=False` once the pools live in the store (C2): the table is
     the pool then, and mirroring the sheet's stale picture over it would
-    un-claim every row a build is holding, thirty seconds at a time."""
+    un-claim every row a build is holding, thirty seconds at a time.
+
+    `phones=False` once the Phones tab lives here too (C3), for the same
+    reason and one more: nothing writes that tab any more, so what it
+    holds is whatever it held the day the switch was thrown - and copying
+    that over the table every half minute would undo every build."""
     did = {"resources": 0, "phones": 0, "closed": 0}
     with conn.cursor() as cur:
         if resources:
@@ -64,12 +70,13 @@ def write_shadow(conn, book, *, resources: bool = True) -> dict:
                 "UPDATE resources SET on_sheet = (id = ANY(%s))"
                 " WHERE on_sheet <> (id = ANY(%s))", (on_sheet, on_sheet))
             did["left_the_sheet"] = cur.rowcount
-        live = _upsert_phones(cur, book)
-        did["phones"] = len(live)
-        cur.execute(
-            "UPDATE phones SET done_at = now(), updated_at = now()"
-            " WHERE done_at IS NULL AND NOT (serial = ANY(%s))", (live,))
-        did["closed"] = cur.rowcount
+        if phones:
+            live = _upsert_phones(cur, book)
+            did["phones"] = len(live)
+            cur.execute(
+                "UPDATE phones SET done_at = now(), updated_at = now()"
+                " WHERE done_at IS NULL AND NOT (serial = ANY(%s))", (live,))
+            did["closed"] = cur.rowcount
     conn.commit()
     return did
 

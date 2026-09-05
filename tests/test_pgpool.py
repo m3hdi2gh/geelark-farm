@@ -581,3 +581,56 @@ def test_every_query_that_picks_stock_ignores_what_left_the_tab():
     assert not reading, (
         "these pick rows out of resources without asking whether the row is "
         "still stock: " + " | ".join(q[:80] for q in reading))
+
+
+# ------------------------------------ the last three tabs, over the store
+def test_a_phone_row_still_speaks_the_tabs_words():
+    """Thirty-odd callers say `Serial`, `GPT Account`, `App`. The row moved;
+    the vocabulary did not, which is why none of them had to change."""
+    from geelark_farm.store.pgphones import _cells
+
+    cells = _cells({"serial": "1523", "status": "ready", "state": "taken",
+                    "gmail": "g@x.com", "app_account": "a@x.com",
+                    "proxy_name": "SX4", "app_installed": True,
+                    "tries": 2, "note": "fine"})
+
+    assert cells["Serial"] == "1523" and cells["GPT Account"] == "a@x.com"
+    assert cells["App"] == "\u2713", "the tab's tick, not a boolean"
+    assert cells["Proxy"] == "SX4" and cells["Tries"] == "2"
+
+
+def test_nobody_looked_stays_nobody_looked():
+    """Three-valued on purpose: NULL is "nobody looked", and it survived one
+    demotion to False already (2026-08-30)."""
+    from geelark_farm.store.pgphones import _cells
+
+    assert _cells({"app_installed": None})["App"] == ""
+    assert _cells({"app_installed": False})["App"] == "\u2717"
+
+
+def test_a_phone_is_closed_rather_than_deleted():
+    """`delete_rows` deleted a line, and that is how "what did we build on
+    Tuesday" became unanswerable. Here it stamps `done_at`, and the
+    question keeps its answer."""
+    import inspect
+
+    from geelark_farm.store import pgphones
+
+    body = inspect.getsource(pgphones.PgPhoneLog.delete_rows)
+    assert "done_at = now()" in body
+    # The SQL keyword, not the English word - the docstring says
+    # "nothing is deleted", which is the point.
+    assert "DELETE FROM" not in body.upper()
+
+
+def test_the_mirror_can_be_told_to_leave_the_phones_alone():
+    """Once nothing writes the tab, what it holds is whatever it held the
+    day the switch was thrown - and copying that over the table every half
+    minute would undo every build."""
+    import inspect
+
+    from geelark_farm.store import shadow
+
+    body = inspect.getsource(shadow.write_shadow)
+    assert "phones: bool = True" in body
+    assert "if phones:" in body

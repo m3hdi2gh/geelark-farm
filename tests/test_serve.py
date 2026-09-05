@@ -1962,7 +1962,7 @@ def test_a_phone_the_sync_took_away_gets_its_last_event(monkeypatch,
 
     monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
     monkeypatch.setattr(shadow_mod, "write_shadow",
-                        lambda conn, book, resources=True: {"closed": 0})
+                        lambda conn, book, **k: {"closed": 0})
     monkeypatch.setattr(state_mod, "put", lambda conn, key, value: None)
     emitted = []
     monkeypatch.setattr(events_mod, "emit",
