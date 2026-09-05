@@ -347,6 +347,14 @@ class Settings:
     web_api_writes: bool = False
 
 
+    #: CapSolver, for the reCAPTCHA image grid Google sometimes throws during
+    #: sign-in. Empty key = the captcha stands and the flow gives up on it as
+    #: it always did. `captcha_max_attempts` is the loop guard: a flow that
+    #: keeps drawing a fresh grid is a flow the account will never pass, and
+    #: three tries is where paying to try again stops being worth it.
+    capsolver_key: str = ""
+    captcha_max_attempts: int = 3
+
     @classmethod
     def load(cls) -> Settings:
         """Read settings from the environment, requiring only what every
@@ -373,6 +381,8 @@ class Settings:
             build_budget_seconds=_int("BUILD_BUDGET_SECONDS", 3600),
             stale_claim_seconds=_int("STALE_CLAIM_SECONDS",
                                      STALE_CLAIM_DEFAULT),
+            capsolver_key=_str("CAPSOLVER_KEY", ""),
+            captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
             app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),

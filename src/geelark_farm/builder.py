@@ -962,6 +962,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 client, phone_id, account,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
                 artifact_dir=artifacts,
+                solver_key=settings.capsolver_key,
+                captcha_max=settings.captcha_max_attempts,
             )
             build.trails.append(("google", outcome.trail))
             if outcome.ok:

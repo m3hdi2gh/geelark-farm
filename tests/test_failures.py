@@ -82,7 +82,12 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # The twenty-first is `passkey_unavailable`: a dialog that will not close
     # would leave the flow tapping OK at it for good, so it gets a name too.
     assert "stuck_on_passkey_unavailable" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 21
+    # The twenty-second is `captcha`: when a solver key is set the reCAPTCHA
+    # is no longer fatal but a screen that tries it, and a grid it never
+    # solves would loop - so the router's own visit guard names it, beside
+    # the act's own `captcha_shown` at the attempt limit (2026-09-06).
+    assert "stuck_on_captcha" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 22
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

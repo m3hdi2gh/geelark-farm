@@ -33,6 +33,7 @@ claiming success is not evidence. Failures are named, so a run can act on them:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,9 +142,12 @@ FATAL_ADVICE = {
 
 @dataclass
 class Context(router.Context):
-    """The generic context plus the account being signed in."""
-
+    """The generic context plus the account being signed in, and - when a
+    key is set - the CapSolver door and the loop guard for the reCAPTCHA
+    image grid Google sometimes throws."""
     account: Account = None                                     # type: ignore
+    solver_key: str = ""
+    captcha_max: int = 3
 
 
 # --------------------------------------------------------------- primitives
@@ -217,7 +221,152 @@ def _fatal_reason(ctx: Context) -> str | None:
             continue
         if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and answerable(ctx):
             continue
+        # A captcha is not a dead end when a solver is configured: the
+        # `captcha` screen tries it, and gives up - back to this same
+        # reason - only after the attempt limit. Without a key it is
+        # fatal exactly as before.
+        if reason == "captcha_shown" and getattr(ctx, "solver_key", ""):
+            continue
         return reason
+    return None
+
+
+#: The reCAPTCHA checkbox, and the grid it can open. The checkbox often
+#: passes on a tap alone from a clean exit; the grid needs the solver.
+_CAPTCHA_NEEDLES = ("confirm you're not a robot", "i'm not a robot",
+                    "select all images", "select all squares")
+_GRID_VERIFY = ("Verify", "Skip", "Next")
+
+
+def _grid_instruction(ctx: Context) -> str:
+    """The 'Select all images with …' line, if one is on the screen."""
+    for el in ctx.elements:
+        low = (el.label or "").lower()
+        if "select all" in low and ("images" in low or "squares" in low):
+            return el.label
+    return ""
+
+
+def _tile_points(rect: tuple[int, int, int, int], size: int,
+                 indices: list[int]) -> list[tuple[int, int]]:
+    """The device point at the centre of each named tile of a `size`x`size`
+    grid filling `rect` (left, top, right, bottom). Pure, so the mapping
+    can be checked without a phone."""
+    left, top, right, bottom = rect
+    if size < 1 or right <= left or bottom <= top:
+        return []
+    cw = (right - left) / size
+    ch = (bottom - top) / size
+    points = []
+    for i in indices:
+        if 0 <= i < size * size:
+            col, row = i % size, i // size
+            points.append((int(left + cw * (col + 0.5)),
+                           int(top + ch * (row + 0.5))))
+    return points
+
+
+def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
+    """The pixel rectangle the tiles fill, read from the page's own
+    anchors: below the instruction line, above the Verify button, the
+    screen's own width. Returns None rather than guess when either
+    anchor is missing - a blind rectangle is a wrong tap on a real
+    account, so a grid we cannot place confidently is left to the limit."""
+    instruction = next((e for e in ctx.elements
+                        if "select all" in (e.label or "").lower()), None)
+    verify = screen.find_first(ctx.elements, _GRID_VERIFY)
+    if instruction is None or verify is None:
+        return None
+    ins, ver = instruction.centre, verify.centre
+    inb = [int(n) for n in re.findall(r"-?\d+", instruction.bounds)]
+    verb = [int(n) for n in re.findall(r"-?\d+", verify.bounds)]
+    width = [int(n) for n in re.findall(r"-?\d+", _screen_bounds(ctx))]
+    if len(inb) != 4 or len(verb) != 4 or ins is None or ver is None:
+        return None
+    left, right = width[0], width[2]
+    top, bottom = inb[3], verb[1]
+    if bottom - top < 100:
+        return None
+    return (left, top, right, bottom)
+
+
+def _screen_bounds(ctx: Context) -> str:
+    """The widest bounds on the page - the frame - so a grid spans the
+    screen's own width rather than a guess."""
+    widest, span = "[0,0][1080,0]", 0
+    for el in ctx.elements:
+        nums = [int(n) for n in re.findall(r"-?\d+", el.bounds)]
+        if len(nums) == 4 and nums[2] - nums[0] > span:
+            span, widest = nums[2] - nums[0], el.bounds
+    return widest
+
+
+def _grab_screenshot_b64(ctx: Context) -> str | None:
+    """The live screen as base64 PNG, for the solver. None on any hitch -
+    the caller treats that as 'the captcha stands'."""
+    import base64
+
+    from .. import phones
+    link = phones.screenshot(ctx.client, ctx.phone_id)
+    if not link:
+        return None
+    try:
+        import requests
+        data = requests.get(link, timeout=30).content
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not fetch the captcha screenshot (%s)", exc)
+        return None
+    return base64.b64encode(data).decode("ascii")
+
+
+def _captcha_present(ctx: Context) -> bool:
+    return bool(getattr(ctx, "solver_key", "")) and ctx.has(*_CAPTCHA_NEEDLES)
+
+
+def act_captcha(ctx: Context) -> Outcome | None:
+    """Try the reCAPTCHA rather than give up on it - within a limit.
+
+    The checkbox alone often passes on a tap from a clean exit. A grid is
+    sent to CapSolver as an image, and the tiles it names are tapped. Every
+    way this can fail - no key balance, an object we have no id for, a grid
+    we cannot place on the screen, the limit reached - ends the same way it
+    did before there was a solver: the `captcha_shown` fatal, so a build
+    still moves on and never loops on a challenge it cannot pass.
+    """
+    attempts = ctx.seen.get("captcha", 0)
+    if attempts > ctx.captcha_max:
+        path = ctx.save("captcha_shown")
+        return Outcome("fatal", "captcha_shown",
+                       f"the captcha was not solved in {ctx.captcha_max} "
+                       f"tries; {FATAL_ADVICE['captcha_shown']}",
+                       artifacts=[path] if path else [])
+    instruction = _grid_instruction(ctx)
+    if not instruction:
+        # Just the checkbox. A tap is the whole move; the page re-reads and
+        # either passes or opens a grid on the next visit.
+        for label in ("I'm not a robot", "not a robot", "Verify", "Next"):
+            if ctx.tap(label):
+                break
+        return None
+    rect = _grid_rect(ctx)
+    if rect is None:
+        # A grid we cannot place. Saved for the record, left to the limit -
+        # never a tap on coordinates guessed from nothing.
+        ctx.save("captcha_grid_unplaced")
+        return None
+    image = _grab_screenshot_b64(ctx)
+    if image is None:
+        return None
+    try:
+        from .. import capsolver
+        tiles = capsolver.solve_grid(ctx.solver_key, image, instruction)
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("captcha not solved (%s)", exc)
+        return None
+    size = 4 if "16" in instruction or ctx.has("none left") else 3
+    for x, y in _tile_points(rect, size, tiles):
+        shell.tap(ctx.client, ctx.phone_id, x, y)
+    submit(ctx)
     return None
 
 
@@ -482,6 +631,12 @@ def act_dismiss(ctx: Context) -> Outcome | None:
 SCREENS: list[Screen] = [
     Screen("fatal", lambda c: _fatal_reason(c) is not None, act_fatal, max_visits=1),
 
+    # Above every acting screen: a captcha is over whatever drew it, and
+    # only reached at all when a solver key is set (else `fatal` above has
+    # already claimed it). Its own visit budget is one past the attempt
+    # limit, so the act's own guard is what ends it, with the right word.
+    Screen("captcha", _captcha_present, act_captcha, max_visits=10),
+
     # Ranked above every screen that acts, and below fatal only because a page
     # that says the sign-in cannot proceed says so whether or not it is still
     # painting. Waiting is the cheapest thing this loop can do and the login
@@ -666,7 +821,8 @@ def open_add_account(client: Client, phone_id: str) -> None:
 
 def sign_in(client: Client, phone_id: str, account: Account, *,
             budget_seconds: float = 900, artifact_dir: Path | None = None,
-            already_open: bool = False) -> Outcome:
+            already_open: bool = False, solver_key: str = "",
+            captcha_max: int = 3) -> Outcome:
     """Drive the login to a named outcome.
 
     Returns rather than raises: a batch needs to record why a row failed and
@@ -687,7 +843,8 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
         open_add_account(client, phone_id)
 
     ctx = Context(client=client, phone_id=phone_id, account=account,
-                  artifact_dir=artifact_dir)
+                  artifact_dir=artifact_dir, solver_key=solver_key,
+                  captcha_max=captcha_max)
 
     # The device is the only truth for this step - the account is either in
     # `dumpsys account` or it is not - so unlike the app login this cannot be
