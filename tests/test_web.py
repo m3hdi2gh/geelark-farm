@@ -668,11 +668,15 @@ def test_an_operator_has_the_dashboard_and_one_phone_and_nothing_else(
     # is not the thing standing in the way.
     _, _, story = client.request("GET", "/phones/1523")
     assert "belongs to an admin" not in story
-    # And the rail is not drawn either, so nothing advertises what they
-    # may not have.
+    # And there is no rail at all - not even one entry. A column down the
+    # side whose only link is the page you are already on is furniture.
     _, _, body = client.request("GET", "/")
+    assert "<nav>" not in body
     assert ">Gmail Pool<" not in body and ">Events<" not in body
-    assert ">Dashboard<" in body
+    # The two things every console needs somewhere moved up beside the
+    # title: who you are, and how you leave.
+    assert 'class="whoout"' in body
+    assert ">narrow<" in body and "Log out" in body
 
 
 def test_an_operator_cannot_post_to_a_page_they_no_longer_have(

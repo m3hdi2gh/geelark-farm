@@ -279,6 +279,12 @@ p{{margin:0}}
 /* The table scrolls inside its own column rather than taking the page
    sideways with it - the rail has to stay where it was put. */
 .tscroll{{overflow-x:auto}}
+.whoout{{display:flex;align-items:center;gap:9px;margin-left:22px;
+ padding-left:22px;border-left:1px solid var(--line2)}}
+.whoout .av{{width:26px;height:26px;border-radius:50%;background:var(--panel);
+ border:1px solid var(--line);display:flex;align-items:center;
+ justify-content:center;font-size:12px;text-transform:uppercase}}
+.whoout .who{{font-size:12.5px;color:var(--muted)}}
 .addfold{{margin-left:auto}}
 .addfold summary{{list-style:none;cursor:pointer}}
 .addfold summary::-webkit-details-marker{{display:none}}
@@ -497,6 +503,24 @@ def _keeps_the_console(user: dict) -> bool:
     return (user or {}).get("role") == "admin"
 
 
+def _who_and_out(user: dict) -> str:
+    """The person and the way out, for a page with no rail to carry them.
+
+    An operator's console is one page, so the two things every console
+    needs somewhere - who am I signed in as, and how do I leave - move up
+    beside the title. An admin's rail already carries both.
+    """
+    if _keeps_the_console(user):
+        return ""
+    name = str(user.get("username") or "?")
+    return (f'<form method="post" action="/logout" class="whoout">'
+            f'<span class="av">{esc(name[:1])}</span>'
+            f'<span class="who">{esc(name)}</span>'
+            f'<input type="hidden" name="csrf" '
+            f'value="{esc(user.get("csrf", ""))}">'
+            f'<button class="quiet">Log out</button></form>')
+
+
 def page(title: str, body: str, *, user: dict | None = None,
          refresh: int = 0, here: str = "") -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
@@ -504,7 +528,13 @@ def page(title: str, body: str, *, user: dict | None = None,
     `here` is the rail entry to light. Without a user there is no rail:
     the page stands alone, centred - the sign-in card."""
     header = ""
-    if user is not None:
+    if user is not None and not _keeps_the_console(user):
+        # No rail at all, rather than a rail with one entry on it. An
+        # operator has one page: a column down the side of it whose only
+        # link is the page they are already on is furniture, and the name
+        # and the way out read better beside the title than under it.
+        header = ""
+    elif user is not None:
         counts = user.get("nav") or {}
         links = [f'<nav><div class="brand">{_BRAND_ICON}geelark farm</div>']
         for path, label, key in _RAIL:
@@ -539,9 +569,12 @@ def page(title: str, body: str, *, user: dict | None = None,
            if refresh else "")
     if user is not None:
         body = _alert_strip(user) + body
+    # `alone` is what widens the page when nothing is beside it - the
+    # sign-in card had it first, and an operator's page has the same
+    # shape for the same reason.
     return _PAGE.format(title=esc(title), header=header, body=body,
-                        favicon=_FAVICON, refresh=tag, alone="" if user is not None
-                        else ' class="alone"')
+                        favicon=_FAVICON, refresh=tag,
+                        alone="" if header else ' class="alone"')
 
 
 #: `page` doubles as a parameter name on the paged views; the alias keeps
@@ -1527,7 +1560,8 @@ def dashboard(data: dict, user: dict, said: str = "",
 
     body = (f'<div class="wide">'
             f'<div class="top"><h2>Instance manager</h2>'
-            f'<span class="status">{_status_sentence(data)}</span></div>'
+            f'<span class="status">{_status_sentence(data)}</span>'
+            f'{_who_and_out(user)}</div>'
             f'<div class="desk"><div class="deskmain">{main}</div>'
             f'<aside class="side">{side}</aside></div>'
             f'</div>' + _DASH_SCRIPT)
