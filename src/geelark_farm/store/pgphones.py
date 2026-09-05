@@ -218,7 +218,14 @@ class PgServiceBoard(ServiceBoard):
             return False
         return True
 
-    def write(self, *args, **kwargs) -> None:
+    def show(self, **fields: str) -> None:
         """The dashboard half. The console reads the pass's own event now,
-        so there is nothing to paint and nothing to spend a write on."""
+        so there is nothing to paint and nothing to spend a write on.
+
+        The name matters more than the body: this began life as `write`,
+        which overrode nothing, so every pass fell through to the sheet's
+        `show` and warned that it could not reach a worksheet this class
+        does not have. Silent, because that method is deliberately never
+        fatal - a dashboard must not stop a build.
+        """
         return None

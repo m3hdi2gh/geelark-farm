@@ -2541,6 +2541,16 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
     update` is that it must not be called against a phone that is coming up,
     and a tidier list is not worth reaching into a build that is under way -
     the next sync catches it once it has stopped.
+
+    **A phone with no row is left alone too.** The account is shared, and
+    most of what `/v1/phone/list` returns was made by somebody else. This
+    renamed one of the operator's own phones to `1743` on 2026-09-05: it
+    had no row, so `named` had nothing for it, and `display_name` happily
+    made a name out of the serial alone. `strand_check` says of exactly
+    this set that "a phone with no row is touched by nothing: not the
+    State column, not the abandoned sweep, not the renaming" - which was
+    true of the other two and never of this one. Whose phones those are is
+    the operator's business, and their names are not ours to write.
     """
     named = {str(row.get("Serial") or "").strip(): (row.get("Gmail") or "").strip()
              for row in book.phones.rows()}
@@ -2549,6 +2559,8 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
         if phone.get("status") in (phones.RUNNING, phones.STARTING):
             continue
         serial = str(phone.get("serialNo") or "").strip()
+        if serial not in named:
+            continue                     # not ours; see the note above
         wanted = phones.display_name(serial, named.get(serial, ""))
         if not wanted or wanted == (phone.get("serialName") or "").strip():
             continue

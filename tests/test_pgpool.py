@@ -634,3 +634,45 @@ def test_the_mirror_can_be_told_to_leave_the_phones_alone():
     body = inspect.getsource(shadow.write_shadow)
     assert "phones: bool = True" in body
     assert "if phones:" in body
+
+
+def test_every_override_lands_on_a_real_method():
+    """A method the base class does not have overrides nothing.
+
+    `PgServiceBoard.show` was called `write` for one deploy. Nothing
+    failed: the pass fell through to the sheet's `show`, which reached
+    for a worksheet the store-backed board does not have, and warned -
+    because that method is deliberately never fatal, a dashboard must
+    not stop a build. The whole class of mistake is one `hasattr` away.
+    """
+    from geelark_farm import pools
+    from geelark_farm.store import pgphones
+
+    #: Helpers these classes own outright, private and named as such.
+    #: Everything else here is claiming to replace something, and the
+    #: name is the only thing that makes the claim true.
+    OWN = {"_set"}
+    pairs = [
+        (pgphones.PgPhoneLog, pools.PhoneLog),
+        (pgphones.PgHistory, pools.HistoryLog),
+        (pgphones.PgServiceBoard, pools.ServiceBoard),
+    ]
+    for child, base in pairs:
+        mine = [name for name, value in vars(child).items()
+                if callable(value) and name != "__init__"
+                and not name.startswith("__") and name not in OWN]
+        assert mine, f"{child.__name__} overrides nothing at all"
+        for name in mine:
+            assert hasattr(base, name), (
+                f"{child.__name__}.{name} overrides nothing on "
+                f"{base.__name__}; the sheet's version will be used")
+
+
+def test_the_board_paints_nothing():
+    """`show` is the dashboard half, and it is deliberately empty."""
+    from geelark_farm import pools
+    from geelark_farm.store import pgphones
+
+    board = pgphones.PgServiceBoard(object())
+    assert board.show(
+        **{name: "x" for name in pools.ServiceBoard.ROWS}) is None

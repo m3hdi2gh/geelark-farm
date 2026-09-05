@@ -2150,15 +2150,45 @@ def test_a_phone_with_no_gmail_in_the_tab_is_named_by_its_serial_alone(
         monkeypatch):
     """Half a name is still the half that matters - the serial is the key
     everything else is filed under. The next sync completes it once the tab
-    has the address."""
+    has the address.
+
+    A *row* with a blank Gmail, which is what the docstring means. This
+    test used to pass an empty book, which is a different thing entirely -
+    a phone with no row at all - and so it stood as the proof of the bug
+    the test below now covers.
+    """
     from geelark_farm import phones as ph
     from geelark_farm.builder import sync_phone_names
     listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1786928959",
                 "status": ph.STOPPED}]
     client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "832", "Gmail": ""}])
 
-    assert sync_phone_names(client, NamingBook([])) == ["832"]
+    assert sync_phone_names(client, book) == ["832"]
     assert client.renames == [("P1", "832")]
+
+
+def test_a_phone_with_no_row_is_not_renamed(monkeypatch):
+    """The GeeLark account is shared, and most of what the listing returns
+    was made by somebody else. This renamed one of the operator's own
+    phones to `1743` (2026-09-05) - it had no row, so there was nothing to
+    name it after and the serial alone became the name.
+
+    `strand_check` already says of this exact set that "a phone with no row
+    is touched by nothing: not the State column, not the abandoned sweep,
+    not the renaming". It was true of the other two.
+    """
+    from geelark_farm import phones as ph
+    from geelark_farm.builder import sync_phone_names
+    listing = [{"id": "P1", "serialNo": "832", "serialName": "farm-1786928959",
+                "status": ph.STOPPED},
+               {"id": "P9", "serialNo": "1743", "serialName": "my own phone",
+                "status": ph.STOPPED}]
+    client = naming_client(monkeypatch, listing)
+    book = NamingBook([{"Serial": "832", "Gmail": "a@gmail.com"}])
+
+    assert sync_phone_names(client, book) == ["832 - a"]
+    assert client.renames == [("P1", "832 - a")]
 
 
 def test_a_rename_that_is_refused_does_not_stop_the_others(monkeypatch):
