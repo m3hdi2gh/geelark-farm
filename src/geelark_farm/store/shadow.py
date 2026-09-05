@@ -43,11 +43,27 @@ def write_shadow(conn, book, *, resources: bool = True) -> dict:
     did = {"resources": 0, "phones": 0, "closed": 0}
     with conn.cursor() as cur:
         if resources:
+            on_sheet = []
             for pool, kind in ((book.gmails, "gmail"),
                                (book.proxies, "proxy"), (book.apps, "app")):
                 for row in pool._rows:
-                    _upsert_resource(cur, kind, pool, row)
+                    found = _upsert_resource(cur, kind, pool, row)
+                    if found is not None:
+                        on_sheet.append(found)
                     did["resources"] += 1
+            # Which rows are still on a tab, the same shape phones have had
+            # all along. Nothing is deleted - a row that left keeps its
+            # history, which is the whole reason this mirror never deletes -
+            # but a row that left is not stock, and counting it as free is
+            # how the front page came to say nineteen Gmails while the tab
+            # held none (2026-09-05).
+            #
+            # Only what changed is written: this runs every thirty seconds
+            # over every row the farm has ever seen.
+            cur.execute(
+                "UPDATE resources SET on_sheet = (id = ANY(%s))"
+                " WHERE on_sheet <> (id = ANY(%s))", (on_sheet, on_sheet))
+            did["left_the_sheet"] = cur.rowcount
         live = _upsert_phones(cur, book)
         did["phones"] = len(live)
         cur.execute(
@@ -58,7 +74,7 @@ def write_shadow(conn, book, *, resources: bool = True) -> dict:
     return did
 
 
-def _upsert_resource(cur, kind: str, pool, row) -> None:
+def _upsert_resource(cur, kind: str, pool, row) -> int | None:
     values = row.values
     status = (values.get(pool.status_column) or "").strip()
     note = (values.get(pool.note_column) or "").strip()
@@ -71,7 +87,7 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
     if kind == "proxy":
         proxy = row.proxy
         if proxy is None:
-            return                     # an unparseable row has no identity
+            return None                # an unparseable row has no identity
         try:
             times_used = int((values.get("Times Used") or "0").strip() or 0)
         except ValueError:
@@ -101,17 +117,18 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
             "   r.claimed_at) IS DISTINCT FROM (EXCLUDED.status,"
             "   EXCLUDED.proxy_name, EXCLUDED.last_exit_ip, EXCLUDED.note,"
             "   EXCLUDED.error, EXCLUDED.serial, EXCLUDED.times_used,"
-            "   EXCLUDED.claimed_at) THEN now() ELSE r.updated_at END",
+            "   EXCLUDED.claimed_at) THEN now() ELSE r.updated_at END"
+            " RETURNING r.id",
             (row.sheet_row, status, proxy.host, proxy.port,
              proxy.username or "", proxy.password or "",
              (values.get("Name") or "").strip(),
              (values.get("Last Exit IP") or "").strip(), note, error,
              (values.get("Used By") or "").strip(), times_used, claimed_at))
-        return
+        return cur.fetchone()[0]
     creds = row.credentials
     address = (creds.email if creds else values.get("Address", "")).strip()
     if not address:
-        return
+        return None
     cur.execute(
         "INSERT INTO resources AS r (kind, sheet_row, status, address, password,"
         " totp_secret, email_code_only, recovery_email, seller, serial,"
@@ -133,7 +150,8 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
         "   r.claimed_at, r.used_at, r.seller) IS DISTINCT FROM"
         "   (EXCLUDED.status, EXCLUDED.serial, EXCLUDED.note, EXCLUDED.error,"
         "   EXCLUDED.claimed_at, EXCLUDED.used_at, EXCLUDED.seller)"
-        "   THEN now() ELSE r.updated_at END",
+        "   THEN now() ELSE r.updated_at END"
+        " RETURNING r.id",
         (kind, row.sheet_row, status, address,
          creds.password if creds else "",
          creds.totp_secret if creds else "",
@@ -143,6 +161,7 @@ def _upsert_resource(cur, kind: str, pool, row) -> None:
          (values.get("Phone Serial") or "").strip(), note, error,
          claimed_at, (values.get("Used Date") or "").strip(),
          (values.get("Purchase Date") or "").strip()))
+    return cur.fetchone()[0]
 
 
 def _when(stamp: str | None):

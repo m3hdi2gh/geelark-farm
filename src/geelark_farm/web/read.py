@@ -30,8 +30,8 @@ def snapshot(settings: Settings, owner_id: int | None = None) -> dict:
             " WHERE done_at IS NULL AND (%s::bigint IS NULL OR owner_id = %s)"
             " GROUP BY status", (owner_id, owner_id))
         stock = store._rows(
-            "SELECT kind, count(*) FILTER (WHERE status = '' AND error IS NULL)"
-            "   AS free,"
+            "SELECT kind, count(*) FILTER (WHERE status = '' AND error IS NULL"
+            "   AND on_sheet) AS free,"
             " count(*) FILTER (WHERE error IS NOT NULL) AS unusable"
             " FROM resources GROUP BY kind")
         last = store._rows(
@@ -52,12 +52,12 @@ def nav_counts(settings: Settings) -> dict:
         rows = store._rows(
             "SELECT"
             " count(*) FILTER (WHERE kind = 'gmail' AND status = ''"
-            "   AND error IS NULL) AS gmail,"
+            "   AND error IS NULL AND on_sheet) AS gmail,"
             " count(*) FILTER (WHERE kind = 'proxy'"
             "   AND lower(status) IN ('', 'free', 'unused')"
-            "   AND error IS NULL) AS proxy,"
+            "   AND error IS NULL AND on_sheet) AS proxy,"
             " count(*) FILTER (WHERE kind = 'app' AND status = ''"
-            "   AND error IS NULL) AS app,"
+            "   AND error IS NULL AND on_sheet) AS app,"
             " (SELECT count(*) FROM actions"
             "   WHERE status IN ('queued', 'running')) AS pending,"
             " (SELECT count(*) FROM resources"
@@ -181,12 +181,14 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         progress = _latest_lines(store, building)
         stock = store._rows(
             "SELECT kind, lower(status) AS status, count(*) AS c"
-            " FROM resources WHERE error IS NULL GROUP BY kind, status")
+            " FROM resources WHERE error IS NULL AND (status <> '' OR on_sheet)"
+            " GROUP BY kind, status")
         awaiting = store._rows(
             "SELECT r.address, r.source, coalesce(u.username, '') AS added_by,"
             " r.created_at FROM resources r"
             " LEFT JOIN users u ON u.id = r.added_by"
             " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
+            "   AND r.on_sheet"
             " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
         queue = store._rows(
             "SELECT count(*) FILTER (WHERE status = 'running') AS running,"
@@ -339,7 +341,8 @@ def gmail_pool(settings: Settings, view: str = "queued",
     with Store(settings) as store:
         counts = store._rows(
             "SELECT"
-            " count(*) FILTER (WHERE status = '' AND error IS NULL) AS queued,"
+            " count(*) FILTER (WHERE status = '' AND error IS NULL"
+            "   AND on_sheet) AS queued,"
             " count(*) FILTER (WHERE status IN ('in_use', 'ready')) AS on_phone,"
             " count(*) FILTER (WHERE status = 'used') AS used,"
             " count(*) FILTER (WHERE error IS NULL"
@@ -361,6 +364,7 @@ def gmail_pool(settings: Settings, view: str = "queued",
             rows = store._rows(
                 f"SELECT {_GMAIL_COLUMNS} FROM resources r"
                 " WHERE r.kind = 'gmail' AND r.status = '' AND r.error IS NULL"
+                "   AND r.on_sheet"
                 " ORDER BY r.sheet_row NULLS LAST, r.id"
                 " LIMIT %s OFFSET %s", (per_page + 1, skip))
             total = counts["queued"]
@@ -563,8 +567,8 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
     with Store(settings) as store:
         counts = store._rows(
             "SELECT"
-            " count(*) FILTER (WHERE status = '' AND error IS NULL)"
-            "   AS waiting,"
+            " count(*) FILTER (WHERE status = '' AND error IS NULL"
+            "   AND on_sheet) AS waiting,"
             " count(*) FILTER (WHERE status IN ('in_use', 'ready'))"
             "   AS on_phone,"
             " count(*) FILTER (WHERE status = 'delivered') AS delivered,"
@@ -617,6 +621,7 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
                 f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
                 " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
                 " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
+                "   AND r.on_sheet"
                 " ORDER BY r.sheet_row NULLS LAST, r.id LIMIT %s OFFSET %s",
                 (per_page + 1, skip))
             total = int(counts["waiting"])
@@ -711,7 +716,7 @@ def signals(settings: Settings) -> dict:
             " AND at > now() - interval '7 days'")
         free = store._rows(
             "SELECT count(*) AS free FROM resources WHERE kind = 'gmail'"
-            " AND status = '' AND error IS NULL")
+            " AND status = '' AND error IS NULL AND on_sheet")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
         stock = store._rows(

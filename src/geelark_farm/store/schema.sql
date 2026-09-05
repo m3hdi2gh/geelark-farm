@@ -424,3 +424,23 @@ CREATE INDEX IF NOT EXISTS webhook_due
 ALTER TABLE actions ADD COLUMN IF NOT EXISTS source    text NOT NULL DEFAULT 'console';
 ALTER TABLE actions ADD COLUMN IF NOT EXISTS client_id bigint REFERENCES api_clients(id);
 ALTER TABLE actions ALTER COLUMN requested_by DROP NOT NULL;
+
+-- ------------------------------------------------ resources, rev 11 (C11)
+-- Whether the row is still on the sheet.
+--
+-- The mirror never deletes: a row that leaves a tab keeps its history here,
+-- which is what makes "what did we build on Tuesday" answerable. But the
+-- console counted free stock as `status = '' AND error IS NULL`, and that
+-- counts every account ever seen whose status happened to be blank when it
+-- was removed. On 2026-09-05 the Gmails tab held six rows and none free,
+-- while the front page said nineteen - four hundred and twenty-six rows of
+-- history, six generations deep on the same sheet_row numbers, with the
+-- alert strip and the supply card beside it contradicting each other.
+--
+-- Defaults true, and must: the mirror inserts without naming it, and a row
+-- born in the store is on its way to the sheet, not off it. The pass sets
+-- it false for what it did not see - the same shape `phones.done_at` has
+-- had all along.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS on_sheet boolean NOT NULL DEFAULT true;
+CREATE INDEX IF NOT EXISTS resources_free
+    ON resources (kind) WHERE status = '' AND error IS NULL AND on_sheet;

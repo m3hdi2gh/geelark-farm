@@ -867,3 +867,103 @@ def test_every_sql_statement_has_balanced_quotes():
                 f"{path.name}:{node.lineno} closes a quoted string early: "
                 f"{text[:90]}")
     assert seen > 40, f"only {seen} statements walked - the walk is broken"
+
+
+# ------------------------------------- what is still on the sheet, rev 11
+def test_the_mirror_says_which_rows_are_still_on_the_sheet():
+    """The mirror never deletes, so the table holds every account the farm
+    has ever seen. Counting a blank status as free then counted history as
+    stock: on 2026-09-05 the Gmails tab held six rows and none free while
+    the front page said nineteen, out of four hundred and twenty-six rows
+    six generations deep on the same sheet_row numbers.
+
+    So the pass says what it saw, the same shape `phones.done_at` has had
+    all along - nothing is removed, and what left stops being stock.
+    """
+    from geelark_farm.store import shadow
+
+    class Cur:
+        def __init__(self):
+            self.executed = []
+            self.rowcount = 2
+            self._ids = iter([11, 12, 13])
+
+        def execute(self, sql, params=None):
+            self.executed.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return (next(self._ids),)
+
+    class Conn:
+        def __init__(self):
+            self.cur = Cur()
+            self.committed = False
+
+        def cursor(self):
+            import contextlib
+
+            @contextlib.contextmanager
+            def cm():
+                yield self.cur
+            return cm()
+
+        def commit(self):
+            self.committed = True
+
+    class Row:
+        sheet_row, error, proxy = 2, None, None
+        values = {"Address": "a@example.com", "Status": "", "Note": ""}
+
+        class credentials:
+            email = "a@example.com"
+            password = "pw"
+            totp_secret = ""
+            email_code_only = False
+            recovery_email = ""
+
+    class Gmails:
+        status_column, note_column, claimed_at_column = "Status", "Note", ""
+        _rows = [Row()]
+
+    class Empty:
+        status_column, note_column, claimed_at_column = "Status", "Note", ""
+        _rows = []
+
+    class Phones:
+        @staticmethod
+        def _typed_rows(what):
+            return iter([])
+
+        @staticmethod
+        def said(value):
+            return value
+
+        @staticmethod
+        def tries(cells):
+            return 0
+
+    book = type("B", (), {"phones": Phones(), "gmails": Gmails(),
+                          "proxies": Empty(), "apps": Empty()})
+    conn = Conn()
+
+    did = shadow.write_shadow(conn, book)
+
+    marked = [(sql, params) for sql, params in conn.cur.executed
+              if "on_sheet" in sql]
+    assert len(marked) == 1, "one statement, after the rows are in"
+    sql, params = marked[0]
+    assert "UPDATE resources SET on_sheet = (id = ANY(%s))" in sql
+    # Only what changed: this runs every thirty seconds over every row the
+    # farm has ever seen.
+    assert "WHERE on_sheet <> (id = ANY(%s))" in sql
+    assert params == ([11], [11]), "the one row the pass actually saw"
+    assert did["left_the_sheet"] == 2
+
+
+def test_the_upserts_hand_back_the_row_they_touched():
+    """The marking is by id rather than by address or by host and port,
+    because the two upserts key on different things and a second spelling
+    of either is a second way for them to disagree."""
+    shadow_src = (SRC / "store" / "shadow.py").read_text(encoding="utf-8")
+
+    assert shadow_src.count("RETURNING r.id") == 2, "both upserts"

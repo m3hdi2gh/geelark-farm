@@ -3193,3 +3193,41 @@ def test_a_day_that_is_not_a_date_is_said_so(caplog):
     with caplog.at_level(logging.DEBUG, logger="geelark_farm.web.read"):
         assert app_mod.read.day_bounds(object(), "not-a-date") is None
     assert "'not-a-date' is not a day" in caplog.text
+
+
+def test_every_query_that_calls_a_row_free_says_it_is_still_on_the_sheet():
+    """The bug this closes was a reading, not a write.
+
+    The mirror never deletes - a row that leaves a tab keeps its history,
+    which is what makes "what did we build on Tuesday" answerable. So
+    `status = '' AND error IS NULL` counts every account ever seen whose
+    status happened to be blank when it was removed. On 2026-09-05 the
+    Gmails tab held six rows and none free while the front page said
+    nineteen, and the alert strip beside it said nothing could be built.
+
+    A sweep rather than a list, because the next query to count free stock
+    is written by somebody who never read this docstring.
+    """
+    from pathlib import Path
+    src = (Path(app_mod.__file__).parent / "read.py").read_text(
+        encoding="utf-8")
+
+    # Each `store._rows(...)` call, as one string: the SQL is written as
+    # adjacent literals, so a predicate and its table can be lines apart.
+    calls, depth, buf = [], 0, ""
+    for chunk in src.split("store._rows(")[1:]:
+        depth, buf = 1, ""
+        for char in chunk:
+            depth += (char == "(") - (char == ")")
+            if not depth:
+                break
+            buf += char
+        calls.append(" ".join(buf.split()))
+
+    assert calls, "the sweep found no queries at all, so it proves nothing"
+    guilty = [q for q in calls
+              if "status = ''" in q and "error IS NULL" in q
+              and "on_sheet" not in q]
+    assert not guilty, (
+        "these call a row free without asking whether it is still on the "
+        "sheet: " + " | ".join(q[:90] for q in guilty))
