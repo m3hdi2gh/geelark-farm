@@ -2285,25 +2285,35 @@ def test_a_building_row_shows_its_last_log_line_and_how_long(web,
     assert 'http-equiv="refresh"' in body
 
 
-def test_the_keepers_warning_sits_above_the_tiles_with_the_fix_linked(
+def test_the_keepers_warning_is_said_once_above_the_title(
         web, monkeypatch):
+    """It was said twice: the strip above the title, and an amber line
+    inside the page carrying the same sentence. A page that says the same
+    thing twice is a page where a reader learns to skip both (2026-09-05).
+
+    The strip is the one that stayed, because it is above the title and
+    on every page. What the in-page line uniquely had - a link to the
+    pool - is now the card in the rail, which is nearer the hand.
+    """
+    say = "the Gmail tab has no free rows to build from"
     _dash(monkeypatch, pulse={"warm": 2, "target": 5, "tripped": "",
-                              "at": 0, "warning": "the Gmail tab has no "
-                                                  "free rows to build from"})
+                              "at": 0, "warning": say})
+    # The strip is fed by the alerts on the nav, which is where every page
+    # gets it - the dashboard no longer has a copy of its own.
+    monkeypatch.setattr(app_mod.read, "nav_counts",
+                        lambda s: {"gmail": 0, "proxy": 2, "app": 1,
+                                   "pending": 0,
+                                   "alerts": [{"level": "warn", "text": say,
+                                               "href": "/pools/gmail"}]})
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert "the Gmail tab has no free rows" in body
-    warn = body[body.index('class="alert warn"'):]
-    assert 'href="/pools/gmail"' in body[:body.index('class="alert warn"') + 200]
-    assert "open the Gmail pool" in warn[:400]
-    assert body.index('class="alert warn"') < body.index("<table")
-
-    _dash(monkeypatch, pulse={"warm": 2, "target": 5, "at": 0,
-                              "tripped": "captcha_shown x5",
-                              "warning": "captcha_shown x5"})
-    _, _, body = client.request("GET", "/")
-    assert 'href="/events?kind=breaker"' in body
+    assert body.count("the Gmail tab has no free rows") == 1
+    # The one that stayed is the strip's, above the title.
+    where = body.index("the Gmail tab has no free rows")
+    assert body.rindex('class="alerts"', 0, where) < where
+    assert where < body.index("<h2>Instance manager")
+    assert body.count('class="alert warn"') == 1
 
 
 def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
@@ -3314,12 +3324,18 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_a_typed_address_wins_over_a_picked_one(web, monkeypatch):
-    """Somebody who filled the box meant the box. Settled at the door so
-    the verb takes one shape of payload however it was asked."""
+def test_whether_an_address_is_new_is_decided_here_not_asked_for(
+        web, monkeypatch):
+    """There were two boxes - a picker and a typed one - and a sentence
+    saying which won. Typing an address the pool already had meant "add
+    it again", silently. One box now, and this end asks the pool.
+    """
     import geelark_farm.store.actions as actions_mod
+    import geelark_farm.web.read as read_mod
 
     _dash(monkeypatch)
+    monkeypatch.setattr(read_mod, "known",
+                        lambda s, kind: {"picked@example.com"})
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 89)
@@ -3328,11 +3344,58 @@ def test_a_typed_address_wins_over_a_picked_one(web, monkeypatch):
 
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), gmail="picked@example.com",
-                         gmail_typed_address="typed@example.com",
-                         gmail_password="pw", install_app="1"))
+                         install_app="1"))
+    assert got["payload"]["gmail"] == "picked@example.com"
+    assert got["payload"]["gmail_typed"] is False, "the pool has this one"
 
-    assert got["payload"]["gmail"] == "typed@example.com"
-    assert got["payload"]["gmail_typed"] is True
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="Bought.Today@example.com",
+                         gmail_password="pw", install_app="1"))
+    assert got["payload"]["gmail"] == "Bought.Today@example.com"
+    assert got["payload"]["gmail_typed"] is True, "the pool has never seen it"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_store_that_cannot_answer_does_not_add_a_duplicate(web, monkeypatch):
+    """Read as "we have it": building on a row that exists is the
+    ordinary case, and a duplicate is the one that costs something."""
+    import geelark_farm.store.actions as actions_mod
+    import geelark_farm.web.read as read_mod
+
+    _dash(monkeypatch)
+
+    def angry(settings, kind):
+        raise RuntimeError("no route to host")
+
+    monkeypatch.setattr(read_mod, "known", angry)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 90)
+    client = web()
+    client.login()
+
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         install_app="1"))
+    assert got["payload"]["gmail_typed"] is False
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
+    """A picker and a box for the same answer were two controls and a
+    sentence about which one won. A datalist is one control that does
+    both."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    for name in ("gmail", "proxy_name", "app_account"):
+        assert f'name="{name}" list="free-{name}"' in body, name
+        assert f'<datalist id="free-{name}">' in body, name
+    assert 'name="gmail_typed_address"' not in body, "the second box is gone"
+    assert 'name="app_typed_address"' not in body
+    assert 'name="install_app"' in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

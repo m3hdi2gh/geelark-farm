@@ -347,20 +347,18 @@ class _Handler(BaseHTTPRequestHandler):
                 # filled the box meant the box. Said here rather than in
                 # the verb, so the verb takes one shape of payload however
                 # it was asked - the API will ask differently.
-                typed_gmail = (field.get("gmail_typed_address") or "").strip()
-                typed_app = (field.get("app_typed_address") or "").strip()
+                gmail = (field.get("gmail") or "").strip()
+                app = (field.get("app_account") or "").strip()
                 install = bool(field.get("install_app"))
                 payload = {
-                    "gmail": typed_gmail or (field.get("gmail") or "").strip(),
-                    "gmail_typed": bool(typed_gmail),
+                    "gmail": gmail,
+                    "gmail_typed": self._is_new("gmail", gmail),
                     "gmail_password": field.get("gmail_password") or "",
                     "gmail_secret": field.get("gmail_secret") or "",
                     "proxy_name": (field.get("proxy_name") or "").strip(),
                     "install_app": install,
-                    "app_account": (typed_app
-                                    or (field.get("app_account") or "").strip()
-                                    ) if install else "",
-                    "app_typed": bool(typed_app) and install,
+                    "app_account": app if install else "",
+                    "app_typed": install and self._is_new("app", app),
                     "app_password": field.get("app_password") or "",
                 }
                 return self._act(
@@ -1070,6 +1068,24 @@ class _Handler(BaseHTTPRequestHandler):
                          f"gf={token}; HttpOnly; SameSite=Lax; Path=/{secure}")
         self.send_header("Location", "/")
         self.end_headers()
+
+    def _is_new(self, kind: str, address: str) -> bool:
+        """Whether the pool has never heard of this address.
+
+        It used to be a second box the person filled instead of the
+        picker, and typing one the pool already had meant "add it again",
+        silently. Never fatal: a store that cannot answer is read as "we
+        have it", because building on a row that exists is the ordinary
+        case and a duplicate is the one that costs something.
+        """
+        if not address:
+            return False
+        try:
+            return address.strip().lower() not in read.known(self.settings,
+                                                             kind)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not check whether %r is new (%s)", address, exc)
+            return False
 
     def _entry(self) -> dict | None:
         """The seat behind the cookie, or None.

@@ -1772,28 +1772,36 @@ NEXT_FREE = "the next free one"
 
 
 def _free_picker(name: str, rows, blank: str) -> str:
-    """A picker of free rows, with a blank option that means "the pool".
+    """One field that is both the picker and the box.
 
-    Blank first and selected, so pressing Build without touching anything
-    is exactly the phone the keeper would have built - the form's default
-    is the farm's own behaviour, and every field is a departure from it.
+    It was two: a `<select>` of what is free, and beneath it a second
+    input for an address the pool has never heard of - which is the
+    commonest reason to build one by hand at all, because an account
+    bought this morning is in no pool yet. Two controls for one answer,
+    and the rule about which one won lived in a sentence beside them.
+
+    A `datalist` is one control that does both: the free rows drop down,
+    and anything else is typed over them. Blank still means the pool -
+    the form's default is the farm's own behaviour, and every field is a
+    departure from it.
     """
-    options = [f'<option value="">{esc(blank)}</option>']
-    options += [f'<option>{esc(str(r.get("label") or ""))}</option>'
-                for r in rows or [] if r.get("label")]
-    return f'<select name="{name}">{"".join(options)}</select>'
+    options = "".join(f'<option value="{esc(str(r.get("label") or ""))}">'
+                      for r in rows or [] if r.get("label"))
+    return (f'<input name="{name}" list="free-{name}" autocomplete="off"'
+            f' spellcheck="false" placeholder="{esc(blank)}">'
+            f'<datalist id="free-{name}">{options}</datalist>')
 
 
 def _build_card(data: dict, user: dict) -> str:
     """Build one phone with credentials somebody chose.
 
-    Folded shut and last in the rail: it is the one thing on this page that
-    spends money, and it should take a decision to open rather than sit
-    open beside the things that only report.
+    Open rather than folded: it is one of the two things this page is
+    for, and a form nobody can see is a feature nobody has.
 
-    No script. Every field is either a picker of what is free or a box to
-    type a new one, and a typed address wins over a picked one - so the
-    form reads the same whether or not the page's one exception loaded.
+    One box per credential. Each is a picker of what is free and a place
+    to type something else, in one control - which is what a person
+    means either way. Whether the address is new is the server's business
+    and not a second field to get right.
     """
     if not _may(user, "may_login_accounts"):
         return ""
@@ -1806,25 +1814,18 @@ def _build_card(data: dict, user: dict) -> str:
         # only be refused is worse than a sentence saying why.
         missing = "Gmail" if not free else "free exit"
         return (f'<div class="panel"><h3>Build a phone by hand</h3>'
-                f'<p class="dim" style="padding:12px 15px">There is no '
-                f'{missing} to build with, so there is nothing to ask for '
-                f'yet.</p></div>')
+                f'<p class="dim">There is no {missing} to build with, so '
+                f'there is nothing to ask for yet.</p></div>')
     return (
         f'<div class="panel"><h3>Build a phone by hand</h3>'
-        f'<details class="fold" style="padding:0 15px 14px">'
-        f'<summary>choose the Gmail, the exit and the app</summary>'
+        f'<p class="dim" style="margin:-6px 0 0">Pick one from the pool or '
+        f'type an address that is not in it yet. Leave a box empty and the '
+        f'keeper takes the next in line.</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
         f'<label>Gmail'
         + _free_picker("gmail", choose.get("gmails"), NEXT_FREE)
         + '</label>'
-        '<label class="typed">or type one to add it to the tab and use it'
-        '<input name="gmail_typed_address" placeholder="address" '
-        'autocomplete="off">'
-        '<input name="gmail_password" placeholder="password" '
-        'autocomplete="off">'
-        '<input name="gmail_secret" placeholder="2fa secret or recovery '
-        'address - optional" autocomplete="off"></label>'
         + '<label>Exit'
         + _free_picker("proxy_name", choose.get("proxies"), NEXT_FREE)
         + '</label>'
@@ -1833,15 +1834,21 @@ def _build_card(data: dict, user: dict) -> str:
         + '<label>GPT account'
         + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
         + '</label>'
-        '<label class="typed">or type one'
-        '<input name="app_typed_address" placeholder="address" '
+        # Only an address the pool has never heard of needs these. Folded
+        # rather than appearing as you type: a field you find out about
+        # after pressing the button is a field that arrived too late.
+        '<details class="fold newone"><summary>credentials, for an address '
+        'the pool does not have yet</summary>'
+        '<input name="gmail_password" placeholder="Gmail password" '
         'autocomplete="off">'
-        '<input name="app_password" placeholder="password" '
-        'autocomplete="off"></label>'
+        '<input name="gmail_secret" placeholder="2fa secret or recovery '
+        'address - optional" autocomplete="off">'
+        '<input name="app_password" placeholder="GPT password" '
+        'autocomplete="off"></details>'
+        '<button class="go">Build it</button>'
         '<p class="dim">This spends one phone, one exit and one Gmail. '
         'The next pass starts it.</p>'
-        '<button class="go">Build it</button>'
-        '</form></details></div>')
+        '</form></div>')
 
 
 def _stopped_card(data: dict, user: dict, explain=None) -> str:
@@ -1990,11 +1997,13 @@ def dashboard(data: dict, user: dict, said: str = "",
     hint = _need(user, "may_take_phones",
                  "taking, returning and closing phones")
 
+    # No second copy of the alert. The strip above the title already
+    # carries every one of these in the same words, and a page that says
+    # the same thing twice is a page where a reader learns to skip both
+    # (the operator, 2026-09-05). What used to be this line's own value -
+    # the link to the pool - is now the card in the rail, which is closer
+    # to the hand than a link ever was.
     warning = ""
-    if pulse.get("warning"):
-        href, label = _warning_link(pulse)
-        warning = (f'<a class="alert warn" href="{href}">'
-                   f'{esc(str(pulse["warning"]))} — {esc(label)}</a>')
 
     # `hidden` until the script says otherwise: a search box that does
     # nothing is worse than none, and this page must still read without it.
