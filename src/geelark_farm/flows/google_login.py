@@ -412,9 +412,16 @@ def _grab_grid_b64(ctx: Context,
         from PIL import Image
 
         shot = Image.open(io.BytesIO(data))
-        # The screenshot and the view hierarchy are the same pixels, so
-        # the rectangle read off the tree crops the picture directly.
-        grid = shot.crop(rect)
+        # The rectangle is read off the view hierarchy, which has its own
+        # width - and the screenshot is the device's, which need not be the
+        # same number. Assuming they were would crop a band of the wrong
+        # part of the screen and call it a grid, so the rectangle is scaled
+        # into the picture's pixels before it cuts anything.
+        scale = shot.width / max(1, _screen_width(ctx))
+        box = tuple(int(round(n * scale)) for n in rect)
+        log.info("captcha grid %s of the tree -> %s of the %sx%s screenshot",
+                 rect, box, shot.width, shot.height)
+        grid = shot.crop(box)
         buf = io.BytesIO()
         grid.save(buf, format="PNG")
         data = buf.getvalue()
@@ -422,6 +429,17 @@ def _grab_grid_b64(ctx: Context,
         log.warning("could not crop the captcha grid (%s)", exc)
         return None
     return base64.b64encode(data).decode("ascii")
+
+
+def _screen_width(ctx: Context) -> int:
+    """How wide the view hierarchy says the screen is - the widest bounds
+    on the page, which is the frame every other rectangle sits inside."""
+    widest = 0
+    for el in ctx.elements:
+        box = _box(el)
+        if box and box[2] - box[0] > widest:
+            widest = box[2] - box[0]
+    return widest
 
 
 #: How many visits the captcha screen gets. Mostly spent waiting, which
@@ -500,17 +518,20 @@ def act_captcha(ctx: Context) -> Outcome | None:
     ctx.captcha_tries += 1
     try:
         from .. import capsolver
-        tiles = capsolver.solve_grid(ctx.solver_key, image, instruction)
+        tiles, read = capsolver.solve_grid(ctx.solver_key, image, instruction)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None
     # Google's two shapes: "Select all images with X" over a 3x3 that
     # refreshes as tiles are taken, and "Select all squares with X" over a
-    # one-shot 4x4. The word is the tell; "none left" belongs to the 3x3
-    # and reading it as 4x4 - which the first version did - taps sixteen
-    # places on a nine-tile grid.
-    size = 4 if "squares" in instruction.lower() else 3
-    for x, y in _tile_points(rect, size, tiles):
+    # one-shot 4x4. The solver says which it read, and its indices only mean
+    # anything against that - so its word beats the wording, which is only
+    # the fallback for an answer that did not say.
+    size = read or (4 if "squares" in instruction.lower() else 3)
+    points = _tile_points(rect, size, tiles)
+    log.info("captcha: %r -> tiles %s of a %dx%d grid at %s",
+             instruction, tiles, size, size, points)
+    for x, y in points:
         shell.tap(ctx.client, ctx.phone_id, x, y)
     submit(ctx)
     return None

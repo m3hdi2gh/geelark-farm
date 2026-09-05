@@ -72,7 +72,7 @@ def test_a_grid_that_cannot_be_placed_is_never_tapped(monkeypatch):
             seen={"captcha": 1})
     called = []
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda *a, **k: called.append(1) or [])
+                        lambda *a, **k: called.append(1) or ([], 0))
     monkeypatch.setattr(g.shell, "tap",
                         lambda *a: called.append("tap"))
     assert g.act_captcha(c) is None
@@ -146,7 +146,8 @@ def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     asked = {}
     monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: asked.update(q=q) or [0, 4, 8])
+                        lambda key, image, q: (asked.update(q=q)
+                                               or ([0, 4, 8], 0)))
     tapped, submitted = [], []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
@@ -164,7 +165,7 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     c, _ = _grid_ctx(seen={"captcha": 1})
     monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: [8])
+                        lambda key, image, q: ([8], 0))
     tapped = []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
@@ -223,3 +224,42 @@ def test_waiting_ends_in_the_operators_captcha_error_not_the_routers_phrase():
     assert out is not None and out.kind == "fatal"
     assert out.reason == "captcha_shown"
     assert "never cleared" in out.detail
+
+
+def test_the_width_the_solver_read_beats_the_wording(monkeypatch):
+    """The fixture's heading says "images", which reads as a 3x3 - but the
+    answer says it read four across, and the indices are only meaningful
+    against that."""
+    c, _ = _grid_ctx(seen={"captcha": 1})
+    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: ([15], 4))
+    tapped = []
+    monkeypatch.setattr(g.shell, "tap",
+                        lambda client, pid, x, y: tapped.append((x, y)))
+    monkeypatch.setattr(g, "submit", lambda c: None)
+    assert g.act_captcha(c) is None
+    assert tapped == g._tile_points((84, 198, 662, 776), 4, [15])
+
+
+def test_the_crop_is_scaled_into_the_screenshots_own_pixels(monkeypatch):
+    """The rectangle is read off the view hierarchy, whose width need not be
+    the device's. Cropping the picture with the tree's numbers would cut a
+    band of the wrong part of the screen and call it a grid."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    c, _ = _skip_grid_ctx()
+    assert g._screen_width(c) == 720
+    shot = Image.new("RGB", (1440, 3200), "white")
+    buf = io.BytesIO()
+    shot.save(buf, format="PNG")
+    monkeypatch.setattr(g.phones, "screenshot", lambda client, pid: "http://s")
+    monkeypatch.setattr("requests.get",
+                        lambda url, timeout: type("R", (), {"content": buf.getvalue()}))
+    out = g._grab_grid_b64(c, (84, 198, 662, 776))
+    got = Image.open(io.BytesIO(base64.b64decode(out)))
+    # Twice the tree's width, so twice every number: 578 across becomes 1156.
+    assert got.size == (1156, 1156)

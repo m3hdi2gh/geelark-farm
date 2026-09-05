@@ -116,8 +116,9 @@ def balance(key: str, *, session=None) -> float:
 
 
 def solve_grid(key: str, image_b64: str, question: str, *,
-               website_url: str = "", session=None) -> list[int]:
-    """Which tiles of a grid hold the thing asked for, zero-based.
+               website_url: str = "", session=None) -> tuple[list[int], int]:
+    """Which tiles of a grid hold the thing asked for, and how wide the
+    solver read the grid to be.
 
     `question` is the word off the screen ("traffic lights"), not the id -
     this maps it. A word we have no id for is a `CapError`, because sending
@@ -126,6 +127,13 @@ def solve_grid(key: str, image_b64: str, question: str, *,
     The tiles are returned in no promised order; the caller taps each.
     An empty list is a real answer - "none of them" is a page with a
     Verify/Skip button and no tiles to press - and is not an error.
+
+    The width comes back in the answer (`size`), and it is the answer's own
+    account of the grid it just read: the indices only mean anything against
+    it. Guessing it from the wording instead - "squares" for sixteen,
+    "images" for nine - is a guess about a picture we are holding, and a
+    wrong one puts every tap in the wrong place. `0` means the solver did
+    not say, and the caller falls back to the wording.
     """
     qid = question_id(question)
     if not qid:
@@ -137,7 +145,9 @@ def solve_grid(key: str, image_b64: str, question: str, *,
         **({"websiteURL": website_url} if website_url else {}),
     }}, session=session)
     solution = data.get("solution") or {}
+    log.info("CapSolver answered %s for %r", solution, question)
     if solution.get("type") == "single":
-        return [0] if solution.get("hasObject") else []
+        return ([0] if solution.get("hasObject") else []), 1
     objects = solution.get("objects") or []
-    return [int(i) for i in objects]
+    size = solution.get("size") or 0
+    return [int(i) for i in objects], (int(size) if size in (3, 4) else 0)

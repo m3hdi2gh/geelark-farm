@@ -42,8 +42,10 @@ def test_a_word_off_the_screen_becomes_the_capsolver_id():
 def test_solve_grid_sends_the_id_and_returns_the_tiles():
     post = FakePost({"errorId": 0, "solution": {"type": "multi",
                                                 "objects": [0, 3, 7]}})
-    tiles = capsolver.solve_grid("K", "BASE64", "traffic lights", session=post)
+    tiles, size = capsolver.solve_grid("K", "BASE64", "traffic lights",
+                                       session=post)
     assert tiles == [0, 3, 7]
+    assert size == 0, "an answer that did not say leaves the caller to guess"
     _url, body, _t = post.calls[0]
     assert body["clientKey"] == "K"
     assert body["task"]["type"] == "ReCaptchaV2Classification"
@@ -54,10 +56,10 @@ def test_solve_grid_sends_the_id_and_returns_the_tiles():
 def test_a_single_object_answer_is_one_tile_or_none():
     yes = FakePost({"errorId": 0, "solution": {"type": "single",
                                                "hasObject": True}})
-    assert capsolver.solve_grid("K", "b", "cars", session=yes) == [0]
+    assert capsolver.solve_grid("K", "b", "cars", session=yes) == ([0], 1)
     no = FakePost({"errorId": 0, "solution": {"type": "single",
                                               "hasObject": False}})
-    assert capsolver.solve_grid("K", "b", "cars", session=no) == []
+    assert capsolver.solve_grid("K", "b", "cars", session=no) == ([], 1)
 
 
 def test_an_unknown_category_never_spends_the_key():
@@ -78,3 +80,21 @@ def test_a_network_that_does_not_answer_is_a_caperror():
     post = FakePost(raises=RuntimeError("no route to host"))
     with pytest.raises(capsolver.CapError, match="did not answer"):
         capsolver.balance("K", session=post)
+
+
+def test_the_grid_width_comes_back_with_the_tiles():
+    """The indices only mean anything against the grid the solver read, and
+    it says which that was. Guessed from the wording instead, a 4x4 read as
+    a 3x3 puts every tap in the wrong place."""
+    post = FakePost({"errorId": 0, "solution": {"type": "multi",
+                                                "objects": [0, 15],
+                                                "size": 4}})
+    assert capsolver.solve_grid("K", "b", "stairs", session=post) == ([0, 15], 4)
+
+
+def test_a_width_the_answer_invents_is_not_believed():
+    """Only the two grids Google draws are accepted; anything else falls
+    back to the wording rather than taking a tap into open space."""
+    post = FakePost({"errorId": 0, "solution": {"type": "multi",
+                                                "objects": [1], "size": 7}})
+    assert capsolver.solve_grid("K", "b", "stairs", session=post) == ([1], 0)
