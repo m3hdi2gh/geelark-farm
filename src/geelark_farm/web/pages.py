@@ -1622,8 +1622,12 @@ _DASH_SCRIPT = """
     if (pressed && pressed.name) data.append(pressed.name, pressed.value);
     var sheet = form.closest('#poolov .sheet');
     form.classList.add('busy');
-    fetch(form.action, {method: 'POST', body: data, credentials: 'same-origin',
-                        redirect: 'follow'})
+    // As the browser would send it - urlencoded. FormData on its own goes
+    // out multipart, which the server does not read, and every field
+    // including the csrf token arrived as nothing: "Stale session"
+    // inside the manager on the first real press (2026-09-05).
+    fetch(form.action, {method: 'POST', body: new URLSearchParams(data),
+                        credentials: 'same-origin', redirect: 'follow'})
       .then(function(r){
         if (r.redirected && /\\/login(\\?|$)/.test(r.url)) {
           location.assign(r.url); return null;
