@@ -93,7 +93,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.dashboard(
                     read.dashboard(self.settings, scope), user,
                     said=(query.get("said") or [""])[0],
-                    manual_login=self.settings.manual_login))
+                    manual_login=self.settings.manual_login,
+                    explain=_advice))
             if path == "/phones":
                 scope = None if user["sees"] == "all" else user["id"]
                 return self._html(200, pages.phones_page(

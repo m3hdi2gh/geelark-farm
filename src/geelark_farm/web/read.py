@@ -190,6 +190,16 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
             "   AND r.on_sheet"
             " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
+        # Credentials a run judged and set aside, with the word it used.
+        # Only what is still on a tab: a row that left is history, and
+        # nobody has a decision to make about history.
+        stopped = store._rows(
+            "SELECT kind, address AS who, status, serial, note"
+            " FROM resources"
+            " WHERE kind IN ('gmail', 'app') AND error IS NULL AND on_sheet"
+            "   AND NOT (status = ANY(%s)) AND status <> %s"
+            " ORDER BY updated_at DESC, id DESC LIMIT 12",
+            (sorted(ROUTINE["gmail"] | ROUTINE["app"]), IMPORTED))
         queue = store._rows(
             "SELECT count(*) FILTER (WHERE status = 'running') AS running,"
             " count(*) FILTER (WHERE status = 'queued') AS queued"
@@ -225,6 +235,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "progress": progress,
         "stock": folded,
         "awaiting": awaiting,
+        "stopped": stopped,
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
         "asked": asked,

@@ -3231,3 +3231,76 @@ def test_every_query_that_calls_a_row_free_says_it_is_still_on_the_sheet():
     assert not guilty, (
         "these call a row free without asking whether it is still on the "
         "sheet: " + " | ".join(q[:90] for q in guilty))
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_an_operator_can_see_which_accounts_stopped(web, monkeypatch):
+    """The gap this closes was one I put there.
+
+    The count of stopped accounts sat behind a link to Needs attention,
+    which is an admin page - so the one thing on the dashboard an operator
+    has to act on rather than watch was the one thing they could not see.
+    The list is small and it is theirs, so it lives where they already are.
+    """
+    _dash(monkeypatch, stopped=[
+        {"kind": "gmail", "who": "rhea@example.com",
+         "status": "phone_verification_required", "serial": "", "note": ""},
+        {"kind": "app", "who": "hollis@example.com",
+         "status": "no_code_source", "serial": "1512", "note": ""}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert "Needs a decision" in body
+    assert "rhea@example.com" in body and "hollis@example.com" in body
+    # In the words the verdict uses, not the token the sheet stores.
+    assert "phone_verification_required" not in body
+    assert "Google asked for a phone number" in body
+    assert "on 1512" in body, "and which phone it was on"
+
+
+def test_the_stopped_card_is_absent_when_nothing_stopped(web, monkeypatch):
+    """On a good day it is empty, and an empty panel saying "nothing
+    stopped" is a line of noise on a page that is about the phones."""
+    _dash(monkeypatch, stopped=[])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert "Needs a decision" not in body
+
+
+def test_the_dashboards_one_script_only_ever_reads_the_page(web, monkeypatch):
+    """The console has no script anywhere else, and this is the exception.
+
+    What buys it: searching, filtering and copying are things a person does
+    to a page rather than to the farm, and each costs a round trip that
+    lands on a page which has moved - this one refreshes itself every
+    thirty seconds while a phone builds. What bounds it: nothing in here
+    may change data, so a browser that refuses it loses three conveniences
+    and no capability.
+    """
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    script = body[body.index("<script>"):body.index("</script>")]
+    for forbidden in ("fetch(", "XMLHttpRequest", ".submit(", "action =",
+                      "innerHTML", "document.write"):
+        assert forbidden not in script, forbidden
+    # The search box is hidden until the script shows it: a box that does
+    # nothing is worse than no box.
+    assert 'id="find" type="search" hidden' in body
+    assert 'id="phones"' in body and 'id="nohits"' in body
+
+
+def test_only_the_dashboard_carries_a_script(web, monkeypatch):
+    """The exception is one page wide. If a second page ever needs one,
+    that is a decision somebody makes on purpose, not a drift."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    for path in ("/pools/gmail", "/pools/proxy", "/pools/gpt", "/phones"):
+        _, _, body = client.request("GET", path)
+        assert "<script>" not in body, path

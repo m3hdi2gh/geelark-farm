@@ -279,6 +279,28 @@ p{{margin:0}}
 /* The table scrolls inside its own column rather than taking the page
    sideways with it - the rail has to stay where it was put. */
 .tscroll{{overflow-x:auto}}
+.stopped h3 .ct{{margin-left:auto;font-family:var(--mono);color:var(--red);
+ letter-spacing:0}}
+.stopped details.fold{{padding:0 15px 12px}}
+.stopped details.fold summary{{padding:10px 0 6px}}
+.stoprow{{padding:9px 0;border-bottom:1px solid var(--line2);font-size:12px}}
+.stoprow:last-child{{border-bottom:0}}
+.stoprow .why{{display:block;color:var(--red);margin-top:3px;line-height:1.45}}
+.stoprow .dim{{display:block;margin-top:2px;font-size:11px}}
+/* Anything a person copies out of this console, they copy by hand today. */
+.cp{{cursor:copy;border-radius:3px}}
+.cp:hover{{background:var(--blue-bg);box-shadow:0 0 0 3px var(--blue-bg)}}
+.cp.flash{{background:var(--green-bg);box-shadow:0 0 0 3px var(--green-bg)}}
+.find{{margin-left:auto;position:relative}}
+.find input{{background:var(--panel2);border:1px solid var(--line);
+ border-radius:7px;color:var(--ink);font:400 12.5px/1 var(--sans);
+ padding:8px 11px;width:210px;font-family:inherit}}
+.find input:focus{{outline:none;border-color:#3a5c96;
+ box-shadow:0 0 0 3px rgba(37,99,196,.16)}}
+.railfind{{padding:9px 15px;border-bottom:1px solid var(--line2)}}
+.railfind input{{width:100%;background:var(--panel2);border:1px solid var(--line);
+ border-radius:6px;color:var(--ink);font:400 12px/1 var(--sans);padding:7px 9px}}
+.railfind input:focus{{outline:none;border-color:#3a5c96}}
 .side{{position:sticky;top:18px;display:flex;flex-direction:column;gap:14px}}
 .side .panel{{padding:0;gap:0;overflow:hidden}}
 .side h3{{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;
@@ -964,11 +986,12 @@ def _phone_rows(data: dict, user: dict) -> str:
                 f'<td colspan="3">{_progress(progress.get(serial))}</td>'
                 f'</tr>')
             continue
-        account = esc(str(r.get("app_account") or "")) or \
-            '<span class="dim">waiting for an account</span>'
+        account = (f'<span class="cp">{esc(str(r.get("app_account")))}</span>'
+                   if r.get("app_account")
+                   else '<span class="dim">waiting for an account</span>')
         lines.append(
             f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
-            f'<td>{account}<br><span class="dim">'
+            f'<td>{account}<br><span class="dim cp">'
             f'{esc(str(r.get("gmail") or ""))}</span></td>'
             f'<td>{esc(str(r.get("proxy_name") or ""))}</td>'
             f'<td class="act">{_row_actions(user, r)}</td></tr>')
@@ -1050,6 +1073,77 @@ def _stock_strip(data: dict) -> str:
 #: What the keeper is doing, by the pulse it left: the word, its colour,
 #: and whether the numbers belong in it. Read top to bottom - the first
 #: that fits wins, so a stopped service never reads as "building".
+#: The console's one page with script on it, and it is deliberately thin.
+#:
+#: Nothing here changes data. Searching, filtering and copying are the
+#: three things a person does to a page rather than to the farm, and every
+#: one of them costs a round trip to do on the server - on a page that
+#: refreshes itself every thirty seconds while a phone is building, that
+#: round trip lands on a page that has moved.
+#:
+#: So if it does not load, or a browser refuses it, the page is exactly
+#: what it was before: the table is there, the rail is there, the fold
+#: still folds, and every button still posts a form. That is the whole
+#: contract, and it is why this is allowed to exist at all.
+_DASH_SCRIPT = """
+<script>
+(function(){
+  // Not the "nothing matches" row: it lives in the same tbody and would
+  // otherwise count itself as a phone.
+  var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
+  var tally = document.getElementById('tally');
+  var find = document.getElementById('find');
+  var none = document.getElementById('nohits');
+  function sift(){
+    var q = find.value.trim().toLowerCase(), shown = 0;
+    rows.forEach(function(tr){
+      var hit = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+      tr.hidden = !hit;
+      if (hit) shown++;
+    });
+    if (none) none.hidden = shown > 0;
+    if (tally) tally.textContent = q
+      ? shown + ' of ' + rows.length + ' shown'
+      : rows.length + (rows.length === 1 ? ' phone' : ' phones');
+  }
+  if (find && rows.length) {
+    find.hidden = false;
+    find.addEventListener('input', sift);
+  }
+
+  var rf = document.getElementById('railfind');
+  if (rf) {
+    rf.parentNode.hidden = false;
+    rf.addEventListener('input', function(){
+      var q = rf.value.trim().toLowerCase();
+      document.querySelectorAll('#awaiting .pick').forEach(function(el){
+        el.hidden = !!q && el.textContent.toLowerCase().indexOf(q) < 0;
+      });
+    });
+  }
+
+  document.addEventListener('click', function(e){
+    var el = e.target.closest('.cp');
+    if (!el) return;
+    var text = el.textContent.trim();
+    var flash = function(){
+      el.classList.add('flash');
+      setTimeout(function(){ el.classList.remove('flash'); }, 500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(flash, function(){});
+      return;
+    }
+    var box = document.createElement('textarea');
+    box.value = text; box.style.position = 'fixed'; box.style.opacity = '0';
+    document.body.appendChild(box); box.select();
+    try { document.execCommand('copy'); flash(); } catch (err) {}
+    box.remove();
+  });
+})();
+</script>"""
+
+
 def _supply_card(data: dict, user: dict) -> str:
     """The three pools, stacked, with the way to add to two of them.
 
@@ -1100,16 +1194,44 @@ def _supply_card(data: dict, user: dict) -> str:
         f'<span class="t">Proxies<i>free exits</i></span>'
         f'<span class="lock">admin</span></div>')
 
-    # Only when there is one to make. A row reading "0 need a decision" is
-    # a line of noise on a page that is about the phones.
-    needs = int((user.get("nav") or {}).get("needs") or 0)
-    if needs and user.get("sees") == "all":
-        parts.append(
-            f'<a class="failrow" href="/needs"><b>{needs}</b>&nbsp;'
-            f'{"accounts" if needs != 1 else "account"} stopped and need '
-            f'{"a decision" if needs == 1 else "a decision"}'
-            f'<span class="arrow">&rsaquo;</span></a>')
     return f'<div class="panel"><h3>Supply</h3>{"".join(parts)}</div>'
+
+
+def _stopped_card(data: dict, user: dict, explain=None) -> str:
+    """The credentials a run judged and set aside, in the words it used.
+
+    This is the one thing on the page an operator has to act on rather
+    than watch, and until now they could not see it at all: the count sat
+    behind a link to Needs attention, which is an admin page. The list is
+    small, it is theirs, and it belongs where they already are.
+
+    Folded shut, because on a good day it is empty and on a bad one it is
+    a work list rather than a headline. `<details>` rather than script:
+    the fold has to work whether or not the page's one exception loaded.
+    """
+    stopped = data.get("stopped") or []
+    if not stopped:
+        return ""
+    items = []
+    for row in stopped:
+        who = esc(str(row.get("who") or ""))
+        status = str(row.get("status") or "")
+        seen = ""
+        if explain:
+            got = explain(status)
+            seen = got[0] if isinstance(got, tuple) else (got or "")
+        words = esc(seen or status.replace("_", " ") or "it stopped")
+        where = esc(str(row.get("serial") or ""))
+        items.append(
+            f'<div class="stoprow"><span class="mono cp">{who}</span>'
+            f'<span class="why">{words}</span>'
+            + (f'<span class="dim mono">on {where}</span>' if where else "")
+            + '</div>')
+    return (f'<div class="panel stopped"><h3>Needs a decision '
+            f'<span class="ct">{len(stopped)}</span></h3>'
+            f'<details class="fold"><summary>what stopped, and why'
+            f'</summary><div class="stoplist">{"".join(items)}</div>'
+            f'</details></div>')
 
 
 def _did_not_finish(rows: list[dict], user: dict) -> str:
@@ -1180,7 +1302,7 @@ def _service_row(data: dict, user: dict, flags: dict | None) -> str:
 
 
 def dashboard(data: dict, user: dict, said: str = "",
-              manual_login: bool = False) -> str:
+              manual_login: bool = False, explain=None) -> str:
     """The console's front page: what an operator watches, and what they
     reach for, side by side.
 
@@ -1210,8 +1332,11 @@ def dashboard(data: dict, user: dict, said: str = "",
     on_the_shelf = [r for r in phones
                     if (r.get("status") or "") != "incomplete"]
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
-    table = (f'<table><tr><th>serial</th><th>state</th><th>account</th>'
-             f'<th>proxy</th><th></th></tr>{rows}</table>'
+    table = (f'<table id="phones"><thead><tr><th>serial</th><th>state</th>'
+             f'<th>account</th><th>proxy</th><th></th></tr></thead>'
+             f'<tbody>{rows}'
+             f'<tr class="none" id="nohits" hidden><td colspan="5">'
+             f'Nothing here matches that.</td></tr></tbody></table>'
              if rows else '<p class="empty">No phones yet - the keeper '
                           'builds the shortfall on its next pass.</p>')
     hint = _need(user, "may_take_phones",
@@ -1223,21 +1348,26 @@ def dashboard(data: dict, user: dict, said: str = "",
         warning = (f'<a class="alert warn" href="{href}">'
                    f'{esc(str(pulse["warning"]))} — {esc(label)}</a>')
 
+    # `hidden` until the script says otherwise: a search box that does
+    # nothing is worse than none, and this page must still read without it.
     tools = (f'<div class="row"><h3>Phones</h3>'
-             f'<span class="dim mono">{_plural(len(on_the_shelf), "phone")}'
-             f'</span></div>')
+             f'<span class="dim mono" id="tally">'
+             f'{_plural(len(on_the_shelf), "phone")}</span>'
+             f'<span class="find"><input id="find" type="search" hidden '
+             f'placeholder="Search phones" autocomplete="off"></span></div>')
     main = (_said(said, _DASH_SAID) + warning + tools
             + f'<div><div class="tscroll">{table}</div>{hint}</div>'
             + _did_not_finish(incomplete, user))
-    side = _supply_card(data, user) + _awaiting_panel(
-        data, user, manual_login, pulse)
+    side = (_supply_card(data, user)
+            + _stopped_card(data, user, explain)
+            + _awaiting_panel(data, user, manual_login, pulse))
 
     body = (f'<div class="wide">'
             f'<div class="top"><h2>Instance manager</h2>'
             f'<span class="status">{_status_sentence(data)}</span></div>'
             f'<div class="desk"><div class="deskmain">{main}</div>'
             f'<aside class="side">{side}</aside></div>'
-            f'</div>')
+            f'</div>' + _DASH_SCRIPT)
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Instance manager", body, user=user, here="/",
@@ -1316,10 +1446,12 @@ def _awaiting_panel(data: dict, user: dict, manual_login: bool,
             f'{who}</span>'
             f'<span class="dim" style="grid-column:{2 if tick else 1}/-1">'
             f'{"added " + ago if ago else "added: no stamp"}</span></label>')
-    listed = "".join(items)
+    listed = f'<div id="awaiting">{"".join(items)}</div>'
     head = (f'<div class="row"><h3>Awaiting login</h3>'
             f'<span class="dim mono">{_plural(len(awaiting), "account")}'
-            f'</span></div>')
+            f'</span></div>'
+            f'<div class="railfind" hidden><input id="railfind" type="search"'
+            f' placeholder="Filter accounts" autocomplete="off"></div>')
     if not can_login:
         why = ("accounts log in on their own on the next pass"
                if not manual_login else
