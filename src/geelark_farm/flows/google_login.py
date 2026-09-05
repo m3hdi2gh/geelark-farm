@@ -148,6 +148,11 @@ class Context(router.Context):
     account: Account = None                                     # type: ignore
     solver_key: str = ""
     captcha_max: int = 3
+    #: Attempts actually made - a tick, or a grid sent to the solver.
+    #: Waiting for reCAPTCHA to answer is not one of them.
+    captcha_tries: int = 0
+    #: The tick box is tapped once per flow; tapping it again unticks it.
+    captcha_ticked: bool = False
 
 
 # --------------------------------------------------------------- primitives
@@ -348,10 +353,21 @@ def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
     return (left, top, right, bottom)
 
 
-def _grab_screenshot_b64(ctx: Context) -> str | None:
-    """The live screen as base64 PNG, for the solver. None on any hitch -
-    the caller treats that as 'the captcha stands'."""
+def _grab_grid_b64(ctx: Context,
+                   rect: tuple[int, int, int, int]) -> str | None:
+    """The tiles, cropped out of the screen, as base64 PNG.
+
+    Cropped and not the whole screen, which is what the first version
+    sent. A classification task is told "here is a grid, which squares
+    hold a crosswalk" - hand it a phone screen and the squares it counts
+    are squares of the screen, so even a confident answer names the wrong
+    tiles. It is also several times the bytes over a link that has
+    already timed out once (2026-09-06, phone 1788).
+
+    None on any hitch, which the caller reads as "the captcha stands".
+    """
     import base64
+    import io
 
     from .. import phones
     link = phones.screenshot(ctx.client, ctx.phone_id)
@@ -359,9 +375,22 @@ def _grab_screenshot_b64(ctx: Context) -> str | None:
         return None
     try:
         import requests
-        data = requests.get(link, timeout=30).content
+        data = requests.get(link, timeout=60).content
     except Exception as exc:                                       # noqa: BLE001
         log.warning("could not fetch the captcha screenshot (%s)", exc)
+        return None
+    try:
+        from PIL import Image
+
+        shot = Image.open(io.BytesIO(data))
+        # The screenshot and the view hierarchy are the same pixels, so
+        # the rectangle read off the tree crops the picture directly.
+        grid = shot.crop(rect)
+        buf = io.BytesIO()
+        grid.save(buf, format="PNG")
+        data = buf.getvalue()
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not crop the captcha grid (%s)", exc)
         return None
     return base64.b64encode(data).decode("ascii")
 
@@ -380,8 +409,11 @@ def act_captcha(ctx: Context) -> Outcome | None:
     did before there was a solver: the `captcha_shown` fatal, so a build
     still moves on and never loops on a challenge it cannot pass.
     """
-    attempts = ctx.seen.get("captcha", 0)
-    if attempts > ctx.captcha_max:
+    # Counted here rather than taken from the router's visit tally: most
+    # visits are waiting for reCAPTCHA to make up its mind, and a wait is
+    # not an attempt. Three attempts is what the operator asked for, and
+    # three attempts is what this is - not three glances at the page.
+    if ctx.captcha_tries >= ctx.captcha_max:
         path = ctx.save("captcha_shown")
         return Outcome("fatal", "captcha_shown",
                        f"the captcha was not solved in {ctx.captcha_max} "
@@ -389,19 +421,22 @@ def act_captcha(ctx: Context) -> Outcome | None:
                        artifacts=[path] if path else [])
     instruction = _grid_instruction(ctx)
     if not instruction:
-        # Just the checkbox, which is two moves and not one: tick it, then
-        # submit the form it sits on. Read from a real screen (2026-09-06):
-        # `I'm not a robot` is a CheckBox at [58,541][106,588] and NEXT is
-        # a separate button at the foot of the page.
+        # The tick box. Tapped once and once only: a second tap unticks
+        # what the first ticked, which is what two live builds did
+        # (2026-09-06, phones 1787 and 1788) - and reCAPTCHA leaves the
+        # box reading unticked for a few seconds while it decides, so the
+        # flow must wait rather than help.
         #
-        # The tick is only tapped while it is empty. Tapping "the checkbox"
-        # on the second visit unticks what the first visit ticked, and the
-        # flow would do that until the limit and call the captcha unsolved.
+        # Nothing is submitted either. Google advances by itself once it
+        # is satisfied - phone 1786 went straight from the tick to the
+        # password page - and pressing NEXT under an unanswered captcha is
+        # a poke at a form that is not ready.
         box = _robot_checkbox(ctx)
-        if box is not None and not box.checked:
-            screen.tap_element(ctx.client, ctx.phone_id, box)
-            return None
-        submit(ctx)
+        if box is None or box.checked or ctx.captcha_ticked:
+            return None                      # let it think; the visit ends
+        screen.tap_element(ctx.client, ctx.phone_id, box)
+        ctx.captcha_ticked = True
+        ctx.captcha_tries += 1
         return None
     rect = _grid_rect(ctx)
     if rect is None:
@@ -409,9 +444,10 @@ def act_captcha(ctx: Context) -> Outcome | None:
         # never a tap on coordinates guessed from nothing.
         ctx.save("captcha_grid_unplaced")
         return None
-    image = _grab_screenshot_b64(ctx)
+    image = _grab_grid_b64(ctx, rect)
     if image is None:
         return None
+    ctx.captcha_tries += 1
     try:
         from .. import capsolver
         tiles = capsolver.solve_grid(ctx.solver_key, image, instruction)
@@ -695,7 +731,7 @@ SCREENS: list[Screen] = [
     # only reached at all when a solver key is set (else `fatal` above has
     # already claimed it). Its own visit budget is one past the attempt
     # limit, so the act's own guard is what ends it, with the right word.
-    Screen("captcha", _captcha_present, act_captcha, max_visits=10),
+    Screen("captcha", _captcha_present, act_captcha, max_visits=14),
 
     # Ranked above every screen that acts, and below fatal only because a page
     # that says the sign-in cannot proceed says so whether or not it is still

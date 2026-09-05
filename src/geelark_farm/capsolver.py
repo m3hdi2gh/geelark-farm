@@ -78,17 +78,30 @@ def question_id(text: str) -> str:
 
 
 def _post(key: str, path: str, payload: dict, *, session=None,
-          timeout: float = 40) -> dict:
+          timeout: float = 90, tries: int = 2) -> dict:
+    """One call, retried once. The farm reaches api.capsolver.com over a
+    link that is not always quick - a 40-second read timed out on a live
+    build with the grid already in hand (2026-09-06, phone 1788) - and a
+    captcha is worth waiting for: the alternative is a phone thrown away.
+    """
     import requests
 
     body = {"clientKey": key, **payload}
-    try:
-        get = session or requests
-        resp = get.post(f"{_BASE}{path}", json=body, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:                                       # noqa: BLE001
-        raise CapError(f"CapSolver {path} did not answer ({exc})") from exc
+    last: Exception | None = None
+    for attempt in range(max(1, tries)):
+        try:
+            get = session or requests
+            resp = get.post(f"{_BASE}{path}", json=body, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as exc:                                   # noqa: BLE001
+            last = exc
+            if attempt + 1 < max(1, tries):
+                log.warning("CapSolver %s did not answer (%s); trying again",
+                            path, exc)
+    else:
+        raise CapError(f"CapSolver {path} did not answer ({last})") from last
     if data.get("errorId"):
         raise CapError(data.get("errorDescription")
                        or data.get("errorCode") or "CapSolver refused")

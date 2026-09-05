@@ -58,12 +58,12 @@ def imported() -> set[str]:
             and name != "geelark_farm"}
 
 
-#: The one dependency whose distribution name is not what you import. A table
-#: with a single entry beats asking the environment: `packages_distributions()`
-#: answered for gspread, pyotp and rich on Windows and not on Linux, so the
-#: first version of these tests passed here and turned CI red (2026-08-27) -
-#: which is the failure they exist to prevent, arriving through the test.
-PROVIDES = {"google-auth": {"google"}}
+#: The dependencies whose distribution name is not what you import. A written
+#: table beats asking the environment: `packages_distributions()` answered for
+#: gspread, pyotp and rich on Windows and not on Linux, so the first version of
+#: these tests passed here and turned CI red (2026-08-27) - which is the
+#: failure they exist to prevent, arriving through the test.
+PROVIDES = {"google-auth": {"google"}, "pillow": {"PIL"}}
 
 
 def provides(dist: str) -> set[str]:

@@ -9,6 +9,10 @@ description = "Provision GeeLark cloud phones from a spreadsheet: create behind 
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31",
+    # Cropping the reCAPTCHA grid out of a screenshot before it goes to the
+    # solver: a classification task counts squares of the image it is given,
+    # so it has to be given the grid and not the phone.
+    "pillow>=10.0",
     "pyotp>=2.9",
     "gspread>=6.0",
     "google-auth>=2.28",

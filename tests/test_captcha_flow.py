@@ -13,10 +13,10 @@ def el(label, bounds, cls="TextView"):
                           focused=False, password=False)
 
 
-def ctx(elements, *, key="K", seen=None, taps=None):
+def ctx(elements, *, key="K", seen=None, taps=None, tries=0):
     account = Account(email="a@x.com", password="pw", totp_secret="")
     c = g.Context(client=None, phone_id="P", account=account,
-                  solver_key=key, captcha_max=3)
+                  solver_key=key, captcha_max=3, captcha_tries=tries)
     c.elements = elements
     c.blob = screen.texts(elements)
     c.seen = seen or {}
@@ -42,22 +42,25 @@ def test_a_captcha_is_fatal_without_a_key_and_handled_with_one():
     assert g._fatal_reason(ctx(els, key="K")) is None
 
 
-def test_the_words_alone_are_never_tapped_as_a_tick_box(monkeypatch):
+def test_the_words_alone_are_never_tapped_and_nothing_is_poked(monkeypatch):
     """"I'm not a robot" is also prose on that page, and tapping prose does
-    nothing. Only a CheckBox is ticked; with none on screen the form is
-    submitted instead of poking at text."""
+    nothing. With no tick box on screen the flow waits - it does not press
+    NEXT under a captcha that has not been answered."""
     tapped, submitted = [], []
     monkeypatch.setattr(g.screen, "tap_element",
                         lambda client, pid, el: tapped.append(el.label))
     monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
     c = ctx([el("I'm not a robot", "[40,300][320,380]")], seen={"captcha": 1})
     assert g.act_captcha(c) is None
-    assert tapped == [] and submitted == [True]
+    assert tapped == [] and submitted == []
+    assert c.captcha_tries == 0
 
 
 def test_the_limit_turns_into_the_captcha_fatal():
+    """Three attempts - a tick or a grid sent to the solver - and no more.
+    Visits spent waiting for reCAPTCHA to answer are not attempts."""
     c = ctx([el("Confirm you're not a robot", "[0,0][1080,200]")],
-            seen={"captcha": 4})     # one past captcha_max
+            seen={"captcha": 9}, tries=3)
     out = g.act_captcha(c)
     assert out is not None and out.kind == "fatal"
     assert out.reason == "captcha_shown"
@@ -96,14 +99,15 @@ def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
     monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == [(82, 564)] and submitted == []
+    assert c.captcha_tries == 1 and c.captcha_ticked
 
-    # Second visit, box now ticked: submit rather than untick it.
-    ticked = [screen.Element(**{**el.__dict__, "checked": True})
-              if el is box else el for el in els]
-    c2 = ctx(ticked, seen={"captcha": 2})
+    # The next visit on the same flow: reCAPTCHA still reads unticked while
+    # it decides, and tapping again unticks what the first tap ticked -
+    # which is what two live builds did. Wait, and never poke with NEXT.
     tapped.clear()
-    assert g.act_captcha(c2) is None
-    assert tapped == [] and submitted == [True]
+    assert g.act_captcha(c) is None
+    assert tapped == [] and submitted == []
+    assert c.captcha_tries == 1, "waiting is not an attempt"
 
 
 def _grid_ctx(**kw):
@@ -140,7 +144,7 @@ def test_the_grid_rectangle_is_read_off_the_real_screen():
 def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     c, _ = _grid_ctx(seen={"captcha": 2})
     asked = {}
-    monkeypatch.setattr(g, "_grab_screenshot_b64", lambda c: "B64")
+    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: asked.update(q=q) or [0, 4, 8])
     tapped, submitted = [], []
@@ -158,7 +162,7 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     """"Click verify once there are none left" belongs to the 3x3 that
     refreshes; reading it as a 4x4 taps sixteen places on nine tiles."""
     c, _ = _grid_ctx(seen={"captcha": 1})
-    monkeypatch.setattr(g, "_grab_screenshot_b64", lambda c: "B64")
+    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: [8])
     tapped = []
