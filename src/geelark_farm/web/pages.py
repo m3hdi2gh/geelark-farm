@@ -1379,7 +1379,8 @@ def _addr_cell(value, empty: str) -> str:
     column, down the page.
     """
     text = str(value or "").strip()
-    if not text:
+    # The tab's own marks for "none" - a cross, a tick - are not addresses.
+    if not text or text in ("✗", "✓", "-"):
         return f'<span class="dim">{esc(empty)}</span>'
     return f'<span class="addr cp" title="{esc(text)}">{esc(text)}</span>' 
 
@@ -2741,10 +2742,15 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'<aside class="side">{side}</aside></div>'
             f'</div>' + _pool_manager(data, user, manual_login)
             + _DASH_SCRIPT)
+    # The page keeps itself current: every ten seconds while something is
+    # being built, every thirty otherwise - so a build that starts after
+    # the page was opened still shows up without a hand on F5 (the
+    # operator, 2026-09-05). With the script this is a quiet swap that
+    # waits for a quiet moment; without it, the browser's own reload.
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
     return page("Instance manager", body, user=quiet, here="/",
-                refresh=30 if busy else 0)
+                refresh=10 if busy else 30)
 
 
 def live_page(serial: str, user: dict, said: str = "",

@@ -3762,8 +3762,8 @@ def test_the_browsers_own_refresh_lives_inside_noscript(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     head = body[:body.index("<body")]
-    assert '<noscript><meta http-equiv="refresh" content="30"></noscript>' in head
-    assert '<meta name="gf-refresh" content="30">' in head
+    assert '<noscript><meta http-equiv="refresh" content="10"></noscript>' in head
+    assert '<meta name="gf-refresh" content="10">' in head
     # Never a live one: the script cannot cancel it once it is parsed.
     assert head.count('http-equiv="refresh"') == 1
     script = body[body.index("<script>"):body.index("</script>")]
@@ -3794,3 +3794,33 @@ def test_a_building_row_can_be_called_off(web, monkeypatch):
         "POST", "/phones/1503/stop", _form(csrf=client.csrf(), back="/"))
     assert got["verb"] == "stop_phone" and got["payload"]["serial"] == "1503"
     assert status == 303 and dict(headers)["Location"].startswith("/?said=")
+
+
+def test_the_dashboard_keeps_itself_current_even_when_idle(web, monkeypatch):
+    """A build that starts after the page was opened must show up without
+    a hand on F5: ten seconds while building, thirty otherwise."""
+    _dash(monkeypatch, phones=[{"serial": "1500", "status": "ready",
+                                "state": ""}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert '<meta name="gf-refresh" content="30">' in body
+
+    _dash(monkeypatch, phones=[{"serial": "1503", "status": "building",
+                                "state": ""}])
+    _, _, body = client.request("GET", "/")
+    assert '<meta name="gf-refresh" content="10">' in body
+
+
+def test_the_tabs_cross_is_not_an_address(web, monkeypatch):
+    """A phone that stopped before sign-in carries the tab's cross in its
+    Gmail cell. The cell says what is missing, not the mark."""
+    _dash(monkeypatch, phones=[{"serial": "1500", "status": "incomplete",
+                                "state": "", "gmail": "✗", "app_account": "✗"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    row = body[body.index('href="/phones/1500"'):]
+    row = row[:row.index("</tr>")]
+    assert "✗" not in row
+    assert "no Gmail on it" in row
