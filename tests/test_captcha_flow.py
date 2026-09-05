@@ -63,28 +63,6 @@ def test_the_limit_turns_into_the_captcha_fatal():
     assert out.reason == "captcha_shown"
 
 
-def test_a_grid_is_solved_and_its_tiles_tapped(monkeypatch):
-    taps = []
-    els = [
-        el("Select all images with traffic lights", "[0,200][1080,300]"),
-        el("Verify", "[860,1400][1060,1500]", cls="Button"),
-        el("frame", "[0,0][1080,1920]", cls="FrameLayout"),
-    ]
-    c = ctx(els, seen={"captcha": 1})
-    monkeypatch.setattr(g, "_grab_screenshot_b64", lambda c: "B64")
-    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: [0, 8])
-    monkeypatch.setattr(g, "submit", lambda c: taps.append("submit"))
-    tapped = []
-    monkeypatch.setattr(g.shell, "tap",
-                        lambda client, pid, x, y: tapped.append((x, y)))
-    assert g.act_captcha(c) is None
-    # grid rect: left/right 0..1080, top 300 (instruction bottom),
-    # bottom 1400 (verify top) -> a 3x3 of 360x~366.
-    assert tapped == g._tile_points((0, 300, 1080, 1400), 3, [0, 8])
-    assert taps == ["submit"]
-
-
 def test_a_grid_that_cannot_be_placed_is_never_tapped(monkeypatch):
     # Instruction but no Verify button -> no rect -> no tap, no solve.
     c = ctx([el("Select all images with cars", "[0,200][1080,300]")],
@@ -126,3 +104,67 @@ def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
     tapped.clear()
     assert g.act_captcha(c2) is None
     assert tapped == [] and submitted == [True]
+
+
+def _grid_ctx(**kw):
+    import pathlib
+    xml = pathlib.Path("tests/fixtures/google-captcha-grid.xml")
+    els = screen.parse(xml.read_text(encoding="utf-8", errors="replace"))
+    return ctx(els, **kw), els
+
+
+def test_the_question_is_read_from_both_of_its_nodes():
+    """Google splits it: "Select all images with" on one line, the object
+    on the next. Reading only the first is the question without its
+    subject, which is what CapSolver was handed (build 1781)."""
+    c, _ = _grid_ctx()
+    question = g._grid_instruction(c)
+    assert question == "Select all images with crosswalks"
+    from geelark_farm import capsolver
+    assert capsolver.question_id(question) == "/m/014xcs"
+
+
+def test_the_grid_rectangle_is_read_off_the_real_screen():
+    """The tiles are pictures in a WebView and in no tree; the rectangle
+    comes from the heading above them, the button row below, and the fact
+    that a reCAPTCHA grid is square."""
+    c, _ = _grid_ctx()
+    rect = g._grid_rect(c)
+    assert rect == (84, 198, 662, 776)
+    # Above the button row (VERIFY starts at y=901), as it must be.
+    assert rect[3] < 898
+    # A 3x3 over it: the middle tile sits in the middle of the grid.
+    assert g._tile_points(rect, 3, [4]) == [(373, 487)]
+
+
+def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
+    c, _ = _grid_ctx(seen={"captcha": 2})
+    asked = {}
+    monkeypatch.setattr(g, "_grab_screenshot_b64", lambda c: "B64")
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: asked.update(q=q) or [0, 4, 8])
+    tapped, submitted = [], []
+    monkeypatch.setattr(g.shell, "tap",
+                        lambda client, pid, x, y: tapped.append((x, y)))
+    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+
+    assert g.act_captcha(c) is None
+    assert asked["q"] == "Select all images with crosswalks"
+    assert tapped == g._tile_points((84, 198, 662, 776), 3, [0, 4, 8])
+    assert submitted == [True]
+
+
+def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
+    """"Click verify once there are none left" belongs to the 3x3 that
+    refreshes; reading it as a 4x4 taps sixteen places on nine tiles."""
+    c, _ = _grid_ctx(seen={"captcha": 1})
+    monkeypatch.setattr(g, "_grab_screenshot_b64", lambda c: "B64")
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: [8])
+    tapped = []
+    monkeypatch.setattr(g.shell, "tap",
+                        lambda client, pid, x, y: tapped.append((x, y)))
+    monkeypatch.setattr(g, "submit", lambda c: None)
+    assert g.act_captcha(c) is None
+    # Tile 8 of a 3x3 is the bottom-right; of a 4x4 it would be mid-left.
+    assert tapped == [(565, 679)]

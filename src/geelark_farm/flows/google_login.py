@@ -238,13 +238,34 @@ _CAPTCHA_NEEDLES = ("confirm you're not a robot", "i'm not a robot",
 _GRID_VERIFY = ("Verify", "Skip", "Next")
 
 
+#: The line that closes the challenge's heading. Everything between the
+#: "Select all …" line and this one is the name of the thing to find.
+_GRID_TAIL = "click verify"
+
+
 def _grid_instruction(ctx: Context) -> str:
-    """The 'Select all images with …' line, if one is on the screen."""
-    for el in ctx.elements:
-        low = (el.label or "").lower()
-        if "select all" in low and ("images" in low or "squares" in low):
-            return el.label
-    return ""
+    """The whole question - "Select all images with crosswalks" - assembled
+    from the two nodes it is split across.
+
+    Google renders the ask and the object as separate views: `Select all
+    images with` on one line and `crosswalks` on the next. Reading only the
+    first is reading the question without its subject, and CapSolver was
+    handed "Select all images with" and no category (2026-09-06, build
+    1781). Anything after the "Click verify once there are none left" line
+    is not part of the question.
+    """
+    labels = [el.label or "" for el in ctx.elements]
+    start = next((i for i, t in enumerate(labels)
+                  if "select all" in t.lower()
+                  and ("images" in t.lower() or "squares" in t.lower())), None)
+    if start is None:
+        return ""
+    words = [labels[start]]
+    for text in labels[start + 1:start + 4]:
+        if not text.strip() or _GRID_TAIL in text.lower():
+            break
+        words.append(text.strip())
+    return " ".join(words)
 
 
 def _robot_checkbox(ctx: Context):
@@ -279,39 +300,52 @@ def _tile_points(rect: tuple[int, int, int, int], size: int,
     return points
 
 
+def _box(el) -> list[int]:
+    """An element's bounds as [left, top, right, bottom], or []."""
+    nums = [int(n) for n in re.findall(r"-?\d+", el.bounds if el else "")]
+    return nums if len(nums) == 4 else []
+
+
 def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
-    """The pixel rectangle the tiles fill, read from the page's own
-    anchors: below the instruction line, above the Verify button, the
-    screen's own width. Returns None rather than guess when either
-    anchor is missing - a blind rectangle is a wrong tap on a real
-    account, so a grid we cannot place confidently is left to the limit."""
-    instruction = next((e for e in ctx.elements
-                        if "select all" in (e.label or "").lower()), None)
-    verify = screen.find_first(ctx.elements, _GRID_VERIFY)
-    if instruction is None or verify is None:
+    """Where the tiles are, read off the challenge's own heading.
+
+    The tiles themselves are pictures inside a WebView and are in no
+    accessibility tree, so the rectangle has to come from what *is*: the
+    heading above them and the button row below.
+
+    From the real screen (2026-09-06, build 1781, and the fixture beside
+    these tests): the object line - `crosswalks`, a View - spans the
+    challenge's whole content width, [84..662]; the heading ends at the
+    "Click verify once there are none left." line, bottom 198; the button
+    row starts at 898. A reCAPTCHA grid is square, so its height is its
+    width - which lands the bottom at 776, comfortably above the buttons.
+
+    Squareness is what makes this a reading rather than a guess: the two
+    ends and one side are on the screen, and the fourth follows. Anything
+    missing, or a rectangle that would reach past the buttons, returns
+    None - and a grid we cannot place is never tapped.
+    """
+    labels = [(el, (el.label or "").lower()) for el in ctx.elements]
+    ask = next((el for el, t in labels
+                if "select all" in t and ("images" in t or "squares" in t)),
+               None)
+    if ask is None:
         return None
-    ins, ver = instruction.centre, verify.centre
-    inb = [int(n) for n in re.findall(r"-?\d+", instruction.bounds)]
-    verb = [int(n) for n in re.findall(r"-?\d+", verify.bounds)]
-    width = [int(n) for n in re.findall(r"-?\d+", _screen_bounds(ctx))]
-    if len(inb) != 4 or len(verb) != 4 or ins is None or ver is None:
+    after = labels[[el for el, _ in labels].index(ask) + 1:]
+    subject = next((el for el, t in after if t.strip()), None)
+    tail = next((el for el, t in after if _GRID_TAIL in t), None)
+    buttons = screen.find_first(ctx.elements, _GRID_VERIFY)
+    side = _box(subject)
+    head = _box(tail) or _box(subject)
+    floor = _box(buttons)
+    if not side or not head or not floor:
         return None
-    left, right = width[0], width[2]
-    top, bottom = inb[3], verb[1]
-    if bottom - top < 100:
+    left, right = side[0], side[2]
+    top = head[3]
+    bottom = top + (right - left)             # a reCAPTCHA grid is square
+    if right - left < 200 or bottom > floor[1]:
         return None
     return (left, top, right, bottom)
-
-
-def _screen_bounds(ctx: Context) -> str:
-    """The widest bounds on the page - the frame - so a grid spans the
-    screen's own width rather than a guess."""
-    widest, span = "[0,0][1080,0]", 0
-    for el in ctx.elements:
-        nums = [int(n) for n in re.findall(r"-?\d+", el.bounds)]
-        if len(nums) == 4 and nums[2] - nums[0] > span:
-            span, widest = nums[2] - nums[0], el.bounds
-    return widest
 
 
 def _grab_screenshot_b64(ctx: Context) -> str | None:
@@ -384,7 +418,12 @@ def act_captcha(ctx: Context) -> Outcome | None:
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None
-    size = 4 if "16" in instruction or ctx.has("none left") else 3
+    # Google's two shapes: "Select all images with X" over a 3x3 that
+    # refreshes as tiles are taken, and "Select all squares with X" over a
+    # one-shot 4x4. The word is the tell; "none left" belongs to the 3x3
+    # and reading it as 4x4 - which the first version did - taps sixteen
+    # places on a nine-tile grid.
+    size = 4 if "squares" in instruction.lower() else 3
     for x, y in _tile_points(rect, size, tiles):
         shell.tap(ctx.client, ctx.phone_id, x, y)
     submit(ctx)
