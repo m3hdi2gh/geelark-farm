@@ -171,7 +171,15 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .ov .sheet .x:hover{{color:var(--bright)}}
 .sheetbody{{overflow:auto;padding:15px 18px}}
 .sheetbody.sub{{display:flex;flex-direction:column;gap:12px}}
-.sheetbody.sub .panel{{margin:0}}
+.sheetbody.sub>*{{width:100%;max-width:none;margin:0}}
+.sheetbody.sub .top,.sheetbody.sub .narrow>.top{{display:none}}
+/* The edit-and-preview-again box of the preview page is the paste box the
+   sheet already has - Back returns to it with the paste still in it. */
+.sheetbody.sub form[action$="/preview"],
+.sheetbody.sub .panel:has(form[action$="/preview"]){{display:none}}
+.sheetbody.sub .panel .row{{justify-content:flex-end;gap:8px}}
+.sheetbody.sub .panel .row .right{{display:none}}
+.sheetbody.sub .panel .row .dim{{margin-right:auto}}
 form.busy button{{opacity:.6;pointer-events:none}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
  border-radius:9px;padding:12px;margin-bottom:14px}}
@@ -192,10 +200,12 @@ form.busy button{{opacity:.6;pointer-events:none}}
 table.pooltable td{{vertical-align:middle}}
 table.pooltable .doors{{display:flex;gap:6px;justify-content:flex-end}}
 table.pooltable .doors form{{display:inline}}
-tr.editrow>td{{background:var(--panel2)}}
-tr.editrow form{{display:flex;gap:7px;flex-wrap:wrap;align-items:center;
- padding:4px 0}}
-tr.editrow input{{min-width:150px;flex:1}}
+tr.editrow>td{{background:var(--panel2);padding:10px 12px}}
+tr.editrow form{{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}}
+tr.editrow input{{flex:1 1 150px;min-width:0;height:36px}}
+tr.editrow .statepick{{flex:0 0 auto}}
+tr.editrow .statepick select,tr.editrow button{{height:36px}}
+tr.editrow button{{padding:0 14px}}
 /* ---- polish, from the contract (2026-09-05): nothing here changes what a
    thing does; each rule is what makes the page feel finished. */
 ::selection{{background:var(--blue-bg);color:#fff}}
@@ -327,9 +337,8 @@ td .badge{{vertical-align:middle}}
  gap:11px}}
 .addbox textarea{{background:var(--bg)}}
 tr.editrow td{{background:rgba(127,180,255,.05)}}
-tr.editrow form{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
 tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
- min-height:32px;padding:4px 9px}}
+ padding:4px 9px}}
 .secret{{display:flex;flex-direction:column;gap:3px}}
 .chips{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
 .chips a,.chips span{{padding:4px 11px;border-radius:12px;font-size:12px;
@@ -1867,7 +1876,7 @@ _POOL_KINDS = {
         "columns": ("Address", "Status", "On phone"),
     },
     "proxy": {
-        "name": "Proxies", "under": "free exits", "one": "exit",
+        "name": "Proxies", "under": "free IPs", "one": "IP",
         "add": "", "manage": "",
         "preview": "/pools/proxy/preview",
         "edit": "", "remove": "/pools/proxy/remove",
@@ -2397,7 +2406,7 @@ def _build_card(data: dict, user: dict) -> str:
         + _free_picker("gmail", choose.get("gmails"),
                        "auto" if free else "a new address")
         + '</label>'
-        + '<label>Exit'
+        + '<label>IP'
         + _free_picker("proxy_name", choose.get("proxies"), "auto")
         + '</label>'
         '<label class="tick"><input type="checkbox" name="install_app" '
@@ -2558,7 +2567,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     on_the_shelf = phones
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
-             f'<th>gmail</th><th>gpt account</th><th>exit</th>'
+             f'<th>gmail</th><th>gpt account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
              f'<tr class="none" id="nohits" hidden><td colspan="7">'
