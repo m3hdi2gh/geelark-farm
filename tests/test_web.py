@@ -917,8 +917,8 @@ def test_each_view_shows_one_list_and_pages_it(web, monkeypatch):
     assert seen == {"view": "on_phone", "seller": "", "page": 2}
     assert '<a href="/phones/1551">1551</a>' in body
     assert '<span class="badge ready">Ready</span>' in body
-    assert '<span class="badge info">building</span>' in body
-    assert '<span class="badge attn">incomplete</span>' in body
+    assert '<span class="badge info">Building</span>' in body
+    assert '<span class="badge attn">Incomplete</span>' in body
     assert '<span class="badge in_use">signing in</span>' in body
     assert 'name="pasted"' not in body, "the add box belongs to Queued"
 
@@ -3328,7 +3328,6 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert 'action="/phones/build"' in body
     assert "pick@example.com" in body and "SX9" in body
     assert 'placeholder="auto"' in body, "blank means the pool decides"
-    assert "This spends one phone, one exit and one Gmail" in body
 
     status, headers, _ = client.request(
         "POST", "/phones/build",

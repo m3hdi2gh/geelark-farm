@@ -135,7 +135,9 @@ def test_the_alert_strip_renders_on_every_page():
             "nav": {"alerts": [{"level": "bad", "text": "The Gmail pool "
                                 "is empty.", "href": "/pools/gmail"}]}}
     html = pages.page("Anything", "<p>x</p>", user=user)
-    assert 'class="alert bad" href="/pools/gmail"' in html
+    # The alert is a box with the link inside it now - a bold lead, the
+    # sentence, and a dismiss - so the class and the link sit on two tags.
+    assert 'class="alert bad"' in html and 'href="/pools/gmail"' in html
     assert "Gmail pool is empty" in html
     assert 'class="alerts"' not in pages.page("A", "<p>x</p>", user={
         "id": 1, "username": "m", "role": "admin", "sees": "all", "nav": {}})
