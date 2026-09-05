@@ -107,7 +107,8 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .slab td.act{{text-align:right;white-space:nowrap}}
 .slab td.act form{{display:inline}}
 .slab .addr{{font-family:var(--mono);font-size:12.5px;display:block;
- max-width:20ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+ max-width:17ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+@media (min-width:1500px){{.slab .addr{{max-width:24ch}}}}
 .nowrap{{white-space:nowrap}}
 /* A dot before the word, so a state reads as a state from a distance
    and not as one more piece of text in a row made of text. */
@@ -118,8 +119,8 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 /* Every button in a row, one size and one rhythm. The exit button wore
    the amber of a warning and is not one: it is the ordinary thing you do
    to a phone whose way out is refused. */
-.slab td.act button,.slab td.act .btn{{padding:5px 10px;font-size:12px;
- border-radius:7px;margin-left:5px}}
+.slab td.act button,.slab td.act .btn{{padding:5px 9px;font-size:12px;
+ border-radius:7px;margin-left:4px}}
 .slab thead th:last-child,.slab td.act{{padding-right:15px}}
 /* ---- the pool cards on the rail, and the manager they open */
 .pool{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -332,6 +333,12 @@ label{{display:flex;gap:8px;align-items:center;font-size:13px}}
  font-size:13px}}
 .seg label:last-child{{border-right:0}}
 .seg label:has(input:checked){{background:#1a2334;color:#fff}}
+.row .seg{{margin-left:auto;background:var(--panel2);padding:2px;gap:0}}
+.seg button{{background:none;border:0;padding:4px 12px;border-radius:5px;
+ cursor:pointer;font:inherit;font-size:12.5px;color:var(--muted)}}
+.seg button:hover{{color:var(--bright);background:transparent}}
+.seg button[aria-pressed=true]{{background:var(--panel);color:var(--bright);
+ box-shadow:0 1px 0 rgba(0,0,0,.4)}}
 .ticks{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
 .ticks label{{align-items:flex-start;padding:9px 12px;border:1px solid var(--line2);
  border-radius:8px;background:var(--panel2);line-height:1.4;cursor:pointer}}
@@ -392,19 +399,25 @@ p{{margin:0}}
  border-radius:6px;color:var(--ink);font:400 11.5px/1.6 var(--mono);
  padding:8px 9px;resize:vertical;width:100%}}
 .addfold textarea:focus{{outline:none;border-color:#3a5c96}}
-.byhand{{display:flex;flex-direction:column;gap:10px;padding-top:6px}}
-.byhand label{{display:flex;flex-direction:column;gap:5px;font-size:12px;
- color:var(--muted)}}
-.byhand label.typed{{font-size:11px;color:var(--dim)}}
-.byhand label.tick{{flex-direction:row;align-items:center;gap:8px;
- font-size:12.5px;color:var(--ink)}}
+.byhand{{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;
+ padding-top:4px}}
+.byhand label{{display:flex;flex-direction:column;gap:5px;font-size:10.5px;
+ letter-spacing:.7px;text-transform:uppercase;color:var(--dim);
+ flex:1 1 200px}}
+.byhand label.tick{{flex:0 0 auto;flex-direction:row;align-items:center;
+ gap:8px;font-size:12.5px;letter-spacing:0;text-transform:none;
+ color:var(--ink);padding-bottom:8px}}
+.byhand label.tick input{{accent-color:var(--accent);width:15px;height:15px}}
 .byhand select,.byhand input[type=text],.byhand input:not([type]){{
- background:var(--panel2);border:1px solid var(--line);border-radius:6px;
- color:var(--ink);font:400 12px/1 var(--mono);padding:8px 9px;
- font-family:var(--mono)}}
+ background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+ color:var(--ink);font:400 12.5px/1 var(--mono);padding:9px 10px;
+ font-family:var(--mono);min-width:0}}
 .byhand select:focus,.byhand input:focus{{outline:none;border-color:#3a5c96}}
-.byhand p{{font-size:11px;line-height:1.5}}
-.byhand button.go{{align-self:stretch}}
+.byhand details.newone{{flex:1 1 100%;font-size:12px;color:var(--dim)}}
+.byhand details.newone summary{{cursor:pointer;padding:2px 0}}
+.byhand details.newone input{{margin:8px 8px 0 0;min-width:220px}}
+.byhand p{{flex:1 1 100%;font-size:11px;line-height:1.5;margin:0}}
+.byhand button.go{{padding:9px 16px;align-self:flex-end}}
 .stopped h3 .ct{{margin-left:auto;font-family:var(--mono);color:var(--red);
  letter-spacing:0}}
 .stopped details.fold{{padding:0 15px 12px}}
@@ -1149,11 +1162,20 @@ def _phone_rows(data: dict, user: dict) -> str:
                                    (r.get("state") or "") == "taken",
                                    str(r.get("serial"))))
     progress = data.get("progress") or {}
+    me = str(user.get("username") or "")
     lines = []
     for r in phones:
         serial = str(r.get("serial") or "")
         status = r.get("status") or ""
         badge = _phone_badge(r)
+        # Which of the three views this row belongs to. `free` is what a
+        # person can take: not held, not still being built, and not a
+        # phone that stopped halfway - that one is a row to look at, not
+        # one to hand over.
+        taken = (r.get("state") or "") == "taken"
+        view = ("mine" if taken and str(r.get("owner") or "") == me else
+                "theirs" if taken else
+                "free" if status in ("ready", "app_only") else status)
         if (r.get("state") or "") == "taken":
             # Who has it, under the badge. When it changed has its own
             # column now, so saying it here as well would be the page
@@ -1162,12 +1184,14 @@ def _phone_rows(data: dict, user: dict) -> str:
                       f'{esc(str(r.get("owner") or "somebody"))}</span>')
         if status == "building":
             lines.append(
-                f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
+                f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
+                f'<td>{badge}</td>'
                 f'<td colspan="5">{_progress(progress.get(serial))}</td>'
                 f'</tr>')
             continue
         lines.append(
-            f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
+            f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
+            f'<td>{badge}</td>'
             f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}</td>'
             f'<td>{_addr_cell(r.get("app_account"), "waiting for one")}</td>'
             f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
@@ -1285,23 +1309,32 @@ _DASH_SCRIPT = """
   // otherwise count itself as a phone.
   var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
   var tally = document.getElementById('tally');
-  var find = document.getElementById('find');
+  var seg = document.getElementById('seg');
   var none = document.getElementById('nohits');
+  var want = '';
   function sift(){
-    var q = find.value.trim().toLowerCase(), shown = 0;
+    var shown = 0;
     rows.forEach(function(tr){
-      var hit = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+      var hit = !want || tr.dataset.view === want;
       tr.hidden = !hit;
       if (hit) shown++;
     });
     if (none) none.hidden = shown > 0;
-    if (tally) tally.textContent = q
+    if (tally) tally.textContent = want
       ? shown + ' of ' + rows.length + ' shown'
       : rows.length + (rows.length === 1 ? ' phone' : ' phones');
   }
-  if (find && rows.length) {
-    find.hidden = false;
-    find.addEventListener('input', sift);
+  if (seg && rows.length) {
+    seg.hidden = false;
+    seg.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        want = b.dataset.show;
+        seg.querySelectorAll('button').forEach(function(o){
+          o.setAttribute('aria-pressed', String(o === b));
+        });
+        sift();
+      });
+    });
   }
 
   var rf = document.getElementById('railfind');
@@ -1521,7 +1554,32 @@ def _state_pill(state: str) -> str:
     return f'<span class="badge {colour}">{esc(state or "-")}</span>'
 
 
-def _pool_queue(kind: str, rows: list[dict]) -> str:
+def _send_form(user: dict, address: str, back: str = "/") -> str:
+    """One waiting account, onto the next warm phone.
+
+    The tick-and-send list this replaces stood in its own panel, which
+    meant choosing accounts in one place and reading about them in
+    another. The button belongs on the row: an account is sent one at a
+    time, and one at a time is what a button is.
+
+    Drawn only where the farm actually signs accounts in by hand
+    (`MANUAL_LOGIN`) and only for somebody who may - otherwise it is a
+    button that leads nowhere.
+    """
+    return (f'<form method="post" class="inline" action="/accounts/login">'
+            f'{_csrf(user)}'
+            f'<input type="hidden" name="addresses" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<button class="quiet go send" title="sign this account into '
+            f'the next warm phone">&rarr; phone</button></form>')
+
+
+def _may_send(user: dict, manual_login: bool) -> bool:
+    return bool(manual_login) and _may(user, "may_login_accounts")
+
+
+def _pool_queue(kind: str, rows: list[dict], user: dict,
+                manual_login: bool) -> str:
     """What is actually free, under the number that counts it.
 
     Four of them and no more: a rail that scrolls is a second page, and
@@ -1534,18 +1592,21 @@ def _pool_queue(kind: str, rows: list[dict]) -> str:
         return (f'<p class="railnote">Nothing free. '
                 f'{_plural(held, "row")} held or set aside.</p>' if held
                 else '<p class="railnote">The pool is empty.</p>')
+    send = kind == "gpt" and _may_send(user, manual_login)
     items = []
     for row in free[:4]:
         label = str(row.get("address") or "?")
-        aside = str(row.get("seller") or "") if kind == "gmail" else ""
+        aside = (_send_form(user, label) if send
+                 else f'<span class="tag">'
+                      f'{esc(str(row.get("seller") or "") if kind == "gmail" else "")}'
+                      f'</span>')
         items.append(f'<li><span class="t" title="{esc(label)}">'
-                     f'{esc(label)}</span>'
-                     f'<span class="tag">{esc(aside)}</span></li>')
+                     f'{esc(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
 
 
 def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
-               why: str, user: dict) -> str:
+               why: str, user: dict, manual_login: bool = False) -> str:
     meta = _POOL_KINDS[kind]
     may_add = bool(meta["add"]) and _may(user, meta["add"])
     add = (f'<button type="button" class="go small" data-pool="{kind}" '
@@ -1557,13 +1618,13 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<header><b style="color:var(--{colour})">{count}</b>'
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
-        f'{_pool_queue(kind, rows)}'
+        f'{_pool_queue(kind, rows, user, manual_login)}'
         f'<button type="button" class="more" data-pool="{kind}">'
         f'Manage all {_plural(len(rows), "row")} &rarr;</button>'
         f'</section>')
 
 
-def _supply_card(data: dict, user: dict) -> str:
+def _supply_card(data: dict, user: dict, manual_login: bool = False) -> str:
     """The three pools, stacked, each showing what is actually in it.
 
     Vertical rather than across the top, because stock is something a
@@ -1617,7 +1678,7 @@ def _supply_card(data: dict, user: dict) -> str:
     listed = data.get("pool_rows") or {}
     return "".join(
         _pool_card(row["kind"], row["count"], listed.get(row["kind"]) or [],
-                   row["colour"], row["why"], user)
+                   row["colour"], row["why"], user, manual_login)
         for row in rows)
 
 
@@ -1970,23 +2031,16 @@ def dashboard(data: dict, user: dict, said: str = "",
     the events - a developer's line on an operator's page. Everything
     that is only sometimes true still appears only when it is true.
     """
-    pulse = data.get("pulse") or {}
     phones = data.get("phones") or []
-    # A phone somebody is holding is theirs, whatever state it is in, so
-    # it is never also one of these. The counts that used to be drawn
-    # from the rest of this are gone with the strip that showed them.
-    free = [r for r in phones if (r.get("state") or "") != "taken"]
-    incomplete = [r for r in free
-                  if (r.get("status") or "") == "incomplete"]
     building = [r for r in phones if (r.get("status") or "") == "building"]
 
-    # A phone that did not finish leaves the table: it is not stock, and
-    # standing it beside a ready one is offering a customer a phone that
-    # does not work. It goes under the table with what went wrong.
-    on_the_shelf = [r for r in phones
-                    if (r.get("status") or "") != "incomplete"]
+    # A phone that did not finish is a row like the others, last, in the
+    # amber of something that wants a look. It stood in its own box under
+    # the table for a while; the prototype the operator chose puts it in
+    # the table, and one list is easier to read than a list and a box.
+    on_the_shelf = phones
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
-    table = (f'<table id="phones"><thead><tr><th>serial</th><th>state</th>'
+    table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>gpt account</th><th>exit</th>'
              f'<th>changed</th><th></th></tr></thead>'
              f'<tbody>{rows}'
@@ -2007,19 +2061,40 @@ def dashboard(data: dict, user: dict, said: str = "",
 
     # `hidden` until the script says otherwise: a search box that does
     # nothing is worse than none, and this page must still read without it.
+    # Three views and no search box. A person here wants one of three
+    # things - everything, what they can take, what they already hold -
+    # and a box that filters on text answers none of those in one press.
+    # `hidden` until the script says otherwise: three buttons that do
+    # nothing are worse than none, and the page must still read without it.
     tools = (f'<div class="row"><h3>Phones</h3>'
              f'<span class="dim mono" id="tally">'
              f'{_plural(len(on_the_shelf), "phone")}</span>'
-             f'<span class="find"><input id="find" type="search" hidden '
-             f'placeholder="Search phones" autocomplete="off"></span></div>')
+             f'<span class="seg" id="seg" role="group" aria-label="Show" hidden>'
+             f'<button type="button" data-show="" aria-pressed="true">All'
+             f'</button>'
+             f'<button type="button" data-show="free" aria-pressed="false">'
+             f'Free</button>'
+             f'<button type="button" data-show="mine" aria-pressed="false">'
+             f'With me</button></span></div>')
+    # The form under the table, in the wide column, where three boxes and
+    # a button fit on one line. In the rail they stacked five deep.
     main = (_said(said, _DASH_SAID) + warning + tools
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
-            + _did_not_finish(incomplete, user))
-    side = (_supply_card(data, user)
-            + _stopped_card(data, user, explain)
-            + _awaiting_panel(data, user, manual_login, pulse)
             + _build_card(data, user))
+    # The pools and the one form. Two panels went (2026-09-05, the
+    # operator: "we still see attention here"), because the manager each
+    # card opens is where both of them already lived:
+    #
+    # "Needs a decision" listed the credentials a run set aside. Every one
+    # of those rows is in its pool's manager, wearing its own word, with a
+    # chip that shows only them - and beside the rows it has to be judged
+    # against, which a separate panel could never do.
+    #
+    # "Awaiting login" listed the accounts with no phone. That is the GPT
+    # card's number and the list underneath it, which is where a person
+    # looking for stock now looks.
+    side = _supply_card(data, user, manual_login)
 
     body = (f'<div class="wide">'
             f'<div class="top"><h2>Instance manager</h2>'

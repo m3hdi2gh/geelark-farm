@@ -1184,11 +1184,12 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     assert "last pass" not in body, "the pass's clock is the alert strip's job"
     assert "IronHawk@gmail.com" in body and "SX27" in body
     assert 'class="badge warn">warm' in body
-    assert "arman@gmail.com" in body and "gpt4.avir@proton.me" in body
-    assert "manual · mehdi" in body
+    # The accounts with no phone are the GPT card's list now; the panel
+    # that carried them went with "Needs a decision" (2026-09-05).
+    assert "waiting@x.com" in body
+    assert "Awaiting login" not in body and "Needs a decision" not in body
     assert "Change IP" not in body, "mutations are off"
     assert 'name="addresses"' not in body, "manual login is off"
-    assert "log in on their own" in body
 
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
@@ -1197,8 +1198,11 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
     client.login()
     _, _, body = client.request("GET", "/")
     assert body.count("Change IP") == 2, "one per phone, both states"
-    assert body.count('name="addresses"') == 2
-    assert "Log in selected" in body
+    # One send per waiting account, on its own row in the GPT card - the
+    # tick-and-send list stood in a panel of its own and went with it.
+    assert body.count('name="addresses"') == 1
+    assert "&rarr; phone" in body
+    assert "Log in selected" not in body
 
 
 @pytest.mark.parametrize("web", [True], indirect=True)
@@ -2334,10 +2338,13 @@ def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
     assert order == sorted(order), "ready, warm, building"
     assert "waiting for one" in body, \
         "the warm row says what its own column lacks"
-    # The incomplete one is not on the shelf at all: it stands under the
-    # table, where it cannot be mistaken for something to hand over.
-    assert body.index("<table") < body.index('class="didnot"')
-    assert body.index('class="didnot"') < body.index('href="/phones/1502"')
+    # The incomplete one is a row like the others, last, wearing the amber
+    # of something that wants a look - and outside the Free view.
+    assert 'class="didnot"' not in body
+    assert body.index('href="/phones/1501"') < body.index('href="/phones/1502"')
+    assert body.index('href="/phones/1502"') < body.index('href="/phones/1503"')
+    row = body[body.rindex("<tr", 0, body.index('href="/phones/1502"')):]
+    assert row.startswith('<tr data-view="incomplete"')
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -2415,14 +2422,18 @@ def test_awaiting_cards_say_how_long_ago_and_count_the_warm_phones(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert "added 14m ago" in body
-    assert 'class="pick tick"' in body and ".pick:has(input:checked)" in body
-    assert "5 warm phones can take them" in body and "Log in selected" in body
+    # The panel went (2026-09-05): the accounts with no phone are the GPT
+    # card's number and the list under it, and sending one is a button on
+    # its row. What the panel alone said - how long ago, how many warm
+    # phones - was a second copy of the card's count and the status line.
+    assert "Awaiting login" not in body
+    assert 'class="pick tick"' not in body
+    assert "waiting@x.com" in body
+    assert "&rarr; phone" in body
 
     base["pulse"] = {"warm": 0, "target": 5, "tripped": "", "at": 0}
     _, _, body = client.request("GET", "/")
-    assert "Log in selected" not in body
-    assert "no warm phone is free" in body
+    assert "&rarr; phone" in body, "the button does not come and go"
 
 
 def test_the_dashboard_carries_no_events(web, monkeypatch):
@@ -2577,7 +2588,6 @@ def test_the_dashboard_no_longer_carries_the_service_line(web, monkeypatch):
     _, _, body = client.request("GET", "/")
     assert "WEB_MUTATIONS" not in body and "POOLS_IN_PG" not in body
     assert 'class="svc"' not in body and "/service/" not in body
-    assert "accounts log in on their own" in body, "that line stays"
 
 
 def test_the_service_row_fits_the_pulse_and_is_admin_only():
@@ -3223,21 +3233,27 @@ def test_an_operator_can_see_which_accounts_stopped(web, monkeypatch):
     has to act on rather than watch was the one thing they could not see.
     The list is small and it is theirs, so it lives where they already are.
     """
-    _dash(monkeypatch, stopped=[
-        {"kind": "gmail", "who": "rhea@example.com",
-         "status": "phone_verification_required", "serial": "", "note": ""},
-        {"kind": "app", "who": "hollis@example.com",
-         "status": "no_code_source", "serial": "1512", "note": ""}])
+    # The panel went (2026-09-05, "we still see attention here"). The rows
+    # it listed are in their pool's manager, wearing their own word, with a
+    # chip that shows only them - beside the rows they are judged against.
+    _dash(monkeypatch, pool_rows={
+        "gmail": [{"id": 1, "address": "rhea@example.com",
+                   "status": "phone_verification_required", "seller": "",
+                   "serial": "", "note": "", "error": None,
+                   "state": "phone_verification_required"}],
+        "gpt": [{"id": 2, "address": "hollis@example.com",
+                 "status": "no_code_source", "serial": "1512", "note": "",
+                 "error": None, "state": "no_code_source"}],
+        "proxy": []})
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
 
-    assert "Needs a decision" in body
-    assert "rhea@example.com" in body and "hollis@example.com" in body
-    # In the words the verdict uses, not the token the sheet stores.
-    assert "phone_verification_required" not in body
-    assert "Google asked for a phone number" in body
-    assert "on 1512" in body, "and which phone it was on"
+    assert "Needs a decision" not in body
+    ov = body[body.index('id="poolov"'):]
+    assert "rhea@example.com" in ov and "hollis@example.com" in ov
+    assert 'class="badge attn">phone_verification_required' in ov
+    assert "1512" in ov, "and which phone it was on"
 
 
 def test_the_stopped_card_is_absent_when_nothing_stopped(web, monkeypatch):
@@ -3270,9 +3286,9 @@ def test_the_dashboards_one_script_only_ever_reads_the_page(web, monkeypatch):
     for forbidden in ("fetch(", "XMLHttpRequest", ".submit(", "action =",
                       "innerHTML", "document.write"):
         assert forbidden not in script, forbidden
-    # The search box is hidden until the script shows it: a box that does
-    # nothing is worse than no box.
-    assert 'id="find" type="search" hidden' in body
+    # The three views are hidden until the script shows them: buttons
+    # that do nothing are worse than none.
+    assert 'id="seg" role="group" aria-label="Show" hidden' in body
     assert 'id="phones"' in body and 'id="nohits"' in body
 
 
