@@ -1395,7 +1395,9 @@ def test_stop_this_one_is_one_queued_command_for_that_phone(web,
     status, headers, _ = client.request("POST", "/phones/1549/stop",
                                         f"csrf={client.csrf()}")
     assert status == 303
-    assert dict(headers)["Location"].startswith("/requests?said=queued")
+    # Back to where it was pressed: the dashboard, unless the form named
+    # the phone's own page. Requests sends nobody to itself.
+    assert dict(headers)["Location"].startswith("/?said=queued")
     assert got["verb"] == "stop_phone"
     assert got["payload"]["serial"] == "1549"
     assert got["payload"]["by"] == "mehdi"
@@ -2291,8 +2293,8 @@ def test_a_building_row_shows_its_last_log_line_and_how_long(web,
     assert "google sign-in: typed the password, waiting for the 2-step screen" \
         in body
     assert re.search(r"· 9[6-9]s</span>", body), "elapsed since the first line"
-    assert 'colspan="5"' in body, \
-        "spans gmail, gpt account, exit, changed and the buttons"
+    assert 'colspan="4"' in body, \
+        "spans gmail, gpt account, ip and age; the buttons cell holds Cancel"
     assert "starting" in body, "a phone with no line yet"
     assert 'href="/phones/1556"' in body
     assert 'http-equiv="refresh"' in body
@@ -3767,3 +3769,28 @@ def test_the_browsers_own_refresh_lives_inside_noscript(web, monkeypatch):
     script = body[body.index("<script>"):body.index("</script>")]
     assert "meta[name=\"gf-refresh\"]" in script
     assert "reloadWhenSettled" in script
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_building_row_can_be_called_off(web, monkeypatch):
+    """The one thing to do to a build under way: Cancel, which is the
+    "stop this one" door on the row it is about. The job gives up at its
+    next step and puts back what it held."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[{"serial": "1503", "status": "building",
+                                "state": ""}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: got.update(k) or 9)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    row = body[body.index('href="/phones/1503"'):]
+    row = row[:row.index("</tr>")]
+    assert 'action="/phones/1503/stop"' in row and ">Cancel<" in row
+    assert 'colspan="4"' in row, "the progress line leaves room for it"
+
+    status, headers, _ = client.request(
+        "POST", "/phones/1503/stop", _form(csrf=client.csrf(), back="/"))
+    assert got["verb"] == "stop_phone" and got["payload"]["serial"] == "1503"
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=")

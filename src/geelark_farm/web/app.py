@@ -387,7 +387,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._act(user, "may_login_accounts", "stop_phone",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "stop", serial),
-                                 back="/requests")
+                                 back=_phone_back(field, serial))
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/proxy"):
                 serial = self.path[len("/phones/"):-len("/proxy")]

@@ -135,7 +135,8 @@ nav form button:hover{{color:#fff;background:#141c2b}}
  color:var(--dim)}}
 .pool>header .go,.pool>header .lock{{margin-left:auto}}
 .go.small{{padding:5px 11px;font-size:12.5px}}
-.pool .queue{{list-style:none;margin:0;padding:0;border-top:1px solid var(--line2)}}
+.pool .queue{{list-style:none;margin:0;padding:0;border-top:1px solid var(--line2);
+ max-height:176px;overflow-y:auto;overscroll-behavior:contain}}
 .pool .queue li{{display:flex;align-items:center;gap:8px;padding:6px 15px;
  font-size:12px}}
 .pool .queue li+li{{border-top:1px solid var(--line2)}}
@@ -172,7 +173,7 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .sheetbody{{overflow:auto;padding:15px 18px}}
 .sheetbody.sub{{display:flex;flex-direction:column;gap:12px}}
 .sheetbody.sub>*{{width:100%;max-width:none;margin:0}}
-.sheetbody.sub .top,.sheetbody.sub .narrow>.top{{display:none}}
+.sheetbody.sub .top,.sheetbody.sub .narrow>.top,.sheetbody.sub .alerts{{display:none}}
 /* The edit-and-preview-again box of the preview page is the paste box the
    sheet already has - Back returns to it with the paste still in it. */
 .sheetbody.sub form[action$="/preview"],
@@ -270,6 +271,13 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
  @keyframes fade{{from{{opacity:0}}}}
  @keyframes rise{{from{{opacity:0;transform:translateY(8px)}}}}
 }}
+/* A small yes-or-no where the button was pressed, for the one destructive
+   thing on the page. The full confirm page is what a browser without the
+   script gets. */
+.mini{{position:absolute;z-index:50;background:var(--panel);
+ border:1px solid var(--line2);border-radius:10px;padding:12px 14px;
+ box-shadow:0 14px 40px rgba(0,0,0,.55);width:min(320px,90vw);font-size:13px}}
+.mini p{{margin:0 0 10px}} .mini .row{{display:flex;gap:8px;justify-content:flex-end}}
 /* ---- the page */
 main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
  gap:16px}}
@@ -1234,6 +1242,19 @@ def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
             f'<button class="quiet">Change IP</button></form>')
 
 
+def _cancel_form(user: dict, serial: str, back: str = "/") -> str:
+    """"Cancel": the build on this phone gives up at its next step and puts
+    back what it held - the Gmail, the exit. The same door "Stop this one"
+    on Requests always was; here it sits on the row it is about."""
+    if not _may(user, "may_login_accounts"):
+        return ""
+    return (f'<form method="post" class="inline" '
+            f'action="/phones/{esc(serial)}/stop">{_csrf(user)}'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<button class="quiet bad" title="the build gives up at its next '
+            f'step and puts back what it held">Cancel</button></form>')
+
+
 def _boot_form(user: dict, serial: str) -> str:
     """"Boot": start the phone in GeeLark, take it, and watch the screen.
 
@@ -1326,11 +1347,15 @@ def _phone_rows(data: dict, user: dict) -> str:
                 "theirs" if taken else
                 "free" if status in ("ready", "app_only") else status)
         if status == "building":
+            # The one thing to do to a build under way is to call it off:
+            # the job gives up at its next step and puts back what it
+            # held (the operator, 2026-09-05).
             lines.append(
                 f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
                 f'<td>{badge}</td>'
-                f'<td colspan="5" class="progress">'
+                f'<td colspan="4" class="progress">'
                 f'{_progress(progress.get(serial))}</td>'
+                f'<td class="act">{_cancel_form(user, serial)}</td>'
                 f'</tr>')
             continue
         lines.append(
@@ -1795,11 +1820,54 @@ _DASH_SCRIPT = """
     catch (err) { return false; }
   }
 
+  // Remove asks first - here, beside the button, not on a page of its own
+  // (the operator, 2026-09-05). Saying yes sends the same form with the
+  // server's own "sure" field, so the server needs nothing new.
+  function askFirst(form, what){
+    var old = document.querySelector('.mini'); if (old) old.remove();
+    var box = document.createElement('div');
+    box.className = 'mini'; box.setAttribute('role', 'dialog');
+    var p = document.createElement('p');
+    p.textContent = 'Remove ' + what + ' from the pool? The request keeps '
+      + 'the row so it can be put back.';
+    var row = document.createElement('div'); row.className = 'row';
+    var keep = document.createElement('button'); keep.type = 'button';
+    keep.className = 'quiet'; keep.textContent = 'Keep it';
+    var yes = document.createElement('button'); yes.type = 'button';
+    yes.className = 'quiet bad'; yes.textContent = 'Remove';
+    row.append(keep, yes); box.append(p, row);
+    var at = form.getBoundingClientRect();
+    box.style.top = (at.bottom + window.scrollY + 6) + 'px';
+    box.style.left = Math.max(8, at.right + window.scrollX - 320) + 'px';
+    document.body.appendChild(box);
+    yes.focus();
+    keep.addEventListener('click', function(){ box.remove(); });
+    yes.addEventListener('click', function(){
+      box.remove();
+      var sure = document.createElement('input');
+      sure.type = 'hidden'; sure.name = 'sure'; sure.value = '1';
+      form.appendChild(sure);
+      form.requestSubmit();
+    });
+    document.addEventListener('keydown', function esc(ev){
+      if (ev.key !== 'Escape') return;
+      box.remove(); document.removeEventListener('keydown', esc);
+    });
+  }
+
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!(form instanceof HTMLFormElement)) return;
     if ((form.method || '').toLowerCase() !== 'post' || form.target) return;
     if (!document.querySelector('main').contains(form)) return;
+    if (/[/]remove$/.test(form.action)
+        && !form.querySelector('input[name=sure]')) {
+      e.preventDefault();
+      var who = (form.querySelector('input[name=address]') || {}).value
+             || (form.querySelector('input[name=name]') || {}).value || 'this row';
+      askFirst(form, who);
+      return;
+    }
     e.preventDefault();
     var data = new FormData(form);
     var pressed = e.submitter;
@@ -1980,9 +2048,10 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
                 manual_login: bool, quiet: bool = False) -> str:
     """What is actually free, under the number that counts it.
 
-    Four of them and no more: a rail that scrolls is a second page, and
-    the number above already answers "how many". This answers the other
-    question a person has at a glance - which ones.
+    Every one of them, in a box that scrolls past the first few: the
+    number above answers "how many", and this answers the other question
+    a person has at a glance - which ones. A list that stopped at four
+    made the fifth look like it did not exist.
     """
     free = [r for r in rows if (r.get("state") or "") == "free"]
     if not free:
@@ -1993,8 +2062,11 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
                 f'{_plural(held, "row")} held or set aside.</p>' if held
                 else '<p class="railnote">The pool is empty.</p>')
     send = kind == "gpt" and _may_send(user, manual_login)
+    # Every free row, in a box that scrolls past the first few: the count
+    # above says how many, and a list that stops at four made the fifth
+    # look like it did not exist (the operator, 2026-09-05).
     items = []
-    for row in free[:4]:
+    for row in free:
         label = str(row.get("address") or "?")
         tag = (str(row.get("seller") or "") if kind == "gmail" else
                f'{row.get("host") or ""}:{row.get("port") or ""}'
@@ -2064,7 +2136,8 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False,
     watching. Standing it on its side gives the table the whole width and
     costs the stock nothing: three numbers read as well in a column.
 
-    Under each number, the rows the number counts - four of them. The
+    Under each number, the rows the number counts, in a box that
+    scrolls. The
     count answers "how many" and was the whole card; the list answers the
     question a person actually had next, which is "which ones", and it
     was two pages away. Everything else is behind Manage, because a rail
