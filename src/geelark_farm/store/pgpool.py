@@ -63,6 +63,21 @@ def _stamp(when) -> str:
     return time.strftime(Pool.CLAIM_FORMAT, when.utctimetuple())
 
 
+#: What makes a row stock rather than history.
+#:
+#: `resources` keeps everything the farm has ever seen - the mirror never
+#: deleted, so that "what did we build on Tuesday" stays answerable. Four
+#: hundred and twenty-six Gmail rows, six generations deep on the same
+#: sheet_row numbers, of which six were on the tab.
+#:
+#: While the sheet is still the pool, the pass sets this: true for what it
+#: saw, false for what left. After the switch nothing sets it false again
+#: and every row born here defaults true - which is the same sentence read
+#: forward: a row is stock unless something took it out of stock.
+#:
+#: Without it here, throwing the switch would have handed out nineteen
+#: addresses that were deleted from the tab, and every one of them costs a
+#: phone and an exit to find out (2026-09-05).
 class ResourceTable:
     """The handful of statements the pools need, over psycopg.
 
@@ -83,7 +98,7 @@ class ResourceTable:
     def rows(self, kind: str) -> list[dict]:
         with self._lock, self._connect() as conn:
             cur = conn.execute(
-                "SELECT * FROM resources WHERE kind = %s"
+                "SELECT * FROM resources WHERE kind = %s AND on_sheet"
                 " ORDER BY sheet_row NULLS LAST, id", (kind,))
             names = [d.name for d in cur.description]
             out = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
@@ -115,7 +130,7 @@ class ResourceTable:
             cur = conn.execute(
                 f"WITH picked AS ("
                 f"  SELECT id FROM resources"
-                f"  WHERE kind = %s AND error IS NULL"
+                f"  WHERE kind = %s AND error IS NULL AND on_sheet"
                 f"    AND lower(status) = ANY(%s)"
                 f"    AND (%s::bigint IS NULL OR id = %s)"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"

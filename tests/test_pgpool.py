@@ -36,7 +36,10 @@ def _now():
 class MemoryTable:
     """ResourceTable's contract over dicts: the same five calls, no SQL."""
 
-    DEFAULTS = dict(status="", error=None, times_used=0, sheet_row=None,
+    # `on_sheet` rides along so a row made here looks like a row made by
+    # the real table, which defaults it true.
+    DEFAULTS = dict(on_sheet=True,
+                    status="", error=None, times_used=0, sheet_row=None,
                     claimed_at=None, serial="", note="", address=None,
                     password="", totp_secret="", recovery_email="",
                     email_code_only=False, seller="", host=None, port=None,
@@ -517,3 +520,44 @@ def test_claim_this_takes_only_the_named_row_over_postgres_too():
     assert pool.claim_this(second, serial="1601") is False, "gone already"
     assert first.values["Status"] == "", "the top row was never touched"
     assert pool.beat() == 1, "held like any other claim"
+
+
+def test_every_query_that_picks_stock_ignores_what_left_the_tab():
+    """`resources` holds everything the farm has ever seen - the mirror
+    never deleted, so that "what did we build on Tuesday" stays
+    answerable. On 2026-09-05 that was four hundred and twenty-six Gmail
+    rows against six on the tab.
+
+    So a query here that asks for rows without asking `on_sheet` hands out
+    history as stock. Throwing the C2 switch with `claim` written that way
+    would have spent nineteen addresses that had been deleted from the
+    tab, one phone and one exit at a time.
+
+    A sweep rather than a list, because the next query is written by
+    somebody who never read this.
+    """
+    import pathlib
+
+    src = pathlib.Path(pgpool.__file__).read_text(encoding="utf-8")
+    # Each SQL string handed to `conn.execute`, flattened - the SQL is
+    # written as adjacent literals and a predicate can be lines from its
+    # table.
+    calls = []
+    for chunk in src.split("conn.execute(")[1:]:
+        depth, buf = 1, ""
+        for char in chunk:
+            depth += (char == "(") - (char == ")")
+            if not depth:
+                break
+            buf += char
+        calls.append(" ".join(buf.split()))
+
+    assert calls, "the sweep found no queries, so it proves nothing"
+    # By kind is what "give me a row of this pool" looks like. A query
+    # that names one row by id - a delete, an update of a row already
+    # picked - is not picking, and asking it would be noise.
+    reading = [q for q in calls
+               if "WHERE kind = %s" in q and "on_sheet" not in q]
+    assert not reading, (
+        "these pick rows out of resources without asking whether the row is "
+        "still stock: " + " | ".join(q[:80] for q in reading))
