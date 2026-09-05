@@ -3785,6 +3785,9 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
     session = SimpleNamespace(
         app_signed_in=False, attempted=0, reset_first=False, condemned=[],
         set_aside=[], suspect_reason="", refused_exits=[], exits=0,
+        # Nobody chose this phone's credentials: the pool did, as it does
+        # for every phone the keeper builds on its own.
+        want=None,
         app_row=SimpleNamespace(credentials=SimpleNamespace(
             email="a@b.com", password="x", totp_secret="")),
         book=SimpleNamespace(apps=SimpleNamespace(service="OpenAI")),
@@ -3882,3 +3885,98 @@ def test_a_row_that_only_remembers_the_serial_is_not_called_a_delivery(
     assert stock.values["Status"] == ""             # still stock
     written = " ".join(book.history._ws.rows[-1])
     assert "No app account was ever on it" in written
+
+
+# --------------------------------------- a phone somebody asked for by hand
+def test_a_chosen_gmail_is_taken_rather_than_the_next_one(monkeypatch):
+    """Somebody chose this row. Quietly building with another spends the
+    wrong Gmail and reads as success, which is the kind of help nobody
+    asked for."""
+    taken = []
+
+    class Row:
+        label = "chosen@example.com"
+
+    class Pool:
+        available = [Row()]
+
+        @staticmethod
+        def claim_this(resource):
+            taken.append(resource.label)
+            return True
+
+    got = builder._pick(Pool, "Chosen@Example.com", "Gmail")
+
+    assert got.label == "chosen@example.com", "matched without case getting in"
+    assert taken == ["chosen@example.com"]
+
+
+def test_a_chosen_row_that_is_not_free_is_refused_by_name(monkeypatch):
+    """Not a fallback to the next one: the answer to "that one is gone" is
+    to say so, not to spend a different account and call it done."""
+    class Pool:
+        available = []
+
+    with pytest.raises(builder.Aborted) as refused:
+        builder._pick(Pool, "gone@example.com", "Gmail")
+
+    assert "gone@example.com" in str(refused.value)
+    assert "not free" in str(refused.value)
+
+
+def test_a_row_taken_between_the_asking_and_the_claiming_is_refused():
+    """The wish is written a pass before the build, so the row can go in
+    between. `claim_this` is what settles it, under the lock."""
+    class Row:
+        label = "gone@example.com"
+
+    class Pool:
+        available = [Row()]
+
+        @staticmethod
+        def claim_this(resource):
+            return False
+
+    with pytest.raises(builder.Aborted) as refused:
+        builder._pick(Pool, "gone@example.com", "Gmail")
+
+    assert "taken while this was being asked for" in str(refused.value)
+
+
+def test_the_wish_reaches_the_build_and_its_id_comes_back(monkeypatch):
+    """The two halves of a hand-built phone are a pass apart: a verb writes
+    the wish, and the build phase takes it. This is the join - the wish
+    reaching `build_one`, and the id coming back on the Build so the person
+    who asked can be told what happened."""
+    seen = {}
+
+    def fake_build_one(client, settings, book, ledger, index, **kwargs):
+        seen["want"] = kwargs.get("want")
+        return builder.Build(index=index, ok=True, status="ready",
+                             serial="1600")
+
+    monkeypatch.setattr(builder, "build_one", fake_build_one)
+    monkeypatch.setattr(builder.phones, "prune_ledger",
+                        lambda client, ledger: None)
+    wish = builder.Wanted(gmail="a@example.com", proxy_name="SX9",
+                          install_app=False, wanted_id=77)
+
+    built = builder._run_jobs(
+        None, _settings_for_jobs(), object(),
+        [{"kind": "build", "phone": None, "want": wish}],
+        workers=1, reporter=None, on_ready=None, cancel=None,
+        ledger=FakeLedger())
+
+    assert seen["want"] is wish, "the credentials somebody chose"
+    assert built[0].wanted_id == 77, "and the row that is waiting to hear"
+
+
+def _settings_for_jobs():
+    """Only what `_run_jobs` reads before it hands a job over."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    tmp = _Path(tempfile.gettempdir())
+    return SimpleNamespace(
+        ensure_dirs=lambda: None, state_dir=tmp, artifact_dir=tmp,
+        stale_claim_seconds=3600, max_concurrent_phones=1)

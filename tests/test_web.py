@@ -3304,3 +3304,96 @@ def test_only_the_dashboard_carries_a_script(web, monkeypatch):
     for path in ("/pools/gmail", "/pools/proxy", "/pools/gpt", "/phones"):
         _, _, body = client.request("GET", path)
         assert "<script>" not in body, path
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
+    """The form's default is the farm's own behaviour: everything blank is
+    exactly the phone the keeper would have built next, and every field is
+    a departure from it."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, choose={
+        "gmails": [{"label": "pick@example.com"}],
+        "proxies": [{"label": "SX9"}],
+        "apps": [{"label": "gpt@example.com"}]})
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 88)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert 'action="/phones/build"' in body
+    assert "pick@example.com" in body and "SX9" in body
+    assert "the next free one" in body, "blank means the pool decides"
+    assert "This spends one phone, one exit and one Gmail" in body
+
+    status, headers, _ = client.request(
+        "POST", "/phones/build",
+        _form(csrf=client.csrf(), gmail="pick@example.com",
+              proxy_name="SX9", install_app="1",
+              app_account="gpt@example.com"))
+
+    assert status == 303 and dict(headers)["Location"].startswith("/")
+    assert got["verb"] == "build_by_hand"
+    assert got["payload"]["gmail"] == "pick@example.com"
+    assert got["payload"]["proxy_name"] == "SX9"
+    assert got["payload"]["install_app"] is True
+    assert got["payload"]["app_account"] == "gpt@example.com"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_typed_address_wins_over_a_picked_one(web, monkeypatch):
+    """Somebody who filled the box meant the box. Settled at the door so
+    the verb takes one shape of payload however it was asked."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 89)
+    client = web()
+    client.login()
+
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="picked@example.com",
+                         gmail_typed_address="typed@example.com",
+                         gmail_password="pw", install_app="1"))
+
+    assert got["payload"]["gmail"] == "typed@example.com"
+    assert got["payload"]["gmail_typed"] is True
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_without_the_app_no_gpt_account_is_asked_for(web, monkeypatch):
+    """Unticking the app is asking for a warm phone. Carrying an account
+    alongside would spend one on a phone that has nowhere to sign it in."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 90)
+    client = web()
+    client.login()
+
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         app_account="gpt@example.com"))
+
+    assert got["payload"]["install_app"] is False
+    assert got["payload"]["app_account"] == ""
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
+    """A form that can only be refused is worse than a sentence saying
+    why."""
+    _dash(monkeypatch, stock={"gmail": {"free": 0}, "proxy": {"free": 9},
+                              "app": {"awaiting": 2}})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert 'action="/phones/build"' not in body
+    assert "There is no Gmail to build with" in body

@@ -63,6 +63,93 @@ def add_gmails(book, ledger, settings, payload, client):
     return _summary("gmail", added, skipped, refused, settings, _by(payload))
 
 
+def build_by_hand(book, ledger, settings, payload, client):
+    """One phone, with the credentials a person chose.
+
+    Two halves, and the split is the whole design. This half runs inside
+    the pass's action drain, which has to be quick: it settles what the
+    words mean - adding a typed credential to its tab, checking a chosen
+    one is really free - and writes the wish. The other half is the build
+    phase of the same pass, which already runs seven-minute jobs in a
+    pool.
+
+    A typed credential is added to its tab rather than used and forgotten.
+    Everything the farm signs in has a row: the mirror owns those columns
+    and the pass reads them, so a credential that lives nowhere cannot be
+    found again, cannot be marked when it fails, and cannot be counted as
+    stock. Adding it is the honest spelling of "use this one".
+    """
+    from .store import validate
+    from .store import wanted as store_wanted
+
+    who = _by(payload)
+    gmail = (payload.get("gmail") or "").strip()
+    proxy_name = (payload.get("proxy_name") or "").strip()
+    app_account = (payload.get("app_account") or "").strip()
+    install_app = bool(payload.get("install_app"))
+
+    def add_typed(pool, kind, address, password, secret=""):
+        """Put a typed credential in its tab, unless it is already there."""
+        if pool.find(address) is not None:
+            return address, ""
+        try:
+            if kind == "gmail":
+                checked = validate.gmail_row(address=address,
+                                             password=password,
+                                             secret=secret, seller="")
+                pool.append(**{
+                    "Purchase Date": _stamp(), "Seller": "",
+                    "Address": checked["address"],
+                    "Password": checked["password"],
+                    "Secret": (checked["recovery_email"]
+                               or checked["totp_secret"]),
+                    "Status": "",
+                    "Note": f"Typed in by {who} on {_stamp()} to build a "
+                            f"phone by hand."})
+            else:
+                checked = validate.app_row(address=address,
+                                           password=password, secret=secret)
+                pool.append(**{
+                    "Address": checked["address"],
+                    "Password": checked["password"],
+                    "2FA Secret": checked["totp_secret"], "Status": "",
+                    "Note": f"Typed in by {who} on {_stamp()} to build a "
+                            f"phone by hand."})
+        except (validate.AccountError, validate.ProxyError) as exc:
+            return "", str(exc)
+        return checked["address"], ""
+
+    if payload.get("gmail_typed"):
+        gmail, refused = add_typed(book.gmails, "gmail", gmail,
+                                   payload.get("gmail_password") or "",
+                                   payload.get("gmail_secret") or "")
+        if refused:
+            return "refused", f"that Gmail was not usable - {refused}"
+        book.reload()
+    if install_app and payload.get("app_typed"):
+        app_account, refused = add_typed(
+            book.apps, "app", app_account,
+            payload.get("app_password") or "",
+            payload.get("app_secret") or "")
+        if refused:
+            return "refused", f"that GPT account was not usable - {refused}"
+        book.reload()
+
+    if not gmail:
+        return "refused", "a phone needs a Gmail; nothing was chosen or typed"
+    if book.gmails.find(gmail) is None:
+        return "refused", f"{gmail} is not in the Gmails tab"
+
+    asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
+                             install_app=install_app,
+                             app_account=app_account,
+                             requested_by=payload.get("by_id"))
+    where = f" on {proxy_name}" if proxy_name else ""
+    app = "" if install_app else " without the app"
+    return "done", (f"asked for a phone{where} for {gmail}{app} - "
+                    f"request {asked}. The next pass starts it.")
+
+
 def add_gpt(book, ledger, settings, payload, client):
     from .store import validate
 
@@ -790,6 +877,7 @@ VERBS = {
     "change_proxy": change_proxy,
     "stop_phone": stop_phone,
     "add_gmails": add_gmails,
+    "build_by_hand": build_by_hand,
     "edit_gmail": edit_gmail,
     "remove_gmail": remove_gmail,
     "add_gpt": add_gpt,

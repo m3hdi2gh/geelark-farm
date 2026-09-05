@@ -190,6 +190,23 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
             "   AND r.on_sheet"
             " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
+        # What a person can choose from when they build one by hand. Capped:
+        # this is a picker, not the pool page, and a select with four hundred
+        # options is a worse way to find an address than the search box on
+        # the tab it came from.
+        choose = {}
+        for kind, key in (("gmail", "gmails"), ("app", "apps")):
+            choose[key] = store._rows(
+                "SELECT address AS label FROM resources"
+                " WHERE kind = %s AND status = '' AND error IS NULL"
+                "   AND on_sheet AND address <> ''"
+                " ORDER BY sheet_row NULLS LAST, id LIMIT 60", (kind,))
+        choose["proxies"] = store._rows(
+            "SELECT proxy_name AS label FROM resources"
+            " WHERE kind = 'proxy' AND error IS NULL AND on_sheet"
+            "   AND lower(status) IN ('', 'free', 'unused')"
+            "   AND proxy_name <> ''"
+            " ORDER BY times_used, sheet_row NULLS LAST LIMIT 60")
         # Credentials a run judged and set aside, with the word it used.
         # Only what is still on a tab: a row that left is history, and
         # nobody has a decision to make about history.
@@ -236,6 +253,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "stock": folded,
         "awaiting": awaiting,
         "stopped": stopped,
+        "choose": choose,
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
         "asked": asked,

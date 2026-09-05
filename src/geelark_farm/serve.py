@@ -535,6 +535,16 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
                 if settings is not None and now and not was:
                     _event(settings, "breaker", status="tripped",
                            serial=str(build.serial or ""), detail=now)
+                # The person who asked for this one is watching a row on
+                # the dashboard for it. Told here rather than by the
+                # builder, so a build knows nothing about the console.
+                if settings is not None and build.wanted_id is not None:
+                    from .store import wanted as store_wanted
+
+                    store_wanted.settle(
+                        settings, build.wanted_id, ok=build.ok,
+                        serial=str(build.serial or ""),
+                        detail=build.detail or build.status)
         finally:
             if flight is not None:
                 flight.done_with(builds=builds, finishes=finishes)
@@ -1183,7 +1193,30 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         "gmails_free": gmails, "exits_free": exits,
         "took": round(time.monotonic() - began, 1)})
 
-    if decision.jobs:
+    # Phones somebody asked for by hand. Taken here, between the drain that
+    # wrote the wish and the batch that will build it - and taken even when
+    # the shortfall is nil, because a full shelf is not a reason to ignore
+    # somebody who asked for a particular phone.
+    wishes: list = []
+    if settings.store_enabled:
+        try:
+            from .store import wanted as store_wanted
+
+            store_wanted.release_stale(settings)
+            for row in store_wanted.take(settings):
+                wishes.append(builder.Wanted(
+                    gmail=row["gmail"], proxy_name=row["proxy_name"],
+                    install_app=row["install_app"],
+                    app_account=row["app_account"], wanted_id=row["id"]))
+        except Exception as exc:                                  # noqa: BLE001
+            # The same rule as every other store read in a pass: the farm
+            # keeps building without the console.
+            log.warning("could not read the hand-built phone requests (%s)",
+                        exc)
+    if wishes:
+        log.info("%d phone(s) were asked for by hand", len(wishes))
+
+    if decision.jobs or wishes:
         # One call, one Book, one runner - never `finish_run` and `run` as two
         # concurrent calls. Each opens its own Book, and `Pool`'s claim lock is
         # per instance: two Books have two locks, and the serialisation that
@@ -1204,6 +1237,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         def batch():
             return builder.run(client, settings,
                                count=decision.jobs,
+                               wanted=wishes,
                                finish_limit=decision.finish,
                                workers=decision.jobs,
                                finish_first=bool(decision.finish),

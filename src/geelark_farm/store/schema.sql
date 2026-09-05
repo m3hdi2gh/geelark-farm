@@ -444,3 +444,34 @@ ALTER TABLE actions ALTER COLUMN requested_by DROP NOT NULL;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS on_sheet boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS resources_free
     ON resources (kind) WHERE status = '' AND error IS NULL AND on_sheet;
+
+-- -------------------------------------------- wanted builds, rev 12 (C12)
+-- A phone somebody asked for by hand, with the credentials they chose.
+--
+-- Its own table rather than an `actions` row, because the two have
+-- different clocks. An action is drained inside a pass and has to be quick;
+-- a build takes seven minutes, and a pass that waited for one would stop
+-- the farm for as long as it ran. So the verb writes the wish here and
+-- returns, and the build phase of the same pass - which already runs
+-- long jobs in a pool - picks it up.
+--
+-- The credentials are text, not ids: the wish is written before anything is
+-- claimed, and `build_one` claims under the lock that stops one Gmail
+-- reaching two phones. A row taken between the asking and the building is a
+-- named failure, not a race.
+CREATE TABLE IF NOT EXISTS wanted_builds (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    gmail        text NOT NULL DEFAULT '',
+    proxy_name   text NOT NULL DEFAULT '',
+    install_app  boolean NOT NULL DEFAULT true,
+    app_account  text NOT NULL DEFAULT '',
+    requested_by bigint REFERENCES users(id),
+    status       text NOT NULL DEFAULT 'queued'
+                 CHECK (status IN ('queued', 'running', 'done', 'failed')),
+    serial       text NOT NULL DEFAULT '',
+    detail       text NOT NULL DEFAULT '',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    ended_at     timestamptz
+);
+CREATE INDEX IF NOT EXISTS wanted_queued
+    ON wanted_builds (created_at) WHERE status = 'queued';

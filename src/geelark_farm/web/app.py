@@ -317,6 +317,33 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._redirect("/password")
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
+            if self.path == "/phones/build":
+                # A typed address wins over a picked one: somebody who
+                # filled the box meant the box. Said here rather than in
+                # the verb, so the verb takes one shape of payload however
+                # it was asked - the API will ask differently.
+                typed_gmail = (field.get("gmail_typed_address") or "").strip()
+                typed_app = (field.get("app_typed_address") or "").strip()
+                install = bool(field.get("install_app"))
+                payload = {
+                    "gmail": typed_gmail or (field.get("gmail") or "").strip(),
+                    "gmail_typed": bool(typed_gmail),
+                    "gmail_password": field.get("gmail_password") or "",
+                    "gmail_secret": field.get("gmail_secret") or "",
+                    "proxy_name": (field.get("proxy_name") or "").strip(),
+                    "install_app": install,
+                    "app_account": (typed_app
+                                    or (field.get("app_account") or "").strip()
+                                    ) if install else "",
+                    "app_typed": bool(typed_app) and install,
+                    "app_password": field.get("app_password") or "",
+                }
+                return self._act(
+                    user, "may_login_accounts", "build_by_hand", payload,
+                    idem=self._minute_key(
+                        user, "byhand",
+                        payload["gmail"] or "next"),
+                    back="/")
             if self.path == "/accounts/login":
                 back = field.get("back") or "/"
                 return self._login_accounts(

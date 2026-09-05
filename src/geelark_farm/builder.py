@@ -258,6 +258,10 @@ class Build:
     index: int
     ok: bool = False
     status: str = "not_started"
+    #: The hand-built request this came from, when it came from one. The
+    #: person who asked is watching a row on the dashboard, and this is what
+    #: joins their row to what happened.
+    wanted_id: int | None = None
     phone_id: str = ""
     serial: str = ""
     proxy: str = ""
@@ -471,6 +475,11 @@ class _Session:
     #: and three seconds, against reading a previous session as this account's
     #: problem (2026-08-30).
     reset_first: bool = False
+    #: What a person chose for this phone, when one did. Only the app half
+    #: is read here - the Gmail and the exit were settled before the phone
+    #: existed - but the whole wish rides along so nothing has to be
+    #: unpacked and passed twice.
+    want: Wanted | None = None
     #: Addresses this phone has condemned, in order. Counted rather than
     #: merely recorded: past a point they stop being evidence about the
     #: accounts and start being evidence about the phone. See
@@ -544,8 +553,24 @@ def _sign_into_app(session: _Session) -> Build | None:
             _give_back_condemned(s)
             return s.finish("budget_exhausted",
                             "installed, but no budget left for the app login")
+        if s.want is not None and not s.want.install_app:
+            # Asked for without the app. That is a warm phone, which is what
+            # the keeper builds on its own all day, so it stops here in the
+            # ordinary way and the next pass finishes it like any other.
+            _give_back_condemned(s)
+            return s.finish("app_not_asked_for",
+                            "built by hand without the app; it is warm and "
+                            "the next pass can sign an account into it")
         if s.app_row is None:
-            s.app_row = s.book.apps.claim(str(s.build.serial or ''))
+            if s.want is not None and s.want.app_account:
+                try:
+                    s.app_row = _pick(s.book.apps, s.want.app_account,
+                                      "GPT account")
+                except Aborted as refused:
+                    _give_back_condemned(s)
+                    return s.finish("chosen_app_unavailable", str(refused))
+            else:
+                s.app_row = s.book.apps.claim(str(s.build.serial or ''))
             if s.app_row is None:
                 _give_back_condemned(s)
                 return s.finish("no_usable_gpt",
@@ -739,13 +764,56 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
         return resource
 
 
+@dataclass(frozen=True)
+class Wanted:
+    """The credentials a person chose for one build, as they typed them.
+
+    Text rather than rows, because the wish is written a pass before the
+    build and `build_one` claims under the lock that stops one Gmail
+    reaching two phones. A row taken in between is a named failure here,
+    not a race there.
+
+    Anything blank means "the pool decides", which is what the keeper's own
+    builds do - so a wish naming only a Gmail is a normal build with one
+    thing pinned.
+    """
+
+    gmail: str = ""
+    proxy_name: str = ""
+    install_app: bool = True
+    app_account: str = ""
+    wanted_id: int | None = None
+
+
+def _pick(pool, wanted: str, what: str):
+    """The free row a person named, or a refusal saying why not.
+
+    Raises rather than falling back to the next free row: somebody chose
+    this one, and quietly building with another is the kind of help nobody
+    asked for - it spends the wrong Gmail and reads as success.
+    """
+    want = wanted.strip().lower()
+    for resource in pool.available:
+        if (resource.label or "").strip().lower() == want:
+            if pool.claim_this(resource):
+                return resource
+            raise Aborted(f"the {what} {wanted} was taken while this was "
+                          f"being asked for")
+    raise Aborted(f"the {what} {wanted} is not free in the tab - it is "
+                  f"already on a phone, set aside, or not there at all")
+
+
 def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
               index: int, *,
               on_phone: Callable[[str], None] | None = None,
               on_ready: Callable[[str], None] | None = None,
               cancelled: Callable[[], bool] | None = None,
-              codes_source: codes.CodeSource | None = None) -> Build:
+              codes_source: codes.CodeSource | None = None,
+              want: Wanted | None = None) -> Build:
     """Take pooled resources to one stopped, ready phone.
+
+    `want` is somebody choosing instead of the pool: a Gmail, an exit,
+    whether the app goes on at all, and which account signs into it.
 
     Returns rather than raises: the caller is a batch, and one bad phone must
     not end it.
@@ -800,12 +868,18 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # first. Holding both together costs a few seconds of serial creation
         # at the start of a batch and nothing after it.
         with _starting:
-            gmail_row = book.gmails.claim()
+            if want and want.gmail:
+                gmail_row = _pick(book.gmails, want.gmail, "Gmail")
+            else:
+                gmail_row = book.gmails.claim()
             if gmail_row is None:
                 return finish("no_usable_gmail",
                               "the Gmails tab has no unused address left, so "
                               "no phone was created")
-            proxy_row = _fresh_proxy(client, book)
+            if want and want.proxy_name:
+                proxy_row = _pick(book.proxies, want.proxy_name, "exit")
+            else:
+                proxy_row = _fresh_proxy(client, book)
             build.proxy = str(proxy_row.proxy)
             build.proxy_name = proxy_row.name
 
@@ -952,7 +1026,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            deadline=deadline, started=started,
                            cancelled=cancelled,
                            codes=codes_source or codes.NoSource(),
-                           proxy_row=proxy_row, refused_exits=refused_exits)
+                           proxy_row=proxy_row, refused_exits=refused_exits,
+                           want=want)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up
@@ -2771,10 +2846,14 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                                cancelled=shutting_down.is_set,
                                codes_source=codes_source)
         else:
+            want = job.get("want")
             build = build_one(client, settings, book, ledger, index,
                               on_phone=note_phone, on_ready=on_ready,
                               cancelled=shutting_down.is_set,
-                              codes_source=codes_source)
+                              codes_source=codes_source,
+                              want=want)
+            if want is not None:
+                build.wanted_id = want.wanted_id
         # Nothing else in the archive says how the build went: a
         # success's pages and a failure's look alike from outside, and which
         # it was decides how long they are worth keeping.
@@ -2997,8 +3076,14 @@ def run(client: Client, settings: Settings, *, count: int,
         finish_limit: int | None = None,
         book: Book | None = None,
         ledger: Ledger | None = None,
-        codes_source: codes.CodeSource | None = None) -> list[Build]:
+        codes_source: codes.CodeSource | None = None,
+        wanted: list[Wanted] | None = None) -> list[Build]:
     """Produce `count` ready phones, finishing before building.
+
+    `wanted` are phones somebody asked for by hand, each with the
+    credentials they chose. They run beside the shortfall rather than
+    instead of it: a person asking for one phone is not asking for the
+    farm to stop keeping itself stocked.
 
     `count` is how many phones are worked on, not how many new ones are made.
     A phone that already has its Gmail and its app and wants only an account is
@@ -3094,6 +3179,8 @@ def run(client: Client, settings: Settings, *, count: int,
                  len(to_finish))
 
     jobs = ([{"kind": "finish", "phone": p} for p in to_finish]
+            + [{"kind": "build", "phone": None, "want": w}
+               for w in (wanted or [])]
             + [{"kind": "build", "phone": None} for _ in range(to_build)])
     if not jobs:
         return []

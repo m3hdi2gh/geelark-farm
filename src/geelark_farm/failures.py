@@ -203,6 +203,21 @@ VERDICTS: dict[str, Verdict] = {
         CREDENTIAL, "Google asked for a 2FA code and the row has no secret",
         "Google asked for a code and the row has no 2FA secret. "
         "Add it, or the account cannot be used unattended."),
+    # ------------------------------- asked for by hand (C12)
+    #: Not a failure at all: somebody asked for a phone without the app,
+    #: and got one. A warm phone is what the keeper builds all day, so this
+    #: reads like `no_usable_gpt` to everything downstream - including the
+    #: breaker, which must not count a request being honoured.
+    "app_not_asked_for": Verdict(
+        NOBODY, "it was asked for without the app",
+        "The phone is warm: Google is signed in and the app is not on it. "
+        "The next pass can sign an account into it like any other."),
+    "chosen_app_unavailable": Verdict(
+        NOBODY, "the GPT account it was asked to use was not free",
+        "Somebody chose that account and it was taken, set aside or "
+        "removed between the asking and the building. The phone is warm, "
+        "so nothing was wasted - ask again with another account, or let "
+        "the next pass sign in whichever is next."),
     "no_authenticator_option": Verdict(
         CREDENTIAL, "Google offered no authenticator to use",
         "Google offered no authenticator choice on this account."),

@@ -38,7 +38,13 @@ LIMIT = 5
 #: the warm stock, and evidence the pipeline works - so it clears the count
 #: exactly as a delivered phone does. Counting it would trip the breaker on
 #: the first quiet afternoon.
-WORKED = frozenset({"no_usable_gpt"})
+#: `app_not_asked_for` and `chosen_app_unavailable` join it for the same
+#: reason and it is not a detail: both end with a warm phone, and both come
+#: from somebody asking for one by hand. Five requests honoured in a row is
+#: not a machine that has stopped working, and a breaker that opened on
+#: them would stop the farm for doing exactly what it was asked.
+WORKED = frozenset({"no_usable_gpt", "app_not_asked_for",
+                    "chosen_app_unavailable"})
 
 #: Nothing was created and nothing was spent, and the verdicts say so. There
 #: is nothing burning for a breaker to stop, and equally nothing that says the

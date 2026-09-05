@@ -279,6 +279,19 @@ p{{margin:0}}
 /* The table scrolls inside its own column rather than taking the page
    sideways with it - the rail has to stay where it was put. */
 .tscroll{{overflow-x:auto}}
+.byhand{{display:flex;flex-direction:column;gap:10px;padding-top:6px}}
+.byhand label{{display:flex;flex-direction:column;gap:5px;font-size:12px;
+ color:var(--muted)}}
+.byhand label.typed{{font-size:11px;color:var(--dim)}}
+.byhand label.tick{{flex-direction:row;align-items:center;gap:8px;
+ font-size:12.5px;color:var(--ink)}}
+.byhand select,.byhand input[type=text],.byhand input:not([type]){{
+ background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+ color:var(--ink);font:400 12px/1 var(--mono);padding:8px 9px;
+ font-family:var(--mono)}}
+.byhand select:focus,.byhand input:focus{{outline:none;border-color:#3a5c96}}
+.byhand p{{font-size:11px;line-height:1.5}}
+.byhand button.go{{align-self:stretch}}
 .stopped h3 .ct{{margin-left:auto;font-family:var(--mono);color:var(--red);
  letter-spacing:0}}
 .stopped details.fold{{padding:0 15px 12px}}
@@ -1197,6 +1210,83 @@ def _supply_card(data: dict, user: dict) -> str:
     return f'<div class="panel"><h3>Supply</h3>{"".join(parts)}</div>'
 
 
+#: What a blank picker means, said the same way in all three.
+NEXT_FREE = "the next free one"
+
+
+def _free_picker(name: str, rows, blank: str) -> str:
+    """A picker of free rows, with a blank option that means "the pool".
+
+    Blank first and selected, so pressing Build without touching anything
+    is exactly the phone the keeper would have built - the form's default
+    is the farm's own behaviour, and every field is a departure from it.
+    """
+    options = [f'<option value="">{esc(blank)}</option>']
+    options += [f'<option>{esc(str(r.get("label") or ""))}</option>'
+                for r in rows or [] if r.get("label")]
+    return f'<select name="{name}">{"".join(options)}</select>'
+
+
+def _build_card(data: dict, user: dict) -> str:
+    """Build one phone with credentials somebody chose.
+
+    Folded shut and last in the rail: it is the one thing on this page that
+    spends money, and it should take a decision to open rather than sit
+    open beside the things that only report.
+
+    No script. Every field is either a picker of what is free or a box to
+    type a new one, and a typed address wins over a picked one - so the
+    form reads the same whether or not the page's one exception loaded.
+    """
+    if not _may(user, "may_login_accounts"):
+        return ""
+    choose = data.get("choose") or {}
+    stock = data.get("stock") or {}
+    free = int((stock.get("gmail") or {}).get("free") or 0)
+    exits = int((stock.get("proxy") or {}).get("free") or 0)
+    if not free or not exits:
+        # Nothing to build with. Said rather than offered: a form that can
+        # only be refused is worse than a sentence saying why.
+        missing = "Gmail" if not free else "free exit"
+        return (f'<div class="panel"><h3>Build a phone by hand</h3>'
+                f'<p class="dim" style="padding:12px 15px">There is no '
+                f'{missing} to build with, so there is nothing to ask for '
+                f'yet.</p></div>')
+    return (
+        f'<div class="panel"><h3>Build a phone by hand</h3>'
+        f'<details class="fold" style="padding:0 15px 14px">'
+        f'<summary>choose the Gmail, the exit and the app</summary>'
+        f'<form method="post" action="/phones/build" class="byhand">'
+        f'{_csrf(user)}'
+        f'<label>Gmail'
+        + _free_picker("gmail", choose.get("gmails"), NEXT_FREE)
+        + '</label>'
+        '<label class="typed">or type one to add it to the tab and use it'
+        '<input name="gmail_typed_address" placeholder="address" '
+        'autocomplete="off">'
+        '<input name="gmail_password" placeholder="password" '
+        'autocomplete="off">'
+        '<input name="gmail_secret" placeholder="2fa secret or recovery '
+        'address - optional" autocomplete="off"></label>'
+        + '<label>Exit'
+        + _free_picker("proxy_name", choose.get("proxies"), NEXT_FREE)
+        + '</label>'
+        '<label class="tick"><input type="checkbox" name="install_app" '
+        'value="1" checked> install the GPT app</label>'
+        + '<label>GPT account'
+        + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
+        + '</label>'
+        '<label class="typed">or type one'
+        '<input name="app_typed_address" placeholder="address" '
+        'autocomplete="off">'
+        '<input name="app_password" placeholder="password" '
+        'autocomplete="off"></label>'
+        '<p class="dim">This spends one phone, one exit and one Gmail. '
+        'The next pass starts it.</p>'
+        '<button class="go">Build it</button>'
+        '</form></details></div>')
+
+
 def _stopped_card(data: dict, user: dict, explain=None) -> str:
     """The credentials a run judged and set aside, in the words it used.
 
@@ -1360,7 +1450,8 @@ def dashboard(data: dict, user: dict, said: str = "",
             + _did_not_finish(incomplete, user))
     side = (_supply_card(data, user)
             + _stopped_card(data, user, explain)
-            + _awaiting_panel(data, user, manual_login, pulse))
+            + _awaiting_panel(data, user, manual_login, pulse)
+            + _build_card(data, user))
 
     body = (f'<div class="wide">'
             f'<div class="top"><h2>Instance manager</h2>'
