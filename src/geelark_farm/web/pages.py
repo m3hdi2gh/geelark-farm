@@ -87,6 +87,40 @@ nav form span.who{{color:#b9c4d4;font-size:13px;overflow:hidden;text-overflow:el
 nav form button{{margin-left:auto;background:none;border:0;color:var(--dim);
  font-size:12px;cursor:pointer;font-family:inherit;padding:6px 8px;border-radius:5px}}
 nav form button:hover{{color:#fff;background:#141c2b}}
+/* ---- the phones table, standing in its own panel */
+.slab{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+ overflow:hidden}}
+.slab>.tscroll{{margin:0}}
+.slab table{{margin:0}}
+.slab thead th{{background:var(--panel2);border-bottom:1px solid var(--line);
+ font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;
+ color:var(--dim);font-weight:500;padding:10px 15px;white-space:nowrap}}
+.slab tbody td{{padding:11px 13px;border-bottom:1px solid var(--line2)}}
+/* The three narrow ones shrink to their words so the two address columns
+   keep the width. Without this the row runs past its box and the last
+   button - the one a person came for - is the half that is cut off. */
+.slab td:nth-child(5),.slab td:nth-child(6),.slab th:nth-child(5),
+.slab th:nth-child(6){{width:1%;white-space:nowrap}}
+.slab thead th:first-child,.slab tbody td:first-child{{width:1%}}
+.slab tbody tr:last-child td{{border-bottom:0}}
+.slab tbody tr:hover{{background:#141c2b}}
+.slab td.act{{text-align:right;white-space:nowrap}}
+.slab td.act form{{display:inline}}
+.slab .addr{{font-family:var(--mono);font-size:12.5px;display:block;
+ max-width:20ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.nowrap{{white-space:nowrap}}
+/* A dot before the word, so a state reads as a state from a distance
+   and not as one more piece of text in a row made of text. */
+.slab .badge::before{{content:"";display:inline-block;width:5px;height:5px;
+ border-radius:50%;background:currentColor;margin-right:6px;
+ vertical-align:middle}}
+.slab .badge.running::before{{margin-right:6px}}
+/* Every button in a row, one size and one rhythm. The exit button wore
+   the amber of a warning and is not one: it is the ordinary thing you do
+   to a phone whose way out is refused. */
+.slab td.act button,.slab td.act .btn{{padding:5px 10px;font-size:12px;
+ border-radius:7px;margin-left:5px}}
+.slab thead th:last-child,.slab td.act{{padding-right:15px}}
 /* ---- the pool cards on the rail, and the manager they open */
 .pool{{background:var(--panel);border:1px solid var(--line);border-radius:10px;
  overflow:hidden}}
@@ -1042,7 +1076,7 @@ def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
     return (f'<form method="post" class="inline" '
             f'action="/phones/{esc(serial)}/proxy">{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<button class="quiet warn">Change IP</button></form>')
+            f'<button class="quiet">Change IP</button></form>')
 
 
 def _boot_form(user: dict, serial: str) -> str:
@@ -1055,7 +1089,7 @@ def _boot_form(user: dict, serial: str) -> str:
     """
     return (f'<form method="post" class="inline" target="_blank" '
             f'action="/phones/{esc(serial)}/boot">{_csrf(user)}'
-            f'<button class="quiet live" title="start it, take it, and '
+            f'<button class="quiet" title="start it, take it, and '
             f'watch the screen in a new tab">Boot</button></form>')
 
 
@@ -1121,26 +1155,40 @@ def _phone_rows(data: dict, user: dict) -> str:
         status = r.get("status") or ""
         badge = _phone_badge(r)
         if (r.get("state") or "") == "taken":
-            who = esc(str(r.get("owner") or "somebody"))
-            when = _when(r.get("updated_at")) if r.get("updated_at") else ""
-            badge += (f'<br><span class="dim">{who}'
-                      f'{" · " + when if when else ""}</span>')
+            # Who has it, under the badge. When it changed has its own
+            # column now, so saying it here as well would be the page
+            # saying a number twice.
+            badge += (f'<br><span class="dim">'
+                      f'{esc(str(r.get("owner") or "somebody"))}</span>')
         if status == "building":
             lines.append(
                 f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
-                f'<td colspan="3">{_progress(progress.get(serial))}</td>'
+                f'<td colspan="5">{_progress(progress.get(serial))}</td>'
                 f'</tr>')
             continue
-        account = (f'<span class="cp">{esc(str(r.get("app_account")))}</span>'
-                   if r.get("app_account")
-                   else '<span class="dim">waiting for an account</span>')
         lines.append(
             f'<tr><td>{_serial_link(serial)}</td><td>{badge}</td>'
-            f'<td>{account}<br><span class="dim cp">'
-            f'{esc(str(r.get("gmail") or ""))}</span></td>'
-            f'<td>{esc(str(r.get("proxy_name") or ""))}</td>'
+            f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}</td>'
+            f'<td>{_addr_cell(r.get("app_account"), "waiting for one")}</td>'
+            f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
+            f'<td class="mono dim nowrap">{_ago(r.get("updated_at")) or "-"}'
+            f'</td>'
             f'<td class="act">{_row_actions(user, r)}</td></tr>')
     return "".join(lines)
+
+
+def _addr_cell(value, empty: str) -> str:
+    """One address, on one line, clipped rather than wrapped.
+
+    Gmail and the GPT account shared a cell, one above the other, which
+    read as a single fact about the phone and is two. Side by side, a
+    column is scannable: every phone missing an account is one empty
+    column, down the page.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return f'<span class="dim">{esc(empty)}</span>'
+    return f'<span class="addr cp" title="{esc(text)}">{esc(text)}</span>' 
 
 
 def _status_sentence(data: dict) -> str:
@@ -1932,9 +1980,10 @@ def dashboard(data: dict, user: dict, said: str = "",
                     if (r.get("status") or "") != "incomplete"]
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>state</th>'
-             f'<th>account</th><th>proxy</th><th></th></tr></thead>'
+             f'<th>gmail</th><th>gpt account</th><th>exit</th>'
+             f'<th>changed</th><th></th></tr></thead>'
              f'<tbody>{rows}'
-             f'<tr class="none" id="nohits" hidden><td colspan="5">'
+             f'<tr class="none" id="nohits" hidden><td colspan="7">'
              f'Nothing here matches that.</td></tr></tbody></table>'
              if rows else '<p class="empty">No phones yet - the keeper '
                           'builds the shortfall on its next pass.</p>')
@@ -1955,7 +2004,8 @@ def dashboard(data: dict, user: dict, said: str = "",
              f'<span class="find"><input id="find" type="search" hidden '
              f'placeholder="Search phones" autocomplete="off"></span></div>')
     main = (_said(said, _DASH_SAID) + warning + tools
-            + f'<div><div class="tscroll">{table}</div>{hint}</div>'
+            + f'<div class="slab"><div class="tscroll">{table}</div>'
+              f'</div>{hint}'
             + _did_not_finish(incomplete, user))
     side = (_supply_card(data, user)
             + _stopped_card(data, user, explain)

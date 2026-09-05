@@ -2278,7 +2278,8 @@ def test_a_building_row_shows_its_last_log_line_and_how_long(web,
     assert "google sign-in: typed the password, waiting for the 2-step screen" \
         in body
     assert re.search(r"· 9[6-9]s</span>", body), "elapsed since the first line"
-    assert 'colspan="3"' in body, "spans the gmail / gpt / proxy columns"
+    assert 'colspan="5"' in body, \
+        "spans gmail, gpt account, exit, changed and the buttons"
     assert "starting" in body, "a phone with no line yet"
     assert 'href="/phones/1556"' in body
     assert 'http-equiv="refresh"' in body
@@ -2321,7 +2322,8 @@ def test_phones_are_ordered_ready_warm_incomplete_building_and_handed_over(
     order = [body.index(f'href="/phones/{s}"') for s in
              ("1500", "1501", "1503")]
     assert order == sorted(order), "ready, warm, building"
-    assert "waiting for an account" in body, "the warm row says what it lacks"
+    assert "waiting for one" in body, \
+        "the warm row says what its own column lacks"
     # The incomplete one is not on the shelf at all: it stands under the
     # table, where it cannot be mistaken for something to hand over.
     assert body.index("<table") < body.index('class="didnot"')
@@ -2345,8 +2347,10 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert 'class="dim">ali' in body and app_mod.pages._when(
-        "2026-09-03 10:00:00+00") in body
+    # Who has it sits under the badge; when it last changed has its own
+    # column now, and saying it twice was the page saying a number twice.
+    assert 'class="dim">ali' in body
+    assert app_mod.pages._ago("2026-09-03 10:00:00+00") in body
     assert '/phones/1500/state' in body and 'value="taken"' in body
     assert 'value="unused"' in body and "Release" in body, \
         "a taken phone can be let go"
@@ -2507,11 +2511,17 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
+    # Colour is for the three that end something - and Take, which is the
+    # one thing a row is for. Boot and the exit button are ordinary work
+    # on an ordinary phone: they wore green and amber, which is a page
+    # shouting five times and so emphasising nothing (2026-09-05).
     for klass, label in (("quiet go", "Take"), ("quiet", "Release"),
                          ("quiet ok", "Done"), ("quiet bad", "Failed"),
-                         ("quiet warn", "Change IP")):
+                         ("quiet", "Change IP")):
         assert f'class="{klass}">{label}<' in body, label
-    assert 'class="quiet live"' in body and ">Boot<" in body
+    assert ">Boot<" in body
+    assert 'class="quiet live"' not in body, "Boot is not a fourth colour"
+    assert 'class="quiet warn">Change IP' not in body, "nor is the exit"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
