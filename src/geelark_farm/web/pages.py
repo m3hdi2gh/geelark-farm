@@ -170,6 +170,9 @@ nav form button:hover{{color:#fff;background:#141c2b}}
  font-size:22px;line-height:1;cursor:pointer;padding:0 4px}}
 .ov .sheet .x:hover{{color:var(--bright)}}
 .sheetbody{{overflow:auto;padding:15px 18px}}
+.sheetbody.sub{{display:flex;flex-direction:column;gap:12px}}
+.sheetbody.sub .panel{{margin:0}}
+form.busy button{{opacity:.6;pointer-events:none}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
  border-radius:9px;padding:12px;margin-bottom:14px}}
 .addbox label{{display:block;font-size:11px;letter-spacing:.6px;
@@ -1357,143 +1360,103 @@ def _stock_strip(data: dict) -> str:
 _DASH_SCRIPT = """
 <script>
 (function(){
-  // Not the "nothing matches" row: it lives in the same tbody and would
-  // otherwise count itself as a phone.
-  var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
-  var tally = document.getElementById('tally');
-  var seg = document.getElementById('seg');
-  var none = document.getElementById('nohits');
-  var want = '';
-  function sift(){
-    var shown = 0;
-    rows.forEach(function(tr){
-      var hit = !want || tr.dataset.view === want;
-      tr.hidden = !hit;
-      if (hit) shown++;
-    });
-    if (none) none.hidden = shown > 0;
-    if (tally) tally.textContent = want
-      ? shown + ' of ' + rows.length + ' shown'
-      : rows.length + (rows.length === 1 ? ' phone' : ' phones');
-  }
-  if (seg) {
-    seg.hidden = false;
-    seg.querySelectorAll('button').forEach(function(b){
-      b.addEventListener('click', function(){
-        want = b.dataset.show;
-        seg.querySelectorAll('button').forEach(function(o){
-          o.setAttribute('aria-pressed', String(o === b));
-        });
-        sift();
-      });
-    });
-  }
-
-  var rf = document.getElementById('railfind');
-  if (rf) {
-    rf.parentNode.hidden = false;
-    rf.addEventListener('input', function(){
-      var q = rf.value.trim().toLowerCase();
-      document.querySelectorAll('#awaiting .pick').forEach(function(el){
-        el.hidden = !!q && el.textContent.toLowerCase().indexOf(q) < 0;
-      });
-    });
-  }
-
-
-  // An alert, put away for this tab. It comes back in a new one: the
-  // page is not deciding the problem is gone, the person is deciding they
-  // have read it.
+  // The one page with a script, and what the script is allowed to do:
+  // arrange what is already on the page, and send the page's own forms
+  // without leaving it. Every request it makes is one a form on the page
+  // declared - the same action, the same fields - and the answer is the
+  // same HTML the browser would have shown; only <main> is swapped, so
+  // the manager stays open and the scroll stays put. Without the script,
+  // every form still posts and every page still reloads (2026-09-05).
   var store = null;
   try { store = window.sessionStorage; } catch (err) {}
-  document.querySelectorAll('.alert[data-alert]').forEach(function(el){
-    var key = 'gf.alert.' + el.dataset.alert;
-    if (store && store.getItem(key)) el.hidden = true;
-    var x = el.querySelector('[data-dismiss]');
-    if (x) x.addEventListener('click', function(){
-      el.hidden = true;
-      if (store) store.setItem(key, '1');
-    });
-  });
 
-  // What a press said: a toast for a few seconds, and gone from the
-  // address so a refresh does not say it again.
-  var said = document.querySelector('.said.toast');
-  if (said) {
-    said.classList.add('up');
-    if (window.history && history.replaceState && /[?&]said=/.test(location.search)) {
-      var clean = location.search.replace(/([?&])said=[^&]*&?/, '$1')
-        .replace(/[?&]$/, '');
-      history.replaceState(null, '', location.pathname + clean + location.hash);
+  function init(){
+    // Not the "nothing matches" row: it lives in the same tbody and would
+    // otherwise count itself as a phone.
+    var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
+    var tally = document.getElementById('tally');
+    var seg = document.getElementById('seg');
+    var none = document.getElementById('nohits');
+    var want = (store && store.getItem('gf.view')) || '';
+    function sift(){
+      var shown = 0;
+      rows.forEach(function(tr){
+        var hit = !want || tr.dataset.view === want;
+        tr.hidden = !hit;
+        if (hit) shown++;
+      });
+      if (none) none.hidden = shown > 0;
+      if (tally) tally.textContent = want
+        ? shown + ' of ' + rows.length + ' shown'
+        : rows.length + (rows.length === 1 ? ' phone' : ' phones');
     }
-    setTimeout(function(){ said.classList.add('gone'); }, 3800);
-    setTimeout(function(){ said.remove(); }, 4400);
-  }
-
-  // The credentials for a brand-new address, opened the moment one is
-  // typed that the pool does not know, and shut again when it is.
-  var fold = document.getElementById('newone');
-  var byhand = document.querySelector('.byhand');
-  if (byhand && fold) byhand.classList.add('js');
-  document.querySelectorAll('.byhand input[list]').forEach(function(box){
-    var list = document.getElementById(box.getAttribute('list'));
-    if (!list || !fold) return;
-    box.addEventListener('input', function(){
-      var v = box.value.trim().toLowerCase();
-      var known = !v || Array.prototype.some.call(list.options, function(o){
-        return o.value.toLowerCase() === v;
-      });
-      var anyNew = Array.prototype.some.call(
-        document.querySelectorAll('.byhand input[list]'), function(b){
-          var l = document.getElementById(b.getAttribute('list'));
-          var w = b.value.trim().toLowerCase();
-          return w && l && !Array.prototype.some.call(l.options, function(o){
-            return o.value.toLowerCase() === w; });
+    if (seg) {
+      seg.hidden = false;
+      seg.querySelectorAll('button').forEach(function(b){
+        b.setAttribute('aria-pressed', String(b.dataset.show === want));
+        b.addEventListener('click', function(){
+          want = b.dataset.show;
+          if (store) store.setItem('gf.view', want);
+          seg.querySelectorAll('button').forEach(function(o){
+            o.setAttribute('aria-pressed', String(o === b));
+          });
+          sift();
         });
-      fold.open = anyNew || !known;
-    });
-  });
+      });
+      sift();
+    }
 
-  // The pool manager. Every sheet is already on the page, shut; this only
-  // decides which one is showing and which rows inside it are.
-  var ov = document.getElementById('poolov');
-  if (ov) {
-    var sheets = ov.querySelectorAll('.sheet');
-    var shut = function(){
-      ov.hidden = true;
-      sheets.forEach(function(el){ el.hidden = true; });
-      ov.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
-    };
-    var show = function(kind, focusAdd){
-      sheets.forEach(function(el){ el.hidden = el.dataset.sheet !== kind; });
-      ov.hidden = false;
-      var open = ov.querySelector('.sheet[data-sheet="' + kind + '"]');
-      if (!open) return;
-      var box = open.querySelector(focusAdd ? 'textarea' : '.poolfind');
-      if (box) box.focus();
-    };
-    document.addEventListener('click', function(e){
-      var opener = e.target.closest('[data-pool]');
-      if (opener && !opener.dataset.edit) {
-        show(opener.dataset.pool, opener.dataset.open === 'add');
-        return;
-      }
-      if (e.target.closest('[data-shut]') || e.target === ov) { shut(); return; }
-      var edit = e.target.closest('[data-edit]');
-      if (!edit) return;
-      var sheet = edit.closest('.sheet');
-      var want = edit.dataset.edit;
-      sheet.querySelectorAll('.editrow').forEach(function(el){
-        el.hidden = el.dataset.for !== want || !el.hidden;
+    // An alert, put away for this tab. It comes back in a new one: the
+    // page is not deciding the problem is gone, the person is deciding
+    // they have read it.
+    document.querySelectorAll('.alert[data-alert]').forEach(function(el){
+      var key = 'gf.alert.' + el.dataset.alert;
+      if (store && store.getItem(key)) el.hidden = true;
+      var x = el.querySelector('[data-dismiss]');
+      if (x) x.addEventListener('click', function(){
+        el.hidden = true;
+        if (store) store.setItem(key, '1');
       });
     });
-    document.addEventListener('keydown', function(e){
-      if (e.key === 'Escape' && !ov.hidden) shut();
+
+    // What a press said: a toast for a few seconds, and gone from the
+    // address so a refresh does not say it again.
+    var said = document.querySelector('.said.toast');
+    if (said) {
+      said.classList.add('up');
+      if (window.history && history.replaceState && /[?&]said=/.test(location.search)) {
+        var clean = location.search.replace(/([?&])said=[^&]*&?/, '$1')
+          .replace(/[?&]$/, '');
+        history.replaceState(null, '', location.pathname + clean + location.hash);
+      }
+      setTimeout(function(){ said.classList.add('gone'); }, 3800);
+      setTimeout(function(){ said.remove(); }, 4400);
+    }
+
+    // The credentials for a brand-new address, opened the moment one is
+    // typed that the pool does not know, and shut again when it is.
+    var fold = document.getElementById('newone');
+    var byhand = document.querySelector('.byhand');
+    if (byhand && fold) byhand.classList.add('js');
+    document.querySelectorAll('.byhand input[list]').forEach(function(box){
+      var list = document.getElementById(box.getAttribute('list'));
+      if (!list || !fold) return;
+      box.addEventListener('input', function(){
+        var anyNew = Array.prototype.some.call(
+          document.querySelectorAll('.byhand input[list]'), function(b){
+            var l = document.getElementById(b.getAttribute('list'));
+            var w = b.value.trim().toLowerCase();
+            return w && l && !Array.prototype.some.call(l.options, function(o){
+              return o.value.toLowerCase() === w; });
+          });
+        fold.open = anyNew;
+      });
     });
+
     // Search and the state chips, one sift per sheet. An edit row follows
     // the row it belongs to: hiding a row and leaving its editor open is
     // an editor with nothing above it.
-    sheets.forEach(function(sheet){
+    document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
       var find = sheet.querySelector('.poolfind');
       var chips = sheet.querySelectorAll('.filters .pill');
       var body = sheet.querySelectorAll('tbody tr:not(.none):not(.editrow)');
@@ -1527,9 +1490,60 @@ _DASH_SCRIPT = """
         });
       });
     });
+
+    // The page refreshes itself while a phone builds. With the script
+    // here, that is a quiet swap rather than a reload.
+    var meta = document.querySelector('meta[http-equiv="refresh"]');
+    if (meta) {
+      var every = parseInt(meta.getAttribute('content'), 10) || 30;
+      meta.remove();
+      clearTimeout(init.timer);
+      init.timer = setTimeout(function(){ reload(); }, every * 1000);
+    }
+  }
+
+  // ------------------------------------------------------ the manager
+  var openKind = null;
+  function ov(){ return document.getElementById('poolov'); }
+  function shut(){
+    var o = ov(); if (!o) return;
+    o.hidden = true; openKind = null;
+    o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
+    o.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
+  }
+  function show(kind, focusAdd){
+    var o = ov(); if (!o) return;
+    o.querySelectorAll('.sheet').forEach(function(el){
+      el.hidden = el.dataset.sheet !== kind;
+    });
+    o.hidden = false; openKind = kind;
+    var open = o.querySelector('.sheet[data-sheet="' + kind + '"]');
+    if (!open) return;
+    var box = open.querySelector(focusAdd ? 'textarea' : '.poolfind');
+    if (box) box.focus();
   }
 
   document.addEventListener('click', function(e){
+    var opener = e.target.closest('[data-pool]');
+    if (opener && !opener.dataset.edit) {
+      show(opener.dataset.pool, opener.dataset.open === 'add');
+      return;
+    }
+    var o = ov();
+    if (e.target.closest('[data-shut]') || e.target === o) { shut(); return; }
+    var edit = e.target.closest('[data-edit]');
+    if (edit) {
+      var sheet = edit.closest('.sheet');
+      var want = edit.dataset.edit;
+      sheet.querySelectorAll('.editrow').forEach(function(el){
+        el.hidden = el.dataset.for !== want || !el.hidden;
+      });
+      return;
+    }
+    // "Back" inside a sheet that is showing a preview or a confirm goes
+    // back to the sheet, not to the page.
+    var back = e.target.closest('#poolov .sheetbody.sub a[href="/"]');
+    if (back) { e.preventDefault(); restoreSheet(back.closest('.sheet')); return; }
     var el = e.target.closest('.cp');
     if (!el) return;
     var text = el.textContent.trim();
@@ -1547,6 +1561,90 @@ _DASH_SCRIPT = """
     try { document.execCommand('copy'); flash(); } catch (err) {}
     box.remove();
   });
+  document.addEventListener('keydown', function(e){
+    var o = ov();
+    if (e.key === 'Escape' && o && !o.hidden) shut();
+  });
+
+  // A sheet can show a page of its own - the preview of a paste, the
+  // "are you sure" of a remove - in place of its list, and come back.
+  function restoreSheet(sheet){
+    var body = sheet.querySelector('.sheetbody.sub');
+    if (body && body._was) body.replaceWith(body._was);
+  }
+  function showInSheet(sheet, main){
+    var was = sheet.querySelector('.sheetbody');
+    var sub = document.createElement('div');
+    sub.className = 'sheetbody sub';
+    Array.prototype.slice.call(main.children).forEach(function(node){
+      if (node.matches('.top, script')) return;
+      sub.appendChild(node);
+    });
+    sub._was = was.classList.contains('sub') ? was._was : was;
+    was.replaceWith(sub);
+    init();
+  }
+
+  // ---------------------------------------------------- the requests
+  function parse(html){
+    return new DOMParser().parseFromString(html, 'text/html');
+  }
+  function swapMain(doc){
+    var fresh = doc.querySelector('main'), here = document.querySelector('main');
+    if (!fresh || !here) { location.reload(); return; }
+    var kept = openKind;
+    var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
+      return !(n.nodeType === 1 && n.matches('script'));
+    });
+    here.replaceChildren.apply(here, nodes);
+    init();
+    if (kept) show(kept, false);
+  }
+  function reload(){
+    fetch(location.pathname + location.search, {credentials: 'same-origin'})
+      .then(function(r){ return r.text(); })
+      .then(function(html){ swapMain(parse(html)); })
+      .catch(function(){ location.reload(); });
+  }
+  function isHere(url){
+    try { return new URL(url, location.href).pathname === '/'; }
+    catch (err) { return false; }
+  }
+
+  document.addEventListener('submit', function(e){
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if ((form.method || '').toLowerCase() !== 'post' || form.target) return;
+    if (!document.querySelector('main').contains(form)) return;
+    e.preventDefault();
+    var data = new FormData(form);
+    var pressed = e.submitter;
+    if (pressed && pressed.name) data.append(pressed.name, pressed.value);
+    var sheet = form.closest('#poolov .sheet');
+    form.classList.add('busy');
+    fetch(form.action, {method: 'POST', body: data, credentials: 'same-origin',
+                        redirect: 'follow'})
+      .then(function(r){
+        if (r.redirected && /\\/login(\\?|$)/.test(r.url)) {
+          location.assign(r.url); return null;
+        }
+        return r.text().then(function(html){ return {url: r.url, html: html}; });
+      })
+      .then(function(got){
+        if (!got) return;
+        var doc = parse(got.html);
+        if (isHere(got.url)) { swapMain(doc); return; }
+        // Not the dashboard: a preview, a confirm, a refusal. Inside the
+        // sheet it came from, if it came from one; else in place of the
+        // page, which is what the browser would have done.
+        var main = doc.querySelector('main');
+        if (sheet && main) showInSheet(sheet, main);
+        else swapMain(doc);
+      })
+      .catch(function(){ form.classList.remove('busy'); form.submit(); });
+  });
+
+  init();
 })();
 </script>"""
 

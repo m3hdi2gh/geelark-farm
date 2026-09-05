@@ -3275,15 +3275,17 @@ def test_the_stopped_card_is_absent_when_nothing_stopped(web, monkeypatch):
     assert "Needs a decision" not in body
 
 
-def test_the_dashboards_one_script_only_ever_reads_the_page(web, monkeypatch):
+def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
+        web, monkeypatch):
     """The console has no script anywhere else, and this is the exception.
 
-    What buys it: searching, filtering and copying are things a person does
-    to a page rather than to the farm, and each costs a round trip that
-    lands on a page which has moved - this one refreshes itself every
-    thirty seconds while a phone builds. What bounds it: nothing in here
-    may change data, so a browser that refuses it loses three conveniences
-    and no capability.
+    What it may do: arrange what is on the page, and send the page's own
+    forms without leaving it - the same action, the same fields, the same
+    HTML back, with only <main> swapped so the manager stays open and the
+    scroll stays put (the operator, 2026-09-05: every button reloaded the
+    page even when nothing needed it). What it may not do: invent a
+    request. Every fetch here is `form.action` or the page itself, and
+    nothing is built from markup strings.
     """
     _dash(monkeypatch)
     client = web()
@@ -3291,14 +3293,20 @@ def test_the_dashboards_one_script_only_ever_reads_the_page(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     script = body[body.index("<script>"):body.index("</script>")]
-    for forbidden in ("fetch(", "XMLHttpRequest", ".submit(", "action =",
-                      "innerHTML", "document.write"):
+    for forbidden in ("XMLHttpRequest", "innerHTML", "document.write",
+                      "action ="):
         assert forbidden not in script, forbidden
+    calls = re.findall(r"fetch\(([^,)]+)", script)
+    assert calls and all(c.strip() in ("form.action",
+                                       "location.pathname + location.search")
+                         for c in calls), calls
+    # The one real submit is the fallback when the network fails.
+    assert script.count(".submit(") == 1
+    assert "addEventListener('submit'" in script
     # The three views are hidden until the script shows them: buttons
     # that do nothing are worse than none.
     assert 'id="seg" role="group" aria-label="Show" hidden' in body
     assert 'id="phones"' in body and 'id="nohits"' in body
-
 
 def test_only_the_dashboard_carries_a_script(web, monkeypatch):
     """The exception is one page wide. If a second page ever needs one,
