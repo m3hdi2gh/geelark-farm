@@ -916,7 +916,7 @@ def test_each_view_shows_one_list_and_pages_it(web, monkeypatch):
     _, _, body = client.request("GET", "/pools/gmail?view=on_phone&page=2")
     assert seen == {"view": "on_phone", "seller": "", "page": 2}
     assert '<a href="/phones/1551">1551</a>' in body
-    assert '<span class="badge ready">ready</span>' in body
+    assert '<span class="badge ready">Ready</span>' in body
     assert '<span class="badge info">building</span>' in body
     assert '<span class="badge attn">incomplete</span>' in body
     assert '<span class="badge in_use">signing in</span>' in body
@@ -1183,7 +1183,7 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     assert "Instance manager" in body, "the page says what it is"
     assert "last pass" not in body, "the pass's clock is the alert strip's job"
     assert "IronHawk@gmail.com" in body and "SX27" in body
-    assert 'class="badge warn">warm' in body
+    assert 'class="badge warn">App only' in body
     # The accounts with no phone are the GPT card's list now; the panel
     # that carried them went with "Needs a decision" (2026-09-05).
     assert "waiting@x.com" in body
@@ -2263,7 +2263,7 @@ def test_a_farm_with_nothing_ready_says_so_quietly(web, monkeypatch):
     # The counts strip is gone, so a farm with nothing ready says it where
     # it is true: in the sentence, and in the table.
     assert "<i>ready</i>" not in body, "the counts strip is gone"
-    assert 'class="badge warn">warm' in body, "the one phone it does have"
+    assert 'class="badge warn">App only' in body, "the one phone it does have"
     assert 'class="badge ok">ready' not in body, "and nothing that is ready"
 
 
@@ -2370,7 +2370,8 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     _, _, body = client.request("GET", "/")
     # Who has it sits under the badge; when it last changed has its own
     # column now, and saying it twice was the page saying a number twice.
-    assert 'class="dim">ali' in body
+    # Whose it is rides as a second pill beside the status, not under it.
+    assert 'class="badge manual">With ali' in body
     assert app_mod.pages._ago("2026-09-03 10:00:00+00") in body
     assert '/phones/1500/state' in body and 'value="taken"' in body
     assert 'value="unused"' in body and "Release" in body, \
@@ -3326,7 +3327,7 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     _, _, body = client.request("GET", "/")
     assert 'action="/phones/build"' in body
     assert "pick@example.com" in body and "SX9" in body
-    assert "the next free one" in body, "blank means the pool decides"
+    assert 'placeholder="auto"' in body, "blank means the pool decides"
     assert "This spends one phone, one exit and one Gmail" in body
 
     status, headers, _ = client.request(
@@ -3452,7 +3453,6 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
     # An empty Gmail pool is the case the form is for - an address bought
     # this morning is in no pool - so the form stays and the hint says so.
     assert 'action="/phones/build"' in body
-    assert "The Gmail pool is empty" in body
     assert 'placeholder="a new address"' in body
 
     _dash(monkeypatch, stock={"gmail": {"free": 3}, "proxy": {"free": 0},

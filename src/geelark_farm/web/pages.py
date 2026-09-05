@@ -289,8 +289,12 @@ tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
 .err::before,.said::before{{font-family:var(--mono);margin-right:8px;font-weight:600}}
 .err::before{{content:"!"}}
 .said{{background:#0f2b1a;border:1px solid #1e5b2a;color:#9be3b3;padding:10px 14px;
- border-radius:8px;font-size:13px}}
-.said::before{{content:"✓"}}
+ border-radius:8px;font-size:13px;margin:0}}
+.said::before{{content:"✓ "}}
+.said.toast.up{{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+ z-index:60;box-shadow:0 12px 34px rgba(0,0,0,.5);
+ transition:opacity .4s,transform .4s}}
+.said.toast.gone{{opacity:0;transform:translate(-50%,8px)}}
 .hint{{color:var(--dim);font-size:12px;line-height:1.55}}
 /* ---- forms */
 input,textarea,select{{background:var(--panel2);border:1px solid #2c3a52;
@@ -424,6 +428,10 @@ p{{margin:0}}
 .byhand button.go{{padding:9px 18px;align-self:flex-end;margin-bottom:1px}}
 .byhand details.newone{{flex:1 1 100%;order:10;font-size:12px;
  color:var(--dim)}}
+/* With the script running, the fold exists only while it is needed -
+   an address the pool does not know has been typed. Without it, the
+   fold is simply there, shut, as a fold. */
+.byhand.js details.newone:not([open]){{display:none}}
 .byhand details.newone summary{{cursor:pointer;padding:2px 0}}
 .byhand details.newone input{{margin:8px 8px 0 0;width:220px}}
 .byhand p{{flex:1 1 100%;order:11;font-size:11px;line-height:1.5;margin:0}}
@@ -516,9 +524,15 @@ details.fold summary::-webkit-details-marker{{display:none}}
 details.fold summary:hover{{color:#fff}}
 details.fold[open]{{display:block;width:100%}}
 .alerts{{display:flex;flex-direction:column;gap:6px}}
-.alert{{display:block;padding:9px 14px;border-radius:8px;font-size:13px;
- border:1px solid;color:var(--ink)}}
-.alert::before{{font-family:var(--mono);font-weight:600;margin-right:8px}}
+.alert{{display:flex;align-items:center;gap:10px;padding:10px 14px;
+ border-radius:8px;font-size:13px;border:1px solid;border-left-width:3px;
+ color:var(--ink)}}
+.alert a{{color:inherit;flex:1}} .alert a:hover{{color:#fff}}
+.alert b{{color:#fff;font-weight:600}}
+.alert .x{{background:none;border:0;color:var(--muted);font-size:18px;
+ line-height:1;cursor:pointer;padding:0 2px}}
+.alert .x:hover{{color:#fff;background:none}}
+.alert::before{{font-family:var(--mono);font-weight:600}}
 .alert.warn{{background:#1c1a15;border-color:#57431c}}
 .alert.warn::before{{content:"!";color:var(--amber)}}
 .alert.bad{{background:#201414;border-color:var(--red-bg)}}
@@ -707,11 +721,25 @@ def _alert_strip(user: dict) -> str:
     found = (user.get("nav") or {}).get("alerts") or []
     if not found:
         return ""
-    lines = "".join(
-        f'<a class="alert {esc(a.get("level", "warn"))}" '
-        f'href="{esc(a.get("href") or "/")}">{esc(a.get("text", ""))}</a>'
-        for a in found)
-    return f'<div class="alerts">{lines}</div>'
+    import hashlib
+
+    lines = []
+    for a in found:
+        text = str(a.get("text", ""))
+        lead, dot, rest = text.partition(". ")
+        said = (f"<b>{esc(lead)}.</b> {esc(rest)}" if dot else esc(text))
+        # The key the dismissal is remembered under: a digest of the words,
+        # so the same alert stays put away and a reworded one comes back -
+        # and so the sentence is on the page once, not once more in an
+        # attribute.
+        key = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+        lines.append(
+            f'<div class="alert {esc(a.get("level", "warn"))}" '
+            f'data-alert="{key}">'
+            f'<a href="{esc(a.get("href") or "/")}">{said}</a>'
+            f'<button type="button" class="x" data-dismiss="1" '
+            f'aria-label="Dismiss">&times;</button></div>')
+    return f'<div class="alerts">{"".join(lines)}</div>'
 
 
 def login(error: str = "") -> str:
@@ -753,19 +781,36 @@ _DASH_SAID = {
 #: account is "warm" stock, which is what the keeper calls it.
 _PHONE_CLASS = {"ready": "ready", "app_only": "warn", "building": "info",
                 "incomplete": "attn"}
-_PHONE_WORD = {"app_only": "warm"}
+#: What a status is called on the dashboard. The loop says `app_only`
+#: and `warm`; a person handing phones out reads "App only" and knows what
+#: is missing from it, which is the one thing the word has to carry.
+_PHONE_WORD = {"app_only": "App only", "ready": "Ready",
+               "incomplete": "Incomplete", "building": "Building"}
 
 
 def _phone_word(status: str) -> str:
     return _PHONE_WORD.get(status, status or "?")
 
 
-def _phone_badge(row: dict) -> str:
-    if (row.get("state") or "") == "taken":
-        return '<span class="badge manual">taken</span>'
+def _phone_badge(row: dict, me: str | None = None) -> str:
+    """What the phone is, and - when `me` is given - whose it is.
+
+    With `me`, a taken phone keeps its status pill and gains a second one
+    saying who holds it: "With you", or "With ali". Taken is not a state
+    the phone is in, it is a fact about a person, and it used to replace
+    the one word that said whether the phone actually works.
+    """
     status = row.get("status") or ""
-    return (f'<span class="badge {_PHONE_CLASS.get(status, "")}">'
+    pill = (f'<span class="badge {_PHONE_CLASS.get(status, "")}">'
             f'{esc(_phone_word(status))}</span>')
+    if (row.get("state") or "") != "taken":
+        return pill
+    if me is None:
+        return '<span class="badge manual">taken</span>'
+    owner = str(row.get("owner") or "")
+    who = "With you" if owner and owner == me else (
+        f"With {owner}" if owner else "Taken")
+    return f'{pill} <span class="badge manual">{esc(who)}</span>'
 
 
 def _actor_bar(data: dict) -> str:
@@ -1176,7 +1221,7 @@ def _phone_rows(data: dict, user: dict) -> str:
     for r in phones:
         serial = str(r.get("serial") or "")
         status = r.get("status") or ""
-        badge = _phone_badge(r)
+        badge = _phone_badge(r, me)
         # Which of the three views this row belongs to. `free` is what a
         # person can take: not held, not still being built, and not a
         # phone that stopped halfway - that one is a row to look at, not
@@ -1185,12 +1230,6 @@ def _phone_rows(data: dict, user: dict) -> str:
         view = ("mine" if taken and str(r.get("owner") or "") == me else
                 "theirs" if taken else
                 "free" if status in ("ready", "app_only") else status)
-        if (r.get("state") or "") == "taken":
-            # Who has it, under the badge. When it changed has its own
-            # column now, so saying it here as well would be the page
-            # saying a number twice.
-            badge += (f'<br><span class="dim">'
-                      f'{esc(str(r.get("owner") or "somebody"))}</span>')
         if status == "building":
             lines.append(
                 f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
@@ -1204,8 +1243,8 @@ def _phone_rows(data: dict, user: dict) -> str:
             f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}</td>'
             f'<td>{_addr_cell(r.get("app_account"), "waiting for one")}</td>'
             f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
-            f'<td class="mono dim nowrap">{_ago(r.get("updated_at")) or "-"}'
-            f'</td>'
+            f'<td class="mono dim nowrap">'
+            f'{_ago(r.get("created_at") or r.get("updated_at")) or "-"}</td>'
             f'<td class="act">{_row_actions(user, r)}</td></tr>')
     return "".join(lines)
 
@@ -1333,7 +1372,7 @@ _DASH_SCRIPT = """
       ? shown + ' of ' + rows.length + ' shown'
       : rows.length + (rows.length === 1 ? ' phone' : ' phones');
   }
-  if (seg && rows.length) {
+  if (seg) {
     seg.hidden = false;
     seg.querySelectorAll('button').forEach(function(b){
       b.addEventListener('click', function(){
@@ -1357,6 +1396,59 @@ _DASH_SCRIPT = """
     });
   }
 
+
+  // An alert, put away for this tab. It comes back in a new one: the
+  // page is not deciding the problem is gone, the person is deciding they
+  // have read it.
+  var store = null;
+  try { store = window.sessionStorage; } catch (err) {}
+  document.querySelectorAll('.alert[data-alert]').forEach(function(el){
+    var key = 'gf.alert.' + el.dataset.alert;
+    if (store && store.getItem(key)) el.hidden = true;
+    var x = el.querySelector('[data-dismiss]');
+    if (x) x.addEventListener('click', function(){
+      el.hidden = true;
+      if (store) store.setItem(key, '1');
+    });
+  });
+
+  // What a press said: a toast for a few seconds, and gone from the
+  // address so a refresh does not say it again.
+  var said = document.querySelector('.said.toast');
+  if (said) {
+    said.classList.add('up');
+    if (window.history && history.replaceState && /[?&]said=/.test(location.search)) {
+      var clean = location.search.replace(/([?&])said=[^&]*&?/, '$1')
+        .replace(/[?&]$/, '');
+      history.replaceState(null, '', location.pathname + clean + location.hash);
+    }
+    setTimeout(function(){ said.classList.add('gone'); }, 3800);
+    setTimeout(function(){ said.remove(); }, 4400);
+  }
+
+  // The credentials for a brand-new address, opened the moment one is
+  // typed that the pool does not know, and shut again when it is.
+  var fold = document.getElementById('newone');
+  var byhand = document.querySelector('.byhand');
+  if (byhand && fold) byhand.classList.add('js');
+  document.querySelectorAll('.byhand input[list]').forEach(function(box){
+    var list = document.getElementById(box.getAttribute('list'));
+    if (!list || !fold) return;
+    box.addEventListener('input', function(){
+      var v = box.value.trim().toLowerCase();
+      var known = !v || Array.prototype.some.call(list.options, function(o){
+        return o.value.toLowerCase() === v;
+      });
+      var anyNew = Array.prototype.some.call(
+        document.querySelectorAll('.byhand input[list]'), function(b){
+          var l = document.getElementById(b.getAttribute('list'));
+          var w = b.value.trim().toLowerCase();
+          return w && l && !Array.prototype.some.call(l.options, function(o){
+            return o.value.toLowerCase() === w; });
+        });
+      fold.open = anyNew || !known;
+    });
+  });
 
   // The pool manager. Every sheet is already on the page, shut; this only
   // decides which one is showing and which rows inside it are.
@@ -1580,7 +1672,7 @@ def _send_form(user: dict, address: str, back: str = "/") -> str:
             f'{_csrf(user)}'
             f'<input type="hidden" name="addresses" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<button class="quiet go send" title="sign this account into '
+            f'<button class="quiet send" title="sign this account into '
             f'the next warm phone">&rarr; phone</button></form>')
 
 
@@ -1606,10 +1698,11 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
     items = []
     for row in free[:4]:
         label = str(row.get("address") or "?")
+        tag = (str(row.get("seller") or "") if kind == "gmail" else
+               f'{row.get("host") or ""}:{row.get("port") or ""}'
+               if kind == "proxy" and row.get("host") else "")
         aside = (_send_form(user, label) if send
-                 else f'<span class="tag">'
-                      f'{esc(str(row.get("seller") or "") if kind == "gmail" else "")}'
-                      f'</span>')
+                 else f'<span class="tag">{esc(tag)}</span>')
         items.append(f'<li><span class="t" title="{esc(label)}">'
                      f'{esc(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
@@ -1906,10 +1999,8 @@ def _build_card(data: dict, user: dict) -> str:
     # address the pool has never seen, and an account bought this morning
     # is exactly what this form is for. The hint says so instead of the
     # form hiding (2026-09-05).
-    hint = ("The Gmail pool is empty - type an address and its password "
-            "below, and the phone is built on it." if not free else
-            "Pick one from the pool or type an address that is not in it "
-            "yet. Leave a box empty and the keeper takes the next in line.")
+    hint = ("Pick one from the pool or type an address that is not in it "
+            "yet. Leave a field empty and the keeper takes the next in line.")
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
@@ -1917,30 +2008,31 @@ def _build_card(data: dict, user: dict) -> str:
         f'{_csrf(user)}'
         f'<label>Gmail'
         + _free_picker("gmail", choose.get("gmails"),
-                       NEXT_FREE if free else "a new address")
+                       "auto" if free else "a new address")
         + '</label>'
         + '<label>Exit'
-        + _free_picker("proxy_name", choose.get("proxies"), NEXT_FREE)
+        + _free_picker("proxy_name", choose.get("proxies"), "auto")
         + '</label>'
         '<label class="tick"><input type="checkbox" name="install_app" '
-        'value="1" checked> install the GPT app</label>'
+        'value="1" checked> Install the app</label>'
         + '<label>GPT account'
-        + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
+        + _free_picker("app_account", choose.get("apps"), "none")
         + '</label>'
         '<button class="go">Build</button>'
         # Only an address the pool has never heard of needs these. Folded
         # rather than appearing as you type: a field you find out about
         # after pressing the button is a field that arrived too late.
-        '<details class="fold newone"><summary>credentials, for an address '
-        'the pool does not have yet</summary>'
+        # Shut, and the script opens it by itself the moment an address is
+        # typed that the pool does not know - the one time these are
+        # needed. Without the script it is a fold, and still there.
+        '<details class="fold newone" id="newone"><summary>credentials, '
+        'for an address the pool does not have yet</summary>'
         '<input name="gmail_password" placeholder="Gmail password" '
         'autocomplete="off">'
         '<input name="gmail_secret" placeholder="2fa secret or recovery '
         'address - optional" autocomplete="off">'
         '<input name="app_password" placeholder="GPT password" '
         'autocomplete="off"></details>'
-        '<p class="dim">This spends one phone, one exit and one Gmail. '
-        'The next pass starts it.</p>'
         '</form></div>')
 
 
@@ -2023,6 +2115,10 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
         return "Stopped by the breaker — nothing is being built", "red"
     if pulse.get("paused"):
         return "Paused — nothing new is being built", "amber"
+    if warm < target and pulse.get("warning"):
+        # Short, and the pass has said why nothing can be built. Calling
+        # that "Building" is the page telling a story the loop is not.
+        return "Idle — waiting for stock", "amber"
     if warm < target:
         return f"Building — {warm} of {target} phones warm", "amber"
     return f"Stocked — {warm} of {target} phones warm", "green"
@@ -2074,7 +2170,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>gpt account</th><th>exit</th>'
-             f'<th>changed</th><th></th></tr></thead>'
+             f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
              f'<tr class="none" id="nohits" hidden><td colspan="7">'
              f'Nothing here matches that.</td></tr></tbody></table>'
@@ -2128,7 +2224,11 @@ def dashboard(data: dict, user: dict, said: str = "",
     # looking for stock now looks.
     side = _supply_card(data, user, manual_login)
 
-    body = (f'<div class="wide">'
+    # The alert strip inside the page column, not above it: the page's
+    # first line, the width of the page, with the rest under it. `page()`
+    # is told nothing is left for it to add.
+    quiet = dict(user, nav=dict(user.get("nav") or {}, alerts=[]))
+    body = (f'<div class="wide">{_alert_strip(user)}'
             f'<div class="top"><h2>Instance manager</h2>'
             f'<span class="status">{_status_sentence(data)}</span>'
             f'{_who_and_out(user)}</div>'
@@ -2138,7 +2238,7 @@ def dashboard(data: dict, user: dict, said: str = "",
             + _DASH_SCRIPT)
     busy = bool(building) or int(
         (data.get("queue") or {}).get("queued") or 0) > 0
-    return page("Instance manager", body, user=user, here="/",
+    return page("Instance manager", body, user=quiet, here="/",
                 refresh=30 if busy else 0)
 
 
@@ -2954,10 +3054,13 @@ def _said(said: str, table: dict) -> str:
     note = table.get(word, "")
     if not note:
         return ""
+    # `toast`: the script moves it to the corner and lets it go after a
+    # few seconds, and takes `?said=` off the address so a refresh does
+    # not say it again. Without the script it is the banner it always was.
     if word in ("queued", "already") and req.isdigit():
-        return (f'<p class="said">{esc(note)} <a href="/requests?hi={req}">'
-                f'#{req} on Requests</a></p>')
-    return f'<p class="said">{esc(note)}</p>'
+        return (f'<p class="said toast">{esc(note)} '
+                f'<a href="/requests?hi={req}">#{req} on Requests</a></p>')
+    return f'<p class="said toast">{esc(note)}</p>'
 
 
 def _kind_2fa(row: dict) -> str:

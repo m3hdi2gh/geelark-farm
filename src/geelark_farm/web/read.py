@@ -171,7 +171,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         phone_rows = store._rows(
             "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
             " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
-            " u.username AS owner"
+            " p.created_at, u.username AS owner"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL"
             " AND (%s::bigint IS NULL OR p.owner_id = %s)"
