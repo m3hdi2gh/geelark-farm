@@ -200,7 +200,8 @@ def act_wait(ctx: Context) -> Outcome | None:
 def drive(ctx: Context, screens: list[Screen], *,
           is_done: Callable[[], Outcome | None],
           budget_seconds: float,
-          logger: logging.Logger | None = None) -> Outcome:
+          logger: logging.Logger | None = None,
+          watch: Callable[[], None] | None = None) -> Outcome:
     """`_drive`, with the path it walked attached to whatever comes back.
 
     A wrapper rather than a line before each `return`: the loop below has five
@@ -209,7 +210,8 @@ def drive(ctx: Context, screens: list[Screen], *,
     what makes a failure's shape readable.
     """
     outcome = _drive(ctx, screens, is_done=is_done,
-                     budget_seconds=budget_seconds, logger=logger)
+                     budget_seconds=budget_seconds, logger=logger,
+                     watch=watch)
     outcome.trail = list(ctx.trail)
     return outcome
 
@@ -217,11 +219,17 @@ def drive(ctx: Context, screens: list[Screen], *,
 def _drive(ctx: Context, screens: list[Screen], *,
            is_done: Callable[[], Outcome | None],
            budget_seconds: float,
-           logger: logging.Logger | None = None) -> Outcome:
+           logger: logging.Logger | None = None,
+           watch: Callable[[], None] | None = None) -> Outcome:
     """Run the loop until something conclusive happens.
 
     Returns rather than raises: a batch needs to record why a row failed and
-    move on, not unwind.
+    move on, not unwind. `watch` is the exception and is the caller's own:
+    it is called once a screen and whatever it raises comes straight back
+    out. That is how "Cancel" reaches a flow. Without it the press was
+    noticed only between build steps, and a sign-in walking a captcha is
+    one step - so a phone somebody had stopped went on answering grids for
+    another five minutes (2026-09-06).
     """
     out = logger or log
     if ctx.artifact_dir:
@@ -236,6 +244,8 @@ def _drive(ctx: Context, screens: list[Screen], *,
     unknown_streak = 0
 
     while time.monotonic() < deadline:
+        if watch is not None:
+            watch()
         # Device truth first: the only definition of success.
         finished = is_done()
         if finished:

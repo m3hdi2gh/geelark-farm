@@ -980,7 +980,8 @@ class Run:
         self.ctx = None
 
     def install(self, monkeypatch):
-        def drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+        def drive(ctx, screens, *, is_done, budget_seconds, logger=None,
+                  watch=None):
             self.is_done = is_done
             self.ctx = ctx
             return self.drove

@@ -585,6 +585,9 @@ def _sign_into_app(session: _Session) -> Build | None:
             # Where a code OpenAI emails is answered from. Nothing by
             # default, which reports the page exactly as it always did.
             codes=s.codes,
+            # As above: a press on Cancel is felt at the next screen, not
+            # at the end of this login.
+            watch=s.check_cancelled,
             # Every attempt after the first starts from a cleared app. The
             # previous one left the app wherever it stopped, and the router
             # matches whatever is on screen - so without this, one account's
@@ -964,6 +967,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 artifact_dir=artifacts,
                 solver_key=settings.capsolver_key,
                 captcha_max=settings.captcha_max_attempts,
+                # "Cancel" reaches inside the sign-in. Checked only here,
+                # between build steps, it could not: a sign-in walking a
+                # captcha is one step, so a phone somebody had stopped went
+                # on answering grids for another five minutes.
+                watch=check_cancelled,
             )
             build.trails.append(("google", outcome.trail))
             if outcome.ok:

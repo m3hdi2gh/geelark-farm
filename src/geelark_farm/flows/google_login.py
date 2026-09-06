@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1320,7 +1321,8 @@ def open_add_account(client: Client, phone_id: str) -> None:
 def sign_in(client: Client, phone_id: str, account: Account, *,
             budget_seconds: float = 900, artifact_dir: Path | None = None,
             already_open: bool = False, solver_key: str = "",
-            captcha_max: int = 3) -> Outcome:
+            captcha_max: int = 3,
+            watch: Callable[[], None] | None = None) -> Outcome:
     """Drive the login to a named outcome.
 
     Returns rather than raises: a batch needs to record why a row failed and
@@ -1373,7 +1375,7 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
                            f"{account.email} is on the device")
         return None
 
-    return router.drive(ctx, SCREENS, is_done=signed_in,
+    return router.drive(ctx, SCREENS, is_done=signed_in, watch=watch,
                         budget_seconds=budget_seconds, logger=log)
 
 

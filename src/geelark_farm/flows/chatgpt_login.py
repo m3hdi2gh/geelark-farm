@@ -63,6 +63,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1059,7 +1060,8 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             package: str, budget_seconds: float = 600,
             artifact_dir: Path | None = None,
             fresh: bool = False,
-            codes: codes_mod.CodeSource | None = None) -> Outcome:
+            codes: codes_mod.CodeSource | None = None,
+            watch: Callable[[], None] | None = None) -> Outcome:
     """Drive the app login to a named outcome.
 
     `fresh` clears the app first. A caller trying a second account on one phone
@@ -1092,7 +1094,7 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
                            f"{creds.email}: the composer is on screen")
         return None
 
-    out = router.drive(ctx, SCREENS, is_done=logged_in,
+    out = router.drive(ctx, SCREENS, is_done=logged_in, watch=watch,
                        budget_seconds=budget_seconds, logger=log)
     if not out.ok:
         return out

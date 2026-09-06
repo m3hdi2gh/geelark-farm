@@ -652,3 +652,32 @@ def test_the_fallback_reads_the_typed_box_and_not_the_password_one(keys,
 
     assert router.fill(context(), box, "a@b.com") is True
     assert board.typed == ["a@b.com"], "it compared against the password box"
+
+
+def test_a_watch_is_felt_at_the_next_screen_and_not_at_the_end():
+    """"Cancel" reaches inside a flow through `watch`. Without it the press
+    was noticed only between build steps, and a sign-in walking a captcha
+    is one step - so a phone somebody had stopped went on answering grids
+    for another five minutes (2026-09-06)."""
+    class Stopped(Exception):
+        pass
+
+    seen = []
+
+    def watch():
+        seen.append(1)
+        if len(seen) == 2:
+            raise Stopped
+
+    ctx = router.Context(client=None, phone_id="P")
+    ctx.refresh = lambda: setattr(
+        ctx, "elements", [screen.Element(text="hi", desc="", cls="TextView",
+                                         resource_id="", bounds="[0,0][10,10]",
+                                         clickable=False, enabled=True,
+                                         focused=False, password=False)])
+    screens = [router.Screen("wait", lambda c: True, lambda c: None,
+                             max_visits=50)]
+    with pytest.raises(Stopped):
+        router.drive(ctx, screens, is_done=lambda: None,
+                     budget_seconds=30, watch=watch)
+    assert seen == [1, 1], "checked every screen, and stopped on the second"

@@ -960,7 +960,8 @@ def test_the_device_is_not_asked_on_every_pass(monkeypatch):
 
     driven = {}
 
-    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None,
+                   watch=None):
         driven["is_done"] = is_done
         return google_login.Outcome("budget", "budget_exhausted")
 
@@ -986,7 +987,8 @@ def test_the_poll_does_not_end_a_login_over_one_refused_command(monkeypatch):
 
     driven = {}
 
-    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None,
+                   watch=None):
         driven["is_done"] = is_done
         return google_login.Outcome("budget", "budget_exhausted")
 
@@ -1343,7 +1345,8 @@ class Session:
             return (self.answers.pop(0) if len(self.answers) > 1
                     else self.answers[0])
 
-        def drive(ctx, screens, *, is_done, budget_seconds, logger=None):
+        def drive(ctx, screens, *, is_done, budget_seconds, logger=None,
+                  watch=None):
             self.driven = {"is_done": is_done, "budget": budget_seconds}
             return outcome or Outcome("fatal", "never_got_there")
 
