@@ -61,7 +61,7 @@ def _tab(book, name: str):
 
 def _rows(sheet) -> list[dict]:
     """A tab as dicts, keyed by its own header row."""
-    values = gsheet.read_values(sheet)
+    values = gsheet.read_values(sheet, what=f"the {sheet.title} tab")
     if not values:
         return []
     headers = [h.strip() for h in values[0]]
