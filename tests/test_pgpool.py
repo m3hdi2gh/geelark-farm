@@ -542,16 +542,24 @@ def test_claim_this_takes_only_the_named_row_over_postgres_too():
     assert pool.beat() == 1, "held like any other claim"
 
 
-def test_every_query_that_picks_stock_ignores_what_left_the_tab():
-    """`resources` holds everything the farm has ever seen - the mirror
-    never deleted, so that "what did we build on Tuesday" stays
-    answerable. On 2026-09-05 that was four hundred and twenty-six Gmail
-    rows against six on the tab.
+def test_no_query_here_still_reads_the_retired_sheet_flag():
+    """The rule this replaces was right for a year and wrong the day the
+    sheet was retired.
 
-    So a query here that asks for rows without asking `on_sheet` hands out
-    history as stock. Throwing the C2 switch with `claim` written that way
-    would have spent nineteen addresses that had been deleted from the
-    tab, one phone and one exit at a time.
+    It said: a query that picks stock without asking `on_sheet` hands out
+    history as stock, because `resources` holds everything the farm has
+    ever seen and on 2026-09-05 that was four hundred and twenty-six Gmail
+    rows against six on the tab. True then. But the column was written by
+    exactly one statement, in the mirror, and the mirror stopped running
+    for resources the day POOLS_IN_PG went on - so the value froze, and a
+    frozen gate is not a gate, it is a wall. The builder could see sixteen
+    Gmails, none free, while the table held four hundred and thirty-one;
+    twenty-one usable rows were invisible to the console and the builder
+    alike, and unreachable by any console path (2026-09-06, found by
+    audit).
+
+    What replaced it is the table itself: removal is a hard DELETE here, so
+    a row that is present is stock, and nothing needs a flag to say so.
 
     A sweep rather than a list, because the next query is written by
     somebody who never read this.
@@ -576,11 +584,11 @@ def test_every_query_that_picks_stock_ignores_what_left_the_tab():
     # By kind is what "give me a row of this pool" looks like. A query
     # that names one row by id - a delete, an update of a row already
     # picked - is not picking, and asking it would be noise.
-    reading = [q for q in calls
-               if "WHERE kind = %s" in q and "on_sheet" not in q]
+    reading = [q for q in calls if "on_sheet" in q]
     assert not reading, (
-        "these pick rows out of resources without asking whether the row is "
-        "still stock: " + " | ".join(q[:80] for q in reading))
+        "these read a column nothing has written since POOLS_IN_PG went on, "
+        "so they answer from a frozen picture: "
+        + " | ".join(q[:80] for q in reading))
 
 
 # ------------------------------------ the last three tabs, over the store

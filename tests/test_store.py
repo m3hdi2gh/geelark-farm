@@ -990,16 +990,15 @@ def test_the_mirror_says_which_rows_are_still_on_the_sheet():
 
     did = shadow.write_shadow(conn, book)
 
-    marked = [(sql, params) for sql, params in conn.cur.executed
-              if "on_sheet" in sql]
-    assert len(marked) == 1, "one statement, after the rows are in"
-    sql, params = marked[0]
-    assert "UPDATE resources SET on_sheet = (id = ANY(%s))" in sql
-    # Only what changed: this runs every thirty seconds over every row the
-    # farm has ever seen.
-    assert "WHERE on_sheet <> (id = ANY(%s))" in sql
-    assert params == ([11], [11]), "the one row the pass actually saw"
-    assert did["left_the_sheet"] == 2
+    # The mirror does not write the sheet flag any anymore, and must not:
+    # nothing reads it, so writing it would only be a way for it to come
+    # back. This one statement over the whole table would mark every row
+    # born in the store since the switch as "not on the sheet" within
+    # thirty seconds, the first time anyone tried POOLS_IN_PG=0 as a
+    # rollback - which is not one (2026-09-06).
+    marked = [sql for sql, _ in conn.cur.executed if "on_sheet" in sql]
+    assert marked == [], "the retired flag was written again"
+    assert did["left_the_sheet"] == 0
 
 
 def test_the_upserts_hand_back_the_row_they_touched():
@@ -1120,3 +1119,20 @@ def test_no_write_is_sent_through_the_reading_helper():
              for m in reading.finditer(text)]
 
     assert not wrong, "these writes are rolled back: " + "; ".join(wrong)
+
+
+def test_the_retired_sheet_flag_is_written_by_nothing_at_all():
+    """One statement wrote it, in the mirror, and that statement is gone.
+    Left dormant it would be the way the column comes back: it runs over
+    the whole table, so the first time anyone tried POOLS_IN_PG=0 as a
+    rollback it would mark every row born in the store since the switch as
+    "not on the sheet", within thirty seconds (2026-09-06)."""
+    import pathlib
+
+    for name in ("store/shadow.py", "store/pgpool.py", "store/db.py",
+                 "web/read.py", "web/api_v1_read.py", "web/api_v1_write.py"):
+        source = pathlib.Path("src/geelark_farm", name).read_text(
+            encoding="utf-8")
+        code = "\n".join(line for line in source.split("\n")
+                         if not line.lstrip().startswith("#"))
+        assert "on_sheet" not in code, f"{name} still touches the sheet flag"

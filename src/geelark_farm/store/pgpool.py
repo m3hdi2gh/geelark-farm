@@ -98,7 +98,7 @@ class ResourceTable:
     def rows(self, kind: str) -> list[dict]:
         with self._lock, self._connect() as conn:
             cur = conn.execute(
-                "SELECT * FROM resources WHERE kind = %s AND on_sheet"
+                "SELECT * FROM resources WHERE kind = %s"
                 " ORDER BY sheet_row NULLS LAST, id", (kind,))
             names = [d.name for d in cur.description]
             out = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
@@ -130,7 +130,7 @@ class ResourceTable:
             cur = conn.execute(
                 f"WITH picked AS ("
                 f"  SELECT id FROM resources"
-                f"  WHERE kind = %s AND error IS NULL AND on_sheet"
+                f"  WHERE kind = %s AND error IS NULL"
                 f"    AND lower(status) = ANY(%s)"
                 f"    AND (%s::bigint IS NULL OR id = %s)"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"

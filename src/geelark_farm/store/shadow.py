@@ -49,27 +49,28 @@ def write_shadow(conn, book, *, resources: bool = True,
     did = {"resources": 0, "phones": 0, "closed": 0}
     with conn.cursor() as cur:
         if resources:
-            on_sheet = []
             for pool, kind in ((book.gmails, "gmail"),
                                (book.proxies, "proxy"), (book.apps, "app")):
                 for row in pool._rows:
-                    found = _upsert_resource(cur, kind, pool, row)
-                    if found is not None:
-                        on_sheet.append(found)
+                    _upsert_resource(cur, kind, pool, row)
                     did["resources"] += 1
-            # Which rows are still on a tab, the same shape phones have had
-            # all along. Nothing is deleted - a row that left keeps its
-            # history, which is the whole reason this mirror never deletes -
-            # but a row that left is not stock, and counting it as free is
-            # how the front page came to say nineteen Gmails while the tab
-            # held none (2026-09-05).
+            # `on_sheet` is not written any more. It said which rows were
+            # still on a tab, which mattered while the tab was the pool: a
+            # row that left it was not stock, and counting it as free is how
+            # the front page came to say nineteen Gmails while the tab held
+            # none (2026-09-05). With the pools in the store the table *is*
+            # the pool, this branch has not run since the day that switch
+            # was thrown, and the column it wrote froze - still gating
+            # twenty queries, hiding twenty-one usable rows from both the
+            # console and the builder (2026-09-06, found by audit).
             #
-            # Only what changed is written: this runs every thirty seconds
-            # over every row the farm has ever seen.
-            cur.execute(
-                "UPDATE resources SET on_sheet = (id = ANY(%s))"
-                " WHERE on_sheet <> (id = ANY(%s))", (on_sheet, on_sheet))
-            did["left_the_sheet"] = cur.rowcount
+            # Left out rather than left dormant. Nothing reads the column
+            # now, so writing it would only be a way for it to come back:
+            # this statement over the whole table would mark every row born
+            # in the store since the switch as "not on the sheet", within
+            # thirty seconds, the first time anyone tried POOLS_IN_PG=0 as
+            # a rollback. It is not one - see .env.example.
+            did["left_the_sheet"] = 0
         if phones:
             live = _upsert_phones(cur, book)
             did["phones"] = len(live)

@@ -342,3 +342,21 @@ def test_enqueue_records_the_asking_as_an_event(monkeypatch, make_settings):
     assert emitted == [("request", {"status": "queued", "user_id": 8,
                                     "serial": "1549",
                                     "detail": "#41 change_proxy: asked by ali"})]
+
+
+def test_a_quick_command_is_not_measured_against_a_builds_clock():
+    """A boot that a restart orphaned sat on the Requests page spinning for
+    two hours, because the sweep used twice the build budget for every row
+    (2026-09-06)."""
+    conn = _ScriptedConn([None], rowcounts=[1])
+    actions_mod.expire_running(conn, older_than=7200,
+                               quick=("boot_phone", "control"),
+                               quick_after=600)
+    sql = conn.sql[0]
+    assert "CASE WHEN verb = ANY(%s) THEN %s ELSE %s END" in sql
+
+
+def test_the_sweep_still_has_one_clock_when_nothing_is_named_quick():
+    conn = _ScriptedConn([None], rowcounts=[0])
+    assert actions_mod.expire_running(conn, older_than=7200) == 0
+    assert "make_interval" in conn.sql[0]

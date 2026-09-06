@@ -341,6 +341,14 @@ ACTION_VERBS: dict = {
 ACTION_VERBS.update(verbs.VERBS)
 
 
+#: How long a command that is over in seconds may sit `running` before a
+#: restart is assumed to have taken it. The build budget is the wrong clock
+#: for a boot: measured against it, a boot an orphaned restart left behind
+#: spun on the Requests page for two hours (2026-09-06). Generous even so -
+#: `test_all_proxies` checks every exit, eight at a time.
+QUICK_COMMAND_SECONDS = 600.0
+
+
 #: What the control lane may take. Read from the verb table rather than
 #: listed twice: a verb says for itself whether it is quick enough and holds
 #: nothing a build needs, and a list here would be the second place to
@@ -540,7 +548,9 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                 # the drain.
                 try:
                     store_actions.expire_running(
-                        conn, older_than=2 * settings.build_budget_seconds)
+                        conn, older_than=2 * settings.build_budget_seconds,
+                        quick=lane_verbs(),
+                        quick_after=QUICK_COMMAND_SECONDS)
                 except Exception as exc:                          # noqa: BLE001
                     # A statement that fails leaves the transaction
                     # aborted, and everything after it on this

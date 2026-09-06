@@ -445,6 +445,39 @@ ALTER TABLE resources ADD COLUMN IF NOT EXISTS on_sheet boolean NOT NULL DEFAULT
 CREATE INDEX IF NOT EXISTS resources_free
     ON resources (kind) WHERE status = '' AND error IS NULL AND on_sheet;
 
+-- ---------------------------------------------- resources, rev 15 (audit)
+-- And that column is retired, because the sheet it named is retired.
+--
+-- It was written by one statement, in the mirror, and the mirror stopped
+-- running for resources the day POOLS_IN_PG went on: `serve.py` passes
+-- `resources=not settings.pools_in_pg`. So the value froze at whatever the
+-- last pre-switch pass wrote, nothing has touched it since, and every row
+-- born in the store has been stuck true by this default.
+--
+-- Frozen, it was still gating about twenty queries and the pool loader. The
+-- builder could see sixteen Gmails, none of them free, while the table held
+-- four hundred and thirty-one; the console showed a row only when
+-- `status <> '' OR on_sheet`, so a row that was free AND off-sheet was
+-- invisible from both directions; and pressing Free on the console moved a
+-- row into exactly that hole. Twenty-one usable rows sat there - nineteen
+-- Gmails, fourteen of them with a 2FA secret, and two GPT accounts - all
+-- `source='sheet'`, never on a phone, unreachable by any console path
+-- (2026-09-06, found by audit).
+--
+-- Safe to stop reading, and checked before it was: removal is a hard
+-- `DELETE FROM resources` (pgpool.delete_row), so a row a person removed is
+-- gone rather than hidden, and cross-checking the twelve `remove_gmail` and
+-- four `remove_app` requests against the hidden rows found no overlap at
+-- all. What the flag hid was never a decision; it was the sheet's shadow.
+--
+-- The column stays for one soak, with the evidence in it, and no query may
+-- read it - there is a test. This index is the same one without the dead
+-- predicate; the old one is dropped because it can no longer serve the
+-- queries it was built for.
+DROP INDEX IF EXISTS resources_free;
+CREATE INDEX IF NOT EXISTS resources_free_stock
+    ON resources (kind) WHERE status = '' AND error IS NULL;
+
 -- -------------------------------------------- wanted builds, rev 12 (C12)
 -- A phone somebody asked for by hand, with the credentials they chose.
 --

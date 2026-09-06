@@ -3249,12 +3249,11 @@ def test_every_query_that_calls_a_row_free_says_it_is_still_on_the_sheet():
         calls.append(" ".join(buf.split()))
 
     assert calls, "the sweep found no queries at all, so it proves nothing"
-    guilty = [q for q in calls
-              if "status = ''" in q and "error IS NULL" in q
-              and "on_sheet" not in q]
+    guilty = [q for q in calls if "on_sheet" in q]
     assert not guilty, (
-        "these call a row free without asking whether it is still on the "
-        "sheet: " + " | ".join(q[:90] for q in guilty))
+        "these read the retired sheet flag, which nothing has written since "
+        "POOLS_IN_PG went on - a frozen gate, not a gate: "
+        + " | ".join(q[:90] for q in guilty))
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3685,7 +3684,7 @@ def test_the_manager_never_lists_a_row_that_is_finished_with():
     body = inspect.getsource(read._pool_rows)
     assert "status <> 'used'" in body
     assert "status <> 'delivered'" in body
-    assert body.count("on_sheet") == 3, "all three, the same rule as the rest"
+    assert "on_sheet" not in body, "the sheet flag is retired"
 
 
 # ---------------------------------------------- the contract, slice B

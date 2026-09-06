@@ -74,18 +74,27 @@ def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
     return int(rows[0]["id"]) if rows else None
 
 
-def expire_running(conn, *, older_than: float) -> int:
+def expire_running(conn, *, older_than: float,
+                   quick: tuple[str, ...] = (), quick_after: float = 0) -> int:
     """Close rows a restart orphaned: still `running`, taken more than
     `older_than` seconds ago, nothing ever settled them. The phones'
     own stories say what became of the work; the row says why it is
-    not still spinning on the Requests page."""
+    not still spinning on the Requests page.
+
+    `quick` is the verbs that are over in seconds - the control lane's -
+    and they get `quick_after` instead. Measured against a build's clock,
+    a boot that a restart orphaned sat on the Requests page spinning for
+    two hours, which is a lie about a command that could not have taken
+    more than a minute (2026-09-06).
+    """
     cur = conn.execute(
         "UPDATE actions SET status = 'failed', finished_at = now(),"
         " result = 'the service restarted while this ran - see the"
         " phones'' stories'"
         " WHERE status = 'running'"
-        " AND executed_at < now() - make_interval(secs => %s)",
-        (float(older_than),))
+        " AND executed_at < now() - make_interval(secs => CASE"
+        "     WHEN verb = ANY(%s) THEN %s ELSE %s END)",
+        (list(quick), float(quick_after or older_than), float(older_than)))
     closed = getattr(cur, "rowcount", 0) or 0
     conn.commit()
     return closed
