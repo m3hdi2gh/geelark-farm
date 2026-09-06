@@ -317,6 +317,88 @@ def _tile_points(rect: tuple[int, int, int, int], size: int,
     return points
 
 
+#: How far apart the lightest and darkest pixel of a line must be before
+#: it counts as part of a photograph. A tile is a street scene and clears
+#: this easily; the banner's flat blue and the card's white are 0.
+_TILE_CONTRAST = 40
+
+#: How big the picture has to be for CapSolver to read each grid, which is
+#: the size Google serves that grid at. The solver reads the shape *from
+#: the size*: the same 4x4 sent at 300 came back read as a 3x3, naming
+#: three tiles that had no crosswalk in them, and sent at the phone's own
+#: 631 it would not read a grid at all (2026-09-06).
+_GRID_PIXELS = {3: 300, 4: 450}
+
+#: Pixels of flat colour that may sit inside the tile block without ending
+#: it: the white lines between tiles, and a stray row or two of the
+#: heading's text bleeding down when a screenshot is not the hierarchy's
+#: own size. The block itself is hundreds of pixels tall, so bridging a
+#: handful cannot join two real things together.
+_TILE_GAP = 8
+
+
+def _tiles_in(image, box: tuple[int, int, int, int]):
+    """The tile block inside `box`, as a rectangle in the same pixels.
+
+    Found by looking rather than by measuring the page: a tile is a
+    photograph and a photograph has contrast down every line of it, while
+    the banner above and the card around are flat colour. The columns are
+    trimmed first and the rows only within them - scanned the other way
+    round, the white page either side of a blue banner is contrast enough
+    to keep the banner, which is how the crop came to start 50 pixels into
+    it.
+
+    None when nothing in the box has any contrast at all, which is a screen
+    with no tiles on it.
+    """
+    grey = image.crop(box).convert("L")
+    wide, high = grey.size
+    px = grey.load()
+    across = _run([_spread(px, [(x, y) for y in range(0, high, 3)])
+                   > _TILE_CONTRAST for x in range(wide)])
+    if across is None:
+        return None
+    left, right = across
+    down = _run([_spread(px, [(x, y) for x in range(left, right, 3)])
+                 > _TILE_CONTRAST for y in range(high)])
+    if down is None:
+        return None
+    return (box[0] + left, box[1] + down[0],
+            box[0] + right, box[1] + down[1])
+
+
+def _spread(px, points) -> int:
+    values = [px[x, y] for x, y in points]
+    return max(values) - min(values) if values else 0
+
+
+def _run(flags: list[bool]) -> tuple[int, int] | None:
+    """The longest stretch of `True`, bridging gaps of `_TILE_GAP`.
+
+    The longest and not the first-to-last: the window's top edge sits
+    right under the heading's last line, and on a phone whose screenshot
+    is not its hierarchy's own size a pixel of that text bleeds into it.
+    Taken end to end, those two pixels stretched the block up over the
+    whole banner; the tiles are a stretch six hundred deep and win on
+    length every time.
+    """
+    best: tuple[int, int] | None = None
+    start = gap = None
+    for i, on in enumerate([*flags, *([False] * (_TILE_GAP + 1))]):
+        if on:
+            start = i if start is None else start
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap <= _TILE_GAP:
+                continue
+            end = i - gap + 1                 # one past the last true pixel
+            if best is None or end - start > best[1] - best[0]:
+                best = (start, end)
+            start = gap = None
+    return best
+
+
 def _button_row(ctx: Context, *, below: int) -> list[int]:
     """The challenge's own button row - the first real button under the
     heading - which is where the tiles stop.
@@ -340,23 +422,19 @@ def _box(el) -> list[int]:
 
 
 def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
-    """Where the tiles are, read off the challenge's own heading.
+    """The band of screen the tiles are somewhere inside.
 
-    The tiles themselves are pictures inside a WebView and are in no
-    accessibility tree, so the rectangle has to come from what *is*: the
-    heading above them and the button row below.
+    Not the tiles themselves. They are pictures in a WebView and are in no
+    accessibility tree, so nothing here can say where they start - an
+    earlier version read the edges off the heading's text and the blue
+    banner's own padding put the top 50 pixels high and the bottom a whole
+    row short (2026-09-05, phone 1807). What the tree *can* say is what the
+    tiles are between: below the heading's last line, above the challenge's
+    button row, and no wider than the screen. `_tiles_in` finds the block
+    itself, in the picture, where it is actually visible.
 
-    From the real screen (2026-09-06, build 1781, and the fixture beside
-    these tests): the object line - `crosswalks`, a View - spans the
-    challenge's whole content width, [84..662]; the heading ends at the
-    "Click verify once there are none left." line, bottom 198; the button
-    row starts at 898. A reCAPTCHA grid is square, so its height is its
-    width - which lands the bottom at 776, comfortably above the buttons.
-
-    Squareness is what makes this a reading rather than a guess: the two
-    ends and one side are on the screen, and the fourth follows. Anything
-    missing, or a rectangle that would reach past the buttons, returns
-    None - and a grid we cannot place is never tapped.
+    None when either edge is missing, and a grid nothing can bound is never
+    tapped.
     """
     labels = [(el, (el.label or "").lower()) for el in ctx.elements]
     ask = next((el for el, t in labels
@@ -367,33 +445,34 @@ def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
     after = labels[[el for el, _ in labels].index(ask) + 1:]
     subject = next((el for el, t in after if t.strip()), None)
     tail = next((el for el, t in after if _is_tail(t)), None)
-    side = _box(subject)
     head = _box(tail) or _box(subject)
-    if not side or not head:
+    width = _screen_width(ctx)
+    if not head or width < 1:
         return None
     floor = _button_row(ctx, below=head[3])
-    if not floor:
+    if not floor or floor[1] - head[3] < 100:
         return None
-    left, right = side[0], side[2]
-    top = head[3]
-    bottom = top + (right - left)             # a reCAPTCHA grid is square
-    if right - left < 200 or bottom > floor[1]:
-        return None
-    return (left, top, right, bottom)
+    return (0, head[3], width, floor[1])
 
 
-def _grab_grid_b64(ctx: Context,
-                   rect: tuple[int, int, int, int]) -> str | None:
-    """The tiles, cropped out of the screen, as base64 PNG.
+def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
+                   size: int):
+    """The tiles as base64 JPEG, and where they sit on the phone.
 
-    Cropped and not the whole screen, which is what the first version
-    sent. A classification task is told "here is a grid, which squares
-    hold a crosswalk" - hand it a phone screen and the squares it counts
-    are squares of the screen, so even a confident answer names the wrong
-    tiles. It is also several times the bytes over a link that has
-    already timed out once (2026-09-06, phone 1788).
+    Three things, none of which can be skipped:
 
-    None on any hitch, which the caller reads as "the captcha stands".
+    Cropped, not the whole screen - a classification task counts squares of
+    the picture it is handed, so a phone screen makes it count squares of a
+    phone screen. Found by looking, not by measuring the page, because the
+    tiles are in no accessibility tree. And *resized*: CapSolver reads the
+    grid's shape from the picture's size, and at the phone's own 631 pixels
+    it declined to read a grid at all - `{"hasObject": false, "size": 0,
+    "type": ""}`, four builds running (2026-09-05). At 450 the same picture
+    came back `[13, 14, 15]`, which is exactly where the crosswalks were.
+
+    Returns (base64, rectangle) with the rectangle in the view hierarchy's
+    own numbers, because that is where the taps go. None on any hitch,
+    which the caller reads as "the captcha stands".
     """
     import base64
     import io
@@ -411,26 +490,34 @@ def _grab_grid_b64(ctx: Context,
     try:
         from PIL import Image
 
-        shot = Image.open(io.BytesIO(data))
-        # The rectangle is read off the view hierarchy, which has its own
-        # width - and the screenshot is the device's, which need not be the
-        # same number. Assuming they were would crop a band of the wrong
-        # part of the screen and call it a grid, so the rectangle is scaled
-        # into the picture's pixels before it cuts anything.
+        shot = Image.open(io.BytesIO(data)).convert("RGB")
+        # The window comes off the view hierarchy, which has its own width,
+        # and the screenshot is the device's own picture. Assuming the two
+        # agree would search a band of the wrong part of the screen.
         scale = shot.width / max(1, _screen_width(ctx))
-        box = tuple(int(round(n * scale)) for n in rect)
-        log.info("captcha grid %s of the tree -> %s of the %sx%s screenshot",
-                 rect, box, shot.width, shot.height)
+        band = tuple(int(round(n * scale)) for n in window)
+        box = _tiles_in(shot, band)
+        if box is None:
+            log.warning("nothing with any contrast in %s - no tiles there",
+                        band)
+            return None
+        square = min(box[2] - box[0], box[3] - box[1])
+        if square < 100 or abs((box[2] - box[0]) - (box[3] - box[1])) > square:
+            log.warning("the block at %s is not a grid's shape", box)
+            return None
         grid = shot.crop(box)
+        side = _GRID_PIXELS[size]
         buf = io.BytesIO()
-        grid.save(buf, format="PNG")
-        data = buf.getvalue()
+        grid.resize((side, side)).save(buf, format="JPEG", quality=92)
         _keep(ctx, "captcha-screen.png", shot)
         _keep(ctx, "captcha-grid.png", grid)
+        log.info("captcha grid at %s of the %sx%s screenshot, sent at %dx%d",
+                 box, shot.width, shot.height, side, side)
     except Exception as exc:                                       # noqa: BLE001
-        log.warning("could not crop the captcha grid (%s)", exc)
+        log.warning("could not cut the captcha grid out (%s)", exc)
         return None
-    return base64.b64encode(data).decode("ascii")
+    at = tuple(int(round(n / scale)) for n in box)
+    return base64.b64encode(buf.getvalue()).decode("ascii"), at
 
 
 def _keep(ctx: Context, name: str, image) -> None:
@@ -526,8 +613,8 @@ def act_captcha(ctx: Context) -> Outcome | None:
         ctx.captcha_ticked = True
         ctx.captcha_tries += 1
         return None
-    rect = _grid_rect(ctx)
-    if rect is None:
+    window = _grid_rect(ctx)
+    if window is None:
         # A grid we cannot place. Never a tap on coordinates guessed from
         # nothing - but saved once, not once a visit: seven copies of one
         # screen is the same evidence seven times (2026-09-05, phone 1793).
@@ -535,9 +622,17 @@ def act_captcha(ctx: Context) -> Outcome | None:
             ctx.captcha_unplaced = True
             ctx.save("captcha_grid_unplaced")
         return None
-    image = _grab_grid_b64(ctx, rect)
-    if image is None:
+    # Google's two shapes, and the wording is the only thing that tells
+    # them apart before the picture is sent: "Select all squares with X"
+    # over a one-shot 4x4, "Select all images with X" over a 3x3 that
+    # refreshes as tiles are taken. It has to be decided here rather than
+    # read off the answer, because the size the picture is sent at is what
+    # the solver reads the shape from.
+    size = 4 if "squares" in instruction.lower() else 3
+    got = _grab_grid_b64(ctx, window, size)
+    if got is None:
         return None
+    image, rect = got
     ctx.captcha_tries += 1
     try:
         from .. import capsolver
@@ -545,12 +640,12 @@ def act_captcha(ctx: Context) -> Outcome | None:
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None
-    # Google's two shapes: "Select all images with X" over a 3x3 that
-    # refreshes as tiles are taken, and "Select all squares with X" over a
-    # one-shot 4x4. The solver says which it read, and its indices only mean
-    # anything against that - so its word beats the wording, which is only
-    # the fallback for an answer that did not say.
-    size = read or (4 if "squares" in instruction.lower() else 3)
+    if read and read != size:
+        # The solver read a different grid than the one that was sent to
+        # it, so its indices are about a picture nobody has. Left alone.
+        log.warning("sent a %dx%d grid and the answer is about a %dx%d one",
+                    size, size, read, read)
+        return None
     points = _tile_points(rect, size, tiles)
     log.info("captcha: %r -> tiles %s of a %dx%d grid at %s",
              instruction, tiles, size, size, points)

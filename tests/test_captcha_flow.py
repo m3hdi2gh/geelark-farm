@@ -2,9 +2,17 @@
 a limit - all without a phone or a network."""
 from __future__ import annotations
 
+import base64
+import io
+
 from geelark_farm import screen
 from geelark_farm.accounts import Account
 from geelark_farm.flows import google_login as g
+
+#: Where the tiles sit on the real screen beside these tests, in the view
+#: hierarchy's own numbers. Every test that fakes the cut uses it, so a tap
+#: is always checked against a place a phone really had tiles.
+SENT_AT = (47, 247, 678, 877)
 
 
 def el(label, bounds, cls="TextView"):
@@ -128,23 +136,18 @@ def test_the_question_is_read_from_both_of_its_nodes():
     assert capsolver.question_id(question) == "/m/014xcs"
 
 
-def test_the_grid_rectangle_is_read_off_the_real_screen():
-    """The tiles are pictures in a WebView and in no tree; the rectangle
-    comes from the heading above them, the button row below, and the fact
-    that a reCAPTCHA grid is square."""
+def test_the_window_is_read_off_the_real_screen():
+    """The band the tiles are inside: below the heading's last line, above
+    the challenge's button row, the screen's own width."""
     c, _ = _grid_ctx()
-    rect = g._grid_rect(c)
-    assert rect == (84, 198, 662, 776)
-    # Above the button row (VERIFY starts at y=901), as it must be.
-    assert rect[3] < 898
-    # A 3x3 over it: the middle tile sits in the middle of the grid.
-    assert g._tile_points(rect, 3, [4]) == [(373, 487)]
+    assert g._grid_rect(c) == (0, 198, 720, 898)
 
 
 def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     c, _ = _grid_ctx(seen={"captcha": 2})
     asked = {}
-    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda c, win, size: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: (asked.update(q=q)
                                                or ([0, 4, 8], 0)))
@@ -155,7 +158,7 @@ def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
 
     assert g.act_captcha(c) is None
     assert asked["q"] == "Select all images with crosswalks"
-    assert tapped == g._tile_points((84, 198, 662, 776), 3, [0, 4, 8])
+    assert tapped == g._tile_points(SENT_AT, 3, [0, 4, 8])
     assert submitted == [True]
 
 
@@ -163,7 +166,8 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     """"Click verify once there are none left" belongs to the 3x3 that
     refreshes; reading it as a 4x4 taps sixteen places on nine tiles."""
     c, _ = _grid_ctx(seen={"captcha": 1})
-    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda c, win, size: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: ([8], 0))
     tapped = []
@@ -171,8 +175,9 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
                         lambda client, pid, x, y: tapped.append((x, y)))
     monkeypatch.setattr(g, "submit", lambda c: None)
     assert g.act_captcha(c) is None
-    # Tile 8 of a 3x3 is the bottom-right; of a 4x4 it would be mid-left.
-    assert tapped == [(565, 679)]
+    # Tile 8 of a 3x3 is the bottom-right; of a 4x4 it would be mid-left,
+    # which on this grid is (125, 640).
+    assert tapped == [(572, 772)]
 
 
 def _skip_grid_ctx(**kw):
@@ -184,14 +189,15 @@ def _skip_grid_ctx(**kw):
     return ctx(els, **kw), els
 
 
-def test_the_grid_is_placed_under_the_pages_own_verify_it_is_you_heading():
-    """The floor of the grid is the challenge's button row, found by class
-    and position. Found by wording, "Verify" matched the page's own
-    `Verify it's you` heading - which sits above the grid - so the floor
-    came out higher than the ceiling and every grid was called unplaceable.
-    Seven went by untouched before the phone gave up (build 1793)."""
+def test_the_window_is_bounded_by_the_heading_and_the_button_row():
+    """The tree cannot say where the tiles start - they are pictures in a
+    WebView - only what they are between. The floor is the challenge's own
+    button row, found by class and position: found by wording, "Verify"
+    matched the page's `Verify it's you` heading, which sits *above* the
+    grid, so the floor came out higher than the ceiling and seven grids
+    went by untouched before the phone gave up (build 1793)."""
     c, _ = _skip_grid_ctx()
-    assert g._grid_rect(c) == (84, 198, 662, 776)
+    assert g._grid_rect(c) == (0, 198, 720, 898)
 
 
 def test_the_heading_ends_at_click_skip_as_well_as_at_click_verify():
@@ -226,40 +232,98 @@ def test_waiting_ends_in_the_operators_captcha_error_not_the_routers_phrase():
     assert "never cleared" in out.detail
 
 
-def test_the_width_the_solver_read_beats_the_wording(monkeypatch):
-    """The fixture's heading says "images", which reads as a 3x3 - but the
-    answer says it read four across, and the indices are only meaningful
-    against that."""
-    c, _ = _grid_ctx(seen={"captcha": 1})
-    monkeypatch.setattr(g, "_grab_grid_b64", lambda c, rect: "B64")
-    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: ([15], 4))
-    tapped = []
-    monkeypatch.setattr(g.shell, "tap",
-                        lambda client, pid, x, y: tapped.append((x, y)))
-    monkeypatch.setattr(g, "submit", lambda c: None)
-    assert g.act_captcha(c) is None
-    assert tapped == g._tile_points((84, 198, 662, 776), 4, [15])
-
-
-def test_the_crop_is_scaled_into_the_screenshots_own_pixels(monkeypatch):
-    """The rectangle is read off the view hierarchy, whose width need not be
-    the device's. Cropping the picture with the tree's numbers would cut a
-    band of the wrong part of the screen and call it a grid."""
-    import base64
-    import io
+def _real_screen(monkeypatch, *, at=1):
+    """The captcha screen a phone actually met (2026-09-05, build 1807),
+    served to the flow as its screenshot. `at` scales the picture without
+    touching the tree, which is how a device whose screenshot is not its
+    hierarchy's own width is reproduced."""
+    import pathlib
 
     from PIL import Image
 
-    c, _ = _skip_grid_ctx()
-    assert g._screen_width(c) == 720
-    shot = Image.new("RGB", (1440, 3200), "white")
+    png = pathlib.Path("tests/fixtures/google-captcha-grid-screen.png")
+    shot = Image.open(png).convert("RGB")
+    if at != 1:
+        shot = shot.resize((shot.width * at, shot.height * at))
     buf = io.BytesIO()
     shot.save(buf, format="PNG")
     monkeypatch.setattr(g.phones, "screenshot", lambda client, pid: "http://s")
-    monkeypatch.setattr("requests.get",
-                        lambda url, timeout: type("R", (), {"content": buf.getvalue()}))
-    out = g._grab_grid_b64(c, (84, 198, 662, 776))
-    got = Image.open(io.BytesIO(base64.b64decode(out)))
-    # Twice the tree's width, so twice every number: 578 across becomes 1156.
-    assert got.size == (1156, 1156)
+    monkeypatch.setattr(
+        "requests.get",
+        lambda url, timeout: type("R", (), {"content": buf.getvalue()}))
+
+
+def _screen_ctx(**kw):
+    import pathlib
+    xml = pathlib.Path("tests/fixtures/google-captcha-grid-screen.xml")
+    els = screen.parse(xml.read_text(encoding="utf-8", errors="replace"))
+    return ctx(els, **kw), els
+
+
+def test_the_tiles_are_found_in_the_picture_not_measured_off_the_page(
+        monkeypatch):
+    """The block of photographs, in a screen a phone actually met. Measured
+    off the page instead, the blue banner's own padding put the top fifty
+    pixels high and the bottom a whole row short, and CapSolver would not
+    read it as a grid at all (build 1807)."""
+    from PIL import Image
+
+    c, _ = _screen_ctx()
+    _real_screen(monkeypatch)
+    got = g._grab_grid_b64(c, g._grid_rect(c), 4)
+    assert got is not None
+    image, rect = got
+    assert rect == SENT_AT
+    sent = Image.open(io.BytesIO(base64.b64decode(image)))
+    # 450 across, which is the size CapSolver reads a 4x4 from. Sent at the
+    # phone's own 631 it answered `{"hasObject": false, "type": ""}` four
+    # builds running; at 450 the same picture came back [13, 14, 15].
+    assert sent.size == (450, 450)
+
+
+def test_the_tiles_are_found_on_a_phone_whose_screenshot_is_not_its_tree(
+        monkeypatch):
+    """The window comes off the view hierarchy and the picture is the
+    device's own. Assuming the two numbers agree searches a band of the
+    wrong part of the screen."""
+    c, _ = _screen_ctx()
+    assert g._screen_width(c) == 720
+    _real_screen(monkeypatch, at=2)
+    got = g._grab_grid_b64(c, g._grid_rect(c), 4)
+    assert got is not None
+    # Twice the picture, the same answer to within a pixel of resampling:
+    # the taps go where the tree says, not where the picture is.
+    assert all(abs(a - b) <= 2 for a, b in zip(got[1], SENT_AT, strict=True))
+
+
+def test_a_screen_with_no_photographs_on_it_is_not_a_grid(monkeypatch):
+    """Nothing is cut out of a flat screen, and nothing is tapped on one."""
+    from PIL import Image
+
+    c, _ = _screen_ctx()
+    blank = Image.new("RGB", (720, 1440), "white")
+    buf = io.BytesIO()
+    blank.save(buf, format="PNG")
+    monkeypatch.setattr(g.phones, "screenshot", lambda client, pid: "http://s")
+    monkeypatch.setattr(
+        "requests.get",
+        lambda url, timeout: type("R", (), {"content": buf.getvalue()}))
+    assert g._grab_grid_b64(c, g._grid_rect(c), 4) is None
+
+
+def test_an_answer_about_a_grid_we_did_not_send_is_left_alone(monkeypatch):
+    """The size the picture goes out at is what the solver reads the shape
+    from, so an answer about a different shape is about a picture nobody
+    has. The same 4x4 sent at 300 came back as a 3x3, naming three tiles
+    that had no crosswalk in them (2026-09-06)."""
+    c, _ = _screen_ctx()
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda c, win, size: ("B64", SENT_AT))
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: ([8, 4, 7], 3))
+    tapped, submitted = [], []
+    monkeypatch.setattr(g.shell, "tap",
+                        lambda client, pid, x, y: tapped.append((x, y)))
+    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    assert g.act_captcha(c) is None
+    assert tapped == [] and submitted == []
