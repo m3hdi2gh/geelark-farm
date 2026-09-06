@@ -337,6 +337,39 @@ _GRID_PIXELS = {3: 300, 4: 450}
 _TILE_GAP = 8
 
 
+#: What each tile of the grid calls itself once the WebView has finished
+#: laying the challenge out. On the first visit they are not there at all,
+#: which is why the picture can still be scanned instead.
+_TILE_LABEL = "image challenge"
+
+
+def _tile_buttons(ctx: Context) -> list:
+    """The grid's own tiles, in reading order, when the page offers them.
+
+    reCAPTCHA's tiles arrive in the accessibility tree a moment after the
+    heading does - sixteen buttons all called `Image challenge`, each with
+    its own bounds. When they are there they are better than anything a
+    picture can be scanned for: the rectangle is exact, the count says
+    whether it is a nine or a sixteen, and a tap goes to a tile rather than
+    to a point that ought to be one.
+
+    Nine or sixteen or nothing. Any other number is a page mid-render, and
+    a half-drawn grid is not one to answer (2026-09-06, phone 1812).
+    """
+    tiles = [el for el in ctx.elements
+             if _TILE_LABEL in (el.label or "").lower() and _box(el)]
+    if len(tiles) not in (9, 16):
+        return []
+    return sorted(tiles, key=lambda el: (_box(el)[1], _box(el)[0]))
+
+
+def _tiles_box(tiles: list) -> tuple[int, int, int, int]:
+    """The rectangle the tiles fill, corner to corner."""
+    boxes = [_box(el) for el in tiles]
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
 def _tiles_in(image, box: tuple[int, int, int, int]):
     """The tile block inside `box`, as a rectangle in the same pixels.
 
@@ -456,7 +489,7 @@ def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
 
 
 def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
-                   size: int):
+                   size: int, *, scan: bool = True):
     """The tiles as base64 JPEG, and where they sit on the phone.
 
     Three things, none of which can be skipped:
@@ -496,7 +529,7 @@ def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
         # agree would search a band of the wrong part of the screen.
         scale = shot.width / max(1, _screen_width(ctx))
         band = tuple(int(round(n * scale)) for n in window)
-        box = _tiles_in(shot, band)
+        box = _tiles_in(shot, band) if scan else band
         if box is None:
             log.warning("nothing with any contrast in %s - no tiles there",
                         band)
@@ -614,7 +647,11 @@ def act_captcha(ctx: Context) -> Outcome | None:
         ctx.captcha_ticked = True
         ctx.captcha_tries += 1
         return None
-    window = _grid_rect(ctx)
+    # The tiles first, if the page is offering them: they are exact, they
+    # say how many there are, and they can be tapped as tiles rather than
+    # as points. The picture is what is left when they have not arrived.
+    tiles = _tile_buttons(ctx)
+    window = _tiles_box(tiles) if tiles else _grid_rect(ctx)
     if window is None:
         # A grid we cannot place. Never a tap on coordinates guessed from
         # nothing - but saved once, not once a visit: seven copies of one
@@ -623,21 +660,23 @@ def act_captcha(ctx: Context) -> Outcome | None:
             ctx.captcha_unplaced = True
             ctx.save("captcha_grid_unplaced")
         return None
-    # Google's two shapes, and the wording is the only thing that tells
-    # them apart before the picture is sent: "Select all squares with X"
-    # over a one-shot 4x4, "Select all images with X" over a 3x3 that
-    # refreshes as tiles are taken. It has to be decided here rather than
-    # read off the answer, because the size the picture is sent at is what
-    # the solver reads the shape from.
-    size = 4 if "squares" in instruction.lower() else 3
-    got = _grab_grid_b64(ctx, window, size)
+    # How many tiles there are, said by the tiles when they are there.
+    # Otherwise the wording, which is the only other thing that tells the
+    # two shapes apart: "Select all squares with X" over a one-shot 4x4,
+    # "Select all images with X" over a 3x3 that refreshes as tiles are
+    # taken. It has to be decided before the picture goes out, because the
+    # size it goes out at is what the solver reads the shape from.
+    size = (3 if len(tiles) == 9 else 4) if tiles else (
+        4 if "squares" in instruction.lower() else 3)
+    got = _grab_grid_b64(ctx, window, size, scan=not tiles)
     if got is None:
         return None
     image, rect = got
     ctx.captcha_tries += 1
     try:
         from .. import capsolver
-        tiles, read = capsolver.solve_grid(ctx.solver_key, image, instruction)
+        answer, read = capsolver.solve_grid(ctx.solver_key, image,
+                                            instruction)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None
@@ -647,11 +686,18 @@ def act_captcha(ctx: Context) -> Outcome | None:
         log.warning("sent a %dx%d grid and the answer is about a %dx%d one",
                     size, size, read, read)
         return None
-    points = _tile_points(rect, size, tiles)
-    log.info("captcha: %r -> tiles %s of a %dx%d grid at %s",
-             instruction, tiles, size, size, points)
-    for x, y in points:
-        shell.tap(ctx.client, ctx.phone_id, x, y)
+    if tiles:
+        chosen = [tiles[i] for i in answer if 0 <= i < len(tiles)]
+        log.info("captcha: %r -> tiles %s of %d, tapped where they are",
+                 instruction, answer, len(tiles))
+        for tile in chosen:
+            screen.tap_element(ctx.client, ctx.phone_id, tile)
+    else:
+        points = _tile_points(rect, size, answer)
+        log.info("captcha: %r -> tiles %s of a %dx%d grid at %s",
+                 instruction, answer, size, size, points)
+        for x, y in points:
+            shell.tap(ctx.client, ctx.phone_id, x, y)
     submit(ctx)
     return None
 

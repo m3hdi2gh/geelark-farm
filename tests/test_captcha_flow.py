@@ -147,7 +147,7 @@ def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     c, _ = _grid_ctx(seen={"captcha": 2})
     asked = {}
     monkeypatch.setattr(g, "_grab_grid_b64",
-                        lambda c, win, size: ("B64", SENT_AT))
+                        lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: (asked.update(q=q)
                                                or ([0, 4, 8], 0)))
@@ -167,7 +167,7 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     refreshes; reading it as a 4x4 taps sixteen places on nine tiles."""
     c, _ = _grid_ctx(seen={"captcha": 1})
     monkeypatch.setattr(g, "_grab_grid_b64",
-                        lambda c, win, size: ("B64", SENT_AT))
+                        lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: ([8], 0))
     tapped = []
@@ -318,7 +318,7 @@ def test_an_answer_about_a_grid_we_did_not_send_is_left_alone(monkeypatch):
     that had no crosswalk in them (2026-09-06)."""
     c, _ = _screen_ctx()
     monkeypatch.setattr(g, "_grab_grid_b64",
-                        lambda c, win, size: ("B64", SENT_AT))
+                        lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: ([8, 4, 7], 3))
     tapped, submitted = [], []
@@ -327,3 +327,68 @@ def test_an_answer_about_a_grid_we_did_not_send_is_left_alone(monkeypatch):
     monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == [] and submitted == []
+
+
+def _tiles_ctx(**kw):
+    """A grid whose tiles the page is offering, off a real phone
+    (2026-09-06, build 1812): sixteen buttons all called `Image
+    challenge`, each with its own bounds."""
+    import pathlib
+    xml = pathlib.Path("tests/fixtures/google-captcha-grid-tiles.xml")
+    els = screen.parse(xml.read_text(encoding="utf-8", errors="replace"))
+    return ctx(els, **kw), els
+
+
+def test_the_tiles_are_taken_from_the_page_when_the_page_offers_them():
+    """Exact, counted, and tappable as tiles. Scanned for in the picture
+    instead, this screen offered no rectangle at all - the first button
+    below the heading was a tile, so the floor came out 46 pixels under the
+    ceiling and ten visits went by doing nothing (build 1812)."""
+    c, _ = _tiles_ctx()
+    tiles = g._tile_buttons(c)
+    assert len(tiles) == 16
+    assert g._tiles_box(tiles) == (44, 244, 680, 879)
+    # Reading order, so the solver's indices land on the right squares.
+    assert g._box(tiles[0])[:2] == [44, 244]
+    assert g._box(tiles[3])[:2] == [518, 244]
+    assert g._box(tiles[4])[:2] == [44, 402]
+
+
+def test_a_half_drawn_grid_is_not_answered():
+    """Nine or sixteen. Any other number is a page mid-render."""
+    c, _ = _tiles_ctx()
+    c.elements = [e for e in c.elements
+                  if "image challenge" not in (e.label or "").lower()][:4]
+    assert g._tile_buttons(c) == []
+
+
+def test_the_solvers_tiles_are_tapped_where_the_page_says_they_are(
+        monkeypatch):
+    c, _ = _tiles_ctx()
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda c, box, size, scan=True: ("B64", box))
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: ([5, 6, 9, 10], 4))
+    tapped, submitted = [], []
+    monkeypatch.setattr(g.screen, "tap_element",
+                        lambda client, pid, el: tapped.append(el.bounds))
+    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    assert g.act_captcha(c) is None
+    assert tapped == ["[202,402][362,562]", "[360,402][522,562]",
+                      "[202,561][362,722]", "[360,561][522,722]"]
+    assert submitted == [True]
+
+
+def test_the_count_of_tiles_beats_the_wording(monkeypatch):
+    """Sixteen buttons is a 4x4 whatever the heading says, and the size the
+    picture goes out at is what the solver reads the shape from."""
+    c, _ = _tiles_ctx()
+    sent = {}
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda c, box, size, scan=True:
+                        sent.update(size=size, scan=scan) or ("B64", box))
+    monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
+                        lambda key, image, q: ([], 4))
+    monkeypatch.setattr(g, "submit", lambda c: None)
+    assert g.act_captcha(c) is None
+    assert sent == {"size": 4, "scan": False}
