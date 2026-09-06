@@ -593,9 +593,16 @@ def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
     import io
 
     from .. import phones
+    # Before each wait, not only between screens: the screenshot poll is a
+    # minute (phones.py), the download is another, and the solver is three
+    # tries at ninety seconds. Six and a half minutes in one act, and the
+    # router does not come back round until it ends - so a phone somebody
+    # stopped kept answering a captcha through all of it (2026-09-06).
+    ctx.check()
     link = phones.screenshot(ctx.client, ctx.phone_id)
     if not link:
         return None
+    ctx.check()
     try:
         import requests
         data = requests.get(link, timeout=60).content
@@ -825,7 +832,7 @@ def act_captcha(ctx: Context) -> Outcome | None:
     try:
         from .. import capsolver
         answer, read = capsolver.solve_grid(ctx.solver_key, image,
-                                            instruction)
+                                            instruction, watch=ctx.check)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None

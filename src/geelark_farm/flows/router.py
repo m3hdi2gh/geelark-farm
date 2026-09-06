@@ -68,6 +68,18 @@ class Context:
     #: the same dictionary, and telling a loop from a straight run is most of
     #: what reading one of these is for.
     trail: list[str] = field(default_factory=list)
+    #: The caller's own interruption check, for an act to call at its slow
+    #: points. `drive` calls it once a screen, which is enough for an act
+    #: that acts and returns - but a captcha act can spend six minutes in
+    #: one turn (a screenshot poll, an image download, three tries at the
+    #: solver) and the loop does not come back round until it ends.
+    watch: Callable[[], None] | None = None
+
+    def check(self) -> None:
+        """Let the caller stop this, here, mid-act. Raises whatever the
+        caller's own watch raises; does nothing when there is none."""
+        if self.watch is not None:
+            self.watch()
 
     def refresh(self) -> None:
         xml = screen.capture(self.client, self.phone_id)
@@ -242,6 +254,9 @@ def _drive(ctx: Context, screens: list[Screen], *,
     # weeks is where that stops being theoretical.
     deadline = time.monotonic() + budget_seconds
     unknown_streak = 0
+    # On the context as well as in the loop, so an act can be interrupted
+    # inside itself and not only between screens.
+    ctx.watch = watch
 
     while time.monotonic() < deadline:
         if watch is not None:

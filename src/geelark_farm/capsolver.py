@@ -78,7 +78,7 @@ def question_id(text: str) -> str:
 
 
 def _post(key: str, path: str, payload: dict, *, session=None,
-          timeout: float = 90, tries: int = 3) -> dict:
+          timeout: float = 90, tries: int = 3, watch=None) -> dict:
     """One call, retried twice. The farm reaches api.capsolver.com over a
     link that is neither quick nor reliable: a 40-second read timed out
     with the grid already in hand (phone 1788), a createTask came back 520
@@ -92,6 +92,11 @@ def _post(key: str, path: str, payload: dict, *, session=None,
     body = {"clientKey": key, **payload}
     last: Exception | None = None
     for attempt in range(max(1, tries)):
+        if watch is not None:
+            # Between the tries, which is where the waiting is: three at
+            # ninety seconds is four and a half minutes in one call, and
+            # somebody who pressed Cancel is watching all of it.
+            watch()
         try:
             get = session or requests
             resp = get.post(f"{_BASE}{path}", json=body, timeout=timeout)
@@ -119,7 +124,8 @@ def balance(key: str, *, session=None) -> float:
 
 
 def solve_grid(key: str, image_b64: str, question: str, *,
-               website_url: str = "", session=None) -> tuple[list[int], int]:
+               website_url: str = "", session=None,
+               watch=None) -> tuple[list[int], int]:
     """Which tiles of a grid hold the thing asked for, and how wide the
     solver read the grid to be.
 
@@ -146,7 +152,7 @@ def solve_grid(key: str, image_b64: str, question: str, *,
         "image": image_b64,
         "question": qid,
         **({"websiteURL": website_url} if website_url else {}),
-    }}, session=session)
+    }}, session=session, watch=watch)
     solution = data.get("solution") or {}
     log.info("CapSolver answered %s for %r", solution, question)
     if solution.get("type") == "single":

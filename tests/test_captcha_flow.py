@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import io
 
+import pytest
+
 from geelark_farm import screen
 from geelark_farm.accounts import Account
 from geelark_farm.flows import google_login as g
@@ -168,8 +170,8 @@ def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     monkeypatch.setattr(g, "_grab_grid_b64",
                         lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: (asked.update(q=q)
-                                               or ([0, 4, 8], 0)))
+                        lambda key, image, q, watch=None:
+                        (asked.update(q=q) or ([0, 4, 8], 0)))
     tapped, submitted = [], []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
@@ -189,7 +191,7 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     monkeypatch.setattr(g, "_grab_grid_b64",
                         lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: ([8], 0))
+                        lambda key, image, q, watch=None: ([8], 0))
     tapped = []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
@@ -340,7 +342,7 @@ def test_an_answer_about_a_grid_we_did_not_send_is_left_alone(monkeypatch):
     monkeypatch.setattr(g, "_grab_grid_b64",
                         lambda c, win, size, scan=True: ("B64", SENT_AT))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: ([8, 4, 7], 3))
+                        lambda key, image, q, watch=None: ([8, 4, 7], 3))
     tapped, submitted = [], []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
@@ -389,7 +391,7 @@ def test_the_solvers_tiles_are_tapped_where_the_page_says_they_are(
     monkeypatch.setattr(g, "_grab_grid_b64",
                         lambda c, box, size, scan=True: ("B64", box))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: ([5, 6, 9, 10], 4))
+                        lambda key, image, q, watch=None: ([5, 6, 9, 10], 4))
     tapped, submitted = [], []
     monkeypatch.setattr(g.screen, "tap_element",
                         lambda client, pid, el: tapped.append(el.bounds))
@@ -410,7 +412,7 @@ def test_the_count_of_tiles_beats_the_wording(monkeypatch):
                         lambda c, box, size, scan=True:
                         sent.update(size=size, scan=scan) or ("B64", box))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
-                        lambda key, image, q: ([], 4))
+                        lambda key, image, q, watch=None: ([], 4))
     monkeypatch.setattr(g, "_answer", lambda c, rect: None)
     assert g.act_captcha(c) is None
     assert sent == {"size": 4, "scan": False}
@@ -526,3 +528,48 @@ def test_the_button_is_read_from_the_screen_as_it_is_after_the_taps(
                         lambda client, pid, e: tapped.append(e.bounds))
     g._answer(c, (44, 244, 680, 879))
     assert tapped == ["[510,951][676,1023]"], "where the button is now"
+
+
+def test_a_stop_is_felt_inside_the_captcha_act_not_only_between_screens(
+        monkeypatch):
+    """One captcha act can spend six and a half minutes in a single turn -
+    a screenshot poll of a minute, a download of another, and three tries
+    at the solver at ninety seconds each - and the router does not come
+    back round until it ends. A phone somebody had stopped kept answering
+    the captcha through all of it (2026-09-06)."""
+    class Stopped(Exception):
+        pass
+
+    c, _ = _screen_ctx()
+    c.watch = lambda: (_ for _ in ()).throw(Stopped)
+    looked = []
+    monkeypatch.setattr(g.phones, "screenshot",
+                        lambda client, pid: looked.append(1) or "http://s")
+    with pytest.raises(Stopped):
+        g._grab_grid_b64(c, g._grid_rect(c), 4)
+    assert looked == [], "stopped before the minute-long poll, not after it"
+
+
+def test_the_solver_is_asked_to_stop_between_its_tries(monkeypatch):
+    """Three tries at ninety seconds is four and a half minutes in one
+    call, and it is the longest single wait in the flow."""
+    from geelark_farm import capsolver
+
+    class Stopped(Exception):
+        pass
+
+    seen = []
+
+    def watch():
+        seen.append(1)
+        if len(seen) == 2:
+            raise Stopped
+
+    class Flaky:
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            raise RuntimeError("no route to host")
+
+    with pytest.raises(Stopped):
+        capsolver.solve_grid("K", "b", "cars", session=Flaky(), watch=watch)
+    assert seen == [1, 1], "asked before each try, and stopped on the second"
