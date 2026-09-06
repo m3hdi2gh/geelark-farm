@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 
+from .. import signals
 from ..config import Settings
 from ..store.db import connect
 from . import api_v1_read as api_read
@@ -170,6 +171,11 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
             (verb, json.dumps(payload), client_id, f"api:{client_id}:{idem}"))
         got = cur.fetchall()
         conn.commit()
+    if got:
+        # The same bell the console rings. A machine's command had no
+        # inline path at all, so every one of them waited a whole pass
+        # (2026-09-06).
+        signals.ring(signals.queued)
     return int(got[0][0]) if got else None
 
 

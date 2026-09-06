@@ -1285,8 +1285,38 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     return decision
 
 
+#: The shortest a woken pass may follow the one before it. A pass is not
+#: free - its prologue opens the workbook, syncs the sheet and asks GeeLark
+#: how many phones are warm - so a burst of presses must not turn into a
+#: burst of passes. Five seconds coalesces a person clicking three buttons
+#: in a row into one pass and still feels immediate.
+WOKEN_PASS_FLOOR = 5.0
+
+
+def naps(settings: Settings):
+    """The service's sleep: the interval, cut short when somebody queues a
+    command. Returns `time.sleep` itself when the flag is off, so with it
+    off not one line of this is in the path.
+
+    A missed nudge costs nothing - the next pass finds the row the way it
+    always did - which is why nothing here is allowed to fail loudly."""
+    if not settings.wake_on_action:
+        return time.sleep
+
+    def nap(seconds: float) -> None:
+        from . import signals
+
+        woken = signals.queued.wait(timeout=max(0.0, seconds))
+        if woken:
+            signals.queued.clear()
+            # The floor, so three buttons pressed in three seconds are one
+            # pass and not three.
+            time.sleep(WOKEN_PASS_FLOOR)
+    return nap
+
+
 def run(settings: Settings, *, stop: threading.Event | None = None,
-        passes: int | None = None, sleep=time.sleep) -> int:
+        passes: int | None = None, sleep=None) -> int:
     """Keep going until something stops it.
 
     `stop` is how a signal reaches it, `passes` is how a test reaches an end,
@@ -1294,6 +1324,10 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     for it.
     """
     settings.ensure_dirs()
+    # Resolved here rather than in the signature, because it depends on a
+    # setting. A caller that passes its own is untouched - which is every
+    # test, and the reason the parameter exists.
+    sleep = sleep or naps(settings)
     client = build_client(settings)
     fuse = Breaker(settings.state_dir / BREAKER_FILE)
     # Kept across passes: the count stays true between them, and the

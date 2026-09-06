@@ -27,6 +27,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+from .. import signals
 from ..config import Settings
 from . import api_v1, pages, read
 
@@ -497,6 +498,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect(_said_url(back, f"already:{twin}"))
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
                                     requested_by=user["id"], idem_key=idem)
+        # Ring, so the service looks now instead of at the top of its next
+        # pass. The row is already written and the pass would find it
+        # anyway; this only decides whether that is in a second or in
+        # thirty (2026-09-06).
+        signals.ring(signals.queued)
         if self._ran_it_now(verb, payload, req):
             return self._redirect(_said_url(back, f"{said_word}:{req}"))
         self._redirect(_said_url(back, f"queued:{req}"))

@@ -2008,3 +2008,41 @@ def test_a_row_the_launcher_already_closed_keeps_the_launchers_word(
     assert finished == [(4, "done", "did nothing, successfully")]
     assert said and said[0]["status"] == "done"
     assert "two phones" in said[0]["detail"]
+
+
+def test_the_sleep_is_the_plain_one_while_the_flag_is_off(make_settings):
+    """Dark by default: with the flag off not one line of the waking code
+    is in the path."""
+    import time as time_mod
+
+    assert serve_mod.naps(make_settings()) is time_mod.sleep
+
+
+def test_a_queued_command_cuts_the_wait_short(monkeypatch, make_settings):
+    """The whole point: a press is looked at in about a second instead of
+    at the top of the next pass."""
+    from geelark_farm import signals
+
+    signals.queued.clear()
+    floors = []
+    monkeypatch.setattr(serve_mod.time, "sleep", floors.append)
+    nap = serve_mod.naps(make_settings(wake_on_action=True))
+
+    signals.ring(signals.queued)
+    nap(300)                      # would have been five minutes
+
+    assert floors == [serve_mod.WOKEN_PASS_FLOOR], "woken, then the floor"
+    assert not signals.queued.is_set(), "the bell is taken, not left ringing"
+
+
+def test_an_unrung_bell_waits_the_whole_interval(monkeypatch, make_settings):
+    from geelark_farm import signals
+
+    signals.queued.clear()
+    slept = []
+    monkeypatch.setattr(serve_mod.time, "sleep", slept.append)
+    nap = serve_mod.naps(make_settings(wake_on_action=True))
+
+    nap(0.01)                     # nothing rings; the wait simply expires
+
+    assert slept == [], "no floor when nothing woke it"

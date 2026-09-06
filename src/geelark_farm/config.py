@@ -359,6 +359,10 @@ class Settings:
     #: those, three phones in a row spent the whole budget answering
     #: correctly and were failed for it (2026-09-06, phones 1834 to 1836).
     #: The rounds inside one captcha are bounded by the flow instead.
+    #: Whether a queued command wakes the service instead of waiting for
+    #: the top of the next pass. Off = the interval is the only clock, which
+    #: is how this has always run.
+    wake_on_action: bool = False
     capsolver_key: str = ""
     captcha_max_attempts: int = 3
 
@@ -390,6 +394,8 @@ class Settings:
                                      STALE_CLAIM_DEFAULT),
             capsolver_key=_str("CAPSOLVER_KEY", ""),
             captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
+            wake_on_action=_str("WAKE_ON_ACTION", "0").strip()
+                          in ("1", "true", "yes", "on"),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
             app_login_budget_seconds=_int("APP_LOGIN_BUDGET_SECONDS", 600),

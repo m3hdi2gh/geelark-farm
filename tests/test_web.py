@@ -3940,3 +3940,23 @@ def test_the_preview_shows_every_piece_in_full_and_refuses_what_it_could_not_rea
     assert "········" not in body
     assert "not understood: stray" in body
     assert ">Add 1 (skip 1)<" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_queued_command_rings_the_bell(web, monkeypatch):
+    """The row is written either way and the pass finds it either way; the
+    bell only decides whether that is in about a second or in thirty."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm import signals
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 81)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    signals.queued.clear()
+    client = web()
+    client.login()
+    status, _, _ = client.request("POST", "/phones/1549/stop",
+                                  _form(csrf=client.csrf(), back="/"))
+    assert status == 303
+    assert signals.queued.is_set(), "nobody rang for a queued command"
+    signals.queued.clear()
