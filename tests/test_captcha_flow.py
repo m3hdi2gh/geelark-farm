@@ -65,10 +65,14 @@ def test_the_words_alone_are_never_tapped_and_nothing_is_poked(monkeypatch):
 
 
 def test_the_limit_turns_into_the_captcha_fatal():
-    """Three attempts - a tick or a grid sent to the solver - and no more.
-    Visits spent waiting for reCAPTCHA to answer are not attempts."""
+    """Three captchas in one sign-in and no more. Separate captchas, which
+    is what the operator asked for - not rounds, and not visits."""
     c = ctx([el("Confirm you're not a robot", "[0,0][1080,200]")],
-            seen={"captcha": 9}, tries=3)
+            seen={"captcha": 9})
+    # Four: one, one after the password page, one after the 2FA page - and
+    # a fourth, which is one past what this is allowed to answer.
+    c.trail = ["captcha", "password_entry", "captcha", "loading", "captcha",
+               "2fa_code_entry", "captcha", "dismissable", "captcha"]
     out = g.act_captcha(c)
     assert out is not None and out.kind == "fatal"
     assert out.reason == "captcha_shown"
@@ -434,3 +438,30 @@ def test_one_flat_column_of_tiles_does_not_move_the_grid(monkeypatch):
             flat.putpixel((x, y), (200, 200, 200))
     c, _ = _screen_ctx()
     assert g._tiles_in(flat, g._grid_rect(c)) == SENT_AT
+
+
+def test_one_captcha_that_redraws_is_still_one_captcha():
+    """A challenge takes tiles away as they are answered and draws fresh
+    ones in their place, going through `loading` on the way. Counting each
+    of those as another captcha spent the whole limit on one page, and
+    three phones in a row were failed for answering correctly (phones 1834
+    to 1836)."""
+    c = ctx([])
+    c.trail = ["captcha"] * 4 + ["loading", "captcha", "captcha"]
+    assert g._captchas_met(c) == 1
+    c.trail += ["password_entry", "captcha"]
+    assert g._captchas_met(c) == 2
+
+
+def test_a_fresh_captcha_gets_fresh_rounds(monkeypatch):
+    """The rounds a captcha is allowed are its own. Carried over, the
+    second captcha of a flow would start already spent."""
+    c = ctx([el("Confirm you're not a robot", "[0,0][720,200]"),
+             el("I'm not a robot", "[58,541][106,588]", cls="CheckBox")],
+            seen={"captcha": 6})
+    c.captcha_tries, c.captcha_met, c.captcha_ticked_on = 9, 1, 5
+    c.trail = ["captcha", "password_entry", "captcha"]
+    monkeypatch.setattr(g.screen, "tap_element", lambda *a: None)
+    assert g.act_captcha(c) is None
+    assert c.captcha_met == 2
+    assert c.captcha_tries == 1, "the tick of the new captcha, and no more"

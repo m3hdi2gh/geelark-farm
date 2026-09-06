@@ -349,9 +349,16 @@ class Settings:
 
     #: CapSolver, for the reCAPTCHA image grid Google sometimes throws during
     #: sign-in. Empty key = the captcha stands and the flow gives up on it as
-    #: it always did. `captcha_max_attempts` is the loop guard: a flow that
-    #: keeps drawing a fresh grid is a flow the account will never pass, and
-    #: three tries is where paying to try again stops being worth it.
+    #: it always did.
+    #:
+    #: `captcha_max_attempts` is the loop guard, counted in *captchas*: how
+    #: many separate times one sign-in may be stopped by one. Not rounds -
+    #: Google's 3x3 is not one question, it takes tiles away as they are
+    #: answered and draws fresh ones until none are left, so a single
+    #: captcha takes three to six rounds before it ever says yes. Counting
+    #: those, three phones in a row spent the whole budget answering
+    #: correctly and were failed for it (2026-09-06, phones 1834 to 1836).
+    #: The rounds inside one captcha are bounded by the flow instead.
     capsolver_key: str = ""
     captcha_max_attempts: int = 3
 

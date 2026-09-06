@@ -157,6 +157,9 @@ class Context(router.Context):
     captcha_ticked_on: int | None = None
     #: Whether a grid this cannot place has already been saved once.
     captcha_unplaced: bool = False
+    #: How many captchas this flow had met when the counters were last
+    #: reset, so a fresh captcha starts with fresh rounds.
+    captcha_met: int = 0
 
 
 # --------------------------------------------------------------- primitives
@@ -281,7 +284,8 @@ def _grid_instruction(ctx: Context) -> str:
         return ""
     words = [labels[start]]
     for text in labels[start + 1:start + 4]:
-        if not text.strip() or _is_tail(text):
+        if (not text.strip() or _is_tail(text)
+                or _TILE_LABEL in text.lower()):
             break
         words.append(text.strip())
     return " ".join(words)
@@ -368,6 +372,13 @@ def _tile_buttons(ctx: Context) -> list:
     if len(tiles) not in (9, 16):
         return []
     return sorted(tiles, key=lambda el: (_box(el)[1], _box(el)[0]))
+
+
+def _half_drawn(ctx: Context) -> bool:
+    """Whether the page is showing some tiles but not a whole grid."""
+    drawn = sum(1 for el in ctx.elements
+                if _TILE_LABEL in (el.label or "").lower() and _box(el))
+    return 0 < drawn < 16 and drawn != 9
 
 
 def _tiles_box(tiles: list) -> tuple[int, int, int, int]:
@@ -458,6 +469,7 @@ def _button_row(ctx: Context, *, below: int) -> list[int]:
     """
     tops = [box[1] for el in ctx.elements
             if el.clickable and "button" in (el.cls or "").lower()
+            and _TILE_LABEL not in (el.label or "").lower()
             and (box := _box(el)) and box[1] > below]
     return [0, min(tops)] if tops else []
 
@@ -627,10 +639,42 @@ def _screen_width(ctx: Context) -> int:
     return widest
 
 
-#: How many visits the captcha screen gets. Mostly spent waiting, which
-#: is why it is generous; `act_captcha` gives up one short of it, so the
-#: build ends on `captcha_shown` and never on the router's own phrase.
-CAPTCHA_VISITS = 14
+#: How many visits the captcha screen gets across a whole flow. Generous,
+#: because most of them are spent waiting and because one flow may meet
+#: several captchas; `act_captcha` gives up one short of it, so the build
+#: ends on `captcha_shown` and never on the router's own phrase.
+CAPTCHA_VISITS = 44
+
+#: Rounds one captcha gets - a tick of its box, or one grid sent to the
+#: solver. Google's 3x3 takes tiles away as they are answered and draws
+#: fresh ones in their place, so passing a single captcha takes three to
+#: six rounds; ten is past that and still stops a page that will not
+#: settle.
+_ROUNDS_PER_CAPTCHA = 10
+
+#: Screens that can appear in the middle of one captcha without the next
+#: captcha screen being a *new* captcha. A challenge that redraws goes
+#: through `loading` on the way, and counting that as a second captcha
+#: would spend the operator's limit on one page.
+_WITHIN_A_CAPTCHA = {"captcha", "loading"}
+
+
+def _captchas_met(ctx: Context) -> int:
+    """How many separate captchas this flow has been shown.
+
+    Not rounds and not visits: the operator's limit is three captchas in
+    one flow, and one captcha is one arrival at the screen however many
+    times it redraws while it is being answered. So this counts runs in
+    the trail - `captcha captcha captcha` is one, and a captcha after the
+    password page is a second.
+    """
+    met, inside = 0, False
+    for name in ctx.trail:
+        if name == "captcha":
+            met, inside = (met + (0 if inside else 1)), True
+        elif name not in _WITHIN_A_CAPTCHA:
+            inside = False
+    return met
 
 
 def _captcha_gave_up(ctx: Context, said: str) -> Outcome:
@@ -658,9 +702,18 @@ def act_captcha(ctx: Context) -> Outcome | None:
     # visits are waiting for reCAPTCHA to make up its mind, and a wait is
     # not an attempt. Three attempts is what the operator asked for, and
     # three attempts is what this is - not three glances at the page.
-    if ctx.captcha_tries >= ctx.captcha_max:
+    met = _captchas_met(ctx)
+    if met != ctx.captcha_met:
+        # A new captcha: its rounds start again, and so does the tick box.
+        ctx.captcha_met, ctx.captcha_tries = met, 0
+        ctx.captcha_ticked_on, ctx.captcha_unplaced = None, False
+    if met > ctx.captcha_max:
         return _captcha_gave_up(
-            ctx, f"the captcha was not solved in {ctx.captcha_max} tries")
+            ctx, f"a {met}th captcha in one sign-in, past the {ctx.captcha_max}"
+                 f" this is allowed to answer")
+    if ctx.captcha_tries >= _ROUNDS_PER_CAPTCHA:
+        return _captcha_gave_up(
+            ctx, f"this captcha did not settle in {_ROUNDS_PER_CAPTCHA} rounds")
     # The other way out. Most visits here are waiting - for reCAPTCHA to
     # decide, or on a grid this cannot place - and waiting was unbounded:
     # the screen simply ran out of visits and the router reported
@@ -704,6 +757,13 @@ def act_captcha(ctx: Context) -> Outcome | None:
     # say how many there are, and they can be tapped as tiles rather than
     # as points. The picture is what is left when they have not arrived.
     tiles = _tile_buttons(ctx)
+    if not tiles and _half_drawn(ctx):
+        # Some tiles, not all of them. The grid is still being laid out, and
+        # a picture taken now holds whichever corner has arrived - one came
+        # out 206 pixels across and was answered as though it were the
+        # whole thing (2026-09-06, phone 1836). Waited out instead; the
+        # visit budget is what ends this if they never all arrive.
+        return None
     window = _tiles_box(tiles) if tiles else _grid_rect(ctx)
     if window is None:
         # A grid we cannot place. Never a tap on coordinates guessed from
