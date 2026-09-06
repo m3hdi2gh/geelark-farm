@@ -2041,3 +2041,41 @@ def test_every_ledger_the_program_loads_carries_the_resolved_window():
         "these Ledger.load calls measure claims against the module default "
         "while the credentials measure them against the setting: "
         + ", ".join(missing))
+
+
+def test_a_closed_sheet_never_opens_the_workbook(monkeypatch, make_settings):
+    """The whole of it: with the flag on, `Book.open` hands back the same
+    Postgres Book `pools_only` builds and makes no Sheets call at all."""
+    from geelark_farm import pools as pools_mod
+
+    opened = []
+    monkeypatch.setattr(pools_mod.Settings, "require_sheets",
+                        lambda self: opened.append("sheets"), raising=False)
+    monkeypatch.setattr(pools_mod.Book, "pools_only",
+                        classmethod(lambda cls, s: "the postgres book"))
+
+    settings = make_settings(sheet_closed=True, pools_in_pg=True,
+                             store_enabled=True)
+    assert pools_mod.Book.open(settings) == "the postgres book"
+    assert opened == [], "it asked for sheet credentials it does not need"
+
+
+def test_a_sheet_closed_without_the_pools_moved_is_refused_at_startup():
+    """`Book.pools_only` builds Postgres pools unconditionally, so the pair
+    would not fail honestly - it would hand back a Book whose pools
+    disagree with what the rest of the process believes."""
+    import os
+
+    from geelark_farm.config import ConfigError, Settings
+
+    was = {k: os.environ.get(k) for k in ("SHEET_CLOSED", "POOLS_IN_PG")}
+    try:
+        os.environ["SHEET_CLOSED"], os.environ["POOLS_IN_PG"] = "1", "0"
+        with pytest.raises(ConfigError, match="POOLS_IN_PG is off"):
+            Settings.load()
+    finally:
+        for key, value in was.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

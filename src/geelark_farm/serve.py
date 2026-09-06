@@ -1516,6 +1516,15 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
 
         web.start(settings)
 
+    if settings.sheet_closed:
+        # Said once, loudly, because the failure it prevents is silent: a
+        # row pasted into a tab while this is on waits there and nothing
+        # ever mentions it. The console's paste boxes are the door now.
+        log.warning("the workbook is not opened - stock comes in through the "
+                    "console's paste boxes, and anything pasted into the "
+                    "sheet's tabs will sit there unread until SHEET_CLOSED "
+                    "goes back to 0")
+
     log.info("serving: %d warm phones, a pass every %ds, claims go stale "
              "after %ds", settings.warm_stock,
              settings.serve_interval_seconds, settings.stale_claim_seconds)

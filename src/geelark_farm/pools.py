@@ -2083,6 +2083,22 @@ class Book:
 
     @classmethod
     def open(cls, settings: Settings) -> Book:
+        # The door, closed. With the pools, the phone log, the history and
+        # the service board all in Postgres, a workbook open costs eleven
+        # Sheets calls a pass and three of them produce anything the
+        # returned Book still uses - the rest build a HistoryLog and a
+        # ServiceBoard that are thrown away three lines later, and write
+        # the Service tab's labels twice, every pass, against a quota that
+        # has no headroom. What is left is the import funnel, which the
+        # console's own paste boxes do, and the Lists tab, whose whole job
+        # is keeping dropdowns honest on a sheet nobody opens.
+        #
+        # Reversible, and that is the point: put SHEET_CLOSED back to 0 and
+        # the next pass opens the workbook and drains whatever is in the
+        # tabs, because nothing here writes them while it is on. It is not
+        # POOLS_IN_PG (2026-09-07).
+        if settings.sheet_closed:
+            return cls.pools_only(settings)
         settings.require_sheets()
         try:
             import gspread

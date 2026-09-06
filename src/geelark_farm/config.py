@@ -366,6 +366,11 @@ class Settings:
     #: Whether a second drainer runs the quick commands off the pass's
     #: thread, so a boot or an exit test does not stand behind a build.
     control_lane: bool = False
+    #: Whether the Google workbook is opened at all. Off = as it always ran.
+    #: On, the stock comes in through the console's paste boxes and the
+    #: farm makes no Sheets call of any kind. Needs the pools in the store,
+    #: because a Book without a workbook is a Book of Postgres pools.
+    sheet_closed: bool = False
     capsolver_key: str = ""
     captcha_max_attempts: int = 3
 
@@ -374,7 +379,7 @@ class Settings:
         """Read settings from the environment, requiring only what every
         command needs. Sheets settings are validated by require_sheets()."""
         load_env()
-        return cls(
+        settings = cls(
             app_id=_str("GEELARK_APP_ID", required=True),
             api_key=_str("GEELARK_API_KEY", required=True),
             sheet_id=_str("GOOGLE_SHEET_ID"),
@@ -400,6 +405,8 @@ class Settings:
             wake_on_action=_str("WAKE_ON_ACTION", "0").strip()
                           in ("1", "true", "yes", "on"),
             control_lane=_str("CONTROL_LANE", "0").strip()
+                        in ("1", "true", "yes", "on"),
+            sheet_closed=_str("SHEET_CLOSED", "0").strip()
                         in ("1", "true", "yes", "on"),
             login_budget_seconds=_int("LOGIN_BUDGET_SECONDS", 900),
             install_budget_seconds=_int("INSTALL_BUDGET_SECONDS", 600),
@@ -434,6 +441,8 @@ class Settings:
             store_user=_str("STORE_USER", "gfarm"),
             store_password=_str("STORE_PASSWORD"),
         )
+        settings.require_sheet_or_store()
+        return settings
 
     def require_sheets(self) -> None:
         """Fail early, with a fixable message, before anything is spent."""
@@ -447,6 +456,23 @@ class Settings:
                 "Create a service account, download its JSON key, and share "
                 "the spreadsheet with that account's email as an Editor."
             )
+
+    def require_sheet_or_store(self) -> None:
+        """The one pair that cannot be set the way it reads.
+
+        SHEET_CLOSED says "the workbook is not opened"; POOLS_IN_PG says
+        "the pools live in Postgres". Closed without the pools in the store
+        is a farm with no stock at all - `Book.pools_only` builds Postgres
+        pools unconditionally, so it would not even fail honestly, it would
+        hand back a Book whose pools disagree with what the rest of the
+        process believes. Refused at load, where every other impossible
+        pair is refused, rather than found at the first pass (2026-09-07).
+        """
+        if self.sheet_closed and not self.pools_in_pg:
+            raise ConfigError(
+                "SHEET_CLOSED is on but POOLS_IN_PG is off - with the "
+                "workbook shut there is nowhere for the pools to live. "
+                "Turn POOLS_IN_PG on first, or leave the sheet open.")
 
     def require_store(self) -> None:
         """Fail early, with a fixable message, before anything is spent.
