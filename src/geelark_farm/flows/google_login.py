@@ -504,6 +504,7 @@ def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
         square = min(box[2] - box[0], box[3] - box[1])
         if square < 100 or abs((box[2] - box[0]) - (box[3] - box[1])) > square:
             log.warning("the block at %s is not a grid's shape", box)
+            _keep(ctx, "captcha-refused.png", shot)
             return None
         grid = shot.crop(box)
         side = _GRID_PIXELS[size]
@@ -521,7 +522,7 @@ def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
 
 
 def _keep(ctx: Context, name: str, image) -> None:
-    """Put a picture beside the build's other artifacts, once.
+    """Put a picture beside the build's other artifacts, once per name.
 
     The view hierarchy says where the tiles are; only the picture says what
     was actually sent. Four builds handed CapSolver a grid and got back an
