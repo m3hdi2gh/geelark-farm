@@ -768,7 +768,12 @@ class _Handler(BaseHTTPRequestHandler):
                     for r in paste.accounts(field.get("rows", ""))]
             return self._act(user, "may_add_gmail", "add_gmails",
                              {"rows": rows,
-                              "seller": (field.get("seller") or "").strip()},
+                              "seller": (field.get("seller") or "").strip(),
+                              # Blank means today, which is what it always
+                              # meant; the field only lets a person say
+                              # otherwise for stock bought a while ago.
+                              "purchased": (field.get("purchased")
+                                            or "").strip()},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
                              back=_add_back(field, "/pools/gmail"))
         if path == "/pools/gmail/edit":

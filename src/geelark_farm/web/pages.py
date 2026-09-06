@@ -2239,10 +2239,18 @@ def _seller_field(kind: str, rows: list[dict]) -> str:
     if kind != "gmail":
         return ""
     options = "".join(f'<option value="{esc(s)}">' for s in _sellers_of(rows))
+    # And when it was bought. Blank means today, which is what the add
+    # always assumed - but `purchased_on` is the column the "how old is
+    # this stock" question is answered from, and a batch bought last month
+    # entering as bought today is an answer nobody can correct except by
+    # editing every row. The sheet had the column; this had nowhere to type
+    # it (2026-09-06, found while closing the sheet).
     return (f'<input name="seller" list="sellers-known" class="mono seller"'
             f' placeholder="seller - pick or type a new one"'
             f' autocomplete="off"><datalist id="sellers-known">{options}'
-            f'</datalist>')
+            f'</datalist>'
+            f'<input name="purchased" type="date" class="mono when"'
+            f' title="when it was bought - blank means today">')
 
 
 def _pool_row_doors(kind: str, row: dict, user: dict,

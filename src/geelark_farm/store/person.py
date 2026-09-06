@@ -99,13 +99,25 @@ def clear_tries(settings: Settings, serial: str) -> bool:
 def marked(settings: Settings) -> list[dict]:
     """Phones somebody has closed as done or failed, with what is on them.
 
-    The shape the sheet handed back, minus `sheet_row` - there are no
-    sheet rows here, and the one caller that used it was deleting the row
-    it named.
+    The shape the sheet handed back, `sheet_row` included - it is this
+    table's own `id`, which is what closes the row.
+
+    It was left out, on the reasoning that "there are no sheet rows here,
+    and the one caller that used it was deleting the row it named". That
+    caller still names it: `apply_phone_states` collects `row["sheet_row"]`
+    (builder.py) and hands the list to `PgPhoneLog.delete_rows`, which
+    closes rows BY ID. Without the key it raised KeyError - and raised it
+    *after* the irreversible half had run, so the GeeLark phone was
+    deleted, the Gmail retired and the app account delivered or freed,
+    while the row stayed open for the next pass to do all of it again. The
+    step guard swallowed the crash into one log line. Nobody had pressed
+    Done or Failed since POOLS_IN_PG went on, so it never fired
+    (2026-09-06, found by audit).
     """
     with Store(settings) as store:
         return store._rows(
-            "SELECT serial, state, coalesce(gmail, '') AS gmail,"
+            "SELECT id AS sheet_row, serial, state,"
+            " coalesce(gmail, '') AS gmail,"
             " coalesce(app_account, '') AS app_account"
             " FROM phones WHERE done_at IS NULL AND state = ANY(%s)"
             " ORDER BY serial", (list(ACTED_ON),))

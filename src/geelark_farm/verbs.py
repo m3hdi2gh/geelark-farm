@@ -40,6 +40,13 @@ def add_gmails(book, ledger, settings, payload, client):
 
     added, skipped, refused = [], [], []
     seller = (payload.get("seller") or "").strip()
+    # When it was bought, if the person said. It used to be stamped today
+    # whatever they meant, and `purchased_on` is the column the "how old is
+    # this stock" question is answered from - so a batch bought last month
+    # entering as bought today is an answer nobody can correct except by
+    # editing every row. The sheet carried the real date; the console had
+    # nowhere to type it (2026-09-06, found while closing the sheet).
+    bought = (payload.get("purchased") or "").strip() or _stamp()
     for row in payload.get("rows") or []:
         try:
             checked = validate.gmail_row(
@@ -54,7 +61,7 @@ def add_gmails(book, ledger, settings, payload, client):
             skipped.append(checked["address"])
             continue
         book.gmails.append(**{
-            "Purchase Date": _stamp(), "Seller": seller,
+            "Purchase Date": bought, "Seller": seller,
             "Address": checked["address"], "Password": checked["password"],
             "Secret": checked["recovery_email"] or checked["totp_secret"],
             "Status": "",

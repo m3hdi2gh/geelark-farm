@@ -961,3 +961,29 @@ def test_free_refuses_a_row_a_phone_is_behind():
     status, said, _ = verbs.free_app(
         book, None, None, {"address": address, "by": "mehdi"}, None)
     assert status == "refused" and "a phone is behind it" in said
+
+
+def test_a_paste_can_say_when_the_stock_was_bought():
+    """`purchased_on` is the column the "how old is this stock" question is
+    answered from, and the add stamped today whatever the person meant - so
+    a batch bought last month entered as bought today, an answer nobody
+    could correct except by editing every row. The sheet carried the date;
+    the console had nowhere to type it (2026-09-06)."""
+    book = make_book()
+    verbs.add_gmails(book, None, None, {
+        "by": "mehdi", "seller": "usa", "purchased": "2026-08-01",
+        "rows": [{"address": "old@x.com", "password": "pw",
+                  "secret": SECRET, "recovery": ""}]}, None)
+    row = book.gmails.find("old@x.com")
+    assert row is not None
+    assert row.values["Purchase Date"] == "2026-08-01"
+
+
+def test_a_paste_that_says_nothing_still_means_today():
+    book = make_book()
+    verbs.add_gmails(book, None, None, {
+        "by": "mehdi", "seller": "usa",
+        "rows": [{"address": "new@x.com", "password": "pw",
+                  "secret": SECRET, "recovery": ""}]}, None)
+    row = book.gmails.find("new@x.com")
+    assert row is not None and row.values["Purchase Date"] == verbs._stamp()

@@ -1136,3 +1136,39 @@ def test_the_retired_sheet_flag_is_written_by_nothing_at_all():
         code = "\n".join(line for line in source.split("\n")
                          if not line.lstrip().startswith("#"))
         assert "on_sheet" not in code, f"{name} still touches the sheet flag"
+
+
+def test_the_rows_a_person_closed_carry_the_id_that_closes_them(monkeypatch,
+                                                                make_settings):
+    """`apply_phone_states` reads `row["sheet_row"]` and hands the list to
+    `PgPhoneLog.delete_rows`, which closes rows BY ID. Without the key it
+    raised KeyError - and raised it after the irreversible half had run, so
+    the GeeLark phone was deleted, the Gmail retired and the app account
+    settled, while the row stayed open for the next pass to do all of it
+    again. The step guard swallowed the crash into one log line
+    (2026-09-06)."""
+    from geelark_farm.store import person
+
+    seen = {}
+
+    class FakeStore:
+        def __init__(self, settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def _rows(self, sql, params=()):
+            seen["sql"] = " ".join(sql.split())
+            return [{"sheet_row": 7, "serial": "1856", "state": "done",
+                     "gmail": "a@x.com", "app_account": ""}]
+
+    monkeypatch.setattr(person, "Store", FakeStore)
+
+    rows = person.marked(make_settings(store_enabled=True))
+
+    assert "SELECT id AS sheet_row" in seen["sql"], "the id it closes rows by"
+    assert rows and rows[0]["sheet_row"] == 7

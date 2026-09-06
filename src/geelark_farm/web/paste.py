@@ -100,9 +100,47 @@ def accounts(text: str) -> list[dict]:
     return rows
 
 
+#: A port on its own, which is what the second column of a four-column
+#: vendor list looks like once the line is split.
+_PORT = re.compile(r"^\d{2,5}$")
+
+
+def _joined(parts: list[str]) -> tuple[str, list[str]]:
+    """An exit assembled from separate columns, and what was left over.
+
+    The Proxy tab has always taken both shapes - its own heading says
+    "Proxy String (or Host/Port/User/Pass)" - and both the sheet pool
+    (`ProxyPool._interpret`) and the importer join the four cells the same
+    way when the joined cell is blank, because somebody filling a tab by
+    hand fills the columns. The console's paste box could read only the
+    joined string, so a vendor list in four columns pasted as nothing at
+    all: every line refused, with no hint that the shape was the problem
+    (2026-09-06, found while closing the sheet).
+
+    Host, port, and then user and password in that order, which is the
+    order the columns are in and the order both existing joins use.
+    """
+    at = next((i for i, part in enumerate(parts) if _PORT.match(part)), None)
+    if at is None or at == 0:
+        return "", parts
+    host = parts[at - 1]
+    rest = parts[at + 1:]
+    # A name can sit either side of the four, so only what looks like
+    # credentials is taken: two tokens at most, and never one with a colon
+    # in it, which would be a joined string somebody split by accident.
+    creds = [p for p in rest[:2] if ":" not in p]
+    used = {at - 1, at, *range(at + 1, at + 1 + len(creds))}
+    joined = ":".join([host, parts[at], *creds])
+    return joined, [p for i, p in enumerate(parts) if i not in used]
+
+
 def proxies(text: str) -> list[dict]:
     """One dict per non-empty line: raw (the host:port:user:pass string)
-    and name (a short token beside it, or empty for the pass to mint)."""
+    and name (a short token beside it, or empty for the pass to mint).
+
+    The joined string wins when there is one; a line of separate columns is
+    assembled the way the tab's own reader assembles it.
+    """
     rows = []
     for raw in (text or "").splitlines():
         parts = _split(raw)
@@ -110,6 +148,8 @@ def proxies(text: str) -> list[dict]:
             continue
         string = next((p for p in parts if _PROXY.match(p)), "")
         others = [p for p in parts if p != string]
+        if not string:
+            string, others = _joined(parts)
         rows.append({"raw": string, "name": others[0] if others else "",
                      "line": raw.strip()})
     return rows
