@@ -2048,8 +2048,19 @@ class Book:
         from .store.pgpool import PgAppPool, PgGmailPool, PgProxyPool, ResourceTable
 
         table = ResourceTable(settings)
+        # The other three boards, when they too live in the store. `Book
+        # .open` already builds them from settings alone - no workbook, no
+        # six seconds against Google - so a Book without them was a hole
+        # for no reason, and every verb that reads the Phones tab (boot a
+        # phone, change an exit, set a state) fell through it into
+        # `_NotOpened` and had to wait for a pass that had one.
+        from .store.pgphones import PgHistory, PgPhoneLog, PgServiceBoard
+
         book = cls(gmails=PgGmailPool(table), proxies=PgProxyPool(table),
-                   apps=PgAppPool(table), phones=_NotOpened("Phones"))
+                   apps=PgAppPool(table),
+                   phones=PgPhoneLog(settings),
+                   history=PgHistory(settings),
+                   service=PgServiceBoard(settings))
         book.reload()
         return book
 

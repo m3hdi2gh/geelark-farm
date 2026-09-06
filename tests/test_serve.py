@@ -1616,7 +1616,7 @@ def _drain_world(monkeypatch, batch, wrote=True):
 
     monkeypatch.setattr(db_mod, "connect", lambda s: _DrainConn())
     monkeypatch.setattr(actions_mod, "take_batch",
-                        lambda conn, *, controls_only: list(batch))
+                        lambda conn, *, controls_only, only=None: list(batch))
     finished = []
     monkeypatch.setattr(
         actions_mod, "finish",
@@ -1867,7 +1867,7 @@ def test_the_drain_tells_the_launcher_which_row_it_works_for(monkeypatch,
     seen = {}
     monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
     monkeypatch.setattr(actions_mod, "take_batch",
-                        lambda conn, *, controls_only: [
+                        lambda conn, *, controls_only, only=None: [
                             {"id": 241, "verb": "spy", "payload": {},
                              "requested_by": 7}])
     monkeypatch.setattr(actions_mod, "finish",
@@ -1930,7 +1930,7 @@ def test_a_drained_command_leaves_a_request_event(monkeypatch, make_settings):
 
     monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
     monkeypatch.setattr(actions_mod, "take_batch",
-                        lambda conn, *, controls_only: [
+                        lambda conn, *, controls_only, only=None: [
                             {"id": 5, "verb": "noop",
                              "payload": {"serial": "1500"},
                              "requested_by": 7}])
@@ -2046,3 +2046,72 @@ def test_an_unrung_bell_waits_the_whole_interval(monkeypatch, make_settings):
     nap(0.01)                     # nothing rings; the wait simply expires
 
     assert slept == [], "no floor when nothing woke it"
+
+
+def test_the_lane_takes_only_the_verbs_that_say_they_are_quick():
+    """Marked on the verb, not listed here: a list would be the second
+    place to remember, and the one that gets forgotten is the ten-minute
+    job that ends up on a thread meant for seconds."""
+    wanted = serve_mod.lane_verbs()
+    assert "boot_phone" in wanted and "control" in wanted
+    assert "test_proxy" in wanted and "change_proxy" in wanted
+    assert "login_accounts" not in wanted, "a ten-minute job is not quick"
+    assert "build_by_hand" not in wanted
+
+
+def test_the_lane_is_absent_while_its_flag_is_off(monkeypatch, make_settings):
+    """Dark deploy: the thread is not started, and the pass drains
+    everything exactly as it did before."""
+    started = []
+    monkeypatch.setattr(serve_mod.ControlLane, "start",
+                        lambda self: started.append(self))
+    for flags in ({"control_lane": False},
+                  {"control_lane": True, "pools_in_pg": False},
+                  {"control_lane": True, "web_mutations": False}):
+        settings = make_settings(**{"store_enabled": True,
+                                    "web_mutations": True,
+                                    "pools_in_pg": True,
+                                    "web_enabled": False, **flags})
+        assert not (settings.control_lane and settings.store_enabled
+                    and settings.web_mutations and settings.pools_in_pg), \
+            f"{flags} should not open the lane"
+    assert started == []
+
+
+def test_a_lane_turn_drains_only_its_own_verbs(monkeypatch, make_settings):
+    """And never sweeps: `expire_running` belongs to the pass, which knows
+    how long a build may take."""
+    asked = {}
+
+    def drain(settings, book, ledger, *, controls_only, client=None,
+              launch=None, only=None):
+        asked.update(controls_only=controls_only, only=only)
+        return 2
+
+    monkeypatch.setattr(serve_mod, "_drain_actions", drain)
+    lane = serve_mod.ControlLane(make_settings(), client=None,
+                                 stop=threading.Event())
+    monkeypatch.setattr(lane, "boards", lambda: None)
+    monkeypatch.setattr(lane, "ledger", lambda: None)
+
+    assert lane.tick(("boot_phone", "control")) == 2
+    assert asked == {"controls_only": False, "only": ("boot_phone", "control")}
+
+
+def test_a_stumbling_lane_never_leaves_its_loop(monkeypatch, make_settings):
+    """A lane that dies takes the farm back to what it was - but silently,
+    which is the one way this can be worse than not existing."""
+    stop = threading.Event()
+    turns = []
+
+    def tick(wanted):
+        turns.append(wanted)
+        if len(turns) == 2:
+            stop.set()
+        raise RuntimeError("the cluster went away")
+
+    lane = serve_mod.ControlLane(make_settings(serve_interval_seconds=0),
+                                 client=None, stop=stop)
+    monkeypatch.setattr(lane, "tick", tick)
+    lane.watch()
+    assert len(turns) == 2, "it kept going after the first stumble"

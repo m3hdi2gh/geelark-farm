@@ -211,7 +211,7 @@ def test_the_drain_hands_the_geelark_client_to_the_handler(monkeypatch,
     seen = {}
     monkeypatch.setattr(db_mod, "connect", lambda s: Conn())
     monkeypatch.setattr(actions_mod, "take_batch",
-                        lambda conn, *, controls_only: [
+                        lambda conn, *, controls_only, only=None: [
                             {"id": 1, "verb": "spy", "payload": {},
                              "requested_by": 7}])
     monkeypatch.setattr(actions_mod, "finish",

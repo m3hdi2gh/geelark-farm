@@ -341,6 +341,101 @@ ACTION_VERBS: dict = {
 ACTION_VERBS.update(verbs.VERBS)
 
 
+#: What the control lane may take. Read from the verb table rather than
+#: listed twice: a verb says for itself whether it is quick enough and holds
+#: nothing a build needs, and a list here would be the second place to
+#: remember.
+def lane_verbs() -> tuple[str, ...]:
+    return tuple(sorted(name for name, verb in verbs.VERBS.items()
+                        if getattr(verb, "lane_safe", False)))
+
+
+class ControlLane:
+    """A second drainer, for the commands that are over in seconds.
+
+    The queue was built for two of these from the start - `take_batch`
+    claims with FOR UPDATE SKIP LOCKED - but only one thread had ever
+    drained it, and that thread is also the one that runs a ten-minute
+    build. Nothing about a login needs to be true for a boot or an exit
+    test to be slow; they were slow because they stood behind it.
+
+    So this takes only the verbs marked `lane_safe` and never builds. The
+    pass keeps draining everything, this one included, which makes it the
+    backstop: with the flag off, or with this thread dead, the farm behaves
+    exactly as it did before.
+
+    It is outside the watchdog on purpose. `guard.began`/`guard.ended`
+    bracket a pass, and a lane action wedged in a GeeLark call delays only
+    the lane - so it must never be allowed to raise out of its loop, and
+    each turn says what it did.
+    """
+
+    def __init__(self, settings: Settings, client: Client,
+                 stop: threading.Event):
+        self.settings = settings
+        self.client = client
+        self.stop = stop
+        self._book: Book | None = None
+        self._ledger = None
+
+    def start(self) -> threading.Thread:
+        thread = threading.Thread(target=self.watch, name="controls",
+                                  daemon=True)
+        thread.start()
+        return thread
+
+    def watch(self) -> None:
+        from . import signals
+
+        wanted = lane_verbs()
+        log.info("control lane open for: %s", ", ".join(wanted))
+        while not self.stop.is_set():
+            signals.queued.wait(timeout=self.settings.serve_interval_seconds)
+            signals.queued.clear()
+            if self.stop.is_set():
+                break
+            try:
+                self.tick(wanted)
+            except Exception:                                     # noqa: BLE001
+                # Never out of the loop: a lane that dies takes the farm
+                # back to what it was, but silently, which is the one way
+                # this can be worse than not existing.
+                log.exception("the control lane stumbled; carrying on")
+
+    def tick(self, wanted: tuple[str, ...]) -> int:
+        """One drain of the lane's own verbs. Returns how many it ran."""
+        if not wanted:
+            return 0
+        did = _drain_actions(self.settings, self.boards(), self.ledger(),
+                             controls_only=False, client=self.client,
+                             only=wanted)
+        if did:
+            log.info("control lane ran %d command(s)", did)
+        return did
+
+    def boards(self) -> Book:
+        """The lane's own Book, built once and re-read each turn.
+
+        Its own, not the pass's: two threads over one Book would share the
+        pools' in-memory rows, and the whole reason this is safe is that
+        both go to Postgres for every claim.
+        """
+        if self._book is None:
+            self._book = Book.pools_only(self.settings)
+        else:
+            self._book.reload()
+        return self._book
+
+    def ledger(self):
+        """Read-only here. A build owns the writing; this only needs to
+        know which phones are held so it refuses to take one away."""
+        if self._ledger is None:
+            self._ledger = Ledger.load(
+                self.settings.state_dir,
+                stale_after=self.settings.stale_claim_seconds)
+        return self._ledger
+
+
 def _outcome_of(settings: Settings, action_id: int,
                 fallback_status: str, fallback_result: str) -> tuple[str, str]:
     """What a row actually says, for a drain whose own write was refused.
@@ -360,9 +455,65 @@ def _outcome_of(settings: Settings, action_id: int,
     return fallback_status, fallback_result
 
 
+def _run_action(settings: Settings, conn, action: dict, *, book: Book,
+                ledger, client: Client | None, launch=None) -> int:
+    """Carry out one claimed command and close its row. Returns 1, always:
+    a command that failed still happened, and the count is of commands
+    handled rather than of commands that worked.
+
+    Its own function because there are two drainers now - the pass, and the
+    control lane beside it - and the rules for running one of these are
+    long enough that a second copy would drift.
+    """
+    from .store import actions as store_actions
+
+    handler = ACTION_VERBS.get(action["verb"])
+    if handler is None:
+        store_actions.finish(conn, action["id"], status="refused",
+                             result=f"unknown verb: {action['verb']}")
+        return 1
+    try:
+        # A verb that starts phone work (C6's login) gets the pass's
+        # launcher, so its jobs run under the same fuse and flight as the
+        # decision's own.
+        if getattr(handler, "needs_launch", False):
+            # The launcher learns which row it is working for, so it can
+            # settle that row when the phones are done - minutes after this
+            # drain returned.
+            launcher = (None if launch is None else
+                        functools.partial(launch, action_id=action["id"]))
+            status, result, detail = handler(
+                book, ledger, settings, action["payload"], client,
+                launch=launcher)
+        else:
+            status, result, detail = handler(
+                book, ledger, settings, action["payload"], client)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("web action %s (%s) failed: %s",
+                    action["id"], action["verb"], exc)
+        status, result, detail = (
+            "failed", "this one is a program error - "
+                      "it is in today's log", None)
+    wrote = store_actions.finish(conn, action["id"], status=status,
+                                 result=result, detail=detail)
+    if not wrote:
+        # The launcher already closed this row from inside the handler,
+        # which is what happens whenever a pass runs its jobs itself. Its
+        # word is the true one, and the event below must not say otherwise.
+        status, result = _outcome_of(settings, action["id"], status, result)
+    # Its own row in events (C8), so "what did people ask for today" is one
+    # filter, and a serial in the payload joins the request to that phone's
+    # story.
+    _event(settings, "request", status=status,
+           user_id=action["requested_by"],
+           serial=str((action["payload"] or {}).get("serial") or ""),
+           detail=f"#{action['id']} {action['verb']}: {result}")
+    return 1
+
+
 def _drain_actions(settings: Settings, book: Book, ledger,
                    *, controls_only: bool, client: Client | None = None,
-                   launch=None) -> int:
+                   launch=None, only: tuple[str, ...] | None = None) -> int:
     """Execute queued web commands with THIS pass's Book and locks.
 
     Two positions, one decision each (signed off 2026-09-01): control verbs
@@ -382,7 +533,7 @@ def _drain_actions(settings: Settings, book: Book, ledger,
         from .store import db as store_db
 
         with store_db.connect(settings) as conn:
-            if not controls_only:
+            if not controls_only and only is None:
                 # A row still `running` twice a build budget after it
                 # was taken belongs to a process that is gone. Its own
                 # guard: a fake or a failing statement here must not stop
@@ -403,56 +554,12 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                     except Exception as also:                     # noqa: BLE001
                         log.debug("the rollback failed too (%s)", also)
             batch = store_actions.take_batch(conn,
-                                             controls_only=controls_only)
+                                             controls_only=controls_only,
+                                             only=only)
             for action in batch:
-                handler = ACTION_VERBS.get(action["verb"])
-                if handler is None:
-                    store_actions.finish(
-                        conn, action["id"], status="refused",
-                        result=f"unknown verb: {action['verb']}")
-                    continue
-                try:
-                    # A verb that starts phone work (C6's login) gets the
-                    # pass's launcher, so its jobs run under the same fuse
-                    # and flight as the decision's own.
-                    if getattr(handler, "needs_launch", False):
-                        # The launcher learns which row it is working
-                        # for, so it can settle that row when the phones
-                        # are done - minutes after this drain returned.
-                        launcher = (None if launch is None else
-                                    functools.partial(launch,
-                                                      action_id=action["id"]))
-                        status, result, detail = handler(
-                            book, ledger, settings, action["payload"], client,
-                            launch=launcher)
-                    else:
-                        status, result, detail = handler(
-                            book, ledger, settings, action["payload"], client)
-                except Exception as exc:                          # noqa: BLE001
-                    log.warning("web action %s (%s) failed: %s",
-                                action["id"], action["verb"], exc)
-                    status, result, detail = (
-                        "failed", "this one is a program error - "
-                                  "it is in today's log", None)
-                wrote = store_actions.finish(conn, action["id"],
-                                             status=status, result=result,
-                                             detail=detail)
-                if not wrote:
-                    # The launcher already closed this row from inside the
-                    # handler, which is what happens whenever a pass runs
-                    # its jobs itself. Its word is the true one, and the
-                    # event below must not say otherwise.
-                    status, result = _outcome_of(settings, action["id"],
-                                                 status, result)
-                done += 1
-                # Its own row in events (C8), so "what did people ask for
-                # today" is one filter, and a serial in the payload joins
-                # the request to that phone's story.
-                _event(settings, "request", status=status,
-                       user_id=action["requested_by"],
-                       serial=str((action["payload"] or {}).get("serial")
-                                  or ""),
-                       detail=f"#{action['id']} {action['verb']}: {result}")
+                done += _run_action(settings, conn, action, book=book,
+                                    ledger=ledger, client=client,
+                                    launch=launch)
     except Exception as exc:                                      # noqa: BLE001
         log.warning("the action drain did not run this pass (%s); queued "
                     "commands wait for the next one", exc)
@@ -1384,6 +1491,12 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         from .store import logdb as store_logdb
 
         store_logdb.install(settings)
+
+    if (settings.control_lane and settings.store_enabled
+            and settings.web_mutations and settings.pools_in_pg):
+        # Beside the watchdog and the web, on the same Client - one process,
+        # one rate limiter, and `build_client` would make a second one.
+        ControlLane(settings, client, stop).start()
 
     if settings.web_enabled:
         # Loopback-only, read-only, daemon: it dies with the process and

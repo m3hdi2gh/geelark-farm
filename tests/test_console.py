@@ -2028,8 +2028,13 @@ def test_every_ledger_the_program_loads_carries_the_resolved_window():
                 continue
             window = next((kw for kw in node.keywords
                            if kw.arg == "stale_after"), None)
-            if window is None or ast.unparse(window.value) != \
-                    "settings.stale_claim_seconds":
+            # Either spelling of the same setting. The rule is about where
+            # the number comes from, not about the name the caller holds
+            # its settings under, and a loader that lives on an object
+            # reads it as `self.settings` (the control lane, 2026-09-06).
+            resolved = {"settings.stale_claim_seconds",
+                        "self.settings.stale_claim_seconds"}
+            if window is None or ast.unparse(window.value) not in resolved:
                 missing.append(f"{path.name}:{node.lineno}")
 
     assert not missing, (

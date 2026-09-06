@@ -1125,3 +1125,25 @@ VERBS = {
     "test_all_proxies": test_all_proxies,
     "remove_proxy": remove_proxy,
 }
+
+
+#: The verbs a second drainer may run off the pass's thread.
+#:
+#: Marked by hand and not derived, because the rule is not a property of the
+#: source: it is "this finishes in seconds and holds nothing a build needs".
+#: `runs_inline` is derived and refuses anything naming `client`, which is
+#: exactly the set that matters here - a boot, an exit test, a proxy swap -
+#: so a second rule would have had to be its opposite and would have said
+#: yes to `login_accounts`, which is a ten-minute job and belongs on the
+#: pass with the pass's fuse, flight and launcher.
+#:
+#: Everything here was checked one at a time against what a build holds at
+#: the same moment: the pools claim with FOR UPDATE SKIP LOCKED, the phone
+#: boards write a row at a time, the ledger is only read, and the GeeLark
+#: client keeps a session per thread behind one locked limiter. Add nothing
+#: here without doing that, and nothing that can take minutes.
+for _lane in (control, boot_phone, test_proxy, test_all_proxies,
+              change_proxy, mark_proxy_free, adopt_proxy, add_proxies,
+              ignore_proxy, remove_proxy, set_phone_state, stop_phone):
+    _lane.lane_safe = True
+del _lane

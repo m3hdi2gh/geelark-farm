@@ -229,16 +229,30 @@ def cancel(settings: Settings, *, action_id: int, user_id: int,
 
 
 # --------------------------------------------------------------- the drain's
-def take_batch(conn, *, controls_only: bool) -> list[dict]:
+def take_batch(conn, *, controls_only: bool,
+               only: tuple[str, ...] | None = None) -> list[dict]:
     """Claim up to DRAIN_BATCH queued commands, oldest first, marking them
-    running. Runs on the serve pass's own connection and transaction."""
-    wanted = ("verb = 'control'" if controls_only else "verb <> 'control'")
+    running.
+
+    `only` narrows the claim to a named set of verbs, which is how a second
+    drainer takes its own work without a second queue. `FOR UPDATE SKIP
+    LOCKED` is what makes two drainers safe, and it was written in from the
+    start; until now only one thread had ever used it. Two drainers over
+    overlapping sets is fine and deliberate - whoever reaches a row first
+    takes it - so the pass stays a backstop for everything the lane can do.
+    """
+    if only is not None:
+        wanted = "verb = ANY(%s)"
+        params: tuple = (list(only),)
+    else:
+        wanted = "verb = 'control'" if controls_only else "verb <> 'control'"
+        params = ()
     cur = conn.execute(
         f"UPDATE actions SET status = 'running', executed_at = now()"
         f" WHERE id IN (SELECT id FROM actions"
         f"   WHERE status = 'queued' AND {wanted}"
         f"   ORDER BY id FOR UPDATE SKIP LOCKED LIMIT {DRAIN_BATCH})"
-        f" RETURNING id, verb, payload, requested_by")
+        f" RETURNING id, verb, payload, requested_by", *([params] if params else []))
     rows = [dict(zip(("id", "verb", "payload", "requested_by"), r,
                      strict=True)) for r in cur.fetchall()]
     conn.commit()
