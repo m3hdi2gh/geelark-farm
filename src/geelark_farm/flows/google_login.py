@@ -851,7 +851,15 @@ def act_captcha(ctx: Context) -> Outcome | None:
 
 
 def _answer(ctx: Context, rect: tuple[int, int, int, int]) -> None:
-    """Hand the challenge its own answer, on its own button."""
+    """Hand the challenge its own answer, on its own button.
+
+    Read from the screen as it is now, not as it was before the tiles were
+    tapped: the button row sits under the tiles and moves with them - the
+    same challenge showed it at y=937 and at y=988 on two rounds - and the
+    button's own word changes from SKIP to VERIFY as soon as one tile is
+    taken. A stale tree presses where the button used to be.
+    """
+    ctx.refresh()
     button = _challenge_button(ctx, below=rect[3])
     if button is None:
         log.warning("the challenge has no button of its own to press")

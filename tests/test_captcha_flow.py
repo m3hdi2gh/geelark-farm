@@ -506,3 +506,23 @@ def test_a_grid_that_never_finishes_drawing_is_not_waited_on_forever():
         assert c.captcha_waited == i + 1, "waiting, and counting it"
     # Past the wait it stops waiting and goes at the picture instead.
     assert c.captcha_waited == g._DRAW_WAIT
+
+
+def test_the_button_is_read_from_the_screen_as_it_is_after_the_taps(
+        monkeypatch):
+    """The button row sits under the tiles and moves with them - one
+    challenge showed it at y=937 and at y=988 on two rounds - and its word
+    changes from SKIP to VERIFY as soon as a tile is taken."""
+    c, _ = _tiles_ctx()
+    moved = [e for e in c.elements if e.label != "SKIP"]
+    moved.append(el("VERIFY", "[510,951][676,1023]", cls="Button"))
+
+    def refresh():
+        c.elements = moved
+
+    c.refresh = refresh
+    tapped = []
+    monkeypatch.setattr(g.screen, "tap_element",
+                        lambda client, pid, e: tapped.append(e.bounds))
+    g._answer(c, (44, 244, 680, 879))
+    assert tapped == ["[510,951][676,1023]"], "where the button is now"
