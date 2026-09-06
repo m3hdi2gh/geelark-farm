@@ -12,7 +12,7 @@ from geelark_farm.flows import google_login as g
 #: Where the tiles sit on the real screen beside these tests, in the view
 #: hierarchy's own numbers. Every test that fakes the cut uses it, so a tap
 #: is always checked against a place a phone really had tiles.
-SENT_AT = (47, 247, 678, 877)
+SENT_AT = (47, 247, 677, 877)
 
 
 def el(label, bounds, cls="TextView"):
@@ -153,7 +153,7 @@ def test_the_window_is_read_off_the_real_screen():
     """The band the tiles are inside: below the heading's last line, above
     the challenge's button row, the screen's own width."""
     c, _ = _grid_ctx()
-    assert g._grid_rect(c) == (0, 198, 720, 898)
+    assert g._grid_rect(c) == (34, 198, 690, 898)
 
 
 def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
@@ -210,7 +210,7 @@ def test_the_window_is_bounded_by_the_heading_and_the_button_row():
     grid, so the floor came out higher than the ceiling and seven grids
     went by untouched before the phone gave up (build 1793)."""
     c, _ = _skip_grid_ctx()
-    assert g._grid_rect(c) == (0, 198, 720, 898)
+    assert g._grid_rect(c) == (34, 198, 690, 898)
 
 
 def test_the_heading_ends_at_click_skip_as_well_as_at_click_verify():
@@ -405,3 +405,32 @@ def test_the_count_of_tiles_beats_the_wording(monkeypatch):
     monkeypatch.setattr(g, "submit", lambda c: None)
     assert g.act_captcha(c) is None
     assert sent == {"size": 4, "scan": False}
+
+
+def test_the_window_is_the_challenges_card_and_not_the_whole_screen():
+    """Scanned across the whole width, a grid came out starting at x=134
+    and running to the screen's own edge at 720 - there was contrast
+    outside the card to find (2026-09-06, phone 1831). The frame is a
+    `reCAPTCHA` View, and the page carries two: the collapsed tick-box
+    widget is the other, told apart by not holding the heading."""
+    c, _ = _screen_ctx()
+    ask = next(g._box(e) for e in c.elements
+               if "select all" in (e.label or "").lower())
+    assert g._card_around(c, ask) == [34, 39, 690, 986]
+
+
+def test_one_flat_column_of_tiles_does_not_move_the_grid(monkeypatch):
+    """The width follows from the height, because a reCAPTCHA grid is
+    square and centred in its card. Trimmed for contrast the way the rows
+    are, a plain wall down the left edge takes the edge with it and every
+    tap after that lands a column over."""
+    from PIL import Image
+
+    shot = Image.open("tests/fixtures/google-captcha-grid-screen.png")
+    flat = shot.convert("RGB").copy()
+    # Paint the leftmost column of tiles a flat grey.
+    for x in range(47, 205):
+        for y in range(247, 877):
+            flat.putpixel((x, y), (200, 200, 200))
+    c, _ = _screen_ctx()
+    assert g._tiles_in(flat, g._grid_rect(c)) == SENT_AT

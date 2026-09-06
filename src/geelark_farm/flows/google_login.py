@@ -394,17 +394,24 @@ def _tiles_in(image, box: tuple[int, int, int, int]):
     grey = image.crop(box).convert("L")
     wide, high = grey.size
     px = grey.load()
-    across = _run([_spread(px, [(x, y) for y in range(0, high, 3)])
-                   > _TILE_CONTRAST for x in range(wide)])
-    if across is None:
-        return None
-    left, right = across
-    down = _run([_spread(px, [(x, y) for x in range(left, right, 3)])
+    # Scanned across the middle of the card, never its edges. The card's
+    # own border is white page against blue banner, and a screenshot that
+    # is not the hierarchy's own size blurs that border across the first
+    # column - which put contrast on every row of the banner and swallowed
+    # the whole window.
+    inset = max(1, wide // 20)
+    down = _run([_spread(px, [(x, y) for x in range(inset, wide - inset, 3)])
                  > _TILE_CONTRAST for y in range(high)])
     if down is None:
         return None
-    return (box[0] + left, box[1] + down[0],
-            box[0] + right, box[1] + down[1])
+    top, bottom = box[1] + down[0], box[1] + down[1]
+    # The width follows from the height, because a reCAPTCHA grid is square
+    # and centred in its card. Trimmed the same way as the rows it does
+    # not: one flat column - a plain wall, a stretch of sky - takes the
+    # edge with it and every tap after that lands a column over.
+    side = bottom - top
+    middle = (box[0] + box[2]) // 2
+    return (middle - side // 2, top, middle - side // 2 + side, bottom)
 
 
 def _spread(px, points) -> int:
@@ -486,13 +493,40 @@ def _grid_rect(ctx: Context) -> tuple[int, int, int, int] | None:
     subject = next((el for el, t in after if t.strip()), None)
     tail = next((el for el, t in after if _is_tail(t)), None)
     head = _box(tail) or _box(subject)
-    width = _screen_width(ctx)
-    if not head or width < 1:
+    card = _card_around(ctx, _box(ask))
+    if not head or not card:
         return None
     floor = _button_row(ctx, below=head[3])
     if not floor or floor[1] - head[3] < 100:
         return None
-    return (0, head[3], width, floor[1])
+    return (card[0], head[3], card[2], floor[1])
+
+
+def _card_around(ctx: Context, ask: list[int]) -> list[int]:
+    """The challenge's own frame - the smallest thing on the page that the
+    heading sits inside, and wide enough to hold a grid.
+
+    Searched for rather than assumed to be the screen. Scanned across the
+    whole width instead, a grid came out starting at x=134 and running to
+    the screen's own edge at 720, because there was contrast outside the
+    card to find (2026-09-06, phone 1831). The frame is `reCAPTCHA`, a
+    View, and the page carries two of them - the collapsed tick-box widget
+    is the other - so it is told apart by containing the heading.
+    """
+    best: list[int] = []
+    for el in ctx.elements:
+        box = _box(el)
+        if not box or box[2] - box[0] < 200:
+            continue
+        if not (box[0] <= ask[0] and box[1] <= ask[1]
+                and box[2] >= ask[2] and box[3] >= ask[3]):
+            continue
+        if box == ask:
+            continue
+        if not best or (box[2] - box[0]) * (box[3] - box[1]) < (
+                best[2] - best[0]) * (best[3] - best[1]):
+            best = box
+    return best
 
 
 def _grab_grid_b64(ctx: Context, window: tuple[int, int, int, int],
