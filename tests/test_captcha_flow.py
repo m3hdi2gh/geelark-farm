@@ -57,7 +57,8 @@ def test_the_words_alone_are_never_tapped_and_nothing_is_poked(monkeypatch):
     tapped, submitted = [], []
     monkeypatch.setattr(g.screen, "tap_element",
                         lambda client, pid, el: tapped.append(el.label))
-    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    monkeypatch.setattr(g, "_answer",
+                        lambda c, rect: submitted.append(True))
     c = ctx([el("I'm not a robot", "[40,300][320,380]")], seen={"captcha": 1})
     assert g.act_captcha(c) is None
     assert tapped == [] and submitted == []
@@ -114,7 +115,8 @@ def test_the_real_checkbox_is_ticked_then_left_alone_then_tried_again(
     c = ctx(els, seen={"captcha": 1})
     monkeypatch.setattr(g.screen, "tap_element",
                         lambda client, pid, el: tapped.append(el.centre))
-    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    monkeypatch.setattr(g, "_answer",
+                        lambda c, rect: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == [(82, 564)] and submitted == []
     assert c.captcha_tries == 1 and c.captcha_ticked_on == 1
@@ -171,7 +173,8 @@ def test_the_real_grid_is_solved_and_its_tiles_tapped(monkeypatch):
     tapped, submitted = [], []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
-    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    monkeypatch.setattr(g, "_answer",
+                        lambda c, rect: submitted.append(True))
 
     assert g.act_captcha(c) is None
     assert asked["q"] == "Select all images with crosswalks"
@@ -190,7 +193,7 @@ def test_a_three_by_three_is_not_read_as_sixteen_tiles(monkeypatch):
     tapped = []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
-    monkeypatch.setattr(g, "submit", lambda c: None)
+    monkeypatch.setattr(g, "_answer", lambda c, rect: None)
     assert g.act_captcha(c) is None
     # Tile 8 of a 3x3 is the bottom-right; of a 4x4 it would be mid-left,
     # which on this grid is (125, 640).
@@ -341,7 +344,8 @@ def test_an_answer_about_a_grid_we_did_not_send_is_left_alone(monkeypatch):
     tapped, submitted = [], []
     monkeypatch.setattr(g.shell, "tap",
                         lambda client, pid, x, y: tapped.append((x, y)))
-    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    monkeypatch.setattr(g, "_answer",
+                        lambda c, rect: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == [] and submitted == []
 
@@ -389,7 +393,8 @@ def test_the_solvers_tiles_are_tapped_where_the_page_says_they_are(
     tapped, submitted = [], []
     monkeypatch.setattr(g.screen, "tap_element",
                         lambda client, pid, el: tapped.append(el.bounds))
-    monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
+    monkeypatch.setattr(g, "_answer",
+                        lambda c, rect: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == ["[202,402][362,562]", "[360,402][522,562]",
                       "[202,561][362,722]", "[360,561][522,722]"]
@@ -406,7 +411,7 @@ def test_the_count_of_tiles_beats_the_wording(monkeypatch):
                         sent.update(size=size, scan=scan) or ("B64", box))
     monkeypatch.setattr("geelark_farm.capsolver.solve_grid",
                         lambda key, image, q: ([], 4))
-    monkeypatch.setattr(g, "submit", lambda c: None)
+    monkeypatch.setattr(g, "_answer", lambda c, rect: None)
     assert g.act_captcha(c) is None
     assert sent == {"size": 4, "scan": False}
 
@@ -465,3 +470,39 @@ def test_a_fresh_captcha_gets_fresh_rounds(monkeypatch):
     assert g.act_captcha(c) is None
     assert c.captcha_met == 2
     assert c.captcha_tries == 1, "the tick of the new captcha, and no more"
+
+
+def test_the_challenges_own_button_is_pressed_and_not_the_pages():
+    """The sign-in page carries a NEXT of its own at the foot of the
+    screen, and `submit` matches on the word. Pressed there, the answer
+    never goes anywhere: phone 1839 tapped the same four tiles five rounds
+    running and got the same grid back every time, because nothing had ever
+    been submitted (2026-09-06).
+
+    Nor is it the topmost button under the tiles: that row carries four
+    icon buttons - another challenge, audio, liveness, help - and the
+    leftmost of those is what position alone picks.
+    """
+    c, _ = _tiles_ctx()
+    button = g._challenge_button(c, below=879)
+    assert button is not None
+    assert button.label == "SKIP" and button.bounds == "[510,901][676,973]"
+
+    page_next = next(e for e in c.elements if e.label == "NEXT")
+    assert page_next.bounds == "[543,1264][687,1342]", "the page's own"
+
+
+def test_a_grid_that_never_finishes_drawing_is_not_waited_on_forever():
+    """Waited on without a bound, a grid part-way through drawing took
+    twenty-four visits and the phone with it (phone 1839)."""
+    c, _ = _tiles_ctx()
+    half = [e for e in c.elements
+            if "image challenge" not in (e.label or "").lower()]
+    tiles = [e for e in c.elements
+             if "image challenge" in (e.label or "").lower()][:5]
+    c.elements = half + tiles
+    for i in range(g._DRAW_WAIT):
+        assert g.act_captcha(c) is None
+        assert c.captcha_waited == i + 1, "waiting, and counting it"
+    # Past the wait it stops waiting and goes at the picture instead.
+    assert c.captcha_waited == g._DRAW_WAIT

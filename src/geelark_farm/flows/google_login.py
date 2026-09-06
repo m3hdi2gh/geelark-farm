@@ -160,6 +160,8 @@ class Context(router.Context):
     #: How many captchas this flow had met when the counters were last
     #: reset, so a fresh captcha starts with fresh rounds.
     captcha_met: int = 0
+    #: Visits spent waiting for a grid to finish drawing itself.
+    captcha_waited: int = 0
 
 
 # --------------------------------------------------------------- primitives
@@ -457,6 +459,32 @@ def _run(flags: list[bool]) -> tuple[int, int] | None:
     return best
 
 
+def _challenge_button(ctx: Context, *, below: int):
+    """The challenge's own VERIFY - the topmost button under the tiles.
+
+    Not the page's NEXT, which is what `submit` finds: it matches on the
+    word, and the sign-in page carries a NEXT of its own at the foot of
+    the screen. Pressed there, the answer never goes anywhere - phone 1839
+    tapped the same four tiles five rounds running and got the same grid
+    back every time, because nothing had ever been submitted (2026-09-06).
+    """
+    below = max(below, 0)
+    wanted = {word.casefold() for word in _GRID_VERIFY}
+    best, top = None, None
+    for el in ctx.elements:
+        box = _box(el)
+        # By the word and not by position alone: the same row carries four
+        # icon buttons - another challenge, audio, liveness, help - and the
+        # leftmost of those is the one a topmost-button rule picks.
+        if (not box or not el.clickable
+                or (el.label or "").strip().casefold() not in wanted
+                or box[1] < below):
+            continue
+        if top is None or box[1] < top:
+            best, top = el, box[1]
+    return best
+
+
 def _button_row(ctx: Context, *, below: int) -> list[int]:
     """The challenge's own button row - the first real button under the
     heading - which is where the tiles stop.
@@ -652,6 +680,11 @@ CAPTCHA_VISITS = 44
 #: settle.
 _ROUNDS_PER_CAPTCHA = 10
 
+#: Visits to give a grid to finish drawing before answering it from the
+#: picture instead. Waited on without a bound, a grid that never settles
+#: took twenty-four visits and the phone with it (2026-09-06, phone 1839).
+_DRAW_WAIT = 3
+
 #: Screens that can appear in the middle of one captcha without the next
 #: captcha screen being a *new* captcha. A challenge that redraws goes
 #: through `loading` on the way, and counting that as a second captcha
@@ -705,7 +738,7 @@ def act_captcha(ctx: Context) -> Outcome | None:
     met = _captchas_met(ctx)
     if met != ctx.captcha_met:
         # A new captcha: its rounds start again, and so does the tick box.
-        ctx.captcha_met, ctx.captcha_tries = met, 0
+        ctx.captcha_met, ctx.captcha_tries, ctx.captcha_waited = met, 0, 0
         ctx.captcha_ticked_on, ctx.captcha_unplaced = None, False
     if met > ctx.captcha_max:
         return _captcha_gave_up(
@@ -757,13 +790,15 @@ def act_captcha(ctx: Context) -> Outcome | None:
     # say how many there are, and they can be tapped as tiles rather than
     # as points. The picture is what is left when they have not arrived.
     tiles = _tile_buttons(ctx)
-    if not tiles and _half_drawn(ctx):
+    if not tiles and _half_drawn(ctx) and ctx.captcha_waited < _DRAW_WAIT:
         # Some tiles, not all of them. The grid is still being laid out, and
         # a picture taken now holds whichever corner has arrived - one came
         # out 206 pixels across and was answered as though it were the
         # whole thing (2026-09-06, phone 1836). Waited out instead; the
         # visit budget is what ends this if they never all arrive.
+        ctx.captcha_waited += 1
         return None
+    ctx.captcha_waited = 0
     window = _tiles_box(tiles) if tiles else _grid_rect(ctx)
     if window is None:
         # A grid we cannot place. Never a tap on coordinates guessed from
@@ -811,8 +846,17 @@ def act_captcha(ctx: Context) -> Outcome | None:
                  instruction, answer, size, size, points)
         for x, y in points:
             shell.tap(ctx.client, ctx.phone_id, x, y)
-    submit(ctx)
+    _answer(ctx, rect)
     return None
+
+
+def _answer(ctx: Context, rect: tuple[int, int, int, int]) -> None:
+    """Hand the challenge its own answer, on its own button."""
+    button = _challenge_button(ctx, below=rect[3])
+    if button is None:
+        log.warning("the challenge has no button of its own to press")
+        return
+    screen.tap_element(ctx.client, ctx.phone_id, button)
 
 
 def recovery_offered(ctx: Context) -> bool:
