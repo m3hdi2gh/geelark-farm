@@ -432,6 +432,22 @@ class Aborted(Exception):
 #: so a set is enough; a serial is taken out the moment it is honoured.
 STOP_BY_HAND: set[str] = set()
 
+#: The aborts that are a person stopping the work rather than a verdict on
+#: the phone. `Aborted` carries both kinds - `no_usable_proxy` and
+#: `all_exits_refused` are judgements, and a phone with no account on it
+#: earned its deletion - so the two are told apart here rather than by the
+#: literal word "interrupted", which is what the discard guard compared
+#: against. Under that comparison `stopped_by_hand` was not spared: press
+#: Stop this one before the Google account is in and the phone GeeLark had
+#: just created is stopped, waited out and deleted, while the operator is
+#: told "nothing was lost - the phone is in the tab and can be finished"
+#: (failures.py). It was safe only by accident, because the only reader of
+#: STOP_BY_HAND ran after the sign-in; it stops being safe the moment a
+#: stop can reach the sign-in, which is the whole point of the next change.
+#: Anything raised as `Aborted` that means a person, not a fault, belongs
+#: in here (2026-09-06, found by audit).
+STOPPED_BY_A_PERSON = frozenset({"interrupted", "stopped_by_hand"})
+
 
 @dataclass
 class _Session:
@@ -845,8 +861,23 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         return deadline - time.monotonic()
 
     def check_cancelled() -> None:
+        """Both ways this build can be stopped: the service going down, and
+        a person pressing Stop this one on its row.
+
+        Only the first was checked here, and the second is the one an
+        operator presses. `STOP_BY_HAND` had exactly one reader,
+        `_Session.check_cancelled`, and the session is not built until
+        after the Google sign-in and the install - so a stop asked for
+        during those, which is most of a build's minutes, was heard only
+        when they ended. Up to twenty-five minutes of a phone billing by
+        the minute after somebody said stop (2026-09-06, found by audit).
+        """
         if cancelled and cancelled():
             raise Aborted("interrupted")
+        serial = str(build.serial or "").strip()
+        if serial and serial in STOP_BY_HAND:
+            STOP_BY_HAND.discard(serial)
+            raise Aborted("stopped_by_hand")
 
     def finish(status: str, detail: str = "", ok: bool = False) -> Build:
         build.ok, build.status, build.detail = ok, status, detail
@@ -1108,7 +1139,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # Not while the run is shutting down: an interrupt is not a verdict on
         # the phone, and the next run's sync sees it either way.
         discarded = (phone_id and not gmail_signed_in
-                     and build.status != "interrupted"
+                     and build.status not in STOPPED_BY_A_PERSON
                      and not _signed_in_after_all(client, build)
                      and _discard(client, book, ledger, build))
         # By serial, not by the row number `start` handed back ten minutes ago.

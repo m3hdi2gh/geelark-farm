@@ -4137,3 +4137,89 @@ def _settings_for_jobs():
     return SimpleNamespace(
         ensure_dirs=lambda: None, state_dir=tmp, artifact_dir=tmp,
         stale_claim_seconds=3600, max_concurrent_phones=1)
+
+
+def test_a_stop_by_hand_does_not_delete_the_phone_it_stopped():
+    """The discard guard compared against the literal word "interrupted",
+    so `Aborted("stopped_by_hand")` was not spared: a phone stopped before
+    its Google account was in would be deleted, while the operator was told
+    "nothing was lost - the phone is in the tab and can be finished"
+    (failures.py). It was safe only by accident, because the sole reader of
+    STOP_BY_HAND ran after the sign-in, and it stops being safe the moment
+    a stop can reach the sign-in (2026-09-06)."""
+    from geelark_farm import builder as builder_mod
+
+    assert "stopped_by_hand" in builder_mod.STOPPED_BY_A_PERSON
+    assert "interrupted" in builder_mod.STOPPED_BY_A_PERSON
+    # And only those: an abort that judges the build still discards the
+    # phone it could not use.
+    for verdict in ("no_usable_proxy", "no_working_proxy",
+                    "all_exits_refused", "proxy_change_refused"):
+        assert verdict not in builder_mod.STOPPED_BY_A_PERSON
+
+
+def test_every_way_a_person_stops_a_build_is_named_in_one_place():
+    """A third stop word added to `Aborted` and not to the set is a phone
+    deleted the next time somebody presses the button."""
+    import re
+    from pathlib import Path
+
+    from geelark_farm import builder as builder_mod
+    from geelark_farm import failures
+
+    source = Path("src/geelark_farm/builder.py").read_text(encoding="utf-8")
+    raised = set(re.findall(r'raise Aborted\("([a-z_]+)"\)', source))
+    # The ones failures.py says nobody is to blame for and that name a
+    # person rather than a fault.
+    by_hand = {word for word in raised
+               if "stopped" in failures.situation(word).lower()
+               or "you stopped" in failures.situation(word).lower()}
+    assert by_hand <= builder_mod.STOPPED_BY_A_PERSON, (
+        f"{by_hand - builder_mod.STOPPED_BY_A_PERSON} would delete a phone")
+
+
+def test_stop_this_one_is_heard_during_the_google_sign_in(monkeypatch):
+    """`STOP_BY_HAND` had one reader, on the session, and the session is
+    not built until after the Google sign-in and the install. A stop asked
+    for during those - most of a build's minutes - was heard only when they
+    ended: up to twenty-five minutes of a phone billing by the minute after
+    somebody said stop (2026-09-06)."""
+    from geelark_farm import builder as builder_mod
+
+    watched = []
+    builder_mod.STOP_BY_HAND.add("1901")
+    try:
+        # The callable build_one hands to google_login.sign_in as `watch`,
+        # rebuilt here with the same closure shape: a build with a serial,
+        # and no service-wide stop.
+        build = builder_mod.Build(index=0, serial="1901")
+
+        def check_cancelled() -> None:
+            serial = str(build.serial or "").strip()
+            if serial and serial in builder_mod.STOP_BY_HAND:
+                builder_mod.STOP_BY_HAND.discard(serial)
+                raise builder_mod.Aborted("stopped_by_hand")
+            watched.append("kept going")
+
+        with pytest.raises(builder_mod.Aborted, match="stopped_by_hand"):
+            check_cancelled()
+        assert watched == []
+        assert "1901" not in builder_mod.STOP_BY_HAND, "taken, not left set"
+    finally:
+        builder_mod.STOP_BY_HAND.discard("1901")
+
+
+def test_the_sign_in_watch_is_the_check_that_hears_a_hand_stop():
+    """The wiring, read off the source: the callable handed to
+    `google_login.sign_in` as `watch=` must be the one that consults
+    STOP_BY_HAND, not a closure that only knows about the service
+    stopping."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+
+    source = inspect.getsource(builder_mod.build_one)
+    assert "watch=check_cancelled" in source
+    body = source.partition("def check_cancelled()")[2].partition(
+        "def finish(")[0]
+    assert "STOP_BY_HAND" in body, "the sign-in's watch cannot hear Stop"
