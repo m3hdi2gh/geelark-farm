@@ -151,8 +151,10 @@ class Context(router.Context):
     #: Attempts actually made - a tick, or a grid sent to the solver.
     #: Waiting for reCAPTCHA to answer is not one of them.
     captcha_tries: int = 0
-    #: The tick box is tapped once per flow; tapping it again unticks it.
-    captcha_ticked: bool = False
+    #: The visit the tick box was last tapped on. Tapped again on the next
+    #: visit it would untick what it just ticked; never tapped again at all,
+    #: a challenge that closes itself is waited out to the limit.
+    captcha_ticked_on: int | None = None
     #: Whether a grid this cannot place has already been saved once.
     captcha_unplaced: bool = False
 
@@ -283,6 +285,11 @@ def _grid_instruction(ctx: Context) -> str:
             break
         words.append(text.strip())
     return " ".join(words)
+
+
+#: Visits to leave the tick box alone after tapping it. reCAPTCHA takes a
+#: few seconds to decide and reads unticked the whole time.
+_TICK_AGAIN = 4
 
 
 def _robot_checkbox(ctx: Context):
@@ -641,10 +648,22 @@ def act_captcha(ctx: Context) -> Outcome | None:
         # password page - and pressing NEXT under an unanswered captcha is
         # a poke at a form that is not ready.
         box = _robot_checkbox(ctx)
-        if box is None or box.checked or ctx.captcha_ticked:
+        visit = ctx.seen.get("captcha", 0)
+        if box is None or box.checked:
             return None                      # let it think; the visit ends
+        if (ctx.captcha_ticked_on is not None
+                and visit - ctx.captcha_ticked_on < _TICK_AGAIN):
+            # Still deciding. reCAPTCHA leaves the box reading unticked for
+            # a few seconds after a tap, and a flow that helps here unticks
+            # what it just ticked - which two builds did until the limit
+            # (2026-09-06, phones 1787 and 1788).
+            return None
+        # Long enough. Either it never took, or the challenge opened and
+        # closed itself again while nothing was answering it, and a phone
+        # that waits out its whole budget in front of a closed challenge
+        # has spent none of its three tries (2026-09-06, phone 1815).
         screen.tap_element(ctx.client, ctx.phone_id, box)
-        ctx.captcha_ticked = True
+        ctx.captcha_ticked_on = visit
         ctx.captcha_tries += 1
         return None
     # The tiles first, if the page is offering them: they are exact, they

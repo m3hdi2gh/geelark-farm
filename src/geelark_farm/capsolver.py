@@ -78,11 +78,14 @@ def question_id(text: str) -> str:
 
 
 def _post(key: str, path: str, payload: dict, *, session=None,
-          timeout: float = 90, tries: int = 2) -> dict:
-    """One call, retried once. The farm reaches api.capsolver.com over a
-    link that is not always quick - a 40-second read timed out on a live
-    build with the grid already in hand (2026-09-06, phone 1788) - and a
-    captcha is worth waiting for: the alternative is a phone thrown away.
+          timeout: float = 90, tries: int = 3) -> dict:
+    """One call, retried twice. The farm reaches api.capsolver.com over a
+    link that is neither quick nor reliable: a 40-second read timed out
+    with the grid already in hand (phone 1788), a createTask came back 520
+    (phone 1811), and one attempt was reset by the peer and then timed out
+    at 90 seconds (phone 1815). A captcha is worth waiting for - the
+    alternative is a phone thrown away - and each of those failures cost a
+    whole build.
     """
     import requests
 

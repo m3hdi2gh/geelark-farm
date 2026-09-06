@@ -87,11 +87,17 @@ def test_a_grid_that_cannot_be_placed_is_never_tapped(monkeypatch):
     assert called == [], "nothing solved, nothing tapped"
 
 
-def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
+def test_the_real_checkbox_is_ticked_then_left_alone_then_tried_again(
+        monkeypatch):
     """From the screen a build actually met (tests/fixtures): the tick is a
-    CheckBox and NEXT is a separate button. Tapping "the checkbox" twice
-    unticks what the first tap ticked, so the box is only tapped while it
-    is empty and the second visit submits instead."""
+    CheckBox and NEXT is a separate button.
+
+    Tapped again on the next visit it unticks what it just ticked, which is
+    what two live builds did until the limit. Never tapped again at all, a
+    challenge that opens and closes itself is waited out to the end of the
+    budget with none of the three tries spent (phone 1815). So: tick, leave
+    it alone while reCAPTCHA decides, and try once more if nothing came of
+    it."""
     import pathlib
 
     xml = pathlib.Path("tests/fixtures/google-captcha-checkbox.xml")
@@ -107,7 +113,7 @@ def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
     monkeypatch.setattr(g, "submit", lambda c: submitted.append(True))
     assert g.act_captcha(c) is None
     assert tapped == [(82, 564)] and submitted == []
-    assert c.captcha_tries == 1 and c.captcha_ticked
+    assert c.captcha_tries == 1 and c.captcha_ticked_on == 1
 
     # The next visit on the same flow: reCAPTCHA still reads unticked while
     # it decides, and tapping again unticks what the first tap ticked -
@@ -116,6 +122,13 @@ def test_the_real_checkbox_screen_is_ticked_once_then_submitted(monkeypatch):
     assert g.act_captcha(c) is None
     assert tapped == [] and submitted == []
     assert c.captcha_tries == 1, "waiting is not an attempt"
+
+    # Four visits on, nothing has come of it. The challenge is not going to
+    # open itself, so the box is tried once more - and that is a try.
+    c.seen["captcha"] = 5
+    assert g.act_captcha(c) is None
+    assert tapped == [(82, 564)] and submitted == []
+    assert c.captcha_tries == 2
 
 
 def _grid_ctx(**kw):
