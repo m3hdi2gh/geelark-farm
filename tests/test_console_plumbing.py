@@ -278,11 +278,16 @@ def test_removing_a_proxy_keeps_what_it_removed_for_undo():
 
 # --------------------------------------------------------- the queue rules
 def test_stuck_running_rows_are_closed_by_the_drain():
-    conn = _ScriptedConn([None])
-    n = actions_mod.expire_running(conn, older_than=7200)
+    """It reports how many it closed, and the fake says how many matched -
+    it used to have no rowcount at all, so this read zero whatever the
+    statement did."""
+    conn = _ScriptedConn([None], rowcounts=[3])
+    assert actions_mod.expire_running(conn, older_than=7200) == 3
     assert "UPDATE actions SET status = 'failed'" in conn.sql[0]
     assert "make_interval" in conn.sql[0] and conn.committed == 1
-    assert n == 0
+
+    quiet = _ScriptedConn([None], rowcounts=[0])
+    assert actions_mod.expire_running(quiet, older_than=7200) == 0
 
 
 @pytest.mark.parametrize("web", [True], indirect=True)

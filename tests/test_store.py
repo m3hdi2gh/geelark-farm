@@ -584,8 +584,13 @@ class _ScriptedConn:
     """execute() plays back a script - each entry is the fetch answer, or an
     exception to raise - and records the SQL for the asserts."""
 
-    def __init__(self, script):
+    def __init__(self, script, rowcounts=None):
         self.script = list(script)
+        # How many rows each statement claims to have touched. A guarded
+        # UPDATE that matches nothing is the whole behaviour of
+        # `actions.finish`'s refusal, and a fake that always says one row
+        # cannot show it. None keeps every older test as it was.
+        self.rowcounts = list(rowcounts or [])
         self.sql = []
         self.committed = 0
         self.rolled_back = 0
@@ -601,8 +606,11 @@ class _ScriptedConn:
         answer = self.script.pop(0)
         if isinstance(answer, Exception):
             raise answer
+        touched = self.rowcounts.pop(0) if self.rowcounts else 1
 
         class Cur:
+            rowcount = touched
+
             @staticmethod
             def fetchone():
                 return answer
@@ -774,6 +782,31 @@ def test_finish_stamps_finished_at_only_when_the_row_is_settled():
     assert "finished_at = CASE WHEN %s THEN now() ELSE finished_at END" \
         in conn.sql[0]
     assert conn.committed == 1
+
+
+def test_a_closed_command_is_not_re_opened_by_a_later_running(monkeypatch):
+    """With SERVE_CONCURRENT off the launcher settles a login from inside
+    the handler, and the drain then wrote the handler's own "running" over
+    the finished row. `running` is not terminal, so nothing closed it
+    again: Requests showed a login that had ended minutes ago as still
+    going, until the sweep said two hours later that the service had
+    restarted - which was untrue (2026-09-06)."""
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([None], rowcounts=[0])
+    wrote = actions.finish(conn, 5, status="running", result="starting")
+    assert wrote is False, "the row was already closed"
+    assert "AND (finished_at IS NULL OR %s)" in conn.sql[0]
+
+
+def test_a_closed_command_can_still_be_corrected_by_another_verdict():
+    """Terminal over terminal is a correction, not a re-opening."""
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([None], rowcounts=[1])
+    assert actions.finish(conn, 5, status="failed", result="it did not") is True
+    params_guard = conn.sql[0]
+    assert "finished_at IS NULL OR %s" in params_guard
 
 
 def test_retry_copies_a_failed_command_into_a_new_row(monkeypatch,

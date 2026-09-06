@@ -1604,8 +1604,13 @@ class _DrainConn:
         return None
 
 
-def _drain_world(monkeypatch, batch):
-    """Wire a fake store under _drain_actions and record what finish saw."""
+def _drain_world(monkeypatch, batch, wrote=True):
+    """Wire a fake store under _drain_actions and record what finish saw.
+
+    `wrote` is what the real `finish` answers: False when the row was
+    already closed by the launcher and this write was refused. The fake
+    returned None before, which is falsy - so it modelled a refusal on
+    every call and could never have shown the difference."""
     import geelark_farm.store.actions as actions_mod
     import geelark_farm.store.db as db_mod
 
@@ -1616,7 +1621,7 @@ def _drain_world(monkeypatch, batch):
     monkeypatch.setattr(
         actions_mod, "finish",
         lambda conn, aid, *, status, result, detail=None:
-        finished.append((aid, status, result)))
+        finished.append((aid, status, result)) or wrote)
     return finished
 
 
@@ -1979,3 +1984,27 @@ def test_a_phone_the_sync_took_away_gets_its_last_event(monkeypatch,
     assert phones == [("phone", "1519", "deleted"),
                       ("phone", "1520", "deleted"),
                       ("phone", "1521", "discarded")]
+
+
+def test_a_row_the_launcher_already_closed_keeps_the_launchers_word(
+        monkeypatch, make_settings):
+    """A login's handler answers "running" and returns, but with
+    SERVE_CONCURRENT off its launcher has already finished the phones and
+    settled the row. The drain's write is refused, and the event it emits
+    must say what the row says - not the word the handler left behind
+    (2026-09-06)."""
+    finished = _drain_world(
+        monkeypatch, [{"id": 4, "verb": "noop", "payload": {},
+                       "requested_by": 7}], wrote=False)
+    monkeypatch.setattr(serve_mod, "_outcome_of",
+                        lambda s, aid, st, res: ("done", "two phones"))
+    said = []
+    monkeypatch.setattr(serve_mod, "_event",
+                        lambda settings, kind, **kw: said.append(kw))
+    settings = make_settings(store_enabled=True, web_mutations=True)
+
+    assert serve_mod._drain_actions(settings, None, None,
+                                    controls_only=False) == 1
+    assert finished == [(4, "done", "did nothing, successfully")]
+    assert said and said[0]["status"] == "done"
+    assert "two phones" in said[0]["detail"]

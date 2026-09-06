@@ -252,11 +252,29 @@ TERMINAL = ("done", "failed", "refused", "cancelled")
 
 
 def finish(conn, action_id: int, *, status: str, result: str,
-           detail: dict | None = None) -> None:
-    conn.execute(
+           detail: dict | None = None) -> bool:
+    """Write a command's outcome. False when the row was already closed and
+    this would have re-opened it.
+
+    A closed row cannot be re-opened, and that guard is here rather than at
+    the caller because two writers reach this from different connections. A
+    login is settled by the launcher when its phones end - `settle`, on its
+    own connection - and with SERVE_CONCURRENT off that launcher runs
+    *inside* the handler, so the drain then wrote the handler's own
+    "running" straight over the finished row. `running` is not terminal, so
+    nothing closed it again: the Requests page showed a login that had ended
+    minutes ago as still going, until `expire_running` swept it two hours
+    later and said the service had restarted, which was untrue
+    (2026-09-06, found by audit).
+
+    Terminal over terminal is still allowed - the last word on a row that
+    is already closed is a correction, not a re-opening.
+    """
+    cur = conn.execute(
         "UPDATE actions SET status = %s, result = %s, detail = %s,"
         " finished_at = CASE WHEN %s THEN now() ELSE finished_at END"
-        " WHERE id = %s",
+        " WHERE id = %s AND (finished_at IS NULL OR %s)",
         (status, result, json.dumps(detail) if detail else None,
-         status in TERMINAL, action_id))
+         status in TERMINAL, action_id, status in TERMINAL))
     conn.commit()
+    return bool(getattr(cur, "rowcount", 1))

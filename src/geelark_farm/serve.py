@@ -341,6 +341,25 @@ ACTION_VERBS: dict = {
 ACTION_VERBS.update(verbs.VERBS)
 
 
+def _outcome_of(settings: Settings, action_id: int,
+                fallback_status: str, fallback_result: str) -> tuple[str, str]:
+    """What a row actually says, for a drain whose own write was refused.
+    Falls back to what the handler said if the row cannot be read - an
+    event with the second-best word beats no event at all."""
+    from .store import db as store_db
+
+    try:
+        with store_db.connect(settings) as conn:
+            row = conn.execute("SELECT status, result FROM actions"
+                               " WHERE id = %s", (action_id,)).fetchone()
+            conn.rollback()
+        if row:
+            return str(row[0]), str(row[1] or "")
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not re-read action %s (%s)", action_id, exc)
+    return fallback_status, fallback_result
+
+
 def _drain_actions(settings: Settings, book: Book, ledger,
                    *, controls_only: bool, client: Client | None = None,
                    launch=None) -> int:
@@ -415,8 +434,16 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                     status, result, detail = (
                         "failed", "this one is a program error - "
                                   "it is in today's log", None)
-                store_actions.finish(conn, action["id"], status=status,
-                                     result=result, detail=detail)
+                wrote = store_actions.finish(conn, action["id"],
+                                             status=status, result=result,
+                                             detail=detail)
+                if not wrote:
+                    # The launcher already closed this row from inside the
+                    # handler, which is what happens whenever a pass runs
+                    # its jobs itself. Its word is the true one, and the
+                    # event below must not say otherwise.
+                    status, result = _outcome_of(settings, action["id"],
+                                                 status, result)
                 done += 1
                 # Its own row in events (C8), so "what did people ask for
                 # today" is one filter, and a serial in the payload joins
