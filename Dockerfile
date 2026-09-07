@@ -33,19 +33,26 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Only what names the dependencies. Nothing here changes when the code does,
 # so this layer is cached until a dependency actually moves.
-#
-# `setuptools` is installed into the venv on purpose, though nothing
-# imports it: it is what the runtime stage's editable install builds
-# with, and putting it here means that stage - the one every deploy
-# re-runs, since copying `src/` invalidates it - never has to reach
-# pypi at all. The server cannot always: a deploy failed three times
-# in a row on a read timeout to pypi.org while the code being
-# deployed was fine (2026-09-08).
 COPY pyproject.toml README.md ./
 RUN mkdir -p src/geelark_farm \
  && printf '__version__ = "0.0.0"\n' > src/geelark_farm/__init__.py \
- && pip install . \
- && pip install "setuptools>=68"
+ && pip install .
+
+# The build backend, in a layer of its own so the one above stays cached -
+# editing that line would send it back to the index for every dependency,
+# and the index is the thing that is not always there.
+#
+# By its own URL rather than by name: the same file the index would have
+# named, from the same publisher and the same CDN, with the hash in the
+# fragment checked on arrival. pypi.org is not always reachable from this
+# server while files.pythonhosted.org is - a deploy failed six times in a
+# row on exactly that split, with the code being deployed perfectly fine
+# (2026-09-08). Nothing imports setuptools; it is what the runtime stage's
+# editable install builds with, and having it here is what lets that stage
+# run with no network at all. Bump it the way any pin is bumped, from the
+# JSON API, hash and all.
+RUN pip install --no-deps \
+ "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl#sha256=51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"
 
 
 FROM python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4 AS runtime
