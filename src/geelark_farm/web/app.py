@@ -102,9 +102,10 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/":
                 scope = None if user["sees"] == "all" else user["id"]
                 query = parse_qs(self.path.partition("?")[2])
+                said = (query.get("said") or [""])[0]
                 return self._html(200, pages.dashboard(
                     read.dashboard(self.settings, scope), user,
-                    said=(query.get("said") or [""])[0],
+                    said=said, said_note=self._said_note(said),
                     manual_login=self.settings.manual_login,
                     explain=_advice))
             if path == "/phones":
@@ -388,7 +389,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._act(user, "may_login_accounts", "stop_phone",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "stop", serial),
-                                 back=_phone_back(field, serial))
+                                 back=_phone_back(field, serial),
+                                 said_word="cancelled")
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/proxy"):
                 serial = self.path[len("/phones/"):-len("/proxy")]
@@ -503,12 +505,47 @@ class _Handler(BaseHTTPRequestHandler):
         # anyway; this only decides whether that is in a second or in
         # thirty (2026-09-06).
         signals.ring(signals.queued)
-        if self._ran_it_now(verb, payload, req):
+        # `said_word` is what the press was FOR, not what it did. The work
+        # runs here now, so its own verdict is known before the redirect -
+        # and it was thrown away: a refusal, a failure and a success all
+        # left as one green tick reading "Done". The dashboard's own Build
+        # button was refused every time somebody left Gmail on "auto", and
+        # said "Done - it is already in" (the operator, 2026-09-07).
+        ran = self._ran_it_now(verb, payload, req)
+        if ran == "done":
             return self._redirect(_said_url(back, f"{said_word}:{req}"))
+        if ran is not None:
+            # Deliberately not `refused`, which both banner tables already
+            # use for "you do not have that tick" and would read as a
+            # missing permission rather than an answer.
+            return self._redirect(_said_url(back, f"no:{req}"))
         self._redirect(_said_url(back, f"queued:{req}"))
 
-    def _ran_it_now(self, verb: str, payload: dict, req: int) -> bool:
-        """Do the work here, in the request that asked for it.
+    def _said_note(self, said: str) -> str:
+        """The verb's own sentence for a press that did not go through.
+
+        It is settled on the request's row a moment before the redirect -
+        "the Gmail x@y is not free", "16 gmails added, 1 already in the
+        pool, 1 refused" - and only that sentence can name the address and
+        say why. Read here rather than carried in the address bar, because
+        an address in a query string is the one thing that must not be
+        (2026-09-07).
+        """
+        word, _, req = (said or "").partition(":")
+        if word != "no" or not req.isdigit():
+            return ""
+        from ..store import actions as store_actions
+
+        try:
+            row = store_actions.one(self.settings, int(req))
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not read request %s back (%s)", req, exc)
+            return ""
+        return str((row or {}).get("result") or "")
+
+    def _ran_it_now(self, verb: str, payload: dict, req: int) -> str | None:
+        """Do the work here, in the request that asked for it, and answer
+        with the verdict it reached - None when it did not run at all.
 
         The queue existed because only the pass could write the sheet.
         With the pools in the store that is no longer true of stock, and
@@ -528,7 +565,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         outcome = run_now(self.settings, verb, payload)
         if outcome is None:
-            return False
+            return None
         status, said, detail = outcome
         try:
             store_actions.settle(self.settings, req, status=status,
@@ -537,7 +574,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The work is done; only the record of it failed. Saying it
             # was queued would be a lie in the other direction.
             log.warning("%s ran but could not be settled (%s)", verb, exc)
-        return True
+        return status
 
     def _undo_remove(self, user: dict, kind: str, field: dict) -> None:
         """Put back the row a remove took out, from what that request kept.
@@ -671,7 +708,7 @@ class _Handler(BaseHTTPRequestHandler):
         return self._act(user, "may_take_phones", "set_phone_state",
                          {"serial": serial, "state": state},
                          idem=self._minute_key(user, f"state-{state}", serial),
-                         back=back)
+                         back=back, said_word=plan["said"])
 
     def _screen(self, user: dict, path: str) -> None:
         """One archived screen, as the plain text it is - and only one

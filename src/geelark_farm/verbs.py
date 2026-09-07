@@ -131,7 +131,7 @@ def build_by_hand(book, ledger, settings, payload, client):
                                    payload.get("gmail_password") or "",
                                    payload.get("gmail_secret") or "")
         if refused:
-            return "refused", f"that Gmail was not usable - {refused}"
+            return "refused", f"that Gmail was not usable - {refused}", None
         book.reload()
     if install_app and payload.get("app_typed"):
         app_account, refused = add_typed(
@@ -139,13 +139,31 @@ def build_by_hand(book, ledger, settings, payload, client):
             payload.get("app_password") or "",
             payload.get("app_secret") or "")
         if refused:
-            return "refused", f"that GPT account was not usable - {refused}"
+            return ("refused",
+                    f"that GPT account was not usable - {refused}", None)
         book.reload()
 
-    if not gmail:
-        return "refused", "a phone needs a Gmail; nothing was chosen or typed"
-    if book.gmails.find(gmail) is None:
-        return "refused", f"{gmail} is not in the Gmails tab"
+    # A blank box is not a refusal, it is the word the box itself shows:
+    # "auto". `builder.build_one` claims the next free row when the wish
+    # names none, and the form says so out loud - so refusing it here made
+    # the dashboard's own main button do nothing at all, under a green
+    # tick (the operator, 2026-09-07).
+    for what, name, pool in (("Gmail", gmail, book.gmails),
+                             ("exit", proxy_name, book.proxies),
+                             ("GPT account", app_account if install_app else "",
+                              book.apps)):
+        if not name:
+            continue
+        # The same question `builder._pick` asks a pass later, asked now:
+        # the row has to be free, not merely present. It said only "is not
+        # in the Gmails tab", so a spent address was accepted here and
+        # refused half an hour later where nobody was looking.
+        free = any((r.label or "").strip().lower() == name.strip().lower()
+                   for r in pool.available)
+        if not free:
+            return ("refused",
+                    f"the {what} {name} is not free - it is already on a "
+                    f"phone, set aside, or not there at all", None)
 
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
@@ -153,8 +171,9 @@ def build_by_hand(book, ledger, settings, payload, client):
                              requested_by=payload.get("by_id"))
     where = f" on {proxy_name}" if proxy_name else ""
     app = "" if install_app else " without the app"
-    return "done", (f"asked for a phone{where} for {gmail}{app} - "
-                    f"request {asked}. The next pass starts it.")
+    who = gmail or "the next free Gmail"
+    return "done", (f"asked for a phone{where} for {who}{app} - "
+                    f"request {asked}. The next pass starts it."), None
 
 
 def add_gpt(book, ledger, settings, payload, client):

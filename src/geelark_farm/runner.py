@@ -46,8 +46,19 @@ def run_now(settings: Settings, verb: str, payload: dict) -> tuple | None:
         # one `runs_inline` should have refused, and the AttributeError
         # that follows is a great deal louder than a phone being driven
         # from a web worker.
-        return verb_table.VERBS[verb](
+        out = verb_table.VERBS[verb](
             book, Ledger.load(settings.state_dir), settings, payload, None)
+        if not (isinstance(out, tuple) and len(out) == 3):
+            # This module's first line promises the caller never sees a
+            # raise. A verb answering with two parts instead of three used
+            # to unpack in the web handler and land as "Something broke" -
+            # a blank error page on the dashboard's own Build form, with
+            # the queued row left unsettled so the pass ran it a second
+            # time and asked for a second phone (2026-09-07).
+            log.warning("%s answered with %r, which is not (status, said, "
+                        "detail); it stays queued", verb, out)
+            return None
+        return out
     except Exception as exc:                                      # noqa: BLE001
         log.warning("%s did not run in the request (%s); it stays queued",
                     verb, exc)

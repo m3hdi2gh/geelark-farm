@@ -4042,3 +4042,61 @@ def test_a_form_stops_being_busy_when_its_request_ends_well_too():
     kept = script.split(".then(function(got){", 1)[1][:700]
     assert "form.classList.remove('busy')" in kept, (
         "the lock has to come off on the way through, not only on error")
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_refusal_is_not_reported_as_a_success(web, monkeypatch):
+    """`said_word` is what the press was FOR, not what it did. The work
+    runs in the request now, so its verdict is known before the redirect -
+    and it was thrown away: a refusal, a failure and a success all left as
+    one green tick reading "Done". The dashboard's own Build button was
+    refused every time somebody left Gmail on "auto" and said "Done - it
+    is already in" (the operator, 2026-09-07)."""
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 51)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda s, r, **k: None)
+    # `_ran_it_now` imports `run_now` inside itself, so the module is what
+    # has to answer differently.
+    monkeypatch.setattr("geelark_farm.runner.run_now",
+                        lambda s, verb, payload: (
+                            "refused", "the Gmail x@y is not free", None))
+    client = web()
+    client.login()
+    _, headers, _ = client.request(
+        "POST", "/phones/build", _form(csrf=client.csrf(), gmail="", ip=""))
+
+    assert "said=no:51" in dict(headers)["Location"], (
+        "a refusal must not wear the word the press was asked for")
+
+
+def test_the_banner_for_a_refusal_is_not_green_and_says_which_one():
+    """The general word cannot name the address or say why, and green with
+    a tick is what every press wore whatever it did."""
+    from geelark_farm.web import pages
+
+    banner = pages._said("no:51", pages._DASH_SAID, None,
+                         "the Gmail x@y is not free")
+    assert 'class="said no toast"' in banner
+    assert "the Gmail x@y is not free" in banner
+    assert ".said.no" in pages.page("t", "", user={"id": 1, "username": "a",
+                                                   "role": "operator"})
+
+    plain = pages._said("done:1", pages._DASH_SAID, None)
+    assert "said no" not in plain, "a success keeps the tick"
+
+
+def test_each_phone_press_says_what_that_press_did():
+    """All five landed on "Done - it is already in", a sentence written
+    for pasted stock and shown after a confirm page about deleting the
+    phone (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    for state, word in (("taken", "took"), ("unused", "released"),
+                        ("done", "closed"), ("failed", "written-off")):
+        assert pages.PHONE_STATES[state]["said"] == word
+        assert word in pages._DASH_SAID, f"{word} has no sentence"
+    assert "cancelled" in pages._DASH_SAID
+    assert len({pages._DASH_SAID[w] for w in
+                ("took", "released", "closed", "written-off", "cancelled")}) == 5

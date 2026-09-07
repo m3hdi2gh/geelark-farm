@@ -388,6 +388,10 @@ tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
 .said{{background:#0f2b1a;border:1px solid #1e5b2a;color:#9be3b3;padding:10px 14px;
  border-radius:8px;font-size:13px;margin:0}}
 .said::before{{content:"✓ "}}
+/* An answer that is not a yes. Every press wore the green tick, so a
+   refusal read as a success and the person walked away (2026-09-07). */
+.said.no{{background:#2a1512;border-color:#57241c;color:#f0a094}}
+.said.no::before{{content:"! "}}
 .said.toast.up{{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
  z-index:60;box-shadow:0 12px 34px rgba(0,0,0,.5);
  transition:opacity .4s,transform .4s}}
@@ -893,6 +897,21 @@ _DASH_SAID = {
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
     "already": "Already asked - that request is still pending:",
+    # The general word, for the rare case the handler could not read the
+    # row back. Normally the verb's own sentence replaces it, because only
+    # that sentence can name the address and say why.
+    "no": "That did not go through.",
+    # The phone buttons each said "Done - it is already in", a sentence
+    # written for pasted stock, after a confirm page that talked about
+    # deleting the phone (2026-09-07).
+    "took": "It is yours - it stays on the list as With you.",
+    "released": "Back on the shelf for anybody.",
+    "closed": "Marked done - the next sync deletes the phone and retires "
+              "what was on it.",
+    "written-off": "Marked failed - the next sync deletes the phone and "
+                   "frees the account that was on it.",
+    "cancelled": "The build gives up at its next step and puts back what "
+                 "it held.",
 }
 
 #: The Phones tab's status words as the dashboard's badge colours, and the
@@ -1055,16 +1074,22 @@ CONTROLS = {
 
 #: The sheet's State words a person can give a phone from the table, and
 #: what each costs - the two that delete something ask first.
+#: `said` is the word the toast looks up afterwards. Without it all five
+#: presses answered "Done - it is already in", a sentence written for
+#: pasted stock and shown after a confirm page about deleting the phone
+#: (2026-09-07).
 PHONE_STATES = {
     "taken": {"label": "Take", "klass": "quiet go", "sure": False,
-              "text": ""},
+              "text": "", "said": "took"},
     "unused": {"label": "Release", "klass": "quiet", "sure": False,
-               "text": ""},
+               "text": "", "said": "released"},
     "done": {"label": "Done", "klass": "quiet ok", "sure": True,
+             "said": "closed",
              "text": "The next sync deletes the phone in GeeLark and "
                      "retires the gmail and the account on it as "
                      "delivered. There is no undo: the phone is gone."},
     "failed": {"label": "Failed", "klass": "quiet bad", "sure": True,
+               "said": "written-off",
                "text": "The next sync deletes the phone in GeeLark, marks "
                        "its gmail used and frees the account for another "
                        "phone. There is no undo: the phone is gone."},
@@ -2681,7 +2706,8 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
 
 
 def dashboard(data: dict, user: dict, said: str = "",
-              manual_login: bool = False, explain=None) -> str:
+              manual_login: bool = False, explain=None,
+              said_note: str = "") -> str:
     """The console's front page: what an operator watches, and what they
     reach for, side by side.
 
@@ -2742,7 +2768,7 @@ def dashboard(data: dict, user: dict, said: str = "",
              f'With me</button></span></div>')
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
-    main = (_said(said, _DASH_SAID, user) + warning + tools
+    main = (_said(said, _DASH_SAID, user, said_note) + warning + tools
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
             + _build_card(data, user))
@@ -3600,15 +3626,30 @@ def _csrf(user: dict) -> str:
             f'value="{esc(user.get("csrf", ""))}">')
 
 
-def _said(said: str, table: dict, user: dict | None = None) -> str:
+#: Tokens whose banner is an answer of "no", not of "done". Green with a
+#: tick was worn by every one of these, so a refusal looked exactly like a
+#: success and the person walked away believing it (2026-09-07).
+_SAID_NO = frozenset({"no", "refused", "off", "auto", "none", "gone", "bad",
+                      "too_late"})
+
+
+def _said(said: str, table: dict, user: dict | None = None,
+          note: str = "") -> str:
     """The banner for a ?said= token. `queued:241` names the request the
     press became, and the banner links to it. `removed-gmail:241` names
     the remove, and the banner carries Undo - which puts the row back from
-    what that request kept."""
+    what that request kept.
+
+    `note` is the verb's own sentence, read off the settled row by the
+    handler: "the Gmail x@y is not free", "16 gmails added, 1 already in
+    the pool, 1 refused". It replaces the table's general word, because
+    the general word cannot say which address or why."""
     word, _, req = (said or "").partition(":")
-    note = table.get(word, "")
+    note = note or table.get(word, "")
     if not note:
         return ""
+    if word in _SAID_NO:
+        return f'<p class="said no toast">{esc(note)}</p>'
     if word.startswith("removed-") and req.isdigit() and user is not None:
         kind = word[len("removed-"):]
         return (f'<p class="said toast undo">{esc(note)} '

@@ -987,3 +987,76 @@ def test_a_paste_that_says_nothing_still_means_today():
                   "secret": SECRET, "recovery": ""}]}, None)
     row = book.gmails.find("new@x.com")
     assert row is not None and row.values["Purchase Date"] == verbs._stamp()
+
+
+def test_leaving_the_gmail_box_empty_asks_for_the_next_free_one():
+    """The box says "auto" and the hint says the next one in the pool is
+    used, and `builder.build_one` does exactly that when the wish names no
+    Gmail. The verb refused it outright, so the dashboard's own main
+    button did nothing at all - under a green tick reading "Done - it is
+    already in" (the operator, 2026-09-07)."""
+    book = make_book(gmails=1)
+    asked = {}
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    with patch.object(wanted_mod, "ask",
+                      lambda s, **k: asked.update(k) or 5):
+        status, said, detail = verbs.build_by_hand(
+            book, None, None, {"by": "mehdi", "install_app": False}, None)
+
+    assert status == "done", said
+    assert asked["gmail"] == "", "the pass claims the next free row"
+    assert "the next free Gmail" in said
+
+
+def test_a_gmail_that_is_not_free_is_refused_at_the_press():
+    """It checked only that the address existed, so a spent one was
+    accepted here and refused half an hour later by the pass, where
+    nobody was looking."""
+    book = make_book(gmails=1)
+    row = book.gmails._rows[0]
+    address = row.values["Address"]
+    book.gmails.claim()                       # now on a phone
+
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "gmail": address, "install_app": False}, None)
+
+    assert status == "refused"
+    assert address in said and "not free" in said
+
+
+def test_every_inline_verb_answers_with_three_parts():
+    """`runs_inline` means the web unpacks the answer in the request that
+    asked for it. `build_by_hand` answered with two parts, so the press
+    landed as "Something broke" - a blank error page on the dashboard's
+    own form - and left the row unsettled, so the pass ran it again and
+    asked for a second phone (2026-09-07)."""
+    import ast
+    import inspect
+
+    wrong = []
+    for name, fn in sorted(verbs.VERBS.items()):
+        if not verbs.runs_inline(name):
+            continue
+        body = ast.parse(inspect.getsource(fn))
+        top = next(n for n in ast.walk(body) if isinstance(n, ast.FunctionDef))
+        for node in ast.walk(top):
+            # Only this verb's own returns: a nested helper answers in its
+            # own shape and is unpacked by the code that calls it.
+            if not isinstance(node, ast.Return) or not node.value:
+                continue
+            if any(node in ast.walk(inner) for inner in ast.walk(top)
+                   if isinstance(inner, ast.FunctionDef) and inner is not top):
+                continue
+            # Only a tuple written out here can be judged. `return
+            # refused` and `return _summary(...)` hand back whatever they
+            # were given, and what they were given is checked where it is
+            # built - by the tests for those helpers.
+            if (isinstance(node.value, ast.Tuple)
+                    and len(node.value.elts) != 3):
+                wrong.append(f"{name}:{node.lineno}")
+    assert not wrong, ("these answer with something other than "
+                       f"(status, said, detail): {wrong}")
