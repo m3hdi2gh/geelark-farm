@@ -264,6 +264,23 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " FROM actions a LEFT JOIN users u ON u.id = a.requested_by"
             " LEFT JOIN api_clients c ON c.id = a.client_id"
             " ORDER BY a.id DESC LIMIT 2")
+        # A phone somebody asked for by hand, from the moment they ask.
+        # `wanted_builds` was read by nothing in the whole web package, so
+        # a press vanished: the toast is gone in four seconds, the table
+        # does not change until a phone exists, and a wish that failed
+        # before one did wrote its reason into a column nobody could see
+        # (2026-09-07). Inlined rather than `wanted.recent`, because the
+        # whole page is one connection.
+        wishes = store._rows(
+            "SELECT w.id, w.gmail, w.proxy_name, w.install_app,"
+            " w.app_account, w.status, w.serial, w.detail, w.created_at,"
+            " coalesce(u.username, '') AS asked_by"
+            " FROM wanted_builds w LEFT JOIN users u"
+            "   ON u.id = w.requested_by"
+            " WHERE w.status IN ('queued', 'running')"
+            "    OR (w.status = 'failed'"
+            "        AND w.created_at > now() - interval '1 hour')"
+            " ORDER BY w.id DESC LIMIT 8")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
         # The manager's lists, read on the same connection the rest of
@@ -294,6 +311,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
         "asked": asked,
+        "wishes": wishes,
         "pulse": (pulse[0]["value"] or {}) if pulse else {},
     }
 

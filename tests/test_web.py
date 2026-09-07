@@ -4206,3 +4206,125 @@ def test_the_gpt_box_stops_promising_none():
     assert 'placeholder="none"' not in card
     assert pages.NEXT_FREE in card
     assert 'name="app_secret"' in card, "a typed account needs its key"
+
+
+def test_a_phone_asked_for_by_hand_is_on_the_page_from_the_moment_it_is_asked():
+    """Nothing in the web package read `wanted_builds`, so a press
+    vanished: the toast is gone in four seconds, the table does not change
+    until a phone exists, and a wish that failed before one did wrote its
+    reason into a column nobody could see. `store.wanted.recent`'s own
+    docstring calls itself "what the person who asked reads to find out
+    whether it happened", and it had no callers at all (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    drawn = pages._wishes({"wishes": [
+        {"gmail": "wait@x.com", "status": "queued", "created_at": None,
+         "proxy_name": "SX9"},
+        {"gmail": "", "status": "running", "created_at": None},
+        {"gmail": "bad@x.com", "status": "failed", "created_at": None,
+         "detail": "no_usable_proxy"},
+    ]}, explain=lambda t: ("the Proxy pool had no free exit to give it", ""))
+
+    assert "Asked for by hand" in drawn
+    assert "wait@x.com" in drawn and "SX9" in drawn
+    assert "the next pass starts it" in drawn
+    assert "the next free Gmail" in drawn, "a wish with no address named"
+    assert "a phone is being made for it" in drawn
+    assert "the Proxy pool had no free exit" in drawn, "and why, if it did not"
+    assert pages._wishes({"wishes": []}) == "", "nothing pending, nothing said"
+
+
+def test_the_page_watches_itself_while_a_wish_is_pending():
+    """It sat on the slow cadence because it did not know anything was
+    pending: a hand build settles `done` in `actions` at once, so the
+    queue count is zero while the wish is still waiting."""
+    import re
+
+    from geelark_farm.web import pages
+
+    data = {"phones": [], "stock": {}, "queue": {"running": 0, "queued": 0},
+            "pulse": {}, "choose": {}, "pool_rows": {}, "awaiting": [],
+            "wishes": [{"gmail": "a@x.com", "status": "queued",
+                        "created_at": None}]}
+    user = {"id": 1, "username": "a", "role": "operator", "csrf": "c",
+            "mutations": True, "may_login_accounts": True}
+    page = pages.dashboard(data, user)
+    found = re.search(r'name="gf-refresh" content="(\d+)"', page)
+    assert found and found.group(1) == "10", "a pending wish is a busy page"
+
+
+def test_the_build_card_says_when_a_press_would_be_lost():
+    """A stopped pass returns long before it takes the wishes, and the
+    breaker and the pause hold back only the keeper's own batch."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "operator", "csrf": "c", "mutations": True,
+            "may_login_accounts": True}
+    base = {"choose": {}, "stock": {"gmail": {"free": 2},
+                                    "proxy": {"free": 3}}}
+
+    stopped = pages._build_card(dict(base, pulse={"stopped": True}), user)
+    assert "nothing will be built until an admin starts it" in stopped
+    assert "<form" not in stopped, "no form where the press would be lost"
+
+    held = pages._build_card(dict(base, pulse={"tripped": "x"}), user)
+    assert "still built" in held and "<form" in held
+    assert "still built" not in pages._build_card(dict(base, pulse={}), user)
+
+
+def test_the_overlay_puts_every_borrowed_body_back_before_it_hides():
+    """Closed mid-preview, a sheet stayed on it: reopen Manage and you got
+    the old preview with no paste box and no list - and `showInSheet` had
+    swapped away the drawer's mount, so the next serial click left the
+    dashboard altogether (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    shut = script.split("function shut(){", 1)[1].split("function ", 1)[0]
+    assert "restoreSheet" in shut, "every sheet hands its body back first"
+    assert shut.index("restoreSheet") < shut.index("o.hidden = true"), (
+        "and before it hides, or the bodies are put back into nothing")
+
+
+def test_a_press_inside_the_drawer_comes_back_to_the_drawer():
+    """The drawer's answer is the phone's own page, and `showInSheet`
+    drops `.top` - which is where that page keeps its buttons. One press
+    emptied the drawer of every control it had (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "sheet.dataset.sheet === 'phone'" in script
+    assert "openDrawer(got.url)" in script, "with the said token on it"
+    assert "if (!body) { location.assign(href); return; }" in script, (
+        "a missing mount is a deliberate fallback, not a TypeError")
+    drawer = script.split("function openDrawer(", 1)[1]
+    assert "script, .alerts, .banner" in drawer, (
+        "the page's own alerts do not come into the drawer with it")
+
+
+def test_the_drawer_does_not_freeze_the_page_behind_it():
+    """It holds no box to type in, so a page frozen behind it is a build
+    nobody can watch move."""
+    from geelark_farm.web import pages
+
+    # The body runs past a `{}` literal, so take it to its own return.
+    gate = pages._DASH_SCRIPT.split("function settled(){", 1)[1]
+    gate = gate.split("return", 1)[1].split(";", 1)[0]
+    assert "openKind !== 'phone'" in gate
+
+
+def test_the_drawer_says_what_a_press_did_and_can_stop_a_build():
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "username": "a", "role": "operator", "csrf": "c",
+            "mutations": True, "may_take_phones": True,
+            "may_login_accounts": True}
+    story = {"serial": "1900", "timeline": [],
+             "phone": {"serial": "1900", "status": "building", "state": ""}}
+    drawn = pages.phone_story_page(story, user, said="took:9")
+
+    assert "It is yours" in drawn, "a press inside the drawer is answered"
+    assert drawn.index("It is yours") < drawn.index('class="top"'), (
+        "outside .top, which the drawer hides")
+    assert 'action="/phones/1900/stop"' in drawn, (
+        "the one thing there is to do about a phone being built")

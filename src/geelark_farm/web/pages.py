@@ -258,6 +258,16 @@ details.tech>summary::-webkit-details-marker{{display:none}}
 details.tech>summary::after{{content:" \2304"}}
 details.tech[open]>summary::after{{content:" \2303"}}
 details.tech[open]{{display:block;margin-top:4px}}
+/* A phone somebody asked for, before it is a phone. One line each,
+   the same rhythm as the table under it. */
+.wishes{{padding:12px 14px}}
+.wishes h3{{margin:0 0 8px}}
+.wish{{display:flex;align-items:center;gap:10px;padding:6px 0;
+ border-top:1px solid var(--line2);font-size:13px}}
+.wish:first-of-type{{border-top:0}}
+.wish .who{{flex:0 0 auto;color:var(--ink)}}
+.wish .why{{color:var(--dim);font-size:12.5px}}
+.wish .age{{flex:0 0 46px;color:var(--dim);font-size:12px}}
 .pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
  border-bottom:1px solid var(--line2)}}
 .pickrow:last-child{{border-bottom:0}}
@@ -908,6 +918,8 @@ _DASH_SAID = {
     # row back. Normally the verb's own sentence replaces it, because only
     # that sentence can name the address and say why.
     "no": "That did not go through.",
+    "asked": "Asked for - it is written down, and the next pass starts it. "
+             "It is listed above the phones until it becomes one.",
     # The phone buttons each said "Done - it is already in", a sentence
     # written for pasted stock, after a confirm page that talked about
     # deleting the phone (2026-09-07).
@@ -1712,7 +1724,10 @@ _DASH_SCRIPT = """
     var o = ov();
     var typing = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(
       (document.activeElement || {}).tagName) >= 0;
-    return !(o && !o.hidden) && !typing;
+    // The drawer holds no box to type in, so a page frozen behind it is
+    // a build nobody can watch move. A manager still holds the page: it
+    // has a paste box and an editor in it (2026-09-07).
+    return !(o && !o.hidden && openKind !== 'phone') && !typing;
   }
   function reloadWhenSettled(){
     if (settled()) { reload(); return; }
@@ -1725,6 +1740,12 @@ _DASH_SCRIPT = """
   function ov(){ return document.getElementById('poolov'); }
   function shut(){
     var o = ov(); if (!o) return;
+    // Every sheet that is showing a preview or a confirm hands its own
+    // body back first. Closed mid-preview, the sheet stayed on it: reopen
+    // Manage and you got the old preview with no paste box and no list -
+    // and `showInSheet` had swapped away the drawer's mount, so the next
+    // serial click left the dashboard altogether (2026-09-07).
+    o.querySelectorAll('.sheet').forEach(restoreSheet);
     o.hidden = true; openKind = null; drawerHref = null;
     o.classList.remove('right');
     if (opener && document.contains(opener)) opener.focus();
@@ -1800,7 +1821,9 @@ _DASH_SCRIPT = """
     }
     // "Back" inside a sheet that is showing a preview or a confirm goes
     // back to the sheet, not to the page.
-    var back = e.target.closest('#poolov .sheetbody.sub a[href="/"]');
+    var back = e.target.closest(
+      '#poolov .sheetbody.sub a[href="/"], '
+      + '#poolov .sheetbody.sub a[href^="/phones/"]');
     if (back) { e.preventDefault(); restoreSheet(back.closest('.sheet')); return; }
     var el = e.target.closest('.cp');
     if (!el) return;
@@ -1851,10 +1874,17 @@ _DASH_SCRIPT = """
         hint.replaceChildren.apply(
           hint, head ? Array.prototype.slice.call(head.childNodes) : []);
         var body = sheet.querySelector('[data-drawer]');
+        if (!body) { location.assign(href); return; }
         var nodes = [];
         if (acts) { acts.className = 'acts'; nodes.push(acts); }
         Array.prototype.slice.call(main.children).forEach(function(n){
-          if (n.matches('script')) return;
+          // Not the page's alerts. `showInSheet` was taught this and the
+          // drawer was not, so the same red banner arrived a second time
+          // on top of the one behind it, an alert already dismissed came
+          // back, its dismiss button was dead - no init() ran on the copy
+          // - and clicking it navigated away and lost the drawer
+          // (2026-09-07).
+          if (n.matches('script, .alerts, .banner')) return;
           nodes.push(n);
         });
         body.replaceChildren.apply(body, nodes);
@@ -2002,6 +2032,14 @@ _DASH_SCRIPT = """
         // sheet it came from, if it came from one; else in place of the
         // page, which is what the browser would have done.
         var main = doc.querySelector('main');
+        // A press inside the drawer answers with the phone's own page,
+        // and `showInSheet` drops `.top` - which is where that page keeps
+        // its buttons. So one press emptied the drawer of every control
+        // it had, with no toast and no way back but the × (2026-09-07).
+        if (sheet && sheet.dataset.sheet === 'phone'
+            && got.url.indexOf('/phones/') >= 0) {
+          openDrawer(got.url); return;
+        }
         if (sheet && main) showInSheet(sheet, main);
         else swapMain(doc);
       })
@@ -2614,8 +2652,16 @@ def _build_card(data: dict, user: dict) -> str:
         return ""
     choose = data.get("choose") or {}
     stock = data.get("stock") or {}
+    pulse = data.get("pulse") or {}
     free = int((stock.get("gmail") or {}).get("free") or 0)
     exits = int((stock.get("proxy") or {}).get("free") or 0)
+    if pulse.get("stopped"):
+        # A stopped pass returns long before it takes the wishes, so a
+        # press now is a press lost until somebody starts it again. Said
+        # rather than offered, the way the no-exit branch below says it.
+        return ('<div class="panel"><h3>Build one now</h3>'
+                '<p class="dim">The service is stopped, so nothing will be '
+                'built until an admin starts it again.</p></div>')
     if not exits:
         # No way out for a phone. Said rather than offered: a form that can
         # only be refused is worse than a sentence saying why.
@@ -2628,6 +2674,13 @@ def _build_card(data: dict, user: dict) -> str:
     # form hiding (2026-09-05).
     hint = ("Pick one from the pool or type an address that is not in it "
             "yet. Leave a field empty and the next one in the pool is used.")
+    # The breaker and the pause hold back the keeper's own batch; a wish
+    # asked for here is taken after both, so it is still built. The banner
+    # above says building has stopped, and for this form that is not true
+    # (2026-09-07).
+    if pulse.get("tripped") or pulse.get("paused"):
+        hint += (" The keeper is held back right now, but a phone asked "
+                 "for here is still built.")
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
@@ -2764,6 +2817,47 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
 
 
 
+def _wishes(data: dict, explain=None) -> str:
+    """Phones somebody asked for by hand, from the moment they ask.
+
+    Nothing in the web package read `wanted_builds`, so a press vanished:
+    the toast is gone in four seconds, the table does not change until a
+    phone exists, and a wish that failed before one did wrote its reason
+    into a column nobody could see. `store.wanted.recent`'s own docstring
+    calls itself "what the person who asked reads to find out whether it
+    happened", and it had no callers at all (2026-09-07).
+    """
+    rows = data.get("wishes") or []
+    if not rows:
+        return ""
+    lines = []
+    for w in rows:
+        status = str(w.get("status") or "")
+        who = str(w.get("gmail") or "") or "the next free Gmail"
+        where = f" on {esc(str(w['proxy_name']))}" if w.get("proxy_name") else ""
+        when = _hhmm(w.get("created_at")) if w.get("created_at") else ""
+        if status == "failed":
+            said, advice = (explain(str(w.get("detail") or ""))
+                            if explain else ("", ""))
+            why = esc(said or str(w.get("detail") or "")
+                      or "it did not say why")
+            tail = (f'<span class="badge bad">did not start</span> '
+                    f'<span class="why">{why}'
+                    + (f' <span class="dim">{esc(advice)}</span>'
+                       if advice else "") + '</span>')
+        elif status == "running":
+            tail = ('<span class="badge info">building</span> '
+                    '<span class="why">a phone is being made for it</span>')
+        else:
+            tail = ('<span class="badge">waiting</span> '
+                    '<span class="why">the next pass starts it</span>')
+        lines.append(f'<div class="wish"><span class="age">{esc(when)}</span>'
+                     f'<span class="who mono">{esc(who)}{where}</span>'
+                     f'{tail}</div>')
+    return (f'<div class="panel wishes"><h3>Asked for by hand '
+            f'<span class="n">{len(rows)}</span></h3>{"".join(lines)}</div>')
+
+
 def dashboard(data: dict, user: dict, said: str = "",
               manual_login: bool = False, explain=None,
               said_note: str = "") -> str:
@@ -2828,6 +2922,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
     main = (_said(said, _DASH_SAID, user, said_note) + warning + tools
+            + _wishes(data, explain)
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
             + _build_card(data, user))
@@ -2875,7 +2970,9 @@ def dashboard(data: dict, user: dict, said: str = "",
     # operator, 2026-09-05). With the script this is a quiet swap that
     # waits for a quiet moment; without it, the browser's own reload.
     busy = bool(building) or int(
-        (data.get("queue") or {}).get("queued") or 0) > 0
+        (data.get("queue") or {}).get("queued") or 0) > 0 or any(
+            str(w.get("status") or "") in ("queued", "running")
+            for w in (data.get("wishes") or []))
     return page("Instance manager", body, user=quiet, here="/",
                 refresh=10 if busy else 15)
 
@@ -5466,7 +5563,8 @@ def _now_entry(phone: dict) -> str:
                   _phone_badge(phone), "now")
 
 
-def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
+def phone_story_page(story: dict, user: dict, *, explain=None,
+                     said: str = "") -> str:
     """Everything one phone went through, two lines an entry: what
     happened, then why or what it means. Identical failures in a row
     fold into one entry with every time listed; the story closes with
@@ -5492,6 +5590,13 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
         actions += _state_forms(user, dict(phone, serial=serial), back)
         if _may(user, "may_change_proxy") and not building:
             actions.append(_change_ip_form(user, serial, back))
+        if building:
+            # The one thing there is to do about a phone being built, and
+            # the table has always offered it. This page offered nothing
+            # at all, so opening a build to watch it was a dead end
+            # (2026-09-07).
+            actions.append(_cancel_form(user, serial, back))
+    actions = [a for a in actions if a]
 
     items = []
     for group in _fold_story(story.get("timeline") or []):
@@ -5524,7 +5629,11 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
     table = (f'<table><tr><th>when</th><th>what</th><th>what happened</th>'
              f'</tr>{"".join(items)}</table>' if items else
              '<p class="empty">Nothing recorded about this phone.</p>')
-    body = (f'<div class="narrow">'
+    # Before `.top`, and wearing neither `alerts` nor `banner`: the
+    # drawer hides `.top` and strips both of those, so a press inside it
+    # said nothing at all - and neither did a press with the script off,
+    # which is a plain navigation to this page (2026-09-07).
+    body = (f'<div class="narrow">{_said(said, _DASH_SAID, user)}'
             f'<div class="top"><a href="/" class="dim">← Dashboard</a>'
             f'<h2>Phone {esc(serial)}</h2>{head}'
             f'<span class="status">{" ".join(actions)}</span></div>'

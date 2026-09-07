@@ -278,7 +278,9 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._html(404, pages.page(
                         "404", "<h2>No such phone</h2>", user=user))
                 return self._html(200, pages.phone_story_page(
-                    story, user, explain=_explain))
+                    story, user, explain=_explain,
+                    said=(parse_qs(self.path.partition("?")[2])
+                          .get("said") or [""])[0]))
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                        user=user))
         except Exception as exc:                                  # noqa: BLE001
@@ -365,7 +367,7 @@ class _Handler(BaseHTTPRequestHandler):
                     idem=self._minute_key(
                         user, "byhand",
                         payload["gmail"] or "next"),
-                    back="/")
+                    back="/", said_word="asked")
             if self.path == "/accounts/login":
                 back = field.get("back") or "/"
                 return self._login_accounts(
