@@ -135,15 +135,17 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
         found.append({"level": "bad", "href": "/events?kind=builds",
                       "text": f"Building has stopped - {n} builds in a row "
                               f"failed, and {limit} is the limit. "
-                              f"{_why_it_tripped(pulse)} An admin has to "
-                              f"clear it before anything is built again."})
+                              f"{_why_it_tripped(pulse)} Add fresh stock, "
+                              f"then press Clear breaker beside the status "
+                              f"line."})
     if pulse.get("paused"):
         found.append({"level": "warn", "href": "/",
                       "text": "Building is paused (Pause building is ticked)."})
     if int(pulse.get("failing") or 0) > 0:
         found.append({"level": "bad", "href": "/logs?level=ERROR",
-                      "text": f"{pulse['failing']} pass(es) in a row failed - "
-                              f"the log says why."})
+                      "text": f"{pulse['failing']} pass(es) in a row "
+                              f"failed. Nothing new is being built until "
+                              f"one of them gets through."})
     if int(counts.get("gmail") or 0) == 0:
         found.append({"level": "bad", "href": "/pools/gmail",
                       "text": "The Gmail pool is empty. No new phone can be "
@@ -151,9 +153,9 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
                               "on its own once stock arrives."})
     if int(pulse.get("unknown_running") or 0) > 0:
         found.append({"level": "warn", "href": "/needs",
-                      "text": f"{pulse['unknown_running']} phone(s) are running "
-                              f"that nothing accounts for - they are being "
-                              f"billed."})
+                      "text": f"{pulse['unknown_running']} phone(s) are "
+                              f"running that nothing accounts for and are "
+                              f"being billed. An admin has to stop them."})
     return found
 
 

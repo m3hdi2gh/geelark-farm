@@ -853,10 +853,16 @@ def _alert_strip(user: dict) -> str:
         # and so the sentence is on the page once, not once more in an
         # attribute.
         key = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+        # An operator is redirected out of every page these link to, so for
+        # them the whole banner was a link that flashed and put them back
+        # where they started. It is a sentence instead; the admin keeps the
+        # link, because for an admin those pages exist (2026-09-07).
+        body = (f'<a href="{esc(a.get("href") or "/")}">{said}</a>'
+                if user.get("role") == "admin"
+                else f'<span class="say">{said}</span>')
         lines.append(
             f'<div class="alert {esc(a.get("level", "warn"))}" '
-            f'data-alert="{key}">'
-            f'<a href="{esc(a.get("href") or "/")}">{said}</a>'
+            f'data-alert="{key}">{body}'
             f'<button type="button" class="x" data-dismiss="1" '
             f'aria-label="Dismiss">&times;</button></div>')
     return f'<div class="alerts">{"".join(lines)}</div>'
@@ -890,14 +896,14 @@ _DASH_SAID = {
     "removed-gpt": "Removed - the row is out of the GPT pool.",
     "gone": "That cannot be undone any more - the request that removed it "
             "kept nothing to put back.",
-    "queued": "Queued - the next pass (within ~30s) carries it out; watch "
-              "Requests.",
+    "queued": "Queued - the next pass starts it within about thirty "
+              "seconds; this page keeps itself up to date.",
     "refused": "You may not do that - ask an admin for the permission.",
     "off": "Actions are not switched on yet.",
     "auto": "Manual login is off: accounts log in on their own on the next "
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
-    "already": "Already asked - that request is still pending:",
+    "already": "Already asked - that request is still pending.",
     # The general word, for the rare case the handler could not read the
     # row back. Normally the verb's own sentence replaces it, because only
     # that sentence can name the address and say why.
@@ -1324,6 +1330,27 @@ def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
             _state_form(user, serial, "failed", back)]
 
 
+def _theirs(user: dict, row: dict) -> str:
+    """The name of whoever else is holding this phone, or "".
+
+    The rule was written inside `_row_actions` and enforced only there, so
+    the table refused a colleague's phone and the phone's own page offered
+    Done and Failed on it - and Failed deletes the phone at the next sync
+    and frees the account on it. One contract, one function (2026-09-07).
+
+    No exception for an admin, which is how the table has always read it:
+    the three ways a phone comes back belong to whoever is holding it, and
+    an admin taking one out from under somebody is the same surprise
+    whatever their role.
+    """
+    if (row.get("state") or "") != "taken":
+        return ""
+    owner = str(row.get("owner") or "")
+    if owner and owner == str(user.get("username") or ""):
+        return ""
+    return owner or "somebody"
+
+
 def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     """What one phone offers from the table.
 
@@ -1345,13 +1372,12 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     building = (row.get("status") or "") == "building"
     serial = str(row.get("serial") or "")
     taken = (row.get("state") or "") == "taken"
-    owner = str(row.get("owner") or "")
-    mine = taken and owner and owner == str(user.get("username") or "")
-    if taken and not mine:
+    held_by = _theirs(user, row)
+    if held_by:
         # Somebody else's. The three ways a phone comes back belong to the
         # person holding it; offering them here is offering to act on a
         # phone that is not yours (the contract, 2026-09-05).
-        return f'<span class="age">with {esc(owner or "somebody")}</span>'
+        return f'<span class="age">with {esc(held_by)}</span>'
     actions = []
     if not building and _may(user, "may_take_phones"):
         if not taken:
@@ -2722,7 +2748,8 @@ def _did_not_finish(rows: list[dict], user: dict) -> str:
 def _keeper_words(pulse: dict) -> tuple[str, str]:
     warm, target = int(pulse.get("warm") or 0), int(pulse.get("target") or 0)
     if pulse.get("stopped"):
-        return "Stopped from the sheet — nothing is running", "red"
+        return ("Stopped — nothing is running until somebody starts it "
+                "again", "red")
     if pulse.get("tripped"):
         return "Stopped by the breaker — nothing is being built", "red"
     if pulse.get("paused"):
@@ -3121,7 +3148,7 @@ _SAID = {
     "not_yours": "That request is not yours to touch.",
     "not_failed": "Only a failed request can be retried.",
     "refused": "You may not do that - ask an admin for the permission.",
-    "already": "Already asked - that request is still pending:",
+    "already": "Already asked - that request is still pending.",
 }
 
 #: The pills above the list, in order. "" is everything.
@@ -3640,7 +3667,7 @@ _POOL_SAID = {
     "bad": "That account was refused at the form - check the address, the "
            "password and the secret.",
     "gone": "That exit is no longer in GeeLark's list - nothing to adopt.",
-    "already": "Already asked - that request is still pending:",
+    "already": "Already asked - that request is still pending.",
     "auto": "Manual login is off: accounts log in on their own on the next "
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
@@ -3663,6 +3690,14 @@ def _csrf(user: dict) -> str:
 #: success and the person walked away believing it (2026-09-07).
 _SAID_NO = frozenset({"no", "refused", "off", "auto", "none", "gone", "bad",
                       "too_late"})
+
+
+def _links_out(user: dict | None) -> bool:
+    """Whether this reader can open the pages the banners point at. An
+    operator cannot: `_operator_may_get` sends them back to "/" from every
+    one, so the link was a flash and a bounce (2026-09-07). `None` is the
+    admin-only call sites, which pass no user at all."""
+    return user is None or user.get("role") == "admin"
 
 
 def _said(said: str, table: dict, user: dict | None = None,
@@ -3692,7 +3727,7 @@ def _said(said: str, table: dict, user: dict | None = None,
     # `toast`: the script moves it to the corner and lets it go after a
     # few seconds, and takes `?said=` off the address so a refresh does
     # not say it again. Without the script it is the banner it always was.
-    if word in ("queued", "already") and req.isdigit():
+    if word in ("queued", "already") and req.isdigit() and _links_out(user):
         return (f'<p class="said toast">{esc(note)} '
                 f'<a href="/requests?hi={req}">#{req} on Requests</a></p>')
     return f'<p class="said toast">{esc(note)}</p>'
@@ -5444,7 +5479,13 @@ def phone_story_page(story: dict, user: dict, *, explain=None) -> str:
     if phone and phone.get("done_at"):
         head += f'<span class="badge">gone {_day(phone["done_at"])}</span>'
     actions = []
-    if phone and not phone.get("done_at"):
+    # The same rule the table keeps. This page kept none, so clicking a
+    # serial that read "with ali" offered Done and Failed on ali's phone
+    # (2026-09-07).
+    held_by = _theirs(user, phone) if phone else ""
+    if held_by:
+        actions = [f'<span class="age">with {esc(held_by)}</span>']
+    elif phone and not phone.get("done_at"):
         building = (phone.get("status") or "") == "building"
         if not building and _may(user, "may_take_phones"):
             actions.append(_boot_form(user, serial))

@@ -380,6 +380,11 @@ class _Handler(BaseHTTPRequestHandler):
                 # One press: start the phone in GeeLark, take it, and hand
                 # the live-view link to the tab that is waiting for it.
                 serial = self.path[len("/phones/"):-len("/boot")]
+                held = self._held_by_somebody_else(user, serial)
+                if held:
+                    return self._refuse(
+                        user, "boot_phone", {"serial": serial},
+                        f"phone {serial} is with {held}")
                 return self._act(user, "may_take_phones", "boot_phone",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "boot", serial),
@@ -395,6 +400,11 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/proxy"):
                 serial = self.path[len("/phones/"):-len("/proxy")]
+                held = self._held_by_somebody_else(user, serial)
+                if held:
+                    return self._refuse(
+                        user, "change_proxy", {"serial": serial},
+                        f"phone {serial} is with {held}")
                 return self._act(user, "may_change_proxy", "change_proxy",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "proxy", serial),
@@ -711,6 +721,36 @@ class _Handler(BaseHTTPRequestHandler):
                              "pools_in_pg", "web_user_admin")}
 
     # ------------------------------------------------ phones and service
+    def _held_by_somebody_else(self, user: dict, serial: str) -> str:
+        """Who is holding this phone, when it is not the person asking.
+
+        The page drew the rule and nothing enforced it, so the press went
+        through on a POST the page had not offered - and Failed deletes
+        the phone at the next sync and frees the account on it
+        (2026-09-07). Read here, once, for every door that acts on a
+        phone.
+        """
+        try:
+            story = read.phone_story(self.settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not read phone %s back (%s)", serial, exc)
+            return ""
+        return pages._theirs(user, (story or {}).get("phone") or {})
+
+    def _refuse(self, user: dict, verb: str, payload: dict,
+                why: str) -> None:
+        """Say no, and leave the same record a refused permission leaves."""
+        from ..store import actions as store_actions
+
+        try:
+            store_actions.record_refused(
+                self.settings, verb=verb,
+                payload=dict(payload, by=user["username"], by_id=user["id"]),
+                requested_by=user["id"], reason=why)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not record the refusal (%s)", exc)
+        return self._redirect(_said_url("/", "refused"))
+
     def _phone_state(self, user: dict, serial: str, field: dict) -> None:
         """Take / Back / Done / Failed off the dashboard's table or the
         phone's own story (`back` says which). The two that delete the
@@ -720,6 +760,12 @@ class _Handler(BaseHTTPRequestHandler):
         if plan is None or not serial.isdigit():
             return self._html(404, pages.page(
                 "404", "<h2>Not a State word</h2>", user=user))
+        held = self._held_by_somebody_else(user, serial)
+        if held:
+            return self._refuse(
+                user, "set_phone_state", {"serial": serial, "state": state},
+                f"phone {serial} is with {held} - the three ways a phone "
+                f"comes back belong to whoever is holding it")
         back = _phone_back(field, serial)
         if plan["sure"] and field.get("sure") != "1":
             return self._html(200, pages.confirm_page(

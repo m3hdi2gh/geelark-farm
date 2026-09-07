@@ -164,7 +164,7 @@ VERDICTS: dict[str, Verdict] = {
     "in_use_by_hand": Verdict(
         NOBODY, "the phone is already running and nothing here started it",
         "Somebody is using this phone by hand, so the run left it alone. If "
-        "that is right, put `taken` in its State column and it will not be "
+        "that is right, press Take on it and it will not be "
         "offered again. If nobody is on it, stop it and it will be picked up."),
     # Somebody wrote `done`, `failed` or `taken` in the phone's State while a
     # run was minutes into working on it. `unfinished` keeps a marked row out

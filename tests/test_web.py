@@ -1695,30 +1695,29 @@ def test_the_story_offers_the_phone_buttons_and_returns_there(web,
                         lambda s, **k: got.update(k) or 63)
     client = web()
     client.login()
+    # 1523 is taken by "ali" and the reader is not ali. The table has
+    # always answered that with the holder's name and no buttons; this
+    # page answered it with Done and Failed - and Failed deletes the phone
+    # at the next sync and frees the account on it. One contract, both
+    # surfaces (2026-09-07).
     _, _, body = client.request("GET", "/phones/1523")
-    assert 'action="/phones/1523/boot"' in body, "Boot, as on the dashboard"
-    assert 'action="/phones/1523/state"' in body
-    assert 'value="unused"' in body, "taken, so it offers Back"
-    assert 'name="back" value="/phones/1523"' in body
-    assert 'action="/phones/1523/proxy"' in body
+    assert "with ali" in body
+    for door in ("boot", "state", "proxy"):
+        assert f'action="/phones/1523/{door}"' not in body, (
+            f"{door} on a phone somebody else is holding")
 
-    status, _, body = client.request(
-        "POST", "/phones/1523/state",
-        _form(csrf=client.csrf(), state="failed", back="/phones/1523"))
-    assert status == 200 and "Mark phone 1523 failed?" in body
-    assert 'name="back" value="/phones/1523"' in body and got == {}
+    # And the POST is refused too, not merely undrawn. The page drew the
+    # rule and nothing enforced it, so the press went through on a form
+    # the page had not offered - and Failed deletes the phone at the next
+    # sync and frees the account on it (2026-09-07).
     status, headers, _ = client.request(
         "POST", "/phones/1523/state",
         _form(csrf=client.csrf(), state="failed", sure="1",
               back="/phones/1523"))
     assert status == 303
-    assert dict(headers)["Location"] == "/phones/1523?said=queued:63"
-    assert got["verb"] == "set_phone_state"
-    status, headers, _ = client.request(
-        "POST", "/phones/1523/state",
-        _form(csrf=client.csrf(), state="taken", back="/evil"))
-    assert dict(headers)["Location"].startswith("/?said="), \
-        "a back the form made up goes to the dashboard"
+    assert dict(headers)["Location"] == "/?said=refused"
+    assert got == {}, "nothing was queued against somebody else's phone"
+
 
     monkeypatch.setattr(FakeStore, "user",
                         {"id": 9, "username": "narrow", "role": "operator",
@@ -2244,8 +2243,11 @@ def test_the_keeper_sentence_says_what_it_is_doing_in_every_state():
     stopped service must never read as "building" because its numbers
     happen to be short."""
     say = app_mod.pages._keeper_words
+    # It named the sheet, which has been shut since 2026-09-07 and which
+    # an operator never had. Not "press Start" either: they are not
+    # granted that one.
     assert say({"stopped": True, "warm": 0, "target": 5}) == (
-        "Stopped from the sheet — nothing is running", "red")
+        "Stopped — nothing is running until somebody starts it again", "red")
     assert say({"tripped": "captcha x5", "warm": 2, "target": 5}) == (
         "Stopped by the breaker — nothing is being built", "red")
     assert say({"paused": True, "warm": 2, "target": 5}) == (

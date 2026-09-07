@@ -130,7 +130,10 @@ def test_alerts_come_off_the_pulse_and_name_the_page_that_fixes_them():
     assert "the service showed a CAPTCHA (2 times)" in texts
     assert "Google refused the sign-in outright" in texts
     assert "captcha_shown" not in texts
-    assert "An admin has to clear it" in texts
+    # It said to find an admin, six inches above the button the operator
+    # can press themselves (2026-09-08).
+    assert "Add fresh stock, then press Clear breaker" in texts
+    assert "An admin has to clear it" not in texts
     assert "paused" in texts and "2 pass(es) in a row failed" in texts
     assert "Gmail pool is empty" in texts and "being billed" in texts
     assert {a["level"] for a in loud} == {"bad", "warn"}
