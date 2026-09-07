@@ -491,9 +491,16 @@ def edit_gmail(book, ledger, settings, payload, client):
 
     Judged the way a pasted row is judged, before anything is written - a
     secret that is neither a base32 key nor an address, or an address that
-    is not one, is refused here rather than discovered on a phone. Blank
-    means blank on purpose: an account with no second factor is a real
-    thing this pool has always carried.
+    is not one, is refused here rather than discovered on a phone.
+
+    A blank box leaves the cell as it was. It used to mean blank, on the
+    reasoning that a paste which leaves the secret out means "no second
+    factor" - true of a paste, and false of an editor, which never shows
+    the secret it holds. So somebody correcting a seller's name saved the
+    row and silently deleted the authenticator key they had paid for, and
+    a blank password was not "leave it" at all but a refusal reading "no
+    password" (the operator, 2026-09-07). Blank leaves it; the tick
+    clears it.
     """
     from .accounts import AccountError, Credentials, normalize_totp_secret
 
@@ -501,21 +508,27 @@ def edit_gmail(book, ledger, settings, payload, client):
     if refused:
         return refused
     was = dict(resource.values)
-    secret = str(payload.get("secret") or "").strip()
+    clear = str(payload.get("clear_secret") or "").strip() in ("1", "on",
+                                                               "true", "yes")
+    typed = str(payload.get("secret") or "").strip()
+    secret = "" if clear else (typed or str(was.get(book.gmails.SECRET_COLUMN)
+                                            or "").strip())
+    password = (str(payload.get("password") or "")
+                or str(was.get("Password") or ""))
     recovery = secret if "@" in secret else ""
     address = str(payload.get("new_address") or "").strip() or str(
         payload.get("address") or "").strip()
     try:
         Credentials(
             email=address,
-            password=str(payload.get("password") or ""),
+            password=password,
             totp_secret="" if recovery else normalize_totp_secret(secret),
             recovery_email=recovery,
         ).validate(what="gmail:")
     except AccountError as exc:
         return "refused", str(exc), None
     cells = {"Address": address,
-             "Password": str(payload.get("password") or ""),
+             "Password": password,
              book.gmails.SECRET_COLUMN: secret,
              "Seller": str(payload.get("seller") or "").strip()}
     purchased = str(payload.get("purchased") or "").strip()
@@ -635,8 +648,14 @@ def edit_app(book, ledger, settings, payload, client):
 
     Judged before anything is written, the way a pasted row is: an address
     that is not one, or a secret that is not base32, is refused here rather
-    than discovered on a phone. A blank secret is a real thing this pool
-    carries - an account with no second factor - and stays blank.
+    than discovered on a phone.
+
+    A blank box leaves the cell as it was - see `edit_gmail` for why that
+    is not what a blank means in a paste. The tick clears the secret.
+
+    And an emailed-code account keeps its tick: `Credentials.validate`
+    reads `email_code_only` to know a blank password is allowed, so
+    leaving it out refused every edit of such a row outright (2026-09-07).
     """
     from .accounts import AccountError, Credentials, normalize_totp_secret
 
@@ -644,19 +663,27 @@ def edit_app(book, ledger, settings, payload, client):
     if refused:
         return refused
     was = dict(resource.values)
-    secret = str(payload.get("secret") or "").strip()
+    clear = str(payload.get("clear_secret") or "").strip() in ("1", "on",
+                                                               "true", "yes")
+    typed = str(payload.get("secret") or "").strip()
+    secret = "" if clear else (typed
+                               or str(was.get("2FA Secret") or "").strip())
+    password = (str(payload.get("password") or "")
+                or str(was.get("Password") or ""))
     address = str(payload.get("new_address") or "").strip() or str(
         payload.get("address") or "").strip()
     try:
         Credentials(
             email=address,
-            password=str(payload.get("password") or ""),
+            password=password,
             totp_secret=normalize_totp_secret(secret),
+            email_code_only=bool(getattr(resource.credentials,
+                                         "email_code_only", False)),
         ).validate(what="app account:")
     except AccountError as exc:
         return "refused", str(exc), None
     cells = {"Address": address,
-             "Password": str(payload.get("password") or ""),
+             "Password": password,
              "2FA Secret": secret}
     problem = book.apps.edit_cells(resource, **cells)
     if problem:

@@ -242,6 +242,7 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand.js details.newone[open] summary{{display:none}}
 .byhand details.newone .lead{{font-size:12px;color:var(--dim)}}
 .byhand details.newone input{{margin:0;width:200px}}
+.byhand input:disabled{{opacity:.45}}
 .ov .sheet.narrow{{width:min(520px,100%)}}
 .ov .sheet.drawer{{position:fixed;right:0;top:0;bottom:0;width:min(480px,100%);
  max-height:none;border-radius:0;border-right:0}}
@@ -1622,6 +1623,21 @@ _DASH_SCRIPT = """
       });
     });
 
+    // Untick "Install the app" and the GPT boxes go quiet with it. The
+    // server drops `app_account` when the tick is off, so an account
+    // typed and then unticked was thrown away without a word - and a
+    // disabled input is not submitted, which makes the form send exactly
+    // what the server will use (the operator, 2026-09-07).
+    var tick = document.querySelector('.byhand input[name="install_app"]');
+    if (tick && byhand) {
+      var gpt = function(){
+        byhand.querySelectorAll('[name="app_account"], [data-for="app_account"]')
+          .forEach(function(box){ box.disabled = !tick.checked; });
+      };
+      tick.addEventListener('change', gpt);
+      gpt();
+    }
+
     // Search and the state chips, one sift per sheet. An edit row follows
     // the row it belongs to: hiding a row and leaving its editor open is
     // an editor with nothing above it.
@@ -2354,15 +2370,22 @@ def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
         f'<input type="hidden" name="back" value="/">'
         f'<input name="new_address" value="{esc(address)}" '
         f'placeholder="address" autocomplete="off">'
-        f'<input name="password" placeholder="password - blank leaves it" '
-        f'autocomplete="off" type="password">'
+        f'<input name="password" placeholder="password - blank leaves it '
+        f'as it is" autocomplete="off" type="password">'
+        # Neither box shows what it holds - a password never should, and a
+        # key is too long to read - so a blank one has to mean "leave it".
+        # It meant "clear it": somebody correcting a seller's name saved
+        # the row and deleted the authenticator key they had paid for. The
+        # tick is how you say you meant it (2026-09-07).
         + (f'<input name="secret" placeholder="2fa secret or recovery '
-           f'address" autocomplete="off">'
+           f'address - blank leaves it as it is" autocomplete="off">'
            f'<input name="seller" value="{esc(str(row.get("seller") or ""))}" '
            f'placeholder="seller" autocomplete="off">'
            if kind == "gmail" else
-           '<input name="secret" placeholder="2fa secret - blank for none" '
-           'autocomplete="off">')
+           '<input name="secret" placeholder="2fa secret - blank leaves it '
+           'as it is" autocomplete="off">')
+        + '<label class="tick"><input type="checkbox" name="clear_secret" '
+          'value="1"> no second factor</label>'
         + _state_choice(row)
         + '<button class="go">Save</button>'
         '<button type="button" class="quiet" data-close-edit="1">Cancel'
@@ -2594,7 +2617,11 @@ def _build_card(data: dict, user: dict) -> str:
         '<label class="tick"><input type="checkbox" name="install_app" '
         'value="1" checked> Install the app</label>'
         + '<label>GPT account'
-        + _free_picker("app_account", choose.get("apps"), "none")
+        # Not "none": leaving it blank does not mean none, it means the
+        # next free account is spent on this phone. Somebody saving an
+        # account for a customer lost it to a box that said otherwise
+        # (2026-09-07). Untick "Install the app" for none.
+        + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
         + '</label>'
         '<button class="go">Build</button>'
         # Only an address the pool has never heard of needs these. Folded
@@ -2612,6 +2639,11 @@ def _build_card(data: dict, user: dict) -> str:
         'address - optional" autocomplete="off" data-for="gmail">'
         '<input name="app_password" placeholder="GPT password" '
         'autocomplete="off" type="password" data-for="app_account">'
+        # `verbs.build_by_hand` has always read `app_secret` and nothing
+        # ever set it, so an account typed here joined the pool with no
+        # key and died at the 2-step screen weeks later (2026-09-07).
+        '<input name="app_secret" placeholder="GPT 2fa secret - optional" '
+        'autocomplete="off" data-for="app_account">'
         '</details>'
         '</form></div>')
 
@@ -4692,11 +4724,39 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
 # verdict, and the good rows carried into the confirm form as the same
 # tab-separated text - so the confirm re-reads exactly what was shown.
 
+#: Refusals that come back in the words of the thing that raised them.
+#: The person reading a preview bought these accounts; they did not write
+#: the validator (the operator, 2026-09-07).
+_PLAINER = (
+    ("is not an email address",
+     "no address on this line - check the first column"),
+    ("cannot be typed",
+     "this password has a character the phone cannot type - retype it with "
+     "plain letters, digits and symbols"),
+    ("not valid base32",
+     "that does not look like an authenticator key - it is letters A-Z and "
+     "digits 2-7, and Google shows it in groups of four"),
+)
+
+
+def _plainer(said: str) -> str:
+    for needle, instead in _PLAINER:
+        if needle in said:
+            return instead
+    return said
+
+
 def _verdict_badge(row: dict) -> str:
+    if row.get("twice"):
+        return ('<span class="badge bad">the same address is on an earlier '
+                'line</span>')
     if row.get("duplicate"):
         return '<span class="badge bad">already in the pool</span>'
     if row.get("error"):
-        return f'<span class="badge bad">{esc(row["error"])}</span>'
+        # The raw words stay on the hover: they are what a person would
+        # quote when asking somebody else about it.
+        return (f'<span class="badge bad" title="{esc(row["error"])}">'
+                f'{esc(_plainer(str(row["error"])))}</span>')
     if row.get("unread"):
         # Refused, not trimmed: a piece the reader could not place is a
         # line the person meant differently, and adding what was
@@ -4708,7 +4768,7 @@ def _verdict_badge(row: dict) -> str:
 
 def _good(rows: list[dict]) -> list[dict]:
     return [r for r in rows if not r.get("error") and not r.get("duplicate")
-            and not r.get("unread")]
+            and not r.get("unread") and not r.get("twice")]
 
 
 def _second_factor(row: dict) -> str:

@@ -68,3 +68,35 @@ def test_a_line_with_no_port_in_it_is_not_invented_into_an_exit():
 
     (row,) = paste.proxies("SX9 some words here")
     assert row["raw"] == ""
+
+
+def test_a_two_column_line_keeps_its_password_instead_of_calling_it_a_key():
+    """A seller's list reads address, password, key. The reader took the
+    FIRST base32-shaped token, and a password of sixteen plain letters is
+    base32-shaped - so it claimed the password as the key and the row read
+    "no password" on a line that visibly had one (2026-09-07)."""
+    from geelark_farm.web import paste
+
+    (row,) = paste.accounts("buyer2@gmail.com\tSIXTEENLETTERPWD")
+    assert row["password"] == "SIXTEENLETTERPWD"
+    assert row["secret"] == ""
+    assert "could not tell the password" in row["error"]
+
+
+def test_the_key_is_taken_from_the_end_of_the_line_not_the_start():
+    from geelark_farm.web import paste
+
+    (row,) = paste.accounts("a@x.com\tPLAINLETTERSPASS\tABCDEFGHIJKLMNOP")
+    assert row["password"] == "PLAINLETTERSPASS"
+    assert row["secret"] == "ABCDEFGHIJKLMNOP"
+    assert not row.get("error")
+
+
+def test_a_line_with_both_a_key_and_a_recovery_address_is_refused():
+    """A row keeps one, and it was the key that was dropped - under a
+    green "ok" (2026-09-07)."""
+    from geelark_farm.web import paste
+
+    (row,) = paste.accounts("a@x.com\tpw1\tABCDEFGHIJKLMNOP\trec@x.com")
+    assert row["secret"] and row["recovery"]
+    assert "both an authenticator key and a recovery address" in row["error"]

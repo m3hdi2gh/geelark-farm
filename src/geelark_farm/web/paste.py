@@ -83,20 +83,39 @@ def accounts(text: str) -> list[dict]:
             continue
         emails = [p for p in parts if _EMAIL.match(p)]
         rest = [p for p in parts if p not in emails]
-        secret = next((p for p in rest
-                       if _BASE32.match(p) and not p.isdigit()), "")
+        # The LAST base32-shaped token, not the first. A seller's list
+        # reads address, password, key - and a password of sixteen plain
+        # letters is base32-shaped, so taking the first claimed the
+        # password as the key and left the row reading "no password" on a
+        # line that visibly had one (2026-09-07).
+        keys = [p for p in rest if _BASE32.match(p) and not p.isdigit()]
+        secret = keys[-1] if keys else ""
         rest = [p for p in rest if p != secret]
         if not secret:
             secret, rest = _regroup(rest)
         password = rest[0] if rest else ""
-        rows.append({
+        row = {
             "address": emails[0] if emails else "",
             "recovery": emails[1] if len(emails) > 1 else "",
             "password": password,
             "secret": secret.replace(" ", "").upper() if secret else "",
             "unread": rest[1:] + emails[2:],
             "line": raw.strip(),
-        })
+        }
+        # Two things the reader can see are wrong but cannot resolve, said
+        # here rather than guessed at. Taking a key and leaving no password
+        # is the guess that used to be made silently; carrying both a key
+        # and a recovery address is a line where only one survives, and it
+        # was the key that was dropped, under a green "ok".
+        if secret and not password:
+            row["password"], row["secret"] = secret, ""
+            row["error"] = ("could not tell the password from the 2fa key "
+                            "on this line - put them in separate columns")
+        elif row["secret"] and row["recovery"]:
+            row["error"] = ("this line has both an authenticator key and a "
+                            "recovery address, and a row keeps one - delete "
+                            "whichever is wrong and preview again")
+        rows.append(row)
     return rows
 
 

@@ -4100,3 +4100,107 @@ def test_each_phone_press_says_what_that_press_did():
     assert "cancelled" in pages._DASH_SAID
     assert len({pages._DASH_SAID[w] for w in
                 ("took", "released", "closed", "written-off", "cancelled")}) == 5
+
+
+def test_the_same_address_twice_in_one_paste_is_counted_once():
+    """Two overlapping copies of a range both read "ok", the button said
+    "Add 2 (skip 0)", and the verb quietly added one - so the number on
+    the button was not the number that went in (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    rows = [{"address": "a@x.com"}, {"address": "b@x.com"},
+            {"address": "A@X.com"}]
+    app_mod._Handler._mark_twice(rows)
+
+    assert [r.get("twice") for r in rows] == [False, False, True]
+    assert len(pages._good(rows)) == 2
+    assert "earlier line" in pages._verdict_badge(rows[2])
+
+
+def test_a_refusal_is_shown_in_words_the_buyer_can_act_on():
+    """The person reading a preview bought these accounts; they did not
+    write the validator (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    badge = pages._verdict_badge(
+        {"error": "totp_secret is not valid base32 (Incorrect padding)"})
+    assert "does not look like an authenticator key" in badge
+    assert "Incorrect padding" in badge, "the raw words stay on the hover"
+
+    assert "no address on this line" in pages._verdict_badge(
+        {"error": "gmail: '' is not an email address"})
+
+
+def test_the_editor_keeps_what_it_does_not_show(monkeypatch):
+    """Neither box shows what it holds, so a blank one has to mean "leave
+    it". It meant "clear it": somebody correcting a seller's name saved
+    the row and deleted the authenticator key they had paid for, and a
+    blank password was not "leave it" but a refusal reading "no password"
+    (the operator, 2026-09-07)."""
+    from geelark_farm import verbs
+    from tests.test_builder import SECRET, make_book
+
+    book = make_book(gmails=1)
+    row = book.gmails._rows[0]
+    address = row.values["Address"]
+    row.values["Password"] = "kept-password"
+    row.values[book.gmails.SECRET_COLUMN] = SECRET
+
+    status, said, _ = verbs.edit_gmail(
+        book, None, None,
+        {"by": "mehdi", "address": address, "new_address": address,
+         "password": "", "secret": "", "seller": "newseller"}, None)
+
+    assert status == "done", said
+    after = book.gmails.find(address)
+    assert after.values["Password"] == "kept-password"
+    assert after.values[book.gmails.SECRET_COLUMN] == SECRET
+    assert after.values["Seller"] == "newseller"
+
+
+def test_the_tick_is_how_you_say_you_meant_to_clear_the_key():
+    from geelark_farm import verbs
+    from tests.test_builder import SECRET, make_book
+
+    book = make_book(gmails=1)
+    row = book.gmails._rows[0]
+    address = row.values["Address"]
+    row.values[book.gmails.SECRET_COLUMN] = SECRET
+
+    status, said, _ = verbs.edit_gmail(
+        book, None, None,
+        {"by": "mehdi", "address": address, "new_address": address,
+         "password": "", "secret": "", "clear_secret": "1"}, None)
+
+    assert status == "done", said
+    assert book.gmails.find(address).values[book.gmails.SECRET_COLUMN] == ""
+
+
+def test_the_editor_promises_what_it_now_does():
+    """The placeholders said "blank leaves it" while the code cleared it."""
+    from geelark_farm.web import pages
+
+    row = {"address": "a@x.com", "seller": "usa", "state": "free"}
+    for kind in ("gmail", "gpt"):
+        editor = pages._pool_edit_row(
+            kind, row, {"id": 1, "role": "admin", "csrf": "c",
+                        "mutations": True}, 5)
+        assert "blank leaves it as it is" in editor
+        assert 'name="clear_secret"' in editor, "and a way to mean blank"
+
+
+def test_the_gpt_box_stops_promising_none():
+    """Blank does not mean none - it spends the next free account. An
+    operator saving one for a customer lost it to a box that said
+    otherwise (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    card = pages._build_card(
+        {"choose": {"apps": [{"label": "a@x.com"}]},
+         "stock": {"gmail": {"free": 2}, "proxy": {"free": 3}}},
+        {"id": 1, "role": "operator", "csrf": "c", "mutations": True,
+         "may_login_accounts": True})
+    assert 'name="app_account"' in card
+    assert 'placeholder="none"' not in card
+    assert pages.NEXT_FREE in card
+    assert 'name="app_secret"' in card, "a typed account needs its key"

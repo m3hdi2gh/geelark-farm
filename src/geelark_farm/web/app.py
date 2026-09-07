@@ -358,6 +358,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "app_account": app if install else "",
                     "app_typed": install and self._is_new("app", app),
                     "app_password": field.get("app_password") or "",
+                     "app_secret": field.get("app_secret") or "",
                 }
                 return self._act(
                     user, "may_login_accounts", "build_by_hand", payload,
@@ -521,6 +522,22 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect(_said_url(back, f"no:{req}"))
         self._redirect(_said_url(back, f"queued:{req}"))
 
+    @staticmethod
+    def _mark_twice(rows: list[dict], key: str = "address") -> None:
+        """Flag a row whose address is on an earlier line of this paste.
+
+        Two overlapping copies of a range both read "ok", the button said
+        "Add 2 (skip 0)", and the verb quietly added one - so the count on
+        the button was not the count that went in (2026-09-07).
+        """
+        seen: set[str] = set()
+        for row in rows:
+            here = str(row.get(key) or "").strip().lower()
+            if not here:
+                continue
+            row["twice"] = here in seen
+            seen.add(here)
+
     def _said_note(self, said: str) -> str:
         """The verb's own sentence for a press that did not go through.
 
@@ -612,7 +629,12 @@ class _Handler(BaseHTTPRequestHandler):
                                  "password": kept.get("Password") or "",
                                  "secret": "" if "@" in secret else secret,
                                  "recovery": secret if "@" in secret else ""}],
-                       "seller": str(kept.get("Seller") or "").strip()}
+                       "seller": str(kept.get("Seller") or "").strip(),
+                       # The remove kept the date and the add honours it;
+                       # only this was dropping it, so Undo put a six-week
+                       # -old batch back as bought today (2026-09-07).
+                       "purchased": str(kept.get("Purchase Date")
+                                        or "").strip()}
         else:
             payload = {"rows": [{"address": kept["Address"],
                                  "password": kept.get("Password") or "",
@@ -807,6 +829,7 @@ class _Handler(BaseHTTPRequestHandler):
                     log.debug("gmail paste row refused: %s", exc)
                     row["error"] = str(exc)
                 row["duplicate"] = row["address"].lower() in known
+            self._mark_twice(rows)
             return self._html(200, pages.gmail_preview(
                 rows, seller, user, idem=secrets.token_urlsafe(12),
                 pasted=pasted, sellers=read.gmail_sellers(self.settings),
@@ -837,6 +860,7 @@ class _Handler(BaseHTTPRequestHandler):
                  "new_address": (field.get("new_address") or "").strip(),
                  "password": field.get("password") or "",
                  "secret": (field.get("secret") or "").strip(),
+                 "clear_secret": (field.get("clear_secret") or "").strip(),
                  "seller": (field.get("seller") or "").strip(),
                  "purchased": (field.get("purchased") or "").strip(),
                  "state": (field.get("state") or "").strip()},
@@ -888,6 +912,7 @@ class _Handler(BaseHTTPRequestHandler):
                 except (validate.AccountError, validate.ProxyError) as exc:
                     log.debug("proxy paste row refused: %s", exc)
                     row["error"] = str(exc)
+            self._mark_twice(rows, "raw")
             return self._html(200, pages.proxy_preview(
                 rows, user, idem=secrets.token_urlsafe(12)))
         if path == "/pools/proxy/add":
@@ -984,6 +1009,7 @@ class _Handler(BaseHTTPRequestHandler):
                     log.debug("gpt paste row refused: %s", exc)
                     row["error"] = str(exc)
                 row["duplicate"] = row["address"].lower() in known
+            self._mark_twice(rows)
             return self._html(200, pages.gpt_preview(
                 rows, user, idem=secrets.token_urlsafe(12), pasted=pasted,
                 back=_add_back(field, "/pools/gpt")))
@@ -1029,6 +1055,7 @@ class _Handler(BaseHTTPRequestHandler):
                  "new_address": (field.get("new_address") or "").strip(),
                  "password": field.get("password") or "",
                  "secret": (field.get("secret") or "").strip(),
+                 "clear_secret": (field.get("clear_secret") or "").strip(),
                  "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_app", address),
                 back=_add_back(field, "/pools/gpt"))
