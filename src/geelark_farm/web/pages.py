@@ -932,31 +932,6 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
     return f'{pill} <span class="badge manual">{esc(who)}</span>'
 
 
-def _actor_bar(data: dict) -> str:
-    pulse = data.get("pulse") or {}
-    queue = data.get("queue") or {}
-    bits = []
-    if pulse:
-        warm, target = pulse.get("warm", 0), pulse.get("target", 0)
-        colour = "green" if warm >= target else "amber"
-        bits.append(f'<span style="color:var(--{colour})">●</span> keeper '
-                    f'{warm}/{target} warm')
-    else:
-        bits.append("keeper: no pass yet")
-    bits.append(f'queue {int(queue.get("running") or 0)} running · '
-                f'{int(queue.get("queued") or 0)} queued')
-    if pulse.get("tripped"):
-        bits.append('<span style="color:var(--red)">breaker open</span>')
-    elif pulse:
-        bits.append("breaker armed")
-    if pulse.get("paused"):
-        bits.append('<span style="color:var(--amber)">building paused</span>')
-    if pulse.get("manual_login"):
-        bits.append("manual login")
-    if pulse.get("at"):
-        bits.append(f"last pass {_ago(pulse['at'])}")
-    return ' <span class="dim">·</span> '.join(bits)
-
 
 def _ago(stamp) -> str:
     """"14m ago", off a unix stamp or any timestamp the store hands back."""
@@ -1223,7 +1198,15 @@ def _request_sentence(a: dict) -> tuple[str, str]:
 
 
 def _controls(data: dict, user: dict) -> str:
-    """The service buttons in the actor bar, and who gets which.
+    """The service buttons beside the status line, and who gets which.
+
+    They sit next to the sentence that says building has stopped, because
+    that sentence is where a person is already looking when they want to
+    start it again. They were written for a `_service_row` at the foot of
+    the page that nothing ever called, so for as long as they have existed
+    nobody could press them - an operator who pasted a batch of Gmails had
+    to go and find an admin, and the admin had no button either (the
+    operator, 2026-09-07).
 
     Pause, Stop and Start are the admin's: they are about the service.
     Clear breaker is not - the breaker means "builds keep failing", and
@@ -2696,28 +2679,6 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
     return f"Stocked — {warm} of {target} phones warm", "green"
 
 
-def _service_row(data: dict, user: dict, flags: dict | None) -> str:
-    """The quiet line at the foot: the service's own controls and which
-    switches this server runs with. Admins only, and never shouted."""
-    controls = _controls(data, user)
-    if user.get("role") != "admin":
-        # Not the switches, and not an empty line: the one button an
-        # operator can be offered here, or nothing at all.
-        return (f'<div class="servicerow">{controls}</div>'
-                if controls else "")
-    switches = ""
-    if flags:
-        bits = []
-        for key, words in _SWITCHES.items():
-            on = bool(flags.get(key))
-            bits.append(f'{words["name"]} '
-                        f'<b style="color:var(--{"green" if on else "dim"})">'
-                        f'{"on" if on else "off"}</b>')
-        switches = (f'<span class="right mono">{" · ".join(bits)}</span>')
-    if not controls and not switches:
-        return ""
-    return (f'<div class="svc"><span>Service</span>{controls}{switches}</div>')
-
 
 def dashboard(data: dict, user: dict, said: str = "",
               manual_login: bool = False, explain=None) -> str:
@@ -2816,7 +2777,8 @@ def dashboard(data: dict, user: dict, said: str = "",
     # told nothing is left for it to add.
     body = (f'<div class="wide">{strip}'
             f'<div class="top"><h2>Instance manager</h2>'
-            f'<span class="status">{_status_sentence(data)}</span>'
+            f'<span class="status">{_status_sentence(data)}'
+            f'{_controls(data, user)}</span>'
             f'{_who_and_out(user)}</div>'
             f'<div class="desk"><div class="deskmain">{main}</div>'
             f'<aside class="side">{side}</aside></div>'

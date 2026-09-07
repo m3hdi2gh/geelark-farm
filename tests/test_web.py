@@ -2623,37 +2623,52 @@ def test_the_dashboard_no_longer_carries_the_service_line(web, monkeypatch):
     assert 'class="svc"' not in body and "/service/" not in body
 
 
-def test_the_service_row_fits_the_pulse_and_is_admin_only():
-    """The Settings page's parts, tested where they live. Which controls
-    are offered follows the pulse: a running service is paused or
-    stopped, a tripped one is resumed and cleared, a stopped one starts."""
+def test_the_controls_follow_the_pulse_and_the_person():
+    """Which controls are offered follows the pulse - a running service is
+    paused or stopped, a tripped one is resumed and cleared, a stopped one
+    starts - and who is offered them follows the person.
+
+    This tested `_service_row`, a renderer at the foot of the page that
+    nothing ever called. So the buttons it composed had no home and nobody
+    could press any of them: an operator who pasted a batch of Gmails had
+    to go and find an admin, and the admin had no button either. They sit
+    beside the status line now, which is where a person is already looking
+    when it says building has stopped (2026-09-07).
+    """
     admin = {"id": 1, "username": "mehdi", "role": "admin", "csrf": "x",
              "mutations": True}
-    flags = {"web_mutations": True, "manual_login": False, "log_db": True,
-             "pools_in_pg": False, "web_user_admin": True}
 
     running = {"pulse": {"warm": 5, "target": 5, "tripped": "",
                          "paused": False, "at": 0}}
-    row = app_mod.pages._service_row(running, admin, flags)
+    row = app_mod.pages._controls(running, admin)
     assert 'action="/service/pause"' in row and "Pause building" in row
     assert 'action="/service/stop"' in row
     assert "/service/resume" not in row and "/service/clear_breaker" not in row
-    assert "WEB_MUTATIONS" in row and "POOLS_IN_PG" in row
 
     tripped = {"pulse": {"warm": 5, "target": 5, "tripped": "captcha x5",
                          "paused": True, "at": 0}}
-    row = app_mod.pages._service_row(tripped, admin, flags)
+    row = app_mod.pages._controls(tripped, admin)
     assert 'action="/service/resume"' in row and "Resume building" in row
     assert 'action="/service/clear_breaker"' in row and "/service/pause" not in row
 
     stopped = {"pulse": {"stopped": True, "at": 0, "tripped": ""}}
-    row = app_mod.pages._service_row(stopped, admin, flags)
+    row = app_mod.pages._controls(stopped, admin)
     assert 'action="/service/start"' in row and "/service/stop" not in row
 
-    operator = {"id": 9, "username": "narrow", "role": "operator",
-                "csrf": "x", "mutations": True}
-    assert app_mod.pages._service_row(running, operator, flags) == "", \
-        "no ticked permission shows them"
+    # An operator gets the one control that is about stock rather than
+    # about the service, and only while the breaker is actually open.
+    keeper = {"id": 9, "username": "narrow", "role": "operator", "csrf": "x",
+              "mutations": True, "may_add_gmail": True}
+    assert app_mod.pages._controls(running, keeper) == ""
+    theirs = app_mod.pages._controls(tripped, keeper)
+    assert 'action="/service/clear_breaker"' in theirs
+    for shut in ("pause", "resume", "stop", "start"):
+        assert f'/service/{shut}"' not in theirs, f"{shut} is the admin's"
+
+    # And somebody who may not add stock is offered nothing at all.
+    watcher = {"id": 10, "username": "eyes", "role": "operator", "csrf": "x",
+               "mutations": True}
+    assert app_mod.pages._controls(tripped, watcher) == ""
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
