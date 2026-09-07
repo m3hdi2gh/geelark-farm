@@ -33,10 +33,19 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Only what names the dependencies. Nothing here changes when the code does,
 # so this layer is cached until a dependency actually moves.
+#
+# `setuptools` is installed into the venv on purpose, though nothing
+# imports it: it is what the runtime stage's editable install builds
+# with, and putting it here means that stage - the one every deploy
+# re-runs, since copying `src/` invalidates it - never has to reach
+# pypi at all. The server cannot always: a deploy failed three times
+# in a row on a read timeout to pypi.org while the code being
+# deployed was fine (2026-09-08).
 COPY pyproject.toml README.md ./
 RUN mkdir -p src/geelark_farm \
  && printf '__version__ = "0.0.0"\n' > src/geelark_farm/__init__.py \
- && pip install .
+ && pip install . \
+ && pip install "setuptools>=68"
 
 
 FROM python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4 AS runtime
@@ -69,7 +78,10 @@ COPY --chown=geelark:geelark scripts/ ./scripts/
 # two levels above `src/geelark_farm/` - and that is where `.env`, `state/`,
 # `logs/` and `secrets/` are looked for. A normal install puts the package in
 # site-packages and sends all four somewhere nobody mounted.
-RUN pip install --no-deps -e . \
+# `--no-build-isolation`: build with the setuptools already in the
+# venv rather than fetching a fresh one. This is the step every
+# deploy runs, and it is now the only one that needs no network.
+RUN pip install --no-deps --no-build-isolation -e . \
  && mkdir -p state logs artifacts \
  && chown -R geelark:geelark /app
 
