@@ -1223,20 +1223,30 @@ def _request_sentence(a: dict) -> tuple[str, str]:
 
 
 def _controls(data: dict, user: dict) -> str:
-    """The service buttons in the actor bar - admins only, and only the
-    ones that make sense for the pulse."""
+    """The service buttons in the actor bar, and who gets which.
+
+    Pause, Stop and Start are the admin's: they are about the service.
+    Clear breaker is not - the breaker means "builds keep failing", and
+    the answer to it is nearly always fresh stock, which is the one thing
+    an operator is trusted to add. They could add a batch of Gmails and
+    then had to find an admin before the farm would use them (the
+    operator, 2026-09-07).
+    """
     pulse = data.get("pulse") or {}
-    if not pulse or not (user.get("mutations") and
-                         user.get("role") == "admin"):
+    if not pulse or not user.get("mutations"):
         return ""
+    admin = user.get("role") == "admin"
+    stopped = bool(pulse.get("stopped"))
     wanted = []
-    if pulse.get("stopped"):
+    if admin and stopped:
         wanted.append("start")
     else:
-        wanted.append("resume" if pulse.get("paused") else "pause")
-        if pulse.get("tripped"):
+        if admin:
+            wanted.append("resume" if pulse.get("paused") else "pause")
+        if pulse.get("tripped") and (admin or _may(user, "may_add_gmail")):
             wanted.append("clear_breaker")
-        wanted.append("stop")
+        if admin:
+            wanted.append("stop")
     return "".join(
         f'<form method="post" class="inline" action="/service/{what}">'
         f'{_csrf(user)}<button class="{CONTROLS[what]["klass"]}">'
@@ -1722,6 +1732,12 @@ _DASH_SCRIPT = """
       return;
     }
     var o = ov();
+    // The editor's own Cancel closes the editor. It used to carry the
+    // overlay's `data-shut`, so pressing it threw the whole manager away
+    // and put the person back on the dashboard - three clicks from where
+    // they were (the operator, 2026-09-07).
+    var row = e.target.closest('[data-close-edit]');
+    if (row) { e.preventDefault(); row.closest('.editrow').hidden = true; return; }
     if (e.target.closest('[data-shut]') || e.target === o) { shut(); return; }
     var edit = e.target.closest('[data-edit]');
     if (edit) {
@@ -1811,7 +1827,11 @@ _DASH_SCRIPT = """
     var sub = document.createElement('div');
     sub.className = 'sheetbody sub';
     Array.prototype.slice.call(main.children).forEach(function(node){
-      if (node.matches('.top, script')) return;
+      // Not the page's heading, and not the page's alerts: the breaker
+      // banner is about the farm, not about the paste being previewed,
+      // and it arrived a second time inside the sheet on top of the one
+      // already on the page behind it (the operator, 2026-09-07).
+      if (node.matches('.top, script, .alerts, .banner')) return;
       sub.appendChild(node);
     });
     sub._was = was.classList.contains('sub') ? was._was : was;
@@ -1919,6 +1939,12 @@ _DASH_SCRIPT = """
         return r.text().then(function(html){ return {url: r.url, html: html}; });
       })
       .then(function(got){
+        // The lock comes off however this ended. It only came off in the
+        // `catch`, so a form that answered *successfully* stayed locked -
+        // and `form.busy button` is `pointer-events:none`, so after a
+        // preview and a Back the Preview button was dead to a real click
+        // while looking perfectly ordinary (the operator, 2026-09-07).
+        form.classList.remove('busy');
         if (!got) return;
         var doc = parse(got.html);
         if (isHere(got.url)) { swapMain(doc); return; }
@@ -2331,7 +2357,8 @@ def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
            'autocomplete="off">')
         + _state_choice(row)
         + '<button class="go">Save</button>'
-        '<button type="button" class="quiet" data-shut="1">Cancel</button>'
+        '<button type="button" class="quiet" data-close-edit="1">Cancel'
+        '</button>'
         '</form></td></tr>')
 
 
@@ -2672,9 +2699,12 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
 def _service_row(data: dict, user: dict, flags: dict | None) -> str:
     """The quiet line at the foot: the service's own controls and which
     switches this server runs with. Admins only, and never shouted."""
-    if user.get("role") != "admin":
-        return ""
     controls = _controls(data, user)
+    if user.get("role") != "admin":
+        # Not the switches, and not an empty line: the one button an
+        # operator can be offered here, or nothing at all.
+        return (f'<div class="servicerow">{controls}</div>'
+                if controls else "")
     switches = ""
     if flags:
         bits = []
@@ -4698,6 +4728,7 @@ def _shown_password(row: dict) -> str:
 def gmail_preview(rows: list[dict], seller: str, user: dict,
                   idem: str, *, pasted: str = "",
                   sellers: list | None = None,
+                  purchased: str = "",
                   back: str = "/pools/gmail") -> str:
     """The verdicts, the confirm, and the paste kept in an editable box
     underneath - a typo is fixed there and previewed again, not pasted
@@ -4719,9 +4750,14 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
             f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
             f'<input type="hidden" name="seller" value="{esc(seller)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
+            # The date the person typed, carried through. The preview
+            # dropped it and the add stamped today, so a batch bought last
+            # month entered as bought today however carefully it was typed
+            # (2026-09-07).
+            f'<input type="hidden" name="purchased" value="{esc(purchased)}">'
             f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
             f'<div class="row"><span class="dim">seller: '
-            f'{esc(seller or "(none)")} · purchase date stamps automatically'
+            f'{esc(seller or "(none)")} · bought {esc(purchased or "today")}'
             f'</span><span class="right"></span>'
             f'<a class="btn quiet" href="{esc(back)}">Back</a>'
             + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
@@ -4734,6 +4770,9 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<textarea name="pasted">{esc(pasted)}</textarea>'
             f'<div class="row">{_seller_pick(list(sellers or []), seller)}'
+            f'<input name="purchased" type="date" class="mono when" '
+            f'value="{esc(purchased)}" '
+            f'title="when it was bought - blank means today">'
             f'<span class="right"></span>'
             f'<button class="quiet">Preview again</button></div>'
             f'</form></div>')

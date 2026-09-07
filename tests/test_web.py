@@ -3959,3 +3959,71 @@ def test_a_queued_command_rings_the_bell(web, monkeypatch):
     assert status == 303
     assert signals.queued.is_set(), "nobody rang for a queued command"
     signals.queued.clear()
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_an_operator_can_clear_the_breaker_after_adding_stock(web, monkeypatch):
+    """The breaker means "builds keep failing", and the answer to it is
+    nearly always fresh stock - which is the one thing an operator is
+    trusted to add. They could add a batch of Gmails and then had to find
+    an admin before the farm would use them (the operator, 2026-09-07).
+
+    The other three controls stay the admin's: they are about the service,
+    not about the stock.
+    """
+    import geelark_farm.store.actions as actions_mod
+
+    # An operator, which the fixture's user is not: the whole point is what
+    # somebody who is not an admin may press.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 7, "username": "mehdi", "role": "operator",
+                         "sees": "own", "may_add_gmail": True})
+    seen = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: seen.append(k) or 9)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    client = web()
+    client.login()
+    status, _, _ = client.request(
+        "POST", "/service/clear_breaker",
+        _form(csrf=client.csrf(), sure="1", back="/"))
+
+    assert status == 303
+    assert [k["verb"] for k in seen] == ["control"]
+    assert seen[0]["payload"]["what"] == "clear_breaker"
+
+    for shut in ("pause", "stop", "start"):
+        seen.clear()
+        client.request("POST", f"/service/{shut}",
+                       _form(csrf=client.csrf(), sure="1", back="/"))
+        assert [k["verb"] for k in seen] == [], f"{shut} is the admin's"
+
+
+def test_the_editors_cancel_closes_the_editor_and_not_the_manager():
+    """It carried the overlay's own `data-shut`, so pressing Cancel threw
+    the whole manager away and put the person back on the dashboard -
+    three clicks from where they were (the operator, 2026-09-07)."""
+    import inspect
+
+    from geelark_farm.web import pages
+
+    body = inspect.getsource(pages._pool_edit_row)
+    assert 'data-close-edit="1"' in body
+    assert "data-shut" not in body, "that attribute shuts the whole overlay"
+    script = pages._DASH_SCRIPT
+    assert "data-close-edit" in script
+    assert script.index("data-close-edit") < script.index("[data-shut]"), (
+        "the editor's Cancel has to be answered before the overlay's")
+
+
+def test_a_form_stops_being_busy_when_its_request_ends_well_too():
+    """`form.busy button` is pointer-events:none, and the class only came
+    off in the `catch`. A form that answered successfully stayed locked,
+    so after a preview and a Back the Preview button was dead to a real
+    click while looking perfectly ordinary (the operator, 2026-09-07)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    kept = script.split(".then(function(got){", 1)[1][:700]
+    assert "form.classList.remove('busy')" in kept, (
+        "the lock has to come off on the way through, not only on error")

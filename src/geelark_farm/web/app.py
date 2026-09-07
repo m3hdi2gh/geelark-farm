@@ -688,10 +688,22 @@ class _Handler(BaseHTTPRequestHandler):
                                                errors="replace"))
 
     def _service(self, user: dict, what: str, field: dict) -> None:
-        """Pause / Resume / Clear breaker / Stop / Start: admins only, and
-        every one asks first - each changes what the next pass does to
-        every phone at once."""
-        if user.get("role") != "admin":
+        """Pause / Resume / Clear breaker / Stop / Start. Every one asks
+        first - each changes what the next pass does to every phone at
+        once - and all but one are the admin's.
+
+        The exception is Clear breaker. The breaker means "builds keep
+        failing", and the answer to it is nearly always fresh stock, which
+        is the one thing an operator is trusted to add: they could paste a
+        batch of Gmails and then had to find an admin before the farm
+        would use them (the operator, 2026-09-07).
+        """
+        from ..store.users import may
+
+        need = "may_add_gmail" if what == "clear_breaker" else "admin"
+        allowed = (user.get("role") == "admin" if need == "admin"
+                   else may(user, need))
+        if not allowed:
             return self._html(403, pages.page(
                 "403", "<h2>Only an admin drives the service</h2>",
                 user=user))
@@ -704,7 +716,7 @@ class _Handler(BaseHTTPRequestHandler):
                 user, title=f"{plan['label']}?", text=plan["text"],
                 action=f"/service/{what}", fields={"sure": "1"},
                 button=f"Yes, {plan['label'].lower()}", back="/"))
-        return self._act(user, "admin", "control", {"what": what},
+        return self._act(user, need, "control", {"what": what},
                          idem=self._minute_key(user, "control", what),
                          back="/")
 
@@ -761,6 +773,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._html(200, pages.gmail_preview(
                 rows, seller, user, idem=secrets.token_urlsafe(12),
                 pasted=pasted, sellers=read.gmail_sellers(self.settings),
+                purchased=(field.get("purchased") or "").strip(),
                 back=_add_back(field, "/pools/gmail")))
         if path == "/pools/gmail/add":
             rows = [{"address": r["address"], "password": r["password"],
@@ -1540,6 +1553,11 @@ _OPERATOR_POSTS = (
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",
+    # The one service control an operator is offered: the breaker means
+    # builds keep failing, and fresh stock is the answer to it. The
+    # permission on the other side is what decides; this only says the
+    # door exists for them (2026-09-07).
+    "/service/clear_breaker",
 )
 
 
