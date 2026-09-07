@@ -116,12 +116,21 @@ def test_alerts_come_off_the_pulse_and_name_the_page_that_fixes_them():
     assert quiet == []
 
     loud = read.alerts({"at": time.time() - 3600, "tripped": "5 failed",
-                        "breaker_count": 5, "breaker_reasons": ["captcha"],
+                        "breaker_count": 5, "breaker_limit": 5,
+                        "breaker_reasons": ["captcha_shown", "captcha_shown",
+                                            "sign_in_refused"],
                         "paused": True, "failing": 2, "unknown_running": 1},
                        {"gmail": 0})
     texts = " | ".join(a["text"] for a in loud)
     assert "last pass was 60m ago" in texts
-    assert "breaker is open (5 of 5" in texts
+    # In words, and each reason once. It listed the raw tokens, which is two
+    # lines of machine spelling on every page including the operator's, who
+    # cannot clear it (2026-09-07).
+    assert "5 builds in a row failed, and 5 is the limit" in texts
+    assert "2× the service showed a CAPTCHA" in texts
+    assert "Google refused the sign-in outright" in texts
+    assert "captcha_shown" not in texts
+    assert "An admin has to clear it" in texts
     assert "paused" in texts and "2 pass(es) in a row failed" in texts
     assert "Gmail pool is empty" in texts and "being billed" in texts
     assert {a["level"] for a in loud} == {"bad", "warn"}

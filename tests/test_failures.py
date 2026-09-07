@@ -274,7 +274,7 @@ def test_a_situation_reads_as_the_clause_it_is_dropped_into():
     survive being merged into the one table."""
     said = failures.situation("no_usable_proxy")
 
-    assert said == "the Proxy tab had no free proxy to give it"
+    assert said == "the Proxy pool had no free exit to give it"
     assert said[0].islower() and not said.endswith(".")
 
 
@@ -334,8 +334,10 @@ def test_a_refused_password_is_not_reported_as_a_wrong_one():
 
     assert "by hand" in advice, (
         "the note has to say to try the password before changing it")
-    assert "blank the status" in advice, (
-        "and what to do when it works - otherwise a good account stays out")
+    assert "press Free" in advice, (
+        "and what to do when it works - otherwise a good account stays out. "
+        "It said 'blank the status' until the sheet was closed; the status is "
+        "blanked by the Free button on the row now (2026-09-07).")
     assert "is not the account's" not in advice, (
         "which of the two refused it cannot be known from here")
 

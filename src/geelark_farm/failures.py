@@ -124,8 +124,9 @@ VERDICTS: dict[str, Verdict] = {
         CREDENTIAL, "{service} showed a CAPTCHA",
         "{service} challenged this address. It follows the account, not the "
         "IP - "
-        "the same exit signs the next one in. Blank the status to try it again "
-        "later, ideally on a residential exit."),
+        "the same exit signs the next one in. Press Free on the row to put it "
+        "back in the pool and try it again later, ideally on a residential "
+        "exit."),
     # The note used to say the password in the sheet was not the account's, as
     # a fact. It is not one that can be known from here. OpenAI's wording is
     # "Incorrect email address or password" - one message for both fields, and
@@ -141,9 +142,9 @@ VERDICTS: dict[str, Verdict] = {
     "wrong_password": Verdict(
         CREDENTIAL, "{service} would not take the password",
         "Try the password by hand before changing it - {service} shows this "
-        "when it is refusing the sign-in for other reasons too, so the one in "
-        "the sheet may well be right. If it works by hand, blank the status "
-        "and leave the password alone."),
+        "when it is refusing the sign-in for other reasons too, so the one on "
+        "the row may well be right. If it works by hand, press Free and "
+        "leave the password alone."),
     # Google offers this on the "Choose how you want to sign in" list, and it
     # is the one option on it answerable from the sheet alone: it asks for the
     # address already on the account rather than sending anything anywhere.
@@ -154,8 +155,8 @@ VERDICTS: dict[str, Verdict] = {
         CREDENTIAL, "Google asked for the recovery address and the row has none",
         "Google asked this account to confirm the recovery address it already "
         "holds. That address is the answer - there is no code to fetch - and "
-        "this row does not carry one. Put it in the Recovery Email column of "
-        "the Gmails tab and blank this status."),
+        "this row does not carry one. Add it with Edit on the row, then "
+        "press Free."),
     # A phone that is already running with nothing in the ledger holding it is
     # one somebody started by hand and is working in. Nothing is wrong with it
     # and nothing was spent - the run refused before it claimed anything - so
@@ -252,19 +253,19 @@ VERDICTS: dict[str, Verdict] = {
         "no unattended run can finish with this account. The password and "
         "2FA were accepted - the subscription is what is broken. Fix the "
         "payment on the account (or let its plan lapse), then blank this "
-        "status to offer it again."),
+        "row's Free button to offer it again."),
     "email_code_required": Verdict(
         CHALLENGED,
         "OpenAI took the password and then asked for an emailed code",
         "OpenAI accepted this account's password and then asked for a code it "
         "emailed rather than one from an authenticator, which means the 2FA on "
-        "the account is not set up. Set it up, then blank this status - "
+        "the account is not set up. Set it up, then press Free on the row - "
         "answering the code instead would sign it in once and leave the next "
         "build exactly here."),
     #: The row's claim and the device's behaviour contradicting each other.
     #:
     #: A ticked row says the account has no password. If OpenAI asks it for
-    #: one, the tick is wrong - or the password exists and is not in the sheet.
+    #: one, the tick is wrong - or the password exists and is not on the row.
     #: Either way the empty cell must not be typed into the box and submitted,
     #: which is what happened before this reason existed: the refusal that came
     #: back was recorded against an account that had never really been tried.
@@ -274,8 +275,8 @@ VERDICTS: dict[str, Verdict] = {
         "This row is ticked as one that signs in with an emailed code, and "
         "{service} asked it for a password. One of the two is wrong: either "
         "the tick does not belong on this row, or the account does have a "
-        "password and it is not in the sheet. Fix whichever it is, then blank "
-        "this status. Nothing was typed and nothing was spent."),
+        "password and it is not on the row. Fix whichever it is with Edit, then "
+        "press Free. Nothing was typed and nothing was spent."),
     "no_code_source": Verdict(
         CHALLENGED,
         "an emailed code was the only way in and nothing could supply one",
@@ -312,7 +313,7 @@ VERDICTS: dict[str, Verdict] = {
         "mailbox produced nothing within the wait. Nothing was judged about "
         "the account - it is set aside rather than marked, and keeps its "
         "place in the pool. Check the mailbox is reachable and the message is "
-        "not held up, then blank the status to try it again; the phone is "
+        "not held up, then press Free to try it again; the phone is "
         "reused, so a retry costs nothing but the attempt."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account",
@@ -427,16 +428,16 @@ VERDICTS: dict[str, Verdict] = {
         "Every free proxy was tried and each one was refused before the "
         "account was ever sent. That is a run out of usable exits, not a bad "
         "account - the credentials went back untouched. Change the addresses "
-        "of the rows marked `change ip` in the Proxy tab, or add proxies."),
+        "of the rows marked `change ip` in the Proxy pool, or add proxies."),
     "no_exit_to_move_to": Verdict(
         NOBODY,
-        "an exit refused it and the Proxy tab had no free one to move to",
+        "an exit refused it and the Proxy pool had no free one to move to",
         "An exit refused this build and there was nothing free to move it to "
         "- a run given as many phones as it has proxies keeps none spare. "
         "Either build fewer at a time than there are proxies, or add some."),
     "no_usable_proxy": Verdict(
-        NOBODY, "the Proxy tab had no free proxy to give it",
-        "No phone was created, so nothing was spent. The Proxy tab has "
+        NOBODY, "the Proxy pool had no free exit to give it",
+        "No phone was created, so nothing was spent. The Proxy pool has "
         "nothing free: rows are `claimed` or `on a phone` from builds that "
         "still hold them, or `change ip` and `dead` and waiting on you."),
     "no_working_proxy": Verdict(
@@ -467,13 +468,13 @@ VERDICTS: dict[str, Verdict] = {
         "If it lasts, another Android version is the way out - the region this "
         "account uses offers more than one."),
     "no_usable_gmail": Verdict(
-        NOBODY, "the Gmails tab had no unused address to give it",
+        NOBODY, "the Gmail pool had no unused address to give it",
         "No address was free, so no phone was created and nothing was spent. "
         "The rows are either held by a run that is still going, used up by a "
         "phone that has had them, or set aside with a reason beside them. Add "
-        "addresses, or blank the status of ones that can be tried again."),
+        "addresses, or press Free on ones that can be tried again."),
     "no_usable_gpt": Verdict(
-        NOBODY, "the Gpt Info tab had no unused account to give it",
+        NOBODY, "the GPT pool had no unused account to give it",
         "The phone is built, signed into Google and has the app on it - it is "
         "one account short of ready, and `Finish waiting phones` completes it "
         "the moment there is one. Nothing was wasted: no new phone, Gmail or "
@@ -498,13 +499,13 @@ VERDICTS: dict[str, Verdict] = {
     "interrupted": Verdict(
         NOBODY, "the run was stopped by hand",
         "You stopped the run. The phone was stopped and every row it held "
-        "went back to its pool, so nothing was lost - the phone is in the tab "
+        "went back to its pool, so nothing was lost - the phone is still listed "
         "and can be finished."),
     "stopped_by_hand": Verdict(
         NOBODY, "somebody pressed Stop this one on the web",
         "A person stopped this phone's job from the Requests page. The "
         "phone was stopped and every row it held went back to its pool, so "
-        "nothing was lost - the phone is in the tab and can be finished."),
+        "nothing was lost - the phone is still listed and can be finished."),
 }
 
 #: The reasons nothing is to blame for. Derived, so it cannot disagree with the

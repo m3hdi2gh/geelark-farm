@@ -248,6 +248,15 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .ov .sheet.drawer .narrow{{width:auto;max-width:none}}
 .ov .sheet.drawer .top{{display:none}}
 .ov .sheet.drawer .acts{{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}}
+/* A fold for what only a person debugging a flow wants: the archived
+   screen files, the raw fields of a history line. Shut, it is one word. */
+details.tech{{display:inline}}
+details.tech>summary{{display:inline;cursor:pointer;color:var(--dim);
+ font-size:12px;list-style:none}}
+details.tech>summary::-webkit-details-marker{{display:none}}
+details.tech>summary::after{{content:" \2304"}}
+details.tech[open]>summary::after{{content:" \2303"}}
+details.tech[open]{{display:block;margin-top:4px}}
 .pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
  border-bottom:1px solid var(--line2)}}
 .pickrow:last-child{{border-bottom:0}}
@@ -2110,8 +2119,11 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
     # go to the same place read as two places (the operator, 2026-09-05).
     # The paste box is the first thing in the manager anyway.
     #
-    # The proxy pool is the admin's: they get the door, an operator gets
-    # the word that says whose it is.
+    # The proxy pool is the admin's: they get the door. An operator used to
+    # get the word "admin" where the button goes - a label that answers a
+    # question nobody asked and offers nothing, on the one card they cannot
+    # open. The count is what they came for: it says whether there is an
+    # exit to move a phone onto (the operator, 2026-09-07).
     opens = (_may(user, meta["manage"]) if meta["manage"]
              else user.get("role") == "admin")
     # Short but not empty: the card says so in amber, under its number,
@@ -2122,9 +2134,7 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
              if kind == "gmail" and colour == "amber" and count and not alerts
              else "")
     add = (f'<button type="button" class="go small" data-pool="{kind}">'
-           f'Manage</button>' if opens
-           else '<span class="lock">admin</span>' if not meta["manage"]
-           else "")
+           f'Manage</button>' if opens else "")
     return (
         f'<section class="pool" title="{esc(why)}">'
         f'<header><b style="color:var(--{colour})">{count}</b>'
@@ -2533,7 +2543,7 @@ def _build_card(data: dict, user: dict) -> str:
     # is exactly what this form is for. The hint says so instead of the
     # form hiding (2026-09-05).
     hint = ("Pick one from the pool or type an address that is not in it "
-            "yet. Leave a field empty and the keeper takes the next in line.")
+            "yet. Leave a field empty and the next one in the pool is used.")
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
@@ -5167,11 +5177,19 @@ def _story_lines(t: dict, explain) -> tuple[str, str]:
         serial = str(t.get("serial") or "")
         head = (f"{_plural(len(files), 'screen')} archived" if files
                 else esc(text))
+        # Folded away. Eighteen file names - `200117-play-package-page.xml` -
+        # laid end to end was the longest thing on the page and the least
+        # readable, and they are for whoever is debugging a flow, not for
+        # the person deciding what to do with the phone (the operator,
+        # 2026-09-07).
         links = " · ".join(
             f'<a href="/phones/{esc(serial)}/screens/{_q(folder)}/{_q(f)}">'
             f'{esc(f)}</a>' for f in files)
+        if links:
+            links = (f'<details class="tech"><summary>the screens</summary>'
+                     f'{links}</details>')
         outcome = esc(status) if status else ""
-        return head, " — ".join(b for b in (outcome, links) if b)
+        return head, " ".join(b for b in (outcome, links) if b)
     if kind == "build_finished":
         fields = _build_fields(text)
         ok = fields.get("ok") == "True" or (not fields and status == "ready")
@@ -5193,10 +5211,51 @@ def _story_lines(t: dict, explain) -> tuple[str, str]:
         head = (f"{esc(who.strip())} set aside: {esc(seen or reason)}"
                 if sep else f"{esc(text)}")
         return head, esc(advice)
+    if kind == "history":
+        return _history_lines(status, text)
     if kind == "breaker":
         return (f"Breaker {esc(status)}", esc(text))
     head = f"{esc(kind)} {esc(status)}".strip()
     return head, esc(text)
+
+
+#: The fields a history line carries, in the order a person would ask
+#: about them. `Steps` is the flow's own trail - a debugging aid, folded.
+_HISTORY_SAID = ("Note", "Gmail", "GPT Account", "Proxy", "Event")
+
+
+def _history_lines(status: str, text: str) -> tuple[str, str]:
+    """A history entry as a sentence rather than the record it is stored as.
+
+    It was printed whole: `Seconds=695; Proxy=SX23; Gmail=...; Note=Ready -
+    signed into Google...; Steps=google: loading > dismissable > email_entry
+    > captcha x17 | ...`. Every fact was in there and none of it was
+    readable, and the one part an operator wants - what became of the phone,
+    and how long it took - was in the middle of it (2026-09-07).
+    """
+    fields, order = {}, []
+    for part in str(text or "").split(";"):
+        key, sep, value = part.partition("=")
+        key, value = key.strip(), value.strip()
+        if sep and key:
+            if key not in fields:
+                order.append(key)
+            fields[key] = value
+    if not fields:
+        return (f"History: {esc(status)}".strip(), esc(text))
+    took = fields.get("Seconds", "")
+    head = f"Its story: {esc(status or fields.get('Event') or 'recorded')}"
+    if took.replace(".", "", 1).isdigit():
+        minutes, seconds = divmod(int(float(took)), 60)
+        head += (f' <span class="dim">· took {minutes}m {seconds}s</span>'
+                 if minutes else f' <span class="dim">· took {seconds}s</span>')
+    said = [esc(fields[k]) for k in _HISTORY_SAID if fields.get(k)]
+    rest = [f"{esc(k)}={esc(fields[k])}" for k in order
+            if k not in _HISTORY_SAID and k != "Seconds" and fields[k]]
+    if rest:
+        said.append(f'<details class="tech"><summary>the rest</summary>'
+                    f'{" · ".join(rest)}</details>')
+    return head, " · ".join(said)
 
 
 def _fold_story(timeline: list) -> list[list]:

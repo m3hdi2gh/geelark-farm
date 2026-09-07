@@ -80,6 +80,32 @@ def nav_counts(settings: Settings) -> dict:
 STALE_AFTER = 180
 
 
+def _why_it_tripped(pulse: dict) -> str:
+    """The breaker's reasons as one sentence a person can read.
+
+    It listed the raw tokens - `stuck_on_2fa_push_to_other_device,
+    stuck_on_2fa_push_to_other_device, stuck_on_dismissable` - which is two
+    lines of machine words on every page, including the operator's, who
+    cannot clear it and has no use for the spelling. `failures` already
+    holds the sentence for each, and the same reason three times is one
+    fact, not three (the operator, 2026-09-07).
+    """
+    from ..failures import verdict
+
+    said, order = {}, []
+    for reason in pulse.get("breaker_reasons") or []:
+        # No guard: `verdict` answers every string, and a reason it has
+        # never seen gets the default verdict rather than an exception.
+        seen = verdict(str(reason)).seen
+        if seen not in said:
+            order.append(seen)
+        said[seen] = said.get(seen, 0) + 1
+    if not order:
+        return "No reason was recorded."
+    parts = [f"{said[w]}× {w}" if said[w] > 1 else w for w in order]
+    return "Mostly: " + "; ".join(parts) + "."
+
+
 def alerts(pulse: dict, counts: dict) -> list[dict]:
     """What is wrong right now, as sentences with the page that fixes it.
     Read off the last pass's pulse, never recomputed; empty when the
@@ -91,9 +117,8 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
     age = _time.time() - float(pulse.get("at") or 0) if pulse.get("at") else None
     if pulse.get("stopped"):
         found.append({"level": "bad", "href": "/",
-                      "text": "STOPPED from the sheet - nothing is synced, "
-                              "built or drained until Stop everything is "
-                              "unticked."})
+                      "text": "STOPPED - nothing is synced, built or drained "
+                              "until Start is pressed."})
     elif age is not None and age > STALE_AFTER:
         minutes = int(age // 60)
         found.append({"level": "warn", "href": "/events",
@@ -102,10 +127,11 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
                               f"wait for the next one."})
     if pulse.get("tripped"):
         n, limit = pulse.get("breaker_count", 0), pulse.get("breaker_limit", 5)
-        why = ", ".join(pulse.get("breaker_reasons") or []) or "no reason recorded"
         found.append({"level": "bad", "href": "/events?kind=builds",
-                      "text": f"The breaker is open ({n} of {limit} in a row: "
-                              f"{why}). Nothing is built until it is cleared."})
+                      "text": f"Building has stopped - {n} builds in a row "
+                              f"failed, and {limit} is the limit. "
+                              f"{_why_it_tripped(pulse)} An admin has to "
+                              f"clear it before anything is built again."})
     if pulse.get("paused"):
         found.append({"level": "warn", "href": "/",
                       "text": "Building is paused (Pause building is ticked)."})
