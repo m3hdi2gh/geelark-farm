@@ -127,7 +127,7 @@ def test_alerts_come_off_the_pulse_and_name_the_page_that_fixes_them():
     # lines of machine spelling on every page including the operator's, who
     # cannot clear it (2026-09-07).
     assert "5 builds in a row failed, and 5 is the limit" in texts
-    assert "2× the service showed a CAPTCHA" in texts
+    assert "the service showed a CAPTCHA (2 times)" in texts
     assert "Google refused the sign-in outright" in texts
     assert "captcha_shown" not in texts
     assert "An admin has to clear it" in texts

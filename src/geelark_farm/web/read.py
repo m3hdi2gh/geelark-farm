@@ -102,7 +102,12 @@ def _why_it_tripped(pulse: dict) -> str:
         said[seen] = said.get(seen, 0) + 1
     if not order:
         return "No reason was recorded."
-    parts = [f"{said[w]}× {w}" if said[w] > 1 else w for w in order]
+    # Commonest first, because the sentence opens with "Mostly" and a list
+    # in the order the reasons happened to arrive does not keep that word's
+    # promise. The count reads as a suffix: "... page (3 times)".
+    first = {word: i for i, word in enumerate(order)}
+    order.sort(key=lambda word: (-said[word], first[word]))
+    parts = [f"{w} ({said[w]} times)" if said[w] > 1 else w for w in order]
     return "Mostly: " + "; ".join(parts) + "."
 
 
