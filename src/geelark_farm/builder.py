@@ -840,6 +840,10 @@ class Wanted:
     #: Which app: '' for none, 'chatgpt' (the farm's own), 'spotify'. An
     #: account is only ever signed into ChatGPT (2026-09-08).
     app: str = "chatgpt"
+    #: Who asked, by user id. The phone is theirs from the moment it
+    #: exists: taken, owned, marked built by them - and not the keeper's
+    #: stock while they hold it (2026-09-08).
+    requested_by: int | None = None
 
 
 #: The apps a phone can be built with, and what each is called on a page.
@@ -991,8 +995,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # somewhere else. The model and region used to be written beside them
         # and cost a phone-list call each build to find out; nothing ever read
         # them back, and every phone had the same two values anyway.
+        # A phone asked for by hand is its builder's from the start: taken
+        # and owned by them, marked with who built it. The keeper's own
+        # phones carry none of that.
+        theirs = ({"State": "taken", "Built by": str(want.requested_by),
+                   "Owner": str(want.requested_by)}
+                  if want is not None and want.requested_by else {})
         log_row = book.phones.start(Serial=build.serial,
-                                    Proxy=build.proxy_name or build.proxy)
+                                    Proxy=build.proxy_name or build.proxy,
+                                    **theirs)
         # The Gmail was claimed inside `_starting`, before this phone existed -
         # it has to be, or a phone can be created with no address to sign in.
         # So the serial goes on now, the moment there is one. Without it the

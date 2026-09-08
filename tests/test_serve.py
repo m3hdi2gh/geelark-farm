@@ -2531,3 +2531,24 @@ def test_the_keepers_count_keeps_a_taken_phone_and_a_send_does_not(
     serve_mod._look(object(), make_settings(), book)
     assert asked == [True], "the keeper counts a taken phone as warm"
     assert "power_off_phone" in serve_mod.lane_verbs()
+
+
+def test_the_lane_hands_a_wish_to_the_build_with_who_asked(monkeypatch,
+                                                            make_settings):
+    from geelark_farm import builder
+    from geelark_farm.store import wanted as store_wanted
+
+    lane = _lane(make_settings, monkeypatch)
+    monkeypatch.setattr(serve_mod, "_drain_actions", lambda *a, **k: 0)
+    monkeypatch.setattr(store_wanted, "take", lambda settings: [
+        {"id": 9, "gmail": "", "proxy_name": "", "install_app": True,
+         "app_account": "", "app": "spotify", "requested_by": 4}])
+    started = {}
+    monkeypatch.setattr(builder, "run",
+                        lambda client, settings, **kw: started.update(kw) or [])
+    monkeypatch.setattr(builder, "apply_phone_states",
+                        lambda client, book, ledger, settings: {})
+
+    lane.tick(("boot_phone",))
+    wish = started["wanted"][0]
+    assert wish.requested_by == 4 and wish.app == "spotify"

@@ -4335,3 +4335,15 @@ def test_a_sent_account_that_fails_does_not_pull_the_next_one_under_manual_login
     # point here is that a1 and a2 were never taken.
     assert [r.credentials.email for r in s.book.apps.available] == [
         "a0@example.com", "a1@example.com", "a2@example.com"]
+
+
+def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
+    """Taken and owned by whoever asked, and marked built by them; the
+    keeper's own phones carry none of that (the operator, 2026-09-08)."""
+    import inspect
+
+    assert builder.Wanted().requested_by is None
+    src = inspect.getsource(builder.build_one)
+    assert '{"State": "taken", "Built by": str(want.requested_by),' in src
+    assert '"Owner": str(want.requested_by)}' in src
+    assert "if want is not None and want.requested_by else {})" in src

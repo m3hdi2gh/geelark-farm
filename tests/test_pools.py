@@ -2343,3 +2343,22 @@ def test_the_keeper_counts_a_taken_phone_as_warm_until_it_is_done_or_failed():
     assert [r["serial"] for r in log.unfinished()] == ["801", "805"]
     assert [r["serial"] for r in log.unfinished(held_too=True)] == [
         "801", "802", "805"]
+
+
+def test_a_hand_built_phone_its_builder_holds_is_not_the_keepers_stock():
+    """The keeper keeps its own five beside it (the operator, 2026-09-08);
+    released, it is stock like any other."""
+    headers = list(PHONE_APP_HEADERS) + [
+        h for h in ("State", "Built by") if h not in PHONE_APP_HEADERS]
+
+    def row(serial, state, built_by=""):
+        line = phone_row(serial, headers=headers)
+        line[headers.index("State")] = state
+        line[headers.index("Built by")] = built_by
+        return line
+
+    log = phone_log([row("811", "taken"), row("812", "taken", "4"),
+                     row("813", "", "4")], headers=headers)
+
+    assert [r["serial"] for r in log.unfinished(held_too=True)] == ["811", "813"]
+    assert [r["serial"] for r in log.unfinished()] == ["813"]

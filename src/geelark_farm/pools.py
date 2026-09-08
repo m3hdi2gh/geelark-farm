@@ -1371,6 +1371,11 @@ class PhoneLog:
             if held_too:
                 if said in (self.DONE, self.FAILED):
                     continue
+                # A phone somebody built by hand and still holds is theirs,
+                # not the keeper's stock: the keeper keeps its own five
+                # beside it (the operator, 2026-09-08).
+                if said == "taken" and cell("Built by").strip():
+                    continue
             elif said not in ("", self.UNUSED):
                 continue
             if self.tries(cells) >= self.GIVE_UP_AFTER:

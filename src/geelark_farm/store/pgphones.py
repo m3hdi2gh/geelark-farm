@@ -48,6 +48,7 @@ def _cells(row: dict) -> dict[str, str]:
         "Tries": str(row.get("tries") or 0) if row.get("tries") else "",
         "Note": row.get("note") or "",
         "Created": _when(row.get("created_at")),
+        "Built by": str(row.get("built_by") or ""),
     }
 
 
@@ -58,7 +59,13 @@ _COLUMNS = {
     "Status": "status", "State": "state", "Phone ID": "phone_id",
     "Gmail": "gmail", "GPT Account": "app_account", "Proxy": "proxy_name",
     "Note": "note", "Serial": "serial", "App name": "app",
+    # Who asked for it by hand, and who holds it - user ids, as text in
+    # the tab's words and as numbers in the table.
+    "Built by": "built_by", "Owner": "owner_id",
 }
+
+#: Columns that are numbers in the table: a blank is NULL, not ''.
+_NUMBERS = ("built_by", "owner_id")
 
 
 def _when(stamp) -> str:
@@ -102,7 +109,9 @@ class PgPhoneLog(PhoneLog):
             column = _COLUMNS.get(name)
             if column and column != "serial":
                 columns.append(column)
-                values.append(value)
+                values.append(int(value) if column in _NUMBERS
+                              and str(value).strip() else
+                              None if column in _NUMBERS else value)
         if "App" in fields:
             columns.append("app_installed")
             values.append({self.YES: True, self.NO: False}.get(

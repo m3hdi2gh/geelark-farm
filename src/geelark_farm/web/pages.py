@@ -280,6 +280,7 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand details.newone .lead{{font-size:12px;color:var(--dim)}}
 .byhand details.newone input{{margin:0;width:200px}}
 .byhand input:disabled,.byhand select:disabled{{opacity:.45}}
+.maker{{display:block;font-size:11px;margin-top:3px;white-space:nowrap}}
 .byhand label.field select{{min-width:210px;height:38px}}
 dialog.editor .dlg{{display:flex;flex-direction:column;gap:12px;padding:16px 18px}}
 dialog.editor .dlg .field input{{width:100%;height:36px;font-family:var(--mono);
@@ -1550,6 +1551,12 @@ def _phone_rows(data: dict, user: dict) -> str:
                 f'<td class="act">{_cancel_form(user, serial)}</td>'
                 f'</tr>')
             continue
+        # Asked for by hand: says so, and by whom, under the status - a
+        # phone built for somebody is not the keeper's stock (2026-09-08).
+        maker = str(r.get("built_by") or "")
+        if maker:
+            badge += (f'<span class="dim maker" title="asked for on the '
+                      f'build card">built by {esc(maker)}</span>')
         lines.append(
             f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
             f'<td>{badge}</td>'

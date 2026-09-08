@@ -496,7 +496,7 @@ class ControlLane:
         wants = [builder.Wanted(gmail=r["gmail"], proxy_name=r["proxy_name"],
                                 install_app=r["install_app"],
                                 app_account=r["app_account"], wanted_id=r["id"],
-                                app=_app_of(r))
+                                app=_app_of(r), requested_by=r.get("requested_by"))
                  for r in rows]
         settings, client = self.settings, self.client
 
@@ -1666,7 +1666,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                     gmail=row["gmail"], proxy_name=row["proxy_name"],
                     install_app=row["install_app"],
                     app_account=row["app_account"], wanted_id=row["id"],
-                    app=_app_of(row)))
+                    app=_app_of(row), requested_by=row.get("requested_by")))
         except Exception as exc:                                  # noqa: BLE001
             # The same rule as every other store read in a pass: the farm
             # keeps building without the console.

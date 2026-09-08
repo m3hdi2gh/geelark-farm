@@ -4849,3 +4849,22 @@ def test_release_queues_a_power_off_beside_the_mark(web, monkeypatch):
     client.request("POST", "/phones/1862/state",
                    _form(csrf=client.csrf(), state="taken"))
     assert [q["verb"] for q in queued] == ["set_phone_state"]
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_hand_built_phone_says_who_built_it(web, monkeypatch):
+    _dash(monkeypatch, phones=[
+        {"serial": "1950", "status": "app_only", "state": "taken",
+         "owner": "ali", "built_by": "ali", "gmail": "a@gmail.com"},
+        {"serial": "1951", "status": "app_only", "state": "",
+         "built_by": None, "gmail": "b@gmail.com"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    def row(serial):
+        start = body.index(f'href="/phones/{serial}"')
+        return body[start:body.index("</tr>", start)]
+
+    assert 'class="dim maker" title="asked for on the build card">built by ali</span>' in row("1950")
+    assert "built by" not in row("1951"), "the keeper's own phone"

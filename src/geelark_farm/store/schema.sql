@@ -560,3 +560,9 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT fal
 -- carries, so the table can say "Spotify" where it said "waiting for one".
 ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT 'chatgpt';
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT '';
+
+-- --------------------------------------------- phones, rev 18 (built by)
+-- Who asked for a phone by hand. A keeper's phone has none. The row is
+-- taken by its builder from the moment it exists (state, owner_id), and
+-- the keeper does not count it as stock while they hold it.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS built_by bigint REFERENCES users(id);

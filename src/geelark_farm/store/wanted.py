@@ -65,7 +65,8 @@ def take(settings: Settings, limit: int = 2) -> list[dict]:
             "              WHERE status = 'queued'"
             "              ORDER BY created_at, id LIMIT %s"
             "              FOR UPDATE SKIP LOCKED)"
-            " RETURNING id, gmail, proxy_name, install_app, app_account, app",
+            " RETURNING id, gmail, proxy_name, install_app, app_account, app,"
+            " requested_by",
             (max(1, int(limit)),))
 
 
