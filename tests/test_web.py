@@ -23,7 +23,8 @@ import geelark_farm.web.app as app_mod
 FAKE_POOL_ROWS = {
     "gmail": [{"id": 1, "address": "free@gmail.com", "status": "",
                "seller": "dalir", "serial": "", "note": "", "error": None,
-               "state": "free"},
+               "state": "free", "password": "Kx82!mnQ",
+               "secret": "JBSWY3DPEHPK3PXP", "second": "authenticator"},
               {"id": 2, "address": "busy@gmail.com", "status": "in_use",
                "seller": "dalir", "serial": "1500", "note": "", "error": None,
                "state": "on a phone"}],
@@ -3697,18 +3698,23 @@ def test_the_doors_need_the_same_permission_adding_does(web, monkeypatch):
     assert "free@gmail.com" in body
 
 
-def test_the_manager_never_lists_a_row_that_is_finished_with():
-    """A `used` Gmail and a `delivered` account are the archive, and the
-    pool tabs keep them. This is the working list: everything here is
-    something somebody still has a decision about."""
+def test_the_manager_reads_spent_rows_under_a_cap_of_their_own():
+    """A `used` Gmail and a `delivered` account were left out as "the
+    archive" until the operator asked for the pool in three views, spent
+    among them (2026-09-08). They come under their own cap, so a thousand
+    used Gmails can never push the batch pasted a minute ago off the
+    bottom of the live list."""
     import inspect
 
     from geelark_farm.web import read
 
     body = inspect.getsource(read._pool_rows)
-    assert "status <> 'used'" in body
-    assert "status <> 'delivered'" in body
+    assert "status {op} 'used'" in body and "status {op} 'delivered'" in body
+    assert body.count('format(op="<>")') == 2, "live rows, read apart"
+    assert body.count('format(op="=")') == 2, "spent rows, read apart"
     assert "on_sheet" not in body, "the sheet flag is retired"
+    assert "AS password" in read._HELD and "AS secret" in read._HELD, (
+        "what the editor opens with")
 
 
 # ---------------------------------------------- the contract, slice B
@@ -3747,14 +3753,27 @@ def test_the_editor_offers_the_rows_status(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     ov = body[body.index('id="poolov"'):]
-    free_row = ov[ov.index('data-for="free@gmail.com"'):]
-    free_row = free_row[:free_row.index("</tr>")]
-    assert '<select name="state">' in free_row
-    assert '<option value="free" selected>' in free_row
-    assert '<option value="set aside">' in free_row
-    held_row = ov[ov.index('data-for="busy@gmail.com"'):]
-    held_row = held_row[:held_row.index("</tr>")]
-    assert '<select name="state" disabled' in held_row
+    gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
+    assert gmail.count('<dialog class="editor"') == 1, "one per sheet"
+    editor = gmail[gmail.index('<dialog class="editor"'):]
+    assert '<select name="state"><option value="free">free</option>' in editor
+    assert '<option value="set aside">set aside</option>' in editor
+    assert 'name="csrf"' in editor, "the pool tab's own form, token and all"
+
+    def row(address):
+        at = gmail.index(f"<td>{address}</td>")
+        return gmail[gmail.rfind("<tr", 0, at):at]
+
+    assert 'data-state="free"' in row("free@gmail.com")
+    assert 'data-state="on a phone"' in row("busy@gmail.com")
+    assert 'data-password="Kx82!mnQ"' in row("free@gmail.com")
+    assert 'data-secret="JBSWY3DPEHPK3PXP"' in row("free@gmail.com")
+    assert 'data-sellername="dalir"' in row("free@gmail.com")
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "f.state.add(new Option(word, word))" in script, "the row's own word"
+    assert "f.state.disabled = state === 'on a phone'" in script
 
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
@@ -4031,7 +4050,7 @@ def test_the_editors_cancel_closes_the_editor_and_not_the_manager():
 
     from geelark_farm.web import pages
 
-    body = inspect.getsource(pages._pool_edit_row)
+    body = inspect.getsource(pages._pool_editor)
     assert 'data-close-edit="1"' in body
     assert "data-shut" not in body, "that attribute shuts the whole overlay"
     script = pages._DASH_SCRIPT
@@ -4185,17 +4204,38 @@ def test_the_tick_is_how_you_say_you_meant_to_clear_the_key():
     assert book.gmails.find(address).values[book.gmails.SECRET_COLUMN] == ""
 
 
-def test_the_editor_promises_what_it_now_does():
-    """The placeholders said "blank leaves it" while the code cleared it."""
+def test_the_editor_shows_what_the_row_holds_and_clears_only_on_purpose():
+    """The boxes were blank "for safety", so a person checking whether a
+    key was pasted wrong had nothing to check it against (the operator,
+    2026-09-08). The dialog is filled from the row; a blank secret still
+    leaves it, and the tick is how you mean blank (2026-09-07). The
+    values ride on the row, never in what the search reads."""
     from geelark_farm.web import pages
 
-    row = {"address": "a@x.com", "seller": "usa", "state": "free"}
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gmail": True, "may_add_gpt": True}
+    rows = [{"address": "a@x.com", "seller": "usa", "state": "free"}]
     for kind in ("gmail", "gpt"):
-        editor = pages._pool_edit_row(
-            kind, row, {"id": 1, "role": "admin", "csrf": "c",
-                        "mutations": True}, 5)
-        assert "blank leaves it as it is" in editor
+        editor = pages._pool_editor(kind, user, rows)
+        assert editor.startswith('<dialog class="editor"')
+        assert 'name="password"' in editor and 'type="password"' not in editor
+        assert 'name="secret"' in editor and 'placeholder="none"' in editor
         assert 'name="clear_secret"' in editor, "and a way to mean blank"
+        assert ('name="seller"' in editor) == (kind == "gmail")
+    assert '<option value="usa">' in pages._pool_editor("gmail", user, rows)
+    script = pages._DASH_SCRIPT
+    assert "f.password.value = tr.dataset.password || ''" in script
+    assert "f.secret.value = tr.dataset.secret || ''" in script
+    assert "closeEditor(form.closest('dialog.editor'))" in script, (
+        "the answer shows in the sheet, not under the dialog")
+
+    table = pages._pool_table(
+        "gmail", [dict(rows[0], password="p4ss", secret="JBSWY3DP",
+                       second="authenticator", serial="")], user)
+    assert 'data-password="p4ss"' in table and 'data-secret="JBSWY3DP"' in table
+    assert "<tr class=\"editrow\"" not in table, "no row under the row"
+    found = table.split('data-find="', 1)[1].split('"', 1)[0]
+    assert "p4ss" not in found and "JBSWY3DP" not in found
 
 
 def test_the_gpt_box_stops_promising_none():
@@ -4377,10 +4417,17 @@ def test_the_manager_says_when_the_list_is_not_the_whole_pool():
     that" to a search that had never seen it (2026-09-07)."""
     from geelark_farm.web import pages
 
-    assert pages._capped(300, 412).count("300") == 1
-    assert "412" in pages._capped(300, 412)
-    assert "the search only looks at these" in pages._capped(300, 412)
-    assert pages._capped(12, 12) == "" and pages._capped(12, 0) == ""
+    live = [{"state": "free"}] * 300
+    spent = [{"state": "used"}] * 300
+    said = pages._capped(live, {"live": 412, "spent": 0})
+    assert said.count("300") == 1 and "412" in said
+    assert "the search only looks at these" in said
+    assert "spent" not in said, "only the part that was cut is mentioned"
+    both = pages._capped(live + spent, {"live": 412, "spent": 900})
+    assert "300 of 412 current and errored rows" in both
+    assert "300 of 900 spent rows" in both
+    assert pages._capped(live[:12], {"live": 12, "spent": 0}) == ""
+    assert pages._capped(live[:12], None) == ""
 
 
 def test_the_building_row_reads_the_run_that_is_holding_the_phone():
@@ -4459,3 +4506,102 @@ def test_an_empty_view_says_what_is_empty_about_it():
     assert "You are not holding any phone" in script
     assert "Nothing is free right now" in script
     assert "Nothing here matches that." in script, "the other views keep it"
+
+
+# ---------------------------------------- the Gmail sheet, redrawn (2026-09-08)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_pool_reads_in_three_views_with_current_pressed(web, monkeypatch):
+    """current, errored, spent - the operator asked for the three
+    (2026-09-08). Current is what the farm can still use: free, on a
+    phone, or set aside by hand. A word a run left is errored. Proxies
+    have no spent rows, so no chip promises them."""
+    def gmail_row(i, address, status, state, serial=""):
+        return {"id": i, "address": address, "status": status, "seller": "",
+                "serial": serial, "note": "", "error": None, "state": state}
+
+    _dash(monkeypatch, pool_rows={
+        "gmail": [gmail_row(1, "free@gmail.com", "", "free"),
+                  gmail_row(2, "held@gmail.com", "in_use", "on a phone", "1500"),
+                  gmail_row(3, "kept@gmail.com", "set_aside", "set_aside"),
+                  gmail_row(4, "stuck@gmail.com", "captcha_shown",
+                            "captcha_shown"),
+                  gmail_row(5, "gone@gmail.com", "used", "used")],
+        "gpt": [],
+        "proxy": [{"id": 6, "address": "SX7", "status": "", "host": "1.2.3.4",
+                   "port": 1080, "exit_ip": "", "times_used": 0, "serial": "",
+                   "note": "", "error": None, "state": "free"}]})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    ov = body[body.index('id="poolov"'):]
+    assert "spent and delivered rows are not listed" not in ov
+    gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
+    assert 'data-group="current" aria-pressed="true">current<b>3</b>' in gmail
+    assert 'data-group="errored" aria-pressed="false">errored<b>1</b>' in gmail
+    assert 'data-group="spent" aria-pressed="false">spent<b>1</b>' in gmail
+
+    def row(address):
+        at = gmail.index(f"<td>{address}</td>")
+        return gmail[gmail.rfind("<tr", 0, at):at]
+
+    assert 'data-group="current"' in row("kept@gmail.com"), "parked by hand"
+    assert 'data-group="errored"' in row("stuck@gmail.com")
+    assert 'data-group="spent"' in row("gone@gmail.com")
+    proxy = ov[ov.index('data-sheet="proxy"'):]
+    assert 'data-group="spent"' not in proxy[:proxy.index("<tbody")]
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "tr.dataset.group === group" in script
+    assert "Nothing here matches that" in script, (
+        "a match under another chip is named, not denied")
+
+
+def test_adding_stock_has_no_date_box_and_only_the_filter_row_sticks(web):
+    """The one picker nobody used made the paste row look like a form,
+    and the paste box stuck to the top beside the search - the two slid
+    over each other on scroll (the operator, 2026-09-08). And the sheet
+    showing a page of its own was `.sub`, which is the subtitle class:
+    the preview sat in two thirds of the sheet, cut off at the edge."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gmail": True}
+    box = pages._pool_add_box("gmail", user, [])
+    assert 'type="date"' not in box and 'name="purchased"' not in box
+    assert 'name="seller"' in box, "the seller stays"
+
+    _, _, body = web().request("GET", "/login")
+    style = body[body.index("<style>"):body.index("</style>")]
+    rules = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
+    assert ".sheetbody .addbox,.sheetbody .filters{position:sticky" not in rules
+    assert ".sheetbody .filters{position:sticky" in rules
+    assert ".sheetbody.sub" not in rules and ".sheetbody.shown{" in rules
+    assert "tr.editrow" not in rules and "dialog.editor{" in rules
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_the_preview_is_one_card_with_the_table_inside_it(web, monkeypatch):
+    """Three panels - the table, a form with the button, the paste again
+    - read as a mess inside the sheet (the operator, 2026-09-08, the
+    third time). One card: the count at the top, the rows in a table
+    that scrolls inside it, the confirm at the foot, and no date."""
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
+    monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: [])
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gmail/preview",
+        _form(csrf=client.csrf(), seller="usa",
+              pasted="a@example.com\tKx82!mnQ\tJBSWY3DPEHPK3PXP\n"
+                     "not an address\tx"))
+    assert status == 200
+    card = body[body.index('class="panel preview"'):]
+    card = card[:card.index("</form>")]
+    assert "<h3>1 row to add, 1 to skip</h3>" in card
+    assert "nothing is written until you press Add" in card
+    assert '<div class="wrap"><table>' in card
+    assert "Add 1 (skip 1)" in card, "the confirm is in the same card"
+    assert "seller: usa" in card
+    assert 'type="date"' not in body and "bought today" not in body

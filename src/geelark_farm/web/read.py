@@ -449,42 +449,50 @@ def pool_rows(settings: Settings) -> dict:
         return _pool_rows(store)
 
 
+#: The columns the manager's editor opens with. The password and the
+#: second factor in clear: an editor that hides what it holds is a form
+#: for retyping, not for correcting, and the operator asked to *see* the
+#: key so they can tell a wrong one from a right one (2026-09-08). The
+#: preview already shows both, to the same people.
+_HELD = (" coalesce(password, '') AS password,"
+         " coalesce(nullif(totp_secret, ''), recovery_email, '') AS secret,"
+         # And which kind it is, as a word, for the column.
+         " CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
+         "      WHEN coalesce(recovery_email, '') <> '' THEN 'recovery'"
+         "      ELSE '' END AS second")
+
+#: The status that means a row is finished with, per pool. Proxies have
+#: none: an exit goes back on the shelf.
+_SPENT = {"gmail": "used", "app": "delivered"}
+
+
 def _pool_rows(store) -> dict:
-    """Every row of the three pools that somebody still has a decision
-    about, for the manager the dashboard opens.
+    """Every row of the three pools, for the manager the dashboard opens.
 
-    **Spent rows are not here.** A `used` Gmail and a `delivered` account
-    are finished - the pool page keeps them because that is the archive,
-    and this is the working list. Proxies have no spent state at all: an
-    exit goes back on the shelf, so all of them are here.
+    The live rows - free, on a phone, set aside, and everything a run
+    refused - and then the spent ones: a `used` Gmail, a `delivered`
+    account. Spent rows were left out as "the archive" until the operator
+    asked for the pool in three views, spent among them (2026-09-08).
+    They are read under their own cap, so a thousand used Gmails can
+    never push the batch pasted a minute ago off the bottom of the list.
 
-    Only what is still on a tab, the same rule every other count on this
-    page follows. A row that left is history, and nobody edits history.
+    Newest first in both: the cap cuts the tail, and the tail must not be
+    what somebody just added (2026-09-07).
     """
+    gmail = ("SELECT id, address, status, coalesce(seller, '') AS seller,"
+             " coalesce(note, '') AS note, error, updated_at,"
+             f" coalesce(serial, '') AS serial,{_HELD}"
+             " FROM resources WHERE kind = 'gmail' AND status {op} 'used'"
+             " ORDER BY id DESC LIMIT %s")
+    gpt = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
+           f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
+           " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
+           " ORDER BY id DESC LIMIT %s")
     rows = {
-            "gmail": store._rows(
-                "SELECT id, address, status, coalesce(seller, '') AS seller,"
-                " coalesce(note, '') AS note, error, updated_at,"
-                " coalesce(serial, '') AS serial,"
-                # Which second factor the row carries, as a word - never
-                # the secret itself, which has no business on a page.
-                " CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
-                "      WHEN coalesce(recovery_email, '') <> '' THEN 'recovery'"
-                "      ELSE '' END AS second"
-                " FROM resources WHERE kind = 'gmail'"
-                "   AND status <> 'used'"
-                # Newest first: the cap cuts the tail, and the tail must
-                # not be the batch somebody pasted a minute ago
-                # (2026-09-07).
-                " ORDER BY id DESC LIMIT %s",
-                (POOL_LIMIT,)),
-            "gpt": store._rows(
-                "SELECT id, address, status, coalesce(serial, '') AS serial,"
-                " coalesce(note, '') AS note, error, updated_at"
-                " FROM resources WHERE kind = 'app'"
-                "   AND status <> 'delivered'"
-                " ORDER BY id DESC LIMIT %s",
-                (POOL_LIMIT,)),
+            "gmail": (store._rows(gmail.format(op="<>"), (POOL_LIMIT,))
+                      + store._rows(gmail.format(op="="), (POOL_LIMIT,))),
+            "gpt": (store._rows(gpt.format(op="<>"), (POOL_LIMIT,))
+                    + store._rows(gpt.format(op="="), (POOL_LIMIT,))),
             "proxy": store._rows(
                 "SELECT id, coalesce(proxy_name, '') AS address, status,"
                 " coalesce(host, '') AS host, port,"
@@ -495,19 +503,24 @@ def _pool_rows(store) -> dict:
                 " ORDER BY times_used, sheet_row NULLS LAST, id LIMIT %s",
                 (POOL_LIMIT,)),
     }
-    # How many there are, against how many are drawn. The cap was silent,
-    # so an address that happened to be the 340th row answered "Nothing
-    # matches that" to a search that had never looked at it (2026-09-07).
+    # How many there are, against how many are drawn, live and spent
+    # apart since each has its own cap. The cap was silent, so an address
+    # that happened to be the 340th row answered "Nothing matches that" to
+    # a search that had never looked at it (2026-09-07).
     totals = store._rows(
-        "SELECT kind, count(*) AS c FROM resources"
-        " WHERE (kind = 'gmail' AND status <> 'used')"
-        "    OR (kind = 'app' AND status <> 'delivered')"
-        "    OR kind = 'proxy'"
+        "SELECT kind,"
+        " count(*) FILTER (WHERE NOT (kind = 'gmail' AND status = 'used')"
+        "   AND NOT (kind = 'app' AND status = 'delivered')) AS live,"
+        " count(*) FILTER (WHERE (kind = 'gmail' AND status = 'used')"
+        "   OR (kind = 'app' AND status = 'delivered')) AS spent"
+        " FROM resources WHERE kind IN ('gmail', 'app', 'proxy')"
         " GROUP BY kind")
-    counted = {str(r["kind"]): int(r["c"] or 0) for r in totals}
-    rows["totals"] = {"gmail": counted.get("gmail", 0),
-                      "gpt": counted.get("app", 0),
-                      "proxy": counted.get("proxy", 0)}
+    counted = {str(r["kind"]): {"live": int(r["live"] or 0),
+                                "spent": int(r["spent"] or 0)}
+               for r in totals}
+    rows["totals"] = {"gmail": counted.get("gmail", {"live": 0, "spent": 0}),
+                      "gpt": counted.get("app", {"live": 0, "spent": 0}),
+                      "proxy": counted.get("proxy", {"live": 0, "spent": 0})}
     for kind, listed in rows.items():
         if kind == "totals":
             continue

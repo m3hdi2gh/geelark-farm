@@ -883,7 +883,6 @@ class _Handler(BaseHTTPRequestHandler):
             return self._html(200, pages.gmail_preview(
                 rows, seller, user, idem=secrets.token_urlsafe(12),
                 pasted=pasted, sellers=read.gmail_sellers(self.settings),
-                purchased=(field.get("purchased") or "").strip(),
                 back=_add_back(field, "/pools/gmail")))
         if path == "/pools/gmail/add":
             rows = [{"address": r["address"], "password": r["password"],

@@ -171,16 +171,26 @@ nav form button:hover{{color:#fff;background:#141c2b}}
  font-size:22px;line-height:1;cursor:pointer;padding:0 4px}}
 .ov .sheet .x:hover{{color:var(--bright)}}
 .sheetbody{{overflow:auto;padding:15px 18px}}
-.sheetbody.sub{{display:flex;flex-direction:column;gap:12px}}
-.sheetbody.sub>*{{width:100%;max-width:none;margin:0}}
-.sheetbody.sub .top,.sheetbody.sub .narrow>.top,.sheetbody.sub .alerts{{display:none}}
+/* A sheet showing a page of its own - a preview, a confirm. It was
+   `.sub`, which is also the subtitle class, so the whole body was capped
+   at 78ch and coloured muted: the preview sat in two thirds of the sheet
+   with its table cut off at the edge (the operator, 2026-09-08). */
+.sheetbody.shown{{display:flex;flex-direction:column;gap:12px}}
+.sheetbody.shown>*{{width:100%;max-width:none;margin:0}}
+.sheetbody.shown .top,.sheetbody.shown .narrow>.top,.sheetbody.shown .alerts{{display:none}}
 /* The edit-and-preview-again box of the preview page is the paste box the
    sheet already has - Back returns to it with the paste still in it. */
-.sheetbody.sub form[action$="/preview"],
-.sheetbody.sub .panel:has(form[action$="/preview"]){{display:none}}
-.sheetbody.sub .panel .row{{justify-content:flex-end;gap:8px}}
-.sheetbody.sub .panel .row .right{{display:none}}
-.sheetbody.sub .panel .row .dim{{margin-right:auto}}
+.sheetbody.shown form[action$="/preview"],
+.sheetbody.shown .panel:has(form[action$="/preview"]){{display:none}}
+.sheetbody.shown .panel .row{{justify-content:flex-end;gap:8px}}
+.sheetbody.shown .panel .row .right{{display:none}}
+.sheetbody.shown .panel .row .dim{{margin-right:auto}}
+/* The preview: one card, the table scrolling inside it rather than
+   pushing the whole sheet sideways (2026-09-08). */
+.preview .lede{{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}}
+.preview .wrap{{overflow-x:auto}}
+.preview th,.preview td{{white-space:nowrap}}
+.preview td:first-child{{color:var(--ink)}}
 form.busy{{cursor:progress}}
 form.busy button{{opacity:.45;filter:grayscale(1);pointer-events:none}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
@@ -199,15 +209,34 @@ form.busy button{{opacity:.45;filter:grayscale(1);pointer-events:none}}
  font:inherit;font-size:12px}}
 .filters .pill[aria-pressed=true]{{background:var(--blue-bg);
  border-color:#2c4d80;color:#a8ccff}}
+.filters .pill b{{font-weight:600;margin-left:4px;font-variant-numeric:tabular-nums}}
+.filters .chips{{gap:5px;margin-right:4px}}
 table.pooltable td{{vertical-align:middle}}
 table.pooltable .doors{{display:flex;gap:6px;justify-content:flex-end}}
 table.pooltable .doors form{{display:inline}}
-tr.editrow>td{{background:var(--panel2);padding:10px 12px}}
-tr.editrow form{{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}}
-tr.editrow input{{flex:1 1 150px;min-width:0;height:36px}}
-tr.editrow .statepick{{flex:0 0 auto}}
-tr.editrow .statepick select,tr.editrow button{{height:36px}}
-tr.editrow button{{padding:0 14px}}
+/* The row editor is a dialog of its own, in the top layer, one per
+   sheet: it used to be a row of six boxes squeezed under the row, with
+   the password and the key blanked - a form for retyping, not for
+   correcting (the operator, 2026-09-08). */
+dialog.editor{{background:var(--panel);color:var(--ink);border:1px solid
+ var(--line2);border-radius:12px;padding:0;width:min(560px,calc(100vw - 32px));
+ box-shadow:0 24px 70px rgba(0,0,0,.6)}}
+dialog.editor::backdrop{{background:rgba(4,7,13,.6)}}
+dialog.editor form{{display:flex;flex-direction:column;gap:12px;padding:16px 18px}}
+dialog.editor header{{display:flex;align-items:baseline;gap:10px;
+ padding-bottom:12px;border-bottom:1px solid var(--line2)}}
+dialog.editor h4{{margin:0;font-size:14px;font-weight:600;color:var(--bright)}}
+dialog.editor header .mono{{color:var(--muted);font-size:12.5px;overflow:hidden;
+ text-overflow:ellipsis;white-space:nowrap;min-width:0}}
+dialog.editor .field input,dialog.editor .field select{{width:100%;height:36px;
+ font-family:var(--mono);font-size:12.5px}}
+dialog.editor .two{{display:grid;gap:10px;
+ grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}}
+dialog.editor .tick{{display:flex;align-items:center;gap:8px;font-size:12.5px;
+ color:var(--muted)}}
+dialog.editor .tick input{{accent-color:var(--accent);width:15px;height:15px}}
+dialog.editor .row{{justify-content:flex-end;padding-top:4px}}
+dialog.editor .row button{{height:36px}}
 /* ---- polish, from the contract (2026-09-05): nothing here changes what a
    thing does; each rule is what makes the page feel finished. */
 ::selection{{background:var(--blue-bg);color:#fff}}
@@ -276,12 +305,18 @@ details.tech[open]{{display:block;margin-top:4px}}
 .wish .who{{flex:0 0 auto;color:var(--ink)}}
 .wish .why{{color:var(--dim);font-size:12.5px}}
 .wish .age{{flex:0 0 46px;color:var(--dim);font-size:12px}}
-/* The paste box and the search live inside the one scrolling body, so
-   both left the screen the moment somebody scrolled to the row they
-   wanted - which is exactly when they want to search (2026-09-07). The
-   negative top cancels the padding on that body. */
-.sheetbody .addbox,.sheetbody .filters{{position:sticky;top:-15px;
- background:var(--panel);z-index:2}}
+/* The search and the chips live inside the one scrolling body, so they
+   left the screen the moment somebody scrolled to the row they wanted -
+   which is exactly when they want to search (2026-09-07). The paste box
+   stuck too, and the two slid over each other (2026-09-08): only this
+   row stays. The negative top cancels the padding on that body; the
+   negative sides run its background to the edges, so nothing shows
+   through beside it. */
+.sheetbody .filters{{position:sticky;top:-15px;margin:0 -18px 0;
+ padding:12px 18px 10px;background:var(--panel);z-index:2;
+ border-bottom:1px solid var(--line2)}}
+/* Under that row, not under the top edge it covers. */
+.sheetbody .pooltable thead th{{top:43px}}
 .pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
  border-bottom:1px solid var(--line2)}}
 .pickrow:last-child{{border-bottom:0}}
@@ -388,9 +423,6 @@ td .badge{{vertical-align:middle}}
  border-radius:12px;padding:14px;display:flex;flex-direction:column;
  gap:11px}}
 .addbox textarea{{background:var(--bg)}}
-tr.editrow td{{background:rgba(127,180,255,.05)}}
-tr.editrow input,tr.editrow select{{font-family:var(--mono);font-size:12px;
- padding:4px 9px}}
 .secret{{display:flex;flex-direction:column;gap:3px}}
 .chips{{display:flex;gap:8px;flex-wrap:wrap;align-items:center}}
 .chips a,.chips span{{padding:4px 11px;border-radius:12px;font-size:12px;
@@ -1719,38 +1751,62 @@ _DASH_SCRIPT = """
       gpt();
     }
 
-    // Search and the state chips, one sift per sheet. An edit row follows
-    // the row it belongs to: hiding a row and leaving its editor open is
-    // an editor with nothing above it.
+    // Search, the seller, and the three chips - current, errored, spent
+    // - one sift per sheet.
     document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
       var find = sheet.querySelector('.poolfind');
       var seller = sheet.querySelector('.sellerpick');
-      var body = sheet.querySelectorAll('tbody tr:not(.none):not(.editrow)');
+      var chips = sheet.querySelectorAll('.filters .pill[data-group]');
+      var body = sheet.querySelectorAll('tbody tr:not(.none)');
       var none = sheet.querySelector('tbody tr.none');
       var tally = sheet.querySelector('.tally');
       var sift = function(){
         var q = (find ? find.value : '').trim().toLowerCase(), shown = 0;
         var who = seller ? seller.value : '';
+        var group = '', elsewhere = {};
+        chips.forEach(function(c){
+          if (c.getAttribute('aria-pressed') === 'true') group = c.dataset.group;
+        });
         body.forEach(function(tr){
           // The row's own values, not its text: the text includes the
           // buttons, so "free" - the most natural word to type - kept
           // nearly every row, and "edit" or "remove" kept all of them
           // (the operator, 2026-09-07).
-          var hit = (!q || (tr.dataset.find || '').indexOf(q) >= 0)
-                 && (!who || tr.dataset.seller === who);
+          var near = (!q || (tr.dataset.find || '').indexOf(q) >= 0)
+                  && (!who || tr.dataset.seller === who);
+          var hit = near && (!group || tr.dataset.group === group);
           tr.hidden = !hit;
           if (hit) shown++;
-          var editor = tr.nextElementSibling;
-          if (editor && editor.classList.contains('editrow') && !hit)
-            editor.hidden = true;
+          // A match under another chip is counted, so "nothing" can say
+          // where it went: a used address searched for under `current`
+          // would otherwise answer "Nothing matches that" (2026-09-08).
+          else if (near) elsewhere[tr.dataset.group]
+            = (elsewhere[tr.dataset.group] || 0) + 1;
         });
-        if (none) none.hidden = shown > 0;
+        if (none) {
+          none.hidden = shown > 0;
+          var where = Object.keys(elsewhere).map(function(g){
+            return elsewhere[g] + ' under ' + g;
+          });
+          none.firstElementChild.textContent = where.length
+            ? 'Nothing here matches that - ' + where.join(', ') + '.'
+            : 'Nothing matches that.';
+        }
         if (tally) tally.textContent = shown === body.length
           ? shown + (shown === 1 ? ' row' : ' rows')
           : shown + ' of ' + body.length + ' shown';
       };
       if (find) find.addEventListener('input', sift);
       if (seller) seller.addEventListener('change', sift);
+      chips.forEach(function(c){
+        c.addEventListener('click', function(){
+          chips.forEach(function(o){
+            o.setAttribute('aria-pressed', String(o === c));
+          });
+          sift();
+        });
+      });
+      sift();
     });
 
     // The page refreshes itself while a phone builds. With the script
@@ -1797,6 +1853,7 @@ _DASH_SCRIPT = """
   function ov(){ return document.getElementById('poolov'); }
   function shut(){
     var mini = document.querySelector('.mini'); if (mini) mini.remove();
+    document.querySelectorAll('dialog.editor[open]').forEach(closeEditor);
     behind(false);
     var o = ov(); if (!o) return;
     // Every sheet that is showing a preview or a confirm hands its own
@@ -1810,7 +1867,6 @@ _DASH_SCRIPT = """
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
     o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
-    o.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
   }
   function behind(off){
     // The dashboard is a sibling emitted before the overlay, so one flag
@@ -1881,22 +1937,17 @@ _DASH_SCRIPT = """
     // and put the person back on the dashboard - three clicks from where
     // they were (the operator, 2026-09-07).
     var row = e.target.closest('[data-close-edit]');
-    if (row) { e.preventDefault(); row.closest('.editrow').hidden = true; return; }
+    if (row) { e.preventDefault(); closeEditor(row.closest('dialog')); return; }
+    // A click on the editor's backdrop reaches the dialog itself.
+    if (e.target.matches('dialog.editor')) { closeEditor(e.target); return; }
     if (e.target.closest('[data-shut]') || e.target === o) { shut(); return; }
     var edit = e.target.closest('[data-edit]');
-    if (edit) {
-      var sheet = edit.closest('.sheet');
-      var want = edit.dataset.edit;
-      sheet.querySelectorAll('.editrow').forEach(function(el){
-        el.hidden = el.dataset.for !== want || !el.hidden;
-      });
-      return;
-    }
+    if (edit) { openEditor(edit); return; }
     // "Back" inside a sheet that is showing a preview or a confirm goes
     // back to the sheet, not to the page.
     var back = e.target.closest(
-      '#poolov .sheetbody.sub a[href="/"], '
-      + '#poolov .sheetbody.sub a[href^="/phones/"]');
+      '#poolov .sheetbody.shown a[href="/"], '
+      + '#poolov .sheetbody.shown a[href^="/phones/"]');
     if (back) { e.preventDefault(); restoreSheet(back.closest('.sheet')); return; }
     var el = e.target.closest('.cp');
     if (!el) return;
@@ -1917,6 +1968,10 @@ _DASH_SCRIPT = """
   });
   document.addEventListener('keydown', function(e){
     var o = ov();
+    // Escape closes the editor first, and the dialog does that itself;
+    // without this it closed the editor and the manager in one press.
+    if (e.key === 'Escape' && document.querySelector('dialog.editor[open]'))
+      return;
     if (e.key === 'Escape' && o && !o.hidden) { shut(); return; }
     var typing = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(
       (document.activeElement || {}).tagName) >= 0;
@@ -1975,13 +2030,13 @@ _DASH_SCRIPT = """
   // A sheet can show a page of its own - the preview of a paste, the
   // "are you sure" of a remove - in place of its list, and come back.
   function restoreSheet(sheet){
-    var body = sheet.querySelector('.sheetbody.sub');
+    var body = sheet.querySelector('.sheetbody.shown');
     if (body && body._was) body.replaceWith(body._was);
   }
   function showInSheet(sheet, main){
     var was = sheet.querySelector('.sheetbody');
     var sub = document.createElement('div');
-    sub.className = 'sheetbody sub';
+    sub.className = 'sheetbody shown';
     Array.prototype.slice.call(main.children).forEach(function(node){
       // Not the page's heading, and not the page's alerts: the breaker
       // banner is about the farm, not about the paste being previewed,
@@ -1990,7 +2045,7 @@ _DASH_SCRIPT = """
       if (node.matches('.top, script, .alerts, .banner')) return;
       sub.appendChild(node);
     });
-    sub._was = was.classList.contains('sub') ? was._was : was;
+    sub._was = was.classList.contains('shown') ? was._was : was;
     was.replaceWith(sub);
     init();
   }
@@ -2027,6 +2082,46 @@ _DASH_SCRIPT = """
   function isHere(url){
     try { return new URL(url, location.href).pathname === '/'; }
     catch (err) { return false; }
+  }
+
+  // The row editor: the sheet's one dialog, filled from the row whose
+  // Edit was pressed - password and key in clear, so a wrong one can be
+  // seen to be wrong (the operator, 2026-09-08). Only `.value` is set;
+  // nothing here is read as markup.
+  function openEditor(button){
+    var sheet = button.closest('.sheet');
+    var dlg = sheet && sheet.querySelector('dialog.editor');
+    var tr = button.closest('tr');
+    if (!dlg || !tr) return;
+    var form = dlg.querySelector('form'), f = form.elements;
+    var address = button.dataset.edit;
+    f.address.value = address;
+    f.new_address.value = address;
+    f.password.value = tr.dataset.password || '';
+    f.secret.value = tr.dataset.secret || '';
+    f.clear_secret.checked = false;
+    if (f.seller) f.seller.value = tr.dataset.sellername || '';
+    dlg.querySelector('[data-who]').textContent = address;
+    // Status: free, set aside, or the word the row has now. A row a
+    // phone is behind shows it greyed - the phone decides that one.
+    var state = tr.dataset.state || '';
+    var word = state === 'set_aside' ? 'set aside' : state;
+    Array.prototype.slice.call(f.state.options).forEach(function(opt){
+      if (opt.value !== 'free' && opt.value !== 'set aside') opt.remove();
+    });
+    if (word && word !== 'free' && word !== 'set aside')
+      f.state.add(new Option(word, word));
+    f.state.value = word || 'free';
+    f.state.disabled = state === 'on a phone';
+    f.state.title = f.state.disabled
+      ? 'a phone is behind this row - the phone decides' : '';
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
+  }
+  function closeEditor(dlg){
+    if (!dlg) return;
+    if (dlg.open && typeof dlg.close === 'function') dlg.close();
+    else dlg.removeAttribute('open');
   }
 
   // Remove asks first - here, beside the button, not on a page of its own
@@ -2119,6 +2214,9 @@ _DASH_SCRIPT = """
         form.classList.remove('busy');
         if (pressed) pressed.disabled = false;
         if (!got) return;
+        // The editor has said its piece: whatever the answer is, it
+        // shows in the sheet, not under a dialog that is still up.
+        closeEditor(form.closest('dialog.editor'));
         var doc = parse(got.html);
         if (isHere(got.url)) { swapMain(doc); return; }
         // Not the dashboard: a preview, a confirm, a refusal. Inside the
@@ -2219,10 +2317,37 @@ _POOL_KINDS = {
     },
 }
 
-#: What a row's state word is called on the chips, in the order they read.
-#: Taken from the states `read.pool_rows` writes, so a word the reader has
-#: never seen still gets a chip rather than disappearing from the list.
-_POOL_CHIPS = ("free", "on a phone", "broken")
+#: The three views of a pool, in the order the chips read. `current` is
+#: pressed when the sheet opens: it is the list the farm builds from.
+_POOL_GROUPS = ("current", "errored", "spent")
+
+
+def _group_of(state: str) -> str:
+    """Which chip a row is under (the operator asked for three,
+    2026-09-08). `current` is what the farm can still use - free, on a
+    phone, or set aside by hand; `spent` is finished with; everything
+    else is a word a run left on the row, which is the list the seller
+    is asked about."""
+    if state in ("used", "delivered"):
+        return "spent"
+    if state in ("free", "on a phone", "set aside", "set_aside"):
+        return "current"
+    return "errored"
+
+
+def _group_chips(kind: str, rows: list[dict]) -> str:
+    """The three chips with their counts. Proxies have no spent rows, so
+    no chip promises them."""
+    counts = {g: 0 for g in _POOL_GROUPS}
+    for row in rows:
+        counts[_group_of(str(row.get("state") or ""))] += 1
+    groups = [g for g in _POOL_GROUPS if g != "spent" or kind != "proxy"]
+    return ('<span class="chips" role="group" aria-label="Show">'
+            + "".join(
+                f'<button type="button" class="pill" data-group="{g}" '
+                f'aria-pressed="{"true" if g == "current" else "false"}">'
+                f'{g}<b>{counts[g]}</b></button>' for g in groups)
+            + "</span>")
 
 
 def _pool_cells(kind: str, row: dict) -> list[str]:
@@ -2462,18 +2587,13 @@ def _seller_field(kind: str, rows: list[dict]) -> str:
     # The names as they were written, which is what a person types.
     options = "".join(f'<option value="{esc(shown)}">'
                       for shown, _ in _sellers_of(rows).values())
-    # And when it was bought. Blank means today, which is what the add
-    # always assumed - but `purchased_on` is the column the "how old is
-    # this stock" question is answered from, and a batch bought last month
-    # entering as bought today is an answer nobody can correct except by
-    # editing every row. The sheet had the column; this had nowhere to type
-    # it (2026-09-06, found while closing the sheet).
+    # No date box: stock is bought the day it is pasted, and the one
+    # picker nobody used made the row look like a form (the operator,
+    # 2026-09-08). `purchased_on` is stamped today by the add.
     return (f'<input name="seller" list="sellers-known" class="mono seller"'
             f' placeholder="seller - pick or type a new one"'
             f' autocomplete="off"><datalist id="sellers-known">{options}'
-            f'</datalist>'
-            f'<input name="purchased" type="date" class="mono when"'
-            f' title="when it was bought - blank means today">')
+            f'</datalist>')
 
 
 def _pool_row_doors(kind: str, row: dict, user: dict,
@@ -2514,67 +2634,66 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     return f'<div class="doors">{"".join(doors)}</div>'
 
 
-def _pool_edit_row(kind: str, row: dict, user: dict, span: int) -> str:
-    """The editor for one row, rendered shut beneath it.
+def _pool_editor(kind: str, user: dict, rows: list[dict]) -> str:
+    """The editor: one dialog per sheet, filled from the row whose Edit
+    was pressed, on top of the list.
 
-    Server-rendered rather than built by the script, so the values are
-    escaped once by the same helper everything else on this page uses -
-    and so the form is the pool tab's own form, field for field.
+    It was a row of six boxes squeezed under the row, with the password
+    and the key blanked "for safety" - so a person checking whether a key
+    had been pasted wrong had nothing to check it against, and the
+    preview shows both to the same people anyway (the operator,
+    2026-09-08). Now it opens showing what the row holds.
+
+    Server-rendered, so the form is the pool tab's own form field for
+    field, with the token in it; the script only copies the row's values
+    in by `.value`, which nothing can read as markup. Status offers free
+    (back on the shelf) and set aside (not to be handed out, by hand);
+    the script adds the word the row has now, and greys the field for a
+    row a phone is behind - the phone decides that one, or two things
+    would be writing the same cell.
     """
     meta = _POOL_KINDS[kind]
     if not meta["edit"] or not _may(user, meta["manage"]):
         return ""
-    address = str(row.get("address") or "")
+    gmail = kind == "gmail"
+    sellers = "".join(f'<option value="{esc(shown)}">'
+                      for shown, _ in _sellers_of(rows).values())
     return (
-        f'<tr class="editrow" data-for="{esc(address)}" hidden>'
-        f'<td colspan="{span}">'
+        f'<dialog class="editor" data-editor="{kind}" '
+        f'aria-labelledby="edit-{kind}">'
         f'<form method="post" action="{meta["edit"]}">{_csrf(user)}'
-        f'<input type="hidden" name="address" value="{esc(address)}">'
+        f'<input type="hidden" name="address" value="">'
         f'<input type="hidden" name="back" value="/">'
-        f'<input name="new_address" value="{esc(address)}" '
-        f'placeholder="address" autocomplete="off">'
-        f'<input name="password" placeholder="password - blank leaves it '
-        f'as it is" autocomplete="off" type="password">'
-        # Neither box shows what it holds - a password never should, and a
-        # key is too long to read - so a blank one has to mean "leave it".
-        # It meant "clear it": somebody correcting a seller's name saved
-        # the row and deleted the authenticator key they had paid for. The
-        # tick is how you say you meant it (2026-09-07).
-        + (f'<input name="secret" placeholder="2fa secret or recovery '
-           f'address - blank leaves it as it is" autocomplete="off">'
-           f'<input name="seller" value="{esc(str(row.get("seller") or ""))}" '
-           f'placeholder="seller" autocomplete="off">'
-           if kind == "gmail" else
-           '<input name="secret" placeholder="2fa secret - blank leaves it '
-           'as it is" autocomplete="off">')
-        + '<label class="tick"><input type="checkbox" name="clear_secret" '
-          'value="1"> no second factor</label>'
-        + _state_choice(row)
-        + '<button class="go">Save</button>'
-        '<button type="button" class="quiet" data-close-edit="1">Cancel'
-        '</button>'
-        '</form></td></tr>')
-
-
-def _state_choice(row: dict) -> str:
-    """Status, in the editor: free (back on the shelf), set aside (not to
-    be handed out, by hand), or the word the row has now. A row a phone is
-    behind shows the field greyed with a note - the phone decides that one,
-    or two things would be writing the same cell."""
-    state = str(row.get("state") or "")
-    held = state == "on a phone"
-    words = ["free", "set aside"]
-    if state not in ("free", "set_aside", "set aside"):
-        words.append(state)
-    def picked(w: str) -> str:
-        return (" selected" if w == state
-                or (w == "set aside" and state == "set_aside") else "")
-    options = "".join(
-        f'<option value="{esc(w)}"{picked(w)}>{esc(w)}</option>' for w in words)
-    off = (' disabled title="a phone is behind this row - the phone decides"'
-           if held else "")
-    return (f'<label class="statepick"><span>status</span>'
-            f'<select name="state"{off}>{options}</select></label>')
+        f'<header><h4 id="edit-{kind}">Edit</h4>'
+        f'<span class="mono" data-who></span></header>'
+        f'<label class="field"><span>Address</span>'
+        f'<input name="new_address" autocomplete="off" autofocus></label>'
+        f'<label class="field"><span>Password</span>'
+        f'<input name="password" autocomplete="off" spellcheck="false">'
+        f'</label>'
+        f'<label class="field"><span>'
+        + ("2FA secret or recovery address" if gmail else "2FA secret")
+        + '</span><input name="secret" autocomplete="off" spellcheck="false"'
+          ' placeholder="none"></label>'
+        # Blank leaves the secret as it was: the box shows it now, so an
+        # emptied box is more likely a slip than a decision, and a key
+        # somebody paid for was once deleted by a blank that meant
+        # "clear" (2026-09-07). The tick is how you mean it.
+        '<label class="tick"><input type="checkbox" name="clear_secret" '
+        'value="1"> no second factor &mdash; clear it</label>'
+        '<div class="two">'
+        + (f'<label class="field"><span>Seller</span>'
+           f'<input name="seller" list="sellers-edit" autocomplete="off">'
+           f'<datalist id="sellers-edit">{sellers}</datalist></label>'
+           if gmail else "")
+        + '<label class="field"><span>Status</span>'
+          '<select name="state"><option value="free">free</option>'
+          '<option value="set aside">set aside</option></select></label>'
+          '</div>'
+          '<div class="row"><button type="button" class="quiet" '
+          'data-close-edit="1">Cancel</button>'
+          '<button class="go">Save</button></div>'
+          '</form></dialog>')
 
 
 def _pool_table(kind: str, rows: list[dict], user: dict,
@@ -2597,12 +2716,19 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
         # words are worth keeping: "broken" and "set aside" are exactly
         # what somebody types when they want to see what wants them.
         findable = " ".join(str(c) for c in cells if c).lower()
-        lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}"'
+        state = str(row.get("state") or "")
+        # What the editor opens with, on the row itself - the one dialog
+        # per sheet is filled from here. Never in `data-find`: a search
+        # for a password would be a strange thing to answer.
+        held = (f' data-password="{esc(str(row.get("password") or ""))}"'
+                f' data-secret="{esc(str(row.get("secret") or ""))}"'
+                f' data-sellername="{esc(str(row.get("seller") or "").strip())}"'
+                if doors else "")
+        lines.append(f'<tr data-state="{esc(state)}"'
+                     f' data-group="{_group_of(state)}"'
                      f' data-find="{esc(findable)}"'
-                     f' data-seller="{esc(_seller_key(row))}">'
+                     f' data-seller="{esc(_seller_key(row))}"{held}>'
                      f'{drawn}{last}</tr>')
-        if doors:
-            lines.append(_pool_edit_row(kind, row, user, span))
     if not lines:
         return ('<p class="empty">Nothing in this pool that anybody still '
                 'has a decision about.</p>')
@@ -2613,16 +2739,28 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
             f'Nothing matches that.</td></tr></tbody></table>')
 
 
-def _capped(shown: int, total: int) -> str:
+def _capped(rows: list[dict], totals: dict | None) -> str:
     """Said out loud when the list is not the whole pool.
 
     The cap was silent and the search only looks at what was drawn, so an
     address that happened to be the 340th row answered "Nothing matches
-    that" to a search that had never seen it (2026-09-07).
+    that" to a search that had never seen it (2026-09-07). Live and spent
+    rows are capped apart, so each is said apart.
     """
-    if not total or total <= shown:
+    shown = {"live": 0, "spent": 0}
+    for row in rows:
+        part = ("spent" if _group_of(str(row.get("state") or "")) == "spent"
+                else "live")
+        shown[part] += 1
+    said = []
+    for part, name in (("live", "current and errored rows"),
+                       ("spent", "spent rows")):
+        total = int((totals or {}).get(part) or 0)
+        if total > shown[part]:
+            said.append(f"the newest {shown[part]} of {total} {name}")
+    if not said:
         return ""
-    return (f'<p class="dim capped">showing the newest {shown} of {total} '
+    return (f'<p class="dim capped">showing {" and ".join(said)} '
             f'&mdash; the search only looks at these.</p>')
 
 
@@ -2685,13 +2823,12 @@ def _pool_manager(data: dict, user: dict,
         sheets.append(
             f'<section class="sheet" data-sheet="{kind}" hidden>'
             f'<header><h3>{esc(meta["name"])}</h3>'
-            f'<span class="dim">spent and delivered rows are not listed'
-            f'</span>'
             f'<button type="button" class="x" data-shut="1" '
             f'aria-label="Close">&times;</button></header>'
             f'<div class="sheetbody">'
             f'{_pool_add_box(kind, user, rows)}'
             f'<div class="filters">'
+            f'{_group_chips(kind, rows)}'
             f'<input type="search" class="poolfind" autocomplete="off"'
             f' placeholder="search {_plural(len(rows), "row")}">'
             f'{_seller_filter(kind, rows)}'
@@ -2701,10 +2838,10 @@ def _pool_manager(data: dict, user: dict,
             # confirm a paste of forty landed (2026-09-07).
             f'<span class="dim mono tally"></span>'
             f'</div>'
-            f'{_capped(len(rows), (listed.get("totals") or {}).get(kind, 0))}'
+            f'{_capped(rows, (listed.get("totals") or {}).get(kind))}'
             f'<div class="tscroll">'
             f'{_pool_table(kind, rows, user, manual_login)}</div>'
-            f'</div></section>')
+            f'</div>{_pool_editor(kind, user, rows)}</section>')
     if _may_send(user, manual_login):
         sheets.append(_send_sheet(data, user))
     sheets.append(
@@ -5070,16 +5207,47 @@ def _shown_password(row: dict) -> str:
             if row.get("password") else "—")
 
 
+def _preview_card(action: str, rows: list[dict], good: list[dict],
+                  user: dict, idem: str, back: str, lines: str,
+                  carried: str, hidden: str = "", note: str = "") -> str:
+    """The preview as one card: what it read at the top, the rows in a
+    table that scrolls inside the card, the confirm at the foot.
+
+    It was three panels - the table, then a form with the button, then
+    the paste again - and inside the manager's sheet, cut to two thirds
+    of its width, it read as a mess (the operator, 2026-09-08). Nothing
+    is written until the button at the foot is pressed, and the heading
+    says so in numbers.
+    """
+    skipped = len(rows) - len(good)
+    lede = (f"{_plural(len(good), 'row')} to add"
+            + (f", {skipped} to skip" if skipped else ""))
+    return (f'<form method="post" action="{action}" class="panel preview">'
+            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">{hidden}'
+            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
+            f'<div class="lede"><h3>{esc(lede)}</h3>'
+            f'<span class="dim">nothing is written until you press Add'
+            f'</span></div>'
+            f'<div class="wrap"><table>{lines}</table></div>'
+            f'<div class="row"><span class="dim">{note}</span>'
+            f'<span class="right"></span>'
+            f'<a class="btn quiet" href="{esc(back)}">Back</a>'
+            + (f'<button>Add {len(good)} (skip {skipped})</button>' if good
+               else '<span class="badge bad">nothing to add</span>')
+            + '</div></form>')
+
+
 def gmail_preview(rows: list[dict], seller: str, user: dict,
                   idem: str, *, pasted: str = "",
                   sellers: list | None = None,
-                  purchased: str = "",
                   back: str = "/pools/gmail") -> str:
     """The verdicts, the confirm, and the paste kept in an editable box
     underneath - a typo is fixed there and previewed again, not pasted
     from scratch."""
     good = _good(rows)
-    lines = "".join(
+    lines = "<tr><th>address</th><th>password</th><th>2fa</th><th>verdict" \
+            "</th></tr>" + "".join(
         f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
         f"<td class=\"muted\">{_shown_password(r)}</td>"
         f"<td class=\"muted\">{_second_factor(r)}</td>"
@@ -5089,35 +5257,17 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
         for r in good)
     body = (f'<div class="top"><h2>Gmail Pool</h2><span class="status">'
             f'preview — nothing is added yet</span></div>'
-            f'<div class="panel"><table><tr><th>address</th><th>password'
-            f'</th><th>2fa</th><th>verdict</th></tr>{lines}</table></div>'
-            f'<form method="post" action="/pools/gmail/add" class="panel">'
-            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
-            f'<input type="hidden" name="seller" value="{esc(seller)}">'
-            f'<input type="hidden" name="back" value="{esc(back)}">'
-            # The date the person typed, carried through. The preview
-            # dropped it and the add stamped today, so a batch bought last
-            # month entered as bought today however carefully it was typed
-            # (2026-09-07).
-            f'<input type="hidden" name="purchased" value="{esc(purchased)}">'
-            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
-            f'<div class="row"><span class="dim">seller: '
-            f'{esc(seller or "(none)")} · bought {esc(purchased or "today")}'
-            f'</span><span class="right"></span>'
-            f'<a class="btn quiet" href="{esc(back)}">Back</a>'
-            + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
-               f'</button>' if good else
-               '<span class="badge bad">nothing to add</span>')
-            + '</div></form>'
-            f'<div class="panel"><h3>Edit and preview again</h3>'
+            + _preview_card(
+                "/pools/gmail/add", rows, good, user, idem, back, lines,
+                carried,
+                hidden=f'<input type="hidden" name="seller" value="{esc(seller)}">',
+                note=f'seller: {esc(seller or "(none)")}')
+            + f'<div class="panel"><h3>Edit and preview again</h3>'
             f'<form method="post" action="/pools/gmail/preview" class="field">'
             f'{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<textarea name="pasted">{esc(pasted)}</textarea>'
             f'<div class="row">{_seller_pick(list(sellers or []), seller)}'
-            f'<input name="purchased" type="date" class="mono when" '
-            f'value="{esc(purchased)}" '
-            f'title="when it was bought - blank means today">'
             f'<span class="right"></span>'
             f'<button class="quiet">Preview again</button></div>'
             f'</form></div>')
@@ -5130,7 +5280,8 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
     judges one; the good rows ride into the confirm as the same
     tab-separated text, and the paste stays in a box underneath."""
     good = _good(rows)
-    lines = "".join(
+    lines = "<tr><th>address</th><th>password</th><th>2fa</th><th>verdict" \
+            "</th></tr>" + "".join(
         f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
         f"<td class=\"muted\">{_shown_password(r)}</td>"
         f"<td class=\"muted\">{_second_factor(r)}</td>"
@@ -5140,20 +5291,10 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
         for r in good)
     body = (f'<div class="top"><h2>Gpt Pool</h2><span class="status">'
             f'preview — nothing is added yet</span></div>'
-            f'<div class="panel"><table><tr><th>address</th><th>password'
-            f'</th><th>2fa</th><th>verdict</th></tr>{lines}</table></div>'
-            f'<form method="post" action="/pools/gpt/add" class="panel">'
-            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
-            f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
-            f'<div class="row"><span class="dim">each lands in the Gpt Info '
-            f'tab as awaiting login</span><span class="right"></span>'
-            f'<a class="btn quiet" href="{esc(back)}">Back</a>'
-            + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
-               f'</button>' if good else
-               '<span class="badge bad">nothing to add</span>')
-            + '</div></form>'
-            f'<div class="panel"><h3>Edit and preview again</h3>'
+            + _preview_card("/pools/gpt/add", rows, good, user, idem, back,
+                            lines, carried,
+                            note="each waits for a phone to be sent to")
+            + f'<div class="panel"><h3>Edit and preview again</h3>'
             f'<form method="post" action="/pools/gpt/preview" class="field">'
             f'{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
