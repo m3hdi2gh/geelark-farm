@@ -1060,3 +1060,29 @@ def test_every_inline_verb_answers_with_three_parts():
                 wrong.append(f"{name}:{node.lineno}")
     assert not wrong, ("these answer with something other than "
                        f"(status, said, detail): {wrong}")
+
+
+def test_login_selected_marks_the_phone_building_before_the_job_starts(
+        monkeypatch):
+    """The pass counts the warm phones right after the drain, and a phone
+    with an account on the way is not warm. Marked by the job a few
+    seconds in, it was still counted, and the replacement waited a whole
+    interval (2026-09-08)."""
+    from geelark_farm import builder
+
+    book = make_book(apps=1)
+    _phone_on(book, "1500", "")
+    monkeypatch.setattr(builder, "_unfinished",
+                        lambda client, book_: (_warm("1500"), []))
+    seen_at_launch = []
+
+    def launch(jobs):
+        seen_at_launch.extend(
+            r["Status"] for r in book.phones.rows() if r["Serial"] == "1500")
+
+    status, _, _ = verbs.login_accounts(
+        book, None, None, {"by": "mehdi", "addresses": ["a0@example.com"]},
+        object(), launch=launch)
+
+    assert status == "running"
+    assert seen_at_launch == [book.phones.BUILDING], "before the job, not by it"

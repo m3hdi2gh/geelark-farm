@@ -4223,3 +4223,90 @@ def test_the_sign_in_watch_is_the_check_that_hears_a_hand_stop():
     body = source.partition("def check_cancelled()")[2].partition(
         "def finish(")[0]
     assert "STOP_BY_HAND" in body, "the sign-in's watch cannot hear Stop"
+
+
+# ------------------------------ warm on purpose, with manual login (2026-09-08)
+def _session_for(settings, *, apps=2, want=None):
+    book = make_book(apps=apps)
+    s = builder._Session(
+        client=None, settings=settings, book=book,
+        build=builder.Build(index=1, serial="691"), phone_id="P1",
+        artifacts=settings.artifact_dir, deadline=time.monotonic() + 600,
+        started=time.monotonic())
+    s.want = want
+    s.build.app_installed = True
+    return s
+
+
+def test_the_keepers_build_stops_warm_and_takes_no_account_under_manual_login(
+        monkeypatch, make_settings, tmp_path):
+    """Five warm phones, no account on any of them until an operator sends
+    one (2026-09-08). With accounts sitting in the pool, the keeper's own
+    build used to sign the next one in by itself."""
+    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    signed = []
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: signed.append(1) or SIGNED_IN)
+    s = _session_for(settings, apps=2)
+
+    build = builder._sign_into_app(s)
+
+    assert build is not None and build.status == builder.WARM_FOR_OPERATOR
+    assert not build.ok and "warm on purpose" in build.detail
+    assert signed == [], "nothing was signed in"
+    assert len(s.book.apps.available) == 2, "nothing was claimed"
+    assert builder._phone_status(build) == builder.APP_ONLY
+    from geelark_farm import breaker
+    assert not breaker.counts_against(build), "the stock being kept is not a failure"
+    assert breaker.shows_it_works(build)
+
+
+def test_without_manual_login_the_keepers_build_still_takes_an_account(
+        monkeypatch, make_settings, tmp_path):
+    settings = make_settings(state_dir=tmp_path, manual_login=False)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    s = _session_for(settings, apps=2)
+
+    assert builder._sign_into_app(s) is None
+    assert s.build.app_account == "a0@example.com"
+
+
+def test_a_by_hand_build_asking_for_the_next_free_account_still_gets_one(
+        monkeypatch, make_settings, tmp_path):
+    """"The next free one" typed on the build card is an order, not the
+    keeper helping itself."""
+    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    s = _session_for(settings, apps=2,
+                     want=builder.Wanted(wanted_id=1, gmail="", app_account=""))
+
+    assert builder._sign_into_app(s) is None
+    assert s.build.app_account == "a0@example.com"
+
+
+def test_a_sent_account_that_fails_does_not_pull_the_next_one_under_manual_login(
+        monkeypatch, make_settings, tmp_path):
+    """The operator sent one account. When it is refused, the phone stays
+    warm for the next one they choose - it does not work through the pool
+    on its own (2026-09-08)."""
+    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    tried = []
+    monkeypatch.setattr(
+        builder.chatgpt_login, "sign_in",
+        lambda c, p, creds, **k: tried.append(creds.email)
+        or Outcome("fatal", "wrong_password"))
+    s = _session_for(settings, apps=3)
+    s.app_row = s.book.apps.claim("691")            # what login_accounts did
+
+    build = builder._sign_into_app(s)
+
+    assert build.status == builder.WARM_FOR_OPERATOR
+    assert "did not sign in" in build.detail
+    assert tried == ["a0@example.com"], "one attempt, the one that was sent"
+    # A phone that signed nobody in gives its account back rather than
+    # condemning it (2026-08-30) - so all three are stock again, and the
+    # point here is that a1 and a2 were never taken.
+    assert [r.credentials.email for r in s.book.apps.available] == [
+        "a0@example.com", "a1@example.com", "a2@example.com"]

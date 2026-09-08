@@ -222,6 +222,11 @@ READY = "ready"
 #: columns rather than the status, so old rows go on working either way.
 APP_ONLY = "app_only"
 
+#: How a build ends when it stops warm on purpose: with manual login on, the
+#: keeper's phones carry no account until an operator sends one (2026-09-08).
+#: In `breaker.WORKED` - it is the stock being kept, not a failure.
+WARM_FOR_OPERATOR = "warm_for_operator"
+
 # What becomes of a resource a build was holding. It was a boolean - spent or
 # not - and a challenged app account is neither: it was not used, and putting
 # it back blank is what made every run pick the same one again.
@@ -585,6 +590,26 @@ def _sign_into_app(session: _Session) -> Build | None:
                 except Aborted as refused:
                     _give_back_condemned(s)
                     return s.finish("chosen_app_unavailable", str(refused))
+            elif s.settings.manual_login and (s.want is None or s.attempted
+                                              or s.set_aside):
+                # With manual login on, no account goes onto a phone that
+                # nobody sent it to. The keeper's own build stops here on
+                # purpose - Google in, the app on it, warm - and a finish
+                # whose sent account did not sign in does not help itself
+                # to the next one (the operator, 2026-09-08). A by-hand
+                # build that asked for "the next free account" is an
+                # order, and takes one below.
+                _give_back_condemned(s)
+                if s.attempted or s.set_aside:
+                    return s.finish(
+                        WARM_FOR_OPERATOR,
+                        "the account sent to it did not sign in - see what "
+                        "it tried - and no other was taken; the phone stays "
+                        "warm for the next one")
+                return s.finish(
+                    WARM_FOR_OPERATOR,
+                    "warm on purpose: Google is signed in and the app is on "
+                    "it; an account goes on when an operator sends one")
             else:
                 s.app_row = s.book.apps.claim(str(s.build.serial or ''))
             if s.app_row is None:

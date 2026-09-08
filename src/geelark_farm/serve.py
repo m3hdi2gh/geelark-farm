@@ -1247,6 +1247,33 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                  stale_claim_seconds=settings.stale_claim_seconds)
     book.reload()
 
+    def launch(jobs: list[dict], *, action_id: int | None = None) -> None:
+        """Run finish jobs a web command chose (C6), on this pass's Book
+        and ledger, under this pass's fuse and flight - exactly as the
+        decision's own jobs run, so this pass counts them too. The
+        command's row is settled when they end (C7)."""
+        def chosen():
+            builds = builder._run_jobs(client, settings, book, jobs,
+                                       workers=len(jobs), reporter=None,
+                                       on_ready=None, cancel=stopping,
+                                       ledger=ledger)
+            if action_id is not None:
+                _settle_action(settings, action_id, jobs, builds)
+            return builds
+        _dispatch(chosen, fuse, flight=flight, pool=pool,
+                  builds=0, finishes=len(jobs), settings=settings)
+
+    # The web's commands run BEFORE the pass counts, not after it. An
+    # operator's Send starts a finish, and the finish marks its phone
+    # `building` - so counted here, the warm stock is one short *this*
+    # pass and the replacement is ordered in the same breath, alongside
+    # the login. Drained at the foot of the pass, as it was, the shortfall
+    # was seen a whole interval later (the operator, 2026-09-08). The
+    # same goes for a paste of stock: counted now, not next time.
+    _drain_actions(settings, book, ledger, client=client, launch=launch,
+                   controls_only=False)
+    book.reload()
+
     warm, waiting, gmails, exits, stock, broken = _look(client, settings, book)
     tripped = fuse.reason()
     # What the workers are already on. Nothing on the sheet says it: a build
@@ -1304,24 +1331,6 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown=len(outcome.get("unknown_phones") or []),
           unknown_running=len(outcome.get("unknown_running") or []))
 
-    def launch(jobs: list[dict], *, action_id: int | None = None) -> None:
-        """Run finish jobs a web command chose (C6), on this pass's Book
-        and ledger, under this pass's fuse and flight - exactly as the
-        decision's own jobs run, so the next pass counts them too. The
-        command's row is settled when they end (C7)."""
-        def chosen():
-            builds = builder._run_jobs(client, settings, book, jobs,
-                                       workers=len(jobs), reporter=None,
-                                       on_ready=None, cancel=stopping,
-                                       ledger=ledger)
-            if action_id is not None:
-                _settle_action(settings, action_id, jobs, builds)
-            return builds
-        _dispatch(chosen, fuse, flight=flight, pool=pool,
-                  builds=0, finishes=len(jobs), settings=settings)
-
-    _drain_actions(settings, book, ledger, client=client, launch=launch,
-                   controls_only=False)
     streak = fuse.seen() if callable(getattr(fuse, "seen", None)) else (0, [])
     _shadow(settings, book, decision, outcome, pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,

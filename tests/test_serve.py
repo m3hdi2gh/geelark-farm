@@ -2115,3 +2115,25 @@ def test_a_stumbling_lane_never_leaves_its_loop(monkeypatch, make_settings):
     monkeypatch.setattr(lane, "tick", tick)
     lane.watch()
     assert len(turns) == 2, "it kept going after the first stumble"
+
+
+def test_a_pass_drains_the_webs_commands_before_it_counts(monkeypatch,
+                                                            settings):
+    """An operator's Send starts a finish and marks its phone `building`.
+    Counted after that, the warm stock is one short *this* pass and the
+    replacement is ordered alongside the login; drained at the foot of
+    the pass, as it was, the shortfall was seen an interval later
+    (the operator, 2026-09-08)."""
+    recorder = Recorder(warm=5, free=10).install(monkeypatch)
+    order = []
+    numbers = recorder.numbers
+    monkeypatch.setattr(serve_mod, "_look",
+                        lambda c, s, b: order.append("look") or numbers)
+    monkeypatch.setattr(
+        serve_mod, "_drain_actions",
+        lambda *a, **k: order.append(
+            "controls" if k.get("controls_only") else "commands") or 0)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert order == ["controls", "commands", "look"]

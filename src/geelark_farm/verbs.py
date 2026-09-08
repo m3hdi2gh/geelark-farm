@@ -443,6 +443,18 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
         jobs.append({"kind": "finish",
                      "phone": {**phone, "account": resource}})
         started.append(f"{address} -> {phone['serial']}")
+        # Marked `building` here, before the job has started, rather than
+        # by the job a few seconds in: the pass that runs this counts the
+        # warm phones right after, and a phone with an account on the way
+        # is not warm - counted as one, the replacement was not built until
+        # the next pass (2026-09-08). Never fatal: the finish writes the
+        # same word itself when it takes the phone.
+        try:
+            book.phones.write(str(phone["serial"]),
+                              Status=book.phones.BUILDING)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not mark %s building ahead of its finish (%s)",
+                      phone["serial"], exc)
     if jobs:
         launch(jobs)
     bits = []

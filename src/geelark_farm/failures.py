@@ -212,7 +212,14 @@ VERDICTS: dict[str, Verdict] = {
     "app_not_asked_for": Verdict(
         NOBODY, "it was asked for without the app",
         "The phone is warm: Google is signed in and the app is not on it. "
-        "The next pass can sign an account into it like any other."),
+        "An account goes on when somebody sends one from the dashboard."),
+    #: The keeper's own phones, with manual login on: warm and kept warm.
+    #: Not a failure - it is the stock being kept (2026-09-08).
+    "warm_for_operator": Verdict(
+        NOBODY, "it is warm, waiting for an operator to send an account",
+        "Google is signed in and the app is on it. No account goes onto a "
+        "phone nobody sent it to: pick one on the dashboard and press Send, "
+        "and the keeper builds the next warm phone at once."),
     "chosen_app_unavailable": Verdict(
         NOBODY, "the GPT account it was asked to use was not free",
         "Somebody chose that account and it was taken, set aside or "
