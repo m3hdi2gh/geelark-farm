@@ -3719,9 +3719,8 @@ def test_both_account_rows_carry_both_doors_and_a_proxy_row_carries_none(
     assert 'action="/pools/gpt/remove"' in gpt
     assert 'name="seller"' not in gpt, "a GPT row has no seller to edit"
     proxy = ov[ov.index('data-sheet="proxy"'):]
-    # The proxy rows carry their own three doors now - Free, Test, Remove
-    # - and name the row by `name`, which is what the proxy routes read
-    # (2026-09-08).
+    # The proxy rows carry Test and Remove, and name the row by `name`,
+    # which is what the proxy routes read (2026-09-08).
     assert 'action="/pools/proxy/test"' in proxy
     assert 'action="/pools/proxy/remove"' in proxy
     assert 'name="name" value="SX7"' in proxy
@@ -4928,8 +4927,11 @@ def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
         at = sheet.index(f"<td>{name}</td>")
         return sheet[at:sheet.index("</tr>", at)]
 
-    assert 'action="/pools/proxy/free"' in row("SX7"), "a dead one can be freed"
+    # A dead one is tested - Test is what frees one that answers - and
+    # a free one is tested or removed; Free as a door is for an exit that
+    # wants a new address, or one a dead run left `starting`.
     assert 'action="/pools/proxy/test"' in row("SX7")
+    assert 'action="/pools/proxy/free"' not in row("SX7")
     assert 'action="/pools/proxy/free"' not in row("SX8"), "a free one is free"
     assert 'action="/pools/proxy/test"' in row("SX8")
 
@@ -4941,10 +4943,10 @@ def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
 
     # The doors go through the same permission, and come back to the page.
     status, headers, _ = client.request(
-        "POST", "/pools/proxy/free",
+        "POST", "/pools/proxy/test",
         _form(csrf=client.csrf(), name="SX7", back="/"))
     assert status == 303 and dict(headers)["Location"].startswith("/?said=")
-    assert got[-1]["verb"] == "mark_proxy_free"
+    assert got[-1]["verb"] == "test_proxy"
     assert got[-1]["payload"]["name"] == "SX7"
     monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     status, _, preview = client.request(
@@ -4954,3 +4956,85 @@ def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
     assert status == 200 and 'class="panel preview"' in preview
     assert '<input type="hidden" name="back" value="/">' in preview
     assert "SX40" in preview and "Add 1 (skip 0)" in preview
+
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
+    """What the Proxy tab said, said here: free / on a phone / starting /
+    dead, with why and since when, all of it on one list with the tab's
+    chips - and `claimed` no longer filed as an error, since it is a
+    build that took the exit seconds ago (the operator, 2026-09-09)."""
+    import datetime as dt
+
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = [
+        {"id": 1, "address": "SX1", "status": "", "host": "1.1.1.1",
+         "port": 10, "exit_ip": "9.9.9.1", "times_used": 3, "serial": "",
+         "note": "", "error": None, "updated_at": now, "claimed_at": None},
+        {"id": 2, "address": "SX2", "status": "on a phone", "host": "1.1.1.2",
+         "port": 10, "exit_ip": "9.9.9.2", "times_used": 5, "serial": "2013",
+         "note": "On phone 2013, which stopped short of ready.",
+         "error": None, "updated_at": now - dt.timedelta(minutes=40),
+         "claimed_at": now - dt.timedelta(minutes=41)},
+        {"id": 3, "address": "SX3", "status": "claimed", "host": "1.1.1.3",
+         "port": 10, "exit_ip": "", "times_used": 0, "serial": "",
+         "note": "", "error": None, "updated_at": now,
+         "claimed_at": now - dt.timedelta(seconds=20)},
+        {"id": 4, "address": "SX4", "status": "dead", "host": "1.1.1.4",
+         "port": 10, "exit_ip": "", "times_used": 8, "serial": "",
+         "note": "GeeLark could not reach it when a phone was put behind "
+                 "it: socks5://u:***@1.1.1.4:10 - Proxy connection failed",
+         "error": None, "updated_at": now - dt.timedelta(hours=2),
+         "claimed_at": None},
+        {"id": 5, "address": "SX5", "status": "change ip", "host": "1.1.1.5",
+         "port": 10, "exit_ip": "9.9.9.5", "times_used": 25, "serial": "",
+         "note": "", "error": None, "updated_at": now, "claimed_at": None},
+    ]
+    from geelark_farm.web import read as read_mod
+    for r in rows:
+        r["state"] = read_mod._pool_state("proxy", r)
+    assert [r["state"] for r in rows] == [
+        "free", "on a phone", "starting", "dead", "needs new IP"]
+
+    _dash(monkeypatch, pool_rows={"gmail": [], "gpt": [], "proxy": rows})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    sheet = body[body.index('data-sheet="proxy"'):]
+    head = sheet[:sheet.index("<tbody")]
+
+    # The tab's chips, `all` pressed, each with its count.
+    assert 'data-group="" aria-pressed="true">all<b>5</b>' in head
+    assert 'data-group="free" aria-pressed="false">free<b>1</b>' in head
+    assert 'data-group="on a phone" aria-pressed="false">on a phone<b>2</b>' \
+        in head
+    assert 'data-group="dead" aria-pressed="false">dead<b>2</b>' in head
+    # The tab's columns.
+    for col in ("Name", "State", "Address", "Exit IP", "Used", "Phone", "Note"):
+        assert f"<th>{col}</th>" in head
+    # Test all, saying how many dead ones it would give another chance.
+    assert 'action="/pools/proxy/test-all"' in head
+    assert "Test all · 2 dead" in head
+
+    def row(name):
+        at = sheet.index(f"<td>{name}</td>")
+        return sheet[sheet.rfind("<tr", 0, at):sheet.index("</tr>", at)]
+
+    # Free: Test and Remove, nothing to free.
+    assert "/pools/proxy/test" in row("SX1") and "/pools/proxy/remove" in row("SX1")
+    assert "/pools/proxy/free" not in row("SX1")
+    # On a phone: the phone, since when, and no doors - the phone decides.
+    assert "<td>2013</td>" in row("SX2") and "since 40m ago" in row("SX2")
+    assert "/pools/proxy/" not in row("SX2")
+    # Starting: filed with the phones, says a build took it, Free only.
+    assert 'data-group="on a phone"' in row("SX3")
+    assert "a build took it 20s ago" in row("SX3")
+    assert "/pools/proxy/free" in row("SX3")
+    assert "/pools/proxy/test" not in row("SX3")
+    # Dead: why, and Test - answering is what frees it.
+    assert "Proxy connection failed" in row("SX4")
+    assert "/pools/proxy/test" in row("SX4") and "/pools/proxy/free" not in row("SX4")
+    # Needs a new IP: filed with the dead, Free (tested first) offered.
+    assert 'data-group="dead"' in row("SX5")
+    assert "/pools/proxy/free" in row("SX5")

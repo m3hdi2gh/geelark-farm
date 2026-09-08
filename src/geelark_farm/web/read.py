@@ -503,7 +503,7 @@ def _pool_rows(store) -> dict:
                 " coalesce(host, '') AS host, port,"
                 " coalesce(last_exit_ip, '') AS exit_ip, times_used,"
                 " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
-                " error, updated_at"
+                " error, updated_at, claimed_at"
                 " FROM resources WHERE kind = 'proxy'"
                 " ORDER BY times_used, sheet_row NULLS LAST, id LIMIT %s",
                 (POOL_LIMIT,)),
@@ -545,9 +545,20 @@ def _pool_state(kind: str, row: dict) -> str:
         return "broken"
     status = (row.get("status") or "").strip().lower()
     if kind == "proxy":
+        # The Proxy tab's words, said the way the sheet said them. `claimed`
+        # is a build that took the exit seconds ago and has no phone yet -
+        # it read as an error on the sheet and was nothing of the kind
+        # (the operator, 2026-09-09); `change ip` is the vendor's word for
+        # an exit that wants a new address before it is used again.
         if status in ("", "free", "unused"):
             return "free"
-        return "on a phone" if status in ("in_use", "on a phone") else status
+        if status in ("in_use", "on a phone"):
+            return "on a phone"
+        if status == "claimed":
+            return "starting"
+        if status == "change ip":
+            return "needs new IP"
+        return status
     if status == "":
         return "free"
     if status in ("in_use", "ready"):

@@ -2458,9 +2458,33 @@ _POOL_KINDS = {
         "edit": "", "remove": "/pools/proxy/remove",
         "how": ("name, then the address - socks5://user:pass@host:port - "
                 "one exit per line"),
-        "columns": ("Name", "Status", "Host", "Exit IP", "Used", "On phone"),
+        "test_all": "/pools/proxy/test-all",
+        "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone",
+                    "Note"),
     },
 }
+
+#: The proxy sheet's chips: the tab's own states, and `all` pressed when
+#: it opens - the exits are one list a person reads whole, not a queue
+#: with a working end (the operator, 2026-09-09). `all` is the empty
+#: group, which is how the sift says "no chip".
+_PROXY_GROUPS = ("", "free", "on a phone", "dead")
+
+
+def _proxy_group(state: str) -> str:
+    """Which proxy chip a row is under. A build that has just taken an
+    exit (`starting`) is filed with the phones - that is where it is
+    going; an exit that wants a new address is filed with the dead ones,
+    since neither will be handed out until somebody acts."""
+    if state == "free":
+        return "free"
+    if state in ("on a phone", "starting"):
+        return "on a phone"
+    return "dead"
+
+
+def _row_group(kind: str, state: str) -> str:
+    return _proxy_group(state) if kind == "proxy" else _group_of(state)
 
 #: The three views of a pool, in the order the chips read. `current` is
 #: pressed when the sheet opens: it is the list the farm builds from.
@@ -2481,18 +2505,53 @@ def _group_of(state: str) -> str:
 
 
 def _group_chips(kind: str, rows: list[dict]) -> str:
-    """The three chips with their counts. Proxies have no spent rows, so
-    no chip promises them."""
+    """The chips with their counts: current / errored / spent for the
+    accounts, all / free / on a phone / dead for the exits."""
+    if kind == "proxy":
+        counts: dict[str, int] = {"": len(rows)}
+        for row in rows:
+            g = _proxy_group(str(row.get("state") or ""))
+            counts[g] = counts.get(g, 0) + 1
+        return ('<span class="chips" role="group" aria-label="Show">'
+                + "".join(
+                    f'<button type="button" class="pill" data-group="{g}" '
+                    f'aria-pressed="{"true" if g == "" else "false"}">'
+                    f'{g or "all"}<b>{counts.get(g, 0)}</b></button>'
+                    for g in _PROXY_GROUPS)
+                + "</span>")
     counts = {g: 0 for g in _POOL_GROUPS}
     for row in rows:
         counts[_group_of(str(row.get("state") or ""))] += 1
-    groups = [g for g in _POOL_GROUPS if g != "spent" or kind != "proxy"]
     return ('<span class="chips" role="group" aria-label="Show">'
             + "".join(
                 f'<button type="button" class="pill" data-group="{g}" '
                 f'aria-pressed="{"true" if g == "current" else "false"}">'
-                f'{g}<b>{counts[g]}</b></button>' for g in groups)
+                f'{g}<b>{counts[g]}</b></button>' for g in _POOL_GROUPS)
             + "</span>")
+
+
+def _proxy_note(row: dict) -> str:
+    """The one line the tab's Note column carried, cut to what the state
+    makes useful: why a dead exit is dead, how long a phone has had one,
+    how long ago a build took one that has no phone yet."""
+    state = str(row.get("state") or "")
+    note = str(row.get("note") or row.get("error") or "").strip()
+    if state == "free":
+        return ""
+    if state == "on a phone":
+        since = _ago(row.get("updated_at"))
+        return f"since {since}" if since else ""
+    if state == "starting":
+        since = _ago(row.get("claimed_at") or row.get("updated_at"))
+        return ("a build took it " + since + "; the phone is being created"
+                if since else "a build took it; the phone is being created")
+    # Dead, needs a new IP, broken: the reason, without the sentence the
+    # tab wrote around it - the hover on the pill has all of it.
+    for lead in ("GeeLark could not reach it when a phone was put behind it:",
+                 "Did not answer on", "Marked free from the web by"):
+        if note.startswith(lead):
+            return note[:96] + ("…" if len(note) > 96 else "")
+    return (note[:96] + ("…" if len(note) > 96 else "")) if note else ""
 
 
 def _pool_cells(kind: str, row: dict) -> list[str]:
@@ -2506,7 +2565,8 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
                 str(row.get("exit_ip") or "-"),
                 str(row.get("times_used") if row.get("times_used") is not None
                     else "-"),
-                str(row.get("serial") or "-")]
+                str(row.get("serial") or "-"),
+                _proxy_note(row) or "-"]
     if kind == "gpt":
         # No Note column: what it held rides on the status pill's hover,
         # and the room goes to the buttons (the contract, 2026-09-05).
@@ -2527,7 +2587,7 @@ def _state_pill(state: str, note: str = "") -> str:
     """
     colour = ("free" if state == "free" else
               "bad" if state in ("broken", "dead") else
-              "on_phone" if state == "on a phone" else "attn")
+              "on_phone" if state in ("on a phone", "starting") else "attn")
     title = f' title="{esc(note)}"' if note else ""
     return f'<span class="badge {colour}"{title}>{esc(state or "-")}</span>'
 
@@ -2763,27 +2823,55 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     if kind == "gpt" and state != "on a phone" \
             and _may_send(user, manual_login):
         doors.append(_send_form(user, address))
+    if kind == "proxy":
+        # The exits, by state - the doors the Proxy tab's blank-the-cell
+        # and delete-the-row gave, named (the operator, 2026-09-09).
+        #   free          Test, Remove
+        #   dead          Test (answers -> free again), Remove
+        #   needs new IP  Free (tested first), Test, Remove
+        #   starting      Free - only for one a dead run left behind; a
+        #                 live build's is freed by nobody but that build,
+        #                 and the pass frees a stale one on its own.
+        #   on a phone    nothing: the phone decides.
+        if state == "on a phone":
+            return ""
+        if state in ("needs new IP", "starting"):
+            doors.append(
+                f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
+                f'<input type="hidden" name="{field}" value="{esc(address)}">'
+                f'<input type="hidden" name="back" value="/">'
+                f'<button class="quiet ok" title="'
+                + ("tested, and back on the shelf if it answers"
+                   if state == "needs new IP" else
+                   "back on the shelf - only if the build that took it is "
+                   "gone; a stale one is freed on its own within minutes")
+                + '">Free</button></form>')
+        if state != "starting":
+            doors.append(
+                f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
+                f'<input type="hidden" name="{field}" value="{esc(address)}">'
+                f'<input type="hidden" name="back" value="/">'
+                f'<button class="quiet" title="'
+                + ("ask GeeLark whether it answers; one that does is free "
+                   "again" if state != "free" else
+                   "ask GeeLark whether it answers; one that does not is "
+                   "marked dead")
+                + '">Test</button></form>')
+            doors.append(
+                f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
+                f'<input type="hidden" name="{field}" value="{esc(address)}">'
+                f'<input type="hidden" name="back" value="/">'
+                f'<button class="quiet bad">Remove</button></form>')
+        return f'<div class="doors">{"".join(doors)}</div>'
     # A row a run set aside gets Free: one press, back on the shelf, and
-    # nothing else on the row touched (the operator, 2026-09-06). A dead
-    # or changed exit is tested first, and freed only if it answers.
+    # nothing else on the row touched (the operator, 2026-09-06).
     if meta.get("free") and state not in ("free", "on a phone"):
         doors.append(
             f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
             f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
-            f'<button class="quiet ok" title="'
-            + ("tested, and back on the shelf if it answers" if kind == "proxy"
-               else "back on the shelf, as it is")
-            + '">Free</button></form>')
-    # Test: ask GeeLark whether the exit answers. A dead one that does
-    # comes back on the shelf; a free one that does not is marked dead.
-    if meta.get("test") and state != "on a phone":
-        doors.append(
-            f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
-            f'<input type="hidden" name="{field}" value="{esc(address)}">'
-            f'<input type="hidden" name="back" value="/">'
-            f'<button class="quiet" title="ask GeeLark whether it answers">'
-            f'Test</button></form>')
+            f'<button class="quiet ok" title="back on the shelf, as it is">'
+            f'Free</button></form>')
     if meta["edit"]:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
@@ -2888,7 +2976,7 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
                 f' data-sellername="{esc(str(row.get("seller") or "").strip())}"'
                 if doors else "")
         lines.append(f'<tr data-state="{esc(state)}"'
-                     f' data-group="{_group_of(state)}"'
+                     f' data-group="{_row_group(kind, state)}"'
                      f' data-find="{esc(findable)}"'
                      f' data-seller="{esc(_seller_key(row))}"{held}>'
                      f'{drawn}{last}</tr>')
@@ -2963,6 +3051,22 @@ def _seller_filter(kind: str, rows: list[dict]) -> str:
             f'<option value="">every seller</option>{options}</select>')
 
 
+def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
+    """One button that tests every free and dead exit - the check the
+    pass runs on its own schedule, on demand. Says how many dead ones
+    it would give another chance."""
+    meta = _POOL_KINDS[kind]
+    if not meta.get("test_all") or not _may(user, meta["manage"]):
+        return ""
+    dead = sum(1 for r in rows
+               if str(r.get("state") or "") in ("dead", "needs new IP"))
+    return (f'<form method="post" action="{meta["test_all"]}" class="inline">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<button class="quiet" title="ask GeeLark about every free and '
+            f'dead exit; a dead one that answers is free again">'
+            f'Test all{f" · {dead} dead" if dead else ""}</button></form>')
+
+
 def _pool_manager(data: dict, user: dict,
                   manual_login: bool = False) -> str:
     """One pool, full size, without leaving the page.
@@ -2995,6 +3099,7 @@ def _pool_manager(data: dict, user: dict,
             f'<input type="search" class="poolfind" autocomplete="off"'
             f' placeholder="search {_plural(len(rows), "row")}">'
             f'{_seller_filter(kind, rows)}'
+            f'{_test_all_door(kind, rows, user)}'
             # The script has always written "12 of 190 shown" into this,
             # and the CSS has always reserved the space for it, and it was
             # never rendered - so the count nobody could see is how you
