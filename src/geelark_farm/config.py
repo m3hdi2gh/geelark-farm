@@ -331,11 +331,12 @@ class Settings:
     #: the stock warm - and a person picks accounts on the dashboard and
     #: presses "Log in selected"; that command is what starts the finishes.
     manual_login: bool = False
-    #: How many jobs - builds and logins - run at once when a pass hands
-    #: its work to a pool (B-2, 2026-09-08). Zero is the old shape: the
-    #: pass runs its own work and is as long as its longest job. This is
-    #: also the ceiling `decide` orders against, so a pass never asks for
-    #: more phones than there are workers to make them.
+    #: How many *batches* may be in flight at once when a pass hands its
+    #: work to a pool (B-2, 2026-09-08). A batch is what one pass or one
+    #: Send ordered, and it runs its own jobs in parallel - so this bounds
+    #: overlapping passes, not phones; phones are `max_concurrent_phones`.
+    #: Zero is the old shape: the pass runs its own batch and is as long
+    #: as its longest job.
     serve_workers: int = 0
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.

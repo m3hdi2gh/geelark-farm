@@ -1573,12 +1573,12 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
     # there are, the shortfall, the free slots and the pool depths.
-    # And never more than there are workers to run them (B-2): a job past
-    # the pool's size waits in its queue, counted as coming, billing nothing
-    # yet - but a pass that orders it has ordered a phone nobody can start.
-    ceiling = [c for c in (settings.max_concurrent_phones,
-                           settings.serve_workers) if c]
-    cap = min(ceiling) if ceiling else None
+    # `MAX_CONCURRENT_PHONES` alone, as it always was. The pool's size was
+    # folded in here for one deploy and it cut the farm from five phones at
+    # once to two: a pool worker runs a *batch*, and a batch runs its jobs
+    # on threads of its own, so the pool bounds batches, not phones (the
+    # operator, 2026-09-08 - "slower than with one thread").
+    cap = settings.max_concurrent_phones or None
     if cap is not None:
         cap = max(0, cap - (coming + claimed))
     # Asked only when the answer changes what happens, which is a pass with

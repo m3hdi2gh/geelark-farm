@@ -2436,22 +2436,22 @@ def test_run_starts_the_housekeeper_when_the_store_is_the_pool(make_settings):
     assert "housekeeping=housekeeping)" in src
 
 
-def test_a_pass_orders_no_more_phones_than_there_are_workers(
+def test_the_pool_bounds_batches_and_never_the_phones_in_one(
         monkeypatch, make_settings, tmp_path):
-    """A job past the pool's size waits in its queue, counted as coming
-    and billing nothing - but a pass that ordered it ordered a phone
-    nobody can start yet (B-2, 2026-09-08)."""
+    """A pool worker runs a batch, and a batch runs its own jobs on threads
+    of its own. Folding the pool's size into the ceiling cut the farm from
+    five phones at once to two (the operator, 2026-09-08): the ceiling is
+    MAX_CONCURRENT_PHONES alone, as it always was."""
+    recorder = Recorder(warm=0, free=10).install(monkeypatch)
     settings = make_settings(state_dir=tmp_path, warm_stock=5,
                              max_concurrent_phones=0, serve_workers=2)
-    recorder = Recorder(warm=0, free=10).install(monkeypatch)
-
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert recorder.asked["count"] == 5, "five short, five at once"
 
-    assert recorder.asked["count"] == 2, "short by five, two workers"
     settings = make_settings(state_dir=tmp_path, warm_stock=5,
-                             max_concurrent_phones=0, serve_workers=0)
+                             max_concurrent_phones=3, serve_workers=2)
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
-    assert recorder.asked["count"] == 5, "no pool: the old, unbounded shape"
+    assert recorder.asked["count"] == 3, "the phone ceiling is the phone ceiling"
 
 
 def test_run_sizes_one_pool_by_the_setting_and_lends_it_to_the_lane():
