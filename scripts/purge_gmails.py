@@ -1,9 +1,11 @@
-"""Delete the spent and the errored Gmail rows from the pool.
+"""Delete the spent and the errored rows of one pool.
 
-    python scripts/purge_gmails.py            # say what would go, touch nothing
-    python scripts/purge_gmails.py --write    # delete them
+    python scripts/purge_gmails.py                  # Gmail: say what would go
+    python scripts/purge_gmails.py --write          # Gmail: delete them
+    python scripts/purge_gmails.py --kind app       # the GPT accounts, likewise
 
-What goes: every Gmail row that is `used` (spent on a delivered phone), or
+What goes: every row that is spent (`used` for a Gmail, `delivered` for a
+GPT account), or
 that a run left a verdict on (captcha_shown, no_authenticator, wrong
 password, ...), or that is unreadable (`error` set). What stays: free rows,
 rows on a phone (`in_use`, `ready`), rows a person set aside by hand, and
@@ -30,20 +32,23 @@ from geelark_farm.web.read import IMPORTED, ROUTINE                # noqa: E402
 #: Words that are not errors and not spent: the row is stock, or parked.
 KEPT = ("", "in_use", "ready", "set_aside", IMPORTED)
 
+#: The word each pool spends a row with.
+SPENT = {"gmail": "used", "app": "delivered"}
 
-def doomed(store) -> list[dict]:
+
+def doomed(store, kind: str) -> list[dict]:
     """The rows that go, in the order they were added."""
-    routine = sorted(ROUTINE["gmail"])
+    routine = sorted(ROUTINE[kind])
     return store._rows(
         "SELECT r.id, r.address, r.status, r.error, r.seller, r.serial"
         " FROM resources r"
-        " WHERE r.kind = 'gmail'"
-        "   AND (r.status = 'used' OR r.error IS NOT NULL"
+        " WHERE r.kind = %s"
+        "   AND (r.status = %s OR r.error IS NOT NULL"
         "        OR (NOT (r.status = ANY(%s)) AND NOT (r.status = ANY(%s))))"
         "   AND NOT EXISTS (SELECT 1 FROM phones p"
         "                   WHERE p.serial = r.serial AND p.done_at IS NULL"
         "                     AND coalesce(r.serial, '') <> '')"
-        " ORDER BY r.id", (routine, list(KEPT)))
+        " ORDER BY r.id", (kind, SPENT[kind], routine, list(KEPT)))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,15 +57,19 @@ def main(argv: list[str] | None = None) -> int:
                         help="delete the rows (the default only lists them)")
     parser.add_argument("--by", default="the operator",
                         help="who asked, for the event")
+    parser.add_argument("--kind", choices=sorted(SPENT), default="gmail",
+                        help="which pool: gmail (default) or app")
     args = parser.parse_args(argv)
+    kind, spent = args.kind, SPENT[args.kind]
+    name = {"gmail": "Gmail", "app": "GPT account"}[kind]
 
     settings = Settings.load()
     with Store(settings) as store:
-        rows = doomed(store)
-        used = [r for r in rows if r["status"] == "used"]
+        rows = doomed(store, kind)
+        used = [r for r in rows if r["status"] == spent]
         broken = [r for r in rows if r["error"] is not None]
         verdict = [r for r in rows if r not in used and r not in broken]
-        print(f"{len(rows)} Gmail row(s) would go: {len(used)} used, "
+        print(f"{len(rows)} {name} row(s) would go: {len(used)} {spent}, "
               f"{len(verdict)} with a run's verdict, {len(broken)} unreadable")
         by_word: dict[str, int] = {}
         for r in rows:
@@ -69,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         for word, n in sorted(by_word.items(), key=lambda kv: -kv[1]):
             print(f"  {n:4d}  {word}")
         kept = store._rows(
-            "SELECT count(*) c FROM resources WHERE kind = 'gmail'")[0]["c"]
+            "SELECT count(*) c FROM resources WHERE kind = %s", (kind,))[0]["c"]
         print(f"{int(kept) - len(rows)} row(s) stay (free, on a phone, "
               f"set aside)")
         if not args.write:
@@ -83,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"deleted {len(gone)} row(s)")
     store_events.emit(
         settings, "stock", status="purged",
-        detail=f"{len(gone)} spent and errored Gmail rows deleted by "
-               f"{args.by} ({len(used)} used, {len(verdict)} verdicts, "
+        detail=f"{len(gone)} spent and errored {name} rows deleted by "
+               f"{args.by} ({len(used)} {spent}, {len(verdict)} verdicts, "
                f"{len(broken)} unreadable)")
     return 0
 
