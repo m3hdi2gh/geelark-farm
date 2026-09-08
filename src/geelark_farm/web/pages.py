@@ -2459,8 +2459,7 @@ _POOL_KINDS = {
         "how": ("name, then the address - socks5://user:pass@host:port - "
                 "one exit per line"),
         "test_all": "/pools/proxy/test-all",
-        "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone",
-                    "Note"),
+        "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone"),
     },
 }
 
@@ -2545,13 +2544,9 @@ def _proxy_note(row: dict) -> str:
         since = _ago(row.get("claimed_at") or row.get("updated_at"))
         return ("a build took it " + since + "; the phone is being created"
                 if since else "a build took it; the phone is being created")
-    # Dead, needs a new IP, broken: the reason, without the sentence the
-    # tab wrote around it - the hover on the pill has all of it.
-    for lead in ("GeeLark could not reach it when a phone was put behind it:",
-                 "Did not answer on", "Marked free from the web by"):
-        if note.startswith(lead):
-            return note[:96] + ("…" if len(note) > 96 else "")
-    return (note[:96] + ("…" if len(note) > 96 else "")) if note else ""
+    # Dead, needs a new IP, broken: the reason, whole - it is a hover now,
+    # not a cell (the operator, 2026-09-09).
+    return note
 
 
 def _pool_cells(kind: str, row: dict) -> list[str]:
@@ -2565,8 +2560,7 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
                 str(row.get("exit_ip") or "-"),
                 str(row.get("times_used") if row.get("times_used") is not None
                     else "-"),
-                str(row.get("serial") or "-"),
-                _proxy_note(row) or "-"]
+                str(row.get("serial") or "-")]
     if kind == "gpt":
         # No Note column: what it held rides on the status pill's hover,
         # and the room goes to the buttons (the contract, 2026-09-05).
@@ -2957,6 +2951,10 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
     for row in rows:
         cells = _pool_cells(kind, row)
         note = str(row.get("note") or row.get("error") or "")
+        if kind == "proxy":
+            # No Note column (the operator, 2026-09-09): the why and the
+            # since-when ride on the pill's hover instead.
+            note = _proxy_note(row) or note
         drawn = "".join(
             f'<td>{_state_pill(cell, note) if i == 1 else esc(cell)}</td>'
             for i, cell in enumerate(cells))

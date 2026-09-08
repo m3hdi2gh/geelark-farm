@@ -5011,8 +5011,9 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
         in head
     assert 'data-group="dead" aria-pressed="false">dead<b>2</b>' in head
     # The tab's columns.
-    for col in ("Name", "State", "Address", "Exit IP", "Used", "Phone", "Note"):
+    for col in ("Name", "State", "Address", "Exit IP", "Used", "Phone"):
         assert f"<th>{col}</th>" in head
+    assert "<th>Note</th>" not in head, "no Note column (the operator, 2026-09-09)"
     # Test all, saying how many dead ones it would give another chance.
     assert 'action="/pools/proxy/test-all"' in head
     assert "Test all · 2 dead" in head
@@ -5024,16 +5025,18 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     # Free: Test and Remove, nothing to free.
     assert "/pools/proxy/test" in row("SX1") and "/pools/proxy/remove" in row("SX1")
     assert "/pools/proxy/free" not in row("SX1")
-    # On a phone: the phone, since when, and no doors - the phone decides.
-    assert "<td>2013</td>" in row("SX2") and "since 40m ago" in row("SX2")
+    # On a phone: the phone, since when on the pill's hover, and no doors
+    # - the phone decides.
+    assert "<td>2013</td>" in row("SX2") and 'title="since 40m ago"' in row("SX2")
     assert "/pools/proxy/" not in row("SX2")
     # Starting: filed with the phones, says a build took it, Free only.
     assert 'data-group="on a phone"' in row("SX3")
-    assert "a build took it 20s ago" in row("SX3")
+    assert 'title="a build took it 20s ago' in row("SX3")
     assert "/pools/proxy/free" in row("SX3")
     assert "/pools/proxy/test" not in row("SX3")
-    # Dead: why, and Test - answering is what frees it.
+    # Dead: why on the hover, and Test - answering is what frees it.
     assert "Proxy connection failed" in row("SX4")
+    assert "<td>Proxy" not in row("SX4") and "<td>GeeLark" not in row("SX4")
     assert "/pools/proxy/test" in row("SX4") and "/pools/proxy/free" not in row("SX4")
     # Needs a new IP: filed with the dead, Free (tested first) offered.
     assert 'data-group="dead"' in row("SX5")
