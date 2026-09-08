@@ -975,7 +975,19 @@ def _lane_is_on(settings: Settings) -> bool:
                 and settings.web_mutations and settings.pools_in_pg)
 
 
-def _running(client: Client) -> list[str] | None:
+def _listing(client: Client) -> list[dict] | None:
+    """GeeLark's list of phones, once a pass - or None when it would not
+    say. The pass asked twice, once to count the warm phones and once for
+    what is on (2026-09-08); every caller below takes this instead."""
+    try:
+        return list(phones.listing(client))
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not list the phones (%s)", exc)
+        return None
+
+
+def _running(client: Client,
+             listing: list[dict] | None = None) -> list[str] | None:
     """The serials GeeLark has on right now, or None when it would not say.
 
     One listing a pass, so the console can show a running phone as
@@ -983,16 +995,17 @@ def _running(client: Client) -> list[str] | None:
     either way, and it read as free (the operator, 2026-09-08). Never
     fatal: a pass that cannot list leaves the last picture standing.
     """
-    try:
-        return [str(p.get("serialNo")) for p in phones.listing(client)
-                if p.get("status") in (phones.RUNNING, phones.STARTING)]
-    except Exception as exc:                                      # noqa: BLE001
-        log.debug("could not list what is running (%s)", exc)
+    if listing is None:
+        listing = _listing(client)
+    if listing is None:
         return None
+    return [str(p.get("serialNo")) for p in listing
+            if p.get("status") in (phones.RUNNING, phones.STARTING)]
 
 
-def _look(client: Client, settings: Settings,
-          book: Book) -> tuple[int, int, int, int, dict, int]:
+def _look(client: Client, settings: Settings, book: Book,
+          listing: list[dict] | None = None
+          ) -> tuple[int, int, int, int, dict, int]:
     """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
 
     Not the free slots. Those cost a call to an endpoint with a limit of one a
@@ -1006,7 +1019,7 @@ def _look(client: Client, settings: Settings,
     """
     from . import builder
 
-    warm, _gone = builder._unfinished(client, book)
+    warm, _gone = builder._unfinished(client, book, listing=listing)
     return (len(warm), len(book.apps.available),
             len(book.gmails.available), len(book.proxies.available),
             book.phones.counts(),
@@ -1520,7 +1533,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         signals.ring(signals.queued)
     book.reload()
 
-    warm, waiting, gmails, exits, stock, broken = _look(client, settings, book)
+    # One listing a pass, for the warm count and for what is on.
+    listed = _listing(client)
+    warm, waiting, gmails, exits, stock, broken = _look(client, settings, book,
+                                                        listing=listed)
     tripped = fuse.reason()
     # What the workers are already on. Nothing on the sheet says it: a build
     # has no row until its phone exists, and an account is claimed minutes
@@ -1583,7 +1599,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown_running=len(outcome.get("unknown_running") or []))
 
     streak = fuse.seen() if callable(getattr(fuse, "seen", None)) else (0, [])
-    _shadow(settings, book, decision, outcome, running=_running(client),
+    _shadow(settings, book, decision, outcome,
+            running=_running(client, listed),
             pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,
         "coming": coming, "claimed": claimed, "tripped": tripped,

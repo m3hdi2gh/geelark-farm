@@ -2883,16 +2883,19 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
     return dead, revived
 
 
-def _unfinished(client: Client, book: Book) -> tuple[list[dict], list[dict]]:
+def _unfinished(client: Client, book: Book,
+                listing: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Phones one step short, split into those that still exist and those that
-    do not. GeeLark's own listing is what says which."""
+    do not. GeeLark's own listing is what says which - handed in when the
+    caller has already asked for it this pass, fetched otherwise."""
     pending = book.phones.unfinished()
     # Resolved here rather than stored in the tab. The id is a machine's
     # handle - twenty digits nobody reads - and the serial is what the panel,
     # the notes and the operator all call the phone by, so the sheet keeps the
     # serial and this turns it into an id at the one moment anything needs one.
     by_serial = {str(p.get("serialNo")): p.get("id")
-                 for p in phones.listing(client)}
+                 for p in (listing if listing is not None
+                           else phones.listing(client))}
     waiting, gone = [], []
     for row in pending:
         phone_id = by_serial.get(str(row["serial"]))

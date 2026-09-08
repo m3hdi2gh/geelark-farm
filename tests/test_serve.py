@@ -301,7 +301,7 @@ class Recorder:
         from geelark_farm import builder
 
         monkeypatch.setattr(serve_mod, "_look",
-                            lambda c, s, b: self.numbers)
+                            lambda c, s, b, **k: self.numbers)
         monkeypatch.setattr(serve_mod.Slots, "look",
                             lambda self_, c, now: self.free)
         # `service` is None the way a real Book's is when the tab could not be
@@ -404,7 +404,7 @@ def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
     warm = [{"sheet_row": 2, "phone_id": "P2", "serial": "662",
              "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}]
 
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (warm, []))
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b, **k: (warm, []))
     monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
@@ -705,7 +705,7 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
         phones=SimpleNamespace(
             counts=lambda: {"ready": 1, "app_only": 2, "taken": 0}))
     monkeypatch.setattr(builder, "_unfinished",
-                        lambda c, b: ([{"serial": "1"}, {"serial": "2"}], []))
+                        lambda c, b, **k: ([{"serial": "1"}, {"serial": "2"}], []))
     monkeypatch.setattr(serve_mod.phones, "plan",
                         lambda c: pytest.fail("the plan was read for nothing"))
 
@@ -2138,7 +2138,7 @@ def test_a_pass_drains_the_webs_commands_before_it_counts(monkeypatch,
     order = []
     numbers = recorder.numbers
     monkeypatch.setattr(serve_mod, "_look",
-                        lambda c, s, b: order.append("look") or numbers)
+                        lambda c, s, b, **k: order.append("look") or numbers)
     monkeypatch.setattr(
         serve_mod, "_drain_actions",
         lambda *a, **k: order.append(
@@ -2463,3 +2463,29 @@ def test_run_sizes_one_pool_by_the_setting_and_lends_it_to_the_lane():
         "the pass's pool when there is one (B-3); a small one of its own "
         "when there is none")
     assert "max_workers=4" not in src, "nothing is hard-coded at four"
+
+
+def test_a_pass_lists_the_phones_once(monkeypatch, settings):
+    """It asked GeeLark twice - once to count the warm phones, once for
+    what is on (2026-09-08). One call, handed to both."""
+    from geelark_farm import phones as phones_mod
+
+    calls = []
+    monkeypatch.setattr(phones_mod, "listing",
+                        lambda client, **k: calls.append(1) or [
+                            {"serialNo": "1862", "id": "P1",
+                             "status": phones_mod.RUNNING}])
+    recorder = Recorder(warm=5, free=10).install(monkeypatch)
+    looked, shadowed = {}, {}
+    monkeypatch.setattr(serve_mod, "_look",
+                        lambda c, s, b, **k: looked.update(k)
+                        or recorder.numbers)
+    monkeypatch.setattr(serve_mod, "_shadow",
+                        lambda s, b, d, o, pulse=None, running=None:
+                        shadowed.update(running=running))
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert calls == [1], "one listing a pass"
+    assert looked["listing"][0]["serialNo"] == "1862", "handed to the count"
+    assert shadowed["running"] == ["1862"], "and to what is on"
