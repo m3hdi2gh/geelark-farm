@@ -87,7 +87,12 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # solves would loop - so the router's own visit guard names it, beside
     # the act's own `captcha_shown` at the attempt limit (2026-09-06).
     assert "stuck_on_captcha" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 22
+    # The twenty-third is `recaptcha_unreachable`: the widget's own "Cannot
+    # contact reCAPTCHA" notice, closed with OK and retried; a phone that
+    # cannot reach it three times is named rather than called unknown
+    # (2026-09-08, phone 1994).
+    assert "stuck_on_recaptcha_unreachable" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 23
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

@@ -98,3 +98,14 @@ def test_a_width_the_answer_invents_is_not_believed():
     post = FakePost({"errorId": 0, "solution": {"type": "multi",
                                                 "objects": [1], "size": 7}})
     assert capsolver.solve_grid("K", "b", "stairs", session=post) == ([1], 0)
+
+
+def test_a_hang_is_given_up_on_at_thirty_seconds_and_tried_five_times():
+    """A call that answers does so in seconds; one that does not never
+    does. Ninety seconds three times was four and a half minutes a grid,
+    and one phone spent three Gmails that way in an hour (2026-09-08)."""
+    post = FakePost(raises=RuntimeError("read timed out"))
+    with pytest.raises(capsolver.CapError, match="did not answer"):
+        capsolver.solve_grid("K", "aGk=", "cars", session=post)
+    assert len(post.calls) == 5
+    assert {timeout for _, _, timeout in post.calls} == {30}

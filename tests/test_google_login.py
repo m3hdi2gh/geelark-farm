@@ -1746,3 +1746,15 @@ def test_an_unmasked_box_on_a_page_without_the_words_is_not_a_password_box(
     ctx.blob = "enter your password show password"
     login.act_password(ctx)
     assert device.filled == [("EditText", ACCOUNT.password)]
+
+
+def test_a_recaptcha_that_cannot_be_reached_is_closed_and_retried(phone):
+    """"Cannot contact reCAPTCHA. Check your connection and try again."
+    over an OK button was an unknown screen, and the phone was thrown away
+    (2026-09-08, phone 1994)."""
+    device = phone(taps_that_work={"OK"})
+    ctx = context_from("google-recaptcha-unreachable.xml")
+
+    assert matched_screen(ctx).name == "recaptcha_unreachable"
+    assert login.act_recaptcha_unreachable(ctx) is None
+    assert device.tapped == ["OK"]

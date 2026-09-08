@@ -910,6 +910,16 @@ def act_fatal(ctx: Context) -> Outcome:
     return Outcome("fatal", reason, detail, artifacts=[path] if path else [])
 
 
+def act_recaptcha_unreachable(ctx: Context) -> Outcome | None:
+    """Close the "Cannot contact reCAPTCHA" dialog and let the widget try
+    again; bounded by the entry's visit allowance."""
+    log.info("the phone could not reach reCAPTCHA; closing the notice to "
+             "let it try again")
+    screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements, ("OK",))
+    time.sleep(5)
+    return None
+
+
 def act_go_back(ctx: Context) -> Outcome | None:
     """Take the page at its word and go back.
 
@@ -1167,6 +1177,16 @@ SCREENS: list[Screen] = [
     # only reached at all when a solver key is set (else `fatal` above has
     # already claimed it). Its own visit budget is one past the attempt
     # limit, so the act's own guard is what ends it, with the right word.
+    # The widget itself could not load: "Cannot contact reCAPTCHA. Check
+    # your connection and try again." over an OK button, with nothing else
+    # on the page - so `captcha` did not match it and it was archived as an
+    # unknown screen and the phone thrown away (2026-09-08, phone 1994).
+    # OK closes it and the page reloads the widget; three of those and it
+    # is `stuck_on_recaptcha_unreachable`, which names the exit's fault.
+    Screen("recaptcha_unreachable",
+           lambda c: c.has("cannot contact recaptcha"),
+           act_recaptcha_unreachable, max_visits=3),
+
     Screen("captcha", _captcha_present, act_captcha,
            max_visits=CAPTCHA_VISITS),
 

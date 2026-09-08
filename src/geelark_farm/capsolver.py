@@ -78,14 +78,21 @@ def question_id(text: str) -> str:
 
 
 def _post(key: str, path: str, payload: dict, *, session=None,
-          timeout: float = 90, tries: int = 3, watch=None) -> dict:
-    """One call, retried twice. The farm reaches api.capsolver.com over a
-    link that is neither quick nor reliable: a 40-second read timed out
-    with the grid already in hand (phone 1788), a createTask came back 520
+          timeout: float = 30, tries: int = 5, watch=None) -> dict:
+    """One call, retried. The farm reaches api.capsolver.com over a link
+    that is neither quick nor reliable: a 40-second read timed out with
+    the grid already in hand (phone 1788), a createTask came back 520
     (phone 1811), and one attempt was reset by the peer and then timed out
     at 90 seconds (phone 1815). A captcha is worth waiting for - the
     alternative is a phone thrown away - and each of those failures cost a
     whole build.
+
+    Thirty seconds, five times, rather than ninety three times. Measured
+    from the farm (2026-09-08): a call that answers does so in one to
+    three seconds, and a call that does not answer never does - it hangs
+    to whatever the timeout is. Ninety seconds a hang, three hangs, was
+    four and a half minutes a grid, and one phone spent three Gmails that
+    way in an hour. A fresh connection each try is what gets through.
     """
     import requests
 
