@@ -505,3 +505,30 @@ def test_an_unknown_log_format_is_refused_not_quietly_ignored(monkeypatch):
     for good in FORMATS:
         monkeypatch.setenv("LOG_FORMAT", good.upper() + " ")
         assert config.Settings.load().log_format == good
+
+
+@pytest.mark.parametrize("env, workers", [
+    ({}, 0),
+    ({"SERVE_CONCURRENT": "1"}, 4),
+    ({"SERVE_WORKERS": "6"}, 6),
+    ({"SERVE_CONCURRENT": "1", "SERVE_WORKERS": "2"}, 2),
+    ({"SERVE_WORKERS": "0", "SERVE_CONCURRENT": "1"}, 0),
+])
+def test_serve_workers_is_the_count_and_the_old_flag_means_four(
+        monkeypatch, tmp_path, env, workers):
+    """`SERVE_CONCURRENT=1` was a boolean over a pool hard-coded at four.
+    The count is the setting now, and the pass orders no more than it
+    (B-2, 2026-09-08)."""
+    monkeypatch.setattr("geelark_farm.config.ENV_FILE", tmp_path / "absent.env")
+    for key in ("SERVE_CONCURRENT", "SERVE_WORKERS"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GEELARK_APP_ID", "id")
+    monkeypatch.setenv("GEELARK_API_KEY", "key")
+    monkeypatch.setenv("GEELARK_ROOT", str(tmp_path))
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    settings = Settings.load()
+
+    assert settings.serve_workers == workers
+    assert settings.serve_concurrent is (workers > 0)

@@ -71,3 +71,14 @@ def make_settings() -> Callable[..., Settings]:
 @pytest.fixture
 def settings() -> Settings:
     return _settings()
+
+
+@pytest.fixture(autouse=True)
+def _one_ledger_per_test():
+    """`Ledger.shared` keeps one object per file for the process; a test
+    must not inherit the last test's claims through it."""
+    from geelark_farm import ledger as ledger_mod
+
+    ledger_mod._SHARED.clear()
+    yield
+    ledger_mod._SHARED.clear()

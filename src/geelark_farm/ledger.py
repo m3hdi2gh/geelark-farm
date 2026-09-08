@@ -56,6 +56,11 @@ log = logging.getLogger(__name__)
 STALE_CLAIM_SECONDS = config.STALE_CLAIM_DEFAULT
 
 
+#: The process's Ledgers, one per file - see `Ledger.shared`.
+_SHARED: dict = {}
+_SHARED_LOCK = threading.Lock()
+
+
 def _now() -> float:
     return time.time()
 
@@ -155,6 +160,27 @@ class Ledger:
                 time.sleep(0.02 * (attempt + 1))
         raise AssertionError(  # pragma: no cover
             "unreachable: the loop above returns or raises")
+
+    @classmethod
+    def shared(cls, state_dir: str | Path, *,
+               stale_after: float | None = None) -> Ledger:
+        """The one Ledger this process holds for that file.
+
+        `save` rewrites the whole file from the object's own dict, so two
+        Ledgers in one process erase each other's phones: the pass loaded
+        one per pass, the lane one per turn, the housekeeper one per turn,
+        and each job beat the one it was handed. A claim the lane's job had
+        just written would vanish under the pass's next save, and a phone
+        with no claim is one `reap` stops mid-login (B-1, 2026-09-08). One
+        object, one lock, one file - the service asks here, never `load`.
+        """
+        path = Path(state_dir) / "ledger.json"
+        with _SHARED_LOCK:
+            found = _SHARED.get(path)
+            if found is None:
+                found = _SHARED[path] = cls.load(state_dir,
+                                                 stale_after=stale_after)
+            return found
 
     @classmethod
     def load(cls, state_dir: str | Path, *,

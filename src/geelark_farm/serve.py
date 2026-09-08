@@ -545,12 +545,12 @@ class ControlLane:
         return self._book
 
     def ledger(self):
-        """Read fresh every turn. It was loaded once and kept, so a claim
-        the pass wrote after the lane's first turn was invisible here -
-        and a Boot or a Failed on a phone a build had just taken would
-        have gone through (2026-09-08). A file read a turn is nothing."""
-        return Ledger.load(self.settings.state_dir,
-                           stale_after=self.settings.stale_claim_seconds)
+        """The process's one Ledger - the same object the pass and every
+        job hold, so a claim written a moment ago is seen here (B-1). It
+        was loaded once and kept, then loaded fresh each turn; both were
+        a second Ledger, and two Ledgers erase each other's phones."""
+        return Ledger.shared(self.settings.state_dir,
+                             stale_after=self.settings.stale_claim_seconds)
 
 
 def _outcome_of(settings: Settings, action_id: int,
@@ -888,8 +888,8 @@ class Housekeeper:
         if probe:
             self.probed = now
         book = Book.open(self.settings)
-        ledger = Ledger.load(self.settings.state_dir,
-                             stale_after=self.settings.stale_claim_seconds)
+        ledger = Ledger.shared(self.settings.state_dir,
+                               stale_after=self.settings.stale_claim_seconds)
         outcome = builder.sync_sheet(
             self.client, book, ledger, settings=self.settings,
             apply_marks=False, probe_proxies=probe,
@@ -1431,8 +1431,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     began = time.monotonic()
     book = Book.open(settings)
-    ledger = Ledger.load(settings.state_dir,
-                        stale_after=settings.stale_claim_seconds)
+    # The process's one Ledger (B-1): the lane's and the housekeeper's jobs
+    # claim in it too, and a per-pass copy saved over their claims.
+    ledger = Ledger.shared(settings.state_dir,
+                           stale_after=settings.stale_claim_seconds)
     # The same call a person's run makes, so the two cannot disagree about
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
@@ -1534,7 +1536,12 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
     # there are, the shortfall, the free slots and the pool depths.
-    cap = settings.max_concurrent_phones or None
+    # And never more than there are workers to run them (B-2): a job past
+    # the pool's size waits in its queue, counted as coming, billing nothing
+    # yet - but a pass that orders it has ordered a phone nobody can start.
+    ceiling = [c for c in (settings.max_concurrent_phones,
+                           settings.serve_workers) if c]
+    cap = min(ceiling) if ceiling else None
     if cap is not None:
         cap = max(0, cap - (coming + claimed))
     # Asked only when the answer changes what happens, which is a pass with
@@ -1718,11 +1725,13 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # phones on a pool of its own, and the pass must subtract those whether
     # or not its own work is handed to a pool.
     flight = InFlight()
-    pool = (ThreadPoolExecutor(max_workers=4, thread_name_prefix="batch")
-            if settings.serve_concurrent else None)
+    pool = (ThreadPoolExecutor(max_workers=settings.serve_workers,
+                               thread_name_prefix="batch")
+            if settings.serve_workers else None)
     if pool is not None:
-        log.warning("passes will not wait for their work: the sheet keeps "
-                    "moving, and several batches can be in flight at once")
+        log.warning("passes will not wait for their work: %d job(s) may run "
+                    "at once, and several batches can be in flight",
+                    settings.serve_workers)
 
     # The staleness window is in the first line of every log file on purpose.
     # It is one number measuring two things - how long before a dead run's
@@ -1763,9 +1772,13 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
             and settings.web_mutations and settings.pools_in_pg):
         # Beside the watchdog and the web, on the same Client - one process,
         # one rate limiter, and `build_client` would make a second one.
+        # The pass's pool when there is one (B-3): one ceiling, one place
+        # every job runs, one `flight` that counts them. Without one the
+        # lane still needs somewhere to run a login that is not its own
+        # thread, so it gets a small pool of its own.
         ControlLane(settings, client, stop, fuse=fuse, flight=flight,
-                    pool=ThreadPoolExecutor(max_workers=4,
-                                            thread_name_prefix="lane")).start()
+                    pool=pool or ThreadPoolExecutor(
+                        max_workers=2, thread_name_prefix="lane")).start()
 
     housekeeping = None
     if _housekeeping_is_on(settings):

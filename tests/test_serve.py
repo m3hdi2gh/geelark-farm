@@ -311,7 +311,8 @@ class Recorder:
                             SimpleNamespace(open=lambda s: SimpleNamespace(
                                 reload=lambda: None, apps=None, service=None)))
         monkeypatch.setattr(serve_mod, "Ledger",
-                            SimpleNamespace(load=lambda d, **k: None))
+                            SimpleNamespace(load=lambda d, **k: None,
+                                            shared=lambda d, **k: None))
         monkeypatch.setattr(builder, "sync_sheet",
                             lambda *a, **k: self.bump("synced") or {})
         monkeypatch.setattr(builder, "run", self._run(fails))
@@ -2294,17 +2295,22 @@ def test_the_pass_leaves_the_marks_to_the_lane_when_there_is_one(
     assert "apply_marks=not _lane_is_on(settings)," in src
 
 
-def test_the_lane_reads_the_ledger_fresh_each_turn(monkeypatch, make_settings):
-    """Loaded once and kept, a claim the pass wrote after the first turn
-    was invisible - and a Boot or a Failed on a phone a build had just
-    taken would have gone through (2026-09-08)."""
-    loads = []
-    monkeypatch.setattr(serve_mod.Ledger, "load",
-                        lambda path, **k: loads.append(path) or object())
-    lane = serve_mod.ControlLane(make_settings(), client=None,
-                                 stop=threading.Event())
-    a, b = lane.ledger(), lane.ledger()
-    assert a is not b and len(loads) == 2
+def test_the_lane_the_pass_and_the_housekeeper_hold_one_ledger(
+        make_settings, tmp_path):
+    """`save` rewrites the whole file from the object's own dict, so two
+    Ledgers in one process erase each other's phones - and a phone with
+    no claim is one reap stops mid-login (B-1, 2026-09-08)."""
+    from geelark_farm.ledger import Ledger
+
+    settings = make_settings(state_dir=tmp_path, stale_claim_seconds=900)
+    lane = serve_mod.ControlLane(settings, client=None, stop=threading.Event())
+    one = lane.ledger()
+    assert one is lane.ledger()
+    assert one is Ledger.shared(tmp_path, stale_after=900), (
+        "the same object the pass asks for")
+    one.claim("P1", label="finish 1500")
+    assert Ledger.shared(tmp_path, stale_after=900).get("P1").is_claimed
+    assert one.stale_after == 900
 
 
 def test_run_wires_the_lane_to_the_passes_fuse_and_flight(monkeypatch,
@@ -2427,3 +2433,33 @@ def test_run_starts_the_housekeeper_when_the_store_is_the_pool(make_settings):
     assert "probe = housekeeping is None and probe_due(probed, now)" in src, (
         "the exit test rides with the housekeeper")
     assert "housekeeping=housekeeping)" in src
+
+
+def test_a_pass_orders_no_more_phones_than_there_are_workers(
+        monkeypatch, make_settings, tmp_path):
+    """A job past the pool's size waits in its queue, counted as coming
+    and billing nothing - but a pass that ordered it ordered a phone
+    nobody can start yet (B-2, 2026-09-08)."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=5,
+                             max_concurrent_phones=0, serve_workers=2)
+    recorder = Recorder(warm=0, free=10).install(monkeypatch)
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert recorder.asked["count"] == 2, "short by five, two workers"
+    settings = make_settings(state_dir=tmp_path, warm_stock=5,
+                             max_concurrent_phones=0, serve_workers=0)
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert recorder.asked["count"] == 5, "no pool: the old, unbounded shape"
+
+
+def test_run_sizes_one_pool_by_the_setting_and_lends_it_to_the_lane():
+    import inspect
+
+    src = inspect.getsource(serve_mod.run)
+    assert "ThreadPoolExecutor(max_workers=settings.serve_workers," in src
+    assert "if settings.serve_workers else None)" in src
+    assert "pool=pool or ThreadPoolExecutor(" in src, (
+        "the pass's pool when there is one (B-3); a small one of its own "
+        "when there is none")
+    assert "max_workers=4" not in src, "nothing is hard-coded at four"
