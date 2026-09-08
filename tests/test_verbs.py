@@ -1086,3 +1086,44 @@ def test_login_selected_marks_the_phone_building_before_the_job_starts(
 
     assert status == "running"
     assert seen_at_launch == [book.phones.BUILDING], "before the job, not by it"
+
+
+def test_release_powers_the_phone_off_unless_a_run_holds_it(monkeypatch):
+    """Release left the phone running, billing, until somebody noticed it
+    under Running (the operator, 2026-09-08)."""
+    from geelark_farm import phones as phones_mod
+
+    stopped = []
+    monkeypatch.setattr(phones_mod, "listing", lambda client, **k: [
+        {"serialNo": "1862", "id": "P1", "status": phones_mod.RUNNING},
+        {"serialNo": "1863", "id": "P2", "status": phones_mod.STOPPED}])
+    monkeypatch.setattr(phones_mod, "stop",
+                        lambda client, phone_id: stopped.append(phone_id))
+
+    class Held:
+        is_claimed, is_stale, label = True, False, "finish 1862"
+
+    class Ledger:
+        def __init__(self, held=None):
+            self.held = held
+
+        def get(self, phone_id):
+            return self.held
+
+    status, said, detail = verbs.power_off_phone(
+        None, Ledger(), None, {"serial": "1862"}, object())
+    assert status == "done" and stopped == ["P1"] and detail == {"off": True}
+    assert "stops billing" in said
+
+    status, said, _ = verbs.power_off_phone(
+        None, Ledger(), None, {"serial": "1863"}, object())
+    assert status == "done" and "already off" in said and stopped == ["P1"]
+
+    status, said, _ = verbs.power_off_phone(
+        None, Ledger(Held()), None, {"serial": "1862"}, object())
+    assert status == "refused" and "held by a run" in said
+
+    status, _, _ = verbs.power_off_phone(
+        None, Ledger(), None, {"serial": "1899"}, object())
+    assert status == "failed"
+    assert verbs.power_off_phone.lane_safe is True

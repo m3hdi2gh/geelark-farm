@@ -2514,3 +2514,20 @@ def test_the_flight_counts_down_job_by_job_not_batch_by_batch():
 
     assert seen == [(1, 1), (1, 0), (1, 0)]
     assert flight.counts() == (0, 0), "the rest comes off when the batch ends"
+
+
+def test_the_keepers_count_keeps_a_taken_phone_and_a_send_does_not(
+        monkeypatch, make_settings):
+    from geelark_farm import builder
+
+    asked = []
+    monkeypatch.setattr(builder, "_unfinished",
+                        lambda client, book, listing=None, held_too=False:
+                        asked.append(held_too) or ([], []))
+    book = SimpleNamespace(apps=SimpleNamespace(available=[], broken=[]),
+                           gmails=SimpleNamespace(available=[], broken=[]),
+                           proxies=SimpleNamespace(available=[], broken=[]),
+                           phones=SimpleNamespace(counts=lambda: {}))
+    serve_mod._look(object(), make_settings(), book)
+    assert asked == [True], "the keeper counts a taken phone as warm"
+    assert "power_off_phone" in serve_mod.lane_verbs()

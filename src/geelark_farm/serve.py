@@ -1049,7 +1049,11 @@ def _look(client: Client, settings: Settings, book: Book,
     """
     from . import builder
 
-    warm, _gone = builder._unfinished(client, book, listing=listing)
+    # A taken phone is still warm stock: it is somebody's until they mark
+    # it done or failed, and Take must not order a replacement (the
+    # operator, 2026-09-08).
+    warm, _gone = builder._unfinished(client, book, listing=listing,
+                                      held_too=True)
     return (len(warm), len(book.apps.available),
             len(book.gmails.available), len(book.proxies.available),
             book.phones.counts(),

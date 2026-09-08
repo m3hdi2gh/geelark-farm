@@ -2321,3 +2321,25 @@ def test_a_pools_only_book_has_no_workbook_and_says_so():
         hole.write("1523", State="taken")
     assert "no Phones tab" in str(refused.value)
     assert "belongs on the pass" in str(refused.value)
+
+
+def test_the_keeper_counts_a_taken_phone_as_warm_until_it_is_done_or_failed():
+    """Take ordered a replacement: the taken phone left the warm count at
+    once. A taken phone is somebody's until they mark it done or failed,
+    and until then it is stock (the operator, 2026-09-08). A Send still
+    never gets it - that count leaves `held_too` off."""
+    headers = list(PHONE_APP_HEADERS) + (
+        [] if "State" in PHONE_APP_HEADERS else ["State"])
+
+    def row(serial, state):
+        line = phone_row(serial, headers=headers)
+        line[headers.index("State")] = state
+        return line
+
+    log = phone_log([row("801", ""), row("802", "taken"), row("803", "done"),
+                     row("804", "failed"), row("805", "unused")],
+                    headers=headers)
+
+    assert [r["serial"] for r in log.unfinished()] == ["801", "805"]
+    assert [r["serial"] for r in log.unfinished(held_too=True)] == [
+        "801", "802", "805"]

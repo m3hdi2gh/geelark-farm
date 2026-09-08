@@ -4823,3 +4823,29 @@ def test_the_mirror_marks_what_is_running_in_one_statement():
 
     assert serve_mod._running(Client()) == ["1862", "1900"]
     assert serve_mod._running(object()) is None
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_release_queues_a_power_off_beside_the_mark(web, monkeypatch):
+    """Release is Boot the other way: back on the shelf, and off, so it
+    stops billing (the operator, 2026-09-08). Take queues no such thing."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[{"serial": "1862", "status": "ready",
+                                "state": "taken", "owner": "mehdi"}])
+    queued = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: queued.append(k) or len(queued))
+    client = web()
+    client.login()
+
+    client.request("POST", "/phones/1862/state",
+                   _form(csrf=client.csrf(), state="unused"))
+    assert [q["verb"] for q in queued] == ["power_off_phone", "set_phone_state"]
+    assert queued[0]["payload"]["serial"] == "1862"
+    assert queued[0]["payload"]["by"] == "mehdi"
+
+    queued.clear()
+    client.request("POST", "/phones/1862/state",
+                   _form(csrf=client.csrf(), state="taken"))
+    assert [q["verb"] for q in queued] == ["set_phone_state"]

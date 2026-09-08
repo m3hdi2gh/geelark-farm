@@ -1332,8 +1332,14 @@ class PhoneLog:
                         what=f"{self.tab} row {sheet_row}")
         return sheet_row
 
-    def unfinished(self) -> list[dict]:
+    def unfinished(self, held_too: bool = False) -> list[dict]:
         """Phones that got a Gmail but never an app account.
+
+        `held_too` counts a phone somebody has taken as well - the keeper
+        asks that way, so Take does not order a replacement: a taken phone
+        is warm stock until it is marked done or failed (the operator,
+        2026-09-08). Left False, a taken phone is nobody's to offer, which
+        is what a Send and a finish need.
 
         Read from the columns rather than from Status, because Status names why
         a build stopped and there are several ways to stop one step short -
@@ -1361,7 +1367,11 @@ class PhoneLog:
             # `failed` are about to be carried out by the sync. Read here as
             # well as in `marked()` because this is the list a run picks from,
             # and a phone somebody is holding must not be on it.
-            if cell("State").strip().casefold() not in ("", self.UNUSED):
+            said = cell("State").strip().casefold()
+            if held_too:
+                if said in (self.DONE, self.FAILED):
+                    continue
+            elif said not in ("", self.UNUSED):
                 continue
             if self.tries(cells) >= self.GIVE_UP_AFTER:
                 # Still in the tab, still readable, simply not offered again.

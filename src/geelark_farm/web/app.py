@@ -783,10 +783,34 @@ class _Handler(BaseHTTPRequestHandler):
                 text=plan["text"], action=f"/phones/{serial}/state",
                 fields={"state": state, "sure": "1", "back": back},
                 button=f"Yes, phone {serial} is {state}", back=back))
+        if state == "unused":
+            self._power_off(user, serial)
         return self._act(user, "may_take_phones", "set_phone_state",
                          {"serial": serial, "state": state},
                          idem=self._minute_key(user, f"state-{state}", serial),
                          back=back, said_word=plan["said"])
+
+    def _power_off(self, user: dict, serial: str) -> None:
+        """Release also stops the phone in GeeLark, so it stops billing
+        (the operator, 2026-09-08). A second command beside the mark,
+        for the lane: the mark itself runs here in the request, and
+        stopping a phone is GeeLark's business. Never fatal, and only
+        for somebody who may take phones - the mark is refused for
+        anybody else, and so is this."""
+        from ..store import actions as store_actions
+        from ..store.users import may
+
+        if not self.settings.web_mutations or not may(user, "may_take_phones"):
+            return
+        try:
+            store_actions.enqueue(
+                self.settings, verb="power_off_phone",
+                payload={"serial": serial, "by": user["username"],
+                         "by_id": user["id"]},
+                requested_by=user["id"],
+                idem_key=self._minute_key(user, "off", serial))
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("phone %s: power-off not queued (%s)", serial, exc)
 
     def _screen(self, user: dict, path: str) -> None:
         """One archived screen, as the plain text it is - and only one

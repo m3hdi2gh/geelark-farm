@@ -849,6 +849,39 @@ def stop_phone(book, ledger, settings, payload, client):
                     f"held goes back to its pool", None)
 
 
+def power_off_phone(book, ledger, settings, payload, client):
+    """Stop the phone in GeeLark, so it stops billing.
+
+    Release said "back on the shelf" and left the phone running - a
+    phone booted from the console and released kept billing until
+    somebody noticed it under Running (the operator, 2026-09-08). Queued
+    beside Release by the web; the same door Boot goes through, the
+    other way. A phone a run holds is left to the run.
+    """
+    from . import phones as phones_mod
+    from .phones import PhoneError
+
+    serial = str(payload.get("serial") or "").strip()
+    if not serial:
+        return "refused", "no phone named", None
+    if client is None:
+        return "failed", "no GeeLark client on this pass", None
+    live = next((p for p in phones_mod.listing(client)
+                 if str(p.get("serialNo")) == serial), None)
+    if live is None:
+        return "failed", f"phone {serial} is not in GeeLark's list", None
+    held = ledger.get(live["id"]) if ledger is not None else None
+    if held is not None and held.is_claimed and not held.is_stale:
+        return "refused", f"phone {serial} is held by a run ({held.label})", None
+    if live.get("status") not in (phones_mod.RUNNING, phones_mod.STARTING):
+        return "done", f"phone {serial} was already off", None
+    try:
+        phones_mod.stop(client, live["id"])
+    except (PhoneError, ApiError) as exc:
+        return "failed", f"phone {serial} would not stop: {exc}", None
+    return "done", f"phone {serial} is off - it stops billing", {"off": True}
+
+
 def change_proxy(book, ledger, settings, payload, client):
     """Put a phone on a different exit: the next free one from the pool.
 
@@ -1184,6 +1217,7 @@ VERBS = {
     "ignore_proxy": ignore_proxy,
     "change_proxy": change_proxy,
     "stop_phone": stop_phone,
+    "power_off_phone": power_off_phone,
     "add_gmails": add_gmails,
     "build_by_hand": build_by_hand,
     "edit_gmail": edit_gmail,
@@ -1223,6 +1257,7 @@ VERBS = {
 for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               change_proxy, mark_proxy_free, adopt_proxy, add_proxies,
               ignore_proxy, remove_proxy, set_phone_state, stop_phone,
+              power_off_phone,
               # Three seconds of pairing; the minutes of login go to the
               # lane's own pool through `launch`, so the lane's thread is
               # free again at once (A-1, 2026-09-08). The pass still drains

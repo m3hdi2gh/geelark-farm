@@ -1238,7 +1238,7 @@ def test_a_phone_is_found_by_its_serial_now_that_the_id_is_not_stored(
     needs one."""
     book = make_book()
     book.phones = FakePhoneLog([])
-    book.phones.unfinished = lambda: [
+    book.phones.unfinished = lambda held_too=False: [
         {"sheet_row": 3, "serial": "691", "gmail": "g@example.com",
          "proxy": "SX14", "status": "no accounts left"},
         {"sheet_row": 4, "serial": "999", "gmail": "h@example.com",
