@@ -90,6 +90,14 @@ FAILING_LIMIT = 5
 #: that does not fail later; it is not worth asking 120 times an hour.
 PROBE_EVERY_SECONDS = 3600
 
+#: How often the housekeeping thread runs the sync's periodic steps -
+#: abandoned rows, exits against the panel, names, strays, dead claims,
+#: the archive. None of them is about this half-minute: they settle what
+#: a killed run or a hand in GeeLark left behind, and five minutes is the
+#: cadence at which those need finding. Every pass ran all of them, and a
+#: pass is what a Send and a Done waited for (A-3, 2026-09-08).
+HOUSEKEEP_EVERY_SECONDS = 300
+
 #: How often the free-slot count is read.
 #:
 #: `/v1/pay/plan/info` allows one call a minute on a budget of its own,
@@ -514,12 +522,14 @@ class ControlLane:
         if self.client is None:
             return {}
         try:
-            return builder.apply_phone_states(self.client, book, ledger,
-                                              self.settings)
+            outcome = builder.apply_phone_states(self.client, book, ledger,
+                                                 self.settings)
         except Exception as exc:                                  # noqa: BLE001
             log.warning("the lane could not carry out the marks (%s); the "
                         "pass will", exc)
             return {}
+        _sync_events(self.settings, outcome)
+        return outcome
 
     def boards(self) -> Book:
         """The lane's own Book, built once and re-read each turn.
@@ -801,6 +811,95 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
         work()
 
 
+def _sync_events(settings: Settings, outcome: dict) -> None:
+    """What a sync did to phones, as events - said by whoever ran it: the
+    housekeeper for its turn, the lane for a mark it carried out. It was
+    said by the pass's mirror, which is right only while the pass is the
+    one syncing (A-3, 2026-09-08)."""
+    if not settings.store_enabled or not outcome:
+        return
+    from .store import events as store_events
+
+    acted = {k: v for k, v in outcome.items() if v}
+    for serial in acted.get("deleted") or []:
+        store_events.emit(settings, "phone", serial=str(serial),
+                          status="deleted",
+                          detail="marked done or failed and deleted")
+    for serial in acted.get("discarded") or []:
+        store_events.emit(settings, "phone", serial=str(serial),
+                          status="discarded",
+                          detail="its build failed and the phone was "
+                                 "discarded by the sync")
+
+
+class Housekeeper:
+    """The sync's periodic steps, on a thread and a cadence of their own.
+
+    Every pass ran the whole sync - abandoned rows, exits against the
+    panel, phone names, strays, dead claims, the archive, the hourly exit
+    test - before it counted anything. None of that is about this
+    half-minute, and all of it stood between a press and the pass that
+    would act on it. Here it runs every `HOUSEKEEP_EVERY_SECONDS`, and the
+    pass reads what the last turn found (A-3, 2026-09-08).
+
+    Done and Failed are not here: those are the lane's, the moment they
+    land. Like the lane, this never raises out of its loop, opens its own
+    Book, reads the ledger fresh each turn, and stands down while the
+    service is stopped from the console.
+    """
+
+    def __init__(self, settings: Settings, client: Client,
+                 stop: threading.Event, every: float = HOUSEKEEP_EVERY_SECONDS):
+        self.settings = settings
+        self.client = client
+        self.stop = stop
+        self.every = every
+        self.last: dict = {}
+        self.at: float | None = None
+        self.probed: float | None = None
+        self.halted = False
+
+    def start(self) -> threading.Thread:
+        thread = threading.Thread(target=self.watch, name="housekeeping",
+                                  daemon=True)
+        thread.start()
+        return thread
+
+    def watch(self) -> None:
+        log.info("housekeeping every %ds", int(self.every))
+        while not self.stop.is_set():
+            try:
+                self.turn()
+            except Exception:                                     # noqa: BLE001
+                log.exception("housekeeping stumbled; carrying on")
+            if self.stop.wait(self.every):
+                break
+
+    def turn(self) -> dict:
+        """One run of the periodic steps. Skipped while the service is
+        stopped: a stopped service must sync nothing, as the pass promises
+        on the console."""
+        from . import builder
+
+        if self.halted:
+            return self.last
+        now = time.monotonic()
+        probe = probe_due(self.probed, now)
+        if probe:
+            self.probed = now
+        book = Book.open(self.settings)
+        ledger = Ledger.load(self.settings.state_dir,
+                             stale_after=self.settings.stale_claim_seconds)
+        outcome = builder.sync_sheet(
+            self.client, book, ledger, settings=self.settings,
+            apply_marks=False, probe_proxies=probe,
+            artifact_dir=self.settings.artifact_dir,
+            stale_claim_seconds=self.settings.stale_claim_seconds) or {}
+        _sync_events(self.settings, outcome)
+        self.last, self.at = outcome, time.time()
+        return outcome
+
+
 def _shadow(settings: Settings, book: Book, decision: Decision,
             outcome: dict, pulse: dict | None = None,
             running: list[str] | None = None) -> None:
@@ -846,20 +945,11 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
                 # the breaker is open - read there, never recomputed.
                 store_state.put(conn, "pass", pulse)
             conn.commit()
+        # The sync's own events are said by whoever ran the sync
+        # (`_sync_events`); a pass that reads the housekeeper's last
+        # outcome must not say them again every half minute.
         acted = {k: v for k, v in (outcome or {}).items() if v}
-        # One row per phone the sync took away (C8), with what came off
-        # it: the story of a serial has to end with why it went.
-        for serial in acted.get("deleted") or []:
-            store_events.emit(settings, "phone", serial=str(serial),
-                              status="deleted",
-                              detail="marked done or failed in the sheet "
-                                     "and deleted by the sync")
-        for serial in acted.get("discarded") or []:
-            store_events.emit(settings, "phone", serial=str(serial),
-                              status="discarded",
-                              detail="its build failed and the phone was "
-                                     "discarded by the sync")
-        if decision.jobs or acted or did["closed"]:
+        if decision.jobs or did["closed"]:
             store_events.emit(
                 settings, "pass",
                 status=(decision.warning or "")[:60],
@@ -869,6 +959,13 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
         log.warning("the store did not take this pass's mirror (%s); "
                     "the sheet remains authoritative and the pass is "
                     "unaffected", exc)
+
+
+def _housekeeping_is_on(settings: Settings) -> bool:
+    """The periodic steps leave the pass once the store is the pool: the
+    housekeeper opens its own Book, and only a store-backed Book is cheap
+    enough to open on a second thread every five minutes."""
+    return bool(settings.store_enabled and settings.pools_in_pg)
 
 
 def _lane_is_on(settings: Settings) -> bool:
@@ -1320,7 +1417,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
          probe_proxies: bool = True,
          stopping: threading.Event | None = None,
          flight: InFlight | None = None,
-         pool=None) -> Decision:
+         pool=None, housekeeping: Housekeeper | None = None) -> Decision:
     """One pass: bring the sheet up to date, then act on what it says.
 
     `flight` and `pool` are what make a pass stop waiting. Given both, the
@@ -1341,6 +1438,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # a phone marked done is deleted here and its slot comes back.
     _drain_actions(settings, book, ledger, client=client, controls_only=True)
     asked = _controls(client, book, ledger, fuse, flight)
+    if housekeeping is not None:
+        housekeeping.halted = "Stop everything" in asked
     if "Stop everything" in asked:
         # Nothing below this line runs: not the sync, which is what carries out
         # the State column and frees claims; not the counting, which reads
@@ -1368,15 +1467,20 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         _event(settings, "breaker", status="cleared",
                detail="cleared by hand from the sheet")
     _import_from_sheet(settings, book)
-    outcome = builder.sync_sheet(client, book, ledger,
-                                 settings=settings,
-                                 # Done and Failed are the lane's the moment
-                                 # they land (A-2); the pass keeps them only
-                                 # where there is no lane to do it.
-                                 apply_marks=not _lane_is_on(settings),
-                                 probe_proxies=probe_proxies,
-                                 artifact_dir=settings.artifact_dir,
-                                 stale_claim_seconds=settings.stale_claim_seconds)
+    if housekeeping is not None:
+        # The periodic steps run on their own thread (A-3); this pass reads
+        # what the last turn found and gets on with counting.
+        outcome = dict(housekeeping.last)
+    else:
+        outcome = builder.sync_sheet(
+            client, book, ledger, settings=settings,
+            # Done and Failed are the lane's the moment they land (A-2);
+            # the pass keeps them only where there is no lane to do it.
+            apply_marks=not _lane_is_on(settings),
+            probe_proxies=probe_proxies,
+            artifact_dir=settings.artifact_dir,
+            stale_claim_seconds=settings.stale_claim_seconds)
+        _sync_events(settings, outcome)
     book.reload()
 
     def launch(jobs: list[dict], *, action_id: int | None = None) -> None:
@@ -1663,6 +1767,11 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
                     pool=ThreadPoolExecutor(max_workers=4,
                                             thread_name_prefix="lane")).start()
 
+    housekeeping = None
+    if _housekeeping_is_on(settings):
+        housekeeping = Housekeeper(settings, client, stop)
+        housekeeping.start()
+
     if settings.web_enabled:
         # Loopback-only, read-only, daemon: it dies with the process and
         # holds nothing that must survive - sessions cost a re-login after
@@ -1687,14 +1796,16 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     probed: float | None = None
     while not stop.is_set() and (passes is None or done < passes):
         now = time.monotonic()
-        probe = probe_due(probed, now)
+        # The exit test rides with the housekeeper when there is one.
+        probe = housekeeping is None and probe_due(probed, now)
         if probe:
             probed = now
         beat(settings)
         guard.began()
         try:
             once(client, settings, fuse, slots, probe_proxies=probe,
-                 stopping=stop, flight=flight, pool=pool)
+                 stopping=stop, flight=flight, pool=pool,
+                 housekeeping=housekeeping)
         except KeyboardInterrupt:
             raise
         except Exception:                                     # noqa: BLE001

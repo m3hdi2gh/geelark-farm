@@ -1975,15 +1975,22 @@ def test_a_phone_the_sync_took_away_gets_its_last_event(monkeypatch,
                         or True)
     settings = make_settings(store_enabled=True)
 
-    serve_mod._shadow(settings, object(), serve_mod.Decision(),
-                      {"deleted": ["1519", "1520"], "discarded": ["1521"],
-                       "freed": ["a@x.com"]})
-
+    outcome = {"deleted": ["1519", "1520"], "discarded": ["1521"],
+               "freed": ["a@x.com"]}
+    # Said by whoever ran the sync, not by the pass's mirror: a pass that
+    # reads the housekeeper's last outcome must not say them again every
+    # half minute (A-3, 2026-09-08).
+    serve_mod._sync_events(settings, outcome)
     phones = [(k, kw["serial"], kw["status"]) for k, kw in emitted
               if k == "phone"]
     assert phones == [("phone", "1519", "deleted"),
                       ("phone", "1520", "deleted"),
                       ("phone", "1521", "discarded")]
+
+    emitted.clear()
+    serve_mod._shadow(settings, object(), serve_mod.Decision(), outcome)
+    assert [k for k, _ in emitted if k == "phone"] == [], (
+        "the mirror no longer says the sync's events")
 
 
 def test_a_row_the_launcher_already_closed_keeps_the_launchers_word(
@@ -2309,3 +2316,114 @@ def test_run_wires_the_lane_to_the_passes_fuse_and_flight(monkeypatch,
     assert 'thread_name_prefix="lane"' in src, "a pool of its own"
     assert "flight = InFlight()\n" in src, (
         "the flight exists whether or not the pass hands its own work off")
+
+
+# ------------------------------------ the housekeeping thread (A-3, 2026-09-08)
+def test_the_housekeeper_runs_the_periodic_steps_without_the_marks(
+        monkeypatch, make_settings, tmp_path):
+    """Every pass ran the whole sync before it counted anything; none of
+    it is about this half-minute. Done and Failed stay the lane's."""
+    from geelark_farm import builder
+
+    asked, emitted = [], []
+    monkeypatch.setattr(serve_mod, "Book",
+                        SimpleNamespace(open=lambda s: "the book"))
+    monkeypatch.setattr(serve_mod.Ledger, "load",
+                        lambda path, **k: "the ledger")
+    monkeypatch.setattr(builder, "sync_sheet",
+                        lambda client, book, ledger, **k:
+                        asked.append((book, ledger, k))
+                        or {"discarded": ["1521"]})
+    monkeypatch.setattr(serve_mod, "_sync_events",
+                        lambda settings, outcome: emitted.append(outcome))
+    settings = make_settings(state_dir=tmp_path, store_enabled=True,
+                             pools_in_pg=True, stale_claim_seconds=900)
+    keeper = serve_mod.Housekeeper(settings, client=object(),
+                                   stop=threading.Event())
+
+    first = keeper.turn()
+    assert first == {"discarded": ["1521"]} and keeper.last is first
+    book, ledger, kw = asked[0]
+    assert (book, ledger) == ("the book", "the ledger")
+    assert kw["apply_marks"] is False, "Done and Failed are the lane's"
+    assert kw["probe_proxies"] is True, "the first turn tests the exits"
+    assert kw["stale_claim_seconds"] == 900
+    assert kw["artifact_dir"] == settings.artifact_dir
+    assert emitted == [first], "it says what it did"
+
+    keeper.turn()
+    assert asked[1][2]["probe_proxies"] is False, "not again within the hour"
+
+    keeper.halted = True
+    assert keeper.turn() is keeper.last and len(asked) == 2, (
+        "a stopped service syncs nothing")
+
+
+def test_a_pass_with_a_housekeeper_reads_its_last_turn_and_syncs_nothing(
+        monkeypatch, settings):
+    from geelark_farm import builder
+
+    recorder = Recorder(warm=5, free=10).install(monkeypatch)
+    shown = {}
+    monkeypatch.setattr(serve_mod, "_show",
+                        lambda book, s, d, **k: shown.update(k))
+    keeper = serve_mod.Housekeeper(settings, client=object(),
+                                   stop=threading.Event())
+    keeper.last = {"incomplete": ["proxies"], "unknown_phones": ["1", "2"],
+                   "unknown_running": ["1"]}
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
+                   housekeeping=keeper)
+
+    assert recorder.synced == 0, "the housekeeper syncs; the pass counts"
+    assert "1 sync step(s) stopped short" in shown["needs"]
+    assert shown["unknown"] == 2 and shown["unknown_running"] == 1
+    assert keeper.halted is False
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert recorder.synced == 1, "without one, the pass syncs as it always did"
+
+
+def test_the_housekeeper_stands_down_while_the_service_is_stopped(
+        monkeypatch, settings):
+    Recorder(warm=5, free=10).install(monkeypatch)
+    monkeypatch.setattr(serve_mod, "_controls",
+                        lambda *a, **k: frozenset({"Stop everything"}))
+    monkeypatch.setattr(serve_mod, "_show", lambda *a, **k: None)
+    monkeypatch.setattr(serve_mod, "_put_state", lambda *a, **k: None)
+    keeper = serve_mod.Housekeeper(settings, client=object(),
+                                   stop=threading.Event())
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
+                   housekeeping=keeper)
+    assert keeper.halted is True
+
+
+def test_a_stumbling_housekeeper_never_leaves_its_loop(make_settings):
+    stop = threading.Event()
+    turns = []
+    keeper = serve_mod.Housekeeper(make_settings(), client=None, stop=stop,
+                                   every=0)
+
+    def turn():
+        turns.append(1)
+        if len(turns) == 2:
+            stop.set()
+        raise RuntimeError("the cluster went away")
+    keeper.turn = turn
+    keeper.watch()
+    assert len(turns) == 2
+
+
+def test_run_starts_the_housekeeper_when_the_store_is_the_pool(make_settings):
+    import inspect
+
+    assert serve_mod._housekeeping_is_on(make_settings(store_enabled=True,
+                                                       pools_in_pg=True))
+    assert not serve_mod._housekeeping_is_on(make_settings(store_enabled=True,
+                                                           pools_in_pg=False))
+    src = inspect.getsource(serve_mod.run)
+    assert "housekeeping = Housekeeper(settings, client, stop)" in src
+    assert "probe = housekeeping is None and probe_due(probed, now)" in src, (
+        "the exit test rides with the housekeeper")
+    assert "housekeeping=housekeeping)" in src
