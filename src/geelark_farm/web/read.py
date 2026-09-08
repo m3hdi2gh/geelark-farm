@@ -159,20 +159,29 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
     return found
 
 
-def known(settings: Settings, kind: str) -> set[str]:
-    """Every identity the mirror holds for one kind, lowercased - what the
-    add previews check a pasted row against so a duplicate is said before
-    it is queued. Addresses for accounts, host:port for exits."""
+def known(settings: Settings, kind: str) -> dict[str, str]:
+    """Every identity the mirror holds for one kind, lowercased, against
+    the state that row is in - what the add previews check a pasted row
+    against so a duplicate is said before it is queued. Addresses for
+    accounts, host:port for exits.
+
+    A dict rather than a set, so the badge can say *where* the row is: it
+    said "already in the pool" about addresses the manager deliberately
+    does not list - a used Gmail, a delivered account - so the operator
+    was sent to look for a row that is not there (2026-09-07). Every
+    `address in known` test still reads, because `in` on a dict is key
+    membership.
+    """
     with Store(settings) as store:
         if kind == "proxy":
             rows = store._rows(
-                "SELECT host || ':' || port AS who FROM resources"
+                "SELECT host || ':' || port AS who, status FROM resources"
                 " WHERE kind = 'proxy' AND host IS NOT NULL")
         else:
             rows = store._rows(
-                "SELECT lower(address) AS who FROM resources"
+                "SELECT lower(address) AS who, status FROM resources"
                 " WHERE kind = %s AND address IS NOT NULL", (kind,))
-    return {r["who"] for r in rows if r["who"]}
+    return {r["who"]: _pool_state(kind, r) for r in rows if r["who"]}
 
 
 def phones(settings: Settings, owner_id: int | None = None) -> list[dict]:
@@ -222,6 +231,14 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " LEFT JOIN users u ON u.id = r.added_by"
             " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
             " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
+        # The card's number, counted rather than measured off the list
+        # above - which stops at sixty. Past that the card said sixty and
+        # the list under it went on (2026-09-07).
+        waiting = store._rows(
+            "SELECT count(*) AS all_of_them,"
+            " count(*) FILTER (WHERE source = 'panel') AS panel"
+            " FROM resources"
+            " WHERE kind = 'app' AND status = '' AND error IS NULL")
         # What a person can choose from when they build one by hand. Capped:
         # this is a picker, not the pool page, and a select with four hundred
         # options is a worse way to find an address than the search box on
@@ -295,10 +312,11 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         for name, words in names.items():
             if row["status"] in words:
                 folded[row["kind"]][name] += row["c"]
+    counted = waiting[0] if waiting else {"all_of_them": 0, "panel": 0}
     folded["app"] = {
-        "awaiting": len(awaiting),
-        "panel": sum(1 for a in awaiting if a["source"] == "panel"),
-        "manual": sum(1 for a in awaiting if a["source"] != "panel"),
+        "awaiting": int(counted["all_of_them"] or 0),
+        "panel": int(counted["panel"] or 0),
+        "manual": int(counted["all_of_them"] or 0) - int(counted["panel"] or 0),
     }
     return {
         "phones": phone_rows,
@@ -322,13 +340,24 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
     and for how long, without the sheet. Empty when nothing was asked."""
     if not serials:
         return {}
+    # Bound to the run that is holding the phone now. It took the newest
+    # line for the serial with no run and no time about it, so a build ten
+    # seconds old showed yesterday's failure sentence and four hours of
+    # elapsed time - and `started` came from that old run's first line, so
+    # the number beside it was wrong the same way (2026-09-07).
+    #
+    # A serial whose current run has said nothing yet returns nothing, and
+    # `_progress` falls through to a dim "starting", which is the truth.
     lines = store._rows(
-        "SELECT l.serial, l.logger, l.msg, l.at, l.run,"
-        " (SELECT min(f.at) FROM logs f"
-        "   WHERE f.serial = l.serial AND f.run = l.run) AS started"
-        " FROM logs l WHERE l.id IN"
-        " (SELECT max(id) FROM logs WHERE serial = ANY(%s)"
-        "   GROUP BY serial)", (list(serials),))
+        "SELECT l.serial, l.logger, l.msg, l.at, l.run, c.taken_at AS started"
+        " FROM logs l"
+        " JOIN phones p ON p.serial = l.serial AND p.done_at IS NULL"
+        " JOIN claims c ON c.phone_row = p.id AND c.released_at IS NULL"
+        "   AND l.run = c.run_id AND l.at >= c.taken_at"
+        " WHERE l.serial = ANY(%s)"
+        "   AND l.id = (SELECT max(m.id) FROM logs m"
+        "               WHERE m.serial = l.serial AND m.run = c.run_id"
+        "                 AND m.at >= c.taken_at)", (list(serials),))
     return {str(r["serial"]): r for r in lines}
 
 
@@ -444,14 +473,17 @@ def _pool_rows(store) -> dict:
                 "      ELSE '' END AS second"
                 " FROM resources WHERE kind = 'gmail'"
                 "   AND status <> 'used'"
-                " ORDER BY sheet_row NULLS LAST, id LIMIT %s",
+                # Newest first: the cap cuts the tail, and the tail must
+                # not be the batch somebody pasted a minute ago
+                # (2026-09-07).
+                " ORDER BY id DESC LIMIT %s",
                 (POOL_LIMIT,)),
             "gpt": store._rows(
                 "SELECT id, address, status, coalesce(serial, '') AS serial,"
                 " coalesce(note, '') AS note, error, updated_at"
                 " FROM resources WHERE kind = 'app'"
                 "   AND status <> 'delivered'"
-                " ORDER BY sheet_row NULLS LAST, id LIMIT %s",
+                " ORDER BY id DESC LIMIT %s",
                 (POOL_LIMIT,)),
             "proxy": store._rows(
                 "SELECT id, coalesce(proxy_name, '') AS address, status,"
@@ -463,7 +495,22 @@ def _pool_rows(store) -> dict:
                 " ORDER BY times_used, sheet_row NULLS LAST, id LIMIT %s",
                 (POOL_LIMIT,)),
     }
+    # How many there are, against how many are drawn. The cap was silent,
+    # so an address that happened to be the 340th row answered "Nothing
+    # matches that" to a search that had never looked at it (2026-09-07).
+    totals = store._rows(
+        "SELECT kind, count(*) AS c FROM resources"
+        " WHERE (kind = 'gmail' AND status <> 'used')"
+        "    OR (kind = 'app' AND status <> 'delivered')"
+        "    OR kind = 'proxy'"
+        " GROUP BY kind")
+    counted = {str(r["kind"]): int(r["c"] or 0) for r in totals}
+    rows["totals"] = {"gmail": counted.get("gmail", 0),
+                      "gpt": counted.get("app", 0),
+                      "proxy": counted.get("proxy", 0)}
     for kind, listed in rows.items():
+        if kind == "totals":
+            continue
         for row in listed:
             # One word for what the row is, whatever column carried it.
             # An unreadable row is `broken` whatever its status says -

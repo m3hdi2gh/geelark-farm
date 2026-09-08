@@ -876,7 +876,9 @@ class _Handler(BaseHTTPRequestHandler):
                 except (validate.AccountError, validate.ProxyError) as exc:
                     log.debug("gmail paste row refused: %s", exc)
                     row["error"] = str(exc)
-                row["duplicate"] = row["address"].lower() in known
+                here = row["address"].lower()
+                row["duplicate"] = here in known
+                row["dup_state"] = known.get(here, "")
             self._mark_twice(rows)
             return self._html(200, pages.gmail_preview(
                 rows, seller, user, idem=secrets.token_urlsafe(12),
@@ -955,8 +957,9 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     checked = validate.proxy_row(raw=row["raw"],
                                                  name=row["name"])
-                    row["duplicate"] = (
-                        f"{checked['host']}:{checked['port']}" in known)
+                    here = f"{checked['host']}:{checked['port']}"
+                    row["duplicate"] = here in known
+                    row["dup_state"] = known.get(here, "")
                 except (validate.AccountError, validate.ProxyError) as exc:
                     log.debug("proxy paste row refused: %s", exc)
                     row["error"] = str(exc)
@@ -1056,7 +1059,9 @@ class _Handler(BaseHTTPRequestHandler):
                 except (validate.AccountError, validate.ProxyError) as exc:
                     log.debug("gpt paste row refused: %s", exc)
                     row["error"] = str(exc)
-                row["duplicate"] = row["address"].lower() in known
+                here = row["address"].lower()
+                row["duplicate"] = here in known
+                row["dup_state"] = known.get(here, "")
             self._mark_twice(rows)
             return self._html(200, pages.gpt_preview(
                 rows, user, idem=secrets.token_urlsafe(12), pasted=pasted,

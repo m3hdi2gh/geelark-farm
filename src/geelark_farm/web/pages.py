@@ -41,7 +41,7 @@ _PAGE = """<!doctype html>
  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 :root{{--bg:#0f1522;--rail:#0b101b;--panel:#151d2d;--panel2:#101827;--line:#232c3f;
- --line2:#1d2636;--ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#6b7a90;
+ --line2:#1d2636;--ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#8391a8;
  --green:#58d68d;--green-bg:#10331f;--amber:#f0c064;--amber-bg:#3a2d10;
  --red:#e0654f;--red-bg:#4d2323;--blue:#7fb4ff;--blue-bg:#16324f;--violet:#c9b8f0;
  --violet-bg:#2c1f3d;--accent:#2563c4;--accent-hi:#2f74e0;--focus:#7fb4ff;
@@ -181,7 +181,8 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .sheetbody.sub .panel .row{{justify-content:flex-end;gap:8px}}
 .sheetbody.sub .panel .row .right{{display:none}}
 .sheetbody.sub .panel .row .dim{{margin-right:auto}}
-form.busy button{{opacity:.6;pointer-events:none}}
+form.busy{{cursor:progress}}
+form.busy button{{opacity:.45;filter:grayscale(1);pointer-events:none}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
  border-radius:9px;padding:12px;margin-bottom:14px}}
 .addbox label{{display:block;font-size:11px;letter-spacing:.6px;
@@ -219,7 +220,14 @@ button:active,.btn:active{{transform:translateY(1px)}}
 input,select,textarea{{color-scheme:dark}}
 input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
  box-shadow:0 0 0 3px var(--blue-bg)}}
+/* Sticky needs a scrollport to stick inside. `.tscroll` was the nearest
+   one and it only scrolls sideways - no height, so it never scrolled down
+   and the headers never stuck, in a table of a hundred and ninety rows
+   (2026-09-07). And a sticky header needs its own background, or the rows
+   pass through the column names. */
 .slab thead th,.pooltable thead th{{position:sticky;top:0;z-index:1}}
+.pooltable thead th{{background:var(--panel2)}}
+.slab>.tscroll{{max-height:calc(100vh - 260px);overflow:auto}}
 .slab th.num,.slab td.num{{text-align:right}}
 .slab tbody tr:hover .addr{{color:var(--ink)}}
 .status .live{{animation:breathe 1.6s ease-in-out infinite;display:inline-block}}
@@ -268,6 +276,12 @@ details.tech[open]{{display:block;margin-top:4px}}
 .wish .who{{flex:0 0 auto;color:var(--ink)}}
 .wish .why{{color:var(--dim);font-size:12.5px}}
 .wish .age{{flex:0 0 46px;color:var(--dim);font-size:12px}}
+/* The paste box and the search live inside the one scrolling body, so
+   both left the screen the moment somebody scrolled to the row they
+   wanted - which is exactly when they want to search (2026-09-07). The
+   negative top cancels the padding on that body. */
+.sheetbody .addbox,.sheetbody .filters{{position:sticky;top:-15px;
+ background:var(--panel);z-index:2}}
 .pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
  border-bottom:1px solid var(--line2)}}
 .pickrow:last-child{{border-bottom:0}}
@@ -294,14 +308,24 @@ details.tech[open]{{display:block;margin-top:4px}}
 /* A small yes-or-no where the button was pressed, for the one destructive
    thing on the page. The full confirm page is what a browser without the
    script gets. */
-.mini{{position:absolute;z-index:50;background:var(--panel);
+/* Fixed, and clamped by the script. It used to be placed at the
+   row position on the document, so a Remove near the foot of a long
+   list put the question below the fold - the press looked like it had
+   done nothing - and scrolling left the bubble over an unrelated row
+   Remove was not the one that would fire (2026-09-07). */
+.mini{{position:fixed;z-index:50;background:var(--panel);
  border:1px solid var(--line2);border-radius:10px;padding:12px 14px;
  box-shadow:0 14px 40px rgba(0,0,0,.55);width:min(320px,90vw);font-size:13px}}
 .mini p{{margin:0 0 10px}} .mini .row{{display:flex;gap:8px;justify-content:flex-end}}
 /* ---- the page */
 main{{flex:1;min-width:0;padding:24px 32px 56px;display:flex;flex-direction:column;
  gap:16px}}
+/* The sign-in card, and only it: `main` is a column flex box at least
+   100vh tall, so centring it vertically centres the whole dashboard -
+   and re-centres it after every live swap, which slides the page half a
+   row under the cursor every time a row appears (2026-09-07). */
 main.alone{{align-items:center;justify-content:center;padding:40px 20px}}
+main.full{{padding:40px 20px}}
 h2{{font-size:25px;font-weight:600;color:var(--bright);margin:0;letter-spacing:-.3px}}
 h3{{font-size:13.5px;font-weight:600;color:#c6d1e0;margin:0;display:flex;align-items:center;
  gap:8px;flex-wrap:wrap}}
@@ -419,7 +443,11 @@ input:hover,textarea:hover{{border-color:#3d4f6e}}
 input:focus,textarea:focus,select:focus{{outline:none;border-color:var(--focus);
  box-shadow:0 0 0 3px rgba(127,180,255,.15)}}
 textarea{{width:100%;min-height:110px;line-height:1.7;resize:vertical}}
-input::placeholder,textarea::placeholder{{color:#55627a}}
+/* The palest thing on the page was the format of the paste box, at
+   about 2.8:1 - and a placeholder is erased by the first keystroke, so
+   the one text somebody needs while typing was the one that left
+   (2026-09-07). */
+input::placeholder,textarea::placeholder{{color:var(--dim)}}
 input[type=checkbox],input[type=radio]{{min-height:0;width:16px;height:16px;
  accent-color:var(--accent-hi);margin:0}}
 button,.btn{{cursor:pointer;background:var(--accent);color:#fff;border:0;
@@ -832,12 +860,14 @@ def page(title: str, body: str, *, user: dict | None = None,
     tag += f'<meta name="gf-rev" content="{esc(revision())}">'
     if user is not None:
         body = _alert_strip(user) + body
-    # `alone` is what widens the page when nothing is beside it - the
-    # sign-in card had it first, and an operator's page has the same
-    # shape for the same reason.
+    # `.wide` is what widens the page. This class only says whether the
+    # body is one card floating in the middle - the sign-in - or a page
+    # that starts at the top and stays there.
     return _PAGE.format(title=esc(title), header=header, body=body,
                         favicon=_FAVICON, refresh=tag,
-                        alone="" if header else ' class="alone"')
+                        alone=("" if header else
+                               ' class="alone"' if user is None else
+                               ' class="full"'))
 
 
 #: `page` doubles as a parameter name on the paged views; the alias keeps
@@ -1582,7 +1612,20 @@ _DASH_SCRIPT = """
         tr.hidden = !hit;
         if (hit) shown++;
       });
-      if (none) none.hidden = shown > 0;
+      if (none) {
+        // What "nothing" means here. It was one fixed sentence about a
+        // search, shown after pressing "With me" on a quiet morning -
+        // and there is no search on this table (2026-09-07).
+        var cell = none.firstElementChild;
+        if (cell) cell.textContent =
+          want === 'mine'
+            ? 'You are not holding any phone - press Free to see what you '
+              + 'can take.'
+          : want === 'free'
+            ? 'Nothing is free right now - the keeper is building.'
+            : 'Nothing here matches that.';
+        none.hidden = shown > 0;
+      }
       if (tally) tally.textContent = want
         ? shown + ' of ' + rows.length + ' shown'
         : rows.length + (rows.length === 1 ? ' phone' : ' phones');
@@ -1689,7 +1732,11 @@ _DASH_SCRIPT = """
         var q = (find ? find.value : '').trim().toLowerCase(), shown = 0;
         var who = seller ? seller.value : '';
         body.forEach(function(tr){
-          var hit = (!q || tr.textContent.toLowerCase().indexOf(q) >= 0)
+          // The row's own values, not its text: the text includes the
+          // buttons, so "free" - the most natural word to type - kept
+          // nearly every row, and "edit" or "remove" kept all of them
+          // (the operator, 2026-09-07).
+          var hit = (!q || (tr.dataset.find || '').indexOf(q) >= 0)
                  && (!who || tr.dataset.seller === who);
           tr.hidden = !hit;
           if (hit) shown++;
@@ -1722,8 +1769,18 @@ _DASH_SCRIPT = """
   // start (the operator, 2026-09-05). It waits, and tries again shortly.
   function settled(){
     var o = ov();
-    var typing = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(
-      (document.activeElement || {}).tagName) >= 0;
+    // Anything the keyboard is on inside the page, not just a box to type
+    // in: the swap replaces every child of `main`, so a redraw threw the
+    // caret back to the top while somebody was tabbing through it.
+    // `:focus-visible` is the keyboard test - a button left focused by a
+    // mouse click would otherwise stall the refresh for good
+    // (2026-09-07).
+    var live = document.activeElement;
+    var main = document.querySelector('main');
+    var typing = !!live
+      && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(live.tagName) >= 0
+          || (!!main && main.contains(live)
+              && live.matches(':focus-visible')));
     // The drawer holds no box to type in, so a page frozen behind it is
     // a build nobody can watch move. A manager still holds the page: it
     // has a paste box and an editor in it (2026-09-07).
@@ -1739,6 +1796,8 @@ _DASH_SCRIPT = """
   var openKind = null, opener = null;
   function ov(){ return document.getElementById('poolov'); }
   function shut(){
+    var mini = document.querySelector('.mini'); if (mini) mini.remove();
+    behind(false);
     var o = ov(); if (!o) return;
     // Every sheet that is showing a preview or a confirm hands its own
     // body back first. Closed mid-preview, the sheet stayed on it: reopen
@@ -1753,15 +1812,29 @@ _DASH_SCRIPT = """
     o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
     o.querySelectorAll('.editrow').forEach(function(el){ el.hidden = true; });
   }
-  function show(kind, focusAdd){
+  function behind(off){
+    // The dashboard is a sibling emitted before the overlay, so one flag
+    // takes the whole of it out of the tab order. Without it, Tab walked
+    // from the last row of the sheet onto the buttons under the dark
+    // backdrop and Enter pressed whichever it landed on (2026-09-07).
+    var page = document.querySelector('.wide');
+    if (page) page.inert = !!off;
+  }
+  function show(kind){
     var o = ov(); if (!o) return;
     o.querySelectorAll('.sheet').forEach(function(el){
       el.hidden = el.dataset.sheet !== kind;
     });
     o.hidden = false; openKind = kind;
+    behind(true);
     var open = o.querySelector('.sheet[data-sheet="' + kind + '"]');
     if (!open) return;
-    var box = open.querySelector(focusAdd ? 'textarea' : '.poolfind');
+    // The paste box, which is what the manager is opened for. It focused
+    // the search unless `focusAdd` was passed, and nothing passed it any
+    // more - so a pasted line filtered the list instead of entering it.
+    // The `/` shortcut still reaches the search (2026-09-07).
+    var box = open.querySelector('.addbox textarea')
+           || open.querySelector('.poolfind');
     if (box) box.focus();
   }
 
@@ -1769,7 +1842,7 @@ _DASH_SCRIPT = """
     var door = e.target.closest('[data-pool]');
     if (door && !door.dataset.edit) {
       opener = door;
-      show(door.dataset.pool, door.dataset.open === 'add');
+      show(door.dataset.pool);
       return;
     }
     // -> phone: choose the phone rather than take the next one. The row's
@@ -1788,7 +1861,7 @@ _DASH_SCRIPT = """
         o2.querySelectorAll('.sheet').forEach(function(el){
           el.hidden = el !== sheet2;
         });
-        o2.hidden = false; openKind = 'send';
+        o2.hidden = false; openKind = 'send'; behind(true);
         return;
       }
     }
@@ -1890,8 +1963,11 @@ _DASH_SCRIPT = """
         body.replaceChildren.apply(body, nodes);
         o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = el !== sheet; });
         o.classList.add('right');
-        o.hidden = false; openKind = 'phone';
-        var first = body.querySelector('button'); if (first) first.focus();
+        o.hidden = false; openKind = 'phone'; behind(true);
+        // Its own heading, not its first button: a stray Enter after the
+        // drawer opened pressed whatever that button was (2026-09-07).
+        var head = sheet.querySelector('[data-title]');
+        if (head) { head.tabIndex = -1; head.focus(); }
       })
       .catch(function(){ location.assign(href); });
   }
@@ -1936,10 +2012,11 @@ _DASH_SCRIPT = """
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
     });
+    var mini = document.querySelector('.mini'); if (mini) mini.remove();
     here.replaceChildren.apply(here, nodes);
     init();
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref);
-    else if (kept && kept !== 'send') show(kept, false);
+    else if (kept && kept !== 'send') show(kept);
   }
   function reload(){
     fetch(location.pathname + location.search, {credentials: 'same-origin'})
@@ -1968,11 +2045,23 @@ _DASH_SCRIPT = """
     var yes = document.createElement('button'); yes.type = 'button';
     yes.className = 'quiet bad'; yes.textContent = 'Remove';
     row.append(keep, yes); box.append(p, row);
-    var at = form.getBoundingClientRect();
-    box.style.top = (at.bottom + window.scrollY + 6) + 'px';
-    box.style.left = Math.max(8, at.right + window.scrollX - 320) + 'px';
+    // Placed in the window, not on the document, and kept inside it: it
+    // used to sit at the row's own place on the page, so a Remove near
+    // the foot of a long list asked its question below the fold - the
+    // press looked like it had done nothing - and one scroll left the
+    // bubble hovering over a different row (2026-09-07).
     document.body.appendChild(box);
+    var at = form.getBoundingClientRect();
+    var size = box.getBoundingClientRect();
+    box.style.top = Math.max(
+      8, Math.min(at.bottom + 6, window.innerHeight - size.height - 8)) + 'px';
+    box.style.left = Math.max(
+      8, Math.min(at.right - size.width, window.innerWidth - size.width - 8))
+      + 'px';
     yes.focus();
+    // And it lives only as long as what it is pointing at stays still.
+    window.addEventListener('scroll', function(){ box.remove(); },
+                            {capture: true, once: true});
     keep.addEventListener('click', function(){ box.remove(); });
     yes.addEventListener('click', function(){
       box.remove();
@@ -2006,6 +2095,9 @@ _DASH_SCRIPT = """
     if (pressed && pressed.name) data.append(pressed.name, pressed.value);
     var sheet = form.closest('#poolov .sheet');
     form.classList.add('busy');
+    // `pointer-events:none` does not stop Enter on a focused submit, so
+    // the same press went twice (2026-09-07).
+    if (pressed) pressed.disabled = true;
     // As the browser would send it - urlencoded. FormData on its own goes
     // out multipart, which the server does not read, and every field
     // including the csrf token arrived as nothing: "Stale session"
@@ -2025,6 +2117,7 @@ _DASH_SCRIPT = """
         // preview and a Back the Preview button was dead to a real click
         // while looking perfectly ordinary (the operator, 2026-09-07).
         form.classList.remove('busy');
+        if (pressed) pressed.disabled = false;
         if (!got) return;
         var doc = parse(got.html);
         if (isHere(got.url)) { swapMain(doc); return; }
@@ -2043,7 +2136,11 @@ _DASH_SCRIPT = """
         if (sheet && main) showInSheet(sheet, main);
         else swapMain(doc);
       })
-      .catch(function(){ form.classList.remove('busy'); form.submit(); });
+      .catch(function(){
+        form.classList.remove('busy');
+        if (pressed) pressed.disabled = false;
+        form.submit();
+      });
   });
 
   init();
@@ -2362,7 +2459,9 @@ def _seller_field(kind: str, rows: list[dict]) -> str:
     and a name that is not there yet is simply typed."""
     if kind != "gmail":
         return ""
-    options = "".join(f'<option value="{esc(s)}">' for s in _sellers_of(rows))
+    # The names as they were written, which is what a person types.
+    options = "".join(f'<option value="{esc(shown)}">'
+                      for shown, _ in _sellers_of(rows).values())
     # And when it was bought. Blank means today, which is what the add
     # always assumed - but `purchased_on` is the column the "how old is
     # this stock" question is answered from, and a batch bought last month
@@ -2493,8 +2592,14 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
             for i, cell in enumerate(cells))
         last = (f"<td>{_pool_row_doors(kind, row, user, manual_login)}</td>"
                 if doors else "")
+        # Lower-cased, and only the row's own words - the address, what
+        # state it is in, whose it was, which phone has it. The state
+        # words are worth keeping: "broken" and "set aside" are exactly
+        # what somebody types when they want to see what wants them.
+        findable = " ".join(str(c) for c in cells if c).lower()
         lines.append(f'<tr data-state="{esc(str(row.get("state") or ""))}"'
-                     f' data-seller="{esc(str(row.get("seller") or ""))}">'
+                     f' data-find="{esc(findable)}"'
+                     f' data-seller="{esc(_seller_key(row))}">'
                      f'{drawn}{last}</tr>')
         if doors:
             lines.append(_pool_edit_row(kind, row, user, span))
@@ -2508,9 +2613,38 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
             f'Nothing matches that.</td></tr></tbody></table>')
 
 
-def _sellers_of(rows: list[dict]) -> list[str]:
-    seen = {str(r.get("seller") or "").strip() for r in rows}
-    return sorted(s for s in seen if s)
+def _capped(shown: int, total: int) -> str:
+    """Said out loud when the list is not the whole pool.
+
+    The cap was silent and the search only looks at what was drawn, so an
+    address that happened to be the 340th row answered "Nothing matches
+    that" to a search that had never seen it (2026-09-07).
+    """
+    if not total or total <= shown:
+        return ""
+    return (f'<p class="dim capped">showing the newest {shown} of {total} '
+            f'&mdash; the search only looks at these.</p>')
+
+
+def _seller_key(row: dict) -> str:
+    """One seller, one key. The filter kept the cell as typed, so "Ali"
+    and "ali" were two people in the list and a trailing space showed a
+    count beside a name that then matched nothing (2026-09-07). The pool
+    query already groups on `lower(seller)`."""
+    return str(row.get("seller") or "").strip().lower()
+
+
+def _sellers_of(rows: list[dict]) -> dict[str, tuple[str, int]]:
+    """Every seller in these rows as `{key: (as they wrote it, how many)}`,
+    keyed the way `_seller_key` keys a row."""
+    found: dict[str, tuple[str, int]] = {}
+    for row in rows:
+        key = _seller_key(row)
+        if not key:
+            continue
+        shown, count = found.get(key, (str(row.get("seller") or "").strip(), 0))
+        found[key] = (shown, count + 1)
+    return dict(sorted(found.items()))
 
 
 def _seller_filter(kind: str, rows: list[dict]) -> str:
@@ -2522,9 +2656,8 @@ def _seller_filter(kind: str, rows: list[dict]) -> str:
     if not sellers:
         return ""
     options = "".join(
-        f'<option value="{esc(s)}">{esc(s)} · '
-        f'{sum(1 for r in rows if str(r.get("seller") or "").strip() == s)}'
-        f'</option>' for s in sellers)
+        f'<option value="{esc(key)}">{esc(shown)} · {count}</option>'
+        for key, (shown, count) in sellers.items())
     return (f'<select class="sellerpick" aria-label="Seller">'
             f'<option value="">every seller</option>{options}</select>')
 
@@ -2562,7 +2695,13 @@ def _pool_manager(data: dict, user: dict,
             f'<input type="search" class="poolfind" autocomplete="off"'
             f' placeholder="search {_plural(len(rows), "row")}">'
             f'{_seller_filter(kind, rows)}'
+            # The script has always written "12 of 190 shown" into this,
+            # and the CSS has always reserved the space for it, and it was
+            # never rendered - so the count nobody could see is how you
+            # confirm a paste of forty landed (2026-09-07).
+            f'<span class="dim mono tally"></span>'
             f'</div>'
+            f'{_capped(len(rows), (listed.get("totals") or {}).get(kind, 0))}'
             f'<div class="tscroll">'
             f'{_pool_table(kind, rows, user, manual_login)}</div>'
             f'</div></section>')
@@ -4883,7 +5022,18 @@ def _verdict_badge(row: dict) -> str:
         return ('<span class="badge bad">the same address is on an earlier '
                 'line</span>')
     if row.get("duplicate"):
-        return '<span class="badge bad">already in the pool</span>'
+        # And where it is. "Already in the pool" was said about rows the
+        # manager deliberately does not list - a used Gmail, a delivered
+        # account - so the operator went looking for a row that is not
+        # there (2026-09-07).
+        where = {"used": "this address was used up",
+                 "delivered": "this account has been delivered",
+                 "on a phone": "already in the pool - on a phone",
+                 "set aside": "already in the pool - set aside",
+                 "broken": "already in the pool - and unreadable",
+                 "free": "already in the pool - free"}.get(
+                     str(row.get("dup_state") or ""), "already in the pool")
+        return f'<span class="badge bad">{esc(where)}</span>'
     if row.get("error"):
         # The raw words stay on the hover: they are what a person would
         # quote when asking somebody else about it.

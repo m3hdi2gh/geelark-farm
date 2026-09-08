@@ -1043,8 +1043,10 @@ def _form(**fields) -> str:
 
 @pytest.mark.parametrize("web", [True], indirect=True)
 def test_the_gmail_preview_judges_each_pasted_row(web, monkeypatch):
+    # `known` answers {identity: what state that row is in}, so the badge
+    # can say where the duplicate already is (2026-09-07).
     monkeypatch.setattr(app_mod.read, "known",
-                        lambda s, kind: {"g0@example.com"})
+                        lambda s, kind: {"g0@example.com": "free"})
     monkeypatch.setattr(app_mod.read, "gmail_sellers",
                         lambda s: ["egypt", "usa"])
     client = web()
@@ -1056,7 +1058,10 @@ def test_the_gmail_preview_judges_each_pasted_row(web, monkeypatch):
         "POST", "/pools/gmail/preview",
         _form(csrf=client.csrf(), seller="usa", pasted=pasted))
     assert status == 200
-    assert '<span class="badge bad">already in the pool</span>' in body
+    # And where it is: "already in the pool" was said about rows the
+    # manager deliberately does not list, so the operator went looking for
+    # a row that is not there (2026-09-07).
+    assert '<span class="badge bad">already in the pool - free</span>' in body
     assert '<span class="badge ok">ok</span>' in body
     assert "no address" in body or "not-an-address" in body
     carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
@@ -1074,7 +1079,7 @@ def test_the_gmail_preview_judges_each_pasted_row(web, monkeypatch):
 
 @pytest.mark.parametrize("web", [True], indirect=True)
 def test_one_by_one_is_the_paste_form_with_three_boxes(web, monkeypatch):
-    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: ["egypt"])
     client = web()
     client.login()
@@ -1935,7 +1940,7 @@ def _proxy_pool(monkeypatch, rows=(), state=None, seen=None):
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_the_proxy_add_panel_offers_paste_and_one_by_one(web, monkeypatch):
     _proxy_pool(monkeypatch)
-    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     client = web()
     client.login()
     _, _, body = client.request("GET", "/pools/proxy")
@@ -2819,8 +2824,8 @@ def test_the_gpt_paste_is_previewed_row_by_row_and_confirmed_as_rows(
 
     _gpt_active(monkeypatch)
     monkeypatch.setattr(app_mod.read, "known",
-                        lambda s, kind: {"dup@x.com"} if kind == "app"
-                        else set())
+                        lambda s, kind: {"dup@x.com": "delivered"}
+                        if kind == "app" else {})
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 91)
@@ -2837,7 +2842,9 @@ def test_the_gpt_paste_is_previewed_row_by_row_and_confirmed_as_rows(
     assert status == 200
     assert "preview — nothing is added yet" in body
     assert body.count('class="badge ok">ok') == 1
-    assert "already in the pool" in body, "dup@x.com is known to the mirror"
+    assert "this account has been delivered" in body, (
+        "dup@x.com is known to the mirror, and saying only 'already in the "
+        "pool' sends them to a list that does not carry delivered rows")
     assert body.count('class="badge bad"') == 2, "the duplicate and nope"
     assert "Add 1 (skip 2)" in body
     assert f"good@x.com\tpw1\t{SECRET}" in body, "only the good row is carried"
@@ -3411,7 +3418,7 @@ def test_whether_an_address_is_new_is_decided_here_not_asked_for(
 
     _dash(monkeypatch)
     monkeypatch.setattr(read_mod, "known",
-                        lambda s, kind: {"picked@example.com"})
+                        lambda s, kind: {"picked@example.com": "free"})
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 89)
@@ -3943,7 +3950,7 @@ def test_the_preview_shows_every_piece_in_full_and_refuses_what_it_could_not_rea
     the password, the whole key - and a line with a piece the reader
     could not place is refused with that piece named, not trimmed."""
     _dash(monkeypatch)
-    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: set())
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: [])
     client = web()
     client.login()
@@ -4307,9 +4314,9 @@ def test_the_drawer_does_not_freeze_the_page_behind_it():
     nobody can watch move."""
     from geelark_farm.web import pages
 
-    # The body runs past a `{}` literal, so take it to its own return.
     gate = pages._DASH_SCRIPT.split("function settled(){", 1)[1]
-    gate = gate.split("return", 1)[1].split(";", 1)[0]
+    # To the next function, so a nested one does not cut it short.
+    gate = gate.split("function reloadWhenSettled", 1)[0]
     assert "openKind !== 'phone'" in gate
 
 
@@ -4328,3 +4335,127 @@ def test_the_drawer_says_what_a_press_did_and_can_stop_a_build():
         "outside .top, which the drawer hides")
     assert 'action="/phones/1900/stop"' in drawn, (
         "the one thing there is to do about a phone being built")
+
+
+def test_the_search_reads_the_row_and_not_its_own_buttons():
+    """It matched `tr.textContent`, which includes the buttons - so
+    "free", the most natural word to type, kept nearly every row (a free
+    row matches its chip, a set-aside row matches its own Free button) and
+    "edit" or "remove" kept all of them (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gmail": True}
+    table = pages._pool_table(
+        "gmail", [{"address": "a@x.com", "state": "set aside",
+                   "seller": "Egypt", "second": "authenticator",
+                   "serial": ""}], user)
+
+    assert 'data-find="' in table
+    found = table.split('data-find="', 1)[1].split('"', 1)[0]
+    assert "a@x.com" in found and "set aside" in found and "egypt" in found
+    assert "remove" not in found and "edit" not in found
+    assert "(tr.dataset.find || '')" in pages._DASH_SCRIPT
+
+
+def test_one_seller_is_one_option_however_it_was_typed():
+    """"Ali · 12" and "ali · 8" were two people, and a trailing space
+    showed a count beside a name that then matched nothing (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    rows = [{"seller": "Ali"}, {"seller": "ali "}, {"seller": " ALI"}]
+    assert pages._sellers_of(rows) == {"ali": ("Ali", 3)}
+
+    picker = pages._seller_filter("gmail", rows)
+    assert picker.count("<option") == 2, "every seller, and Ali"
+    assert 'value="ali">Ali · 3' in picker
+
+
+def test_the_manager_says_when_the_list_is_not_the_whole_pool():
+    """The cap was silent and the search only looks at what was drawn, so
+    an address that happened to be the 340th row answered "Nothing matches
+    that" to a search that had never seen it (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    assert pages._capped(300, 412).count("300") == 1
+    assert "412" in pages._capped(300, 412)
+    assert "the search only looks at these" in pages._capped(300, 412)
+    assert pages._capped(12, 12) == "" and pages._capped(12, 0) == ""
+
+
+def test_the_building_row_reads_the_run_that_is_holding_the_phone():
+    """It took the newest line for the serial with no run and no time
+    about it, so a build ten seconds old showed yesterday's failure
+    sentence and four hours of elapsed time (2026-09-07)."""
+    import inspect
+
+    from geelark_farm.web import read
+
+    sql = inspect.getsource(read._latest_lines)
+    assert "claims c" in sql and "c.released_at IS NULL" in sql
+    assert "l.run = c.run_id" in sql and "l.at >= c.taken_at" in sql
+    assert "c.taken_at AS started" in sql, (
+        "and how long it has been going, from the claim rather than from "
+        "the first line of whatever ran last")
+
+
+def test_the_page_starts_at_the_top_and_stays_there():
+    """`main` is a column flex box at least 100vh tall, and the operator
+    always got `alone` - so the dashboard was centred vertically and
+    re-centred after every live swap, sliding half a row under the cursor
+    each time a row appeared (2026-09-07)."""
+    from geelark_farm.web import pages
+
+    who = {"id": 1, "username": "a", "role": "operator"}
+    assert '<main class="full">' in pages.page("t", "body", user=who)
+    assert '<main class="alone">' in pages.login(), "the sign-in card floats"
+    assert "main.full{padding:40px 20px}" in pages.page("t", "", user=who)
+
+
+def test_the_overlay_takes_the_page_behind_it_out_of_the_tab_order():
+    """Tab walked from the last row of the sheet onto the buttons under
+    the dark backdrop, and Enter pressed whichever it landed on."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "page.inert = !!off" in script
+    assert "behind(true)" in script and "behind(false)" in script
+    # And the manager opens on the box it exists for.
+    assert "open.querySelector('.addbox textarea')" in script
+
+
+def test_a_press_in_flight_cannot_be_fired_twice_by_the_keyboard():
+    """`pointer-events:none` does not stop Enter on a focused submit."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "pressed.disabled = true" in script
+    assert script.count("pressed.disabled = false") == 2, (
+        "cleared on the way through and on the way out")
+    assert "form.busy{cursor:progress}" in pages.page(
+        "t", "", user={"id": 1, "username": "a", "role": "operator"})
+
+
+def test_the_confirm_is_placed_in_the_window_and_does_not_outlive_a_scroll():
+    """It sat at the row position on the document, so a Remove near the
+    foot of a long list asked below the fold - the press looked like it
+    had done nothing - and one scroll left the bubble over another row."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "window.innerHeight - size.height - 8" in script
+    assert "window.innerWidth - size.width - 8" in script
+    assert "{capture: true, once: true}" in script
+    assert ".mini{position:fixed" in pages.page(
+        "t", "", user={"id": 1, "username": "a", "role": "operator"})
+
+
+def test_an_empty_view_says_what_is_empty_about_it():
+    """One fixed sentence about a search, shown after pressing "With me"
+    on a quiet morning - and this table has no search."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "You are not holding any phone" in script
+    assert "Nothing is free right now" in script
+    assert "Nothing here matches that." in script, "the other views keep it"
