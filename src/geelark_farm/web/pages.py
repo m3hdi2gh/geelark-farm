@@ -315,8 +315,13 @@ details.tech[open]{{display:block;margin-top:4px}}
 .sheetbody .filters{{position:sticky;top:-15px;margin:0 -18px 0;
  padding:12px 18px 10px;background:var(--panel);z-index:2;
  border-bottom:1px solid var(--line2)}}
-/* Under that row, not under the top edge it covers. */
-.sheetbody .pooltable thead th{{top:43px}}
+/* Under that row, not under the top edge it covers: the row is 59px
+   tall in the same inset frame the -15px is measured in. And the table
+   wrapper must not be a scrollport of its own here, or the column names
+   stick to a box that never scrolls - which is why they never stuck in
+   the sheet (2026-09-08). */
+.sheetbody>.tscroll{{overflow:visible}}
+.sheetbody .pooltable thead th{{top:44px}}
 .pickrow{{display:flex;align-items:center;gap:10px;padding:9px 12px;
  border-bottom:1px solid var(--line2)}}
 .pickrow:last-child{{border-bottom:0}}
