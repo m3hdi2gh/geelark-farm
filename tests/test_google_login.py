@@ -1758,3 +1758,26 @@ def test_a_recaptcha_that_cannot_be_reached_is_closed_and_retried(phone):
     assert matched_screen(ctx).name == "recaptcha_unreachable"
     assert login.act_recaptcha_unreachable(ctx) is None
     assert device.tapped == ["OK"]
+
+
+def test_verify_your_phone_number_with_another_way_is_a_tap_not_a_verdict(
+        phone):
+    """The real page, off a real device (2026-09-09): "Verify your phone
+    number" over CONTINUE and TRY ANOTHER WAY, after the password. Read as
+    `phone_verification_required`, seventeen Gmails with nothing wrong with
+    them were set aside in twenty-five minutes; by hand, every one signed
+    in. The SMS is Google's first offer, not its only one."""
+    device = phone(taps_that_work={"Try another way"})
+    ctx = context_from("google-verify-phone-try-another-way.xml")
+
+    assert login._fatal_reason(ctx) is None
+    assert matched_screen(ctx).name == "2fa_verify_phone", (
+        "above `dismissable`, which would press CONTINUE and be asked for "
+        "a number")
+    assert login.act_try_another_way(ctx) is None
+    assert device.tapped == ["Try another way"]
+
+    # The same words with no way around them are the dead end they were.
+    ctx.blob = "verify your phone number to continue"
+    ctx.elements = []
+    assert login._fatal_reason(ctx) == "phone_verification_required"

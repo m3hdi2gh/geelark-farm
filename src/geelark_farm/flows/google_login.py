@@ -234,7 +234,8 @@ def _fatal_reason(ctx: Context) -> str | None:
     for reason, needles in FATAL_TEXTS.items():
         if not ctx.has(*needles):
             continue
-        if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and answerable(ctx):
+        if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and (
+                answerable(ctx) or another_way_offered(ctx)):
             continue
         # A captcha is not a dead end when a solver is configured: the
         # `captcha` screen tries it, and gives up - back to this same
@@ -897,6 +898,20 @@ def answerable(ctx: Context) -> bool:
     return authenticator_offered(ctx) or recovery_offered(ctx)
 
 
+def another_way_offered(ctx: Context) -> bool:
+    """Whether the page carries Google's own way around it.
+
+    "Verify your phone number" over CONTINUE and TRY ANOTHER WAY, after the
+    password: the SMS is Google's first offer, not its only one, and the
+    second button opens the method list where the authenticator is. Read
+    as fatal, seventeen Gmails with nothing wrong with them were set aside
+    in twenty-five minutes; signed in by hand, every one worked (the
+    operator, 2026-09-09). The needle stays for the page that offers no
+    other way - that one is a dead end still.
+    """
+    return ctx.has("try another way")
+
+
 def is_loading(ctx: Context) -> bool:
     """The generic progress bar, or Google saying it is still thinking."""
     return still_loading(ctx) or ctx.has(*CHECKING_TEXTS)
@@ -1249,6 +1264,18 @@ SCREENS: list[Screen] = [
     # the former is available gets the sign-in refused outright.
     Screen("2fa_authenticator_offered", authenticator_offered,
            act_choose_authenticator),
+
+    # "Verify your phone number" over CONTINUE and TRY ANOTHER WAY: the SMS
+    # is Google's first offer, not its only one. Above `dismissable`, which
+    # would press CONTINUE and be asked for a number; the second button
+    # opens the method list, where the authenticator is (the operator,
+    # 2026-09-09, seventeen Gmails set aside with nothing wrong with them).
+    Screen("2fa_verify_phone",
+           lambda c: (c.has("verify your phone number",
+                            "confirm your phone number")
+                      and another_way_offered(c)
+                      and not authenticator_offered(c)),
+           act_try_another_way, max_visits=2),
 
     # Only when no authenticator row is present.
     Screen("2fa_push_to_other_device",

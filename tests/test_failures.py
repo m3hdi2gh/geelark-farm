@@ -92,7 +92,11 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # cannot reach it three times is named rather than called unknown
     # (2026-09-08, phone 1994).
     assert "stuck_on_recaptcha_unreachable" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 23
+    # The twenty-fourth is `2fa_verify_phone`: "Verify your phone number"
+    # with a Try another way beside it, tapped rather than called fatal
+    # (2026-09-09).
+    assert "stuck_on_2fa_verify_phone" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 24
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])
