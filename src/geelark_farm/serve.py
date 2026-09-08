@@ -1270,8 +1270,16 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # the login. Drained at the foot of the pass, as it was, the shortfall
     # was seen a whole interval later (the operator, 2026-09-08). The
     # same goes for a paste of stock: counted now, not next time.
-    _drain_actions(settings, book, ledger, client=client, launch=launch,
-                   controls_only=False)
+    if _drain_actions(settings, book, ledger, client=client, launch=launch,
+                      controls_only=False):
+        # Something was asked for and done; a pass follows in seconds
+        # rather than an interval, so what the command set up is carried
+        # out now - a phone marked done or failed is deleted by the sync,
+        # and this pass's sync has already run (the operator, 2026-09-08).
+        # The follow-up drains nothing, so it rings nothing.
+        from . import signals
+
+        signals.ring(signals.queued)
     book.reload()
 
     warm, waiting, gmails, exits, stock, broken = _look(client, settings, book)

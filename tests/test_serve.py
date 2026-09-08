@@ -2137,3 +2137,25 @@ def test_a_pass_drains_the_webs_commands_before_it_counts(monkeypatch,
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
 
     assert order == ["controls", "commands", "look"]
+
+
+def test_a_pass_that_carried_out_a_command_rings_for_the_next(monkeypatch,
+                                                              settings):
+    """A phone marked failed is deleted by the sync, and this pass's sync
+    has already run - so a pass follows in seconds rather than an
+    interval. A pass that drained nothing rings nothing (2026-09-08)."""
+    from geelark_farm import signals
+
+    Recorder(warm=5, free=10).install(monkeypatch)
+    did = {"n": 1}
+    monkeypatch.setattr(serve_mod, "_drain_actions",
+                        lambda *a, **k: 0 if k.get("controls_only") else did["n"])
+    signals.queued.clear()
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert signals.queued.is_set(), "something was done: look again soon"
+
+    signals.queued.clear()
+    did["n"] = 0
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert not signals.queued.is_set(), "nothing was done: sleep the interval"

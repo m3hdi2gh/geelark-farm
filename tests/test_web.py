@@ -2387,7 +2387,9 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     # Who has it sits under the badge; when it last changed has its own
     # column now, and saying it twice was the page saying a number twice.
     # Whose it is rides as a second pill beside the status, not under it.
-    assert 'class="badge manual">With you' in body
+    assert '>With you</span>' in body
+    assert 'class="badge ready">Ready</span> <span class="badge manual"' \
+        not in body, "one pill, not two, once it is taken (2026-09-08)"
     assert app_mod.pages._ago("2026-09-03 10:00:00+00") in body
     assert '/phones/1500/state' in body and 'value="taken"' in body
     assert 'value="unused"' in body and "Release" in body, \
@@ -2583,7 +2585,7 @@ def test_a_phone_somebody_else_holds_offers_only_their_name(web, monkeypatch):
     assert '<span class="age">with ali</span>' in row
     for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
         assert f">{label}<" not in row, label
-    assert 'class="badge manual">With ali' in row
+    assert 'class="badge manual" title="Ready">With ali</span>' in row
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4605,3 +4607,76 @@ def test_the_preview_is_one_card_with_the_table_inside_it(web, monkeypatch):
     assert "Add 1 (skip 1)" in card, "the confirm is in the same card"
     assert "seller: usa" in card
     assert 'type="date"' not in body and "bought today" not in body
+
+
+# ------------------------------------- the table after a press (2026-09-08)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_taken_phone_keeps_its_place_and_wears_one_pill(web, monkeypatch):
+    """Take sent the row to the foot of its group, under the cursor, and
+    grew it a second pill; a marked phone still offered every button
+    while the sync had not got to it yet (the operator, 2026-09-08)."""
+    _dash(monkeypatch, phones=[
+        {"serial": "1856", "status": "ready", "state": "taken",
+         "owner": "mehdi", "gmail": "a@gmail.com", "app_account": "x@y.com"},
+        {"serial": "1862", "status": "ready", "state": "",
+         "gmail": "b@gmail.com", "app_account": "z@y.com"},
+        {"serial": "1870", "status": "ready", "state": "failed",
+         "owner": "mehdi", "gmail": "c@gmail.com", "app_account": "w@y.com"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert body.index('href="/phones/1856"') < body.index('href="/phones/1862"'), (
+        "by serial, taken or not")
+    start = body.index('href="/phones/1856"')
+    row = body[start:body.index("</tr>", start)]
+    assert row.count('class="badge') == 1, "With you, and nothing beside it"
+    assert 'title="Ready">With you</span>' in row
+    start = body.index('href="/phones/1870"')
+    leaving = body[start:body.index("</tr>", start)]
+    assert "marked failed &middot; leaving" in leaving
+    assert '<span class="age">leaving</span>' in leaving
+    for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
+        assert f">{label}<" not in leaving, label
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_done_and_failed_ask_beside_the_button(web, monkeypatch):
+    """The two that delete the phone went to a page of their own to ask;
+    Remove already asked in a bubble beside the button. Same bubble, same
+    words the page had (the operator, 2026-09-08)."""
+    from geelark_farm.web import pages
+
+    _dash(monkeypatch, phones=[{"serial": "1856", "status": "ready",
+                                "state": "taken", "owner": "mehdi"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    start = body.index('href="/phones/1856"')
+    row = body[start:body.index("</tr>", start)]
+    assert 'data-ask="Phone 1856 failed? The next sync deletes' in row
+    assert 'data-yes="Yes, phone 1856 is failed"' in row
+    assert 'data-ask="Phone 1856 done? The next sync deletes' in row
+    assert row.count("data-ask=") == 2, "Release asks nothing"
+    script = pages._DASH_SCRIPT
+    assert "askFirst(form, form.dataset.ask, form.dataset.yes || 'Yes')" in script
+    assert "function askFirst(form, question, answer)" in script
+
+
+def test_the_send_sheet_counts_a_cross_as_no_account(web, monkeypatch):
+    """The build writes a cross into the account column of a warm phone,
+    and the sheet read the cross as an account - so with a warm phone on
+    the list it said none could take one (the operator, 2026-09-08)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_login_accounts": True}
+    data = {"phones": [{"serial": "1848", "status": "app_only",
+                        "app_account": "\u2717", "state": "",
+                        "proxy_name": "SX22"}]}
+    sheet = pages._send_sheet(data, user)
+    assert 'name="serial" value="1848"' in sheet
+    assert "No phone can take an account" not in sheet
+    gone = dict(data, phones=[dict(data["phones"][0], state="failed")])
+    assert 'value="1848"' not in pages._send_sheet(gone, user), "leaving"

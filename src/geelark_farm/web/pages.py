@@ -1025,16 +1025,26 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
     the one word that said whether the phone actually works.
     """
     status = row.get("status") or ""
+    state = row.get("state") or ""
     pill = (f'<span class="badge {_PHONE_CLASS.get(status, "")}">'
             f'{esc(_phone_word(status))}</span>')
-    if (row.get("state") or "") != "taken":
+    if state in ("done", "failed"):
+        # Marked, and on its way out: the pass deletes it within seconds.
+        # Said on the row, so the press is seen to have landed.
+        return (f'<span class="badge manual" title="{esc(_phone_word(status))}">'
+                f'marked {esc(state)} &middot; leaving</span>')
+    if state != "taken":
         return pill
     if me is None:
         return '<span class="badge manual">taken</span>'
     owner = str(row.get("owner") or "")
     who = "With you" if owner and owner == me else (
         f"With {owner}" if owner else "Taken")
-    return f'{pill} <span class="badge manual">{esc(who)}</span>'
+    # The one pill, not two: the status word rode beside it and the row
+    # grew a line when Take was pressed (the operator, 2026-09-08). What
+    # the phone is stays on the hover.
+    return (f'<span class="badge manual" title="{esc(_phone_word(status))}">'
+            f'{esc(who)}</span>')
 
 
 
@@ -1351,8 +1361,15 @@ def _state_form(user: dict, serial: str, state: str, back: str = "/") -> str:
     """One Take / Back / Done / Failed button; `back` is the page the
     press returns to (the dashboard, or the phone's own story)."""
     plan = PHONE_STATES[state]
+    # The two that delete the phone carry their question on the form, so
+    # the script asks it beside the button rather than on a page of its
+    # own (the operator, 2026-09-08); without the script the server still
+    # asks on that page.
+    ask = (f' data-ask="Phone {esc(serial)} {state}? {esc(plan["text"])}"'
+           f' data-yes="Yes, phone {esc(serial)} is {state}"'
+           if plan["sure"] else "")
     return (f'<form method="post" class="inline" '
-            f'action="/phones/{esc(serial)}/state">{_csrf(user)}'
+            f'action="/phones/{esc(serial)}/state"{ask}>{_csrf(user)}'
             f'<input type="hidden" name="state" value="{state}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<button class="{plan["klass"]}">{esc(plan["label"])}'
@@ -1451,6 +1468,9 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     building = (row.get("status") or "") == "building"
     serial = str(row.get("serial") or "")
     taken = (row.get("state") or "") == "taken"
+    if (row.get("state") or "") in ("done", "failed"):
+        # Decided: nothing more is done to a phone that is leaving.
+        return '<span class="age">leaving</span>'
     held_by = _theirs(user, row)
     if held_by:
         # Somebody else's. The three ways a phone comes back belong to the
@@ -1474,9 +1494,11 @@ def _phone_rows(data: dict, user: dict) -> str:
     page - this table is for seeing the shelf at a glance."""
     # What can go out first, and inside each kind what nobody has taken:
     # the top of this table is the shelf the headline number counts.
+    # By status, then serial - and not by whether it is taken: that sent
+    # the row somebody had just pressed Take on to the bottom of its
+    # group, under their cursor (the operator, 2026-09-08).
     phones = sorted(data.get("phones") or [],
                     key=lambda r: (_PHONE_ORDER.get(r.get("status") or "", 9),
-                                   (r.get("state") or "") == "taken",
                                    str(r.get("serial"))))
     progress = data.get("progress") or {}
     me = str(user.get("username") or "")
@@ -1526,10 +1548,18 @@ def _addr_cell(value, empty: str) -> str:
     column, down the page.
     """
     text = str(value or "").strip()
-    # The tab's own marks for "none" - a cross, a tick - are not addresses.
-    if not text or text in ("✗", "✓", "-"):
+    if _no_address(text):
         return f'<span class="dim">{esc(empty)}</span>'
-    return f'<span class="addr cp" title="{esc(text)}">{esc(text)}</span>' 
+    return f'<span class="addr cp" title="{esc(text)}">{esc(text)}</span>'
+
+
+def _no_address(value) -> bool:
+    """Whether a phone's address cell says nothing is there. The tab's own
+    marks for "none" - a cross, a tick - are not addresses, and the build
+    writes a cross into an empty step column, so blank is not the only
+    way a cell says none."""
+    text = str(value or "").strip()
+    return not text or text in ("✗", "✓", "-")
 
 
 def _status_sentence(data: dict) -> str:
@@ -2132,18 +2162,17 @@ _DASH_SCRIPT = """
   // Remove asks first - here, beside the button, not on a page of its own
   // (the operator, 2026-09-05). Saying yes sends the same form with the
   // server's own "sure" field, so the server needs nothing new.
-  function askFirst(form, what){
+  function askFirst(form, question, answer){
     var old = document.querySelector('.mini'); if (old) old.remove();
     var box = document.createElement('div');
     box.className = 'mini'; box.setAttribute('role', 'dialog');
     var p = document.createElement('p');
-    p.textContent = 'Remove ' + what + ' from the pool? The request keeps '
-      + 'the row so it can be put back.';
+    p.textContent = question;
     var row = document.createElement('div'); row.className = 'row';
     var keep = document.createElement('button'); keep.type = 'button';
     keep.className = 'quiet'; keep.textContent = 'Keep it';
     var yes = document.createElement('button'); yes.type = 'button';
-    yes.className = 'quiet bad'; yes.textContent = 'Remove';
+    yes.className = 'quiet bad'; yes.textContent = answer;
     row.append(keep, yes); box.append(p, row);
     // Placed in the window, not on the document, and kept inside it: it
     // used to sit at the row's own place on the page, so a Remove near
@@ -2186,7 +2215,15 @@ _DASH_SCRIPT = """
       e.preventDefault();
       var who = (form.querySelector('input[name=address]') || {}).value
              || (form.querySelector('input[name=name]') || {}).value || 'this row';
-      askFirst(form, who);
+      askFirst(form, 'Remove ' + who + ' from the pool? The request keeps '
+        + 'the row so it can be put back.', 'Remove');
+      return;
+    }
+    // Done and Failed, which delete the phone: asked beside the button,
+    // with the words the server would have put on a page of its own.
+    if (form.dataset.ask && !form.querySelector('input[name=sure]')) {
+      e.preventDefault();
+      askFirst(form, form.dataset.ask, form.dataset.yes || 'Yes');
       return;
     }
     e.preventDefault();
@@ -2868,9 +2905,14 @@ def _send_sheet(data: dict, user: dict) -> str:
     without the script the row's own button sends to the next warm phone,
     which is what it always did.
     """
+    # `app_account` holds a cross, not a blank, on a phone with no account
+    # - the build writes one - so "no account" is the same test the cell
+    # uses. Read as a plain truthy string, every warm phone failed it and
+    # the sheet said none could take one (the operator, 2026-09-08).
     able = [p for p in (data.get("phones") or [])
             if (p.get("status") or "") == "app_only"
-            and not p.get("app_account") and (p.get("state") or "") != "taken"]
+            and _no_address(p.get("app_account"))
+            and (p.get("state") or "") not in ("taken", "done", "failed")]
     rows = "".join(
         f'<form method="post" class="pickrow" action="/accounts/login">'
         f'{_csrf(user)}<input type="hidden" name="addresses" value="">'
