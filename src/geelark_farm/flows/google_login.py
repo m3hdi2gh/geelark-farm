@@ -1116,6 +1116,19 @@ def act_choose_authenticator(ctx: Context) -> Outcome | None:
                        FATAL_ADVICE["no_recovery_email"],
                        artifacts=[path] if path else [])
 
+    # The first list Google shows after "Verify your phone number" can be
+    # the SMS row and a Try another way, nothing else - the authenticator
+    # is one more press away, behind that button (2026-09-09, phones 2082,
+    # 2086 and 2090: three Gmails that sign in by hand were called SMS-only
+    # here). Pressed once, on the first list only: a second list with no
+    # authenticator on it is the answer, and the guard on `act_try_another
+    # _way` still stands - this is only reached with none visible.
+    if ctx.has("try another way") and ctx.seen.get("2fa_method_list", 0) <= 1:
+        log.info("the list offers no authenticator; asking for another way")
+        if ctx.tap("Try another way"):
+            time.sleep(4)
+            return None
+
     path = ctx.save("no-authenticator-option")
     return Outcome("fatal", "no_authenticator_option",
                    "the account's 2FA choices do not include an authenticator app",
@@ -1284,11 +1297,14 @@ SCREENS: list[Screen] = [
                       and not authenticator_offered(c)),
            act_try_another_way),
 
+    # Three visits, not one: the first list may carry only the SMS row and
+    # a Try another way, which the act presses once; the second list is
+    # the verdict (2026-09-09).
     Screen("2fa_method_list",
            lambda c: (c.has("choose how you want to sign in",
                             "other ways to verify")
                       and not authenticator_offered(c)),
-           act_choose_authenticator, max_visits=1),
+           act_choose_authenticator, max_visits=3),
 
     # Google's g.co/sc challenge: "To get your security code, go to g.co/sc in
     # a new browser window". Unattended, that is a dead end - there is no other

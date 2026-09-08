@@ -1570,12 +1570,15 @@ def test_a_fatal_page_is_handled_once_and_not_argued_with():
     assert fatal.max_visits == 1
 
 
-def test_the_method_list_is_chosen_from_once():
+def test_the_method_list_is_chosen_from_twice_at_most():
     """Coming back to it means the choice did not take, and choosing again
-    from a list that did not respond is how a flow loops."""
+    from a list that did not respond is how a flow loops. One extra visit
+    since 2026-09-09: the first list may be the SMS row and a Try another
+    way, which the act presses once - and on the second list the act itself
+    gives the verdict, so the allowance is a backstop, not the loop's end."""
     method = next(s for s in login.SCREENS if s.name == "2fa_method_list")
 
-    assert method.max_visits == 1
+    assert method.max_visits == 3
 
 
 def test_an_artifact_directory_that_is_already_there_is_not_an_error(session,
@@ -1781,3 +1784,26 @@ def test_verify_your_phone_number_with_another_way_is_a_tap_not_a_verdict(
     ctx.blob = "verify your phone number to continue"
     ctx.elements = []
     assert login._fatal_reason(ctx) == "phone_verification_required"
+
+
+def test_a_list_with_only_the_sms_row_is_widened_once_before_it_is_a_verdict(
+        phone, tmp_path):
+    """The real list, off a real device (2026-09-09): after "Verify your
+    phone number" and its Try another way, Google shows "Get a verification
+    code sent to your phone" and one more Try another way. The authenticator
+    is behind that button. Three Gmails that sign in by hand were called
+    SMS-only here (phones 2082, 2086, 2090)."""
+    device = phone(taps_that_work={"Try another way"})
+    ctx = context_from("google-method-list-sms-only.xml")
+    ctx.artifact_dir = tmp_path
+
+    assert matched_screen(ctx).name == "2fa_method_list"
+    ctx.seen = {"2fa_method_list": 1}
+    assert login.act_choose_authenticator(ctx) is None
+    assert device.tapped == ["Try another way"]
+
+    # The second list with nothing on it is the answer it always was.
+    ctx.seen = {"2fa_method_list": 2}
+    out = login.act_choose_authenticator(ctx)
+    assert out.reason == "no_authenticator_option"
+    assert device.tapped == ["Try another way"], "not pressed again"
