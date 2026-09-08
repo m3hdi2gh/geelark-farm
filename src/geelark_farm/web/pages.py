@@ -1033,18 +1033,26 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
         # Said on the row, so the press is seen to have landed.
         return (f'<span class="badge manual" title="{esc(_phone_word(status))}">'
                 f'marked {esc(state)} &middot; leaving</span>')
+    on = " &middot; on" if row.get("running") else ""
     if state != "taken":
+        if row.get("running"):
+            # GeeLark has it on and nobody here holds it: booted by hand
+            # in GeeLark, or taken and released while still up. It is
+            # billing, and it read as free (the operator, 2026-09-08).
+            return (f'<span class="badge manual" '
+                    f'title="{esc(_phone_word(status))} - on in GeeLark, '
+                    f'nobody here holds it">Running</span>')
         return pill
     if me is None:
-        return '<span class="badge manual">taken</span>'
+        return f'<span class="badge manual">taken{on}</span>'
     owner = str(row.get("owner") or "")
     who = "With you" if owner and owner == me else (
         f"With {owner}" if owner else "Taken")
     # The one pill, not two: the status word rode beside it and the row
     # grew a line when Take was pressed (the operator, 2026-09-08). What
-    # the phone is stays on the hover.
+    # the phone is stays on the hover; whether it is on rides along.
     return (f'<span class="badge manual" title="{esc(_phone_word(status))}">'
-            f'{esc(who)}</span>')
+            f'{esc(who)}{on}</span>')
 
 
 
@@ -1479,7 +1487,9 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
         return f'<span class="age">with {esc(held_by)}</span>'
     actions = []
     if not building and _may(user, "may_take_phones"):
-        if not taken:
+        # Not on a phone GeeLark already has on: Boot would start what
+        # is started, and bill it again (2026-09-08). Take is the door.
+        if not taken and not row.get("running"):
             actions.append(_boot_form(user, serial))
         actions += (_state_forms(user, row, back) if taken
                     else _state_forms(user, row, back)[:1])
@@ -1504,6 +1514,12 @@ def _phone_rows(data: dict, user: dict) -> str:
     me = str(user.get("username") or "")
     lines = []
     for r in phones:
+        # Marked done or failed: decided, and gone from this table the
+        # moment the press lands rather than when the pass gets to it -
+        # the operator has nothing left to do with it (2026-09-08). The
+        # phone's own page still tells its story until the sync closes it.
+        if (r.get("state") or "") in ("done", "failed"):
+            continue
         serial = str(r.get("serial") or "")
         status = r.get("status") or ""
         badge = _phone_badge(r, me)
@@ -2205,10 +2221,30 @@ _DASH_SCRIPT = """
     });
   }
 
+  // A word on this page, for a few seconds.
+  function toast(text){
+    var old = document.querySelector('.said.toast'); if (old) old.remove();
+    var p = document.createElement('p');
+    p.className = 'said toast up'; p.textContent = text;
+    document.querySelector('main').appendChild(p);
+    setTimeout(function(){ p.classList.add('gone'); }, 5200);
+    setTimeout(function(){ p.remove(); }, 5800);
+  }
+
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!(form instanceof HTMLFormElement)) return;
-    if ((form.method || '').toLowerCase() !== 'post' || form.target) return;
+    if ((form.method || '').toLowerCase() !== 'post') return;
+    if (form.target) {
+      // Boot opens its own tab and that tab waits for the link. This
+      // page says so, or the press looked like nothing (2026-09-08).
+      if (/[/]boot$/.test(form.action)) {
+        var which = (form.action.split('/phones/')[1] || '').split('/')[0];
+        toast('Starting ' + (which || 'the phone') + ' - its screen opens '
+          + 'in the new tab as soon as GeeLark hands the link back.');
+      }
+      return;
+    }
     if (!document.querySelector('main').contains(form)) return;
     if (/[/]remove$/.test(form.action)
         && !form.querySelector('input[name=sure]')) {
@@ -2260,6 +2296,13 @@ _DASH_SCRIPT = """
         // shows in the sheet, not under a dialog that is still up.
         closeEditor(form.closest('dialog.editor'));
         var doc = parse(got.html);
+        // Queued is not done: the lane carries it out a moment later, so
+        // look again shortly and the table shows what happened - a marked
+        // phone gone, a taken one wearing its name (2026-09-08).
+        if (/[?&]said=queued/.test(got.url)) {
+          clearTimeout(init.timer);
+          init.timer = setTimeout(reloadWhenSettled, 2500);
+        }
         if (isHere(got.url)) { swapMain(doc); return; }
         // Not the dashboard: a preview, a confirm, a refusal. Inside the
         // sheet it came from, if it came from one; else in place of the
@@ -2912,6 +2955,7 @@ def _send_sheet(data: dict, user: dict) -> str:
     able = [p for p in (data.get("phones") or [])
             if (p.get("status") or "") == "app_only"
             and _no_address(p.get("app_account"))
+            and not p.get("running")
             and (p.get("state") or "") not in ("taken", "done", "failed")]
     rows = "".join(
         f'<form method="post" class="pickrow" action="/accounts/login">'
@@ -3204,7 +3248,8 @@ def dashboard(data: dict, user: dict, said: str = "",
     # amber of something that wants a look. It stood in its own box under
     # the table for a while; the prototype the operator chose puts it in
     # the table, and one list is easier to read than a list and a box.
-    on_the_shelf = phones
+    on_the_shelf = [p for p in phones
+                    if (p.get("state") or "") not in ("done", "failed")]
     rows = _phone_rows(dict(data, phones=on_the_shelf), user)
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>gpt account</th><th>ip</th>'
@@ -3331,16 +3376,23 @@ def live_page(serial: str, user: dict, said: str = "",
     else:
         title, note, colour, wait = (
             f"Starting {serial}",
-            "the keeper picks this up on its next pass, within about half "
-            "a minute - this tab goes to the screen by itself",
+            "GeeLark is starting it - usually ten to twenty seconds. This "
+            "tab goes to the screen by itself; keep it open.",
             "amber", 3)
+    # Its own refresh. The browser's went inside <noscript> for the
+    # dashboard's sake, and this page has no script - so it never asked
+    # again, and Boot looked wired to nothing while the link sat in the
+    # request's row (the operator, 2026-09-08).
+    again = (f'<script>setTimeout(function(){{ location.reload(); }}, '
+             f'{int(wait) * 1000});</script>' if wait else "")
     body = (f'<div class="card" style="width:min(520px,100%);'
             f'text-align:center">'
             f'<div class="brand" style="justify-content:center">'
             f'{_BRAND_ICON}geelark farm</div>'
             f'<h2 style="color:var(--{colour})">{esc(title)}</h2>'
             f'<p class="muted">{esc(note)}</p>'
-            f'<a class="btn quiet" href="/">Back to the dashboard</a></div>')
+            f'<a class="btn quiet" href="/">Back to the dashboard</a></div>'
+            f'{again}')
     return page(f"Boot {serial}", body, user=user, here="/", refresh=wait)
 
 

@@ -188,6 +188,21 @@ def _when(stamp: str | None):
     return text.rstrip("Zz") + "+00"
 
 
+def mark_running(cur, running) -> int:
+    """Which live phones GeeLark has on, from this pass's listing: `running`
+    is the serials that are on. Every other live row is off. One statement,
+    touching only rows whose answer changed, so a quiet pass writes nothing.
+    None means the listing could not be read - then nothing is said, and the
+    last true picture stands rather than every phone reading off."""
+    if running is None:
+        return 0
+    on = [str(s) for s in running]
+    cur.execute(
+        "UPDATE phones SET running = (serial = ANY(%s))"
+        " WHERE done_at IS NULL AND running <> (serial = ANY(%s))", (on, on))
+    return int(cur.rowcount or 0)
+
+
 def _upsert_phones(cur, book) -> list[str]:
     live: list[str] = []
     for _offset, cells in book.phones._typed_rows("the Phones tab"):

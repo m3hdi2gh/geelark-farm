@@ -188,7 +188,7 @@ def phones(settings: Settings, owner_id: int | None = None) -> list[dict]:
     with Store(settings) as store:
         return store._rows(
             "SELECT serial, status, state, app_installed, gmail,"
-            " app_account, proxy_name, tries, note, updated_at"
+            " app_account, proxy_name, tries, note, updated_at, running"
             " FROM phones WHERE done_at IS NULL"
             " AND (%s::bigint IS NULL OR owner_id = %s)"
             " ORDER BY serial", (owner_id, owner_id))
@@ -213,7 +213,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         phone_rows = store._rows(
             "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
             " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
-            " p.created_at, u.username AS owner"
+            " p.created_at, p.running, u.username AS owner"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL"
             " AND (%s::bigint IS NULL OR p.owner_id = %s)"

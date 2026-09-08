@@ -543,3 +543,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS sessions_of_user ON sessions (user_id);
+
+-- --------------------------------------------- phones, rev 16 (running)
+-- Whether GeeLark has the phone on right now, written by every pass from
+-- the listing it already reads. The console showed a running phone as
+-- free - Boot offered, nothing to say it was billing - so a phone booted
+-- from the console, or by hand in GeeLark, looked exactly like one that
+-- was off (the operator, 2026-09-08). Machine-owned, like status: the
+-- person channel (state, owner) is untouched by it.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT false;

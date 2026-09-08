@@ -703,7 +703,8 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
 
 
 def _shadow(settings: Settings, book: Book, decision: Decision,
-            outcome: dict, pulse: dict | None = None) -> None:
+            outcome: dict, pulse: dict | None = None,
+            running: list[str] | None = None) -> None:
     """Mirror this pass into the store, and say what the pass did.
 
     Sheet stays authoritative; this is the read-model the web will serve
@@ -735,6 +736,11 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
             # the Proxy Pool page can offer to add them without a call.
             store_state.put(conn, "unlisted_proxies",
                             getattr(book, "unlisted_proxies", []))
+            # What GeeLark has on, whatever the pools flag says: this is
+            # the machine's half of the row, like status (2026-09-08).
+            if running is not None:
+                with conn.cursor() as cur:
+                    store_shadow.mark_running(cur, running)
             if pulse is not None:
                 # The numbers the pass decided from, for the dashboard's
                 # actor bar (C6): warm of target, who is waiting, whether
@@ -764,6 +770,22 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
         log.warning("the store did not take this pass's mirror (%s); "
                     "the sheet remains authoritative and the pass is "
                     "unaffected", exc)
+
+
+def _running(client: Client) -> list[str] | None:
+    """The serials GeeLark has on right now, or None when it would not say.
+
+    One listing a pass, so the console can show a running phone as
+    running - booted from the console or by hand in GeeLark, it is billing
+    either way, and it read as free (the operator, 2026-09-08). Never
+    fatal: a pass that cannot list leaves the last picture standing.
+    """
+    try:
+        return [str(p.get("serialNo")) for p in phones.listing(client)
+                if p.get("status") in (phones.RUNNING, phones.STARTING)]
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not list what is running (%s)", exc)
+        return None
 
 
 def _look(client: Client, settings: Settings,
@@ -1340,7 +1362,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
           unknown_running=len(outcome.get("unknown_running") or []))
 
     streak = fuse.seen() if callable(getattr(fuse, "seen", None)) else (0, [])
-    _shadow(settings, book, decision, outcome, pulse={
+    _shadow(settings, book, decision, outcome, running=_running(client),
+            pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,
         "coming": coming, "claimed": claimed, "tripped": tripped,
         "free_slots": free, "manual_login": settings.manual_login,

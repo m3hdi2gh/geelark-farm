@@ -97,7 +97,7 @@ def test_the_pulse_says_why_and_how_close_the_breaker_is(monkeypatch,
     monkeypatch.setattr(serve_mod, "_drain_actions", lambda *a, **k: 0)
     kept = {}
     monkeypatch.setattr(serve_mod, "_shadow",
-                        lambda s, b, d, o, pulse=None: kept.update(pulse))
+                        lambda s, b, d, o, pulse=None, **k: kept.update(pulse))
     fuse = Fuse(tripped="5 builds in a row failed")
     fuse.seen = lambda: (5, ["captcha_shown"] * 5)      # the real API
 

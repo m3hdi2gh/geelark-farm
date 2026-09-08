@@ -4632,12 +4632,11 @@ def test_a_taken_phone_keeps_its_place_and_wears_one_pill(web, monkeypatch):
     row = body[start:body.index("</tr>", start)]
     assert row.count('class="badge') == 1, "With you, and nothing beside it"
     assert 'title="Ready">With you</span>' in row
-    start = body.index('href="/phones/1870"')
-    leaving = body[start:body.index("</tr>", start)]
-    assert "marked failed &middot; leaving" in leaving
-    assert '<span class="age">leaving</span>' in leaving
-    for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
-        assert f">{label}<" not in leaving, label
+    # Marked failed: gone from the table the moment the press lands, and
+    # out of the count - the operator has nothing left to do with it. The
+    # phone's own page still tells its story until the sync closes it.
+    assert 'href="/phones/1870"' not in body
+    assert "2 phones" in body
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4680,3 +4679,101 @@ def test_the_send_sheet_counts_a_cross_as_no_account(web, monkeypatch):
     assert "No phone can take an account" not in sheet
     gone = dict(data, phones=[dict(data["phones"][0], state="failed")])
     assert 'value="1848"' not in pages._send_sheet(gone, user), "leaving"
+
+
+# ---------------------------------- what GeeLark has on, and Boot (2026-09-08)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_phone_geelark_has_on_reads_running_and_offers_no_boot(web,
+                                                                  monkeypatch):
+    """Booted from the console or by hand in GeeLark, a running phone is
+    billing - and it read as free, Boot and all, so nobody could tell it
+    was on (the operator, 2026-09-08)."""
+    from geelark_farm.web import pages
+
+    _dash(monkeypatch, phones=[
+        {"serial": "1862", "status": "ready", "state": "", "running": True,
+         "gmail": "a@gmail.com", "app_account": "x@y.com"},
+        {"serial": "1848", "status": "app_only", "state": "", "running": True,
+         "gmail": "b@gmail.com", "app_account": "\u2717"},
+        {"serial": "1856", "status": "ready", "state": "taken",
+         "owner": "mehdi", "running": True, "gmail": "c@gmail.com"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    def row(serial):
+        start = body.index(f'href="/phones/{serial}"')
+        return body[start:body.index("</tr>", start)]
+
+    assert 'nobody here holds it">Running</span>' in row("1862")
+    assert ">Boot<" not in row("1862") and ">Take<" in row("1862")
+    assert "With you &middot; on</span>" in row("1856")
+    # Off again: the ordinary row, Boot and all.
+    _dash(monkeypatch, phones=[{"serial": "1862", "status": "ready",
+                                "state": "", "running": False}])
+    _, _, again = client.request("GET", "/")
+    assert ">Boot<" in again
+    table = again[again.index('id="phones"'):again.index("</table>")]
+    assert "Running" not in table
+    # And the send sheet does not offer a phone that is on: the finish
+    # would refuse it as in use by hand.
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_login_accounts": True}
+    sheet = pages._send_sheet(
+        {"phones": [{"serial": "1848", "status": "app_only",
+                     "app_account": "\u2717", "state": "", "running": True}]},
+        user)
+    assert 'value="1848"' not in sheet
+
+
+def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
+    """The browser's refresh went inside <noscript> for the dashboard's
+    sake, and the live tab has no script - so it never asked again, and
+    Boot looked wired to nothing while the link sat in the request's row
+    (the operator, 2026-09-08). The dashboard also says what the press
+    did, since the answer opens in another tab."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "username": "test", "role": "operator", "csrf": "c"}
+    waiting = pages.live_page("1862", user, said="queued:70", row={})
+    assert "setTimeout(function(){ location.reload(); }, 3000)" in waiting
+    assert "GeeLark is starting it" in waiting
+    started = pages.live_page("1862", user, said="queued:70",
+                              row={"status": "done", "result": "started"})
+    assert "location.reload()" not in started, "nothing left to wait for"
+    script = pages._DASH_SCRIPT
+    assert "toast('Starting ' + (which || 'the phone')" in script
+    assert "in the new tab as soon as GeeLark hands the link back" in script
+    assert "if (/[?&]said=queued/.test(got.url))" in script, (
+        "queued is not done: look again shortly")
+
+
+def test_the_mirror_marks_what_is_running_in_one_statement():
+    from geelark_farm import serve as serve_mod
+    from geelark_farm import phones as phones_mod
+    from geelark_farm.store import shadow
+
+    class Cur:
+        rowcount = 2
+        executed = []
+
+        def execute(self, sql, params=None):
+            self.executed.append((" ".join(sql.split()), params))
+
+    cur = Cur()
+    assert shadow.mark_running(cur, ["1862", "1848"]) == 2
+    sql, params = cur.executed[0]
+    assert "SET running = (serial = ANY(%s))" in sql
+    assert "done_at IS NULL" in sql and params == (["1862", "1848"],) * 2
+    assert shadow.mark_running(cur, None) == 0 and len(cur.executed) == 1, (
+        "a listing that could not be read says nothing")
+
+    class Client:
+        def data(self, path, params):
+            return {"items": [
+                {"serialNo": "1862", "status": phones_mod.RUNNING},
+                {"serialNo": "1848", "status": phones_mod.STOPPED},
+                {"serialNo": "1900", "status": phones_mod.STARTING}]}
+
+    assert serve_mod._running(Client()) == ["1862", "1900"]
+    assert serve_mod._running(object()) is None

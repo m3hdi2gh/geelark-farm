@@ -1807,7 +1807,7 @@ def test_the_pass_leaves_its_pulse_for_the_dashboard(monkeypatch,
     Recorder(warm=3, free=10, waiting=1).install(monkeypatch)
     kept = {}
     monkeypatch.setattr(serve_mod, "_shadow",
-                        lambda s, b, d, o, pulse=None: kept.update(pulse))
+                        lambda s, b, d, o, pulse=None, **k: kept.update(pulse))
     monkeypatch.setattr(serve_mod, "_drain_actions", lambda *a, **k: 0)
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
