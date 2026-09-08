@@ -507,3 +507,34 @@ def test_a_beat_survives_a_restart(tmp_path, monkeypatch):
     book.beat()
 
     assert not ledger_mod.Ledger.load(tmp_path).get("P1").is_stale
+
+
+def test_a_dead_runs_claims_are_not_kept_fresh_by_the_next_process(
+        tmp_path, monkeypatch):
+    """`beat` restamped every unreleased claim in the file, so a process that
+    started after a kill kept the dead run's claims fresh forever, and
+    `settle_abandoned` left three `building` rows - two of them running and
+    billing - "to a run" that no longer existed, through two more restarts
+    (2026-09-08, phones 1991, 1992, 1995)."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    dead = ledger_mod.Ledger.load(tmp_path)
+    dead.record("P1", label="build 1")
+    dead.claim("P1")
+
+    # The next process: it claims one of its own and beats.
+    fresh = ledger_mod.Ledger.load(tmp_path)
+    fresh.record("P2", label="build 1")
+    fresh.claim("P2")
+    clock["t"] += ledger_mod.STALE_CLAIM_SECONDS + 1
+    assert fresh.beat() == ["P2"]
+
+    again = ledger_mod.Ledger.load(tmp_path)
+    assert again.get("P1").is_stale, "the dead run's claim went stale"
+    assert not again.get("P2").is_stale
+
+    # Released or forgotten, a claim is no longer this process's to beat.
+    fresh.release("P2")
+    assert fresh.beat() == []

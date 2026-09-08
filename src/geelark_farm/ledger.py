@@ -124,6 +124,13 @@ class Ledger:
     #: disagree the way the constant and the setting did.
     stale_after: float = STALE_CLAIM_SECONDS
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    #: The claims *this process* made. `beat` restamps these and no others:
+    #: it restamped every unreleased claim in the file, so a process that
+    #: started after a kill kept the dead run's claims fresh forever, and
+    #: `settle_abandoned` left three `building` rows - two of them running
+    #: and billing - "to a run" that no longer existed, through two more
+    #: restarts (2026-09-08, phones 1991, 1992, 1995).
+    _mine: set = field(default_factory=set, repr=False)
 
     def _adopt(self, entry: Entry) -> Entry:
         """Every Entry this Ledger holds is measured against this Ledger's
@@ -292,6 +299,7 @@ class Ledger:
             entry.released_at = None
             if label:
                 entry.label = label
+            self._mine.add(phone_id)
             self.save()
             return entry
 
@@ -314,7 +322,7 @@ class Ledger:
         with self._lock:
             now = _now()
             held = [phone_id for phone_id, entry in self.entries.items()
-                    if entry.is_claimed]
+                    if entry.is_claimed and phone_id in self._mine]
             for phone_id in held:
                 self.entries[phone_id].claimed_at = now
             if held:
@@ -331,11 +339,13 @@ class Ledger:
             entry.released_at = _now()
             if note:
                 entry.note = note
+            self._mine.discard(phone_id)
             self.save()
 
     def forget(self, phone_id: str) -> None:
         """Drop a phone that no longer exists (deleted upstream)."""
         with self._lock:
+            self._mine.discard(phone_id)
             if self.entries.pop(phone_id, None) is not None:
                 self.save()
 
