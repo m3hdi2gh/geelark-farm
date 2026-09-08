@@ -2516,20 +2516,30 @@ def test_the_flight_counts_down_job_by_job_not_batch_by_batch():
     assert flight.counts() == (0, 0), "the rest comes off when the batch ends"
 
 
-def test_the_keepers_count_keeps_a_taken_phone_and_a_send_does_not(
-        monkeypatch, make_settings):
+def test_warm_is_what_a_send_can_use(monkeypatch, make_settings):
+    """A taken phone is somebody's, not stock - so Take orders its
+    replacement - and a phone with no app on it is not offered by the
+    Send sheet, so it is not stock while accounts go in by hand. Two free
+    phones read as five, and the keeper built for five (the operator,
+    2026-09-09). With the keeper finishing phones itself an app-less one
+    is a phone it can finish, and counts."""
     from geelark_farm import builder
 
     asked = []
+    rows = [{"serial": "1", "app": "yes"}, {"serial": "2", "app": ""}]
     monkeypatch.setattr(builder, "_unfinished",
                         lambda client, book, listing=None, held_too=False:
-                        asked.append(held_too) or ([], []))
+                        asked.append(held_too) or (list(rows), []))
     book = SimpleNamespace(apps=SimpleNamespace(available=[], broken=[]),
                            gmails=SimpleNamespace(available=[], broken=[]),
                            proxies=SimpleNamespace(available=[], broken=[]),
-                           phones=SimpleNamespace(counts=lambda: {}))
-    serve_mod._look(object(), make_settings(), book)
-    assert asked == [True], "the keeper counts a taken phone as warm"
+                           phones=SimpleNamespace(counts=lambda: {},
+                                                  INSTALLED="yes"))
+    warm = serve_mod._look(object(), make_settings(manual_login=True), book)[0]
+    assert asked == [False], "a taken phone is not stock"
+    assert warm == 1, "only the phone with the app on it"
+    warm = serve_mod._look(object(), make_settings(manual_login=False), book)[0]
+    assert warm == 2, "the keeper can finish the app-less one itself"
     assert "power_off_phone" in serve_mod.lane_verbs()
 
 

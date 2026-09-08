@@ -1058,11 +1058,17 @@ def _look(client: Client, settings: Settings, book: Book,
     """
     from . import builder
 
-    # A taken phone is still warm stock: it is somebody's until they mark
-    # it done or failed, and Take must not order a replacement (the
-    # operator, 2026-09-08).
-    warm, _gone = builder._unfinished(client, book, listing=listing,
-                                      held_too=True)
+    # Warm is what a Send can use, and nothing else. A taken phone is
+    # somebody's, not stock - so Take orders its replacement - and a phone
+    # with no app on it is not offered by the Send sheet, so it is not
+    # stock either while accounts go in by hand (the operator, 2026-09-09:
+    # two free phones read as five, and the keeper built for five). With
+    # the keeper finishing phones itself, an app-less one is still a phone
+    # it can finish, and counts.
+    warm, _gone = builder._unfinished(client, book, listing=listing)
+    if settings.manual_login:
+        installed = getattr(book.phones, "INSTALLED", "yes")
+        warm = [p for p in warm if p.get("app") == installed]
     return (len(warm), len(book.apps.available),
             len(book.gmails.available), len(book.proxies.available),
             book.phones.counts(),
