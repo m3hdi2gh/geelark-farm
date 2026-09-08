@@ -675,3 +675,28 @@ def test_the_budget_never_asks_for_a_timeout_of_zero(make_settings,
         client.post(READ, timeout=90.0, total=300.0)
 
     assert all(s["timeout"] >= 1.0 for s in line.sent), line.sent
+
+
+def test_each_thread_counts_the_requests_it_sent(make_settings):
+    """One build is one thread, so the count is the build's own bill
+    against the 200-a-minute limit (B-5, 2026-09-08)."""
+    import threading
+
+    client = client_for(make_settings, Line(Reply(), Reply(), Reply()))
+    assert client.calls_here() == 0
+    client.post("/v1/phone/list", {})
+    client.post("/v1/phone/list", {})
+    assert client.calls_here() == 2
+
+    seen = {}
+
+    def other():
+        seen["before"] = client.calls_here()
+        client.post("/v1/phone/list", {})
+        seen["after"] = client.calls_here()
+
+    t = threading.Thread(target=other)
+    t.start()
+    t.join()
+    assert (seen["before"], seen["after"]) == (0, 1)
+    assert client.calls_here() == 2

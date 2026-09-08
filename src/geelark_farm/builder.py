@@ -67,6 +67,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from . import apps
 from . import artifacts as archive
 from . import breaker, codes, failures, phones, shell
 from . import proxy as proxy_mod
@@ -300,6 +301,9 @@ class Build:
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
+    #: GeeLark requests this build sent, for the count that decides how
+    #: many phones may be built at once against the 200-a-minute limit.
+    api_calls: int = 0
     #: Where this build's archived pages went, for the prune to judge.
     artifact_dir: str = ""
     #: The screens each phase walked, as (phase, [screen, ...]). Written to
@@ -857,6 +861,47 @@ def _package_for(settings: Settings, app: str) -> str:
     return SPOTIFY_PACKAGE if app == "spotify" else settings.target_package
 
 
+#: How long an install GeeLark was asked for at boot gets to land after the
+#: sign-in, before Play is walked for it instead. Spotify is on well inside
+#: the sign-in's two minutes when the order was taken; three more is
+#: patience, not a budget.
+API_INSTALL_WAIT_SECONDS = 180
+
+
+def _calls(client) -> int:
+    count = getattr(client, "calls_here", None)
+    return int(count()) if callable(count) else 0
+
+
+def _mark(build) -> str:
+    """OK, FAIL - or WARM: a phone kept warm on purpose is not a failure,
+    and read as one in the log for a day (2026-09-08)."""
+    if build.ok:
+        return "OK"
+    return "WARM" if build.status == WARM_FOR_OPERATOR else "FAIL"
+
+
+def _install(client: Client, phone_id: str, package: str, *, name: str,
+             ordered: bool, budget: float, artifacts,
+             cancelled=None) -> play_install.Outcome:
+    """The app onto the phone: by the order GeeLark's installer already
+    took at boot when there was one, and by the Play Store otherwise -
+    or as well, if the order never landed. The Play outcome is the type
+    either way, since the builder reads `.trail` and `.reason` off it."""
+    if ordered:
+        wait = min(API_INSTALL_WAIT_SECONDS, budget)
+        if apps.wait_installed(client, phone_id, package, budget_seconds=wait,
+                               cancelled=cancelled):
+            log.info("%s is on, from GeeLark's installer", name)
+            return play_install.Outcome("success", "installed",
+                                        f"{name} installed by GeeLark")
+        log.warning("%s has not landed from GeeLark's installer in %.0fs; "
+                    "the Play Store is walked for it", name, wait)
+        budget = max(0.0, budget - wait)
+    return play_install.install(client, phone_id, package,
+                                budget_seconds=budget, artifact_dir=artifacts)
+
+
 def _pick(pool, wanted: str, what: str):
     """The free row a person named, or a refusal saying why not.
 
@@ -932,9 +977,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             STOP_BY_HAND.discard(serial)
             raise Aborted("stopped_by_hand")
 
+    calls_before = _calls(client)
+
     def finish(status: str, detail: str = "", ok: bool = False) -> Build:
         build.ok, build.status, build.detail = ok, status, detail
         build.seconds = time.monotonic() - started
+        build.api_calls = _calls(client) - calls_before
         return build
 
     try:
@@ -1021,9 +1069,22 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                      / f"{stamp}-build{build.serial or index}")
         build.artifact_dir = str(artifacts)
 
+        # Spotify goes in through GeeLark's own installer, ordered the
+        # moment the phone reports running and left to land while the
+        # settle and the Google sign-in go on. ChatGPT is not in the app
+        # center and still walks the Play Store (2026-09-08).
+        ordered = {"spotify": False}
+        spotify_by_api = settings.app_install_api and (
+            want is None or want.app == "spotify")
+
+        def order_apps() -> None:
+            if spotify_by_api:
+                ordered["spotify"] = apps.begin(client, phone_id,
+                                                SPOTIFY_PACKAGE, name="Spotify")
+
         phones.ensure_running(client, phone_id,
                               timeout=min(phones.BOOT_SECONDS, remaining()),
-                              cancelled=cancelled)
+                              cancelled=cancelled, on_running=order_apps)
         if on_ready:
             on_ready(phone_id)
 
@@ -1121,10 +1182,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             build.app_installed = False
             return finish("ready", "signed into Google; no app was asked for",
                           ok=True)
-        installed = play_install.install(
-            client, phone_id, _package_for(settings, app),
-            budget_seconds=min(settings.install_budget_seconds, remaining()),
-            artifact_dir=artifacts,
+        installed = _install(
+            client, phone_id, _package_for(settings, app), name=APPS[app],
+            ordered=(app == "spotify" and ordered["spotify"]),
+            budget=min(settings.install_budget_seconds, remaining()),
+            artifacts=artifacts, cancelled=cancelled,
         )
         build.trails.append(("install", installed.trail))
         if not installed.ok:
@@ -1144,11 +1206,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if remaining() <= 0:
                 return finish("budget_exhausted",
                               "ChatGPT is on, but no time left for Spotify")
-            extra = play_install.install(
-                client, phone_id, SPOTIFY_PACKAGE,
-                budget_seconds=min(settings.install_budget_seconds,
-                                   remaining()),
-                artifact_dir=artifacts,
+            extra = _install(
+                client, phone_id, SPOTIFY_PACKAGE, name="Spotify",
+                ordered=ordered["spotify"],
+                budget=min(settings.install_budget_seconds, remaining()),
+                artifacts=artifacts, cancelled=cancelled,
             )
             build.trails.append(("install", extra.trail))
             if extra.ok:
@@ -3097,9 +3159,10 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         # rolled (2026-08-30). `extra` lands each field beside the message in
         # the JSON line - see logs.JsonLines - so `jq` can group by them.
         log.info("%s %s: %s (%.0fs)", build.name,
-                 "OK" if build.ok else "FAIL", build.status, build.seconds,
+                 _mark(build), build.status, build.seconds,
                  extra={"outcome": build.status, "ok": build.ok,
                         "seconds": round(build.seconds), "serial": build.serial,
+                        "api_calls": build.api_calls,
                         "gmail": build.gmail, "proxy": build.proxy_name,
                         "app_account": build.app_account})
         if _event_sink is not None:
@@ -3117,7 +3180,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
         if reporter:
             reporter.finish(build)
         else:
-            mark = "OK" if build.ok else "FAIL"
+            mark = _mark(build)
             print(f"  {build.name} {mark}: {build.status} "
                   f"({build.seconds:.0f}s)", flush=True)
         if on_done is not None:

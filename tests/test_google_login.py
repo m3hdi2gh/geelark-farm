@@ -1709,3 +1709,40 @@ def test_the_confirm_page_outranks_the_code_entry_screen():
     names = [s.name for s in login.SCREENS if s.match(ctx)]
 
     assert names and names[0] == "recovery_email_confirm", names
+
+
+# ------------------------------------------ the password page after a captcha
+def test_the_password_page_after_a_captcha_is_known_by_its_words(phone):
+    """Its box comes back `password="false"` straight after a reCAPTCHA -
+    the same box, the same bounds, unmasked in the dump - and the page
+    fell to `dismissable`, which pressed NEXT over it eight times. Four
+    phones went on one address that way in an hour (2026-09-08, phones
+    1981, 1985, 1987 and 1988)."""
+    device = phone(taps_that_work={"Next"})
+    ctx = context_from("google-password-after-captcha.xml")
+
+    assert matched_screen(ctx).name == "password_entry"
+    assert login.act_password(ctx) is None
+    assert device.filled == [("EditText", ACCOUNT.password)]
+
+
+def test_an_unmasked_box_on_a_page_without_the_words_is_not_a_password_box(
+        phone):
+    """The email page and the code page both carry an unmasked box; only
+    the password page's own words make one a password box."""
+    device = phone()
+    ctx = a_context(input_box(password=False))
+    assert not login.password_page(ctx)
+    assert login.act_password(ctx) is None
+    assert device.filled == []
+
+    email = context_from("google-email-entry.xml")
+    assert matched_screen(email).name == "email_entry"
+
+    # Both boxes on one page: the masked one, as before.
+    device = phone(taps_that_work={"Next"})
+    ctx = a_context(input_box(bounds="[0,0][200,80]"),
+                    input_box(password=True, bounds="[0,300][200,380]"))
+    ctx.blob = "enter your password show password"
+    login.act_password(ctx)
+    assert device.filled == [("EditText", ACCOUNT.password)]

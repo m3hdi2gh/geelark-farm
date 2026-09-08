@@ -396,11 +396,17 @@ def wait_until_stopped(client: Client, phone_id: str, *,
 
 def wait_until_running(client: Client, phone_id: str, *,
                        timeout: float = BOOT_SECONDS, settle: float = 30,
-                       cancelled: Callable[[], bool] | None = None) -> None:
+                       cancelled: Callable[[], bool] | None = None,
+                       on_running: Callable[[], None] | None = None) -> None:
     """Block until the phone reports running, then let Play Services settle.
 
     The settle wait is not superstition: a dump taken immediately after boot
     returns a hierarchy that is still changing.
+
+    `on_running` fires once, the moment the phone reports running and
+    before the settle - for work that needs a live phone and no screen,
+    such as asking GeeLark to install an app, which then lands while the
+    settle and the sign-in go on (2026-09-08).
 
     `cancelled` is how an interrupt reaches this loop. Without it, Ctrl+C
     stopped the phones and then left every worker polling the phone it had just
@@ -416,6 +422,8 @@ def wait_until_running(client: Client, phone_id: str, *,
                              f"the run is shutting down")
         state = status(client, phone_id)
         if state == RUNNING:
+            if on_running:
+                on_running()
             log.info("phone running; settling for %.0fs", settle)
             # In pieces, so the settle answers an interrupt too. The loop
             # around it checks `cancelled` and this did not, so a run being
@@ -440,7 +448,8 @@ def wait_until_running(client: Client, phone_id: str, *,
 def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
                    timeout: float = BOOT_SECONDS,
                    on_url: Callable[[str], None] | None = None,
-                   cancelled: Callable[[], bool] | None = None) -> str | None:
+                   cancelled: Callable[[], bool] | None = None,
+                   on_running: Callable[[], None] | None = None) -> str | None:
     """Start the phone if needed. Returns the live-view URL when it started
     it, None when it was already up.
 
@@ -457,6 +466,8 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
     """
     state = status(client, phone_id)
     if state == RUNNING:
+        if on_running:
+            on_running()
         return None
     if state == EXPIRED:
         raise PhoneError(f"phone {phone_id} has expired")
@@ -468,7 +479,7 @@ def ensure_running(client: Client, phone_id: str, *, settle: float = 30,
         if on_url:
             on_url(url)
     wait_until_running(client, phone_id, settle=settle, timeout=timeout,
-                       cancelled=cancelled)
+                       cancelled=cancelled, on_running=on_running)
     return url
 
 

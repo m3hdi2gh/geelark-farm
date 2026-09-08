@@ -333,7 +333,16 @@ def decide(*, tripped: str, warm: int, target: int, free_slots: int | None,
             f"the warm stock is {warm} of {target} and nothing can be built: "
             f"the Gmails or Proxy tab has no usable row left."))
 
-    return Decision(finish=to_finish, build=to_build)
+    # Said when the Gmail pool, not the stock or the slots, is what sets
+    # the batch: a target of ten over five free addresses builds five, and
+    # nothing on the dashboard said why the other five were not coming
+    # (the operator, 2026-09-08).
+    warning = ""
+    if gmails is not None and to_build < short and to_build == gmails:
+        warning = (f"{gmails} Gmail(s) free, so {to_build} of the {short} "
+                   f"missing warm phone(s) are being built this pass; add "
+                   f"Gmails to build more at once")
+    return Decision(finish=to_finish, build=to_build, warning=warning)
 
 
 #: What the drain may execute, by verb. Slices register their handlers

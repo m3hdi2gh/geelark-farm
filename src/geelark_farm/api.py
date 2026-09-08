@@ -201,6 +201,11 @@ class Client:
         }
 
     # ------------------------------------------------------------ requests
+    def calls_here(self) -> int:
+        """How many requests this thread has sent through this client -
+        retries included, since each is a request against the limit."""
+        return int(getattr(self._local, "calls", 0))
+
     def post(self, path: str, payload: dict | None = None, *,
              strict: bool = True, retry: bool | None = None,
              timeout: float = 90.0, attempts: int = 3,
@@ -262,6 +267,10 @@ class Client:
             headers = self.auth_headers()
             trace_id = headers["traceId"]
 
+            # Counted per thread, and one build is one thread: this is the
+            # build's own bill against the 200-a-minute limit, which is
+            # what decides how many phones may be built at once (B-5).
+            self._local.calls = getattr(self._local, "calls", 0) + 1
             try:
                 response = self.session.post(
                     f"{BASE_URL}{path}", headers=headers,

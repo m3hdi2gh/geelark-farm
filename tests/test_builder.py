@@ -4419,3 +4419,128 @@ def test_a_hand_built_phones_own_take_is_not_a_stranger_giving_up_on_it(
     assert "own_take=bool(want and want.requested_by)" in src
     src = inspect.getsource(builder._sign_into_app)
     assert "own_take=bool(s.want and s.want.requested_by)" in src
+
+
+# ------------------------------------------- Spotify from GeeLark's installer
+def _boot_fires(monkeypatch):
+    """`ensure_running` as the real one behaves: the boot hook fires."""
+    monkeypatch.setattr(builder.phones, "ensure_running",
+                        lambda *a, **k: k.get("on_running") and k["on_running"]())
+
+
+def test_the_keepers_spotify_is_ordered_at_boot_and_only_chatgpt_walks_play(
+        device, settings, drive, monkeypatch):
+    """Spotify comes from GeeLark's app center, ordered the moment the phone
+    is up and left to land during the sign-in; ChatGPT is not in the center
+    and still walks Play (2026-09-08)."""
+    _boot_fires(monkeypatch)
+    ordered, waited, played = [], [], []
+    monkeypatch.setattr(builder.apps, "begin",
+                        lambda c, p, package, **k: ordered.append(package)
+                        or True)
+    monkeypatch.setattr(builder.apps, "wait_installed",
+                        lambda c, p, package, **k: waited.append(package)
+                        or True)
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda c, p, package, **k: played.append(package)
+                        or INSTALLED)
+
+    build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
+
+    assert build.ok and build.app == "chatgpt+spotify"
+    assert ordered == [builder.SPOTIFY_PACKAGE]
+    assert waited == [builder.SPOTIFY_PACKAGE]
+    assert played == [settings.target_package], "Spotify never walked Play"
+
+
+def test_an_order_geelark_never_lands_falls_back_to_play(
+        device, settings, drive, monkeypatch):
+    _boot_fires(monkeypatch)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: True)
+    monkeypatch.setattr(builder.apps, "wait_installed", lambda *a, **k: False)
+    played = []
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda c, p, package, **k: played.append(package)
+                        or INSTALLED)
+
+    build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
+
+    assert build.ok and build.app == "chatgpt+spotify"
+    assert played == [settings.target_package, builder.SPOTIFY_PACKAGE]
+
+
+def test_a_center_without_the_app_or_the_door_shut_means_play_as_before(
+        device, settings, drive, monkeypatch, make_settings):
+    _boot_fires(monkeypatch)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: False)
+    monkeypatch.setattr(builder.apps, "wait_installed",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("nothing was ordered")))
+    played = []
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda c, p, package, **k: played.append(package)
+                        or INSTALLED)
+    build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
+    assert build.ok and played == [settings.target_package,
+                                   builder.SPOTIFY_PACKAGE]
+
+    # The door shut by hand: GeeLark is never asked.
+    asked = []
+    monkeypatch.setattr(builder.apps, "begin",
+                        lambda *a, **k: asked.append(1) or True)
+    played.clear()
+    import dataclasses
+    off = dataclasses.replace(settings, app_install_api=False)
+    build = drive(make_book(apps=1), off, google=[SIGNED_IN])
+    assert build.ok and asked == [] and played == [settings.target_package,
+                                                   builder.SPOTIFY_PACKAGE]
+
+
+def test_a_hand_built_spotify_phone_takes_the_same_door(
+        device, settings, drive, monkeypatch):
+    _boot_fires(monkeypatch)
+    ordered, played = [], []
+    monkeypatch.setattr(builder.apps, "begin",
+                        lambda c, p, package, **k: ordered.append(package)
+                        or True)
+    monkeypatch.setattr(builder.apps, "wait_installed", lambda *a, **k: True)
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda c, p, package, **k: played.append(package)
+                        or INSTALLED)
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+
+    build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
+                              1, want=builder.Wanted(app="spotify"))
+    assert build.ok and build.app == "spotify"
+    assert ordered == [builder.SPOTIFY_PACKAGE] and played == []
+
+    # A ChatGPT-only hand build orders nothing: the center has no ChatGPT,
+    # and Spotify was not asked for.
+    ordered.clear()
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
+                              1, want=builder.Wanted(app="chatgpt",
+                                                     app_account="a0@example.com"))
+    assert build.ok and ordered == []
+
+
+def test_a_build_bills_its_own_api_calls_and_a_warm_phone_reads_warm(
+        device, settings, drive, monkeypatch):
+    """Per build, from the client's per-thread count - what decides how many
+    phones may be built at once against the 200-a-minute limit (B-5). And
+    the log line for a phone kept warm on purpose said FAIL for a day."""
+    build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
+    assert build.api_calls == 0, "no client, no calls"
+
+    class Counting:
+        def calls_here(self):
+            return 7
+    assert builder._calls(Counting()) == 7 and builder._calls(None) == 0
+
+    warm = builder.Build(index=1, ok=False, status=builder.WARM_FOR_OPERATOR)
+    assert builder._mark(warm) == "WARM"
+    assert builder._mark(builder.Build(index=1, ok=True, status="ready")) == "OK"
+    assert builder._mark(builder.Build(index=1, ok=False,
+                                       status="install_failed")) == "FAIL"

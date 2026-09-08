@@ -984,8 +984,35 @@ def act_email(ctx: Context) -> Outcome | None:
     return None
 
 
+#: The password page's own words. Its box is masked - `password="true"`
+#: in the dump - on every visit but one: straight after a reCAPTCHA the
+#: same box, at the same bounds, comes back `password="false"`. The page
+#: then fell past this entry to `dismissable`, which pressed NEXT over an
+#: empty box eight times and failed the build as `stuck_on_dismissable` -
+#: a verdict on the device, so the Gmail stayed free, the next phone took
+#: it, met the same captcha and the same page, and four phones went on one
+#: address in an hour (2026-09-08, phones 1981, 1985, 1987 and 1988).
+#:
+#: So the page is known by its words as well as by its box: these, and a
+#: box of either kind. The masked one is still taken first when both are
+#: on screen.
+PASSWORD_TEXTS = ("enter your password", "enter a password", "show password",
+                  "forgot password")
+
+
+def _password_box(ctx: Context):
+    box = screen.find_input(ctx.elements, password=True)
+    if box is not None or not ctx.has(*PASSWORD_TEXTS):
+        return box
+    return screen.find_input(ctx.elements, password=False)
+
+
+def password_page(ctx: Context) -> bool:
+    return _password_box(ctx) is not None
+
+
 def act_password(ctx: Context) -> Outcome | None:
-    field = screen.find_input(ctx.elements, password=True)
+    field = _password_box(ctx)
     if not field:
         return None
     log.info("entering the password")
@@ -1248,9 +1275,7 @@ SCREENS: list[Screen] = [
                       and not authenticator_offered(c)),
            act_try_another_way, max_visits=2),
 
-    Screen("password_entry",
-           lambda c: screen.find_input(c.elements, password=True) is not None,
-           act_password),
+    Screen("password_entry", password_page, act_password),
 
     # Matched on text unique to the email page, never on "sign in". That
     # phrase appears on half of Google's verification screens - including

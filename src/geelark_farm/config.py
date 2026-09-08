@@ -380,6 +380,11 @@ class Settings:
     sheet_closed: bool = False
     capsolver_key: str = ""
     captcha_max_attempts: int = 3
+    #: Apps GeeLark's own app center carries go in through its installer,
+    #: fired the moment the phone is up, instead of through the Play Store
+    #: screens - seven of a warm phone's eleven minutes (2026-09-08). Off,
+    #: every install walks Play as before.
+    app_install_api: bool = True
 
     @classmethod
     def load(cls) -> Settings:
@@ -417,6 +422,8 @@ class Settings:
                                      STALE_CLAIM_DEFAULT),
             capsolver_key=_str("CAPSOLVER_KEY", ""),
             captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
+            app_install_api=_str("APP_INSTALL_API", "1").strip()
+                            in ("1", "true", "yes", "on"),
             wake_on_action=_str("WAKE_ON_ACTION", "0").strip()
                           in ("1", "true", "yes", "on"),
             control_lane=_str("CONTROL_LANE", "0").strip()

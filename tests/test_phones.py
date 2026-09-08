@@ -997,3 +997,30 @@ def test_a_capacity_refusal_that_clears_is_not_an_error_at_all(monkeypatch):
     phones.start(client, "P1", attempts=3)
 
     assert client.asked == 2
+
+
+def test_on_running_fires_once_the_phone_is_up_and_before_the_settle(
+        monkeypatch):
+    """For work that needs a live phone and no screen - asking GeeLark to
+    install an app - so it lands while the settle and the sign-in go on
+    (2026-09-08)."""
+    states = iter([phones.STARTING, phones.RUNNING])
+    monkeypatch.setattr(phones, "status", lambda *a, **k: next(states))
+    order = []
+    monkeypatch.setattr(phones.time, "sleep",
+                        lambda s: order.append(("sleep", s)))
+
+    phones.wait_until_running(object(), "P1", settle=4,
+                              on_running=lambda: order.append("fired"))
+
+    fired_at = order.index("fired")
+    assert order[fired_at - 1] == ("sleep", 10), "after the boot poll"
+    assert order[fired_at + 1] == ("sleep", 2.0), "before the settle"
+    assert order.count("fired") == 1
+
+    # Already up: it fires too, since the work is the same.
+    monkeypatch.setattr(phones, "status", lambda *a, **k: phones.RUNNING)
+    fired = []
+    assert phones.ensure_running(object(), "P1",
+                                 on_running=lambda: fired.append(1)) is None
+    assert fired == [1]

@@ -2552,3 +2552,23 @@ def test_the_lane_hands_a_wish_to_the_build_with_who_asked(monkeypatch,
     lane.tick(("boot_phone",))
     wish = started["wanted"][0]
     assert wish.requested_by == 4 and wish.app == "spotify"
+
+
+def test_a_batch_capped_by_the_gmail_pool_says_so():
+    """A target of ten over five free addresses builds five, and nothing on
+    the dashboard said why the other five were not coming (the operator,
+    2026-09-08)."""
+    decision = decide(**numbers(warm=2, target=10, free_slots=24, cap=None,
+                                gmails=5, exits=36, coming=2))
+    assert decision.build == 5
+    assert "5 Gmail(s) free" in decision.warning
+    assert "5 of the 6 missing" in decision.warning
+
+    # The stock, not the pool, is the limit: no warning.
+    decision = decide(**numbers(warm=2, target=10, free_slots=24, cap=None,
+                                gmails=50, exits=36, coming=2))
+    assert decision.build == 6 and not decision.warning
+    # The pool is exactly enough: no warning either.
+    decision = decide(**numbers(warm=2, target=10, free_slots=24, cap=None,
+                                gmails=6, exits=36, coming=2))
+    assert decision.build == 6 and not decision.warning
