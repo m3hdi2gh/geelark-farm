@@ -2055,8 +2055,10 @@ def test_the_lane_takes_only_the_verbs_that_say_they_are_quick():
     wanted = serve_mod.lane_verbs()
     assert "boot_phone" in wanted and "control" in wanted
     assert "test_proxy" in wanted and "change_proxy" in wanted
-    assert "login_accounts" not in wanted, "a ten-minute job is not quick"
-    assert "build_by_hand" not in wanted
+    # Three seconds of pairing; the minutes of login go to the lane's own
+    # pool through `launch` (A-1, 2026-09-08).
+    assert "login_accounts" in wanted
+    assert "build_by_hand" not in wanted, "it runs in the request itself"
 
 
 def test_the_lane_is_absent_while_its_flag_is_off(monkeypatch, make_settings):
@@ -2159,3 +2161,151 @@ def test_a_pass_that_carried_out_a_command_rings_for_the_next(monkeypatch,
     did["n"] = 0
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
     assert not signals.queued.is_set(), "nothing was done: sleep the interval"
+
+
+# ------------------------------- the lane starts phone work itself (A-1, A-2)
+class _Now:
+    """A pool that runs what it is given, here."""
+
+    def submit(self, fn):
+        fn()
+
+
+def _lane(make_settings, monkeypatch, **more):
+    lane = serve_mod.ControlLane(
+        make_settings(store_enabled=True), client=object(),
+        stop=threading.Event(), fuse=Fuse(), flight=serve_mod.InFlight(),
+        pool=_Now(), **more)
+    monkeypatch.setattr(lane, "boards", lambda: "the book")
+    monkeypatch.setattr(lane, "ledger", lambda: "the ledger")
+    return lane
+
+
+def test_the_lane_launches_a_login_on_its_own_pool_under_the_passes_fuse(
+        monkeypatch, make_settings):
+    """An operator's Send waited for the pass, and with five builds running
+    the pass was ten minutes away (the operator, 2026-09-08). The lane
+    runs the pairing and hands the minutes to its pool; the job reports to
+    the same fuse and flight the pass reads."""
+    from geelark_farm import builder
+
+    lane = _lane(make_settings, monkeypatch)
+    ran, settled = {}, {}
+    monkeypatch.setattr(builder, "_run_jobs",
+                        lambda client, settings, book, jobs, **kw:
+                        ran.update(jobs=jobs, book=book, kw=kw)
+                        or [build(ok=True)])
+    monkeypatch.setattr(serve_mod, "_settle_action",
+                        lambda settings, action_id, jobs, builds:
+                        settled.update(action_id=action_id, builds=builds))
+    seen_flight = []
+    real = serve_mod._dispatch
+
+    def spy(batch, fuse, *, flight, pool, builds, finishes, settings=None):
+        seen_flight.append((flight, pool, builds, finishes))
+        return real(batch, fuse, flight=flight, pool=pool, builds=builds,
+                    finishes=finishes, settings=settings)
+    monkeypatch.setattr(serve_mod, "_dispatch", spy)
+
+    assert lane.can_launch
+    lane.launch([{"kind": "finish", "phone": {"serial": "1500"}}], action_id=70)
+
+    assert ran["jobs"][0]["phone"]["serial"] == "1500"
+    assert ran["book"] == "the book" and ran["kw"]["ledger"] == "the ledger"
+    assert ran["kw"]["cancel"] is lane.stop
+    assert settled == {"action_id": 70, "builds": ran and settled["builds"]}
+    assert seen_flight == [(lane.flight, lane.pool, 0, 1)]
+
+
+def test_a_lane_turn_hands_the_launcher_to_the_drain_and_takes_the_wishes(
+        monkeypatch, make_settings):
+    from geelark_farm import builder
+    from geelark_farm.store import wanted as store_wanted
+
+    lane = _lane(make_settings, monkeypatch)
+    asked = {}
+    monkeypatch.setattr(
+        serve_mod, "_drain_actions",
+        lambda settings, book, ledger, **k: asked.update(k) or 1)
+    monkeypatch.setattr(store_wanted, "take", lambda settings: [
+        {"id": 9, "gmail": "", "proxy_name": "", "install_app": True,
+         "app_account": ""}])
+    started = {}
+    monkeypatch.setattr(builder, "run",
+                        lambda client, settings, **kw: started.update(kw) or [])
+    monkeypatch.setattr(builder, "apply_phone_states",
+                        lambda client, book, ledger, settings:
+                        started.update(marks=(book, ledger)) or {})
+
+    assert lane.tick(("boot_phone", "login_accounts")) == 1
+    assert asked["launch"] == lane.launch, "the drain can start work now"
+    assert asked["only"] == ("boot_phone", "login_accounts")
+    assert [w.wanted_id for w in started["wanted"]] == [9]
+    assert started["count"] == 0 and started["workers"] == 1
+    assert started["marks"] == ("the book", "the ledger"), (
+        "Done and Failed are carried out on the lane's turn")
+
+
+def test_a_lane_without_a_pool_starts_nothing_and_the_pass_keeps_it(
+        monkeypatch, make_settings):
+    """Given no fuse or no pool the lane is what it was: quick verbs only,
+    and the pass drains logins and builds wishes exactly as before."""
+    from geelark_farm.store import wanted as store_wanted
+
+    lane = serve_mod.ControlLane(make_settings(), client=None,
+                                 stop=threading.Event())
+    monkeypatch.setattr(lane, "boards", lambda: None)
+    monkeypatch.setattr(lane, "ledger", lambda: None)
+    asked = {}
+    monkeypatch.setattr(
+        serve_mod, "_drain_actions",
+        lambda settings, book, ledger, **k: asked.update(k) or 0)
+    monkeypatch.setattr(store_wanted, "take",
+                        lambda settings: (_ for _ in ()).throw(
+                            AssertionError("no pool, no wishes")))
+
+    assert not lane.can_launch
+    lane.tick(("boot_phone",))
+    assert asked["launch"] is None
+
+
+def test_the_pass_leaves_the_marks_to_the_lane_when_there_is_one(
+        make_settings):
+    """Two hands on the same Done would be one deletion and one error;
+    the lane's turn is the one that comes within a second of the press."""
+    import inspect
+
+    on = make_settings(store_enabled=True, web_mutations=True,
+                       pools_in_pg=True, control_lane=True)
+    assert serve_mod._lane_is_on(on)
+    for off in ({"control_lane": False}, {"pools_in_pg": False},
+                {"web_mutations": False}):
+        assert not serve_mod._lane_is_on(make_settings(
+            **{"store_enabled": True, "web_mutations": True,
+               "pools_in_pg": True, "control_lane": True, **off}))
+    src = inspect.getsource(serve_mod.once)
+    assert "apply_marks=not _lane_is_on(settings)," in src
+
+
+def test_the_lane_reads_the_ledger_fresh_each_turn(monkeypatch, make_settings):
+    """Loaded once and kept, a claim the pass wrote after the first turn
+    was invisible - and a Boot or a Failed on a phone a build had just
+    taken would have gone through (2026-09-08)."""
+    loads = []
+    monkeypatch.setattr(serve_mod.Ledger, "load",
+                        lambda path, **k: loads.append(path) or object())
+    lane = serve_mod.ControlLane(make_settings(), client=None,
+                                 stop=threading.Event())
+    a, b = lane.ledger(), lane.ledger()
+    assert a is not b and len(loads) == 2
+
+
+def test_run_wires_the_lane_to_the_passes_fuse_and_flight(monkeypatch,
+                                                           make_settings):
+    import inspect
+
+    src = inspect.getsource(serve_mod.run)
+    assert "ControlLane(settings, client, stop, fuse=fuse, flight=flight," in src
+    assert 'thread_name_prefix="lane"' in src, "a pool of its own"
+    assert "flight = InFlight()\n" in src, (
+        "the flight exists whether or not the pass hands its own work off")

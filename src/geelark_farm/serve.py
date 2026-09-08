@@ -379,12 +379,23 @@ class ControlLane:
     """
 
     def __init__(self, settings: Settings, client: Client,
-                 stop: threading.Event):
+                 stop: threading.Event, *, fuse: Breaker | None = None,
+                 flight: InFlight | None = None, pool=None):
         self.settings = settings
         self.client = client
         self.stop = stop
+        # What a launched job reports to - the pass's own fuse and flight,
+        # so a login the lane started counts against the same breaker and
+        # in the same "in flight" the pass subtracts (A-1, 2026-09-08).
+        self.fuse = fuse
+        self.flight = flight
+        # A pool of its own. Without one a four-minute login would run on
+        # this thread and every Boot behind it would wait - the very thing
+        # the lane exists to prevent. Never the pass's pool: with
+        # SERVE_CONCURRENT off the pass has none, and this must not depend
+        # on that flag.
+        self.pool = pool
         self._book: Book | None = None
-        self._ledger = None
 
     def start(self) -> threading.Thread:
         thread = threading.Thread(target=self.watch, name="controls",
@@ -411,15 +422,104 @@ class ControlLane:
                 log.exception("the control lane stumbled; carrying on")
 
     def tick(self, wanted: tuple[str, ...]) -> int:
-        """One drain of the lane's own verbs. Returns how many it ran."""
+        """One turn: drain the lane's own verbs, start the phones asked
+        for by hand, and carry out Done and Failed. Returns how many
+        commands it ran."""
         if not wanted:
             return 0
-        did = _drain_actions(self.settings, self.boards(), self.ledger(),
+        book, ledger = self.boards(), self.ledger()
+        did = _drain_actions(self.settings, book, ledger,
                              controls_only=False, client=self.client,
-                             only=wanted)
+                             only=wanted,
+                             launch=self.launch if self.can_launch else None)
         if did:
             log.info("control lane ran %d command(s)", did)
+        if self.can_launch:
+            self.wishes(book, ledger)
+        self.marks(book, ledger)
         return did
+
+    @property
+    def can_launch(self) -> bool:
+        """Whether this lane may start phone work: it needs the pass's
+        fuse to report to and a pool to run on. Without either the pass
+        keeps that work, exactly as before."""
+        return (self.fuse is not None and self.pool is not None
+                and self.client is not None)
+
+    def launch(self, jobs: list[dict], *, action_id: int | None = None) -> None:
+        """Run finish jobs a web command chose, here, now - on the lane's
+        pool, under the pass's fuse and flight. What the pass's own
+        launcher did, without waiting for a pass: an operator's Send used
+        to wait for the pass, and with five builds running the pass was
+        ten minutes away (the operator, 2026-09-08)."""
+        from . import builder
+
+        settings, client, book, ledger = (self.settings, self.client,
+                                          self.boards(), self.ledger())
+
+        def chosen():
+            builds = builder._run_jobs(client, settings, book, jobs,
+                                       workers=len(jobs), reporter=None,
+                                       on_ready=None, cancel=self.stop,
+                                       ledger=ledger)
+            if action_id is not None:
+                _settle_action(settings, action_id, jobs, builds)
+            return builds
+        _dispatch(chosen, self.fuse, flight=self.flight, pool=self.pool,
+                  builds=0, finishes=len(jobs), settings=settings)
+
+    def wishes(self, book: Book, ledger) -> int:
+        """Phones asked for by hand, started now rather than at the next
+        pass. `take` marks them running in the same statement, so the
+        pass - which still reads them as a backstop - cannot take the
+        same wish twice."""
+        from . import builder
+        from .store import wanted as store_wanted
+
+        try:
+            rows = store_wanted.take(self.settings)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the lane could not read the hand-built phone "
+                        "requests (%s)", exc)
+            return 0
+        if not rows:
+            return 0
+        wants = [builder.Wanted(gmail=r["gmail"], proxy_name=r["proxy_name"],
+                                install_app=r["install_app"],
+                                app_account=r["app_account"], wanted_id=r["id"])
+                 for r in rows]
+        settings, client = self.settings, self.client
+
+        def batch():
+            return builder.run(client, settings, count=0, wanted=wants,
+                               finish_limit=0, workers=len(wants),
+                               finish_first=False, cancel=self.stop,
+                               book=book, ledger=ledger)
+        log.info("%d phone(s) asked for by hand; the lane is starting them",
+                 len(wants))
+        _dispatch(batch, self.fuse, flight=self.flight, pool=self.pool,
+                  builds=len(wants), finishes=0, settings=settings)
+        return len(wants)
+
+    def marks(self, book: Book, ledger) -> dict:
+        """Done and Failed, carried out now. This was the sync's first
+        step, so a phone marked done waited for the next pass - and with
+        five builds running, the pass was ten minutes away (the operator,
+        2026-09-08). The rule is unchanged, only the moment: the same
+        function, on the same rows, the same refusals for a phone a run
+        holds."""
+        from . import builder
+
+        if self.client is None:
+            return {}
+        try:
+            return builder.apply_phone_states(self.client, book, ledger,
+                                              self.settings)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the lane could not carry out the marks (%s); the "
+                        "pass will", exc)
+            return {}
 
     def boards(self) -> Book:
         """The lane's own Book, built once and re-read each turn.
@@ -435,13 +535,12 @@ class ControlLane:
         return self._book
 
     def ledger(self):
-        """Read-only here. A build owns the writing; this only needs to
-        know which phones are held so it refuses to take one away."""
-        if self._ledger is None:
-            self._ledger = Ledger.load(
-                self.settings.state_dir,
-                stale_after=self.settings.stale_claim_seconds)
-        return self._ledger
+        """Read fresh every turn. It was loaded once and kept, so a claim
+        the pass wrote after the lane's first turn was invisible here -
+        and a Boot or a Failed on a phone a build had just taken would
+        have gone through (2026-09-08). A file read a turn is nothing."""
+        return Ledger.load(self.settings.state_dir,
+                           stale_after=self.settings.stale_claim_seconds)
 
 
 def _outcome_of(settings: Settings, action_id: int,
@@ -770,6 +869,13 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
         log.warning("the store did not take this pass's mirror (%s); "
                     "the sheet remains authoritative and the pass is "
                     "unaffected", exc)
+
+
+def _lane_is_on(settings: Settings) -> bool:
+    """The one condition `run` opens the lane under, so the pass can know
+    what the lane has taken over."""
+    return bool(settings.control_lane and settings.store_enabled
+                and settings.web_mutations and settings.pools_in_pg)
 
 
 def _running(client: Client) -> list[str] | None:
@@ -1264,6 +1370,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     _import_from_sheet(settings, book)
     outcome = builder.sync_sheet(client, book, ledger,
                                  settings=settings,
+                                 # Done and Failed are the lane's the moment
+                                 # they land (A-2); the pass keeps them only
+                                 # where there is no lane to do it.
+                                 apply_marks=not _lane_is_on(settings),
                                  probe_proxies=probe_proxies,
                                  artifact_dir=settings.artifact_dir,
                                  stale_claim_seconds=settings.stale_claim_seconds)
@@ -1500,7 +1610,10 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # over and returns, so the sheet keeps moving through a ten-minute build;
     # without one, the pass is as long as its longest job, which is how this
     # has always run.
-    flight = InFlight() if settings.serve_concurrent else None
+    # The flight always exists now: the lane launches logins and hand-built
+    # phones on a pool of its own, and the pass must subtract those whether
+    # or not its own work is handed to a pool.
+    flight = InFlight()
     pool = (ThreadPoolExecutor(max_workers=4, thread_name_prefix="batch")
             if settings.serve_concurrent else None)
     if pool is not None:
@@ -1546,7 +1659,9 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
             and settings.web_mutations and settings.pools_in_pg):
         # Beside the watchdog and the web, on the same Client - one process,
         # one rate limiter, and `build_client` would make a second one.
-        ControlLane(settings, client, stop).start()
+        ControlLane(settings, client, stop, fuse=fuse, flight=flight,
+                    pool=ThreadPoolExecutor(max_workers=4,
+                                            thread_name_prefix="lane")).start()
 
     if settings.web_enabled:
         # Loopback-only, read-only, daemon: it dies with the process and

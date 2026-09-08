@@ -1209,6 +1209,11 @@ VERBS = {
 #: here without doing that, and nothing that can take minutes.
 for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               change_proxy, mark_proxy_free, adopt_proxy, add_proxies,
-              ignore_proxy, remove_proxy, set_phone_state, stop_phone):
+              ignore_proxy, remove_proxy, set_phone_state, stop_phone,
+              # Three seconds of pairing; the minutes of login go to the
+              # lane's own pool through `launch`, so the lane's thread is
+              # free again at once (A-1, 2026-09-08). The pass still drains
+              # it too, as the backstop it is for every lane verb.
+              login_accounts):
     _lane.lane_safe = True
 del _lane
