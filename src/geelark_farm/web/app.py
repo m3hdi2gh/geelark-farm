@@ -996,14 +996,15 @@ class _Handler(BaseHTTPRequestHandler):
                     row["error"] = str(exc)
             self._mark_twice(rows, "raw")
             return self._html(200, pages.proxy_preview(
-                rows, user, idem=secrets.token_urlsafe(12)))
+                rows, user, idem=secrets.token_urlsafe(12),
+                back=_add_back(field, "/pools/proxy")))
         if path == "/pools/proxy/add":
             rows = [{"raw": r["raw"], "name": r["name"]}
                     for r in paste.proxies(field.get("rows", ""))]
-            return self._act(user, "admin", "add_proxies",
+            return self._act(user, "may_change_proxy", "add_proxies",
                              {"rows": rows},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
-                             back="/pools/proxy")
+                             back=_add_back(field, "/pools/proxy"))
         if path in ("/pools/proxy/free", "/pools/proxy/test",
                     "/pools/proxy/remove"):
             verb = {"free": "mark_proxy_free", "test": "test_proxy",
@@ -1023,11 +1024,13 @@ class _Handler(BaseHTTPRequestHandler):
                     action="/pools/proxy/remove",
                     fields={"name": name, "sure": "1", "back": back},
                     button=f"Yes, remove {name}", back=back))
-            return self._act(user, "admin", verb, {"name": name},
+            # Whoever may change a phone's exit may keep the exits: it
+            # was the admin's alone (2026-09-08).
+            return self._act(user, "may_change_proxy", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
                              back=back)
         if path == "/pools/proxy/test-all":
-            return self._act(user, "admin", "test_all_proxies", {},
+            return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
                              back=_proxy_back(field))
         if path == "/pools/proxy/ignore":
@@ -1649,7 +1652,7 @@ def _explain(status: str) -> tuple[str, str]:
 #: A whitelist rather than the field: `back` rides through a preview and a
 #: confirm in a hidden input, and an open redirect is what that shape is
 #: for if nobody checks it.
-_ADD_BACKS = ("/", "/pools/gmail", "/pools/gpt")
+_ADD_BACKS = ("/", "/pools/gmail", "/pools/gpt", "/pools/proxy")
 
 
 def _add_back(field, default: str) -> str:
@@ -1698,6 +1701,8 @@ _OPERATOR_POSTS = (
     "/pools/gmail/preview", "/pools/gmail/add",
     "/pools/gmail/edit", "/pools/gmail/remove", "/pools/gmail/undo",
     "/pools/gmail/free",
+    "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
+    "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",

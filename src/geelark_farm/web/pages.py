@@ -2449,10 +2449,15 @@ _POOL_KINDS = {
     },
     "proxy": {
         "name": "Proxies", "under": "free IPs", "one": "IP",
-        "add": "", "manage": "",
-        "preview": "/pools/proxy/preview", "free": "",
+        # Whoever may change a phone's exit may keep the exits: it was the
+        # admin's alone, and the operator had no way to put a dead exit
+        # back or add one (2026-09-08).
+        "add": "may_change_proxy", "manage": "may_change_proxy",
+        "preview": "/pools/proxy/preview", "free": "/pools/proxy/free",
+        "test": "/pools/proxy/test",
         "edit": "", "remove": "/pools/proxy/remove",
-        "how": "host:port:username:password - one exit per line",
+        "how": ("name, then the address - socks5://user:pass@host:port - "
+                "one exit per line"),
         "columns": ("Name", "Status", "Host", "Exit IP", "Used", "On phone"),
     },
 }
@@ -2600,8 +2605,11 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
     # question nobody asked and offers nothing, on the one card they cannot
     # open. The count is what they came for: it says whether there is an
     # exit to move a phone onto (the operator, 2026-09-07).
-    opens = (_may(user, meta["manage"]) if meta["manage"]
-             else user.get("role") == "admin")
+    # The proxy pool keeps the admin's door whatever the switches say -
+    # it was theirs alone until the tick opened it (2026-09-08).
+    opens = ((_may(user, meta["manage"])
+              or (kind == "proxy" and user.get("role") == "admin"))
+             if meta["manage"] else user.get("role") == "admin")
     # Short but not empty: the card says so in amber, under its number,
     # in the words the title used to keep for a hover.
     # Gmail only: "fewer than the phones the keeper keeps warm" is a fact
@@ -2749,18 +2757,33 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
         return ""
     doors = []
     state = str(row.get("state") or "")
+    # The proxy routes name a row by `name`; the account routes by
+    # `address`. The cell is the same one either way.
+    field = "name" if kind == "proxy" else "address"
     if kind == "gpt" and state != "on a phone" \
             and _may_send(user, manual_login):
         doors.append(_send_form(user, address))
     # A row a run set aside gets Free: one press, back on the shelf, and
-    # nothing else on the row touched (the operator, 2026-09-06).
+    # nothing else on the row touched (the operator, 2026-09-06). A dead
+    # or changed exit is tested first, and freed only if it answers.
     if meta.get("free") and state not in ("free", "on a phone"):
         doors.append(
             f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
-            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
-            f'<button class="quiet ok" title="back on the shelf, as it is">'
-            f'Free</button></form>')
+            f'<button class="quiet ok" title="'
+            + ("tested, and back on the shelf if it answers" if kind == "proxy"
+               else "back on the shelf, as it is")
+            + '">Free</button></form>')
+    # Test: ask GeeLark whether the exit answers. A dead one that does
+    # comes back on the shelf; a free one that does not is marked dead.
+    if meta.get("test") and state != "on a phone":
+        doors.append(
+            f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
+            f'<input type="hidden" name="{field}" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="/">'
+            f'<button class="quiet" title="ask GeeLark whether it answers">'
+            f'Test</button></form>')
     if meta["edit"]:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
@@ -2768,7 +2791,7 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     if meta["remove"]:
         doors.append(
             f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
-            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
             f'<button class="quiet bad">Remove</button></form>')
     return f'<div class="doors">{"".join(doors)}</div>'
@@ -5513,9 +5536,12 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
     return page("Gpt Pool — preview", body, user=user, here="/pools/gpt")
 
 
-def proxy_preview(rows: list[dict], user: dict, idem: str) -> str:
+def proxy_preview(rows: list[dict], user: dict, idem: str, *,
+                  back: str = "/pools/proxy") -> str:
+    """The same one card the other two previews are; `back` is where the
+    paste came from - the dashboard's sheet, or the pool page."""
     good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
-    lines = "".join(
+    lines = "<tr><th>name</th><th>proxy</th><th>verdict</th></tr>" + "".join(
         f"<tr><td>{esc(r.get('name') or 'next SX')}</td>"
         f"<td class=\"muted\">{esc(r.get('raw') or r.get('line', ''))}</td>"
         f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
@@ -5524,17 +5550,10 @@ def proxy_preview(rows: list[dict], user: dict, idem: str) -> str:
     body = (f'<div class="top"><h2>Proxy Pool</h2><span class="status">'
             f'preview — each is tested by the pass before it joins</span>'
             f'</div>'
-            f'<div class="panel"><table><tr><th>name</th><th>proxy</th>'
-            f'<th>verdict</th></tr>{lines}</table></div>'
-            f'<form method="post" action="/pools/proxy/add" class="panel">'
-            f'{_csrf(user)}<input type="hidden" name="idem" value="{esc(idem)}">'
-            f'<textarea name="rows" hidden>{esc(carried)}</textarea>'
-            f'<div class="row"><span style="margin-left:auto"></span>'
-            f'<a class="btn quiet" href="/pools/proxy">Back</a>'
-            + (f'<button>Add {len(good)} (skip {len(rows) - len(good)})'
-               f'</button>' if good else
-               '<span class="badge bad">nothing to add</span>')
-            + '</div></form>')
+            + _preview_card("/pools/proxy/add", rows, good, user, idem, back,
+                            lines, carried,
+                            note="each is tested before it joins; one that "
+                                 "does not answer goes in as dead"))
     return page("Proxy Pool — preview", body, user=user, here="/pools/proxy")
 
 

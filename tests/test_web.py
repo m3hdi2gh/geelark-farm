@@ -752,11 +752,13 @@ def test_an_operator_cannot_post_to_a_page_they_no_longer_have(
     client.login(username="narrow")
     token = client.csrf()
 
-    # Proxies are the admin's pool - an operator's power over an exit is
-    # Change IP on one phone - so this door is shut whatever the person
-    # can do with the two pools they own.
+    # Ignoring an exit GeeLark holds is the admin's - an operator keeps
+    # the pool (add, test, free, remove) but does not decide what the farm
+    # stops accounting for. So this door is shut whatever the person can
+    # do with the pools they own.
     status, _, body = client.request(
-        "POST", "/pools/proxy/remove", _form(csrf=token, name="SX7"))
+        "POST", "/pools/proxy/ignore",
+        _form(csrf=token, host="1.2.3.4", port="1080", username="u"))
     assert status == 403 and "Nothing was changed" in body
 
     # The doors that stayed open are the ones the dashboard posts through:
@@ -3578,7 +3580,7 @@ def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
     client.login()
     _, _, body = client.request("GET", "/")
 
-    assert body.count('class="addbox"') == 2, "Gmail and GPT, not proxies"
+    assert body.count('class="addbox"') == 3, "all three pools (2026-09-08)"
     assert 'action="/pools/gmail/preview"' in body
     assert 'action="/pools/gpt/preview"' in body
     # The card carries the button and the manager carries the form, so a
@@ -3717,7 +3719,13 @@ def test_both_account_rows_carry_both_doors_and_a_proxy_row_carries_none(
     assert 'action="/pools/gpt/remove"' in gpt
     assert 'name="seller"' not in gpt, "a GPT row has no seller to edit"
     proxy = ov[ov.index('data-sheet="proxy"'):]
-    assert "/pools/proxy/remove" not in proxy, "proxies are the admin's"
+    # The proxy rows carry their own three doors now - Free, Test, Remove
+    # - and name the row by `name`, which is what the proxy routes read
+    # (2026-09-08).
+    assert 'action="/pools/proxy/test"' in proxy
+    assert 'action="/pools/proxy/remove"' in proxy
+    assert 'name="name" value="SX7"' in proxy
+    assert 'name="address"' not in proxy.split("<tbody", 1)[1]
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4886,3 +4894,63 @@ def test_a_failed_wish_with_words_explain_does_not_know_still_draws():
         assert "did not start" in panel
     assert "seen" in pages._wishes(data, lambda d: ("seen", "advice"))
     assert "is not free" in pages._wishes(data, lambda d: ())
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
+    """Manage on the card, a paste box, and Free / Test / Remove on the
+    rows - for the tick that already lets somebody change a phone's exit.
+    It was the admin's alone (the operator, 2026-09-08)."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import paste
+
+    _dash(monkeypatch, pool_rows={
+        "gmail": [], "gpt": [],
+        "proxy": [{"id": 4, "address": "SX7", "status": "dead", "host": "1.2.3.4",
+                   "port": 1080, "exit_ip": "", "times_used": 2, "serial": "",
+                   "note": "", "error": None, "state": "dead"},
+                  {"id": 5, "address": "SX8", "status": "", "host": "1.2.3.5",
+                   "port": 1080, "exit_ip": "", "times_used": 0, "serial": "",
+                   "note": "", "error": None, "state": "free"}]})
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or len(got))
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert 'data-pool="proxy">Manage</button>' in body
+    sheet = body[body.index('data-sheet="proxy"'):]
+    assert 'action="/pools/proxy/preview"' in sheet, "a paste box"
+    assert "socks5://user:pass@host:port" in sheet
+
+    def row(name):
+        at = sheet.index(f"<td>{name}</td>")
+        return sheet[at:sheet.index("</tr>", at)]
+
+    assert 'action="/pools/proxy/free"' in row("SX7"), "a dead one can be freed"
+    assert 'action="/pools/proxy/test"' in row("SX7")
+    assert 'action="/pools/proxy/free"' not in row("SX8"), "a free one is free"
+    assert 'action="/pools/proxy/test"' in row("SX8")
+
+    # The vendor's line: a name, then the address as a URL.
+    rows = paste.proxies("SX40 socks5://ul01m07t:jn7Ols6u@190.2.141.12:10448")
+    assert rows == [{"raw": "socks5://ul01m07t:jn7Ols6u@190.2.141.12:10448",
+                     "name": "SX40",
+                     "line": "SX40 socks5://ul01m07t:jn7Ols6u@190.2.141.12:10448"}]
+
+    # The doors go through the same permission, and come back to the page.
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/free",
+        _form(csrf=client.csrf(), name="SX7", back="/"))
+    assert status == 303 and dict(headers)["Location"].startswith("/?said=")
+    assert got[-1]["verb"] == "mark_proxy_free"
+    assert got[-1]["payload"]["name"] == "SX7"
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
+    status, _, preview = client.request(
+        "POST", "/pools/proxy/preview",
+        _form(csrf=client.csrf(), back="/",
+              pasted="SX40 socks5://ul01m07t:jn7Ols6u@190.2.141.12:10448"))
+    assert status == 200 and 'class="panel preview"' in preview
+    assert '<input type="hidden" name="back" value="/">' in preview
+    assert "SX40" in preview and "Add 1 (skip 0)" in preview
