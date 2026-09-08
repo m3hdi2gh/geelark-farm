@@ -1035,7 +1035,10 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
                 f'marked {esc(state)} &middot; leaving</span>')
     on = " &middot; on" if row.get("running") else ""
     if state != "taken":
-        if row.get("running"):
+        # A phone being built is on because the build has it - that is
+        # Building, not Running; the word is for a phone nobody here holds
+        # and no run is working on (2026-09-08).
+        if row.get("running") and status != "building":
             # GeeLark has it on and nobody here holds it: booted by hand
             # in GeeLark, or taken and released while still up. It is
             # billing, and it read as free (the operator, 2026-09-08).

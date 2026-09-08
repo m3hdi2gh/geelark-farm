@@ -4707,6 +4707,12 @@ def test_a_phone_geelark_has_on_reads_running_and_offers_no_boot(web,
 
     assert 'nobody here holds it">Running</span>' in row("1862")
     assert ">Boot<" not in row("1862") and ">Take<" in row("1862")
+    # A phone being built is on because the build has it: Building.
+    _dash(monkeypatch, phones=[{"serial": "1939", "status": "building",
+                                "state": "", "running": True}])
+    _, _, built = client.request("GET", "/")
+    assert 'class="badge info">Building</span>' in built
+    assert "Running" not in built[built.index('id="phones"'):built.index("</table>")]
     assert "With you &middot; on</span>" in row("1856")
     # Off again: the ordinary row, Boot and all.
     _dash(monkeypatch, phones=[{"serial": "1862", "status": "ready",
