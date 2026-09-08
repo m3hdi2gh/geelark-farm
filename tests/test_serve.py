@@ -1908,7 +1908,8 @@ def test_the_breaker_opening_is_one_event_not_a_log_line(monkeypatch,
             self.tripped = "5 builds in a row failed"
 
     fuse = TrippingFuse()
-    serve_mod._dispatch(lambda: [build(ok=False), build(ok=False)], fuse,
+    serve_mod._dispatch(lambda on_done=None: [build(ok=False), build(ok=False)],
+                        fuse,
                         flight=None, pool=None, builds=2, finishes=0,
                         settings=settings)
 
@@ -2489,3 +2490,27 @@ def test_a_pass_lists_the_phones_once(monkeypatch, settings):
     assert calls == [1], "one listing a pass"
     assert looked["listing"][0]["serialNo"] == "1862", "handed to the count"
     assert shadowed["running"] == ["1862"], "and to what is on"
+
+
+def test_the_flight_counts_down_job_by_job_not_batch_by_batch():
+    """A batch of two ends when the slower one does; until then the pass
+    saw both as in flight and ordered nothing into the slot the faster
+    one had freed - one worker idle for a whole build (the soak,
+    2026-09-08)."""
+    flight = serve_mod.InFlight()
+    seen = []
+
+    def batch(on_done):
+        on_done({"kind": "build"}, build(ok=True))
+        seen.append(flight.counts())
+        on_done({"kind": "finish"}, build(ok=True))
+        seen.append(flight.counts())
+        on_done({"kind": "finish"}, build(ok=True))     # one too many: ignored
+        seen.append(flight.counts())
+        return [build(ok=True)] * 2
+
+    serve_mod._dispatch(batch, Fuse(), flight=flight, pool=_Now(),
+                        builds=2, finishes=1)
+
+    assert seen == [(1, 1), (1, 0), (1, 0)]
+    assert flight.counts() == (0, 0), "the rest comes off when the batch ends"

@@ -466,11 +466,11 @@ class ControlLane:
         settings, client, book, ledger = (self.settings, self.client,
                                           self.boards(), self.ledger())
 
-        def chosen():
+        def chosen(on_done):
             builds = builder._run_jobs(client, settings, book, jobs,
                                        workers=len(jobs), reporter=None,
                                        on_ready=None, cancel=self.stop,
-                                       ledger=ledger)
+                                       ledger=ledger, on_done=on_done)
             if action_id is not None:
                 _settle_action(settings, action_id, jobs, builds)
             return builds
@@ -499,11 +499,11 @@ class ControlLane:
                  for r in rows]
         settings, client = self.settings, self.client
 
-        def batch():
+        def batch(on_done):
             return builder.run(client, settings, count=0, wanted=wants,
                                finish_limit=0, workers=len(wants),
                                finish_first=False, cancel=self.stop,
-                               book=book, ledger=ledger)
+                               book=book, ledger=ledger, on_done=on_done)
         log.info("%d phone(s) asked for by hand; the lane is starting them",
                  len(wants))
         _dispatch(batch, self.fuse, flight=self.flight, pool=self.pool,
@@ -772,9 +772,26 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
     otherwise. The same door for the decision's jobs and for the ones a
     web command chose (C6) - what differs is only who made the list.
     """
+    # Counted down job by job, not batch by batch: a batch of two ends
+    # when the slower one does, and until then the pass saw both as in
+    # flight and ordered nothing into the slot the faster one had freed -
+    # one worker idle for the length of a build (the soak, 2026-09-08).
+    left = {"builds": builds, "finishes": finishes}
+    left_lock = threading.Lock()
+
+    def one_done(job, build):
+        kind = "finishes" if (job or {}).get("kind") == "finish" else "builds"
+        with left_lock:
+            if left[kind] < 1:
+                return
+            left[kind] -= 1
+        if flight is not None:
+            flight.done_with(builds=1 if kind == "builds" else 0,
+                             finishes=1 if kind == "finishes" else 0)
+
     def work():
         try:
-            for build in batch():
+            for build in batch(one_done):
                 with _FUSE_LOCK:
                     # `Breaker.record` is read-modify-write on a file with
                     # no lock of its own. It was safe while one thread
@@ -800,7 +817,11 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
                         detail=build.detail or build.status)
         finally:
             if flight is not None:
-                flight.done_with(builds=builds, finishes=finishes)
+                with left_lock:
+                    rest = dict(left)
+                    left["builds"], left["finishes"] = 0, 0
+                flight.done_with(builds=rest["builds"],
+                                 finishes=rest["finishes"])
 
     if pool is not None and flight is not None:
         # Counted before it is submitted, so the very next pass already
@@ -1503,11 +1524,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         and ledger, under this pass's fuse and flight - exactly as the
         decision's own jobs run, so this pass counts them too. The
         command's row is settled when they end (C7)."""
-        def chosen():
+        def chosen(on_done):
             builds = builder._run_jobs(client, settings, book, jobs,
                                        workers=len(jobs), reporter=None,
                                        on_ready=None, cancel=stopping,
-                                       ledger=ledger)
+                                       ledger=ledger, on_done=on_done)
             if action_id is not None:
                 _settle_action(settings, action_id, jobs, builds)
             return builds
@@ -1658,7 +1679,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         # back to `max_concurrent_phones`, and a pass of ten jobs would run
         # them one after another inside one pass - seventy minutes instead of
         # fifteen, which is the opposite of the point.
-        def batch():
+        def batch(on_done):
             return builder.run(client, settings,
                                count=decision.jobs,
                                wanted=wishes,
@@ -1672,7 +1693,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                # sync - and two Books are two claim locks over
                                # two snapshots, which is the one thing stopping
                                # a Gmail reaching two phones.
-                               book=book, ledger=ledger)
+                               book=book, ledger=ledger, on_done=on_done)
 
         _dispatch(batch, fuse, flight=flight, pool=pool,
                   builds=decision.build, finishes=decision.finish,

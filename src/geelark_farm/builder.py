@@ -2910,8 +2910,14 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
               on_ready: Callable[[str], None] | None,
               cancel: threading.Event | None,
               ledger: Ledger | None = None,
-              codes_source: codes.CodeSource | None = None) -> list[Build]:
+              codes_source: codes.CodeSource | None = None,
+              on_done: Callable[[dict, Build], None] | None = None
+              ) -> list[Build]:
     """Run a mixed list of build and finish jobs, up to `workers` at a time.
+
+    `on_done` hears each job the moment it ends, with the job and its
+    Build - what a scheduler counting jobs in flight needs, since a batch
+    of two ends only when the slower one does (2026-09-08).
 
     One runner for both, because they are the same thing to everyone watching:
     a phone being worked on, one line in the table, one row in the tab. Only
@@ -3030,6 +3036,12 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
             mark = "OK" if build.ok else "FAIL"
             print(f"  {build.name} {mark}: {build.status} "
                   f"({build.seconds:.0f}s)", flush=True)
+        if on_done is not None:
+            try:
+                on_done(job, build)
+            except Exception:                                     # noqa: BLE001
+                log.warning("on_done raised; the build is unaffected",
+                            exc_info=True)
         return build
 
     stop_beating = _start_heartbeat(book, ledger, run_id)
@@ -3216,7 +3228,8 @@ def run(client: Client, settings: Settings, *, count: int,
         book: Book | None = None,
         ledger: Ledger | None = None,
         codes_source: codes.CodeSource | None = None,
-        wanted: list[Wanted] | None = None) -> list[Build]:
+        wanted: list[Wanted] | None = None,
+        on_done: Callable[[dict, Build], None] | None = None) -> list[Build]:
     """Produce `count` ready phones, finishing before building.
 
     `wanted` are phones somebody asked for by hand, each with the
@@ -3325,7 +3338,7 @@ def run(client: Client, settings: Settings, *, count: int,
         return []
     return _run_jobs(client, settings, book, jobs, workers=workers,
                      reporter=reporter, on_ready=on_ready, cancel=cancel, ledger=ledger,
-                     codes_source=codes_source)
+                     codes_source=codes_source, on_done=on_done)
 
 
 def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
