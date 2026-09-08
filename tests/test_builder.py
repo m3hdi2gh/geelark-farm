@@ -3977,7 +3977,7 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
                         lambda client, phone_id, creds, **kw: SimpleNamespace(
                             ok=False, reason="session_unverified", detail="",
                             trail=[]))
-    monkeypatch.setattr(builder, "_given_up_on", lambda book, serial: "")
+    monkeypatch.setattr(builder, "_given_up_on", lambda book, serial, **k: "")
 
     out = builder._sign_into_app(session)
 
@@ -4398,3 +4398,24 @@ def test_spotify_not_installing_is_a_note_not_a_failed_phone(
     build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
     assert build.ok and build.app == "chatgpt"
     assert ("spotify", "install_failed", "Play") in build.tried
+
+
+def test_a_hand_built_phones_own_take_is_not_a_stranger_giving_up_on_it(
+        monkeypatch, make_settings, tmp_path):
+    """Taken by its builder from the moment its row exists, and read as a
+    stranger's take, every hand-built phone gave up on itself at its
+    first check: "somebody wrote taken in its State" (2026-09-08)."""
+    from geelark_farm.store import person
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    _SAID["1958"] = "taken"
+    assert builder._given_up_on(settings, "1958") == "taken"
+    assert builder._given_up_on(settings, "1958", own_take=True) == ""
+    _SAID["1958"] = "failed"
+    assert builder._given_up_on(settings, "1958", own_take=True) == "failed"
+    import inspect
+
+    src = inspect.getsource(builder.build_one)
+    assert "own_take=bool(want and want.requested_by)" in src
+    src = inspect.getsource(builder._sign_into_app)
+    assert "own_take=bool(s.want and s.want.requested_by)" in src

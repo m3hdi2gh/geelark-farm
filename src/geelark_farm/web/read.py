@@ -298,7 +298,10 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "   ON u.id = w.requested_by"
             " WHERE w.status IN ('queued', 'running')"
             "    OR (w.status = 'failed'"
-            "        AND w.created_at > now() - interval '1 hour')"
+            # Long enough to be read, not an hour on the page: a wish that
+            # did not start is one line of why, and the operator asked
+            # why it was still there (2026-09-08).
+            "        AND w.created_at > now() - interval '15 minutes')"
             " ORDER BY w.id DESC LIMIT 8")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")

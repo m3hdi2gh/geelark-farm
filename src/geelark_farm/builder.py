@@ -567,7 +567,8 @@ def _sign_into_app(session: _Session) -> Build | None:
         # spends most of its minutes, so it is where a row marked mid-run has
         # to be noticed - and an account claimed for a phone about to be
         # deleted is the one cost worth a read of the tab to avoid.
-        marked = _given_up_on(s.settings, s.build.serial)
+        marked = _given_up_on(s.settings, s.build.serial,
+                              own_take=bool(s.want and s.want.requested_by))
         if marked:
             return s.finish("given_up_on",
                             f"somebody wrote {marked!r} in its State while "
@@ -1101,7 +1102,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
         # ----------------------------------------------------- the install
         check_cancelled()
-        marked = _given_up_on(settings, build.serial)
+        marked = _given_up_on(settings, build.serial,
+                              own_take=bool(want and want.requested_by))
         if marked:
             return finish("given_up_on",
                           f"somebody wrote {marked!r} in its State while this "
@@ -1822,7 +1824,8 @@ def attempts_of(build: Build) -> list[str]:
             for email, reason, service in build.tried]
 
 
-def _given_up_on(settings: Settings, serial: str) -> str:
+def _given_up_on(settings: Settings, serial: str, *,
+                 own_take: bool = False) -> str:
     """The word somebody has written in this phone's State, if any.
 
     Checked at the few places a build is about to spend real time, because a
@@ -1832,13 +1835,19 @@ def _given_up_on(settings: Settings, serial: str) -> str:
     installed on it until 20:36, and the sync then deleted it (2026-08-29).
 
     `taken` is here too: somebody has claimed the phone by hand and this run
-    should let go of it rather than drive it.
+    should let go of it rather than drive it - unless `own_take`: a phone
+    asked for by hand is taken by its builder from the moment its row
+    exists, and that take is this run's own, not a stranger's. Read as a
+    stranger's, every hand-built phone gave up on itself at its first
+    check (2026-09-08).
     """
     if not serial:
         return ""
     from .store import person
 
     state = person.state_of(settings, serial)
+    if own_take and state == person.TAKEN:
+        return ""
     return state if state in (person.DONE, person.FAILED,
                               person.TAKEN) else ""
 
