@@ -4868,3 +4868,21 @@ def test_a_hand_built_phone_says_who_built_it(web, monkeypatch):
 
     assert 'class="dim maker" title="asked for on the build card">built by ali</span>' in row("1950")
     assert "built by" not in row("1951"), "the keeper's own phone"
+
+
+def test_a_failed_wish_with_words_explain_does_not_know_still_draws():
+    """`explain` answered nothing for a detail it had no verdict for, and
+    the wishes panel unpacked that nothing as a pair - so one failed
+    hand-built phone took the whole dashboard down (2026-09-08)."""
+    from geelark_farm.web import pages
+
+    data = {"wishes": [{"id": 1, "gmail": "a@x.com", "proxy_name": "",
+                        "install_app": True, "app": "chatgpt",
+                        "app_account": "", "status": "failed",
+                        "detail": "the Gmail a@x.com is not free",
+                        "created_at": None, "asked_by": "mehdi"}]}
+    for answer in ((), "", None, ("seen", "advice"), ("only",)):
+        panel = pages._wishes(data, lambda detail, a=answer: a)
+        assert "did not start" in panel
+    assert "seen" in pages._wishes(data, lambda d: ("seen", "advice"))
+    assert "is not free" in pages._wishes(data, lambda d: ())

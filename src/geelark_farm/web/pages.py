@@ -3306,8 +3306,15 @@ def _wishes(data: dict, explain=None) -> str:
                   "chatgpt": ""}.get(app, f" &middot; {esc(app)}")
         when = _hhmm(w.get("created_at")) if w.get("created_at") else ""
         if status == "failed":
-            said, advice = (explain(str(w.get("detail") or ""))
-                            if explain else ("", ""))
+            # `explain` answers a pair for a reason it knows and nothing
+            # for words it does not - and a wish that failed on words it
+            # did not know took the whole dashboard down with "not enough
+            # values to unpack" (2026-09-08). Whatever it answers is read.
+            got = explain(str(w.get("detail") or "")) if explain else None
+            if isinstance(got, tuple) and len(got) == 2:
+                said, advice = got
+            else:
+                said, advice = (str(got or ""), "")
             why = esc(said or str(w.get("detail") or "")
                       or "it did not say why")
             tail = (f'<span class="badge bad">did not start</span> '
