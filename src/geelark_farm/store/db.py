@@ -9,6 +9,8 @@ must not raise until something actually asks for a connection.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from importlib import resources as importlib_resources
 
 from ..config import Settings
@@ -49,11 +51,132 @@ def dsn_kwargs(settings: Settings) -> dict:
     )
 
 
-def connect(settings: Settings):
-    """One new connection. The caller owns closing it."""
+class _Pool:
+    """Connections kept for the next caller rather than closed.
+
+    Measured from the farm (2026-09-08): opening a connection to the
+    cluster is 170-300 ms - a TLS handshake and a remote round trip -
+    and a query on an open one is about a millisecond. Every read on the
+    console opened its own, and a dashboard page opened three or four: the
+    session, the page, the rail. Six hundred milliseconds of handshakes
+    around forty milliseconds of work, on every page and every button.
+
+    `close()` on a pooled connection hands it back here; the caller's
+    code does not change. A connection is handed out only if it is clean
+    - no transaction left open, not broken, not idle long enough for the
+    cluster to have dropped it - and one that is not is closed for real.
+    Bounded, so a burst opens what it needs and keeps `size` of it.
+    """
+
+    #: Kept idle this long at most. The cluster drops quiet connections at
+    #: some point of its own choosing; this stays well inside it.
+    IDLE_SECONDS = 120.0
+    #: Idle this long, a connection is pinged before it is handed out: a
+    #: ping is a millisecond, a dead connection is a failed page.
+    PING_AFTER = 10.0
+    SIZE = 12
+
+    def __init__(self, open):
+        self._open = open
+        self._free: list = []            # (connection, returned_at), LIFO
+        self._lock = threading.Lock()
+        self._key = None
+
+    def take(self, settings: Settings):
+        kwargs = dsn_kwargs(settings)
+        key = (kwargs["host"], kwargs["port"], kwargs["dbname"],
+               kwargs["user"])
+        stale = []
+        with self._lock:
+            if key != self._key:
+                # Another cluster or user: what is kept answers to the
+                # old one (tests switch settings; production never does).
+                stale, self._free, self._key = self._free, [], key
+            while self._free:
+                conn, since = self._free.pop()
+                idle = time.monotonic() - since
+                if getattr(conn, "closed", False) or idle > self.IDLE_SECONDS:
+                    stale.append((conn, since))
+                    continue
+                if idle > self.PING_AFTER and not self._alive(conn):
+                    stale.append((conn, since))
+                    continue
+                break
+            else:
+                conn = None
+        for old, _ in stale:
+            _discard(old)
+        return conn if conn is not None else self._open(kwargs)
+
+    def give(self, conn) -> None:
+        """Back on the shelf, if it is fit to be handed out again."""
+        if getattr(conn, "closed", False):
+            return
+        try:
+            # 0 is IDLE (psycopg.pq.TransactionStatus): a transaction
+            # left open by a caller that raised is rolled back here, so
+            # the next caller never inherits a failed one.
+            if int(conn.info.transaction_status) != 0:
+                conn.rollback()
+        except Exception:                                          # noqa: BLE001
+            _discard(conn)
+            return
+        with self._lock:
+            if len(self._free) < self.SIZE:
+                self._free.append((conn, time.monotonic()))
+                return
+        _discard(conn)
+
+    @staticmethod
+    def _alive(conn) -> bool:
+        try:
+            conn.execute("SELECT 1").fetchone()
+            return True
+        except Exception:                                          # noqa: BLE001
+            return False
+
+    def drain(self) -> None:
+        """Close everything kept. For tests, and for a process on its way out."""
+        with self._lock:
+            kept, self._free = self._free, []
+        for conn, _ in kept:
+            _discard(conn)
+
+
+def _discard(conn) -> None:
+    """Close a connection for real - the pool's own door out, since
+    `close()` on a pooled one only puts it back."""
+    try:
+        really = getattr(conn, "discard", None) or conn.close
+        really()
+    except Exception as exc:                                       # noqa: BLE001
+        log.debug("a pooled connection would not close (%s)", exc)
+
+
+def _open_pooled(kwargs: dict):
     import psycopg
 
-    return psycopg.connect(**dsn_kwargs(settings))
+    class PooledConnection(psycopg.Connection):
+        """A connection whose `close()` is a return to the pool. `with`
+        blocks, `Store.close()` and every caller that closes what it
+        opened all land here unchanged."""
+
+        def close(self) -> None:          # noqa: D102 - see class
+            _POOL.give(self)
+
+        def discard(self) -> None:
+            super().close()
+
+    return PooledConnection.connect(**kwargs)
+
+
+_POOL = _Pool(_open_pooled)
+
+
+def connect(settings: Settings):
+    """A connection. The caller owns closing it - which, here, puts it
+    back for the next caller rather than tearing it down."""
+    return _POOL.take(settings)
 
 
 def schema_sql() -> str:

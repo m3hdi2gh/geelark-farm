@@ -1172,3 +1172,139 @@ def test_the_rows_a_person_closed_carry_the_id_that_closes_them(monkeypatch,
 
     assert "SELECT id AS sheet_row" in seen["sql"], "the id it closes rows by"
     assert rows and rows[0]["sheet_row"] == 7
+
+
+# ------------------------------------------------------- the connection pool
+class _Info:
+    def __init__(self):
+        self.transaction_status = 0
+
+
+class _Conn:
+    """What the pool needs of a connection: closed, its transaction
+    state, rollback, a ping, and a real close."""
+
+    def __init__(self):
+        self.closed = False
+        self.info = _Info()
+        self.rolled_back = 0
+        self.pings = 0
+        self.ping_ok = True
+
+    def rollback(self):
+        self.rolled_back += 1
+        self.info.transaction_status = 0
+
+    def execute(self, sql):
+        self.pings += 1
+        if not self.ping_ok:
+            raise RuntimeError("gone")
+        return self
+
+    def fetchone(self):
+        return (1,)
+
+    def discard(self):
+        self.closed = True
+
+
+def _pool(monkeypatch, make_settings):
+    from geelark_farm.store import db
+
+    opened = []
+
+    def open(kwargs):
+        conn = _Conn()
+        opened.append(conn)
+        return conn
+
+    settings = make_settings(store_enabled=True, store_host="db",
+                             store_password="pw")
+    monkeypatch.setattr(db.Settings, "require_store", lambda self: None,
+                        raising=False)
+    return db._Pool(open), settings, opened
+
+
+def test_a_closed_connection_is_the_next_callers(monkeypatch, make_settings):
+    """Opening one is 170-300 ms against the cluster and a query on an
+    open one a millisecond; every read on the console opened its own, and
+    a dashboard page opened three or four (2026-09-08)."""
+    pool, settings, opened = _pool(monkeypatch, make_settings)
+    first = pool.take(settings)
+    pool.give(first)
+    assert pool.take(settings) is first and len(opened) == 1
+    # Two out at once are two connections; both come back.
+    second = pool.take(settings)
+    assert second is not first and len(opened) == 2
+    pool.give(first)
+    pool.give(second)
+    assert pool.take(settings) is second, "LIFO: the warmest one first"
+
+
+def test_a_connection_is_handed_out_only_when_it_is_clean(
+        monkeypatch, make_settings):
+    pool, settings, opened = _pool(monkeypatch, make_settings)
+    conn = pool.take(settings)
+    # A transaction left open is rolled back on the way in, never
+    # inherited by the next caller.
+    conn.info.transaction_status = 2
+    pool.give(conn)
+    assert conn.rolled_back == 1 and pool.take(settings) is conn
+    # One that broke is closed for real, not kept.
+    conn.closed = True
+    pool.give(conn)
+    assert pool.take(settings) is not conn and len(opened) == 2
+    # One whose rollback fails is discarded too.
+    bad = pool.take(settings)
+    bad.info.transaction_status = 3
+    bad.rollback = lambda: (_ for _ in ()).throw(RuntimeError("dead"))
+    pool.give(bad)
+    assert bad.closed and pool.take(settings) is not bad
+
+
+def test_an_idle_connection_is_pinged_and_an_old_one_dropped(
+        monkeypatch, make_settings):
+    from geelark_farm.store import db
+
+    pool, settings, opened = _pool(monkeypatch, make_settings)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(db.time, "monotonic", lambda: clock["t"])
+    conn = pool.take(settings)
+    pool.give(conn)
+    # Back soon: no ping.
+    clock["t"] += 1
+    assert pool.take(settings) is conn and conn.pings == 0
+    pool.give(conn)
+    # Idle past the ping window: pinged, and kept when it answers.
+    clock["t"] += db._Pool.PING_AFTER + 1
+    assert pool.take(settings) is conn and conn.pings == 1
+    pool.give(conn)
+    # Pinged and silent: closed for real, a fresh one opened.
+    clock["t"] += db._Pool.PING_AFTER + 1
+    conn.ping_ok = False
+    fresh = pool.take(settings)
+    assert fresh is not conn and conn.closed
+    pool.give(fresh)
+    # Idle past the cluster's patience: dropped without asking.
+    clock["t"] += db._Pool.IDLE_SECONDS + 1
+    assert pool.take(settings) is not fresh and fresh.closed
+
+
+def test_the_pool_is_bounded_and_answers_to_one_cluster(
+        monkeypatch, make_settings):
+    from geelark_farm.store import db
+
+    pool, settings, opened = _pool(monkeypatch, make_settings)
+    out = [pool.take(settings) for _ in range(db._Pool.SIZE + 2)]
+    for conn in out:
+        pool.give(conn)
+    kept = [c for c in out if not c.closed]
+    assert len(kept) == db._Pool.SIZE, "a burst keeps SIZE, closes the rest"
+    # Other settings - another cluster, another user - flush the shelf.
+    other = make_settings(store_enabled=True, store_host="db2",
+                          store_password="pw")
+    conn = pool.take(other)
+    assert conn not in out and all(c.closed for c in out)
+    pool.give(conn)
+    pool.drain()
+    assert conn.closed
