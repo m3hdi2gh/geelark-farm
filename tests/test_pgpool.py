@@ -684,3 +684,30 @@ def test_the_board_paints_nothing():
     board = pgphones.PgServiceBoard(object())
     assert board.show(
         **{name: "x" for name in pools.ServiceBoard.ROWS}) is None
+
+
+def test_a_proxy_added_from_the_web_lands_in_the_four_columns():
+    """"Proxy String" was mapped to a column the table does not have, so
+    every add from the web failed with a program error (the operator,
+    2026-09-08). The joined string is split into host, port, user, pass
+    - in either shape a vendor writes it."""
+    table = MemoryTable()
+    pool = PgProxyPool(table)
+    pool.load()
+    row = pool.append(**{
+        "Name": "SX43",
+        "Proxy String": "socks5://ul01m20nt:4l9zMqqC@185.132.177.174:10730",
+        "Status": "free", "Note": "Added from the web", "Last Exit IP": "",
+        "Times Used": "0"})
+    assert row.error is None, row.error
+    kept = [r for r in table.rows("proxy") if r.get("proxy_name") == "SX43"][0]
+    assert (kept["host"], kept["port"], kept["username"], kept["proxy_pass"]) == (
+        "185.132.177.174", 10730, "ul01m20nt", "4l9zMqqC")
+    assert "proxy_string" not in kept
+    assert row.values["Proxy String"] == "185.132.177.174:10730:ul01m20nt:4l9zMqqC"
+    assert row.proxy.host == "185.132.177.174" and row.proxy.port == 10730
+
+    other = pool.append(**{"Name": "", "Proxy String": "10.0.0.9:1080:u:p",
+                           "Status": "free"})
+    assert (other.proxy.host, other.proxy.port, other.proxy.username,
+            other.proxy.password) == ("10.0.0.9", 1080, "u", "p")

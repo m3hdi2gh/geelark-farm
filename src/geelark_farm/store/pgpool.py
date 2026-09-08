@@ -308,6 +308,16 @@ class _PgPool(Pool):
             secret = (fields.get("Secret") or "").strip()
             row["recovery_email"] = secret if "@" in secret else ""
             row["totp_secret"] = "" if "@" in secret else secret
+        if isinstance(self, ProxyPool) and (fields.get("Proxy String") or "").strip():
+            # The joined string, in whichever shape the vendor wrote it -
+            # socks5://user:pass@host:port or host:port:user:pass - split
+            # into the four columns the table keeps.
+            from ..proxy import parse
+
+            proxy = parse((fields.get("Proxy String") or "").strip())
+            row["host"], row["port"] = proxy.host, int(proxy.port)
+            row["username"] = proxy.username or ""
+            row["proxy_pass"] = proxy.password or ""
         new_id = self._table.insert(row)
         if new_id is None:
             raise ValueError("already in the pool")
@@ -395,7 +405,12 @@ class PgAppPool(_PgPool, AppPool):
 class PgProxyPool(_PgPool, ProxyPool):
     kind = "proxy"
     COLUMNS = {
-        "Name": "proxy_name", "Proxy String": "proxy_string",
+        # No "Proxy String" column: the table keeps the four parts, and
+        # `append` splits the joined string into them. Mapped to a column
+        # that did not exist, every add from the web failed with
+        # `column "proxy_string" of relation "resources" does not exist`
+        # (the operator, 2026-09-08).
+        "Name": "proxy_name",
         "Host": "host", "Port": "port", "Username": "username",
         "Password": "proxy_pass", "Last Exit IP": "last_exit_ip",
         "Used By": "serial", "Status": "status", "Note": "note",
