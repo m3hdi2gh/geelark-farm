@@ -57,7 +57,7 @@ def _cells(row: dict) -> dict[str, str]:
 _COLUMNS = {
     "Status": "status", "State": "state", "Phone ID": "phone_id",
     "Gmail": "gmail", "GPT Account": "app_account", "Proxy": "proxy_name",
-    "Note": "note", "Serial": "serial",
+    "Note": "note", "Serial": "serial", "App name": "app",
 }
 
 

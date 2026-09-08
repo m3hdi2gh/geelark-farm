@@ -279,7 +279,11 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand.js details.newone[open] summary{{display:none}}
 .byhand details.newone .lead{{font-size:12px;color:var(--dim)}}
 .byhand details.newone input{{margin:0;width:200px}}
-.byhand input:disabled{{opacity:.45}}
+.byhand input:disabled,.byhand select:disabled{{opacity:.45}}
+.byhand label.field select{{min-width:210px;height:38px}}
+dialog.editor .dlg{{display:flex;flex-direction:column;gap:12px;padding:16px 18px}}
+dialog.editor .dlg .field input{{width:100%;height:36px;font-family:var(--mono);
+ font-size:12.5px}}
 .ov .sheet.narrow{{width:min(520px,100%)}}
 .ov .sheet.drawer{{position:fixed;right:0;top:0;bottom:0;width:min(480px,100%);
  max-height:none;border-radius:0;border-right:0}}
@@ -1550,12 +1554,25 @@ def _phone_rows(data: dict, user: dict) -> str:
             f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
             f'<td>{badge}</td>'
             f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}</td>'
-            f'<td>{_addr_cell(r.get("app_account"), "waiting for one")}</td>'
+            f'<td>{_account_cell(r)}</td>'
             f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
             f'<td class="mono dim nowrap">'
             f'{_ago(r.get("created_at") or r.get("updated_at")) or "-"}</td>'
             f'<td class="act">{_row_actions(user, r)}</td></tr>')
     return "".join(lines)
+
+
+def _account_cell(row: dict) -> str:
+    """The GPT account column: the address, or why there is none. A
+    Spotify phone never gets one, and a phone built with no app is done
+    the moment Google is in (2026-09-08)."""
+    app = str(row.get("app") or "")
+    if app == "spotify":
+        return '<span class="dim">Spotify &middot; no account</span>'
+    if (not app and (row.get("status") or "") == "ready"
+            and _no_address(row.get("app_account"))):
+        return '<span class="dim">no app</span>'
+    return _addr_cell(row.get("app_account"), "waiting for one")
 
 
 def _addr_cell(value, empty: str) -> str:
@@ -1761,48 +1778,38 @@ _DASH_SCRIPT = """
       setTimeout(function(){ said.remove(); }, stay + 600);
     }
 
-    // The credentials for a brand-new address, opened the moment one is
-    // typed that the pool does not know, and shut again when it is.
-    var fold = document.getElementById('newone');
+    // Build one now: four choices. The account is a choice only with
+    // ChatGPT; "type a new one" on the Gmail and the account opens a small
+    // dialog, and what is typed rides in the card's hidden boxes while the
+    // choice shows the address (2026-09-08).
     var byhand = document.querySelector('.byhand');
-    if (byhand && fold) byhand.classList.add('js');
-    document.querySelectorAll('.byhand input[list]').forEach(function(box){
-      var list = document.getElementById(box.getAttribute('list'));
-      if (!list || !fold) return;
-      box.addEventListener('input', function(){
-        var isNew = function(b){
-          var l = document.getElementById(b.getAttribute('list'));
-          var w = b.value.trim().toLowerCase();
-          var fresh = !!w && !!l && !Array.prototype.some.call(l.options,
-            function(o){ return o.value.toLowerCase() === w; });
-          b.classList.toggle('new', fresh);
-          return fresh;
-        };
-        var open = false;
-        document.querySelectorAll('.byhand input[list]').forEach(function(b){
-          var fresh = isNew(b);
-          fold.querySelectorAll('[data-for="' + b.name + '"]').forEach(function(i){
-            i.hidden = !fresh;
-          });
-          if (fresh) open = true;
-        });
-        fold.open = open;
-      });
-    });
-
-    // Untick "Install the app" and the GPT boxes go quiet with it. The
-    // server drops `app_account` when the tick is off, so an account
-    // typed and then unticked was thrown away without a word - and a
-    // disabled input is not submitted, which makes the form send exactly
-    // what the server will use (the operator, 2026-09-07).
-    var tick = document.querySelector('.byhand input[name="install_app"]');
-    if (tick && byhand) {
-      var gpt = function(){
-        byhand.querySelectorAll('[name="app_account"], [data-for="app_account"]')
-          .forEach(function(box){ box.disabled = !tick.checked; });
+    if (byhand) {
+      var appPick = byhand.querySelector('select[name="app"]');
+      var acctPick = byhand.querySelector('select[name="app_account"]');
+      var gate = function(){
+        if (!appPick || !acctPick) return;
+        var on = appPick.value === 'chatgpt';
+        acctPick.disabled = !on;
+        if (!on) acctPick.value = '';
       };
-      tick.addEventListener('change', gpt);
-      gpt();
+      if (appPick) { appPick.addEventListener('change', gate); gate(); }
+      byhand.querySelectorAll('select[data-new]').forEach(function(pick){
+        var was = pick.value === '__new__' ? '' : pick.value;
+        pick.addEventListener('change', function(){
+          if (pick.value !== '__new__') { was = pick.value; return; }
+          openNew(pick, was);
+        });
+      });
+      // A choice still on "type a new one" has nothing typed yet: open
+      // the dialog rather than send the placeholder.
+      byhand.addEventListener('submit', function(e){
+        var stuck = Array.prototype.filter.call(
+          byhand.querySelectorAll('select[data-new]'),
+          function(p){ return !p.disabled && p.value === '__new__'; })[0];
+        if (!stuck) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+        openNew(stuck, '');
+      }, true);
     }
 
     // Search, the seller, and the three chips - current, errored, spent
@@ -2176,6 +2183,44 @@ _DASH_SCRIPT = """
     if (!dlg) return;
     if (dlg.open && typeof dlg.close === 'function') dlg.close();
     else dlg.removeAttribute('open');
+  }
+
+  // "type a new one" on the build card: the dialog `pick` names, filled
+  // in, copied into the card's hidden boxes; the address becomes the
+  // choice. Cancel puts the choice back where it was.
+  function openNew(pick, was){
+    var dlg = document.getElementById(pick.dataset.new);
+    var form = pick.closest('form');
+    if (!dlg || !form) return;
+    var address = dlg.querySelector('[data-field$="_address"]');
+    var done = function(use){
+      if (use) {
+        var addr = (address ? address.value : '').trim();
+        if (!addr) { if (address) address.focus(); return; }
+        dlg.querySelectorAll('[data-field]').forEach(function(i){
+          if (i === address) return;
+          var box = form.querySelector('input[name="' + i.dataset.field + '"]');
+          if (box) box.value = i.value;
+        });
+        var old = pick.querySelector('option[data-typed]');
+        if (old) old.remove();
+        var opt = new Option(addr + ' (new)', addr, true, true);
+        opt.setAttribute('data-typed', '1');
+        pick.insertBefore(opt, pick.querySelector('option[value="__new__"]'));
+        pick.value = addr;
+      } else {
+        pick.value = was;
+      }
+      closeEditor(dlg);
+    };
+    dlg.querySelector('[data-use]').onclick = function(){ done(true); };
+    dlg.querySelector('[data-cancel]').onclick = function(){ done(false); };
+    dlg.addEventListener('cancel', function(ev){
+      ev.preventDefault(); done(false);
+    }, {once: true});
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
+    if (address) address.focus();
   }
 
   // Remove asks first - here, beside the button, not on a page of its own
@@ -3042,59 +3087,102 @@ def _build_card(data: dict, user: dict) -> str:
     # address the pool has never seen, and an account bought this morning
     # is exactly what this form is for. The hint says so instead of the
     # form hiding (2026-09-05).
-    hint = ("Pick one from the pool or type an address that is not in it "
-            "yet. Leave a field empty and the next one in the pool is used.")
-    # The breaker and the pause hold back the keeper's own batch; a wish
-    # asked for here is taken after both, so it is still built. The banner
-    # above says building has stopped, and for this form that is not true
-    # (2026-09-07).
+    hint = ("Each box starts on what the farm would do by itself; pick "
+            "something else, or type a new one.")
     if pulse.get("tripped") or pulse.get("paused"):
         hint += (" The keeper is held back right now, but a phone asked "
                  "for here is still built.")
+    gmails = _label_list(choose.get("gmails"))
+    proxies = _label_list(choose.get("proxies"))
+    apps = _label_list(choose.get("apps"))
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        f'<label>Gmail'
-        + _free_picker("gmail", choose.get("gmails"),
-                       "auto" if free else "a new address")
-        + '</label>'
-        + '<label>IP'
-        + _free_picker("proxy_name", choose.get("proxies"), "auto")
-        + '</label>'
-        '<label class="tick"><input type="checkbox" name="install_app" '
-        'value="1" checked> Install the app</label>'
-        + '<label>GPT account'
-        # Not "none": leaving it blank does not mean none, it means the
-        # next free account is spent on this phone. Somebody saving an
-        # account for a customer lost it to a box that said otherwise
-        # (2026-09-07). Untick "Install the app" for none.
-        + _free_picker("app_account", choose.get("apps"), NEXT_FREE)
-        + '</label>'
-        '<button class="go">Build</button>'
-        # Only an address the pool has never heard of needs these. Folded
-        # rather than appearing as you type: a field you find out about
-        # after pressing the button is a field that arrived too late.
-        # Shut, and the script opens it by itself the moment an address is
-        # typed that the pool does not know - the one time these are
-        # needed. Without the script it is a fold, and still there.
-        '<details class="fold newone" id="newone"><summary>credentials, '
-        'for an address the pool does not have yet</summary>'
-        '<span class="lead">New address - the pool needs its</span>'
-        '<input name="gmail_password" placeholder="Gmail password" '
-        'autocomplete="off" type="password" data-for="gmail">'
-        '<input name="gmail_secret" placeholder="2fa secret or recovery '
-        'address - optional" autocomplete="off" data-for="gmail">'
-        '<input name="app_password" placeholder="GPT password" '
-        'autocomplete="off" type="password" data-for="app_account">'
-        # `verbs.build_by_hand` has always read `app_secret` and nothing
-        # ever set it, so an account typed here joined the pool with no
-        # key and died at the 2-step screen weeks later (2026-09-07).
-        '<input name="app_secret" placeholder="GPT 2fa secret - optional" '
-        'autocomplete="off" data-for="app_account">'
-        '</details>'
-        '</form></div>')
+        + _pick_box("gmail", "Gmail", gmails,
+                  auto="auto &mdash; the next free one",
+                  empty="auto &mdash; the pool is empty", new="gmail-new")
+        + _pick_box("proxy_name", "Exit", proxies,
+                  auto="auto &mdash; the first free one", empty="")
+        + '<label class="field"><span>App</span><select name="app">'
+          '<option value="">none</option>'
+          '<option value="chatgpt" selected>ChatGPT</option>'
+          '<option value="spotify">Spotify</option></select></label>'
+        + _pick_box("app_account", "GPT account", apps,
+                  auto="none &mdash; sign in later",
+                  empty="none &mdash; sign in later", new="account-new",
+                  auto_needs_rows=False)
+        + '<button class="go">Build</button>'
+        # What the two dialogs typed rides here; the address itself is the
+        # choice's value.
+        + "".join(f'<input type="hidden" name="{name}" value="">'
+                  for name in ("gmail_password", "gmail_secret",
+                               "app_password", "app_secret"))
+        + '</form>'
+        + _new_dialog("gmail-new", "New Gmail", [
+            ("gmail_address", "Address", ""),
+            ("gmail_password", "Password", ""),
+            ("gmail_secret", "2FA secret or recovery address", "optional")])
+        + _new_dialog("account-new", "New GPT account", [
+            ("app_address", "Address", ""),
+            ("app_password", "Password", ""),
+            ("app_secret", "2FA secret", "optional")])
+        + '</div>')
+
+
+def _label_list(rows) -> list[str]:
+    return [str(r.get("label") or "") for r in rows or [] if r.get("label")]
+
+
+def _pick_box(name: str, label: str, rows: list[str], *, auto: str,
+            empty: str, new: str = "", auto_needs_rows: bool = True) -> str:
+    """One choice of the card: what the farm would do by itself first,
+    then the free rows to pick from, then - where typing is allowed -
+    "type a new one", which opens the dialog `new` names.
+
+    `auto_needs_rows`: the first option needs stock behind it (a Gmail
+    from an empty pool is nothing), or it does not ("none" is always a
+    thing to choose). With no stock and typing allowed, typing is what
+    the box opens on.
+    """
+    options = []
+    if rows or not auto_needs_rows:
+        options.append(f'<option value="">{auto}</option>')
+    else:
+        options.append(f'<option value="" disabled>{empty}</option>')
+    if rows:
+        options.append('<optgroup label="pick one">'
+                       + "".join(f'<option value="{esc(r)}">{esc(r)}</option>'
+                                 for r in rows) + '</optgroup>')
+    if new:
+        first = " selected" if (auto_needs_rows and not rows) else ""
+        options.append(f'<option value="__new__"{first}>type a new one'
+                       f'&hellip;</option>')
+    hook = f' data-new="{new}"' if new else ""
+    return (f'<label class="field"><span>{esc(label)}</span>'
+            f'<select name="{name}"{hook}>{"".join(options)}</select></label>')
+
+
+def _new_dialog(ident: str, title: str,
+                fields: list[tuple[str, str, str]]) -> str:
+    """The small dialog "type a new one" opens: the credential's boxes,
+    Cancel and Use. Nothing here is a form field of the card - the
+    script copies what was typed into the card's hidden boxes and shows
+    the address as the choice."""
+    boxes = "".join(
+        f'<label class="field"><span>{esc(label)}</span>'
+        f'<input data-field="{name}" autocomplete="off" spellcheck="false"'
+        + (f' placeholder="{esc(hint)}"' if hint else "")
+        + (' autofocus' if name.endswith("_address") else "")
+        + '></label>' for name, label, hint in fields)
+    return (f'<dialog class="editor" id="{ident}" aria-labelledby="{ident}-h">'
+            f'<div class="dlg"><header><h4 id="{ident}-h">{esc(title)}</h4>'
+            f'</header>{boxes}'
+            f'<div class="row"><button type="button" class="quiet" '
+            f'data-cancel="1">Cancel</button>'
+            f'<button type="button" class="go" data-use="1">Use it</button>'
+            f'</div></div></dialog>')
 
 
 def _stopped_card(data: dict, user: dict, explain=None) -> str:
@@ -3205,6 +3293,10 @@ def _wishes(data: dict, explain=None) -> str:
         status = str(w.get("status") or "")
         who = str(w.get("gmail") or "") or "the next free Gmail"
         where = f" on {esc(str(w['proxy_name']))}" if w.get("proxy_name") else ""
+        app = (str(w.get("app")) if w.get("app") is not None
+               else ("chatgpt" if w.get("install_app", True) else ""))
+        where += {"": " &middot; no app", "spotify": " &middot; Spotify",
+                  "chatgpt": ""}.get(app, f" &middot; {esc(app)}")
         when = _hhmm(w.get("created_at")) if w.get("created_at") else ""
         if status == "failed":
             said, advice = (explain(str(w.get("detail") or ""))

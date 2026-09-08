@@ -3393,20 +3393,37 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     _, _, body = client.request("GET", "/")
     assert 'action="/phones/build"' in body
     assert "pick@example.com" in body and "SX9" in body
-    assert 'placeholder="auto"' in body, "blank means the pool decides"
+    assert "auto &mdash; the next free one" in body, "blank means the pool decides"
 
     status, headers, _ = client.request(
         "POST", "/phones/build",
         _form(csrf=client.csrf(), gmail="pick@example.com",
-              proxy_name="SX9", install_app="1",
+              proxy_name="SX9", app="chatgpt",
               app_account="gpt@example.com"))
 
     assert status == 303 and dict(headers)["Location"].startswith("/")
     assert got["verb"] == "build_by_hand"
     assert got["payload"]["gmail"] == "pick@example.com"
     assert got["payload"]["proxy_name"] == "SX9"
+    assert got["payload"]["app"] == "chatgpt"
     assert got["payload"]["install_app"] is True
     assert got["payload"]["app_account"] == "gpt@example.com"
+
+    # Spotify: no account rides along, whatever the box said.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), app="spotify",
+                         app_account="gpt@example.com"))
+    assert got["payload"]["app"] == "spotify"
+    assert got["payload"]["install_app"] is True
+    assert got["payload"]["app_account"] == ""
+    # None: no app at all.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), app="none"))
+    assert got["payload"]["app"] == "" and got["payload"]["install_app"] is False
+    # The old form's tick still means ChatGPT.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), install_app="1"))
+    assert got["payload"]["app"] == "chatgpt"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3471,17 +3488,38 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     """A picker and a box for the same answer were two controls and a
     sentence about which one won. A datalist is one control that does
     both."""
-    _dash(monkeypatch)
+    from geelark_farm.web import pages
+
+    _dash(monkeypatch, choose={"gmails": [{"label": "a@x.com"}],
+                               "proxies": [{"label": "SX1"}],
+                               "apps": [{"label": "g@x.com"}]})
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
 
-    for name in ("gmail", "proxy_name", "app_account"):
-        assert f'name="{name}" list="free-{name}"' in body, name
-        assert f'<datalist id="free-{name}">' in body, name
-    assert 'name="gmail_typed_address"' not in body, "the second box is gone"
-    assert 'name="app_typed_address"' not in body
-    assert 'name="install_app"' in body
+    # Four choices, each a select: what the farm would do first, the free
+    # rows to pick from, and - for the two that can be typed - "type a new
+    # one", which opens a dialog (the operator, 2026-09-08).
+    card = body[body.index('class="byhand"'):body.index("Build</button>")]
+    for name in ("gmail", "proxy_name", "app", "app_account"):
+        assert f'<select name="{name}"' in card, name
+    assert 'name="gmail" data-new="gmail-new"' in card
+    assert 'name="app_account" data-new="account-new"' in card
+    assert 'data-new' not in card.split('name="proxy_name"', 1)[1].split("</select>", 1)[0], (
+        "an exit is never typed")
+    assert card.count("type a new one&hellip;</option>") == 2
+    assert '<option value="chatgpt" selected>ChatGPT</option>' in card
+    assert '<option value="">none</option>' in card and "Spotify" in card
+    assert 'name="install_app"' not in card, "the tick became the App choice"
+    assert '<optgroup label="pick one">' in card
+    for ident in ("gmail-new", "account-new"):
+        assert f'<dialog class="editor" id="{ident}"' in body, ident
+    assert 'data-field="gmail_secret"' in body and 'data-field="app_secret"' in body
+    for name in ("gmail_password", "gmail_secret", "app_password", "app_secret"):
+        assert f'<input type="hidden" name="{name}" value="">' in body, name
+    script = pages._DASH_SCRIPT
+    assert "acctPick.disabled = !on" in script, "an account only with ChatGPT"
+    assert "function openNew(pick, was)" in script
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3518,7 +3556,8 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
     # An empty Gmail pool is the case the form is for - an address bought
     # this morning is in no pool - so the form stays and the hint says so.
     assert 'action="/phones/build"' in body
-    assert 'placeholder="a new address"' in body
+    assert '<option value="" disabled>auto &mdash; the pool is empty</option>' in body
+    assert '<option value="__new__" selected>type a new one&hellip;</option>' in body
 
     _dash(monkeypatch, stock={"gmail": {"free": 3}, "proxy": {"free": 0},
                               "app": {"awaiting": 2}})
@@ -4251,9 +4290,10 @@ def test_the_gpt_box_stops_promising_none():
          "stock": {"gmail": {"free": 2}, "proxy": {"free": 3}}},
         {"id": 1, "role": "operator", "csrf": "c", "mutations": True,
          "may_login_accounts": True})
-    assert 'name="app_account"' in card
-    assert 'placeholder="none"' not in card
-    assert pages.NEXT_FREE in card
+    assert '<select name="app_account"' in card
+    assert '<option value="">none &mdash; sign in later</option>' in card, (
+        "an account only when one is chosen (2026-09-08)")
+    assert pages.NEXT_FREE not in card
     assert 'name="app_secret"' in card, "a typed account needs its key"
 
 

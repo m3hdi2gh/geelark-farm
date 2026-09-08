@@ -4272,18 +4272,43 @@ def test_without_manual_login_the_keepers_build_still_takes_an_account(
     assert s.build.app_account == "a0@example.com"
 
 
-def test_a_by_hand_build_asking_for_the_next_free_account_still_gets_one(
+def test_a_by_hand_build_with_no_account_named_stops_warm(
         monkeypatch, make_settings, tmp_path):
-    """"The next free one" typed on the build card is an order, not the
-    keeper helping itself."""
-    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    """Blank used to mean "the next free one"; the card says none now, and
+    none means none - an account goes on when somebody sends one
+    (2026-09-08). Named, it is used."""
+    settings = make_settings(state_dir=tmp_path, manual_login=False)
+    signed = []
     monkeypatch.setattr(builder.chatgpt_login, "sign_in",
-                        lambda *a, **k: SIGNED_IN)
+                        lambda *a, **k: signed.append(1) or SIGNED_IN)
     s = _session_for(settings, apps=2,
                      want=builder.Wanted(wanted_id=1, gmail="", app_account=""))
 
+    build = builder._sign_into_app(s)
+    assert build is not None and build.status == builder.WARM_FOR_OPERATOR
+    assert "asked for without an account" in build.detail
+    assert signed == [] and len(s.book.apps.available) == 2
+
+    s = _session_for(settings, apps=2,
+                     want=builder.Wanted(wanted_id=2, app_account="a1@example.com"))
     assert builder._sign_into_app(s) is None
-    assert s.build.app_account == "a0@example.com"
+    assert s.build.app_account == "a1@example.com"
+
+
+def test_the_app_a_hand_built_phone_gets_is_what_was_asked_for(make_settings,
+                                                                 tmp_path):
+    settings = make_settings(state_dir=tmp_path)
+    assert builder._package_for(settings, "chatgpt") == settings.target_package
+    assert builder._package_for(settings, "spotify") == builder.SPOTIFY_PACKAGE
+    assert builder.Wanted().app == "chatgpt", "the keeper's own phones"
+    assert builder.APPS == {"chatgpt": "ChatGPT", "spotify": "Spotify"}
+    import inspect
+
+    src = inspect.getsource(builder.build_one)
+    assert 'app = want.app if want is not None else "chatgpt"' in src
+    assert '"signed into Google; no app was asked for"' in src, "none: ready at once"
+    assert 'if app != "chatgpt":' in src, "Spotify: ready once installed"
+    assert '_package_for(settings, app)' in src
 
 
 def test_a_sent_account_that_fails_does_not_pull_the_next_one_under_manual_login(

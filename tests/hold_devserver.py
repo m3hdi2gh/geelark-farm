@@ -53,7 +53,11 @@ def test_hold(web, monkeypatch):
             {"id": 900, "address": "waiting@x.com", "status": "", "serial": "",
              "note": "", "error": None, "state": "free",
              "password": "pw", "secret": "", "second": ""}],
-        "proxy": [], "totals": {"gmail": {"live": 36, "spent": 40}}})
+        "proxy": [], "totals": {"gmail": {"live": 36, "spent": 40}}},
+          choose={"gmails": [{"label": f"fresh{n:02d}@gmail.com"} for n in range(6)],
+                  "proxies": [{"label": f"SX{n}"} for n in (1, 4, 5, 10)],
+                  "apps": [{"label": "mehdifcb1331@gmail.com"},
+                           {"label": "mhmdzare@gmail.com"}]})
     import geelark_farm.web.app as app_mod
     monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: ["LEO"])

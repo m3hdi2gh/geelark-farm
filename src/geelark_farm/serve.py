@@ -495,7 +495,8 @@ class ControlLane:
             return 0
         wants = [builder.Wanted(gmail=r["gmail"], proxy_name=r["proxy_name"],
                                 install_app=r["install_app"],
-                                app_account=r["app_account"], wanted_id=r["id"])
+                                app_account=r["app_account"], wanted_id=r["id"],
+                                app=_app_of(r))
                  for r in rows]
         settings, client = self.settings, self.client
 
@@ -987,6 +988,14 @@ def _housekeeping_is_on(settings: Settings) -> bool:
     housekeeper opens its own Book, and only a store-backed Book is cheap
     enough to open on a second thread every five minutes."""
     return bool(settings.store_enabled and settings.pools_in_pg)
+
+
+def _app_of(row: dict) -> str:
+    """Which app a wish asks for. A row from before the column follows
+    its tick: ChatGPT, or nothing."""
+    if "app" in row and row["app"] is not None:
+        return str(row["app"])
+    return "chatgpt" if row.get("install_app", True) else ""
 
 
 def _lane_is_on(settings: Settings) -> bool:
@@ -1652,7 +1661,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                 wishes.append(builder.Wanted(
                     gmail=row["gmail"], proxy_name=row["proxy_name"],
                     install_app=row["install_app"],
-                    app_account=row["app_account"], wanted_id=row["id"]))
+                    app_account=row["app_account"], wanted_id=row["id"],
+                    app=_app_of(row)))
         except Exception as exc:                                  # noqa: BLE001
             # The same rule as every other store read in a pass: the farm
             # keeps building without the console.

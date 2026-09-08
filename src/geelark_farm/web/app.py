@@ -348,19 +348,27 @@ class _Handler(BaseHTTPRequestHandler):
                 # the verb, so the verb takes one shape of payload however
                 # it was asked - the API will ask differently.
                 gmail = (field.get("gmail") or "").strip()
-                app = (field.get("app_account") or "").strip()
-                install = bool(field.get("install_app"))
+                # Which app: none, ChatGPT or Spotify. The old form sent a
+                # tick instead; it still means ChatGPT or nothing.
+                if "app" in field:
+                    which = (field.get("app") or "").strip().lower()
+                    which = "" if which == "none" else which
+                else:
+                    which = "chatgpt" if field.get("install_app") else ""
+                account = ((field.get("app_account") or "").strip()
+                           if which == "chatgpt" else "")
                 payload = {
                     "gmail": gmail,
                     "gmail_typed": self._is_new("gmail", gmail),
                     "gmail_password": field.get("gmail_password") or "",
                     "gmail_secret": field.get("gmail_secret") or "",
                     "proxy_name": (field.get("proxy_name") or "").strip(),
-                    "install_app": install,
-                    "app_account": app if install else "",
-                    "app_typed": install and self._is_new("app", app),
+                    "app": which,
+                    "install_app": bool(which),
+                    "app_account": account,
+                    "app_typed": bool(account) and self._is_new("app", account),
                     "app_password": field.get("app_password") or "",
-                     "app_secret": field.get("app_secret") or "",
+                    "app_secret": field.get("app_secret") or "",
                 }
                 return self._act(
                     user, "may_login_accounts", "build_by_hand", payload,

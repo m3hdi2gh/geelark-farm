@@ -295,6 +295,8 @@ class Build:
     #: A phone this run created is `False` rather than `None`: it is new, so
     #: nothing is installed on it, and that is knowledge.
     app_installed: bool | None = None
+    #: Which app this phone carries: '' for none, 'chatgpt', 'spotify'.
+    app: str = ""
     app_account: str = ""
     detail: str = ""
     seconds: float = 0.0
@@ -590,15 +592,23 @@ def _sign_into_app(session: _Session) -> Build | None:
                 except Aborted as refused:
                     _give_back_condemned(s)
                     return s.finish("chosen_app_unavailable", str(refused))
+            elif s.want is not None:
+                # Asked for by hand with no account named: the phone is
+                # warm - Google in, the app on it - and an account goes on
+                # when somebody sends one. Blank used to mean "the next
+                # free one"; the card says none now (2026-09-08).
+                _give_back_condemned(s)
+                return s.finish(
+                    WARM_FOR_OPERATOR,
+                    "asked for without an account: Google is signed in and "
+                    "the app is on it; send an account to it when you want")
             elif s.settings.manual_login and (s.want is None or s.attempted
                                               or s.set_aside):
                 # With manual login on, no account goes onto a phone that
                 # nobody sent it to. The keeper's own build stops here on
                 # purpose - Google in, the app on it, warm - and a finish
                 # whose sent account did not sign in does not help itself
-                # to the next one (the operator, 2026-09-08). A by-hand
-                # build that asked for "the next free account" is an
-                # order, and takes one below.
+                # to the next one (the operator, 2026-09-08).
                 _give_back_condemned(s)
                 if s.attempted or s.set_aside:
                     return s.finish(
@@ -827,6 +837,19 @@ class Wanted:
     install_app: bool = True
     app_account: str = ""
     wanted_id: int | None = None
+    #: Which app: '' for none, 'chatgpt' (the farm's own), 'spotify'. An
+    #: account is only ever signed into ChatGPT (2026-09-08).
+    app: str = "chatgpt"
+
+
+#: The apps a phone can be built with, and what each is called on a page.
+APPS = {"chatgpt": "ChatGPT", "spotify": "Spotify"}
+#: Spotify's package; ChatGPT's is `settings.target_package`.
+SPOTIFY_PACKAGE = "com.spotify.music"
+
+
+def _package_for(settings: Settings, app: str) -> str:
+    return SPOTIFY_PACKAGE if app == "spotify" else settings.target_package
 
 
 def _pick(pool, wanted: str, what: str):
@@ -1074,8 +1097,19 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                           f"was running, so it was left alone")
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
+        # Which app, if any. The keeper's own phones carry ChatGPT; a
+        # hand-built one carries what was asked for - none, ChatGPT or
+        # Spotify (the operator, 2026-09-08). None is ready the moment
+        # Google is in; Spotify is ready once it is installed, since no
+        # account is ever signed into it here.
+        app = want.app if want is not None else "chatgpt"
+        build.app = app
+        if not app:
+            build.app_installed = False
+            return finish("ready", "signed into Google; no app was asked for",
+                          ok=True)
         installed = play_install.install(
-            client, phone_id, settings.target_package,
+            client, phone_id, _package_for(settings, app),
             budget_seconds=min(settings.install_budget_seconds, remaining()),
             artifact_dir=artifacts,
         )
@@ -1085,6 +1119,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                           f"the app could not be installed - "
                           f"{failures.verdict(installed.reason).seen}")
         build.app_installed = True
+        if app != "chatgpt":
+            return finish("ready", f"signed into Google and {APPS[app]} is "
+                                   f"installed", ok=True)
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,
@@ -1945,7 +1982,10 @@ def _record(book: Book, build: Build) -> None:
     device: dict[str, str] = {}
     if status is not None:
         device = {"Status": status,
-                  "App": book.phones.YES if build.app_installed else cross}
+                  "App": book.phones.YES if build.app_installed else cross,
+                  # Which one, for the table: "Spotify" beside a phone
+                  # that has it, rather than "waiting for one".
+                  "App name": build.app}
 
     try:
         wrote = book.phones.write(

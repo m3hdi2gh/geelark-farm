@@ -28,15 +28,21 @@ STATES = ("queued", "running", "done", "failed")
 
 def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
         install_app: bool = True, app_account: str = "",
-        requested_by: int | None = None) -> int:
-    """Write one wish. Returns its id, which is what the page says back."""
+        requested_by: int | None = None, app: str | None = None) -> int:
+    """Write one wish. Returns its id, which is what the page says back.
+
+    `app` is which app the phone gets - '' for none, 'chatgpt', 'spotify'.
+    Left None it follows `install_app`, which is what every older caller
+    means: the app, or no app."""
+    if app is None:
+        app = "chatgpt" if install_app else ""
     with Store(settings) as store:
         rows = store._write(
             "INSERT INTO wanted_builds"
-            " (gmail, proxy_name, install_app, app_account, requested_by)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (gmail.strip(), proxy_name.strip(), bool(install_app),
-             app_account.strip(), requested_by))
+            " (gmail, proxy_name, install_app, app_account, requested_by, app)"
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (gmail.strip(), proxy_name.strip(), bool(app),
+             app_account.strip(), requested_by, app))
     return int(rows[0]["id"])
 
 
@@ -59,7 +65,7 @@ def take(settings: Settings, limit: int = 2) -> list[dict]:
             "              WHERE status = 'queued'"
             "              ORDER BY created_at, id LIMIT %s"
             "              FOR UPDATE SKIP LOCKED)"
-            " RETURNING id, gmail, proxy_name, install_app, app_account",
+            " RETURNING id, gmail, proxy_name, install_app, app_account, app",
             (max(1, int(limit)),))
 
 

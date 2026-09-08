@@ -92,8 +92,18 @@ def build_by_hand(book, ledger, settings, payload, client):
     who = _by(payload)
     gmail = (payload.get("gmail") or "").strip()
     proxy_name = (payload.get("proxy_name") or "").strip()
-    app_account = (payload.get("app_account") or "").strip()
-    install_app = bool(payload.get("install_app"))
+    # Which app: '' for none, 'chatgpt', 'spotify'. An older payload says
+    # only `install_app`, which means ChatGPT or nothing.
+    if "app" in payload:
+        app = str(payload.get("app") or "").strip().lower()
+    else:
+        app = "chatgpt" if payload.get("install_app") else ""
+    if app not in ("", "chatgpt", "spotify"):
+        return "refused", f"{app!r} is not an app this farm installs", None
+    install_app = bool(app)
+    # An account is only ever signed into ChatGPT.
+    app_account = ((payload.get("app_account") or "").strip()
+                   if app == "chatgpt" else "")
 
     def add_typed(pool, kind, address, password, secret=""):
         """Put a typed credential in its tab, unless it is already there."""
@@ -168,12 +178,15 @@ def build_by_hand(book, ledger, settings, payload, client):
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
                              app_account=app_account,
-                             requested_by=payload.get("by_id"))
+                             requested_by=payload.get("by_id"), app=app)
     where = f" on {proxy_name}" if proxy_name else ""
-    app = "" if install_app else " without the app"
+    carrying = {"": " without an app", "chatgpt": " with ChatGPT",
+                "spotify": " with Spotify"}[app]
+    if app_account:
+        carrying += f" and {app_account} signed in"
     who = gmail or "the next free Gmail"
-    return "done", (f"asked for a phone{where} for {who}{app} - "
-                    f"request {asked}. The next pass starts it."), None
+    return "done", (f"asked for a phone{where} for {who}{carrying} - "
+                    f"request {asked}. It starts within seconds."), None
 
 
 def add_gpt(book, ledger, settings, payload, client):

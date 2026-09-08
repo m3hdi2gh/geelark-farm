@@ -552,3 +552,11 @@ CREATE INDEX IF NOT EXISTS sessions_of_user ON sessions (user_id);
 -- was off (the operator, 2026-09-08). Machine-owned, like status: the
 -- person channel (state, owner) is untouched by it.
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS running boolean NOT NULL DEFAULT false;
+
+-- ------------------------------------------- wanted builds, rev 17 (app)
+-- Which app a hand-built phone gets: '' for none, 'chatgpt', 'spotify'.
+-- `install_app` stays as the boolean it was (true iff app <> ''), so nothing
+-- that read it has to change. And the phone row remembers which app it
+-- carries, so the table can say "Spotify" where it said "waiting for one".
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT 'chatgpt';
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT '';

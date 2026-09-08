@@ -213,7 +213,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         phone_rows = store._rows(
             "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
             " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
-            " p.created_at, p.running, u.username AS owner"
+            " p.created_at, p.running, p.app, u.username AS owner"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL"
             " AND (%s::bigint IS NULL OR p.owner_id = %s)"
@@ -289,7 +289,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         # (2026-09-07). Inlined rather than `wanted.recent`, because the
         # whole page is one connection.
         wishes = store._rows(
-            "SELECT w.id, w.gmail, w.proxy_name, w.install_app,"
+            "SELECT w.id, w.gmail, w.proxy_name, w.install_app, w.app,"
             " w.app_account, w.status, w.serial, w.detail, w.created_at,"
             " coalesce(u.username, '') AS asked_by"
             " FROM wanted_builds w LEFT JOIN users u"
