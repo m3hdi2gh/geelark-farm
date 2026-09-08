@@ -205,6 +205,13 @@ class BuildContextFilter(logging.Filter):
 # and a login. Below this the honest thing is to report what it has.
 ATTEMPT_SECONDS = 420
 
+#: Captchas met on one exit before the exit is changed rather than the
+#: next Gmail spent. A captcha is Google distrusting the address, and one
+#: is treated that way; two in a row on the same exit is the exit, and
+#: phone 1995 spent three Gmails in an hour on SX44 while every other
+#: phone that pass met one captcha or none (the operator, 2026-09-08).
+CAPTCHAS_PER_EXIT = 2
+
 # What the Phones tab records. The build knows exactly why it stopped and says
 # so in the note; the Status column answers the only question asked of it at a
 # glance - can I use this phone.
@@ -949,6 +956,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # The Gmail phase counts its own attempts; the app phase's are the
     # session's, since that loop is shared with `finish`.
     tried_gmails = 0
+    captchas_here = 0                     # on the exit the phone is on now
+    exit_swaps = 0
     session: _Session | None = None
     # Whether the Gmail ended up on the device. Not the same question as "did
     # the build succeed" - see _release. The app account's equivalent lives on
@@ -1160,6 +1169,41 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                                   book.gmails.service).advice)
             gmail_row = None
             tried_gmails += 1
+            # Two captchas on this exit: the exit is changed before the
+            # next address is tried on it. The address just set aside
+            # stays set aside - it did meet a captcha - and the next one
+            # gets a fresh exit. No exit to move to is not a failed
+            # build: the next address goes on the same exit, as before.
+            if outcome.reason == "captcha_shown":
+                captchas_here += 1
+            if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
+                previous = proxy_row
+                seen = {f"{r.proxy.host}:{r.proxy.port}"
+                        for r, _ in refused_exits if r.proxy}
+                if proxy_row.proxy:
+                    seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
+                try:
+                    proxy_row = _new_exit(
+                        client, settings, book, build, phone_id, proxy_row,
+                        f"{captchas_here} Gmails met a captcha on this exit",
+                        remaining(), swaps=exit_swaps, avoid=seen,
+                        cancelled=cancelled)
+                except Aborted as exc:
+                    log.warning("the exit could not be changed (%s); the "
+                                "next Gmail goes on the same one", exc)
+                    # _new_exit stops the phone before it looks for an
+                    # exit, so a refusal leaves it down.
+                    phones.ensure_running(
+                        client, phone_id,
+                        timeout=min(phones.BOOT_SECONDS, remaining()),
+                        cancelled=cancelled)
+                else:
+                    if previous is not None and previous is not proxy_row:
+                        # Held, not freed - see _new_exit. Released at the
+                        # end, marked with why.
+                        refused_exits.append((previous, "captcha_shown"))
+                    exit_swaps += 1
+                captchas_here = 0
 
         # ----------------------------------------------------- the install
         check_cancelled()

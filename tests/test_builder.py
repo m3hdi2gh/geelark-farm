@@ -4544,3 +4544,44 @@ def test_a_build_bills_its_own_api_calls_and_a_warm_phone_reads_warm(
     assert builder._mark(builder.Build(index=1, ok=True, status="ready")) == "OK"
     assert builder._mark(builder.Build(index=1, ok=False,
                                        status="install_failed")) == "FAIL"
+
+
+# --------------------------------------------- two captchas change the exit
+def test_two_captchas_on_one_exit_change_the_exit_not_the_third_gmail(
+        device, settings, drive):
+    """A captcha is Google distrusting the address, and one is treated that
+    way; two in a row on the same exit is the exit. Phone 1995 spent three
+    Gmails in an hour on SX44 while every other phone that pass met one
+    captcha or none (the operator, 2026-09-08)."""
+    captcha = Outcome("fatal", "captcha_shown")
+    book = make_book(gmails=3, proxies=3)
+    build = drive(book, settings, google=[captcha, captcha, SIGNED_IN])
+
+    assert build.ok and build.gmail == "g2@example.com"
+    assert len(device.proxies_set) == 1, "one swap, after the second captcha"
+    # Both addresses that met a captcha are set aside, as before.
+    assert [r.credentials.email for r in book.gmails.available] == []
+    # The phone is on the swapped-in exit for the third address.
+    assert device.proxies_set[0] in build.proxy
+
+    # One captcha alone does not move the phone.
+    device.proxies_set.clear()
+    book = make_book(gmails=3, proxies=3)
+    build = drive(book, settings, google=[captcha, SIGNED_IN])
+    assert build.ok and device.proxies_set == []
+
+
+def test_no_exit_to_move_to_is_not_a_failed_build(device, settings, drive,
+                                                    monkeypatch):
+    """The next Gmail goes on the same exit, as before - and the phone,
+    which `_new_exit` stops before it looks, is brought back up first."""
+    captcha = Outcome("fatal", "captcha_shown")
+    started = []
+    monkeypatch.setattr(builder.phones, "ensure_running",
+                        lambda *a, **k: started.append(1))
+    book = make_book(gmails=3, proxies=1)
+    build = drive(book, settings, google=[captcha, captcha, SIGNED_IN])
+
+    assert build.ok and build.gmail == "g2@example.com"
+    assert device.proxies_set == []
+    assert len(started) == 2, "once at boot, once after the refused swap"
