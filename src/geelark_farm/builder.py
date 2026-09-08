@@ -1133,6 +1133,28 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if app != "chatgpt":
             return finish("ready", f"signed into Google and {APPS[app]} is "
                                    f"installed", ok=True)
+        if want is None:
+            # The keeper's own phones carry Spotify beside ChatGPT, and are
+            # warm only once both are on (the operator, 2026-09-08). A
+            # phone asked for by hand gets exactly the app it asked for.
+            # Spotify not installing is a note on the row, not a failed
+            # phone: ChatGPT is what the account goes into.
+            if remaining() <= 0:
+                return finish("budget_exhausted",
+                              "ChatGPT is on, but no time left for Spotify")
+            extra = play_install.install(
+                client, phone_id, SPOTIFY_PACKAGE,
+                budget_seconds=min(settings.install_budget_seconds,
+                                   remaining()),
+                artifact_dir=artifacts,
+            )
+            build.trails.append(("install", extra.trail))
+            if extra.ok:
+                build.app = "chatgpt+spotify"
+            else:
+                log.warning("Spotify did not install on %s (%s); the phone "
+                            "goes on without it", build.serial, extra.reason)
+                build.tried.append(("spotify", extra.reason, "Play"))
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,

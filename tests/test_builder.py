@@ -789,6 +789,15 @@ class FakePhoneLog:
 #: `state_book` fills it from the same rows it builds the tab from.
 _MARKS: list = []
 
+
+@pytest.fixture(autouse=True)
+def _no_build_context_leaks():
+    """`build_one` stamps the log context with its serial and only
+    `_run_jobs` clears it; a test that calls `build_one` directly left
+    "622" on every later log line, in another module (2026-09-08)."""
+    yield
+    builder._serial.set(builder.NO_BUILD)
+
 #: What somebody has said about each phone, and how many attempts this
 #: tool has made on it - the other two halves of the person channel.
 _SAID: dict = {}
@@ -4347,3 +4356,45 @@ def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
     assert '{"State": "taken", "Built by": str(want.requested_by),' in src
     assert '"Owner": str(want.requested_by)}' in src
     assert "if want is not None and want.requested_by else {})" in src
+
+
+def test_the_keepers_phone_carries_spotify_beside_chatgpt(device, settings,
+                                                          drive, monkeypatch):
+    """A warm phone is warm once both are on; a phone asked for by hand
+    gets exactly the app it asked for (the operator, 2026-09-08)."""
+    installed = []
+    monkeypatch.setattr(
+        builder.play_install, "install",
+        lambda client, phone_id, package, **k: installed.append(package)
+        or INSTALLED)
+    book = make_book(apps=1)
+    build = drive(book, settings, google=[SIGNED_IN])
+    assert build.ok and installed == [settings.target_package,
+                                      builder.SPOTIFY_PACKAGE]
+    assert build.app == "chatgpt+spotify"
+
+    installed.clear()
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    book = make_book(apps=1)
+    build = builder.build_one(None, settings, book, FakeLedger(), 1,
+                              want=builder.Wanted(app="chatgpt",
+                                                  app_account="a0@example.com"))
+    assert build.ok and installed == [settings.target_package]
+    assert build.app == "chatgpt"
+
+
+def test_spotify_not_installing_is_a_note_not_a_failed_phone(
+        device, settings, drive, monkeypatch):
+    from geelark_farm.flows.play_install import Outcome as Install
+
+    def install(client, phone_id, package, **k):
+        if package == builder.SPOTIFY_PACKAGE:
+            return Install("fatal", "install_failed", trail=[])
+        return INSTALLED
+    monkeypatch.setattr(builder.play_install, "install", install)
+    build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
+    assert build.ok and build.app == "chatgpt"
+    assert ("spotify", "install_failed", "Play") in build.tried
