@@ -1393,3 +1393,39 @@ def test_a_warm_build_is_a_done_job_not_a_failed_one(monkeypatch, make_settings)
     jobs.finish(make_settings(), 6, ok=False, status="install_failed",
                 worked=False)
     assert conn.params[-1][0] == "failed"
+
+
+def test_a_builds_screens_are_mirrored_listed_and_served_from_the_store(
+        monkeypatch, make_settings, tmp_path):
+    """Scale-out step 3: a console on any host shows what a builder on
+    another host archived (2026-09-10). Files past MAX_BYTES stay on
+    disk only."""
+    from geelark_farm.store import artifacts
+
+    folder = tmp_path / "20260910-010203-build622"
+    folder.mkdir()
+    (folder / "010300-captcha.xml").write_text("<hierarchy/>", encoding="utf-8")
+    (folder / "outcome.txt").write_text("failed captcha_shown\n", encoding="utf-8")
+    (folder / "big.png").write_bytes(b"x" * (artifacts.MAX_BYTES + 1))
+    conn = _ScriptedConn([None, None])
+    monkeypatch.setattr(artifacts, "connect", lambda s: conn)
+    s = make_settings()
+
+    assert artifacts.put_dir(s, folder, "622") == 2
+    inserts = [q for q in conn.sql if q.startswith("INSERT INTO artifacts")]
+    assert len(inserts) == 2 and "ON CONFLICT (folder, name)" in inserts[0]
+    names = {p[2] for p in conn.params if p and len(p) == 4}
+    assert names == {"010300-captcha.xml", "outcome.txt"}, "the big one stayed"
+
+    conn = _ScriptedConn([[("20260910-010203-build622", "when",
+                            ["010300-captcha.xml"], "failed captcha_shown\n")],
+                          (memoryview(b"<hierarchy/>"),), None])
+    monkeypatch.setattr(artifacts, "connect", lambda s: conn)
+    listed = artifacts.folders(s, "622")
+    assert listed == [{"folder": "20260910-010203-build622", "at": "when",
+                       "files": ["010300-captcha.xml"],
+                       "outcome": "failed captcha_shown"}]
+    assert artifacts.get(s, "622", "20260910-010203-build622",
+                         "010300-captcha.xml") == b"<hierarchy/>"
+    artifacts.prune(s, days=7)
+    assert "DELETE FROM artifacts" in conn.sql[-1]

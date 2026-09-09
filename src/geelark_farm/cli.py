@@ -760,7 +760,9 @@ def cmd_breaker(settings: Settings, args) -> int:
     from .breaker import Breaker
     from .serve import BREAKER_FILE
 
-    fuse = Breaker(settings.state_dir / BREAKER_FILE)
+    from .breaker import open_breaker
+
+    fuse = open_breaker(settings, settings.state_dir / BREAKER_FILE)
 
     if args.clear:
         fuse.clear()
@@ -1156,6 +1158,10 @@ def _configure_logging(settings: Settings):
     for noisy in ("urllib3", "google", "googleapiclient", "requests"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    if not getattr(settings, "log_file", True):
+        # A builder that comes and goes by number keeps no file of its own
+        # (LOG_FILE=0): the store's log table has every line, by machine.
+        return None
     try:
         settings.log_dir.mkdir(parents=True, exist_ok=True)
         path = settings.log_dir / f"{time.strftime('%Y%m%d')}-{machine()}.log"

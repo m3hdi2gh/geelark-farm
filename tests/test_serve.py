@@ -2780,3 +2780,55 @@ def test_the_builder_takes_carries_and_looks_again(make_settings, tmp_path,
     assert (tmp_path / serve_mod.BUILDER_HEARTBEAT_FILE).exists()
     ok, said = serve_mod.healthy(settings)
     assert ok and "builder" in said
+
+
+# --------------------------------------------- the breaker in the store
+def test_the_stores_breaker_counts_like_the_files_and_imports_it_once(
+        make_settings, tmp_path, monkeypatch):
+    """Scale-out step 2: the count in service_state, so a keeper on any
+    host picks up where the last stopped; the file is read once into an
+    empty key (2026-09-10)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import breaker as breaker_mod
+    from geelark_farm.store import db, state as store_state
+
+    kept = {}
+    monkeypatch.setattr(store_state, "get",
+                        lambda s, key, default=None: kept.get(key, default))
+    monkeypatch.setattr(store_state, "put",
+                        lambda conn, key, value: kept.__setitem__(key, value))
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def commit(self):
+            pass
+    monkeypatch.setattr(db, "connect", lambda s: Conn())
+
+    path = tmp_path / "breaker.json"
+    path.write_text('{"consecutive": 2, "reasons": ["a", "b"]}',
+                    encoding="utf-8")
+    settings = make_settings(state_dir=tmp_path, state_in_pg=True,
+                             store_enabled=True, store_host="db",
+                             store_password="pw")
+    fuse = breaker_mod.open_breaker(settings, path, limit=3)
+    assert isinstance(fuse, breaker_mod.PgBreaker)
+
+    assert fuse.seen() == (2, ["a", "b"]), "the file, imported once"
+    assert kept["breaker"]["consecutive"] == 2
+    fuse.record(SimpleNamespace(ok=False, status="install_failed",
+                                serial="7"))
+    assert kept["breaker"]["consecutive"] == 3 and fuse.reason()
+    fuse.clear()
+    assert kept["breaker"] == {"consecutive": 0} and not fuse.reason()
+    # The file is not written to by the store's breaker.
+    assert '"consecutive": 2' in path.read_text(encoding="utf-8")
+
+    # Without the flag it is the file, as it always was.
+    plain = breaker_mod.open_breaker(make_settings(state_dir=tmp_path), path)
+    assert type(plain) is breaker_mod.Breaker

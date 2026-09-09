@@ -163,3 +163,53 @@ class Breaker:
         """Somebody has looked at it and decided to carry on."""
         self._write({"consecutive": 0})
         log.info("the breaker was cleared by hand")
+
+
+class PgBreaker(Breaker):
+    """The same breaker with its count in the store's `service_state`
+    (key `breaker`) rather than a file - so a keeper started on any host
+    picks up where the last one stopped (scale-out step 2, 2026-09-10).
+    The file is read once into an empty key, the first time."""
+
+    def __init__(self, settings, path: Path, limit: int = LIMIT):
+        super().__init__(path=path, limit=limit)
+        self._settings = settings
+        self._imported = False
+
+    def _read(self) -> dict:
+        from .store import state as store_state
+
+        try:
+            found = store_state.get(self._settings, "breaker", None)
+        except Exception as exc:                                   # noqa: BLE001
+            log.error("could not read the breaker from the store (%s); "
+                      "reading it as closed", exc)
+            return {}
+        if found is None and not self._imported:
+            self._imported = True
+            state = super()._read()               # the file, once
+            if state:
+                self._write(state)
+            return state
+        return dict(found or {})
+
+    def _write(self, state: dict) -> None:
+        from .store import db
+        from .store import state as store_state
+
+        try:
+            with db.connect(self._settings) as conn:
+                store_state.put(conn, "breaker", state)
+                conn.commit()
+        except Exception as exc:                                   # noqa: BLE001
+            log.error("could not record the build outcome for the breaker "
+                      "(%s); it cannot trip on this machine", exc)
+
+
+def open_breaker(settings, path: Path, limit: int = LIMIT) -> Breaker:
+    """The breaker this process should use: the store's when STATE_IN_PG is
+    on and the store is, the file otherwise."""
+    if getattr(settings, "state_in_pg", False) and getattr(
+            settings, "store_enabled", False):
+        return PgBreaker(settings, path, limit=limit)
+    return Breaker(path, limit=limit)

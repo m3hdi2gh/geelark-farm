@@ -5050,3 +5050,22 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     assert 'data-group="dead"' in row("SX6")
     assert "/pools/proxy/free" in row("SX6") and "/pools/proxy/test" in row("SX6")
     assert "3 Google challenges" in row("SX6")
+
+
+def test_a_screen_is_served_from_the_store_first_and_the_disk_second(
+        make_settings, tmp_path, monkeypatch):
+    from geelark_farm.store import artifacts as store_artifacts
+    from geelark_farm.web import read as read_mod
+
+    folder = tmp_path / "20260910-010203-build622"
+    folder.mkdir()
+    (folder / "a.xml").write_text("<disk/>", encoding="utf-8")
+    settings = make_settings(artifact_dir=tmp_path, artifacts_in_pg=True)
+
+    monkeypatch.setattr(store_artifacts, "get",
+                        lambda s, serial, f, n: b"<store/>")
+    assert read_mod.screen_bytes(settings, "622", folder.name, "a.xml") == b"<store/>"
+    monkeypatch.setattr(store_artifacts, "get", lambda s, serial, f, n: None)
+    assert read_mod.screen_bytes(settings, "622", folder.name, "a.xml") == b"<disk/>"
+    assert read_mod.screen_bytes(settings, "622", "..", "a.xml") is None
+    assert read_mod.screen_bytes(settings, "622", folder.name, "a.png") is None

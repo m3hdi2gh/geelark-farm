@@ -1150,11 +1150,69 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
                          "text": f"{r['requested_by']} asked: {r['verb']}"
                                  f" -> {r['status']}: {r['result']}",
                          "seconds": None})
+    seen_folders = set()
+    if settings.artifacts_in_pg:
+        # The store first: screens a builder on another host archived.
+        for folder in _stored(settings, serial):
+            seen_folders.add(folder["folder"])
+            timeline.append(folder)
     for folder in _archived(settings.artifact_dir, serial):
-        timeline.append(folder)
+        if folder["folder"] not in seen_folders:
+            timeline.append(folder)
     timeline.sort(key=lambda t: _stamp_key(t["at"]))
     return {"phone": phone[0] if phone else None, "serial": serial,
             "timeline": timeline}
+
+
+def _stored(settings: Settings, serial: str) -> list[dict]:
+    """The archived screens the store holds for one phone, as timeline
+    entries - the same shape `_archived` builds from the disk."""
+    from ..store import artifacts as store_artifacts
+
+    try:
+        found = store_artifacts.folders(settings, serial)
+    except Exception as exc:                                       # noqa: BLE001
+        log.debug("could not list the store's screens for %s (%s)", serial,
+                  exc)
+        return []
+    return [{"at": f["at"], "source": "artifact", "kind": "screens",
+             "status": f["outcome"], "run": f["folder"],
+             "folder": f["folder"], "files": f["files"],
+             "text": f"{len(f['files'])} screen(s) archived in {f['folder']}"
+                     + (f" - {f['outcome']}" if f["outcome"] else ""),
+             "seconds": None} for f in found]
+
+
+def screen_bytes(settings: Settings, serial: str, folder: str, name: str
+                 ) -> bytes | None:
+    """One archived screen's text, from the store when it is on and has
+    it, from the disk this host can see otherwise. The same three guards
+    as `screen_file`: nothing here reads a name it was not told."""
+    if not (serial and folder and name):
+        return None
+    if any(sep in folder + name for sep in ("/", "\\")) or ".." in (folder,
+                                                                     name):
+        return None
+    if not name.endswith(".xml"):
+        return None
+    if settings.artifacts_in_pg:
+        from ..store import artifacts as store_artifacts
+
+        try:
+            found = store_artifacts.get(settings, serial, folder, name)
+        except Exception as exc:                                   # noqa: BLE001
+            log.debug("could not read %s/%s from the store (%s)", folder,
+                      name, exc)
+            found = None
+        if found is not None:
+            return found
+    path = screen_file(settings, serial, folder, name)
+    if path is None:
+        return None
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
 
 
 def _archived(root, serial: str) -> list[dict]:

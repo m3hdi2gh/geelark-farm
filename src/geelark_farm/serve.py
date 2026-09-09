@@ -927,6 +927,13 @@ class Housekeeper:
 
         if self.halted:
             return self.last
+        if self.settings.artifacts_in_pg:
+            try:
+                from .store import artifacts as store_artifacts
+
+                store_artifacts.prune(self.settings)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not prune the store's screens (%s)", exc)
         now = time.monotonic()
         probe = probe_due(self.probed, now)
         if probe:
@@ -1888,6 +1895,13 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                       detail=build.detail or "", seconds=build.seconds,
                       wanted_id=build.wanted_id,
                       worked=build.status in _breaker.WORKED)
+    if settings.artifacts_in_pg and build.artifact_dir and build.serial:
+        from pathlib import Path as _Path
+
+        from .store import artifacts as store_artifacts
+
+        store_artifacts.put_dir(settings, _Path(build.artifact_dir),
+                                str(build.serial))
     if build.wanted_id is not None:
         store_wanted.settle(settings, build.wanted_id, ok=build.ok,
                             serial=str(build.serial or ""),
@@ -2166,7 +2180,9 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # test, and the reason the parameter exists.
     sleep = sleep or naps(settings)
     client = build_client(settings)
-    fuse = Breaker(settings.state_dir / BREAKER_FILE)
+    from .breaker import open_breaker
+
+    fuse = open_breaker(settings, settings.state_dir / BREAKER_FILE)
     # Kept across passes: the count stays true between them, and the
     # endpoint that gives it allows one call a minute.
     slots = Slots()

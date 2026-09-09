@@ -369,6 +369,15 @@ class Settings:
     #: rather than state/ledger.json, so every process on every host
     #: shares one answer to "whose is this phone".
     ledger_in_pg: bool = False
+    #: Scale-out step 2: the breaker in `service_state` rather than
+    #: state/breaker.json.
+    state_in_pg: bool = False
+    #: Scale-out step 3: a build's archived screens mirrored into the
+    #: store's `artifacts` table when it ends, for a console anywhere.
+    artifacts_in_pg: bool = False
+    #: Step 4: whether this process also keeps a log file under log_dir.
+    #: A builder that comes and goes by number keeps none; LOG_DB has it.
+    log_file: bool = True
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -447,6 +456,12 @@ class Settings:
             in ("1", "true", "yes", "on"),
             builder_workers=_int("BUILDER_WORKERS", 4),
             ledger_in_pg=_str("LEDGER_IN_PG", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
+            state_in_pg=_str("STATE_IN_PG", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
+            artifacts_in_pg=_str("ARTIFACTS_IN_PG", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
+            log_file=_str("LOG_FILE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
@@ -585,5 +600,7 @@ def machine() -> str:
     import platform
     import re
 
-    name = _str("GEELARK_MACHINE") or platform.node() or "unknown"
+    # An empty GEELARK_MACHINE means "the hostname, on purpose": a builder
+    # replica's hostname is its container id, distinct per replica.
+    name = (_str("GEELARK_MACHINE") or "").strip() or platform.node() or "unknown"
     return re.sub(r"[^A-Za-z0-9-]+", "-", name).strip("-").lower() or "unknown"

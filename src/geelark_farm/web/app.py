@@ -818,13 +818,12 @@ class _Handler(BaseHTTPRequestHandler):
         the path). Anything else is a 404, never a listing."""
         serial, _, rest = path[len("/phones/"):].partition("/screens/")
         folder, _, name = rest.partition("/")
-        found = (read.screen_file(self.settings, serial, folder, name)
+        found = (read.screen_bytes(self.settings, serial, folder, name)
                  if serial.isdigit() else None)
         if found is None:
             return self._html(404, pages.page(
                 "404", "<h2>No such screen</h2>", user=user))
-        return self._text(200, found.read_text(encoding="utf-8",
-                                               errors="replace"))
+        return self._text(200, found.decode("utf-8", errors="replace"))
 
     def _service(self, user: dict, what: str, field: dict) -> None:
         """Pause / Resume / Clear breaker / Stop / Start. Every one asks

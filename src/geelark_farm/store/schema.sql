@@ -608,3 +608,18 @@ CREATE TABLE IF NOT EXISTS phone_claims (
     claimed_by  text NOT NULL DEFAULT '',
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- ---------------------------------------------------- artifacts, rev 21
+-- The screens a build archived, mirrored from the builder's disk when the
+-- build ends, so a console on any host can show them (scale-out step 3,
+-- 2026-09-10). Pruned by the keeper after store.artifacts.KEEP_DAYS.
+CREATE TABLE IF NOT EXISTS artifacts (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    serial     text NOT NULL,
+    folder     text NOT NULL,
+    name       text NOT NULL,
+    content    bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (folder, name)
+);
+CREATE INDEX IF NOT EXISTS artifacts_by_serial ON artifacts (serial, folder);

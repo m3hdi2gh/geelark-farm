@@ -108,18 +108,24 @@ services:
   # was on, which the keeper names `lost` and orders again; restarting the
   # keeper or the console touches no build (phase 4, 2026-09-10). Needs
   # BUILD_QUEUE=1 in .env for the keeper to order into the queue at all.
+  # No container_name and no fixed machine name, so it scales by number:
+  #   docker compose up -d --scale builder=3
+  # Each replica is named by its own hostname (the container id) in the
+  # logs and the ledger, keeps no log file (LOG_FILE=0 - the store's log
+  # table has every line) and mirrors its screens into the store
+  # (ARTIFACTS_IN_PG) - so nothing of it lives on this host's disk that
+  # another host would need (scale-out step 4, 2026-09-10).
   builder:
     image: geelark-farm:local
-    container_name: geelark-builder
     env_file: .env
     environment:
       ROLE: builder
-      GEELARK_MACHINE: "${GEELARK_MACHINE:-server-1}-builder"
+      GEELARK_MACHINE: ""
+      LOG_FILE: "0"
       TZ: UTC
       LOG_FORMAT: json
     volumes:
       - ./state:/app/state
-      - ./logs:/app/logs
       - ./artifacts:/app/artifacts
       - ./secrets:/app/secrets:ro
     restart: always
