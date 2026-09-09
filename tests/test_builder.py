@@ -4636,13 +4636,29 @@ def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_hos
     struck = []
     monkeypatch.setattr(builder, "_strike_captcha_host",
                         lambda s, b, row: struck.append(row.proxy.host) or [])
-    passed = Outcome("success", "signed_in",
-                     trail=["email_entry", "captcha", "captcha",
-                            "password_entry", "2fa_code_entry"])
-    build = drive(make_book(), settings, google=[passed])
+    heavy = Outcome("success", "signed_in",
+                    trail=["email_entry"] + ["captcha"] * 6
+                    + ["password_entry", "2fa_code_entry"])
+    build = drive(make_book(), settings, google=[heavy])
 
     assert build.ok
-    assert len(struck) == 1, "once per sign-in, whatever the rounds"
+    assert len(struck) == 1, "once per sign-in, however many rounds"
+
+    # Three to five rounds is what a young account meets anywhere: not a
+    # word against the host (four exits on two ordinary hosts were set
+    # aside in one evening before this line, 2026-09-09).
+    struck.clear()
+    light = Outcome("success", "signed_in",
+                    trail=["email_entry", "captcha", "captcha", "captcha",
+                           "password_entry"])
+    build = drive(make_book(), settings, google=[light])
+    assert build.ok and struck == [], "a light captcha is not a strike"
+
+    # One that never got through is, however few rounds it took.
+    struck.clear()
+    lost = Outcome("fatal", "captcha_shown", trail=["email_entry", "captcha"])
+    build = drive(make_book(), settings, google=[lost, SIGNED_IN])
+    assert build.ok and len(struck) == 1
 
     struck.clear()
     build = drive(make_book(), settings, google=[SIGNED_IN])

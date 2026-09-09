@@ -220,6 +220,10 @@ CAPTCHAS_PER_EXIT = 2
 #: rather than sent to the back of the queue, so a run never reaches for
 #: one; Free on the row is how a person puts it back.
 CAPTCHA_STRIKES_PER_HOST = 3
+#: Captcha visits in one sign-in before it counts as a strike against the
+#: host. Three to five is what a young account meets anywhere; the hosts
+#: worth setting aside ran to thirteen and forty-three (2026-09-09).
+HEAVY_CAPTCHA_ROUNDS = 6
 SUSPECT = "suspect"
 #: Where the day's tally lives with no store: one process, one dict.
 _captcha_hosts_memory: dict = {}
@@ -1226,7 +1230,16 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # 190.2.143.20 and signs in is still thirteen rounds this host
             # cost, and the host's other exits are set aside at three such
             # sign-ins in a day (the operator, 2026-09-09).
-            if "captcha" in (outcome.trail or []) and proxy_row is not None:
+            # A heavy one only: with young accounts nearly every sign-in
+            # meets a three-round captcha on any host, and counting those
+            # set aside four exits on two ordinary hosts in one evening.
+            # What marks a bad host is the sign-in that eats the rounds -
+            # thirteen to forty-three on 190.2.143.20 - or never gets
+            # through at all (the operator, 2026-09-09).
+            rounds = sum(1 for s in (outcome.trail or []) if s == "captcha")
+            heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
+                     or outcome.reason == "captcha_shown")
+            if heavy and proxy_row is not None:
                 try:
                     _strike_captcha_host(settings, book, proxy_row)
                 except Exception as exc:                           # noqa: BLE001
