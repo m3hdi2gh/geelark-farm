@@ -566,3 +566,26 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT '';
 -- taken by its builder from the moment it exists (state, owner_id), and
 -- the keeper does not count it as stock while they hold it.
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS built_by bigint REFERENCES users(id);
+
+-- ------------------------------------------------------- jobs, rev 19
+-- The build queue: one row per phone to work on. The keeper writes rows
+-- and reads results; a builder container takes rows with FOR UPDATE SKIP
+-- LOCKED and reports back on them, so restarting the keeper or the console
+-- touches no build (phase 4, 2026-09-10). `seen` is the keeper's own mark:
+-- a finished row it has taken into the breaker and the events.
+CREATE TABLE IF NOT EXISTS jobs (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind         text NOT NULL CHECK (kind IN ('build', 'finish')),
+    payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
+    action_id    bigint,
+    status       text NOT NULL DEFAULT 'queued'
+                 CHECK (status IN ('queued', 'running', 'done', 'failed', 'lost')),
+    claimed_by   text,
+    claimed_at   timestamptz,
+    heartbeat_at timestamptz,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    done_at      timestamptz,
+    result       jsonb,
+    seen         boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS jobs_queued ON jobs (status, id);

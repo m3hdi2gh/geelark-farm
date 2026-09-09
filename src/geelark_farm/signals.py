@@ -26,6 +26,10 @@ import threading
 #: is looked at in about a second instead of at the top of the next pass.
 queued = threading.Event()
 
+#: Somebody queued a job for the builders (phase 4). A builder's wait
+#: sits on this; the keeper never touches it.
+jobs = threading.Event()
+
 
 def ring(event: threading.Event) -> None:
     """Ring a bell.

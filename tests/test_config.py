@@ -540,5 +540,6 @@ def test_the_role_is_one_of_three_words(make_settings, monkeypatch):
     assert config._role("") == "all"
     assert config._role(" Web ") == "web"
     assert config._role("keeper") == "keeper"
+    assert config._role("builder") == "builder"
     with pytest.raises(config.ConfigError, match="ROLE"):
-        config._role("builder")
+        config._role("janitor")

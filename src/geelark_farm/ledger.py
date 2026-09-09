@@ -131,6 +131,38 @@ class Ledger:
     #: and billing - "to a run" that no longer existed, through two more
     #: restarts (2026-09-08, phones 1991, 1992, 1995).
     _mine: set = field(default_factory=set, repr=False)
+    #: The file's mtime as of the last read or write by this object: a
+    #: reload happens only when somebody else has written since.
+    _seen_mtime: int = field(default=-1, repr=False)
+
+    def _reload(self) -> None:
+        """Read the file again before changing it.
+
+        Two processes share this file now - the keeper, which settles and
+        prunes, and a builder, which claims and releases (phase 4). Each
+        `save` writes the whole file from its own dict, so a process that
+        changed it a second ago would have its change erased by the other's
+        next save: a claim the builder had just written, gone under the
+        keeper's prune, and a phone with no claim is one `settle_abandoned`
+        deletes mid-login. Re-reading first makes every mutation
+        read-modify-write against the file, not against a memory of it;
+        `_mine` keeps saying which claims are this process's to beat.
+        """
+        try:
+            stamp = self.path.stat().st_mtime_ns
+        except OSError:
+            return                                # no file yet: nothing newer
+        if stamp == self._seen_mtime:
+            return                                # nobody else wrote it
+        try:
+            fresh = type(self).load(self.path.parent,
+                                    stale_after=self.stale_after)
+        except Exception as exc:                                   # noqa: BLE001
+            log.warning("could not re-read the ledger before writing it "
+                        "(%s); writing what this process remembers", exc)
+            return
+        self.entries = fresh.entries
+        self._seen_mtime = stamp
 
     def _adopt(self, entry: Entry) -> Entry:
         """Every Entry this Ledger holds is measured against this Ledger's
@@ -239,6 +271,10 @@ class Ledger:
                 log.error("ledger entry %s could not be read (%s); it is "
                           "skipped, so `geelark phones` is the only thing "
                           "that can account for it", phone_id, exc)
+        try:
+            ledger._seen_mtime = path.stat().st_mtime_ns
+        except OSError as exc:
+            log.debug("could not stamp the ledger's mtime after loading (%s)", exc)
         return ledger
 
     def save(self) -> None:
@@ -257,6 +293,11 @@ class Ledger:
             temp = self.path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._replace(temp)
+            try:
+                self._seen_mtime = self.path.stat().st_mtime_ns
+            except OSError as exc:
+                log.debug("could not stamp the ledger's mtime after saving "
+                          "(%s)", exc)
 
     def _replace(self, temp: Path, attempts: int = 10) -> None:
         """os.replace, retried.
@@ -284,6 +325,7 @@ class Ledger:
                proxy: str = "", note: str = "") -> Entry:
         """Register a phone that now exists. Call this before anything else."""
         with self._lock:
+            self._reload()
             entry = self._adopt(
                 Entry(phone_id=phone_id, created_at=_now(), serial=serial,
                       label=label, proxy=proxy, note=note))
@@ -294,6 +336,7 @@ class Ledger:
     def claim(self, phone_id: str, label: str = "") -> Entry:
         """Mark that a run is working with this phone right now."""
         with self._lock:
+            self._reload()
             entry = self.entries.get(phone_id) or self.record(phone_id, label=label)
             entry.claimed_at = _now()
             entry.released_at = None
@@ -320,6 +363,7 @@ class Ledger:
         overlap (2026-08-29).
         """
         with self._lock:
+            self._reload()
             now = _now()
             held = [phone_id for phone_id, entry in self.entries.items()
                     if entry.is_claimed and phone_id in self._mine]
@@ -333,6 +377,7 @@ class Ledger:
         """Mark the run finished with this phone. After this it should be
         stopped, and reap will stop it if it is not."""
         with self._lock:
+            self._reload()
             entry = self.entries.get(phone_id)
             if not entry:
                 return
@@ -346,12 +391,17 @@ class Ledger:
         """Drop a phone that no longer exists (deleted upstream)."""
         with self._lock:
             self._mine.discard(phone_id)
+            self._reload()
             if self.entries.pop(phone_id, None) is not None:
                 self.save()
 
     # --------------------------------------------------------------- queries
     def get(self, phone_id: str) -> Entry | None:
-        return self.entries.get(phone_id)
+        with self._lock:
+            self._reload()
+            return self.entries.get(phone_id)
 
     def claimed(self) -> list[Entry]:
-        return [e for e in self.entries.values() if e.is_claimed]
+        with self._lock:
+            self._reload()
+            return [e for e in self.entries.values() if e.is_claimed]

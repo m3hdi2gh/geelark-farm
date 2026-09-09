@@ -472,6 +472,9 @@ class ControlLane:
         ten minutes away (the operator, 2026-09-08)."""
         from . import builder
 
+        if self.settings.build_queue:
+            _queue_finishes(self.settings, jobs, action_id)
+            return
         settings, client, book, ledger = (self.settings, self.client,
                                           self.boards(), self.ledger())
 
@@ -508,6 +511,16 @@ class ControlLane:
                                 app=_app_of(r), requested_by=r.get("requested_by"))
                  for r in rows]
         settings, client = self.settings, self.client
+        if settings.build_queue:
+            from dataclasses import asdict
+
+            from .store import jobs as store_jobs
+
+            for want in wants:
+                store_jobs.queue(settings, "build", {"want": asdict(want)})
+            log.info("%d phone(s) asked for by hand; queued for the builders",
+                     len(wants))
+            return len(wants)
 
         def batch(on_done):
             return builder.run(client, settings, count=0, wanted=wants,
@@ -1152,6 +1165,8 @@ def healthy(settings: Settings, now: float | None = None) -> tuple[bool, str]:
     """
     if getattr(settings, "role", "all") == "web":
         return web_healthy(settings, now)
+    if getattr(settings, "role", "all") == "builder":
+        return builder_healthy(settings, now)
     failed = _failing(settings)
     if failed >= FAILING_LIMIT:
         return False, (f"{failed} passes in a row have failed - the loop is "
@@ -1554,6 +1569,10 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         and ledger, under this pass's fuse and flight - exactly as the
         decision's own jobs run, so this pass counts them too. The
         command's row is settled when they end (C7)."""
+        if settings.build_queue:
+            _queue_finishes(settings, jobs, action_id)
+            return
+
         def chosen(on_done):
             builds = builder._run_jobs(client, settings, book, jobs,
                                        workers=len(jobs), reporter=None,
@@ -1588,12 +1607,24 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     listed = _listing(client)
     warm, waiting, gmails, exits, stock, broken = _look(client, settings, book,
                                                         listing=listed)
+    if settings.build_queue:
+        _take_results(settings, fuse)
     tripped = fuse.reason()
     # What the workers are already on. Nothing on the sheet says it: a build
     # has no row until its phone exists, and an account is claimed minutes
     # into a finish. Subtracted here, or ordered a second time thirty seconds
     # from now (2026-08-29).
-    coming, claimed = flight.counts() if flight is not None else (0, 0)
+    if settings.build_queue:
+        from .store import jobs as store_jobs
+
+        try:
+            coming, claimed = store_jobs.counts(settings)
+        except Exception as exc:                                   # noqa: BLE001
+            log.warning("could not count the queue (%s); ordering nothing "
+                        "this pass", exc)
+            coming, claimed = 10 ** 6, 0
+    else:
+        coming, claimed = flight.counts() if flight is not None else (0, 0)
     waiting = max(0, waiting - claimed)
     # With manual login on (C6) nobody is "waiting" as far as the decision
     # is concerned: an account sits in the pool until a person picks it on
@@ -1692,6 +1723,12 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     if wishes:
         log.info("%d phone(s) were asked for by hand", len(wishes))
 
+    if settings.build_queue and (decision.jobs or wishes):
+        try:
+            _order(settings, client, book, decision, wishes)
+        except Exception as exc:                                   # noqa: BLE001
+            log.warning("could not order into the queue (%s)", exc)
+        return decision
     if decision.jobs or wishes:
         # One call, one Book, one runner - never `finish_run` and `run` as two
         # concurrent calls. Each opens its own Book, and `Pool`'s claim lock is
@@ -1755,9 +1792,10 @@ class Listener:
     """
 
     def __init__(self, settings: Settings, stop: threading.Event, *,
-                 connect=None):
+                 connect=None, channel: str | None = None, event=None):
         self.settings, self.stop = settings, stop
         self._connect = connect
+        self.channel, self.event = channel, event
 
     def start(self) -> threading.Thread:
         thread = threading.Thread(target=self.watch, name="listener",
@@ -1778,20 +1816,21 @@ class Listener:
         from . import signals
         from .store.actions import NOTIFY_CHANNEL
 
+        channel = self.channel or NOTIFY_CHANNEL
+        bell = self.event if self.event is not None else signals.queued
         backoff = 5.0
         while not self.stop.is_set():
             try:
                 with self._open() as conn:
-                    conn.execute(f"LISTEN {NOTIFY_CHANNEL}")
-                    log.info("listening on %s for the console's commands",
-                             NOTIFY_CHANNEL)
+                    conn.execute(f"LISTEN {channel}")
+                    log.info("listening on %s", channel)
                     backoff = 5.0
                     while not self.stop.is_set():
                         heard = False
                         for _ in conn.notifies(timeout=15.0, stop_after=1):
                             heard = True
                         if heard:
-                            signals.ring(signals.queued)
+                            signals.ring(bell)
             except Exception as exc:                              # noqa: BLE001
                 if self.stop.is_set():
                     break
@@ -1804,6 +1843,214 @@ class Listener:
 #: The web role's own heartbeat, beside the loop's: Docker's healthcheck
 #: runs `geelark serve --healthcheck` in both shapes of container.
 WEB_HEARTBEAT_FILE = "heartbeat-web"
+BUILDER_HEARTBEAT_FILE = "heartbeat-builder"
+#: A running job whose builder has not beaten for this long is lost.
+JOB_LOST_SECONDS = 300.0
+
+
+def _job_dict(book: Book, job: dict):
+    """A queue row back into what `builder._run_jobs` takes."""
+    from . import builder
+
+    payload = job.get("payload") or {}
+    if job["kind"] == "finish":
+        phone = dict(payload.get("phone") or {})
+        address = phone.pop("account_address", "")
+        phone["account"] = book.apps.find(address) if address else None
+        return {"kind": "finish", "phone": phone}
+    want = payload.get("want")
+    return {"kind": "build",
+            "want": builder.Wanted(**want) if want else None}
+
+
+def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
+               stop: threading.Event) -> None:
+    """One job, start to finish, on a builder's thread: run it, tell the
+    queue, the wish and the command what became of it."""
+    from . import builder
+    from .store import jobs as store_jobs
+    from .store import wanted as store_wanted
+
+    try:
+        made = _job_dict(book, job)
+        builds = builder._run_jobs(client, settings, book, [made],
+                                   workers=1, reporter=None, on_ready=None,
+                                   cancel=stop, ledger=ledger)
+        build = builds[0]
+    except Exception as exc:                                       # noqa: BLE001
+        log.exception("job %s died in the builder", job.get("id"))
+        store_jobs.finish(settings, job["id"], ok=False,
+                          status="builder_crashed", detail=str(exc)[:300])
+        return
+    store_jobs.finish(settings, job["id"], ok=build.ok, status=build.status,
+                      serial=str(build.serial or ""),
+                      detail=build.detail or "", seconds=build.seconds,
+                      wanted_id=build.wanted_id)
+    if build.wanted_id is not None:
+        store_wanted.settle(settings, build.wanted_id, ok=build.ok,
+                            serial=str(build.serial or ""),
+                            detail=build.detail or build.status)
+    if job.get("action_id") is not None:
+        _settle_action(settings, job["action_id"], [made], builds)
+
+
+def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
+                  take=None, carry=None) -> int:
+    """A builder: takes jobs from the queue and carries them out, up to
+    `builder_workers` at a time. Nothing else - no passes, no console,
+    no decisions. Blocks until `stop`."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import signals
+    from .store import jobs as store_jobs
+
+    from . import config as _config
+
+    stop = stop or threading.Event()
+    worker = _config.machine()
+    client = build_client(settings)
+    book = Book.open(settings)
+    ledger = Ledger.shared(settings.state_dir,
+                           stale_after=settings.stale_claim_seconds)
+    Listener(settings, stop, channel=store_jobs.NOTIFY_CHANNEL,
+             event=signals.jobs).start()
+    workers = max(1, int(settings.builder_workers))
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="job")
+    running: dict[int, dict] = {}
+    lock = threading.Lock()
+    take = take or (lambda n: store_jobs.take(settings, worker, limit=n))
+    carry = carry or (lambda job: _carry_out(settings, client, book, ledger,
+                                             job, stop))
+
+    def beating() -> None:
+        while not stop.wait(60):
+            with lock:
+                ids = list(running)
+            try:
+                store_jobs.beat(settings, ids)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not beat for %d job(s) (%s)", len(ids), exc)
+
+    threading.Thread(target=beating, name="job-beat", daemon=True).start()
+
+    def one(job: dict) -> None:
+        try:
+            carry(job)
+        finally:
+            with lock:
+                running.pop(job["id"], None)
+            signals.ring(signals.jobs)     # a slot freed: look again
+
+    log.info("building for the queue as %s, %d at a time (ROLE=builder)",
+             worker, workers)
+    while not stop.is_set():
+        try:
+            (settings.state_dir / BUILDER_HEARTBEAT_FILE).write_text(
+                str(time.time()), encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not write the builder heartbeat (%s)", exc)
+        with lock:
+            free = workers - len(running)
+        taken: list[dict] = []
+        if free > 0:
+            try:
+                book.reload()
+                taken = take(free)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not take from the queue (%s)", exc)
+        for job in taken:
+            with lock:
+                running[job["id"]] = job
+            log.info("job %s taken (%s)", job["id"], job["kind"])
+            pool.submit(one, job)
+        if not taken:
+            signals.jobs.wait(timeout=15.0)
+            signals.jobs.clear()
+    pool.shutdown(wait=True)
+    return 0
+
+
+def _order(settings: Settings, client, book: Book, decision, wishes) -> int:
+    """The keeper's side of the queue: rows for what this pass decided,
+    instead of threads. Returns how many were ordered."""
+    from dataclasses import asdict
+
+    from . import builder
+    from .store import jobs as store_jobs
+
+    ordered = 0
+    if decision.finish:
+        waiting, _gone = builder._unfinished(client, book)
+        for phone in waiting[:decision.finish]:
+            store_jobs.queue(settings, "finish", {"phone": dict(phone)})
+            ordered += 1
+    for _ in range(int(decision.build or 0)):
+        store_jobs.queue(settings, "build", {})
+        ordered += 1
+    for want in wishes or []:
+        store_jobs.queue(settings, "build", {"want": asdict(want)})
+        ordered += 1
+    if ordered:
+        log.info("%d job(s) ordered into the queue", ordered)
+    return ordered
+
+
+def _queue_finishes(settings: Settings, jobs: list[dict],
+                    action_id: int | None) -> None:
+    """Finish jobs a command chose, onto the queue rather than the lane's
+    pool. The chosen account rides as its address; the builder finds the
+    row again, claimed as the command left it."""
+    from .store import jobs as store_jobs
+
+    for job in jobs:
+        phone = dict(job.get("phone") or {})
+        account = phone.pop("account", None)
+        if account is not None:
+            phone["account_address"] = getattr(account, "label", "")
+        store_jobs.queue(settings, "finish", {"phone": phone},
+                         action_id=action_id)
+
+
+def _take_results(settings: Settings, fuse: Breaker) -> None:
+    """What the builders finished since the last pass: into the breaker
+    and the events, exactly as the batch's own results went."""
+    from types import SimpleNamespace
+
+    from .store import jobs as store_jobs
+
+    try:
+        store_jobs.lose_stale(settings, JOB_LOST_SECONDS)
+        done = store_jobs.unseen(settings)
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not read the queue's results (%s)", exc)
+        return
+    for job in done:
+        result = job.get("result") or {}
+        build = SimpleNamespace(ok=bool(result.get("ok")),
+                                status=str(result.get("status") or "unknown"),
+                                serial=str(result.get("serial") or ""))
+        with _FUSE_LOCK:
+            was = fuse.reason()
+            fuse.record(build)
+            now = fuse.reason()
+        if now and not was:
+            _event(settings, "breaker", status="tripped",
+                   serial=build.serial, detail=now)
+    if done:
+        store_jobs.mark_seen(settings, [j["id"] for j in done])
+
+
+def builder_healthy(settings: Settings, now: float | None = None
+                    ) -> tuple[bool, str]:
+    path = settings.state_dir / BUILDER_HEARTBEAT_FILE
+    try:
+        last = float(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False, "the builder has not started yet"
+    since = (now if now is not None else time.time()) - last
+    if since > 120:
+        return False, f"the builder's heartbeat is {since / 60:.0f} minutes old"
+    return True, f"the builder looked at the queue {since:.0f}s ago"
 
 
 def serve_web(settings: Settings, *, stop: threading.Event | None = None,
@@ -1889,6 +2136,13 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         # The console alone: nothing below - the client, the breaker, the
         # watchdog, the lane, the loop - belongs to this process.
         return serve_web(settings, stop=stop)
+    if role == "builder":
+        from . import shell as _shell
+        from .flows import google_login as _google
+
+        _shell.HUMAN_CADENCE = bool(settings.human_cadence)
+        _google.SIGN_IN_VIA = settings.sign_in_via
+        return serve_builder(settings, stop=stop)
     # The hand's cadence for every login this process runs - see
     # shell.HUMAN_CADENCE for why (the operator, 2026-09-09).
     from . import shell as _shell

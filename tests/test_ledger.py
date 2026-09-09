@@ -538,3 +538,34 @@ def test_a_dead_runs_claims_are_not_kept_fresh_by_the_next_process(
     # Released or forgotten, a claim is no longer this process's to beat.
     fresh.release("P2")
     assert fresh.beat() == []
+
+
+def test_two_processes_on_one_ledger_do_not_erase_each_other(tmp_path,
+                                                             monkeypatch):
+    """Phase 4 puts the keeper and a builder on the same file. Each save
+    wrote the whole file from its own memory, so a claim the builder had
+    just written vanished under the keeper's next prune - and a phone
+    with no claim is one settle_abandoned deletes mid-login. Every
+    mutation re-reads the file first now (2026-09-10)."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    keeper = ledger_mod.Ledger.load(tmp_path)
+    keeper.record("OLD", label="old")
+    builder = ledger_mod.Ledger.load(tmp_path)     # a second process
+
+    builder.record("NEW", label="build 1")
+    builder.claim("NEW")
+    keeper.forget("OLD")                            # the keeper's prune
+
+    fresh = ledger_mod.Ledger.load(tmp_path)
+    assert fresh.get("NEW") is not None and fresh.get("NEW").is_claimed, (
+        "the builder's claim survived the keeper's save")
+    assert fresh.get("OLD") is None
+    # And the keeper sees the builder's claim without reloading by hand.
+    assert keeper.get("NEW").is_claimed
+    # The beat is still only this process's own claims.
+    clock["t"] += 400
+    assert keeper.beat() == []
+    assert builder.beat() == ["NEW"]

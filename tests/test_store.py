@@ -1351,3 +1351,28 @@ def test_enqueue_rings_the_postgres_bell_with_the_row(monkeypatch,
     assert actions.enqueue(make_settings(), verb="noop", payload={},
                            requested_by=1, idem_key="k") == 7
     assert conn.ran[-2:] == ["NOTIFY geelark_actions", "COMMIT"]
+
+
+def test_the_queue_takes_with_skip_locked_and_rings_the_builders(monkeypatch,
+                                                                make_settings):
+    """Two builders must never take one row: SKIP LOCKED is the whole
+    guarantee, and it has to be in the statement (phase 4, 2026-09-10)."""
+    from geelark_farm.store import jobs
+
+    conn = _ScriptedConn([(5,), None, [(5, "build", "{}", None, "running", "b1")],
+                          None, (2, 1), None])
+    monkeypatch.setattr(jobs, "connect", lambda s: conn)
+    s = make_settings()
+
+    assert jobs.queue(s, "build", {}) == 5
+    assert "NOTIFY geelark_jobs" in conn.sql
+    got = jobs.take(s, "b1", limit=1)
+    assert got == [{"id": 5, "kind": "build", "payload": {}, "action_id": None,
+                    "status": "running", "claimed_by": "b1"}]
+    taking = [q for q in conn.sql if "SKIP LOCKED" in q]
+    assert taking and "status = 'queued'" in taking[0]
+    assert "ORDER BY id" in taking[0]
+    jobs.beat(s, [5])
+    assert jobs.counts(s) == (2, 1)
+    jobs.finish(s, 5, ok=True, status="ready", serial="7", seconds=12.4)
+    assert any("status = %s" in q and "result" in q for q in conn.sql)

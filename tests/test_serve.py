@@ -2655,3 +2655,128 @@ def test_the_listener_rings_the_bell_on_a_notification(make_settings,
     assert conn.ran == ["LISTEN geelark_actions"]
     assert signals.queued.is_set(), "the bell rang"
     signals.queued.clear()
+
+
+# ------------------------------------------------------------- the queue
+def test_with_the_queue_on_a_pass_orders_rows_instead_of_running_threads(
+        make_settings, monkeypatch):
+    """Phase 4: the keeper writes what it decided into `jobs`; a builder
+    container carries it out. Restarting the keeper touches no build."""
+    from types import SimpleNamespace
+
+    from geelark_farm import builder
+    from geelark_farm.store import jobs as store_jobs
+
+    ordered = []
+    monkeypatch.setattr(store_jobs, "queue",
+                        lambda s, kind, payload=None, action_id=None:
+                        ordered.append((kind, payload or {}, action_id)) or 1)
+    monkeypatch.setattr(builder, "_unfinished",
+                        lambda client, book, **k: ([{"serial": "7"}], []))
+    decision = SimpleNamespace(build=2, finish=1, jobs=3)
+    want = builder.Wanted(gmail="g@x", proxy_name="", install_app=True,
+                          app_account="", wanted_id=9)
+
+    n = serve_mod._order(make_settings(build_queue=True), None, None,
+                         decision, [want])
+
+    assert n == 4
+    assert [k for k, _, _ in ordered] == ["finish", "build", "build", "build"]
+    assert ordered[0][1] == {"phone": {"serial": "7"}}
+    assert ordered[3][1]["want"]["gmail"] == "g@x"
+
+
+def test_a_commands_finish_goes_to_the_queue_with_its_account_address(
+        make_settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from geelark_farm.store import jobs as store_jobs
+
+    ordered = []
+    monkeypatch.setattr(store_jobs, "queue",
+                        lambda s, kind, payload=None, action_id=None:
+                        ordered.append((kind, payload, action_id)) or 1)
+    account = SimpleNamespace(label="a@example.com")
+    serve_mod._queue_finishes(make_settings(build_queue=True), [
+        {"kind": "finish", "phone": {"serial": "7", "account": account}}], 42)
+
+    assert ordered == [("finish", {"phone": {"serial": "7",
+                                             "account_address": "a@example.com"}},
+                        42)]
+
+
+def test_a_queue_row_becomes_the_job_the_runner_takes(make_settings):
+    from types import SimpleNamespace
+
+    from geelark_farm import builder
+
+    found = SimpleNamespace(label="a@example.com")
+    book = SimpleNamespace(apps=SimpleNamespace(
+        find=lambda address: found if address == "a@example.com" else None))
+    made = serve_mod._job_dict(book, {
+        "kind": "finish", "payload": {"phone": {"serial": "7",
+                                                "account_address": "a@example.com"}}})
+    assert made == {"kind": "finish", "phone": {"serial": "7", "account": found}}
+
+    made = serve_mod._job_dict(book, {"kind": "build", "payload": {
+        "want": {"gmail": "g@x", "proxy_name": "", "install_app": True,
+                 "app_account": "", "wanted_id": 9, "app": "chatgpt",
+                 "requested_by": 4}}})
+    assert isinstance(made["want"], builder.Wanted)
+    assert made["want"].wanted_id == 9 and made["want"].requested_by == 4
+    assert serve_mod._job_dict(book, {"kind": "build", "payload": {}}) == {
+        "kind": "build", "want": None}
+
+
+def test_the_builders_results_feed_the_breaker(make_settings, tmp_path,
+                                               monkeypatch):
+    from geelark_farm.store import jobs as store_jobs
+
+    monkeypatch.setattr(store_jobs, "lose_stale", lambda s, older: [])
+    monkeypatch.setattr(store_jobs, "unseen", lambda s: [
+        {"id": 1, "kind": "build", "result": {"ok": False,
+                                              "status": "install_failed",
+                                              "serial": "7"}},
+        {"id": 2, "kind": "build", "result": {"ok": True, "status": "ready"}}])
+    seen = []
+    monkeypatch.setattr(store_jobs, "mark_seen", lambda s, ids: seen.extend(ids))
+    fuse = serve_mod.Breaker(tmp_path / "breaker.json")
+
+    serve_mod._take_results(make_settings(build_queue=True), fuse)
+
+    assert seen == [1, 2]
+    assert fuse.seen()[0] == 0, "the failure was counted, then the success cleared it"
+
+
+def test_the_builder_takes_carries_and_looks_again(make_settings, tmp_path,
+                                                   monkeypatch):
+    """One builder loop: takes what is free, runs it on a thread, beats
+    its heartbeat file, and stops when told."""
+    stop = threading.Event()
+    carried = []
+    handed = [[{"id": 1, "kind": "build", "payload": {}},
+               {"id": 2, "kind": "build", "payload": {}}], []]
+
+    def take(n):
+        assert n >= 1
+        got = handed.pop(0) if handed else []
+        if not handed:
+            stop.set()
+        return got[:n]
+
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(serve_mod.Book, "open", classmethod(
+        lambda cls, s: SimpleNamespace(reload=lambda: None)))
+    monkeypatch.setattr(serve_mod.Ledger, "shared",
+                        classmethod(lambda cls, d, stale_after=None: object()))
+    monkeypatch.setattr(serve_mod.Listener, "start", lambda self: None)
+    settings = make_settings(state_dir=tmp_path, role="builder",
+                             builder_workers=2)
+
+    code = serve_mod.serve_builder(settings, stop=stop, take=take,
+                                   carry=lambda job: carried.append(job["id"]))
+
+    assert code == 0 and sorted(carried) == [1, 2]
+    assert (tmp_path / serve_mod.BUILDER_HEARTBEAT_FILE).exists()
+    ok, said = serve_mod.healthy(settings)
+    assert ok and "builder" in said

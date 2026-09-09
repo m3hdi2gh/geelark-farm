@@ -159,7 +159,7 @@ def _int(key: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
-ROLES = ("all", "web", "keeper")
+ROLES = ("all", "web", "keeper", "builder")
 
 
 def _role(value: str) -> str:
@@ -359,6 +359,12 @@ class Settings:
     #: without the console). One image, three shapes, so a change to a page
     #: never restarts a build (the operator, 2026-09-09).
     role: str = "all"
+    #: Phase 4: the keeper orders builds into the `jobs` table instead of
+    #: running them on its own threads, and `builder` containers carry them
+    #: out. Off, the keeper builds as it always did.
+    build_queue: bool = False
+    #: How many jobs one builder container runs at once.
+    builder_workers: int = 4
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -433,6 +439,9 @@ class Settings:
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()
                          or "settings"),
             role=_role(_str("ROLE", "all")),
+            build_queue=_str("BUILD_QUEUE", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
+            builder_workers=_int("BUILDER_WORKERS", 4),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
                                in ("1", "true", "yes", "on") else 0,
