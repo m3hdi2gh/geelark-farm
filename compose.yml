@@ -74,6 +74,36 @@ services:
         max-size: "10m"
         max-file: "10"
 
+  # The console in a container of its own (ROLE=web): the same image, the
+  # same .env, the same volumes, and none of the loop - so a change to a
+  # page is `docker compose up -d web`, seconds, with no build touched
+  # (the operator, 2026-09-09). Caddy points at 8788 once this is up; the
+  # loop's own console on 8787 stays until ROLE=keeper turns it off.
+  web:
+    image: geelark-farm:local
+    container_name: geelark-web
+    env_file: .env
+    environment:
+      ROLE: web
+      GEELARK_MACHINE: "${GEELARK_MACHINE:-server-1}-web"
+      TZ: UTC
+      LOG_FORMAT: json
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts:ro
+      - ./secrets:/app/secrets:ro
+    ports:
+      - "127.0.0.1:8788:8787"
+    restart: always
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # (the loop's own notes continue)
     # No mem_limit on purpose. Hitting one is an OOM kill, which is SIGKILL,
     # which is the one signal the shutdown cannot catch - so a limit would
     # turn "under memory pressure" into "phones left running and billing".

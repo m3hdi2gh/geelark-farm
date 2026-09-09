@@ -159,6 +159,16 @@ def _int(key: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+ROLES = ("all", "web", "keeper")
+
+
+def _role(value: str) -> str:
+    word = (value or "").strip().lower() or "all"
+    if word not in ROLES:
+        raise ConfigError(f"ROLE={value!r} is not one of {', '.join(ROLES)}")
+    return word
+
+
 def _log_format() -> str:
     """`LOG_FORMAT`, refused rather than quietly ignored.
 
@@ -343,6 +353,12 @@ class Settings:
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
+    #: Which part of the service this process is: `all` (the loop and the
+    #: console in one process, as it always was), `web` (the console alone:
+    #: it reads and writes Postgres and nothing else), `keeper` (the loop
+    #: without the console). One image, three shapes, so a change to a page
+    #: never restarts a build (the operator, 2026-09-09).
+    role: str = "all"
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -416,6 +432,7 @@ class Settings:
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()
                          or "settings"),
+            role=_role(_str("ROLE", "all")),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
                                in ("1", "true", "yes", "on") else 0,

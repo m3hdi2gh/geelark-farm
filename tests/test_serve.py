@@ -2582,3 +2582,76 @@ def test_a_batch_capped_by_the_gmail_pool_says_so():
     decision = decide(**numbers(warm=2, target=10, free_slots=24, cap=None,
                                 gmails=6, exits=36, coming=2))
     assert decision.build == 6 and not decision.warning
+
+
+# ------------------------------------------------------------ the roles
+def test_the_web_role_serves_the_console_and_nothing_else(make_settings,
+                                                          tmp_path,
+                                                          monkeypatch):
+    """One image, three shapes: with ROLE=web the process starts the web
+    server, writes its own heartbeat, and never builds a client, a breaker
+    or a loop (the operator, 2026-09-09: a change to a page must not
+    restart a build)."""
+    started = []
+    monkeypatch.setattr(serve_mod, "build_client",
+                        lambda s: started.append("client"))
+    stop = threading.Event()
+    stop.set()                                   # one turn of the loop
+    settings = make_settings(state_dir=tmp_path, role="web")
+
+    code = serve_mod.serve_web(settings, stop=stop,
+                               start=lambda s: started.append("web"))
+
+    assert code == 0 and started == ["web"]
+    assert (tmp_path / serve_mod.WEB_HEARTBEAT_FILE).exists()
+    ok, said = serve_mod.healthy(settings)
+    assert "console" in said
+
+
+def test_run_hands_the_web_role_straight_to_serve_web(make_settings, tmp_path,
+                                                      monkeypatch):
+    called = []
+    monkeypatch.setattr(serve_mod, "serve_web",
+                        lambda settings, stop=None: called.append("web") or 0)
+    monkeypatch.setattr(serve_mod, "build_client",
+                        lambda s: called.append("client"))
+    settings = make_settings(state_dir=tmp_path, role="web")
+    assert serve_mod.run(settings, stop=threading.Event()) == 0
+    assert called == ["web"], "no client, no loop"
+
+
+def test_the_listener_rings_the_bell_on_a_notification(make_settings,
+                                                        monkeypatch):
+    """The console in another container cannot set this process's Event;
+    Postgres NOTIFY is how its press gets here inside a second."""
+    from geelark_farm import signals
+
+    class Conn:
+        def __init__(self):
+            self.ran = []
+            self.gave = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql):
+            self.ran.append(sql)
+
+        def notifies(self, timeout=None, stop_after=None):
+            self.gave += 1
+            if self.gave == 1:
+                yield object()               # one notification
+            else:
+                stop.set()                   # then the process is leaving
+
+    conn = Conn()
+    stop = threading.Event()
+    signals.queued.clear()
+    serve_mod.Listener(make_settings(), stop, connect=lambda: conn).watch()
+
+    assert conn.ran == ["LISTEN geelark_actions"]
+    assert signals.queued.is_set(), "the bell rang"
+    signals.queued.clear()

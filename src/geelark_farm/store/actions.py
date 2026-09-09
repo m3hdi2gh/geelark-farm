@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 DRAIN_BATCH = 20
 
 
+#: The Postgres channel a queued command rings. The keeper LISTENs on it;
+#: a missed notification costs a wait and nothing else, exactly like the
+#: in-process bell it stands beside.
+NOTIFY_CHANNEL = "geelark_actions"
+
+
 def enqueue(settings: Settings, *, verb: str, payload: dict,
             requested_by: int, idem_key: str) -> int:
     """Insert one command; a duplicate idem_key returns the FIRST row's id.
@@ -36,6 +42,12 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
                 " VALUES (%s, %s, %s, %s) RETURNING id",
                 (verb, json.dumps(payload), requested_by, idem_key))
             new_id = cur.fetchone()[0]
+            # The bell, for a keeper in another container: the in-process
+            # `signals.queued` cannot reach it, and without this a press
+            # waited for the top of the next pass (see serve.Listener).
+            # Delivered with the commit, so a listener never wakes to a
+            # row it cannot yet see.
+            conn.execute(f"NOTIFY {NOTIFY_CHANNEL}")
             conn.commit()
         except Exception as exc:                                  # noqa: BLE001
             conn.rollback()

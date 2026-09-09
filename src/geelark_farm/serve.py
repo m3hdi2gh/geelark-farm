@@ -1150,6 +1150,8 @@ def healthy(settings: Settings, now: float | None = None) -> tuple[bool, str]:
     has stopped or hung, and a loop that is running perfectly on time while
     every pass dies. The second is the one that used to report healthy.
     """
+    if getattr(settings, "role", "all") == "web":
+        return web_healthy(settings, now)
     failed = _failing(settings)
     if failed >= FAILING_LIMIT:
         return False, (f"{failed} passes in a row have failed - the loop is "
@@ -1738,6 +1740,119 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 WOKEN_PASS_FLOOR = 5.0
 
 
+class Listener:
+    """The console's bell, heard across containers.
+
+    With the console in its own container its `signals.queued` is a flag
+    in a process the keeper is not, so a press would wait for the top of
+    the next pass - up to thirty seconds. `enqueue` says NOTIFY on
+    `actions.NOTIFY_CHANNEL` with every row it writes; this holds one
+    connection of its own on LISTEN and rings the local bell for each
+    notification, and everything downstream - the lane's wait, the pass's
+    nap - is unchanged. Never load-bearing: a lost connection is retried
+    with a backoff, and in between the queue is read on the clock as it
+    always was.
+    """
+
+    def __init__(self, settings: Settings, stop: threading.Event, *,
+                 connect=None):
+        self.settings, self.stop = settings, stop
+        self._connect = connect
+
+    def start(self) -> threading.Thread:
+        thread = threading.Thread(target=self.watch, name="listener",
+                                  daemon=True)
+        thread.start()
+        return thread
+
+    def _open(self):
+        if self._connect is not None:
+            return self._connect()
+        import psycopg
+
+        from .store import db
+
+        return psycopg.connect(**db.dsn_kwargs(self.settings), autocommit=True)
+
+    def watch(self) -> None:
+        from . import signals
+        from .store.actions import NOTIFY_CHANNEL
+
+        backoff = 5.0
+        while not self.stop.is_set():
+            try:
+                with self._open() as conn:
+                    conn.execute(f"LISTEN {NOTIFY_CHANNEL}")
+                    log.info("listening on %s for the console's commands",
+                             NOTIFY_CHANNEL)
+                    backoff = 5.0
+                    while not self.stop.is_set():
+                        heard = False
+                        for _ in conn.notifies(timeout=15.0, stop_after=1):
+                            heard = True
+                        if heard:
+                            signals.ring(signals.queued)
+            except Exception as exc:                              # noqa: BLE001
+                if self.stop.is_set():
+                    break
+                log.warning("the command listener lost its connection (%s); "
+                            "listening again in %.0fs", exc, backoff)
+                self.stop.wait(backoff)
+                backoff = min(60.0, backoff * 2)
+
+
+#: The web role's own heartbeat, beside the loop's: Docker's healthcheck
+#: runs `geelark serve --healthcheck` in both shapes of container.
+WEB_HEARTBEAT_FILE = "heartbeat-web"
+
+
+def serve_web(settings: Settings, *, stop: threading.Event | None = None,
+              start=None) -> int:
+    """The console alone: one process, one job. Reads and writes Postgres,
+    serves pages, queues commands; never touches GeeLark, the ledger or a
+    phone. Blocks until `stop`."""
+    from . import web
+
+    stop = stop or threading.Event()
+    (start or web.start)(settings)
+    log.info("serving the console alone (ROLE=web) on %s:%d",
+             settings.web_bind, settings.web_port)
+    while True:
+        try:
+            (settings.state_dir / WEB_HEARTBEAT_FILE).write_text(
+                str(time.time()), encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not write the web heartbeat (%s)", exc)
+        if stop.wait(30):
+            return 0
+
+
+def web_healthy(settings: Settings, now: float | None = None
+                ) -> tuple[bool, str]:
+    """The web role's answer to the healthcheck: its heartbeat is recent,
+    and the port answers."""
+    path = settings.state_dir / WEB_HEARTBEAT_FILE
+    try:
+        last = float(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False, "the console has not started yet"
+    since = (now if now is not None else time.time()) - last
+    if since > 120:
+        return False, f"the console's heartbeat is {since / 60:.0f} minutes old"
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{settings.web_port}/login",
+                timeout=5) as answer:
+            code = answer.status
+    except Exception as exc:                                       # noqa: BLE001
+        code = getattr(exc, "code", None)
+        if code is None:
+            return False, f"the console's port does not answer ({exc})"
+    return True, f"the console answers ({code})"
+
+
 def naps(settings: Settings):
     """The service's sleep: the interval, cut short when somebody queues a
     command. Returns `time.sleep` itself when the flag is off, so with it
@@ -1769,6 +1884,11 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     for it.
     """
     settings.ensure_dirs()
+    role = getattr(settings, "role", "all")
+    if role == "web":
+        # The console alone: nothing below - the client, the breaker, the
+        # watchdog, the lane, the loop - belongs to this process.
+        return serve_web(settings, stop=stop)
     # The hand's cadence for every login this process runs - see
     # shell.HUMAN_CADENCE for why (the operator, 2026-09-09).
     from . import shell as _shell
@@ -1862,13 +1982,20 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         housekeeping = Housekeeper(settings, client, stop)
         housekeeping.start()
 
-    if settings.web_enabled:
+    if settings.web_enabled and role != "keeper":
         # Loopback-only, read-only, daemon: it dies with the process and
         # holds nothing that must survive - sessions cost a re-login after
         # the Watchdog's os._exit, and that is the whole loss.
         from . import web
 
         web.start(settings)
+    elif role == "keeper":
+        log.info("the console is another container's (ROLE=keeper)")
+    if settings.store_enabled and settings.wake_on_action:
+        # The console's bell across containers - see Listener. Started in
+        # the `all` shape too: harmless beside the in-process bell, and
+        # it means a second console container needs nothing more.
+        Listener(settings, stop).start()
 
     if settings.sheet_closed:
         # Said once, loudly, because the failure it prevents is silent: a

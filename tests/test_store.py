@@ -603,7 +603,9 @@ class _ScriptedConn:
 
     def execute(self, sql, params=None):
         self.sql.append(" ".join(sql.split()))
-        answer = self.script.pop(0)
+        # A statement past the script - the NOTIFY that rides with every
+        # enqueue - answers nothing, like Postgres does (2026-09-09).
+        answer = self.script.pop(0) if self.script else None
         if isinstance(answer, Exception):
             raise answer
         touched = self.rowcounts.pop(0) if self.rowcounts else 1
@@ -1308,3 +1310,44 @@ def test_the_pool_is_bounded_and_answers_to_one_cluster(
     pool.give(conn)
     pool.drain()
     assert conn.closed
+
+
+def test_enqueue_rings_the_postgres_bell_with_the_row(monkeypatch,
+                                                      make_settings):
+    """A keeper in another container hears NOTIFY, not a threading.Event;
+    the bell goes with the commit so it never wakes to a row it cannot
+    yet see (2026-09-09)."""
+    from geelark_farm.store import actions, db
+
+    class Cur:
+        def fetchone(self):
+            return (7,)
+
+    class Conn:
+        def __init__(self):
+            self.ran = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.ran.append(sql)
+            return Cur()
+
+        def commit(self):
+            self.ran.append("COMMIT")
+
+        def rollback(self):
+            self.ran.append("ROLLBACK")
+
+    conn = Conn()
+    monkeypatch.setattr(db, "connect", lambda s: conn)
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+    monkeypatch.setattr("geelark_farm.store.events.emit", lambda *a, **k: None)
+
+    assert actions.enqueue(make_settings(), verb="noop", payload={},
+                           requested_by=1, idem_key="k") == 7
+    assert conn.ran[-2:] == ["NOTIFY geelark_actions", "COMMIT"]

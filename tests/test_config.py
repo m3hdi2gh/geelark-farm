@@ -532,3 +532,13 @@ def test_serve_workers_is_the_count_and_the_old_flag_means_four(
 
     assert settings.serve_workers == workers
     assert settings.serve_concurrent is (workers > 0)
+
+
+def test_the_role_is_one_of_three_words(make_settings, monkeypatch):
+    from geelark_farm import config
+
+    assert config._role("") == "all"
+    assert config._role(" Web ") == "web"
+    assert config._role("keeper") == "keeper"
+    with pytest.raises(config.ConfigError, match="ROLE"):
+        config._role("builder")
