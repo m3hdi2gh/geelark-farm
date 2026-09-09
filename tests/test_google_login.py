@@ -1807,3 +1807,36 @@ def test_a_list_with_only_the_sms_row_is_widened_once_before_it_is_a_verdict(
     out = login.act_choose_authenticator(ctx)
     assert out.reason == "no_authenticator_option"
     assert device.tapped == ["Try another way"], "not pressed again"
+
+
+def test_a_row_with_no_second_factor_is_not_walked_into_try_another_way(
+        phone, tmp_path):
+    """"Try another way" is a promise the row cannot keep when it has no
+    authenticator and no recovery address: Google reads the second press
+    as "I have nothing else" and blocks the account with "You didn't
+    provide enough info". Three such rows went that way in five minutes
+    (2026-09-09). For them the SMS page is the dead end it says it is."""
+    bare = Account(email="bare@gmail.com", password="x", totp_secret="")
+    device = phone(taps_that_work={"Try another way"})
+
+    ctx = context_from("google-verify-phone-try-another-way.xml")
+    ctx.account = bare
+    assert not login.has_second_factor(ctx)
+    assert login._fatal_reason(ctx) == "phone_verification_required", (
+        "set aside at once, not one press closer to a block")
+    assert matched_screen(ctx).name != "2fa_verify_phone"
+
+    ctx = context_from("google-method-list-sms-only.xml")
+    ctx.account = bare
+    ctx.artifact_dir = tmp_path
+    ctx.seen = {"2fa_method_list": 1}
+    out = login.act_choose_authenticator(ctx)
+    assert out.reason == "no_authenticator_option"
+    assert device.tapped == [], "never pressed for a row with nothing behind it"
+
+    # A recovery address is a second factor too: the list is widened.
+    ctx.account = Account(email="r@gmail.com", password="x", totp_secret="",
+                          recovery_email="other@gmail.com")
+    assert login.has_second_factor(ctx)
+    assert login.act_choose_authenticator(ctx) is None
+    assert device.tapped == ["Try another way"]

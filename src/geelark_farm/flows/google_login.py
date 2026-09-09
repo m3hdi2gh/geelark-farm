@@ -237,7 +237,8 @@ def _fatal_reason(ctx: Context) -> str | None:
         if not ctx.has(*needles):
             continue
         if reason in NOT_FATAL_BESIDE_AUTHENTICATOR and (
-                answerable(ctx) or another_way_offered(ctx)):
+                answerable(ctx)
+                or (another_way_offered(ctx) and has_second_factor(ctx))):
             continue
         # A captcha is not a dead end when a solver is configured: the
         # `captcha` screen tries it, and gives up - back to this same
@@ -900,6 +901,23 @@ def answerable(ctx: Context) -> bool:
     return authenticator_offered(ctx) or recovery_offered(ctx)
 
 
+def has_second_factor(ctx: Context) -> bool:
+    """Whether the row has anything a widened list could offer: an
+    authenticator secret, or a recovery address to confirm.
+
+    Without either, "Try another way" is a promise the row cannot keep,
+    and Google reads a second press with nothing behind it as "I have
+    nothing else" - and answers "You didn't provide enough info", which
+    blocks the account for a while. Three rows with no second factor were
+    walked into exactly that in five minutes (2026-09-09, jogvncubic,
+    fyvjkivd, bufbjifcbk). For such a row the SMS page is the dead end
+    it says it is, and the row is set aside at once instead.
+    """
+    account = getattr(ctx, "account", None)
+    return bool(getattr(account, "totp_secret", "")
+                or getattr(account, "recovery_email", ""))
+
+
 def another_way_offered(ctx: Context) -> bool:
     """Whether the page carries Google's own way around it.
 
@@ -1125,7 +1143,8 @@ def act_choose_authenticator(ctx: Context) -> Outcome | None:
     # here). Pressed once, on the first list only: a second list with no
     # authenticator on it is the answer, and the guard on `act_try_another
     # _way` still stands - this is only reached with none visible.
-    if ctx.has("try another way") and ctx.seen.get("2fa_method_list", 0) <= 1:
+    if (ctx.has("try another way") and has_second_factor(ctx)
+            and ctx.seen.get("2fa_method_list", 0) <= 1):
         log.info("the list offers no authenticator; asking for another way")
         if ctx.tap("Try another way"):
             time.sleep(4)
@@ -1289,6 +1308,7 @@ SCREENS: list[Screen] = [
            lambda c: (c.has("verify your phone number",
                             "confirm your phone number")
                       and another_way_offered(c)
+                      and has_second_factor(c)
                       and not authenticator_offered(c)),
            act_try_another_way, max_visits=2),
 
