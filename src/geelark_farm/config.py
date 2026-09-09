@@ -338,6 +338,8 @@ class Settings:
     #: Zero is the old shape: the pass runs its own batch and is as long
     #: as its longest job.
     serve_workers: int = 0
+    #: Type and tap the way a hand does - see shell.HUMAN_CADENCE.
+    human_cadence: bool = True
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -407,6 +409,8 @@ class Settings:
             warm_stock=_int("WARM_STOCK", 10),
             # `SERVE_WORKERS=N` is the setting; `SERVE_CONCURRENT=1` with
             # no count is what it always meant, four workers.
+            human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
                                in ("1", "true", "yes", "on") else 0,

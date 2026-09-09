@@ -278,13 +278,19 @@ def texts(elements: list[Element]) -> str:
 
 # ------------------------------------------------------------------ acting
 def tap_element(client: Client, phone_id: str, element: Element) -> bool:
-    point = element.centre
-    if not point:
+    from . import shell
+
+    centre = element.centre
+    if not centre:
         log.warning("element %r has unparseable bounds %r",
                     element.label, element.bounds)
         return False
+    nums = [int(n) for n in re.findall(r"-?\d+", element.bounds)]
+    point = shell.human_point(centre, tuple(nums[:4]) if len(nums) >= 4
+                              else None)
     log.info("tapping %r at %s (clickable=%s)",
              element.label or element.cls, point, element.clickable)
+    shell.pause(0.2, 0.7)
     tap(client, phone_id, *point)
     return True
 

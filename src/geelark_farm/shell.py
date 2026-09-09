@@ -12,8 +12,10 @@ contain both.
 from __future__ import annotations
 
 import logging
+import random
 import re
 import shlex
+import time
 
 from .api import Client
 
@@ -201,18 +203,78 @@ def type_segments(text: str) -> list[str]:
     return segments
 
 
+#: Type and tap the way a hand does, or the way a script does.
+#:
+#: Off, a field is filled in one `input text` and every tap lands on the
+#: exact centre of its button, the same pixel every time. Google's sign-in
+#: page scores exactly that: the operator signed the same accounts into
+#: fresh GeeLark phones through the same exits by hand and met no captcha
+#: and no "Verify your phone number", while the builder met both on
+#: thirteen of sixteen phones (2026-09-09). On, text goes in bursts of two
+#: to four characters with a short pause between, taps land at a point
+#: inside the control rather than on its centre, and there is a moment
+#: before a form is submitted. Off in this module so the test suite does
+#: not sleep; `serve` turns it on from `HUMAN_CADENCE` (default on).
+HUMAN_CADENCE = False
+_rng = random.Random()
+
+
+def pause(low: float, high: float) -> None:
+    """A hand's hesitation, when the cadence is on; nothing when it is off."""
+    if HUMAN_CADENCE:
+        time.sleep(_rng.uniform(low, high))
+
+
+def bursts(payload: str) -> list[str]:
+    """One `input text` payload cut the way a hand types it: two to four
+    keys at a time. `%s` is one key - a space - and never split, because
+    `%` and `s` typed in two calls are the two characters, not the space
+    (see `type_segments`)."""
+    if not HUMAN_CADENCE:
+        return [payload]
+    keys = re.findall(r"%s|.", payload, flags=re.DOTALL)
+    out: list[str] = []
+    at = 0
+    while at < len(keys):
+        take = _rng.randint(2, 4)
+        out.append("".join(keys[at:at + take]))
+        at += take
+    return out
+
+
+def human_point(centre: tuple[int, int],
+                bounds: tuple[int, int, int, int] | None) -> tuple[int, int]:
+    """Where a thumb lands on a control: near the middle, not on it.
+
+    Inside the middle three fifths of the control on each axis, so a small
+    target - the reCAPTCHA tick box is forty pixels across - is still hit,
+    and a wide button is not always pressed at the same pixel.
+    """
+    if not HUMAN_CADENCE or bounds is None:
+        return centre
+    left, top, right, bottom = bounds
+    x = centre[0] + int(round(_rng.uniform(-0.3, 0.3) * max(0, right - left) / 2))
+    y = centre[1] + int(round(_rng.uniform(-0.3, 0.3) * max(0, bottom - top) / 2))
+    return (min(max(x, left + 1), right - 1) if right > left + 2 else centre[0],
+            min(max(y, top + 1), bottom - 1) if bottom > top + 2 else centre[1])
+
+
 def type_text(client: Client, phone_id: str, text: str) -> None:
     """Type `text` into the focused field, exactly as given.
 
     Raises TypingError rather than typing something subtly different - a
     password that types wrong looks identical to a wrong password, and costs a
     login attempt against an account's reputation to discover.
+
+    In bursts, with the cadence on - see `HUMAN_CADENCE`.
     """
     if not text:
         return
     check_typeable(text)
     for payload in type_segments(text):
-        run(client, phone_id, f"input text {shlex.quote(payload)}")
+        for burst in bursts(payload):
+            run(client, phone_id, f"input text {shlex.quote(burst)}")
+            pause(0.12, 0.4)
 
 
 MOVE_END = 123          # KEYCODE_MOVE_END

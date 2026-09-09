@@ -140,6 +140,7 @@ def fill(ctx: Context, element: screen.Element, text: str) -> bool:
         shell.clear_field(ctx.client, ctx.phone_id, max_chars=len(element.text) + 4)
     shell.type_text(ctx.client, ctx.phone_id, text)
     time.sleep(1)
+    shell.pause(0.3, 1.2)
 
     if element.password:
         return True

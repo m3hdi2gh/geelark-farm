@@ -170,6 +170,8 @@ def submit(ctx: Context) -> None:
     """Advance the form. Google labels the button Next, but the on-screen
     keyboard's enter key works when the button is scrolled out of view."""
     ctx.refresh()
+    # A hand reads the page before it presses Next (see shell.HUMAN_CADENCE).
+    shell.pause(0.8, 2.0)
     # One spelling each: `screen.find` casefolds, so `NEXT` after `Next` was
     # a second look for a label the first had already matched.
     for label in ("Next", "Continue", "Sign in", "Verify", "Done"):

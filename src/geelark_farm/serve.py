@@ -1769,6 +1769,12 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     for it.
     """
     settings.ensure_dirs()
+    # The hand's cadence for every login this process runs - see
+    # shell.HUMAN_CADENCE for why (the operator, 2026-09-09).
+    from . import shell as _shell
+    _shell.HUMAN_CADENCE = bool(settings.human_cadence)
+    if _shell.HUMAN_CADENCE:
+        log.info("typing and tapping with a hand's cadence (HUMAN_CADENCE)")
     # Resolved here rather than in the signature, because it depends on a
     # setting. A caller that passes its own is untouched - which is every
     # test, and the reason the parameter exists.

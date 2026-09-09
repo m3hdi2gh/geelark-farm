@@ -9,6 +9,7 @@ of them condemns a perfectly good account.
 
 from __future__ import annotations
 
+import re
 import pytest
 
 from geelark_farm import shell
@@ -219,3 +220,71 @@ def test_text_is_checked_before_any_of_it_is_sent():
         shell.type_text(device, "P", "pass\u00f6rd")
 
     assert device.commands == [], "it sent part of it before checking"
+
+
+# ------------------------------------------------------- a hand's cadence
+def test_with_the_cadence_off_typing_and_tapping_are_what_they_were(
+        monkeypatch):
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", False)
+    assert shell.bursts("hello%sworld") == ["hello%sworld"]
+    assert shell.human_point((50, 50), (0, 0, 100, 100)) == (50, 50)
+    naps = []
+    monkeypatch.setattr(shell.time, "sleep", lambda s: naps.append(s))
+    shell.pause(0.5, 1.0)
+    assert naps == []
+
+
+def test_with_the_cadence_on_text_goes_in_bursts_that_keep_a_space_whole(
+        monkeypatch):
+    """The operator signed the same accounts into fresh phones through the
+    same exits by hand and met no captcha; the builder, which pastes a
+    field in one call and taps the same pixel every time, met one on
+    thirteen of sixteen phones (2026-09-09). `%s` is one key - a space -
+    and split in two it types the two characters instead."""
+    import random
+
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", True)
+    monkeypatch.setattr(shell, "_rng", random.Random(7))
+    naps = []
+    monkeypatch.setattr(shell.time, "sleep", lambda s: naps.append(s))
+
+    made = shell.bursts("ab%scd%sefghij")
+    assert "".join(made) == "ab%scd%sefghij"
+    assert all(1 <= len(re.findall(r"%s|.", b)) <= 4 for b in made)
+    assert all("%" not in b or "%s" in b for b in made), "a space stays whole"
+    assert len(made) >= 3
+
+    class Device:
+        def __init__(self):
+            self.typed = []
+
+        def post(self, path, payload=None, **k):
+            self.typed.append(payload["cmd"] if payload else path)
+            return {"code": 0, "data": {"output": ""}}
+
+    device = Device()
+    monkeypatch.setattr(shell, "run",
+                        lambda c, p, cmd, **k: device.typed.append(cmd) or "")
+    shell.type_text(device, "P", "someone@example.com")
+    assert len(device.typed) >= 5, "several `input text` calls, not one"
+    assert "".join(c.removeprefix("input text ").strip("'")
+                   for c in device.typed) == "someone@example.com"
+    assert naps and all(0.12 <= n <= 0.4 for n in naps)
+
+
+def test_with_the_cadence_on_a_tap_lands_inside_the_control_not_on_its_centre(
+        monkeypatch):
+    import random
+
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", True)
+    monkeypatch.setattr(shell, "_rng", random.Random(3))
+    points = {shell.human_point((360, 518), (200, 490, 520, 546))
+              for _ in range(40)}
+    assert len(points) > 5, "not the same pixel every time"
+    for x, y in points:
+        assert 200 < x < 520 and 490 < y < 546, "always inside the button"
+        assert abs(x - 360) <= 48 and abs(y - 518) <= 9, "near the middle"
+    # A tiny target - the reCAPTCHA tick box - is still hit.
+    for _ in range(40):
+        x, y = shell.human_point((82, 564), (62, 544, 102, 584))
+        assert 62 < x < 102 and 544 < y < 584
