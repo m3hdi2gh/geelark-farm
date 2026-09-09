@@ -481,6 +481,17 @@ def test_googles_transient_error_is_retried_not_reported_as_a_gap():
     assert matched_screen(ctx).max_visits <= 3
 
 
+def test_plays_welcome_after_a_back_is_a_known_page_not_a_gap():
+    """SIGN_IN_VIA=play: BACK out of "Something went wrong" lands on Play's
+    welcome, which is inside the sign-in's packages and so not "closed" -
+    build 2222 sat there and reported unknown_screen (2026-09-10)."""
+    ctx = context_from("play-welcome-sign-in.xml")
+
+    assert matched_screen(ctx).name == "play_welcome"
+    assert matched_screen(ctx).act is login.act_reenter_from_play
+    assert matched_screen(ctx).max_visits <= 3
+
+
 def test_the_notification_card_is_dismissed_although_nothing_is_clickable():
     """Nothing in the ChatGPT app reports clickable=true - every label, both
     buttons on this card included, is a plain TextView whose centre taps
@@ -1280,6 +1291,24 @@ def test_a_device_that_will_not_say_what_is_in_front_is_not_second_guessed(
     login.act_go_back(ctx)
 
     assert device.commands == []
+
+
+def test_plays_welcome_is_answered_by_pressing_its_sign_in_again(phone):
+    device = phone(taps_that_work={"Sign in"})
+    ctx = a_context()
+
+    assert login.act_reenter_from_play(ctx) is None
+    assert device.tapped == ["Sign in"]
+
+
+def test_a_play_welcome_with_no_sign_in_is_left_to_the_visit_count(phone):
+    """No button, no guess: the entry's max_visits turns a welcome that will
+    not move into stuck_on_play_welcome."""
+    device = phone()
+    ctx = a_context()
+
+    assert login.act_reenter_from_play(ctx) is None
+    assert device.tapped == [] and device.commands == []
 
 
 # ------------------------------------------------------------- getting there

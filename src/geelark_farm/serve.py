@@ -2138,6 +2138,39 @@ def naps(settings: Settings):
     return nap
 
 
+def _attach_store(settings: Settings) -> None:
+    """What every role does once at start when the store is on: the
+    schema ensured, the builder's events routed to the events table, and
+    this process's own log lines captured into the logs table (LOG_DB).
+
+    One place for the three because the builder role skipped all of them
+    until 2026-09-10: the block lived in the keeper's half of `run`, below
+    the role dispatch, so a builder wrote no events and no log rows - and
+    with LOG_FILE=0 its `docker logs` were the only record of a build.
+    Warn-not-fatal on the schema, like every store touch: a cluster that
+    is down at boot must not stop the farm.
+    """
+    if not settings.store_enabled:
+        return
+    # Injected, not imported by builder - see builder.set_event_sink.
+    from . import builder
+    from .store import db as store_db
+    from .store import events as store_events
+    from .store import logdb as store_logdb
+
+    try:
+        store_db.ensure_schema(settings)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not ensure the store schema at startup (%s); "
+                    "store writes will keep failing until it is back", exc)
+    builder.set_event_sink(
+        lambda kind, **kw: store_events.emit(settings, kind, **kw))
+    # C8: the process's own log lines, batched into the store off a
+    # bounded queue. Never in a build's path; switches itself off if
+    # the cluster stalls. None when LOG_DB is off.
+    store_logdb.install(settings)
+
+
 def run(settings: Settings, *, stop: threading.Event | None = None,
         passes: int | None = None, sleep=None) -> int:
     """Keep going until something stops it.
@@ -2147,6 +2180,9 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     for it.
     """
     settings.ensure_dirs()
+    # The store first, for every role: the schema before anything reads
+    # it, the log capture before anything worth capturing is logged.
+    _attach_store(settings)
     # Scale-out step 1: the ledger in the store, for every role at once.
     from . import ledger as _ledger
 
@@ -2214,34 +2250,6 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     # pool - and when those two disagreed, one account sat on two phones for
     # 115 minutes (2026-08-28). `.env` can move it, so no deploy should be
     # able to move it quietly (2026-08-31).
-    if settings.store_enabled:
-        # Injected, not imported by builder - see builder.set_event_sink.
-        # Once, here, rather than per pass: the sink is process-lifetime
-        # state exactly like the watchdog beside it.
-        from . import builder
-        from .store import db as store_db
-        from .store import events as store_events
-
-        # ensure_schema's own docstring says it runs on every store-enabled
-        # start - and until 2026-08-31 nothing made that true: only the
-        # store-init command called it, so a schema change deployed with the
-        # code never reached the cluster and the first page to need the new
-        # column answered 500. Warn-not-fatal, like every store touch: a
-        # cluster that is down at boot must not stop the farm.
-        try:
-            store_db.ensure_schema(settings)
-        except Exception as exc:                                  # noqa: BLE001
-            log.warning("could not ensure the store schema at startup (%s); "
-                        "store writes will keep failing until it is back",
-                        exc)
-        builder.set_event_sink(
-            lambda kind, **kw: store_events.emit(settings, kind, **kw))
-        # C8: the process's own log lines, batched into the store off a
-        # bounded queue. Never in a build's path; switches itself off if
-        # the cluster stalls. None when LOG_DB is off.
-        from .store import logdb as store_logdb
-
-        store_logdb.install(settings)
 
     if (settings.control_lane and settings.store_enabled
             and settings.web_mutations and settings.pools_in_pg):

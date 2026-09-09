@@ -1009,6 +1009,25 @@ def act_go_back(ctx: Context) -> Outcome | None:
     return None
 
 
+def act_reenter_from_play(ctx: Context) -> Outcome | None:
+    """Press Google Play's Sign in again.
+
+    With SIGN_IN_VIA=play the sign-in was started from Play's welcome, so
+    BACK out of a Google stumble lands on that welcome - Play is the app
+    that asked, `sign_in_closed` rightly says nothing has closed, and the
+    page is one tap from where the run started. Bounded by the entry's
+    visits: a welcome that keeps coming back is stuck_on_play_welcome.
+    """
+    pressed = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
+                                       PLAY_SIGN_IN_LABELS)
+    if pressed:
+        log.info("back on Google Play's welcome; pressed its %r again", pressed)
+    else:
+        log.warning("Google Play's welcome offered no Sign in to press")
+    time.sleep(6)
+    return None
+
+
 def sign_in_closed(ctx: Context) -> bool:
     """Whether the add-account UI is no longer the app in front.
 
@@ -1312,6 +1331,15 @@ SCREENS: list[Screen] = [
            lambda c: c.has("something went wrong",
                            "please go back and try again"),
            act_go_back, max_visits=3),
+
+    # Google Play's own welcome - "Sign in to find the latest Android apps,
+    # games, movies, music & more" over one Sign in. The page BACK returns
+    # to when Google stumbles on the Play path, and until 2026-09-10 the
+    # one page there nothing knew: build 2222 reported unknown_screen 177 s
+    # in, sitting one tap from where it had started.
+    Screen("play_welcome",
+           lambda c: c.has("find the latest android apps"),
+           act_reenter_from_play, max_visits=3),
 
     # Above 2fa_code_entry, which would otherwise claim this page: its
     # predicate is four loose tokens plus any input, and "verification code"

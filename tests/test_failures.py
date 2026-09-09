@@ -96,7 +96,12 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # with a Try another way beside it, tapped rather than called fatal
     # (2026-09-09).
     assert "stuck_on_2fa_verify_phone" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 24
+    # The twenty-fifth is `play_welcome`: Google Play's own welcome, the
+    # page BACK lands on when Google stumbles on the Play path; its Sign in
+    # is pressed again, and a welcome that keeps coming back is named
+    # (2026-09-10, phone 2222).
+    assert "stuck_on_play_welcome" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 25
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

@@ -2782,6 +2782,46 @@ def test_the_builder_takes_carries_and_looks_again(make_settings, tmp_path,
     assert ok and "builder" in said
 
 
+def test_every_role_attaches_the_store_before_it_does_anything(
+        make_settings, tmp_path, monkeypatch):
+    """The schema, the event sink and the log capture lived in the keeper's
+    half of `run`, below the role dispatch: a builder wrote no events and no
+    log rows, and with LOG_FILE=0 had no record at all (2026-09-10)."""
+    attached = []
+    monkeypatch.setattr(serve_mod, "_attach_store",
+                        lambda s: attached.append(s.role))
+    monkeypatch.setattr(serve_mod, "serve_builder", lambda s, stop=None: 0)
+    monkeypatch.setattr(serve_mod, "serve_web", lambda s, stop=None: 0)
+
+    for role in ("builder", "web"):
+        assert serve_mod.run(make_settings(state_dir=tmp_path, role=role)) == 0
+
+    assert attached == ["builder", "web"]
+
+
+def test_attaching_the_store_ensures_the_schema_routes_events_and_captures_logs(
+        make_settings, tmp_path, monkeypatch):
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.store import db as store_db
+    from geelark_farm.store import logdb as store_logdb
+
+    done = []
+    monkeypatch.setattr(store_db, "ensure_schema",
+                        lambda s: done.append("schema"))
+    monkeypatch.setattr(builder_mod, "set_event_sink",
+                        lambda sink: done.append("events"))
+    monkeypatch.setattr(store_logdb, "install", lambda s: done.append("logs"))
+
+    serve_mod._attach_store(make_settings(state_dir=tmp_path,
+                                          store_enabled=True))
+    assert done == ["schema", "events", "logs"]
+
+    done.clear()
+    serve_mod._attach_store(make_settings(state_dir=tmp_path,
+                                          store_enabled=False))
+    assert done == [], "the store is off"
+
+
 # --------------------------------------------- the breaker in the store
 def test_the_stores_breaker_counts_like_the_files_and_imports_it_once(
         make_settings, tmp_path, monkeypatch):
