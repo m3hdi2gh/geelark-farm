@@ -56,6 +56,24 @@ log = logging.getLogger(__name__)
 STALE_CLAIM_SECONDS = config.STALE_CLAIM_DEFAULT
 
 
+#: The store the ledger lives in when `use_store` was called - see
+#: `PgLedger`. Empty means the file, as it always was.
+_STORE: dict = {}
+
+
+def use_store(settings) -> bool:
+    """Route every `Ledger.shared` and `Ledger.load` in this process to the
+    store's `phone_claims` table (LEDGER_IN_PG=1 with the store on).
+    Called once at start by every role; the call sites do not change."""
+    if getattr(settings, "ledger_in_pg", False) and getattr(
+            settings, "store_enabled", False):
+        _STORE["settings"] = settings
+        return True
+    _STORE.pop("settings", None)
+    _STORE.pop("ledger", None)
+    return False
+
+
 #: The process's Ledgers, one per file - see `Ledger.shared`.
 _SHARED: dict = {}
 _SHARED_LOCK = threading.Lock()
@@ -225,6 +243,8 @@ class Ledger:
         with no claim is one `reap` stops mid-login (B-1, 2026-09-08). One
         object, one lock, one file - the service asks here, never `load`.
         """
+        if _STORE.get("settings") is not None:
+            return _pg_shared(stale_after)
         path = Path(state_dir) / "ledger.json"
         with _SHARED_LOCK:
             found = _SHARED.get(path)
@@ -243,6 +263,11 @@ class Ledger:
         setting, and a test walks the AST to keep it that way - a call that
         quietly took the default would be the 2026-08-28 bug again.
         """
+        if _STORE.get("settings") is not None and cls is Ledger:
+            # The store's ledger answers every `load` too: a command-line
+            # tool or a fallback that opened the file would otherwise read
+            # a copy nothing writes any more.
+            return _pg_shared(stale_after)
         path = Path(state_dir) / "ledger.json"
         ledger = cls(path=path,
                      stale_after=(STALE_CLAIM_SECONDS if stale_after is None
@@ -417,3 +442,195 @@ class Ledger:
         with self._lock:
             self._reload()
             return [e for e in self.entries.values() if e.is_claimed]
+
+
+# ------------------------------------------------------------ the store's
+def _pg_shared(stale_after: float | None):
+    with _SHARED_LOCK:
+        found = _STORE.get("ledger")
+        if found is None:
+            found = _STORE["ledger"] = PgLedger(
+                _STORE["settings"],
+                stale_after=(STALE_CLAIM_SECONDS if stale_after is None
+                             else stale_after))
+        return found
+
+
+_CLAIM_COLUMNS = ("phone_id, serial, label, proxy, note, created_at,"
+                  " claimed_at, released_at")
+
+
+class PgLedger:
+    """The ledger in the store's `phone_claims` table - the same verbs as
+    `Ledger`, the same `Entry` answers, one row per phone instead of one
+    file per host.
+
+    Every verb is one statement against the store, so two builders and a
+    keeper on three hosts read and write the same rows with the store's
+    own locking between them; nothing is remembered here but which claims
+    this process made (`_mine`), which is what `beat` restamps. Timestamps
+    are the epoch floats the file held, so `Entry.is_stale` and the window
+    it is measured against are untouched.
+    """
+
+    def __init__(self, settings, *, stale_after: float = STALE_CLAIM_SECONDS):
+        self._settings = settings
+        self.stale_after = stale_after
+        self.path = Path(settings.state_dir) / "ledger.json"
+        self._mine: set = set()
+        self._lock = threading.RLock()
+        self._imported = False
+
+    # ----------------------------------------------------------- plumbing
+    def _connect(self):
+        from .store import db
+
+        return db.connect(self._settings)
+
+    def _entry(self, row) -> Entry:
+        (phone_id, serial, label, proxy, note, created_at, claimed_at,
+         released_at) = row
+        entry = Entry(phone_id=phone_id, created_at=float(created_at),
+                      serial=serial or None, label=label or "",
+                      proxy=proxy or "", note=note or "",
+                      claimed_at=(None if claimed_at is None
+                                  else float(claimed_at)),
+                      released_at=(None if released_at is None
+                                   else float(released_at)))
+        entry.stale_after = self.stale_after      # type: ignore[misc]
+        return entry
+
+    def _import_file_once(self, conn) -> None:
+        """The file's phones into an empty table, the first time. A phone
+        the file knew and the table did not would otherwise be nobody's,
+        which is the one thing this ledger exists to prevent."""
+        if self._imported:
+            return
+        self._imported = True
+        if not self.path.exists():
+            return
+        cur = conn.execute("SELECT count(*) FROM phone_claims")
+        if int((cur.fetchone() or [0])[0]):
+            return
+        old = Ledger.load(self.path.parent, stale_after=self.stale_after)
+        for phone_id, entry in old.entries.items():
+            conn.execute(
+                f"INSERT INTO phone_claims ({_CLAIM_COLUMNS})"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (phone_id) DO NOTHING",
+                (phone_id, str(entry.serial or ""), entry.label, entry.proxy,
+                 entry.note, entry.created_at, entry.claimed_at,
+                 entry.released_at))
+        conn.commit()
+        if old.entries:
+            log.info("imported %d phone(s) from %s into the store's ledger",
+                     len(old.entries), self.path)
+
+    def save(self) -> None:
+        """Nothing to do: every verb wrote its row already."""
+
+    # ------------------------------------------------------------ writing
+    def record(self, phone_id: str, *, serial=None, label: str = "",
+               proxy: str = "", note: str = "") -> Entry:
+        with self._lock, self._connect() as conn:
+            self._import_file_once(conn)
+            conn.execute(
+                f"INSERT INTO phone_claims ({_CLAIM_COLUMNS})"
+                " VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL)"
+                " ON CONFLICT (phone_id) DO NOTHING",
+                (phone_id, str(serial or ""), label, proxy, note, _now()))
+            conn.commit()
+            return self._fetch(conn, phone_id)
+
+    def claim(self, phone_id: str, label: str = "") -> Entry:
+        with self._lock, self._connect() as conn:
+            self._import_file_once(conn)
+            conn.execute(
+                f"INSERT INTO phone_claims ({_CLAIM_COLUMNS}, claimed_by)"
+                " VALUES (%s, '', %s, '', '', %s, %s, NULL, %s)"
+                " ON CONFLICT (phone_id) DO UPDATE SET"
+                "   claimed_at = EXCLUDED.claimed_at, released_at = NULL,"
+                "   claimed_by = EXCLUDED.claimed_by,"
+                "   label = CASE WHEN EXCLUDED.label <> '' THEN EXCLUDED.label"
+                "                ELSE phone_claims.label END,"
+                "   updated_at = now()",
+                (phone_id, label, _now(), _now(), _who()))
+            conn.commit()
+            self._mine.add(phone_id)
+            return self._fetch(conn, phone_id)
+
+    def beat(self) -> list[str]:
+        with self._lock:
+            mine = sorted(self._mine)
+            if not mine:
+                return []
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE phone_claims SET claimed_at = %s, updated_at = now()"
+                    " WHERE phone_id = ANY(%s) AND claimed_at IS NOT NULL"
+                    "   AND released_at IS NULL RETURNING phone_id",
+                    (_now(), mine))
+                held = [r[0] for r in cur.fetchall()]
+                conn.commit()
+            return held
+
+    def release(self, phone_id: str, note: str = "") -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE phone_claims SET released_at = %s,"
+                " note = CASE WHEN %s <> '' THEN %s ELSE note END,"
+                " updated_at = now() WHERE phone_id = %s",
+                (_now(), note, note, phone_id))
+            conn.commit()
+            self._mine.discard(phone_id)
+
+    def forget(self, phone_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM phone_claims WHERE phone_id = %s",
+                         (phone_id,))
+            conn.commit()
+            self._mine.discard(phone_id)
+
+    # ------------------------------------------------------------ reading
+    def _fetch(self, conn, phone_id: str) -> Entry | None:
+        cur = conn.execute(
+            f"SELECT {_CLAIM_COLUMNS} FROM phone_claims WHERE phone_id = %s",
+            (phone_id,))
+        row = cur.fetchone()
+        return self._entry(row) if row else None
+
+    def get(self, phone_id: str) -> Entry | None:
+        with self._lock, self._connect() as conn:
+            self._import_file_once(conn)
+            entry = self._fetch(conn, phone_id)
+            conn.rollback()
+            return entry
+
+    def claimed(self) -> list[Entry]:
+        with self._lock, self._connect() as conn:
+            self._import_file_once(conn)
+            cur = conn.execute(
+                f"SELECT {_CLAIM_COLUMNS} FROM phone_claims"
+                " WHERE claimed_at IS NOT NULL AND released_at IS NULL")
+            rows = [self._entry(r) for r in cur.fetchall()]
+            conn.rollback()
+            return rows
+
+    @property
+    def entries(self) -> dict[str, Entry]:
+        """Every phone the ledger knows, as `Ledger.entries` was read: a
+        dict by phone id. A snapshot - writing into it changes nothing."""
+        with self._lock, self._connect() as conn:
+            self._import_file_once(conn)
+            cur = conn.execute(f"SELECT {_CLAIM_COLUMNS} FROM phone_claims")
+            rows = {r[0]: self._entry(r) for r in cur.fetchall()}
+            conn.rollback()
+            return rows
+
+
+def _who() -> str:
+    """Which process holds a claim: the machine name, for the row."""
+    try:
+        return config.machine()
+    except Exception:                                              # noqa: BLE001
+        return ""

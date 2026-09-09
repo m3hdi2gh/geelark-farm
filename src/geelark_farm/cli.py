@@ -1200,6 +1200,9 @@ def main(argv: list[str] | None = None) -> int:
     # anything else - including for commands that are not implemented yet.
     try:
         settings = Settings.load()
+        from . import ledger as _ledger
+
+        _ledger.use_store(settings)
     except ConfigError as exc:
         print(f"config: {exc}", file=sys.stderr)
         return 2

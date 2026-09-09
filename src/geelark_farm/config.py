@@ -365,6 +365,10 @@ class Settings:
     build_queue: bool = False
     #: How many jobs one builder container runs at once.
     builder_workers: int = 4
+    #: Scale-out step 1: the phone ledger in the store (`phone_claims`)
+    #: rather than state/ledger.json, so every process on every host
+    #: shares one answer to "whose is this phone".
+    ledger_in_pg: bool = False
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -442,6 +446,8 @@ class Settings:
             build_queue=_str("BUILD_QUEUE", "0").strip().lower()
             in ("1", "true", "yes", "on"),
             builder_workers=_int("BUILDER_WORKERS", 4),
+            ledger_in_pg=_str("LEDGER_IN_PG", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
                                in ("1", "true", "yes", "on") else 0,

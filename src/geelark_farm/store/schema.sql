@@ -589,3 +589,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     seen         boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS jobs_queued ON jobs (status, id);
+
+-- ------------------------------------------------ phone claims, rev 20
+-- The ledger, out of state/ledger.json and into the store, so a keeper
+-- and any number of builders on any host share one answer to "whose is
+-- this phone" (scale-out step 1, 2026-09-10). Timestamps are the epoch
+-- floats the file held: `Entry` and its staleness window read them as
+-- they always did, and `claimed_by` says which process holds it.
+CREATE TABLE IF NOT EXISTS phone_claims (
+    phone_id    text PRIMARY KEY,
+    serial      text NOT NULL DEFAULT '',
+    label       text NOT NULL DEFAULT '',
+    proxy       text NOT NULL DEFAULT '',
+    note        text NOT NULL DEFAULT '',
+    created_at  double precision NOT NULL,
+    claimed_at  double precision,
+    released_at double precision,
+    claimed_by  text NOT NULL DEFAULT '',
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);

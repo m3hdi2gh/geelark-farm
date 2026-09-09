@@ -569,3 +569,131 @@ def test_two_processes_on_one_ledger_do_not_erase_each_other(tmp_path,
     clock["t"] += 400
     assert keeper.beat() == []
     assert builder.beat() == ["NEW"]
+
+
+# ---------------------------------------------------- the store's ledger
+class _Conn:
+    """Records every statement; answers the next scripted rows."""
+
+    def __init__(self, rows=None):
+        self.sql = []
+        self.params = []
+        self.rows = list(rows or [])
+        self.commits = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+        self.params.append(params)
+        answer = self.rows.pop(0) if self.rows else []
+
+        class Cur:
+            @staticmethod
+            def fetchone():
+                return answer[0] if answer else None
+
+            @staticmethod
+            def fetchall():
+                return answer
+        return Cur()
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        pass
+
+
+def _pg(monkeypatch, make_settings, tmp_path, rows=None):
+    from geelark_farm import ledger as ledger_mod
+    from geelark_farm.store import db
+
+    conn = _Conn(rows)
+    monkeypatch.setattr(db, "connect", lambda s: conn)
+    settings = make_settings(state_dir=tmp_path, ledger_in_pg=True,
+                             store_enabled=True, store_host="db",
+                             store_password="pw")
+    ledger = ledger_mod.PgLedger(settings, stale_after=300)
+    ledger._imported = True               # no file to import in these
+    return ledger, conn
+
+
+def test_the_stores_ledger_answers_the_same_verbs_with_entries(
+        monkeypatch, make_settings, tmp_path):
+    """Scale-out step 1: one row per phone in `phone_claims`, so a keeper
+    and any number of builders on any host share one answer to whose a
+    phone is (2026-09-10)."""
+    from geelark_farm import ledger as ledger_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ledger_mod, "_now", lambda: clock["t"])
+    row = ("P1", "7", "build 1", "1.2.3.4:10", "", 1000.0, 1000.0, None)
+    ledger, conn = _pg(monkeypatch, make_settings, tmp_path,
+                       rows=[[], [row], [], [row], [("P1",)], [row], [], [row]])
+
+    got = ledger.record("P1", serial="7", label="build 1", proxy="1.2.3.4:10")
+    assert "INSERT INTO phone_claims" in conn.sql[0]
+    assert got.phone_id == "P1" and got.serial == "7"
+
+    got = ledger.claim("P1")
+    assert "ON CONFLICT (phone_id) DO UPDATE" in conn.sql[2]
+    assert got.is_claimed and not got.is_stale
+    assert ledger.beat() == ["P1"], "only this process's claims are restamped"
+    assert "phone_id = ANY(%s)" in conn.sql[4]
+
+    clock["t"] += 400
+    assert ledger.get("P1").is_stale, "the window is the Entry's own"
+    assert [e.phone_id for e in ledger.claimed()] == []      # scripted empty
+    assert list(ledger.entries) == ["P1"]
+
+    ledger.release("P1", note="done")
+    assert "SET released_at" in conn.sql[-1]
+    assert ledger.beat() == [], "released, so no longer this process's"
+    ledger.forget("P1")
+    assert conn.sql[-1].startswith("DELETE FROM phone_claims")
+    assert conn.commits >= 4
+
+
+def test_use_store_routes_shared_and_load_to_the_stores_ledger(
+        monkeypatch, make_settings, tmp_path):
+    from geelark_farm import ledger as ledger_mod
+    from geelark_farm.store import db
+
+    monkeypatch.setattr(db, "connect", lambda s: _Conn())
+    settings = make_settings(state_dir=tmp_path, ledger_in_pg=True,
+                             store_enabled=True, store_host="db",
+                             store_password="pw")
+    assert ledger_mod.use_store(settings)
+    try:
+        one = ledger_mod.Ledger.shared(tmp_path, stale_after=300)
+        two = ledger_mod.Ledger.load(tmp_path, stale_after=300)
+        assert isinstance(one, ledger_mod.PgLedger) and one is two
+    finally:
+        ledger_mod.use_store(make_settings(state_dir=tmp_path))
+    assert not isinstance(ledger_mod.Ledger.shared(tmp_path, stale_after=300),
+                          ledger_mod.PgLedger)
+
+
+def test_the_file_is_imported_into_an_empty_table_once(monkeypatch,
+                                                       make_settings, tmp_path):
+    from geelark_farm import ledger as ledger_mod
+
+    old = ledger_mod.Ledger.load(tmp_path)
+    old.record("P9", serial="9", label="old")
+    old.claim("P9")
+    ledger, conn = _pg(monkeypatch, make_settings, tmp_path,
+                       rows=[[(0,)], [], [("P9", "9", "old", "", "", 1.0,
+                                         2.0, None)]])
+    ledger._imported = False
+
+    assert ledger.get("P9").phone_id == "P9"
+    inserts = [q for q in conn.sql if q.startswith("INSERT INTO phone_claims")]
+    assert len(inserts) == 1
+    assert conn.params[conn.sql.index(inserts[0])][0] == "P9"
+    ledger.get("P9")
+    assert len([q for q in conn.sql if "count(*)" in q]) == 1, "asked once"

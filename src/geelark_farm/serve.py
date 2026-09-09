@@ -2133,6 +2133,12 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     for it.
     """
     settings.ensure_dirs()
+    # Scale-out step 1: the ledger in the store, for every role at once.
+    from . import ledger as _ledger
+
+    if _ledger.use_store(settings):
+        log.info("the phone ledger is the store's phone_claims table "
+                 "(LEDGER_IN_PG)")
     role = getattr(settings, "role", "all")
     if role == "web":
         # The console alone: nothing below - the client, the breaker, the
