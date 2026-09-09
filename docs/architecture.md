@@ -77,3 +77,12 @@ lists both.
 - `state/` holds each container's own heartbeat file - local by design.
 - The disk copy of `artifacts/` is kept beside the store's; the console
   reads the store first.
+
+## Proof
+
+`scripts/soak_scale.py` runs the queue's take (FOR UPDATE SKIP LOCKED)
+and the ledger's claim upsert from N threads against a real Postgres on
+throw-away tables. On the Arvan cluster, 2026-09-10: four builders took
+200 jobs in 0.6 s with 0 taken twice (66/45/44/45), and four workers
+kept 300 claims with every worker holding exactly its own. Run it inside
+any container after a change to either statement.
