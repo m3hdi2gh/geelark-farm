@@ -1201,6 +1201,27 @@ def act_recovery_email(ctx: Context) -> Outcome | None:
     return None
 
 
+def act_verify_phone(ctx: Context) -> Outcome | None:
+    """"Verify your phone number" with a Try another way: pressed once. If
+    the same page comes back, Google has nothing else to offer - "There is
+    something unusual about your activity" over CONTINUE and TRY ANOTHER
+    WAY, after the authenticator code was already accepted - and the
+    answer is the account's, not the phone's.
+
+    It was the router's `stuck_on_2fa_verify_phone`, which blames the
+    device: the Gmail stayed free, the next phone took it, and one address
+    (CadmiumTitan) ate six phones in forty minutes and tripped the breaker
+    (2026-09-10). Named for what it is, the address is set aside.
+    """
+    if ctx.seen.get("2fa_verify_phone", 0) >= 2:
+        path = ctx.save("phone_verification_required")
+        return Outcome("fatal", "phone_verification_required",
+                       "Try another way brought the phone-number page back; "
+                       + FATAL_ADVICE["phone_verification_required"],
+                       artifacts=[path] if path else [])
+    return act_try_another_way(ctx)
+
+
 def act_try_another_way(ctx: Context) -> Outcome | None:
     """Only reached when the authenticator is NOT among the visible options.
 
@@ -1333,7 +1354,7 @@ SCREENS: list[Screen] = [
                       and another_way_offered(c)
                       and has_second_factor(c)
                       and not authenticator_offered(c)),
-           act_try_another_way, max_visits=2),
+           act_verify_phone, max_visits=3),
 
     # Only when no authenticator row is present.
     Screen("2fa_push_to_other_device",

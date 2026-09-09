@@ -1896,3 +1896,25 @@ def test_when_play_shows_no_sign_in_settings_is_used_instead(phone, monkeypatch)
 def test_with_sign_in_via_settings_play_is_not_the_sign_ins_package(monkeypatch):
     monkeypatch.setattr(login, "SIGN_IN_VIA", "settings")
     assert "com.android.vending" not in login._sign_in_packages()
+
+
+def test_the_phone_page_coming_back_after_try_another_way_is_the_accounts_fault(
+        phone, tmp_path):
+    """After the authenticator code was accepted, "Verify your phone
+    number - there is something unusual about your activity" came back
+    the moment Try another way was pressed. Read as the device being
+    stuck, the Gmail stayed free and one address ate six phones in forty
+    minutes (2026-09-10, CadmiumTitan). It is the account's, and it is
+    set aside."""
+    device = phone(taps_that_work={"Try another way"})
+    ctx = context_from("google-verify-phone-try-another-way.xml")
+    ctx.artifact_dir = tmp_path
+
+    ctx.seen = {"2fa_verify_phone": 1}
+    assert login.act_verify_phone(ctx) is None
+    assert device.tapped == ["Try another way"], "pressed once"
+
+    ctx.seen = {"2fa_verify_phone": 2}
+    out = login.act_verify_phone(ctx)
+    assert out.kind == "fatal" and out.reason == "phone_verification_required"
+    assert device.tapped == ["Try another way"], "not pressed again"
