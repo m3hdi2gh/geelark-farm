@@ -2823,20 +2823,23 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
         #   free          Test, Remove
         #   dead          Test (answers -> free again), Remove
         #   needs new IP  Free (tested first), Test, Remove
+        #   suspect       Free (tested first), Test, Remove - a host Google
+        #                 kept challenging, set aside by the farm or by
+        #                 hand (2026-09-09)
         #   starting      Free - only for one a dead run left behind; a
         #                 live build's is freed by nobody but that build,
         #                 and the pass frees a stale one on its own.
         #   on a phone    nothing: the phone decides.
         if state == "on a phone":
             return ""
-        if state in ("needs new IP", "starting"):
+        if state in ("needs new IP", "starting", "suspect"):
             doors.append(
                 f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
                 f'<button class="quiet ok" title="'
                 + ("tested, and back on the shelf if it answers"
-                   if state == "needs new IP" else
+                   if state in ("needs new IP", "suspect") else
                    "back on the shelf - only if the build that took it is "
                    "gone; a stale one is freed on its own within minutes")
                 + '">Free</button></form>')

@@ -4990,12 +4990,16 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
         {"id": 5, "address": "SX5", "status": "change ip", "host": "1.1.1.5",
          "port": 10, "exit_ip": "9.9.9.5", "times_used": 25, "serial": "",
          "note": "", "error": None, "updated_at": now, "claimed_at": None},
+        {"id": 6, "address": "SX6", "status": "suspect", "host": "1.1.1.6",
+         "port": 10, "exit_ip": "9.9.9.6", "times_used": 2, "serial": "",
+         "note": "Suspect - 3 Google challenges on 1.1.1.6 today.",
+         "error": None, "updated_at": now, "claimed_at": None},
     ]
     from geelark_farm.web import read as read_mod
     for r in rows:
         r["state"] = read_mod._pool_state("proxy", r)
     assert [r["state"] for r in rows] == [
-        "free", "on a phone", "starting", "dead", "needs new IP"]
+        "free", "on a phone", "starting", "dead", "needs new IP", "suspect"]
 
     _dash(monkeypatch, pool_rows={"gmail": [], "gpt": [], "proxy": rows})
     client = web()
@@ -5005,11 +5009,11 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     head = sheet[:sheet.index("<tbody")]
 
     # The tab's chips, `all` pressed, each with its count.
-    assert 'data-group="" aria-pressed="true">all<b>5</b>' in head
+    assert 'data-group="" aria-pressed="true">all<b>6</b>' in head
     assert 'data-group="free" aria-pressed="false">free<b>1</b>' in head
     assert 'data-group="on a phone" aria-pressed="false">on a phone<b>2</b>' \
         in head
-    assert 'data-group="dead" aria-pressed="false">dead<b>2</b>' in head
+    assert 'data-group="dead" aria-pressed="false">dead<b>3</b>' in head
     # The tab's columns.
     for col in ("Name", "State", "Address", "Exit IP", "Used", "Phone"):
         assert f"<th>{col}</th>" in head
@@ -5041,3 +5045,8 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     # Needs a new IP: filed with the dead, Free (tested first) offered.
     assert 'data-group="dead"' in row("SX5")
     assert "/pools/proxy/free" in row("SX5")
+    # Suspect - a host Google kept challenging - the same three doors,
+    # and the count on the hover (2026-09-09).
+    assert 'data-group="dead"' in row("SX6")
+    assert "/pools/proxy/free" in row("SX6") and "/pools/proxy/test" in row("SX6")
+    assert "3 Google challenges" in row("SX6")

@@ -212,6 +212,77 @@ ATTEMPT_SECONDS = 420
 #: phone that pass met one captcha or none (the operator, 2026-09-08).
 CAPTCHAS_PER_EXIT = 2
 
+#: Google challenges met on one exit *host* in one day before every free
+#: exit on that host is set aside as `suspect`. The vendor sells several
+#: ports on one address, and Google's opinion is of the address: on
+#: 190.2.143.20 one phone ate forty-three captcha rounds while phones on
+#: 212.8.248.20 met three or none (the operator, 2026-09-09). Set aside
+#: rather than sent to the back of the queue, so a run never reaches for
+#: one; Free on the row is how a person puts it back.
+CAPTCHA_STRIKES_PER_HOST = 3
+SUSPECT = "suspect"
+#: Where the day's tally lives with no store: one process, one dict.
+_captcha_hosts_memory: dict = {}
+
+
+def _captcha_hosts(settings: Settings) -> dict:
+    if getattr(settings, "store_enabled", False):
+        from .store import state as store_state
+        return dict(store_state.get(settings, "captcha_hosts", {}) or {})
+    # A copy, like the store's answer: `_remember_captcha_hosts` clears
+    # the dict before it refills it, and refilling it from itself emptied
+    # the tally on every strike.
+    return dict(_captcha_hosts_memory)
+
+
+def _remember_captcha_hosts(settings: Settings, hosts: dict) -> None:
+    if getattr(settings, "store_enabled", False):
+        from .store import db
+        from .store import state as store_state
+        with db.connect(settings) as conn:
+            store_state.put(conn, "captcha_hosts", hosts)
+            conn.commit()
+        return
+    _captcha_hosts_memory.clear()
+    _captcha_hosts_memory.update(hosts)
+
+
+def _strike_captcha_host(settings: Settings, book: Book,
+                         proxy_row) -> list[str]:
+    """One Google challenge, counted against the exit's host for today.
+
+    At `CAPTCHA_STRIKES_PER_HOST` every free exit on that host is set
+    aside as `suspect`, with the count in its note. Returns the names set
+    aside. The exit the challenge was met on is not among them - it is
+    held by this build, and the build's own rule (two captchas, change the
+    exit) is what moves the phone off it.
+    """
+    host = str(getattr(getattr(proxy_row, "proxy", None), "host", "") or "")
+    if not host:
+        return []
+    today = failures.today()
+    hosts = _captcha_hosts(settings)
+    seen = hosts.get(host) or {}
+    count = (int(seen.get("count") or 0)
+             if seen.get("day") == today else 0) + 1
+    hosts[host] = {"day": today, "count": count}
+    _remember_captcha_hosts(settings, hosts)
+    if count < CAPTCHA_STRIKES_PER_HOST:
+        return []
+    aside = []
+    for resource in list(book.proxies.available):
+        if str(getattr(getattr(resource, "proxy", None), "host", "")) != host:
+            continue
+        book.proxies.fail(resource, SUSPECT, note=(
+            f"Suspect - {count} Google challenges on {host} today ({today}); "
+            f"set aside on its own. Press Free to use it again."))
+        aside.append(str(getattr(resource, "name", "") or resource.label))
+    if aside:
+        log.warning("%s: %d Google challenge(s) today; %d free exit(s) on it "
+                    "set aside as suspect: %s", host, count, len(aside),
+                    ", ".join(aside))
+    return aside
+
 # What the Phones tab records. The build knows exactly why it stopped and says
 # so in the note; the Status column answers the only question asked of it at a
 # glance - can I use this phone.
@@ -1176,6 +1247,14 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # build: the next address goes on the same exit, as before.
             if outcome.reason == "captcha_shown":
                 captchas_here += 1
+                # And against the host, for the day: three across any
+                # phones and its free exits are set aside as suspect.
+                if proxy_row is not None:
+                    try:
+                        _strike_captcha_host(settings, book, proxy_row)
+                    except Exception as exc:                       # noqa: BLE001
+                        log.warning("could not count the captcha against "
+                                    "the exit's host (%s)", exc)
             if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
                 previous = proxy_row
                 seen = {f"{r.proxy.host}:{r.proxy.port}"

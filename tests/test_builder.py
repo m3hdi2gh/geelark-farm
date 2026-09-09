@@ -4585,3 +4585,45 @@ def test_no_exit_to_move_to_is_not_a_failed_build(device, settings, drive,
     assert build.ok and build.gmail == "g2@example.com"
     assert device.proxies_set == []
     assert len(started) == 2, "once at boot, once after the refused swap"
+
+
+# ------------------------------------------ a host Google keeps challenging
+def test_three_challenges_on_one_host_in_a_day_set_its_free_exits_aside(
+        make_settings, monkeypatch):
+    """The vendor sells several ports on one address, and Google's opinion
+    is of the address: on 190.2.143.20 one phone ate forty-three captcha
+    rounds while phones on 212.8.248.20 met three or none (the operator,
+    2026-09-09). At the third challenge in a day, every free exit on that
+    host is set aside as suspect; the other host is untouched."""
+    from types import SimpleNamespace
+
+    builder._captcha_hosts_memory.clear()
+    monkeypatch.setattr(builder.failures, "today", lambda: "2026-09-09")
+
+    def exit_(name, host):
+        return SimpleNamespace(name=name, label=name,
+                               proxy=SimpleNamespace(host=host))
+
+    failed = []
+    free = [exit_("SX4", "190.2.143.20"), exit_("SX10", "190.2.143.20"),
+            exit_("SX1", "212.8.248.20")]
+    book = SimpleNamespace(proxies=SimpleNamespace(
+        available=free,
+        fail=lambda r, status, note="": failed.append((r.name, status, note))))
+    settings = make_settings()            # no store: the day lives in memory
+    held = exit_("SX44", "190.2.143.20")  # the one the build is on
+
+    assert builder._strike_captcha_host(settings, book, held) == []
+    assert builder._strike_captcha_host(settings, book, held) == []
+    assert failed == [], "two challenges are a bad day, not a verdict"
+    assert builder._strike_captcha_host(settings, book, held) == ["SX4", "SX10"]
+    assert [(n, s) for n, s, _ in failed] == [("SX4", "suspect"),
+                                              ("SX10", "suspect")]
+    assert "3 Google challenges on 190.2.143.20" in failed[0][2]
+    assert "Press Free" in failed[0][2]
+
+    # Another day starts the count again.
+    monkeypatch.setattr(builder.failures, "today", lambda: "2026-09-10")
+    failed.clear()
+    assert builder._strike_captcha_host(settings, book, held) == []
+    assert failed == []
