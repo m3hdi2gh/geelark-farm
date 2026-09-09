@@ -231,6 +231,29 @@ SIGN_IN_PACKAGES = (
     "com.google.android.gsf",
 )
 
+#: Where the sign-in is started from: "settings" is Android's own
+#: add-account entry point, as it always was; "play" opens Google Play and
+#: presses its Sign in. The operator signs the same accounts into the same
+#: phones through the same exits from Play by hand and meets no captcha
+#: and no "Verify your phone number", while the builder, from Settings,
+#: met both - and which app asked for the sign-in is one of the few
+#: things left that differ (2026-09-09). `serve` sets it from
+#: `SIGN_IN_VIA`; the flow's reopen and its "is the sign-in still in
+#: front" question read it too.
+SIGN_IN_VIA = "settings"
+PLAY_PACKAGE = "com.android.vending"
+PLAY_SIGN_IN_LABELS = ("Sign in",)
+#: How long Play gets to show its Sign in before Settings is used instead.
+PLAY_OPEN_SECONDS = 45.0
+
+
+def _sign_in_packages() -> tuple[str, ...]:
+    """The packages that may be in front while the sign-in is ours. Play is
+    one of them only when the sign-in was started from Play."""
+    if SIGN_IN_VIA == "play":
+        return SIGN_IN_PACKAGES + (PLAY_PACKAGE,)
+    return SIGN_IN_PACKAGES
+
 
 def _fatal_reason(ctx: Context) -> str | None:
     for reason, needles in FATAL_TEXTS.items():
@@ -980,7 +1003,7 @@ def act_go_back(ctx: Context) -> Outcome | None:
     # the same whether Google has shown something new or the flow is no longer
     # in Google at all.
     front = shell.foreground_package(ctx.client, ctx.phone_id)
-    if front and not any(front.startswith(p) for p in SIGN_IN_PACKAGES):
+    if front and not any(front.startswith(p) for p in _sign_in_packages()):
         log.warning("back left the sign-in (%s is in front); reopening it", front)
         open_add_account(ctx.client, ctx.phone_id)
     return None
@@ -996,7 +1019,7 @@ def sign_in_closed(ctx: Context) -> bool:
     """
     front = shell.foreground_package(ctx.client, ctx.phone_id)
     return bool(front) and not any(front.startswith(p)
-                                   for p in SIGN_IN_PACKAGES)
+                                   for p in _sign_in_packages())
 
 
 def act_wait_for_the_account(ctx: Context) -> Outcome | None:
@@ -1418,13 +1441,51 @@ SCREENS: list[Screen] = [
 
 
 # ------------------------------------------------------------------- driver
-def open_add_account(client: Client, phone_id: str) -> None:
-    """Start the flow at Android's own add-Google-account entry point.
+def open_play_sign_in(client: Client, phone_id: str) -> bool:
+    """Start the sign-in from Google Play's own door.
+
+    Play with no account shows its welcome and a Sign in; pressing it opens
+    the same Google pages Settings does, with Play as the app that asked.
+    True once the sign-in is on screen - the button pressed, or Play having
+    gone straight to the email page; False if Play showed neither within
+    `PLAY_OPEN_SECONDS`, and the caller falls back to Settings.
+    """
+    shell.run(client, phone_id, f"am force-stop {PLAY_PACKAGE}")
+    time.sleep(2)
+    shell.run(client, phone_id,
+              f"monkey -p {PLAY_PACKAGE} -c android.intent.category.LAUNCHER 1")
+    deadline = time.monotonic() + PLAY_OPEN_SECONDS
+    while True:
+        time.sleep(3)
+        elements = screen.read_screen(client, phone_id)
+        blob = screen.texts(elements)
+        if "email or phone" in blob:
+            log.info("Google Play went straight to the sign-in")
+            return True
+        pressed = screen.tap_first_present(client, phone_id, elements,
+                                           PLAY_SIGN_IN_LABELS)
+        if pressed:
+            log.info("pressed Google Play's %r", pressed)
+            time.sleep(6)
+            return True
+        if time.monotonic() >= deadline:
+            return False
+
+
+def open_add_account(client: Client, phone_id: str, via: str | None = None
+                     ) -> None:
+    """Start the flow at Android's own add-Google-account entry point - or,
+    with `SIGN_IN_VIA=play`, at Google Play's Sign in.
 
     Driving Settings ourselves means no dependence on GeeLark's RPA, and the
     intent goes straight there rather than navigating menus whose layout varies
     by Android skin.
     """
+    if (via or SIGN_IN_VIA) == "play":
+        if open_play_sign_in(client, phone_id):
+            return
+        log.warning("Google Play offered no Sign in within %.0fs; opening the "
+                    "sign-in from Settings instead", PLAY_OPEN_SECONDS)
     shell.run(client, phone_id, "am force-stop com.android.settings")
     time.sleep(2)
     shell.run(

@@ -1840,3 +1840,59 @@ def test_a_row_with_no_second_factor_is_not_walked_into_try_another_way(
     assert login.has_second_factor(ctx)
     assert login.act_choose_authenticator(ctx) is None
     assert device.tapped == ["Try another way"]
+
+
+# ------------------------------------------------- starting from Google Play
+_PLAY_WELCOME = (
+    '<hierarchy><node text="Google Play" clickable="false" '
+    'bounds="[100,300][620,380]"/><node text="Sign in" clickable="true" '
+    'bounds="[200,900][520,980]"/></hierarchy>')
+_PLAY_EMPTY = '<hierarchy><node text="Loading" bounds="[0,0][10,10]"/></hierarchy>'
+
+
+def test_with_sign_in_via_play_the_sign_in_starts_at_plays_own_door(
+        phone, monkeypatch):
+    """The operator signs in from Play by hand and meets no challenge; the
+    builder, from Settings, met captchas and "Verify your phone number" on
+    the same phones through the same exits (2026-09-09). Which app asked
+    is one of the few things left that differ."""
+    device = phone(taps_that_work={"Sign in"})
+    monkeypatch.setattr(login, "SIGN_IN_VIA", "play")
+    shown = [_PLAY_EMPTY, _PLAY_WELCOME]
+    monkeypatch.setattr(login.screen, "read_screen",
+                        lambda c, p: screen.parse(shown.pop(0) if shown
+                                                  else _PLAY_WELCOME))
+    ran = []
+    monkeypatch.setattr(login.shell, "run",
+                        lambda c, p, cmd, **k: ran.append(cmd) or "")
+
+    login.open_add_account(None, "P")
+
+    assert any("monkey -p com.android.vending" in c for c in ran)
+    assert not any("ADD_ACCOUNT_SETTINGS" in c for c in ran), "not Settings"
+    assert device.tapped == ["Sign in"]
+    # Play is the sign-in's own package now, so it does not read as
+    # "the sign-in was left".
+    assert "com.android.vending" in login._sign_in_packages()
+
+
+def test_when_play_shows_no_sign_in_settings_is_used_instead(phone, monkeypatch):
+    device = phone()
+    monkeypatch.setattr(login, "SIGN_IN_VIA", "play")
+    monkeypatch.setattr(login, "PLAY_OPEN_SECONDS", 0.0)
+    monkeypatch.setattr(login.screen, "read_screen",
+                        lambda c, p: screen.parse(_PLAY_EMPTY))
+    ran = []
+    monkeypatch.setattr(login.shell, "run",
+                        lambda c, p, cmd, **k: ran.append(cmd) or "")
+
+    login.open_add_account(None, "P")
+
+    assert any("monkey -p com.android.vending" in c for c in ran)
+    assert any("ADD_ACCOUNT_SETTINGS" in c for c in ran), "the old door"
+    assert device.tapped == []
+
+
+def test_with_sign_in_via_settings_play_is_not_the_sign_ins_package(monkeypatch):
+    monkeypatch.setattr(login, "SIGN_IN_VIA", "settings")
+    assert "com.android.vending" not in login._sign_in_packages()

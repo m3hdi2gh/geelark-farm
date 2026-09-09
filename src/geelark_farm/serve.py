@@ -1775,6 +1775,10 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     _shell.HUMAN_CADENCE = bool(settings.human_cadence)
     if _shell.HUMAN_CADENCE:
         log.info("typing and tapping with a hand's cadence (HUMAN_CADENCE)")
+    from .flows import google_login as _google
+    _google.SIGN_IN_VIA = settings.sign_in_via
+    if _google.SIGN_IN_VIA == "play":
+        log.info("the Google sign-in starts from Google Play (SIGN_IN_VIA)")
     # Resolved here rather than in the signature, because it depends on a
     # setting. A caller that passes its own is untouched - which is every
     # test, and the reason the parameter exists.

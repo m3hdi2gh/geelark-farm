@@ -340,6 +340,9 @@ class Settings:
     serve_workers: int = 0
     #: Type and tap the way a hand does - see shell.HUMAN_CADENCE.
     human_cadence: bool = True
+    #: Where the Google sign-in starts: "settings" or "play" - see
+    #: flows.google_login.SIGN_IN_VIA.
+    sign_in_via: str = "settings"
     #: C8: capture the process's own INFO-and-up log lines into the store
     #: (store.logdb), for the Logs page. Off = the file on disk only.
     log_db: bool = False
@@ -411,6 +414,8 @@ class Settings:
             # no count is what it always meant, four workers.
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
+            sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()
+                         or "settings"),
             serve_workers=_int("SERVE_WORKERS",
                                4 if _str("SERVE_CONCURRENT", "0").strip()
                                in ("1", "true", "yes", "on") else 0,
