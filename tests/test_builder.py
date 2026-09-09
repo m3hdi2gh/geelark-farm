@@ -4627,3 +4627,49 @@ def test_three_challenges_on_one_host_in_a_day_set_its_free_exits_aside(
     failed.clear()
     assert builder._strike_captcha_host(settings, book, held) == []
     assert failed == []
+
+
+def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_host(
+        device, settings, drive, monkeypatch):
+    """A phone that solves thirteen rounds on 190.2.143.20 and signs in is
+    still thirteen rounds that host cost (the operator, 2026-09-09)."""
+    struck = []
+    monkeypatch.setattr(builder, "_strike_captcha_host",
+                        lambda s, b, row: struck.append(row.proxy.host) or [])
+    passed = Outcome("success", "signed_in",
+                     trail=["email_entry", "captcha", "captcha",
+                            "password_entry", "2fa_code_entry"])
+    build = drive(make_book(), settings, google=[passed])
+
+    assert build.ok
+    assert len(struck) == 1, "once per sign-in, whatever the rounds"
+
+    struck.clear()
+    build = drive(make_book(), settings, google=[SIGNED_IN])
+    assert build.ok and struck == [], "no captcha, no strike"
+
+
+def test_an_exit_handed_back_onto_a_struck_host_goes_back_as_suspect():
+    """The tally only sets aside what is free the moment it fills; the two
+    exits a build was holding would otherwise be the first two the next
+    build takes (2026-09-09)."""
+    from types import SimpleNamespace
+
+    freed, failed = [], []
+    pool = SimpleNamespace(
+        release=lambda r, note="": freed.append(r.label),
+        fail=lambda r, status, note="": failed.append((r.label, status, note)))
+    book = SimpleNamespace(proxies=pool, apps=None, gmails=None)
+    bad = SimpleNamespace(label="SX44",
+                          proxy=SimpleNamespace(host="190.2.143.20"))
+    good = SimpleNamespace(label="SX1",
+                           proxy=SimpleNamespace(host="212.8.248.20"))
+
+    builder._release(book, builder.Build(index=1), [
+        (pool, bad, builder.RELEASE, "", ""),
+        (pool, good, builder.RELEASE, "", ""),
+    ], suspect_hosts={"190.2.143.20"})
+
+    assert freed == ["SX1"]
+    assert [(n, s) for n, s, _ in failed] == [("SX44", "suspect")]
+    assert "Press Free" in failed[0][2]

@@ -247,6 +247,21 @@ def _remember_captcha_hosts(settings: Settings, hosts: dict) -> None:
     _captcha_hosts_memory.update(hosts)
 
 
+def _struck_hosts(settings: Settings) -> set[str]:
+    """The hosts at `CAPTCHA_STRIKES_PER_HOST` today. An exit a build hands
+    back onto one of these goes back as `suspect`, not as stock - or the
+    two exits a build held would be the first two the next build takes,
+    since the tally only sets aside what is free at the moment it fills."""
+    try:
+        today = failures.today()
+        return {host for host, seen in _captcha_hosts(settings).items()
+                if seen.get("day") == today
+                and int(seen.get("count") or 0) >= CAPTCHA_STRIKES_PER_HOST}
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not read the day's captcha tally (%s)", exc)
+        return set()
+
+
 def _strike_captcha_host(settings: Settings, book: Book,
                          proxy_row) -> list[str]:
     """One Google challenge, counted against the exit's host for today.
@@ -1206,6 +1221,17 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 watch=check_cancelled,
             )
             build.trails.append(("google", outcome.trail))
+            # Counted against the exit's host whether or not the captcha was
+            # eventually passed: a phone that solves thirteen rounds on
+            # 190.2.143.20 and signs in is still thirteen rounds this host
+            # cost, and the host's other exits are set aside at three such
+            # sign-ins in a day (the operator, 2026-09-09).
+            if "captcha" in (outcome.trail or []) and proxy_row is not None:
+                try:
+                    _strike_captcha_host(settings, book, proxy_row)
+                except Exception as exc:                           # noqa: BLE001
+                    log.warning("could not count the captcha against the "
+                                "exit's host (%s)", exc)
             if outcome.ok:
                 build.gmail = account.email
                 gmail_signed_in = True
@@ -1247,14 +1273,6 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # build: the next address goes on the same exit, as before.
             if outcome.reason == "captcha_shown":
                 captchas_here += 1
-                # And against the host, for the day: three across any
-                # phones and its free exits are set aside as suspect.
-                if proxy_row is not None:
-                    try:
-                        _strike_captcha_host(settings, book, proxy_row)
-                    except Exception as exc:                       # noqa: BLE001
-                        log.warning("could not count the captcha against "
-                                    "the exit's host (%s)", exc)
             if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
                 previous = proxy_row
                 seen = {f"{r.proxy.host}:{r.proxy.port}"
@@ -1411,7 +1429,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                          SPEND if phone_id else RELEASE, "", ""))
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
-        _release(book, build, held)
+        _release(book, build, held, suspect_hosts=_struck_hosts(settings))
         # A phone with no Google account on it is not a phone. Nothing can be
         # done with it - `finish` refuses it by name, since there is nothing to
         # build on - so it is deleted rather than left occupying a plan slot and
@@ -1935,8 +1953,13 @@ def _session_holds(book: Book, session: _Session | None, *,
     return held
 
 
-def _release(book: Book, build: Build, held: list[tuple]) -> None:
+def _release(book: Book, build: Build, held: list[tuple], *,
+             suspect_hosts: frozenset | set = frozenset()) -> None:
     """Hand every still-claimed resource its outcome.
+
+    `suspect_hosts` are the exit hosts Google challenged enough today (see
+    `_struck_hosts`): an exit going back as stock onto one of them goes
+    back as `suspect` instead, with Free on the row as the way back.
 
     `spent` is what the resource ended up on a device as, not whether the build
     as a whole succeeded. A Gmail that signed in is on that phone whatever
@@ -1968,6 +1991,18 @@ def _release(book: Book, build: Build, held: list[tuple]) -> None:
                     if build.ok else
                     f"On phone {build.serial}, which stopped short of ready - "
                     f"see that row in the Phones tab."))
+            elif (pool is book.proxies and suspect_hosts
+                  and str(getattr(getattr(resource, "proxy", None), "host", ""))
+                  in suspect_hosts):
+                host = resource.proxy.host
+                pool.fail(resource, SUSPECT, note=(
+                    f"Suspect - Google challenged {CAPTCHA_STRIKES_PER_HOST} "
+                    f"or more sign-ins on {host} today ({failures.today()}); "
+                    f"set aside on its own as this build let go of it. Press "
+                    f"Free to use it again."))
+                log.warning("%s goes back as suspect, not stock: %s is a host "
+                            "Google kept challenging today", resource.label,
+                            host)
             else:
                 # Claimed but never put on a device - the Gmail fetched just as
                 # the budget ran out, the app account nothing was tried with,
