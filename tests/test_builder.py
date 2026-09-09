@@ -4689,3 +4689,85 @@ def test_an_exit_handed_back_onto_a_struck_host_goes_back_as_suspect():
     assert freed == ["SX1"]
     assert [(n, s) for n, s, _ in failed] == [("SX44", "suspect")]
     assert "Press Free" in failed[0][2]
+
+
+# ----------------------------------------------- the operator's Play recipe
+def _play(kind, reason):
+    from geelark_farm.flows import play_install
+
+    return play_install.Outcome(kind, reason)
+
+
+def test_a_play_page_without_install_gets_a_new_exit_and_a_cleared_play(
+        device, settings, drive, monkeypatch):
+    """The operator's recipe: stop the phone, another exit, start it,
+    force-stop and clear the Play Store, open the page again - usually
+    the third exit does it (2026-09-10)."""
+    answers = [_play("fatal", "no_install_button"),
+               _play("fatal", "app_unavailable"),
+               _play("success", "installed")]
+    # Spotify's own install rides after ChatGPT's on a keeper build; once
+    # the script is spent it simply lands.
+    monkeypatch.setattr(builder, "_install",
+                        lambda *a, **k: (answers.pop(0) if answers
+                                         else _play("success", "installed")))
+    resets = []
+    monkeypatch.setattr(builder, "_reset_play",
+                        lambda c, p: resets.append(p))
+    build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
+
+    assert build.ok and build.app_installed
+    assert len(device.proxies_set) == 2, "two exits before the page had Install"
+    assert len(resets) == 2, "Play cleared after each move"
+    assert "10.0.0.2" in build.proxy, "the phone ends on the exit it moved to"
+
+
+def test_a_parked_download_gets_play_cleared_first_and_an_exit_second(
+        device, settings, drive, monkeypatch):
+    answers = [_play("fatal", "download_stalled"),
+               _play("fatal", "download_stalled"),
+               _play("success", "installed")]
+    # Spotify's own install rides after ChatGPT's on a keeper build; once
+    # the script is spent it simply lands.
+    monkeypatch.setattr(builder, "_install",
+                        lambda *a, **k: (answers.pop(0) if answers
+                                         else _play("success", "installed")))
+    resets = []
+    monkeypatch.setattr(builder, "_reset_play",
+                        lambda c, p: resets.append(p))
+    build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
+
+    assert build.ok
+    assert len(resets) == 2
+    assert len(device.proxies_set) == 1, (
+        "the first stall only clears Play; the second moves the exit")
+
+
+def test_a_play_refusal_the_recipe_cannot_answer_is_not_retried(
+        device, settings, drive, monkeypatch):
+    answers = [_play("fatal", "play_needs_payment")]
+    # Spotify's own install rides after ChatGPT's on a keeper build; once
+    # the script is spent it simply lands.
+    monkeypatch.setattr(builder, "_install",
+                        lambda *a, **k: (answers.pop(0) if answers
+                                         else _play("success", "installed")))
+    monkeypatch.setattr(builder, "_reset_play",
+                        lambda c, p: (_ for _ in ()).throw(AssertionError("no")))
+    build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
+
+    assert not build.ok and build.status == "install_failed"
+    assert device.proxies_set == []
+
+
+def test_the_recipe_stops_at_three_exits(device, settings, drive, monkeypatch):
+    answers = [_play("fatal", "no_install_button")] * 6
+    # Spotify's own install rides after ChatGPT's on a keeper build; once
+    # the script is spent it simply lands.
+    monkeypatch.setattr(builder, "_install",
+                        lambda *a, **k: (answers.pop(0) if answers
+                                         else _play("success", "installed")))
+    monkeypatch.setattr(builder, "_reset_play", lambda c, p: None)
+    build = drive(make_book(proxies=6), settings, google=[SIGNED_IN])
+
+    assert not build.ok and build.status == "install_failed"
+    assert len(device.proxies_set) == 3

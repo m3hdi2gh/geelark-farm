@@ -978,6 +978,94 @@ def _mark(build) -> str:
     return "WARM" if build.status == WARM_FOR_OPERATOR else "FAIL"
 
 
+#: The Play Store outcomes the operator's recipe answers, and how. A page
+#: with no Install (`no_install_button`, `play_page_never_loaded`,
+#: `app_unavailable`, a server error) is the exit: stop the phone, put it
+#: behind another exit, start it, force-stop and clear the Play Store,
+#: open the page again - "usually the third exit does it". A download
+#: parked pending or on one percentage (`download_stalled`) is Play's own
+#: state: force-stop and clear it, and the download goes through; a second
+#: stall is treated like a page with no Install (the operator, 2026-09-10).
+PLAY_RETRY_REASONS = frozenset({"no_install_button", "play_page_never_loaded",
+                                "app_unavailable", "play_server_error",
+                                "download_stalled"})
+PLAY_RECIPE_EXITS = 3
+#: Not worth starting another round with less than this left.
+PLAY_RETRY_FLOOR_SECONDS = 150.0
+
+
+def _reset_play(client: Client, phone_id: str) -> None:
+    """Force-stop and clear the Play Store - the operator's "clear cache".
+    `pm clear` clears data as well; the Google account is not in it (it
+    lives with AccountManager), and Play signs itself back in."""
+    log.info("force-stopping and clearing the Play Store")
+    shell.run(client, phone_id, f"am force-stop {play_install.PLAY_PACKAGE}",
+              strict=False)
+    shell.run(client, phone_id, f"pm clear {play_install.PLAY_PACKAGE}",
+              strict=False)
+    time.sleep(3)
+
+
+def _install_by_recipe(client: Client, settings: Settings, book: Book,
+                       build: Build, phone_id: str, package: str, *,
+                       name: str, ordered: bool, remaining, artifacts,
+                       cancelled, proxy_row, refused_exits: list
+                       ) -> tuple[play_install.Outcome, object]:
+    """`_install`, and the operator's recipe around it when Play will not
+    give the app - see PLAY_RETRY_REASONS. Returns the outcome and the
+    exit the phone ends up on."""
+    installed = _install(client, phone_id, package, name=name,
+                         ordered=ordered,
+                         budget=min(settings.install_budget_seconds,
+                                    remaining()),
+                         artifacts=artifacts, cancelled=cancelled)
+    cleared = False
+    swaps = 0
+    while (not installed.ok and installed.reason in PLAY_RETRY_REASONS
+           and remaining() > PLAY_RETRY_FLOOR_SECONDS):
+        if cancelled is not None and cancelled():
+            break
+        if installed.reason == "download_stalled" and not cleared:
+            log.warning("%s: the download is parked (%s); clearing the Play "
+                        "Store and asking again", name, installed.reason)
+            _reset_play(client, phone_id)
+            cleared = True
+        else:
+            if swaps >= PLAY_RECIPE_EXITS or proxy_row is None:
+                break
+            previous = proxy_row
+            seen = {f"{r.proxy.host}:{r.proxy.port}"
+                    for r, _ in refused_exits if getattr(r, "proxy", None)}
+            if getattr(proxy_row, "proxy", None):
+                seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
+            try:
+                proxy_row = _new_exit(
+                    client, settings, book, build, phone_id, proxy_row,
+                    f"{name}: the Play Store offered no install "
+                    f"({installed.reason}) - exit {swaps + 1} of "
+                    f"{PLAY_RECIPE_EXITS}",
+                    remaining(), swaps=swaps, avoid=seen, cancelled=cancelled)
+            except Aborted as exc:
+                log.warning("no other exit to try the Play Store from (%s)",
+                            exc)
+                phones.ensure_running(
+                    client, phone_id,
+                    timeout=min(phones.BOOT_SECONDS, remaining()),
+                    cancelled=cancelled)
+                break
+            if previous is not None and previous is not proxy_row:
+                refused_exits.append((previous, installed.reason))
+            swaps += 1
+            cleared = False
+            _reset_play(client, phone_id)
+        installed = _install(client, phone_id, package, name=name,
+                             ordered=False,
+                             budget=min(settings.install_budget_seconds,
+                                        remaining()),
+                             artifacts=artifacts, cancelled=cancelled)
+    return installed, proxy_row
+
+
 def _install(client: Client, phone_id: str, package: str, *, name: str,
              ordered: bool, budget: float, artifacts,
              cancelled=None) -> play_install.Outcome:
@@ -1336,11 +1424,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             build.app_installed = False
             return finish("ready", "signed into Google; no app was asked for",
                           ok=True)
-        installed = _install(
-            client, phone_id, _package_for(settings, app), name=APPS[app],
+        installed, proxy_row = _install_by_recipe(
+            client, settings, book, build, phone_id,
+            _package_for(settings, app), name=APPS[app],
             ordered=(app == "spotify" and ordered["spotify"]),
-            budget=min(settings.install_budget_seconds, remaining()),
-            artifacts=artifacts, cancelled=cancelled,
+            remaining=remaining, artifacts=artifacts, cancelled=cancelled,
+            proxy_row=proxy_row, refused_exits=refused_exits,
         )
         build.trails.append(("install", installed.trail))
         if not installed.ok:

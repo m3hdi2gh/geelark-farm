@@ -1867,6 +1867,7 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                stop: threading.Event) -> None:
     """One job, start to finish, on a builder's thread: run it, tell the
     queue, the wish and the command what became of it."""
+    from . import breaker as _breaker
     from . import builder
     from .store import jobs as store_jobs
     from .store import wanted as store_wanted
@@ -1885,7 +1886,8 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
     store_jobs.finish(settings, job["id"], ok=build.ok, status=build.status,
                       serial=str(build.serial or ""),
                       detail=build.detail or "", seconds=build.seconds,
-                      wanted_id=build.wanted_id)
+                      wanted_id=build.wanted_id,
+                      worked=build.status in _breaker.WORKED)
     if build.wanted_id is not None:
         store_wanted.settle(settings, build.wanted_id, ok=build.ok,
                             serial=str(build.serial or ""),

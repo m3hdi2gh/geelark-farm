@@ -135,7 +135,7 @@ class Ledger:
     #: reload happens only when somebody else has written since.
     _seen_mtime: int = field(default=-1, repr=False)
 
-    def _reload(self) -> None:
+    def _reload(self, force: bool = False) -> None:
         """Read the file again before changing it.
 
         Two processes share this file now - the keeper, which settles and
@@ -152,7 +152,7 @@ class Ledger:
             stamp = self.path.stat().st_mtime_ns
         except OSError:
             return                                # no file yet: nothing newer
-        if stamp == self._seen_mtime:
+        if stamp == self._seen_mtime and not force:
             return                                # nobody else wrote it
         try:
             fresh = type(self).load(self.path.parent,
@@ -161,7 +161,19 @@ class Ledger:
             log.warning("could not re-read the ledger before writing it "
                         "(%s); writing what this process remembers", exc)
             return
-        self.entries = fresh.entries
+        # Merged into the objects already held, not swapped for new ones:
+        # a caller that keeps the Entry `record` handed back must go on
+        # seeing the phone it recorded (the reaper's tests do exactly that).
+        for phone_id, theirs in fresh.entries.items():
+            mine = self.entries.get(phone_id)
+            if mine is None:
+                self.entries[phone_id] = theirs
+                continue
+            for name in (f.name for f in dataclass_fields(Entry)):
+                setattr(mine, name, getattr(theirs, name))
+        for phone_id in list(self.entries):
+            if phone_id not in fresh.entries:
+                del self.entries[phone_id]
         self._seen_mtime = stamp
 
     def _adopt(self, entry: Entry) -> Entry:
@@ -325,7 +337,7 @@ class Ledger:
                proxy: str = "", note: str = "") -> Entry:
         """Register a phone that now exists. Call this before anything else."""
         with self._lock:
-            self._reload()
+            self._reload(force=True)
             entry = self._adopt(
                 Entry(phone_id=phone_id, created_at=_now(), serial=serial,
                       label=label, proxy=proxy, note=note))
@@ -336,7 +348,7 @@ class Ledger:
     def claim(self, phone_id: str, label: str = "") -> Entry:
         """Mark that a run is working with this phone right now."""
         with self._lock:
-            self._reload()
+            self._reload(force=True)
             entry = self.entries.get(phone_id) or self.record(phone_id, label=label)
             entry.claimed_at = _now()
             entry.released_at = None
@@ -363,7 +375,7 @@ class Ledger:
         overlap (2026-08-29).
         """
         with self._lock:
-            self._reload()
+            self._reload(force=True)
             now = _now()
             held = [phone_id for phone_id, entry in self.entries.items()
                     if entry.is_claimed and phone_id in self._mine]
@@ -377,7 +389,7 @@ class Ledger:
         """Mark the run finished with this phone. After this it should be
         stopped, and reap will stop it if it is not."""
         with self._lock:
-            self._reload()
+            self._reload(force=True)
             entry = self.entries.get(phone_id)
             if not entry:
                 return
@@ -391,7 +403,7 @@ class Ledger:
         """Drop a phone that no longer exists (deleted upstream)."""
         with self._lock:
             self._mine.discard(phone_id)
-            self._reload()
+            self._reload(force=True)
             if self.entries.pop(phone_id, None) is not None:
                 self.save()
 

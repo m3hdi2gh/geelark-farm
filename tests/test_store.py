@@ -592,6 +592,7 @@ class _ScriptedConn:
         # cannot show it. None keeps every older test as it was.
         self.rowcounts = list(rowcounts or [])
         self.sql = []
+        self.params = []
         self.committed = 0
         self.rolled_back = 0
 
@@ -603,6 +604,7 @@ class _ScriptedConn:
 
     def execute(self, sql, params=None):
         self.sql.append(" ".join(sql.split()))
+        self.params.append(params)
         # A statement past the script - the NOTIFY that rides with every
         # enqueue - answers nothing, like Postgres does (2026-09-09).
         answer = self.script.pop(0) if self.script else None
@@ -1376,3 +1378,18 @@ def test_the_queue_takes_with_skip_locked_and_rings_the_builders(monkeypatch,
     assert jobs.counts(s) == (2, 1)
     jobs.finish(s, 5, ok=True, status="ready", serial="7", seconds=12.4)
     assert any("status = %s" in q and "result" in q for q in conn.sql)
+
+
+def test_a_warm_build_is_a_done_job_not_a_failed_one(monkeypatch, make_settings):
+    """A phone kept warm on purpose is not `ok` as a Build; the queue read
+    it as failed for a night (2026-09-10)."""
+    from geelark_farm.store import jobs
+
+    conn = _ScriptedConn([None, None])
+    monkeypatch.setattr(jobs, "connect", lambda s: conn)
+    jobs.finish(make_settings(), 5, ok=False, status="warm_for_operator",
+                worked=True)
+    assert conn.params[-1][0] == "done"
+    jobs.finish(make_settings(), 6, ok=False, status="install_failed",
+                worked=False)
+    assert conn.params[-1][0] == "failed"

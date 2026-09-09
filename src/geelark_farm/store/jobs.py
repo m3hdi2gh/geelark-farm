@@ -85,16 +85,21 @@ def beat(settings: Settings, ids: list[int]) -> int:
 
 def finish(settings: Settings, job_id: int, *, ok: bool, status: str,
            serial: str = "", detail: str = "", seconds: float = 0.0,
-           wanted_id: int | None = None) -> None:
-    """What became of one job. The keeper reads it through `unseen`."""
-    result = {"ok": bool(ok), "status": status, "serial": str(serial or ""),
-              "detail": (detail or "")[:400], "seconds": round(seconds),
-              "wanted_id": wanted_id}
+           wanted_id: int | None = None, worked: bool | None = None) -> None:
+    """What became of one job. The keeper reads it through `unseen`.
+
+    `worked` is the breaker's word for it: a phone kept warm on purpose
+    is not `ok` as a Build, and read as `failed` here for a night
+    (2026-09-10). Done is ok or worked; the result keeps both."""
+    done = bool(ok) or bool(worked)
+    result = {"ok": bool(ok), "worked": done, "status": status,
+              "serial": str(serial or ""), "detail": (detail or "")[:400],
+              "seconds": round(seconds), "wanted_id": wanted_id}
     with connect(settings) as conn:
         conn.execute(
             "UPDATE jobs SET status = %s, result = %s, done_at = now()"
             " WHERE id = %s",
-            ("done" if ok else "failed", json.dumps(result), job_id))
+            ("done" if done else "failed", json.dumps(result), job_id))
         conn.commit()
 
 
