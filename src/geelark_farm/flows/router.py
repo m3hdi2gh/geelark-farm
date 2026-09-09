@@ -210,6 +210,12 @@ def act_wait(ctx: Context) -> Outcome | None:
     return None
 
 
+#: Empty screen dumps in a row before the device is called unreadable. Two
+#: or three are a phone between pages; twelve (a minute) are a device that
+#: has stopped answering.
+EMPTY_DUMPS_LIMIT = 12
+
+
 def drive(ctx: Context, screens: list[Screen], *,
           is_done: Callable[[], Outcome | None],
           budget_seconds: float,
@@ -254,6 +260,7 @@ def _drive(ctx: Context, screens: list[Screen], *,
     # every budget in the process, and a service that stays up for
     # weeks is where that stops being theoretical.
     deadline = time.monotonic() + budget_seconds
+    empty = 0
     unknown_streak = 0
     # On the context as well as in the loop, so an act can be interrupted
     # inside itself and not only between screens.
@@ -269,9 +276,26 @@ def _drive(ctx: Context, screens: list[Screen], *,
 
         ctx.refresh()
         if not ctx.elements:
-            out.info("screen is empty; waiting")
+            empty += 1
+            if empty >= EMPTY_DUMPS_LIMIT:
+                # The device has stopped answering, not paused: phone 2182
+                # gave `no hierarchy in dump output` for three minutes (a
+                # GeeLark shellExecError underneath), the loop waited it out
+                # and then walked the rest of a seventeen-minute budget
+                # reading `sign_in_closed` (2026-09-09). Named, so the
+                # build ends in two minutes and the phone - which is the
+                # thing at fault - is let go of (the operator, 2026-09-10).
+                out.warning("the screen came back empty %d times in a row; "
+                            "the device is not answering", empty)
+                return Outcome("unknown", "screen_unreadable",
+                               f"the screen dump was empty {empty} times in "
+                               f"a row - the device stopped answering",
+                               trail=list(ctx.trail))
+            out.info("screen is empty; waiting (%d/%d)", empty,
+                     EMPTY_DUMPS_LIMIT)
             time.sleep(5)
             continue
+        empty = 0
 
         matched = next((s for s in screens if s.match(ctx)), None)
         if matched is None:

@@ -399,6 +399,11 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "Google stopped answering this phone",
         "Google is refusing to keep talking to this device. Leave it "
         "and come back later."),
+    "screen_unreadable": Verdict(
+        DEVICE, "the device stopped answering screen dumps",
+        "The device returned empty screen dumps a dozen times in a row, "
+        "usually a GeeLark shell error underneath. The phone is let go of; "
+        "the credentials were not judged and go back on the shelf."),
     "unknown_screen": Verdict(
         DEVICE, "the app showed a page the run did not recognise",
         "The router did not recognise the page. Its XML is under "

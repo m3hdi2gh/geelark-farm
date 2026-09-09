@@ -681,3 +681,24 @@ def test_a_watch_is_felt_at_the_next_screen_and_not_at_the_end():
         router.drive(ctx, screens, is_done=lambda: None,
                      budget_seconds=30, watch=watch)
     assert seen == [1, 1], "checked every screen, and stopped on the second"
+
+
+def test_a_device_that_stops_answering_is_named_in_a_minute_not_a_budget(
+        device, monkeypatch):
+    """Phone 2182 gave empty dumps for three minutes, the loop waited them
+    out, and then walked the rest of a seventeen-minute budget reading
+    `sign_in_closed` (2026-09-09). A dozen empty dumps in a row is the
+    device, and it is said so (the operator, 2026-09-10)."""
+    import geelark_farm.flows.router as router_mod
+
+    device.pages = [EMPTY] * (router_mod.EMPTY_DUMPS_LIMIT + 3)
+    screens = [Screen("continue", lambda c: c.has("continue"),
+                      lambda c: Outcome("success", "done"))]
+
+    out = drive(context(), screens)
+
+    assert out.reason == "screen_unreadable" and out.kind == "unknown"
+    assert len(device.pages) == 3, "gave up at the limit, not the budget"
+    # A few empty dumps between pages are still a phone between pages.
+    device.pages = [EMPTY] * 3 + [page("Continue")]
+    assert drive(context(), screens).ok
