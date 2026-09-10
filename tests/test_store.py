@@ -1429,3 +1429,19 @@ def test_a_builds_screens_are_mirrored_listed_and_served_from_the_store(
                          "010300-captcha.xml") == b"<hierarchy/>"
     artifacts.prune(s, days=7)
     assert "DELETE FROM artifacts" in conn.sql[-1]
+
+
+# ------------------------------------------ the build card (2026-09-10)
+def test_a_wish_may_be_bare_and_a_failed_one_is_dismissed_by_its_asker():
+    import inspect
+
+    from geelark_farm.store import wanted
+
+    ask = inspect.getsource(wanted.ask)
+    assert "no_gmail" in ask and 'gmail, app, app_account = "", "", ""' in ask
+    take = inspect.getsource(wanted.take)
+    assert "requested_by, no_gmail" in take, "the builder reads it back"
+    dismiss = inspect.getsource(wanted.dismiss)
+    assert "dismissed_at = now()" in dismiss
+    assert "status = 'failed' AND dismissed_at IS NULL" in dismiss
+    assert "(%s OR requested_by = %s)" in dismiss, "the asker, or an admin"

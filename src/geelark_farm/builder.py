@@ -946,16 +946,31 @@ class Wanted:
     #: exists: taken, owned, marked built by them - and not the keeper's
     #: stock while they hold it (2026-09-08).
     requested_by: int | None = None
+    #: A bare phone: no Google account at all, and so no app and no
+    #: account either. Nothing is claimed, nothing is signed in, and the
+    #: phone is ready the moment it is up (the build card, 2026-09-10).
+    no_gmail: bool = False
 
 
 #: The apps a phone can be built with, and what each is called on a page.
-APPS = {"chatgpt": "ChatGPT", "spotify": "Spotify"}
-#: Spotify's package; ChatGPT's is `settings.target_package`.
+APPS = {"chatgpt": "ChatGPT", "spotify": "Spotify", "claude": "Claude"}
+#: Spotify's package; ChatGPT's is `settings.target_package`. Claude
+#: walks the Play Store the way ChatGPT does (the build card, 2026-09-10).
 SPOTIFY_PACKAGE = "com.spotify.music"
+CLAUDE_PACKAGE = "com.anthropic.claude"
+#: How many addresses one build may spend before it stops and says so.
+#: Bounded by the budget alone, a phone on a bad exit or a bad batch of
+#: accounts ate address after address and reported budget_exhausted,
+#: which blames nothing (the build card, 2026-09-10).
+GMAILS_PER_BUILD = 5
 
 
 def _package_for(settings: Settings, app: str) -> str:
-    return SPOTIFY_PACKAGE if app == "spotify" else settings.target_package
+    if app == "spotify":
+        return SPOTIFY_PACKAGE
+    if app == "claude":
+        return CLAUDE_PACKAGE
+    return settings.target_package
 
 
 #: How long an install GeeLark was asked for at boot gets to land after the
@@ -1189,12 +1204,17 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # interleaved and phone 701 got the second address while 702 got the
         # first. Holding both together costs a few seconds of serial creation
         # at the start of a batch and nothing after it.
+        # A bare phone claims no address and signs nothing in: the Gmail
+        # phase is skipped whole, and the phone is ready once it is up.
+        bare = bool(want is not None and want.no_gmail)
         with _starting:
-            if want and want.gmail:
+            if bare:
+                gmail_row = None
+            elif want and want.gmail:
                 gmail_row = _pick(book.gmails, want.gmail, "Gmail")
             else:
                 gmail_row = book.gmails.claim()
-            if gmail_row is None:
+            if gmail_row is None and not bare:
                 return finish("no_usable_gmail",
                               "the Gmails tab has no unused address left, so "
                               "no phone was created")
@@ -1207,7 +1227,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
             entry = phones.create(client, settings, proxy_row.proxy,
                                   ledger=ledger, label=f"build {index}",
-                                  account=gmail_row.label)
+                                  account=gmail_row.label if gmail_row else "")
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
@@ -1217,7 +1237,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         _record_event("phone", "created", run_id=_run.get(), build=str(index),
                       serial=build.serial,
                       detail=f"created behind {build.proxy_name} for "
-                             f"{gmail_row.label}")
+                             f"{gmail_row.label if gmail_row else 'nobody'}"
+                             + (" - a bare phone, as asked" if bare else ""))
         # This phone did not exist a moment ago, so nothing is installed on
         # it. Said here rather than left to the field's default so that the
         # default can mean "nobody looked" - which is what a `finish` that
@@ -1245,7 +1266,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # So the serial goes on now, the moment there is one. Without it the
         # row reads `in_use` with nothing saying which phone, and a tab with
         # several at once can be counted but not read (2026-08-29).
-        book.gmails.note_serial(gmail_row, build.serial)
+        if gmail_row is not None:
+            book.gmails.note_serial(gmail_row, build.serial)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         # By serial, not by batch position: `build3` today and `build3`
@@ -1276,7 +1298,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             on_ready(phone_id)
 
         # ------------------------------------------------------- the Gmail
-        while not gmail_signed_in:
+        while not gmail_signed_in and not bare:
             check_cancelled()
             if remaining() <= ATTEMPT_SECONDS:
                 return finish("budget_exhausted",
@@ -1299,7 +1321,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # having no recovery address while the address sat on the row.
             account = Account(**dataclasses.asdict(gmail_row.credentials),
                               proxy=build.proxy)
-            log.info("signing in as %s", account.email)
+            chosen = bool(want is not None and want.gmail)
+            # The dashboard's building row reads this line: which address,
+            # and how far into the build's five this one is.
+            if chosen:
+                log.info("signing in as %s (chosen on the build card)",
+                         account.email)
+            else:
+                log.info("signing in as %s (Gmail %d of %d on this phone)",
+                         account.email, tried_gmails + 1, GMAILS_PER_BUILD)
             outcome = google_login.sign_in(
                 client, phone_id, account,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
@@ -1367,6 +1397,21 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                                   book.gmails.service).advice)
             gmail_row = None
             tried_gmails += 1
+            said = failures.verdict(outcome.reason, book.gmails.service).seen
+            if chosen:
+                # Theirs, not the pool's: somebody named this address, and
+                # the next free one is not what they asked for. It is set
+                # aside above with the reason beside it; the build stops
+                # and says which address and why (the build card,
+                # 2026-09-10).
+                return finish("chosen_gmail_failed",
+                              f"{account.email} - {said}")
+            if tried_gmails >= GMAILS_PER_BUILD:
+                tally = ", ".join(f"{email} ({reason})"
+                                  for email, reason, _ in build.tried[-tried_gmails:])
+                return finish("gmails_exhausted",
+                              f"{tried_gmails} Gmails from the pool were "
+                              f"refused on this phone in a row - {tally}")
             # Two captchas on this exit: the exit is changed before the
             # next address is tried on it. The address just set aside
             # stays set aside - it did meet a captcha - and the next one
@@ -1411,6 +1456,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("given_up_on",
                           f"somebody wrote {marked!r} in its State while this "
                           f"was running, so it was left alone")
+        if bare:
+            return finish("ready", "a bare phone - no Google account and no "
+                                   "app, as asked", ok=True)
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
         # Which app, if any. The keeper's own phones carry ChatGPT; a
@@ -1540,7 +1588,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         #
         # Not while the run is shutting down: an interrupt is not a verdict on
         # the phone, and the next run's sync sees it either way.
-        discarded = (phone_id and not gmail_signed_in
+        # A bare phone has none on purpose, and stays.
+        discarded = (phone_id and not gmail_signed_in and not bare
                      and build.status not in STOPPED_BY_A_PERSON
                      and not _signed_in_after_all(client, build)
                      and _discard(client, book, ledger, build))

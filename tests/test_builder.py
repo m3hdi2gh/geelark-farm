@@ -4309,8 +4309,10 @@ def test_the_app_a_hand_built_phone_gets_is_what_was_asked_for(make_settings,
     settings = make_settings(state_dir=tmp_path)
     assert builder._package_for(settings, "chatgpt") == settings.target_package
     assert builder._package_for(settings, "spotify") == builder.SPOTIFY_PACKAGE
+    assert builder._package_for(settings, "claude") == builder.CLAUDE_PACKAGE
     assert builder.Wanted().app == "chatgpt", "the keeper's own phones"
-    assert builder.APPS == {"chatgpt": "ChatGPT", "spotify": "Spotify"}
+    assert builder.APPS == {"chatgpt": "ChatGPT", "spotify": "Spotify",
+                            "claude": "Claude"}
     import inspect
 
     src = inspect.getsource(builder.build_one)
@@ -4771,3 +4773,72 @@ def test_the_recipe_stops_at_three_exits(device, settings, drive, monkeypatch):
 
     assert not build.ok and build.status == "install_failed"
     assert len(device.proxies_set) == 3
+
+
+# ------------------------------------------ the build card (2026-09-10)
+def test_a_bare_phone_claims_no_gmail_signs_nothing_in_and_is_kept(
+        device, settings, monkeypatch):
+    """No Google account: the Gmail phase is skipped whole, the phone is
+    ready the moment it is up, and the rule that deletes a phone with
+    nothing signed into it does not apply - it has nothing on purpose."""
+    asked = []
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: asked.append(1) or SIGNED_IN)
+    book = make_book(gmails=2, apps=1)
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1,
+                              want=builder.Wanted(no_gmail=True, app=""))
+
+    assert build.ok and build.status == "ready", build.detail
+    assert "bare phone" in build.detail
+    assert asked == [], "nothing was signed in"
+    assert build.gmail == "" and build.app == ""
+    assert build.phone_id, "kept, not discarded"
+    assert len(book.gmails.available) == 2, "no address was claimed"
+    assert len(book.apps.available) == 1
+
+
+def test_a_chosen_gmail_that_fails_stops_the_build_and_says_which(
+        device, settings, monkeypatch):
+    """Somebody named this address on the card; the next free one is not
+    what they asked for. It is set aside with the reason, the build ends
+    with the address and the reason in one sentence, and the phone -
+    with nothing on it - goes."""
+    wrong = Outcome("fatal", "wrong_password")
+    monkeypatch.setattr(builder.google_login, "sign_in", lambda *a, **k: wrong)
+    monkeypatch.setattr(builder.shell, "device_accounts", lambda *a, **k: [])
+    book = make_book(gmails=2)
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1,
+                              want=builder.Wanted(gmail="g0@example.com"))
+
+    assert build.status == "chosen_gmail_failed"
+    assert "g0@example.com" in build.detail and "password" in build.detail
+    assert [r.label for r in book.gmails.available] == ["g1@example.com"], (
+        "the chosen one is set aside; the other was never touched")
+    assert ("g0@example.com", "wrong_password", "Google") in build.tried
+
+
+def test_five_refused_gmails_end_the_build_with_a_tally(device, settings,
+                                                        monkeypatch):
+    """Bounded by the budget alone, a bad exit or a bad batch ate address
+    after address and reported budget_exhausted, which blames nothing."""
+    wrong = Outcome("fatal", "wrong_password")
+    monkeypatch.setattr(builder.google_login, "sign_in", lambda *a, **k: wrong)
+    book = make_book(gmails=7)
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1)
+
+    assert build.status == "gmails_exhausted"
+    assert build.detail.startswith("5 Gmails from the pool were refused")
+    assert build.detail.count("wrong_password") == 5
+    assert len(book.gmails.available) == 2, "five set aside, two untouched"
+    assert builder.GMAILS_PER_BUILD == 5
+
+
+def test_the_sixth_gmail_is_not_reached_when_the_fifth_signs_in(
+        device, settings, drive):
+    wrong = Outcome("fatal", "wrong_password")
+    build = drive(make_book(gmails=6), settings,
+                  google=[wrong, wrong, wrong, wrong, SIGNED_IN])
+    assert build.ok and build.gmail == "g4@example.com"

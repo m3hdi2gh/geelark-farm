@@ -485,6 +485,21 @@ VERDICTS: dict[str, Verdict] = {
         "The rows are either held by a run that is still going, used up by a "
         "phone that has had them, or set aside with a reason beside them. Add "
         "addresses, or press Free on ones that can be tried again."),
+    "chosen_gmail_failed": Verdict(
+        NOBODY, "the Gmail chosen for it was refused, so the build stopped "
+                "rather than reach for another",
+        "Somebody chose this address on the build card, and a chosen Gmail is "
+        "theirs to replace: the next free one is not what they asked for. The "
+        "address is set aside with the reason Google gave beside it; the phone "
+        "was deleted, nothing was signed into it. Fix the address, or build "
+        "again with another."),
+    "gmails_exhausted": Verdict(
+        CREDENTIAL, "five Gmails from the pool were refused on this phone in "
+                    "a row",
+        "Each was set aside with its own reason beside it. Five in a row on "
+        "one phone is the pool talking, not the phone: read those five rows "
+        "before the next build, and press Free on any that were refused for "
+        "something the farm can try again."),
     "no_usable_gpt": Verdict(
         NOBODY, "the GPT pool had no unused account to give it",
         "The phone is built, signed into Google and has the app on it - it is "

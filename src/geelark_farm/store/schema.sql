@@ -623,3 +623,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
     UNIQUE (folder, name)
 );
 CREATE INDEX IF NOT EXISTS artifacts_by_serial ON artifacts (serial, folder);
+
+-- --------------------------------------- wanted builds, rev 22 (the card)
+-- The build card redrawn (the operator, 2026-09-10): a wish may ask for a
+-- bare phone - no Google account, and so no app - and a wish that failed
+-- stays on the dashboard, as a row of the phones table saying why, until
+-- whoever asked dismisses it. `dismissed_at` is that press.
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS no_gmail boolean NOT NULL DEFAULT false;
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;

@@ -281,7 +281,18 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand details.newone input{{margin:0;width:200px}}
 .byhand input:disabled,.byhand select:disabled{{opacity:.45}}
 .maker{{display:block;font-size:11px;margin-top:3px;white-space:nowrap}}
-.byhand label.field select{{min-width:210px;height:38px}}
+.byhand label.field select{{min-width:230px;height:38px}}
+.byhand .exit{{flex-basis:100%;font-size:12px;color:var(--dim);margin-top:-2px}}
+dialog.editor .or{{font-size:12.5px;color:var(--muted);padding-top:6px;
+ border-top:1px solid var(--line2)}}
+dialog.editor .pick{{max-height:170px;overflow:auto;border:1px solid var(--line2);
+ border-radius:7px;background:var(--panel2)}}
+dialog.editor .pick label{{display:flex;gap:10px;align-items:center;padding:7px 11px;
+ font-family:var(--mono);font-size:12.5px;border-top:1px solid var(--line2);
+ cursor:pointer}}
+dialog.editor .pick label:first-child{{border-top:0}}
+dialog.editor .pick label:hover{{background:#141d2f}}
+dialog.editor .pick .none{{padding:10px 11px;font-size:12.5px;color:var(--dim)}}
 dialog.editor .dlg{{display:flex;flex-direction:column;gap:12px;padding:16px 18px}}
 dialog.editor .dlg .field input{{width:100%;height:36px;font-family:var(--mono);
  font-size:12.5px}}
@@ -1003,6 +1014,7 @@ _DASH_SAID = {
                    "frees the account that was on it.",
     "cancelled": "The build gives up at its next step and puts back what "
                  "it held.",
+    "dismissed": "Taken off the list.",
 }
 
 #: The Phones tab's status words as the dashboard's badge colours, and the
@@ -1540,15 +1552,22 @@ def _phone_rows(data: dict, user: dict) -> str:
                 "theirs" if taken else
                 "free" if status in ("ready", "app_only") else status)
         if status == "building":
-            # The one thing to do to a build under way is to call it off:
-            # the job gives up at its next step and puts back what it
-            # held (the operator, 2026-09-05).
+            # Two things to do to a build under way: watch it, and call
+            # it off - the job gives up at its next step and puts back
+            # what it held (the operator, 2026-09-05). The link is the
+            # one GeeLark answered the start with, off the builder's own
+            # log line (the operator, 2026-09-10).
+            url = str((data.get("live") or {}).get(serial) or "")
+            watch = (f'<a class="btn quiet live" target="_blank" '
+                     f'rel="noopener" href="{esc(url)}" title="its '
+                     f'screen, in a new tab">Watch live</a> '
+                     if url else "")
             lines.append(
                 f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
                 f'<td>{badge}</td>'
                 f'<td colspan="4" class="progress">'
                 f'{_progress(progress.get(serial))}</td>'
-                f'<td class="act">{_cancel_form(user, serial)}</td>'
+                f'<td class="act">{watch}{_cancel_form(user, serial)}</td>'
                 f'</tr>')
             continue
         # Asked for by hand: says so, and by whom, under the status - a
@@ -1785,21 +1804,30 @@ _DASH_SCRIPT = """
       setTimeout(function(){ said.remove(); }, stay + 600);
     }
 
-    // Build one now: four choices. The account is a choice only with
-    // ChatGPT; "type a new one" on the Gmail and the account opens a small
-    // dialog, and what is typed rides in the card's hidden boxes while the
-    // choice shows the address (2026-09-08).
+    // Build one now: three choices. No Gmail means no app and no account,
+    // so those two boxes go off; the account is a choice only with
+    // ChatGPT. "choose..." on the Gmail and the account opens a small
+    // dialog - type one, or pick a free one - and what is typed rides in
+    // the card's hidden boxes while the choice shows the address
+    // (2026-09-10).
     var byhand = document.querySelector('.byhand');
     if (byhand) {
+      var gmailPick = byhand.querySelector('select[name="gmail"]');
       var appPick = byhand.querySelector('select[name="app"]');
       var acctPick = byhand.querySelector('select[name="app_account"]');
       var gate = function(){
-        if (!appPick || !acctPick) return;
-        var on = appPick.value === 'chatgpt';
-        acctPick.disabled = !on;
-        if (!on) acctPick.value = '';
+        var bare = !!gmailPick && gmailPick.value === 'none';
+        if (appPick) appPick.disabled = bare;
+        var on = !bare && !!appPick && appPick.value === 'chatgpt';
+        if (acctPick) {
+          acctPick.disabled = !on;
+          if (!on) acctPick.value = '';
+        }
       };
-      if (appPick) { appPick.addEventListener('change', gate); gate(); }
+      [gmailPick, appPick].forEach(function(p){
+        if (p) p.addEventListener('change', gate);
+      });
+      gate();
       byhand.querySelectorAll('select[data-new]').forEach(function(pick){
         var was = pick.value === '__new__' ? '' : pick.value;
         pick.addEventListener('change', function(){
@@ -2200,18 +2228,32 @@ _DASH_SCRIPT = """
     var form = pick.closest('form');
     if (!dlg || !form) return;
     var address = dlg.querySelector('[data-field$="_address"]');
+    var picked = function(){
+      return dlg.querySelector('input[type="radio"]:checked');
+    };
+    // Typing is choosing to type: the picked row lets go. Picking a row
+    // is choosing the pool: the boxes empty, the pool has the rest.
+    dlg.oninput = function(ev){
+      if (ev.target.type === 'radio') {
+        dlg.querySelectorAll('[data-field]').forEach(function(i){ i.value = ''; });
+      } else {
+        dlg.querySelectorAll('input[type="radio"]').forEach(function(r){ r.checked = false; });
+      }
+    };
     var done = function(use){
       if (use) {
-        var addr = (address ? address.value : '').trim();
+        var row = picked();
+        var addr = row ? row.value : (address ? address.value : '').trim();
         if (!addr) { if (address) address.focus(); return; }
         dlg.querySelectorAll('[data-field]').forEach(function(i){
           if (i === address) return;
           var box = form.querySelector('input[name="' + i.dataset.field + '"]');
-          if (box) box.value = i.value;
+          if (box) box.value = row ? '' : i.value;
         });
         var old = pick.querySelector('option[data-typed]');
         if (old) old.remove();
-        var opt = new Option(addr + ' (new)', addr, true, true);
+        var opt = new Option(addr + (row ? ' (from the pool)' : ' (new)'),
+                             addr, true, true);
         opt.setAttribute('data-typed', '1');
         pick.insertBefore(opt, pick.querySelector('option[value="__new__"]'));
         pick.value = addr;
@@ -3224,46 +3266,65 @@ def _build_card(data: dict, user: dict) -> str:
     # is exactly what this form is for. The hint says so instead of the
     # form hiding (2026-09-05).
     hint = ("Each box starts on what the farm would do by itself; pick "
-            "something else, or type a new one.")
+            "something else, or choose your own.")
     if pulse.get("tripped") or pulse.get("paused"):
         hint += (" The keeper is held back right now, but a phone asked "
                  "for here is still built.")
     gmails = _label_list(choose.get("gmails"))
-    proxies = _label_list(choose.get("proxies"))
     apps = _label_list(choose.get("apps"))
+    # Three boxes. The exit is not one of them any more: the build picks
+    # one and swaps it whenever an install or a sign-in shows it is bad -
+    # a choice made here was a choice the build had to undo (the
+    # operator, 2026-09-10). A Gmail is the pool's next, none at all, or
+    # one chosen in the dialog - typed, or picked from the free ones.
+    if gmails:
+        first = (f'<option value="">auto &mdash; the next free one '
+                 f'({len(gmails)} free)</option>'
+                 '<option value="none">none &mdash; no Google account</option>')
+    else:
+        first = ('<option value="" disabled>auto &mdash; the pool is empty'
+                 '</option>'
+                 '<option value="none" selected>none &mdash; no Google '
+                 'account</option>')
+    gmail_box = (f'<label class="field"><span>Gmail</span>'
+                 f'<select name="gmail" data-new="gmail-new">{first}'
+                 f'<option value="__new__">choose&hellip;</option>'
+                 f'</select></label>')
+    app_box = ('<label class="field"><span>App</span><select name="app">'
+               '<option value="chatgpt" selected>ChatGPT</option>'
+               '<option value="spotify">Spotify</option>'
+               '<option value="claude">Claude</option>'
+               '<option value="">none &mdash; Google only</option>'
+               '</select></label>')
+    account_box = ('<label class="field"><span>GPT account</span>'
+                   '<select name="app_account" data-new="account-new">'
+                   '<option value="">none &mdash; sign in later</option>'
+                   '<option value="__new__">choose&hellip;</option>'
+                   '</select></label>')
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        + _pick_box("gmail", "Gmail", gmails,
-                  auto="auto &mdash; the next free one",
-                  empty="auto &mdash; the pool is empty", new="gmail-new")
-        + _pick_box("proxy_name", "Exit", proxies,
-                  auto="auto &mdash; the first free one", empty="")
-        + '<label class="field"><span>App</span><select name="app">'
-          '<option value="">none</option>'
-          '<option value="chatgpt" selected>ChatGPT</option>'
-          '<option value="spotify">Spotify</option></select></label>'
-        + _pick_box("app_account", "GPT account", apps,
-                  auto="none &mdash; sign in later",
-                  empty="none &mdash; sign in later", new="account-new",
-                  auto_needs_rows=False)
+        + gmail_box + app_box + account_box
         + '<button class="go">Build</button>'
+        + '<span class="exit">Exit: the farm picks one and swaps it '
+          'whenever an install or a sign-in shows the proxy is bad.</span>'
         # What the two dialogs typed rides here; the address itself is the
         # choice's value.
         + "".join(f'<input type="hidden" name="{name}" value="">'
                   for name in ("gmail_password", "gmail_secret",
                                "app_password", "app_secret"))
         + '</form>'
-        + _new_dialog("gmail-new", "New Gmail", [
+        + _new_dialog("gmail-new", "Choose a Gmail", [
             ("gmail_address", "Address", ""),
             ("gmail_password", "Password", ""),
-            ("gmail_secret", "2FA secret or recovery address", "optional")])
-        + _new_dialog("account-new", "New GPT account", [
+            ("gmail_secret", "Authenticator key",
+             "empty = the account has none")], rows=gmails)
+        + _new_dialog("account-new", "Choose a GPT account", [
             ("app_address", "Address", ""),
             ("app_password", "Password", ""),
-            ("app_secret", "2FA secret", "optional")])
+            ("app_secret", "2FA secret", "optional")], rows=apps)
         + '</div>')
 
 
@@ -3271,50 +3332,35 @@ def _label_list(rows) -> list[str]:
     return [str(r.get("label") or "") for r in rows or [] if r.get("label")]
 
 
-def _pick_box(name: str, label: str, rows: list[str], *, auto: str,
-            empty: str, new: str = "", auto_needs_rows: bool = True) -> str:
-    """One choice of the card: what the farm would do by itself first,
-    then the free rows to pick from, then - where typing is allowed -
-    "type a new one", which opens the dialog `new` names.
-
-    `auto_needs_rows`: the first option needs stock behind it (a Gmail
-    from an empty pool is nothing), or it does not ("none" is always a
-    thing to choose). With no stock and typing allowed, typing is what
-    the box opens on.
-    """
-    options = []
-    if rows or not auto_needs_rows:
-        options.append(f'<option value="">{auto}</option>')
-    else:
-        options.append(f'<option value="" disabled>{empty}</option>')
-    if rows:
-        options.append('<optgroup label="pick one">'
-                       + "".join(f'<option value="{esc(r)}">{esc(r)}</option>'
-                                 for r in rows) + '</optgroup>')
-    if new:
-        first = " selected" if (auto_needs_rows and not rows) else ""
-        options.append(f'<option value="__new__"{first}>type a new one'
-                       f'&hellip;</option>')
-    hook = f' data-new="{new}"' if new else ""
-    return (f'<label class="field"><span>{esc(label)}</span>'
-            f'<select name="{name}"{hook}>{"".join(options)}</select></label>')
-
-
 def _new_dialog(ident: str, title: str,
-                fields: list[tuple[str, str, str]]) -> str:
-    """The small dialog "type a new one" opens: the credential's boxes,
+                fields: list[tuple[str, str, str]],
+                rows: list[str] | None = None) -> str:
+    """The dialog "choose..." opens: the credential's boxes to type one,
+    and under them the free rows of its pool to pick one instead, then
     Cancel and Use. Nothing here is a form field of the card - the
     script copies what was typed into the card's hidden boxes and shows
-    the address as the choice."""
+    the address as the choice; a picked row carries nothing but its
+    address, since the pool has the rest."""
     boxes = "".join(
         f'<label class="field"><span>{esc(label)}</span>'
         f'<input data-field="{name}" autocomplete="off" spellcheck="false"'
         + (f' placeholder="{esc(hint)}"' if hint else "")
         + (' autofocus' if name.endswith("_address") else "")
         + '></label>' for name, label, hint in fields)
+    pick = ""
+    if rows is not None:
+        if rows:
+            pick = "".join(
+                f'<label><input type="radio" name="pick-{ident}" '
+                f'value="{esc(r)}"> {esc(r)}</label>' for r in rows)
+        else:
+            pick = ('<div class="none">The pool has nothing free - type '
+                    'one above.</div>')
+        pick = (f'<div class="or">or one of the free ones</div>'
+                f'<div class="pick">{pick}</div>')
     return (f'<dialog class="editor" id="{ident}" aria-labelledby="{ident}-h">'
             f'<div class="dlg"><header><h4 id="{ident}-h">{esc(title)}</h4>'
-            f'</header>{boxes}'
+            f'</header>{boxes}{pick}'
             f'<div class="row"><button type="button" class="quiet" '
             f'data-cancel="1">Cancel</button>'
             f'<button type="button" class="go" data-use="1">Use it</button>'
@@ -3411,8 +3457,46 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
 
 
 
+def _wish_rows(data: dict, user: dict) -> str:
+    """A hand-built phone that failed, as a row of the phones table: which
+    address and why, in the builder's own sentence, until whoever asked
+    presses Dismiss. First in the table - it is the one row that wants a
+    person - and theirs alone to dismiss (an admin's too), since the row
+    is the answer to something they asked for (the build card,
+    2026-09-10).
+    """
+    me = str(user.get("username") or "")
+    admin = user.get("role") == "admin"
+    lines = []
+    for w in data.get("wishes") or []:
+        if str(w.get("status") or "") != "failed":
+            continue
+        serial = str(w.get("serial") or "")
+        who = str(w.get("asked_by") or "")
+        detail = str(w.get("detail") or "") or "it did not say why"
+        mine = bool(who) and who == me
+        if mine or admin:
+            act = (f'<form method="post" class="inline" '
+                   f'action="/wishes/{int(w["id"])}/dismiss">{_csrf(user)}'
+                   f'<button class="quiet" title="take it off the list">'
+                   f'Dismiss</button></form>')
+        else:
+            act = f'<span class="age">with {esc(who or "somebody")}</span>'
+        lines.append(
+            f'<tr data-view="{"mine" if mine else "theirs"}">'
+            f'<td>{_serial_link(serial) if serial else "<span class=dim>&mdash;</span>"}</td>'
+            f'<td><span class="badge failed">Failed</span>'
+            + (f'<span class="dim maker">built by {esc(who)}</span>' if who
+               else "")
+            + f'</td><td colspan="4" class="progress">{esc(detail)}</td>'
+            f'<td class="act">{act}</td></tr>')
+    return "".join(lines)
+
+
 def _wishes(data: dict, explain=None) -> str:
-    """Phones somebody asked for by hand, from the moment they ask.
+    """Phones somebody asked for by hand, from the moment they ask - the
+    ones with no phone yet. A wish that failed is a row of the phones
+    table instead (`_wish_rows`), until it is dismissed.
 
     Nothing in the web package read `wanted_builds`, so a press vanished:
     the toast is gone in four seconds, the table does not change until a
@@ -3421,7 +3505,8 @@ def _wishes(data: dict, explain=None) -> str:
     calls itself "what the person who asked reads to find out whether it
     happened", and it had no callers at all (2026-09-07).
     """
-    rows = data.get("wishes") or []
+    rows = [w for w in data.get("wishes") or []
+            if str(w.get("status") or "") != "failed"]
     if not rows:
         return ""
     lines = []
@@ -3432,7 +3517,10 @@ def _wishes(data: dict, explain=None) -> str:
         app = (str(w.get("app")) if w.get("app") is not None
                else ("chatgpt" if w.get("install_app", True) else ""))
         where += {"": " &middot; no app", "spotify": " &middot; Spotify",
+                  "claude": " &middot; Claude",
                   "chatgpt": ""}.get(app, f" &middot; {esc(app)}")
+        if w.get("no_gmail"):
+            who, where = "a bare phone", " &middot; nothing signed in"
         when = _hhmm(w.get("created_at")) if w.get("created_at") else ""
         if status == "failed":
             # `explain` answers a pair for a reason it knows and nothing
@@ -3488,7 +3576,8 @@ def dashboard(data: dict, user: dict, said: str = "",
     # the table, and one list is easier to read than a list and a box.
     on_the_shelf = [p for p in phones
                     if (p.get("state") or "") not in ("done", "failed")]
-    rows = _phone_rows(dict(data, phones=on_the_shelf), user)
+    rows = (_wish_rows(data, user)
+            + _phone_rows(dict(data, phones=on_the_shelf), user))
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>gpt account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'

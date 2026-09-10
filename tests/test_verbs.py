@@ -1127,3 +1127,47 @@ def test_release_powers_the_phone_off_unless_a_run_holds_it(monkeypatch):
         None, Ledger(), None, {"serial": "1899"}, object())
     assert status == "failed"
     assert verbs.power_off_phone.lane_safe is True
+
+
+# ------------------------------------------ the build card (2026-09-10)
+def test_a_bare_phone_is_asked_for_with_nothing_else():
+    """No Gmail means no app and no account, whatever else the payload
+    carried - the boxes are off on the page, and ignored here."""
+    book = make_book(gmails=1)
+    asked = {}
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    with patch.object(wanted_mod, "ask",
+                      lambda s, **k: asked.update(k) or 7):
+        status, said, _ = verbs.build_by_hand(
+            book, None, None,
+            {"by": "mehdi", "no_gmail": True, "gmail": "g0@example.com",
+             "app": "chatgpt", "app_account": "a0@example.com"}, None)
+
+    assert status == "done", said
+    assert asked["no_gmail"] is True
+    assert (asked["gmail"], asked["app"], asked["app_account"]) == ("", "", "")
+    assert asked["install_app"] is False
+    assert "bare phone" in said and "request 7" in said
+
+
+def test_claude_is_an_app_the_card_may_ask_for():
+    book = make_book(gmails=1)
+    asked = {}
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    with patch.object(wanted_mod, "ask",
+                      lambda s, **k: asked.update(k) or 8):
+        status, said, _ = verbs.build_by_hand(
+            book, None, None,
+            {"by": "mehdi", "app": "claude", "app_account": "a0@example.com"},
+            None)
+
+    assert status == "done", said
+    assert asked["app"] == "claude" and asked["no_gmail"] is False
+    assert asked["app_account"] == "", "an account is ChatGPT's only"
+    assert "with Claude" in said

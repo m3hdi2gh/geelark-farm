@@ -91,15 +91,22 @@ def build_by_hand(book, ledger, settings, payload, client):
 
     who = _by(payload)
     gmail = (payload.get("gmail") or "").strip()
+    # The exit is not the card's to choose any more: the build picks one
+    # and swaps it whenever an install or a sign-in shows it is bad. The
+    # panel API may still name one, and a named one is honoured.
     proxy_name = (payload.get("proxy_name") or "").strip()
-    # Which app: '' for none, 'chatgpt', 'spotify'. An older payload says
-    # only `install_app`, which means ChatGPT or nothing.
+    # A bare phone: no Google account, and so no app and no account.
+    no_gmail = bool(payload.get("no_gmail"))
+    # Which app: '' for none, 'chatgpt', 'spotify', 'claude'. An older
+    # payload says only `install_app`, which means ChatGPT or nothing.
     if "app" in payload:
         app = str(payload.get("app") or "").strip().lower()
     else:
         app = "chatgpt" if payload.get("install_app") else ""
-    if app not in ("", "chatgpt", "spotify"):
+    if app not in ("", "chatgpt", "spotify", "claude"):
         return "refused", f"{app!r} is not an app this farm installs", None
+    if no_gmail:
+        gmail, app = "", ""
     install_app = bool(app)
     # An account is only ever signed into ChatGPT.
     app_account = ((payload.get("app_account") or "").strip()
@@ -178,12 +185,17 @@ def build_by_hand(book, ledger, settings, payload, client):
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
                              app_account=app_account,
-                             requested_by=payload.get("by_id"), app=app)
+                             requested_by=payload.get("by_id"), app=app,
+                             no_gmail=no_gmail)
     where = f" on {proxy_name}" if proxy_name else ""
     carrying = {"": " without an app", "chatgpt": " with ChatGPT",
-                "spotify": " with Spotify"}[app]
+                "spotify": " with Spotify", "claude": " with Claude"}[app]
     if app_account:
         carrying += f" and {app_account} signed in"
+    if no_gmail:
+        return "done", (f"asked for a bare phone{where} - no Google account, "
+                        f"no app - request {asked}. It starts within seconds."
+                        ), None
     who = gmail or "the next free Gmail"
     return "done", (f"asked for a phone{where} for {who}{carrying} - "
                     f"request {asked}. It starts within seconds."), None

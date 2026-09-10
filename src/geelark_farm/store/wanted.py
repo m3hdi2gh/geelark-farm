@@ -28,21 +28,26 @@ STATES = ("queued", "running", "done", "failed")
 
 def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
         install_app: bool = True, app_account: str = "",
-        requested_by: int | None = None, app: str | None = None) -> int:
+        requested_by: int | None = None, app: str | None = None,
+        no_gmail: bool = False) -> int:
     """Write one wish. Returns its id, which is what the page says back.
 
-    `app` is which app the phone gets - '' for none, 'chatgpt', 'spotify'.
-    Left None it follows `install_app`, which is what every older caller
-    means: the app, or no app."""
+    `app` is which app the phone gets - '' for none, 'chatgpt', 'spotify',
+    'claude'. Left None it follows `install_app`, which is what every
+    older caller means: the app, or no app. `no_gmail` asks for a bare
+    phone: nothing signed in, and so no app and no account either."""
     if app is None:
         app = "chatgpt" if install_app else ""
+    if no_gmail:
+        gmail, app, app_account = "", "", ""
     with Store(settings) as store:
         rows = store._write(
             "INSERT INTO wanted_builds"
-            " (gmail, proxy_name, install_app, app_account, requested_by, app)"
-            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            " (gmail, proxy_name, install_app, app_account, requested_by,"
+            "  app, no_gmail)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (gmail.strip(), proxy_name.strip(), bool(app),
-             app_account.strip(), requested_by, app))
+             app_account.strip(), requested_by, app, bool(no_gmail)))
     return int(rows[0]["id"])
 
 
@@ -66,7 +71,7 @@ def take(settings: Settings, limit: int = 2) -> list[dict]:
             "              ORDER BY created_at, id LIMIT %s"
             "              FOR UPDATE SKIP LOCKED)"
             " RETURNING id, gmail, proxy_name, install_app, app_account, app,"
-            " requested_by",
+            " requested_by, no_gmail",
             (max(1, int(limit)),))
 
 
@@ -84,6 +89,21 @@ def settle(settings: Settings, wanted_id: int, *, ok: bool,
     except Exception as exc:                                      # noqa: BLE001
         log.warning("could not record what became of wanted build %s (%s)",
                     wanted_id, exc)
+
+
+def dismiss(settings: Settings, wanted_id: int, *, user_id: int | None,
+            admin: bool = False) -> bool:
+    """Take a failed wish off the dashboard. Whoever asked may, and an
+    admin may; nobody else - the row is theirs to read. True when a row
+    changed."""
+    with Store(settings) as store:
+        rows = store._write(
+            "UPDATE wanted_builds SET dismissed_at = now()"
+            " WHERE id = %s AND status = 'failed' AND dismissed_at IS NULL"
+            "   AND (%s OR requested_by = %s)"
+            " RETURNING id",
+            (int(wanted_id), bool(admin), user_id))
+    return bool(rows)
 
 
 def recent(settings: Settings, limit: int = 8) -> list[dict]:

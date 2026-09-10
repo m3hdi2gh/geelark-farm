@@ -3394,8 +3394,14 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
     assert 'action="/phones/build"' in body
-    assert "pick@example.com" in body and "SX9" in body
+    assert "pick@example.com" in body, "a free Gmail is offered in the dialog"
+    assert "gpt@example.com" in body, "a free account too"
+    assert "SX9" not in body, "the exit is the build's business now"
+    assert 'name="proxy_name"' not in body
     assert "auto &mdash; the next free one" in body, "blank means the pool decides"
+    assert 'value="none">none &mdash; no Google account' in body
+    assert 'value="claude">Claude' in body
+    assert 'value="">none &mdash; Google only' in body
 
     status, headers, _ = client.request(
         "POST", "/phones/build",
@@ -3406,7 +3412,8 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert status == 303 and dict(headers)["Location"].startswith("/")
     assert got["verb"] == "build_by_hand"
     assert got["payload"]["gmail"] == "pick@example.com"
-    assert got["payload"]["proxy_name"] == "SX9"
+    assert got["payload"]["no_gmail"] is False
+    assert got["payload"]["proxy_name"] == "SX9", "the API may still name one"
     assert got["payload"]["app"] == "chatgpt"
     assert got["payload"]["install_app"] is True
     assert got["payload"]["app_account"] == "gpt@example.com"
@@ -3422,6 +3429,20 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), app="none"))
     assert got["payload"]["app"] == "" and got["payload"]["install_app"] is False
+    # Claude is an app now.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), app="claude",
+                         app_account="gpt@example.com"))
+    assert got["payload"]["app"] == "claude"
+    assert got["payload"]["app_account"] == "", "an account is ChatGPT's only"
+    # No Gmail: a bare phone, whatever the other boxes carried.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="none", app="chatgpt",
+                         app_account="gpt@example.com"))
+    assert got["payload"]["no_gmail"] is True
+    assert got["payload"]["gmail"] == "" and got["payload"]["app"] == ""
+    assert got["payload"]["app_account"] == ""
+    assert got["payload"]["gmail_typed"] is False
     # The old form's tick still means ChatGPT.
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), install_app="1"))
@@ -3499,29 +3520,46 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
-    # Four choices, each a select: what the farm would do first, the free
-    # rows to pick from, and - for the two that can be typed - "type a new
-    # one", which opens a dialog (the operator, 2026-09-08).
+    # Three choices, each a select - the exit is the build's own business
+    # now: the Gmail (auto, none, or "choose...", which opens a dialog to
+    # type one or pick a free one), the app, and the account (the
+    # operator, 2026-09-10).
     card = body[body.index('class="byhand"'):body.index("Build</button>")]
-    for name in ("gmail", "proxy_name", "app", "app_account"):
+    for name in ("gmail", "app", "app_account"):
         assert f'<select name="{name}"' in card, name
+    assert 'name="proxy_name"' not in card, "an exit is never chosen here"
     assert 'name="gmail" data-new="gmail-new"' in card
     assert 'name="app_account" data-new="account-new"' in card
-    assert 'data-new' not in card.split('name="proxy_name"', 1)[1].split("</select>", 1)[0], (
-        "an exit is never typed")
-    assert card.count("type a new one&hellip;</option>") == 2
+    assert card.count("choose&hellip;</option>") == 2
+    assert "type a new one" not in card
+    assert '<option value="">auto &mdash; the next free one (1 free)</option>' in card
+    assert '<option value="none">none &mdash; no Google account</option>' in card
     assert '<option value="chatgpt" selected>ChatGPT</option>' in card
-    assert '<option value="">none</option>' in card and "Spotify" in card
+    assert '<option value="spotify">Spotify</option>' in card
+    assert '<option value="claude">Claude</option>' in card
+    assert '<option value="">none &mdash; Google only</option>' in card
+    assert '<option value="">none &mdash; sign in later</option>' in card
     assert 'name="install_app"' not in card, "the tick became the App choice"
-    assert '<optgroup label="pick one">' in card
+    assert '<optgroup label="pick one">' not in card, "the free rows moved into the dialog"
+    assert "Exit: the farm picks one and swaps it" in body
     for ident in ("gmail-new", "account-new"):
         assert f'<dialog class="editor" id="{ident}"' in body, ident
-    assert 'data-field="gmail_secret"' in body and 'data-field="app_secret"' in body
+    # The dialog: the boxes, then the free rows to pick from.
+    gdlg = body[body.index('id="gmail-new"'):body.index('id="account-new"')]
+    assert 'data-field="gmail_secret"' in gdlg
+    assert "Authenticator key" in gdlg and "empty = the account has none" in gdlg
+    assert '<input type="radio" name="pick-gmail-new" value="a@x.com"> a@x.com' in gdlg
+    adlg = body[body.index('id="account-new"'):]
+    assert 'data-field="app_secret"' in adlg
+    assert '<input type="radio" name="pick-account-new" value="g@x.com"> g@x.com' in adlg
     for name in ("gmail_password", "gmail_secret", "app_password", "app_secret"):
         assert f'<input type="hidden" name="{name}" value="">' in body, name
     script = pages._DASH_SCRIPT
     assert "acctPick.disabled = !on" in script, "an account only with ChatGPT"
+    assert "gmailPick.value === 'none'" in script, "no Gmail: no app, no account"
+    assert "appPick.disabled = bare" in script
     assert "function openNew(pick, was)" in script
+    assert "' (from the pool)'" in script, "a picked row says where it came from"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3559,7 +3597,8 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
     # this morning is in no pool - so the form stays and the hint says so.
     assert 'action="/phones/build"' in body
     assert '<option value="" disabled>auto &mdash; the pool is empty</option>' in body
-    assert '<option value="__new__" selected>type a new one&hellip;</option>' in body
+    assert '<option value="none" selected>none &mdash; no Google account</option>' in body
+    assert "The pool has nothing free - type one above." in body
 
     _dash(monkeypatch, stock={"gmail": {"free": 3}, "proxy": {"free": 0},
                               "app": {"awaiting": 2}})
@@ -4313,21 +4352,50 @@ def test_a_phone_asked_for_by_hand_is_on_the_page_from_the_moment_it_is_asked():
     whether it happened", and it had no callers at all (2026-09-07)."""
     from geelark_farm.web import pages
 
-    drawn = pages._wishes({"wishes": [
-        {"gmail": "wait@x.com", "status": "queued", "created_at": None,
+    data = {"wishes": [
+        {"id": 1, "gmail": "wait@x.com", "status": "queued", "created_at": None,
          "proxy_name": "SX9"},
-        {"gmail": "", "status": "running", "created_at": None},
-        {"gmail": "bad@x.com", "status": "failed", "created_at": None,
-         "detail": "no_usable_proxy"},
-    ]}, explain=lambda t: ("the Proxy pool had no free exit to give it", ""))
+        {"id": 2, "gmail": "", "status": "running", "created_at": None},
+        {"id": 3, "gmail": "", "status": "queued", "created_at": None,
+         "no_gmail": True, "app": ""},
+        {"id": 4, "gmail": "bad@x.com", "status": "failed", "created_at": None,
+         "detail": "bad@x.com - Google refused the password", "serial": "2236",
+         "asked_by": "mehdi"},
+    ]}
+    drawn = pages._wishes(data, explain=lambda t: ("", ""))
 
     assert "Asked for by hand" in drawn
     assert "wait@x.com" in drawn and "SX9" in drawn
     assert "the next pass starts it" in drawn
     assert "the next free Gmail" in drawn, "a wish with no address named"
     assert "a phone is being made for it" in drawn
-    assert "the Proxy pool had no free exit" in drawn, "and why, if it did not"
+    assert "a bare phone" in drawn and "nothing signed in" in drawn
+    # The failed one is not in the panel: it is a row of the phones
+    # table, until whoever asked dismisses it (2026-09-10).
+    assert "bad@x.com" not in drawn and "did not start" not in drawn
+    assert "Asked for by hand <span class=\"n\">3</span>" in drawn
     assert pages._wishes({"wishes": []}) == "", "nothing pending, nothing said"
+
+    me = {"id": 1, "username": "mehdi", "role": "operator", "csrf": "c"}
+    rows = pages._wish_rows(data, me)
+    assert rows.count("<tr") == 1, "only the failed one"
+    assert '<span class="badge failed">Failed</span>' in rows
+    assert "built by mehdi" in rows
+    assert "bad@x.com - Google refused the password" in rows
+    assert 'href="/phones/2236"' in rows
+    assert 'action="/wishes/4/dismiss"' in rows and "Dismiss" in rows
+    assert 'data-view="mine"' in rows
+    # Somebody else's: read, not dismissed - unless by an admin.
+    other = {"id": 2, "username": "ali", "role": "operator", "csrf": "c"}
+    theirs = pages._wish_rows(data, other)
+    assert "Dismiss" not in theirs and "with mehdi" in theirs
+    assert 'data-view="theirs"' in theirs
+    admin = {"id": 3, "username": "root", "role": "admin", "csrf": "c"}
+    assert 'action="/wishes/4/dismiss"' in pages._wish_rows(data, admin)
+    # No phone ever existed: a dash where the serial goes.
+    none_yet = pages._wish_rows({"wishes": [dict(data["wishes"][3], serial="")]},
+                                me)
+    assert "&mdash;" in none_yet and 'href="/phones/' not in none_yet
 
 
 def test_the_page_watches_itself_while_a_wish_is_pending():
@@ -4890,9 +4958,11 @@ def test_a_failed_wish_with_words_explain_does_not_know_still_draws():
                         "created_at": None, "asked_by": "mehdi"}]}
     for answer in ((), "", None, ("seen", "advice"), ("only",)):
         panel = pages._wishes(data, lambda detail, a=answer: a)
-        assert "did not start" in panel
-    assert "seen" in pages._wishes(data, lambda d: ("seen", "advice"))
-    assert "is not free" in pages._wishes(data, lambda d: ())
+        assert panel == "", "a failed wish is a table row now"
+    me = {"id": 1, "username": "mehdi", "role": "operator", "csrf": "c"}
+    assert "is not free" in pages._wish_rows(data, me)
+    assert "it did not say why" in pages._wish_rows(
+        {"wishes": [dict(data["wishes"][0], detail="")]}, me)
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -5069,3 +5139,78 @@ def test_a_screen_is_served_from_the_store_first_and_the_disk_second(
     assert read_mod.screen_bytes(settings, "622", folder.name, "a.xml") == b"<disk/>"
     assert read_mod.screen_bytes(settings, "622", "..", "a.xml") is None
     assert read_mod.screen_bytes(settings, "622", folder.name, "a.png") is None
+
+
+# ------------------------------------------ the build card (2026-09-10)
+def test_a_failed_wish_is_dismissed_by_a_press_and_the_press_is_the_askers(
+        web, monkeypatch):
+    """A direct write, like the users page: nothing runs and nothing is
+    queued. The store decides who may - the asker, or an admin - and a
+    press that changed nothing says so rather than nothing."""
+    import geelark_farm.store.wanted as wanted_mod
+
+    _dash(monkeypatch)
+    calls = []
+
+    def dismiss(settings, wanted_id, *, user_id, admin):
+        calls.append((wanted_id, user_id, admin))
+        return wanted_id == 4
+
+    monkeypatch.setattr(wanted_mod, "dismiss", dismiss)
+    client = web()
+    client.login()
+
+    status, headers, _ = client.request("POST", "/wishes/4/dismiss",
+                                        _form(csrf=client.csrf()))
+    assert status == 303 and dict(headers)["Location"] == "/?said=dismissed"
+    assert calls[-1][0] == 4 and calls[-1][1] == 7, "the seat's own id"
+    assert calls[-1][2] is True, "the fake seat is an admin"
+
+    status, headers, _ = client.request("POST", "/wishes/9/dismiss",
+                                        _form(csrf=client.csrf()))
+    assert status == 303 and dict(headers)["Location"] == "/?said=no"
+
+    status, headers, _ = client.request("POST", "/wishes/x/dismiss",
+                                        _form(csrf=client.csrf()))
+    assert status == 303 and dict(headers)["Location"] == "/?said=no"
+    assert len(calls) == 2, "a bad id never reaches the store"
+
+
+def test_the_live_link_of_a_building_phone_is_the_builders_newest_start_line():
+    """GeeLark answers the start call with the link; the builder logs it,
+    once per start, so the newest such line of the phone's current run is
+    the screen as it is now - after an exit swap too."""
+    import inspect
+    from types import SimpleNamespace
+
+    from geelark_farm.web import read
+
+    sql = inspect.getsource(read._live_links)
+    assert "l.msg LIKE 'watch it live: %%'" in sql
+    assert "claims c" in sql and "l.run = c.run_id" in sql, "this run's, not last week's"
+    assert read._live_links(SimpleNamespace(_rows=lambda *a: []), []) == {}
+
+    store = SimpleNamespace(_rows=lambda sql, params: [
+        {"serial": "2241", "msg": "watch it live: https://phone.geelark.com/x?id=1 "},
+        {"serial": "2242", "msg": "watch it live: nothing"}])
+    assert read._live_links(store, ["2241", "2242"]) == {
+        "2241": "https://phone.geelark.com/x?id=1"}
+
+
+def test_a_building_row_offers_watch_live_beside_cancel():
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "username": "a", "role": "operator", "csrf": "c",
+            "mutations": True, "may_login_accounts": True,
+            "may_take_phones": True}
+    rows = pages._phone_rows({
+        "phones": [{"serial": "2241", "status": "building", "state": ""},
+                   {"serial": "2242", "status": "building", "state": ""}],
+        "progress": {},
+        "live": {"2241": "https://phone.geelark.com/x?id=1&a=b"}}, user)
+    r1 = rows[:rows.index("</tr>")]
+    r2 = rows[rows.index("</tr>"):]
+    assert ('<a class="btn quiet live" target="_blank" rel="noopener" '
+            'href="https://phone.geelark.com/x?id=1&amp;a=b"') in r1
+    assert "Watch live</a>" in r1 and "Cancel" in r1
+    assert "Watch live" not in r2 and "Cancel" in r2, "no link yet: no dead button"

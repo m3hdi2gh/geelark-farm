@@ -223,6 +223,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         building = [str(r["serial"]) for r in phone_rows
                     if r["status"] == "building"]
         progress = _latest_lines(store, building)
+        live = _live_links(store, building)
         stock = store._rows(
             "SELECT kind, lower(status) AS status, count(*) AS c"
             " FROM resources WHERE error IS NULL"
@@ -293,16 +294,18 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         wishes = store._rows(
             "SELECT w.id, w.gmail, w.proxy_name, w.install_app, w.app,"
             " w.app_account, w.status, w.serial, w.detail, w.created_at,"
+            " w.ended_at, w.no_gmail, w.requested_by,"
             " coalesce(u.username, '') AS asked_by"
             " FROM wanted_builds w LEFT JOIN users u"
             "   ON u.id = w.requested_by"
             " WHERE w.status IN ('queued', 'running')"
-            "    OR (w.status = 'failed'"
-            # Long enough to be read, not an hour on the page: a wish that
-            # did not start is one line of why, and the operator asked
-            # why it was still there (2026-09-08).
-            "        AND w.created_at > now() - interval '15 minutes')"
-            " ORDER BY w.id DESC LIMIT 8")
+            # A wish that failed stays - as a row of the phones table
+            # saying which address and why - until whoever asked
+            # dismisses it (the build card, 2026-09-10). It used to leave
+            # by itself after fifteen minutes, and a build that failed
+            # while the operator was at lunch left no trace.
+            "    OR (w.status = 'failed' AND w.dismissed_at IS NULL)"
+            " ORDER BY w.id DESC LIMIT 12")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
         # The manager's lists, read on the same connection the rest of
@@ -326,6 +329,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
     return {
         "phones": phone_rows,
         "progress": progress,
+        "live": live,
         "stock": folded,
         "pool_rows": pools_listed,
         "awaiting": awaiting,
@@ -364,6 +368,34 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
         "               WHERE m.serial = l.serial AND m.run = c.run_id"
         "                 AND m.at >= c.taken_at)", (list(serials),))
     return {str(r["serial"]): r for r in lines}
+
+
+def _live_links(store, serials: list[str]) -> dict[str, str]:
+    """The live-view link of each phone being built, by serial.
+
+    The builder logs it the moment GeeLark answers the start call - once
+    per start, so after an exit swap the newest line of the phone's
+    current run is the screen as it is now. Bound to the run holding the
+    phone the way `_latest_lines` is, for the same reason: yesterday's
+    link on today's build is a tab that opens on nothing."""
+    if not serials:
+        return {}
+    lines = store._rows(
+        "SELECT l.serial, l.msg FROM logs l"
+        " JOIN phones p ON p.serial = l.serial AND p.done_at IS NULL"
+        " JOIN claims c ON c.phone_row = p.id AND c.released_at IS NULL"
+        "   AND l.run = c.run_id AND l.at >= c.taken_at"
+        " WHERE l.serial = ANY(%s) AND l.msg LIKE 'watch it live: %%'"
+        "   AND l.id = (SELECT max(m.id) FROM logs m"
+        "               WHERE m.serial = l.serial AND m.run = c.run_id"
+        "                 AND m.at >= c.taken_at"
+        "                 AND m.msg LIKE 'watch it live: %%')", (list(serials),))
+    out = {}
+    for r in lines:
+        url = str(r["msg"] or "")[len("watch it live: "):].strip()
+        if url.startswith("https://"):
+            out[str(r["serial"])] = url
+    return out
 
 
 def latest_lines(settings: Settings, serials: list[str]) -> dict[str, dict]:

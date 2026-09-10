@@ -343,23 +343,39 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path == "/phones/build":
+                # Three choices: the Gmail, the app, the account. The exit
+                # is not one of them any more - the build picks one and
+                # swaps it when an install or a sign-in shows it is bad
+                # (the operator, 2026-09-10); a `proxy_name` the panel API
+                # still sends is passed on, and honoured.
+                #
                 # A typed address wins over a picked one: somebody who
                 # filled the box meant the box. Said here rather than in
                 # the verb, so the verb takes one shape of payload however
                 # it was asked - the API will ask differently.
                 gmail = (field.get("gmail") or "").strip()
-                # Which app: none, ChatGPT or Spotify. The old form sent a
-                # tick instead; it still means ChatGPT or nothing.
+                # "none": a bare phone - nothing signed in, and so no app
+                # and no account. The boxes below are off on the page and
+                # ignored here, whatever they carried.
+                no_gmail = gmail.lower() == "none"
+                if no_gmail:
+                    gmail = ""
+                # Which app: none, ChatGPT, Spotify or Claude. The old
+                # form sent a tick instead; it still means ChatGPT or
+                # nothing.
                 if "app" in field:
                     which = (field.get("app") or "").strip().lower()
                     which = "" if which == "none" else which
                 else:
                     which = "chatgpt" if field.get("install_app") else ""
+                if no_gmail:
+                    which = ""
                 account = ((field.get("app_account") or "").strip()
                            if which == "chatgpt" else "")
                 payload = {
                     "gmail": gmail,
-                    "gmail_typed": self._is_new("gmail", gmail),
+                    "no_gmail": no_gmail,
+                    "gmail_typed": bool(gmail) and self._is_new("gmail", gmail),
                     "gmail_password": field.get("gmail_password") or "",
                     "gmail_secret": field.get("gmail_secret") or "",
                     "proxy_name": (field.get("proxy_name") or "").strip(),
@@ -374,8 +390,11 @@ class _Handler(BaseHTTPRequestHandler):
                     user, "may_login_accounts", "build_by_hand", payload,
                     idem=self._minute_key(
                         user, "byhand",
-                        payload["gmail"] or "next"),
+                        payload["gmail"] or ("bare" if no_gmail else "next")),
                     back="/", said_word="asked")
+            if self.path.startswith("/wishes/") and \
+                    self.path.endswith("/dismiss"):
+                return self._dismiss_wish(user)
             if self.path == "/accounts/login":
                 back = field.get("back") or "/"
                 return self._login_accounts(
@@ -1431,6 +1450,27 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _dismiss_wish(self, user: dict) -> None:
+        """Take a failed hand-built request off the dashboard.
+
+        A direct write, like the users page: nothing runs and nothing is
+        queued, so there is nothing for the keeper to do. The store says
+        who may - whoever asked, or an admin - and a press on somebody
+        else's row changes nothing and says so."""
+        from ..store import wanted as store_wanted
+
+        ident = self.path[len("/wishes/"):-len("/dismiss")]
+        if not ident.isdigit():
+            return self._redirect(_said_url("/", "no"))
+        try:
+            gone = store_wanted.dismiss(
+                self.settings, int(ident), user_id=user["id"],
+                admin=user.get("role") == "admin")
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not dismiss wish %s (%s)", ident, exc)
+            gone = False
+        return self._redirect(_said_url("/", "dismissed" if gone else "no"))
+
     def _redirect(self, where: str) -> None:
         self.send_response(303)
         self.send_header("Location", where)
@@ -1717,8 +1757,11 @@ def _operator_may_post(path: str) -> bool:
     if path in _OPERATOR_POSTS:
         return True
     # One phone: boot it, take it, hand it back, change its exit.
-    return path.startswith("/phones/") and path.rsplit("/", 1)[-1] in (
-        "boot", "state", "proxy", "stop")
+    if path.startswith("/phones/") and path.rsplit("/", 1)[-1] in (
+            "boot", "state", "proxy", "stop"):
+        return True
+    # One failed hand-built request: take it off the list.
+    return path.startswith("/wishes/") and path.endswith("/dismiss")
 
 
 def _advice(status: str) -> str:

@@ -2552,7 +2552,8 @@ def test_the_lane_hands_a_wish_to_the_build_with_who_asked(monkeypatch,
     monkeypatch.setattr(serve_mod, "_drain_actions", lambda *a, **k: 0)
     monkeypatch.setattr(store_wanted, "take", lambda settings: [
         {"id": 9, "gmail": "", "proxy_name": "", "install_app": True,
-         "app_account": "", "app": "spotify", "requested_by": 4}])
+         "app_account": "", "app": "spotify", "requested_by": 4,
+         "no_gmail": True}])
     started = {}
     monkeypatch.setattr(builder, "run",
                         lambda client, settings, **kw: started.update(kw) or [])
@@ -2562,6 +2563,7 @@ def test_the_lane_hands_a_wish_to_the_build_with_who_asked(monkeypatch,
     lane.tick(("boot_phone",))
     wish = started["wanted"][0]
     assert wish.requested_by == 4 and wish.app == "spotify"
+    assert wish.no_gmail is True, "a bare phone reaches the build as one"
 
 
 def test_a_batch_capped_by_the_gmail_pool_says_so():

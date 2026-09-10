@@ -508,7 +508,8 @@ class ControlLane:
         wants = [builder.Wanted(gmail=r["gmail"], proxy_name=r["proxy_name"],
                                 install_app=r["install_app"],
                                 app_account=r["app_account"], wanted_id=r["id"],
-                                app=_app_of(r), requested_by=r.get("requested_by"))
+                                app=_app_of(r), requested_by=r.get("requested_by"),
+                                no_gmail=bool(r.get("no_gmail")))
                  for r in rows]
         settings, client = self.settings, self.client
         if settings.build_queue:
