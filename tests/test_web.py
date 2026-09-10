@@ -5176,6 +5176,18 @@ def test_a_failed_wish_is_dismissed_by_a_press_and_the_press_is_the_askers(
     assert len(calls) == 2, "a bad id never reaches the store"
 
 
+def test_a_failed_wish_stays_a_day_not_forever():
+    """The column arrived after weeks of wishes, and every failure since
+    June stood up on the dashboard at once (the operator, 2026-09-10)."""
+    import inspect
+
+    from geelark_farm.web import read
+
+    sql = inspect.getsource(read.dashboard)
+    at = sql.index("w.status = 'failed' AND w.dismissed_at IS NULL")
+    assert "> now() - interval '24 hours'" in sql[at:at + 200]
+
+
 def test_the_live_link_of_a_building_phone_is_the_builders_newest_start_line():
     """GeeLark answers the start call with the link; the builder logs it,
     once per start, so the newest such line of the phone's current run is

@@ -304,7 +304,12 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             # dismisses it (the build card, 2026-09-10). It used to leave
             # by itself after fifteen minutes, and a build that failed
             # while the operator was at lunch left no trace.
-            "    OR (w.status = 'failed' AND w.dismissed_at IS NULL)"
+            # A day, not forever: the column arrived after weeks of
+            # wishes, and every failure since June stood up at once
+            # (the operator, 2026-09-10). Yesterday's is not news.
+            "    OR (w.status = 'failed' AND w.dismissed_at IS NULL"
+            "        AND coalesce(w.ended_at, w.created_at)"
+            "            > now() - interval '24 hours')"
             " ORDER BY w.id DESC LIMIT 12")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
