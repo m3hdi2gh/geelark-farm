@@ -124,8 +124,13 @@ class ResourceTable:
         for exits, top of the tab for credentials. `row_id` narrows the
         pick to one chosen row (C6's "log in selected"): None if that row
         is not free any more, never the next one down."""
+        # `tries` first: a row back off the ladder is an address Google
+        # refused once already, and it is older than every fresh one, so
+        # by id it went first - the revival wave took the pool's first
+        # eight slots ahead of 29 untried addresses (2026-09-10). Fresh
+        # stock first, the ladder's rows when nothing else is free.
         order = ("times_used, sheet_row NULLS LAST, id" if count_use
-                 else "sheet_row NULLS LAST, id")
+                 else "tries, sheet_row NULLS LAST, id")
         bump = "times_used + 1" if count_use else "times_used"
         with self._lock, self._connect() as conn:
             cur = conn.execute(

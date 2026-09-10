@@ -224,3 +224,17 @@ def test_it_says_how_close_it_is_and_to_what(tmp_path):
 
 def test_a_machine_that_has_never_failed_says_nothing_happened(tmp_path):
     assert Breaker(tmp_path / "breaker.json").seen() == (0, [])
+
+
+def test_a_distrusted_phone_is_googles_verdict_not_the_machines():
+    """The first revival wave off the ladder: 23 once-refused addresses,
+    20 refused again, ten in a row opened the breaker and stopped the farm
+    over accounts the numbers had already judged (2026-09-10)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import breaker as breaker_mod
+
+    build = SimpleNamespace(ok=False, status="phone_distrusted")
+    assert not breaker_mod.counts_against(build)
+    assert not breaker_mod.shows_it_works(build)
+

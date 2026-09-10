@@ -60,9 +60,16 @@ WORKED = frozenset({"no_usable_gpt", "app_not_asked_for",
 #: claimed anything, because somebody was working in the phone. Nothing was
 #: created, nothing was spent, and a person using their own stock is not
 #: evidence that this machine has stopped working (2026-08-29).
+#: `phone_distrusted` is here because it is Google's verdict on an
+#: address and an exit, not on this machine: the phone was made, refused
+#: on its first address, and deleted the way the rule says. The first
+#: revival wave off the ladder put 23 once-refused addresses through and
+#: 20 were refused again - ten in a row opened the breaker and stopped
+#: the farm over accounts the numbers had already judged (2026-09-10).
+#: What that wave means is read on the Login rate page, not here.
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
                               "no_capacity", "in_use_by_hand",
-                              "given_up_on"})
+                              "given_up_on", "phone_distrusted"})
 
 
 def counts_against(build) -> bool:

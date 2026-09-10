@@ -711,3 +711,18 @@ def test_a_proxy_added_from_the_web_lands_in_the_four_columns():
                            "Status": "free"})
     assert (other.proxy.host, other.proxy.port, other.proxy.username,
             other.proxy.password) == ("10.0.0.9", 1080, "u", "p")
+
+
+def test_fresh_gmails_are_claimed_before_the_ladders_rows():
+    """A row back off the ladder is older than every fresh one and went
+    first by id: the revival wave took the pool's first eight slots ahead
+    of 29 untried addresses (2026-09-10)."""
+    import inspect
+
+    from geelark_farm.store import pgpool
+
+    src = inspect.getsource(pgpool.ResourceTable.claim)
+    assert 'else "tries, sheet_row NULLS LAST, id"' in src
+    assert '"times_used, sheet_row NULLS LAST, id" if count_use' in src, (
+        "a proxy is still least-used first")
+
