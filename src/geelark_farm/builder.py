@@ -1462,6 +1462,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if chosen:
                 log.info("signing in as %s (chosen on the build card)",
                          account.email)
+            elif getattr(settings, "one_gmail_per_phone", True):
+                # One per phone: a distrust refusal ends the build here;
+                # only a credential verdict (wrong password) goes on to
+                # the next address, up to the cap.
+                log.info("signing in as %s (Gmail %d on this phone; one per "
+                         "phone unless the password is wrong)",
+                         account.email, tried_gmails + 1)
             else:
                 log.info("signing in as %s (Gmail %d of %d on this phone)",
                          account.email, tried_gmails + 1, GMAILS_PER_BUILD)
