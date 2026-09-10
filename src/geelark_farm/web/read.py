@@ -309,7 +309,12 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             # (the operator, 2026-09-10). Yesterday's is not news.
             "    OR (w.status = 'failed' AND w.dismissed_at IS NULL"
             "        AND coalesce(w.ended_at, w.created_at)"
-            "            > now() - interval '24 hours')"
+            "            > now() - interval '24 hours'"
+            # A failed wish whose phone is on the shelf is not a row of
+            # its own: the phone's row says everything (2026-09-11).
+            "        AND NOT EXISTS (SELECT 1 FROM phones p"
+            "                        WHERE p.serial = w.serial"
+            "                          AND p.done_at IS NULL))"
             " ORDER BY w.id DESC LIMIT 12")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")

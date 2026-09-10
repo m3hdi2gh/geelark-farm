@@ -836,7 +836,7 @@ def _dispatch(batch, fuse: Breaker, *, flight: InFlight | None, pool,
                     from .store import wanted as store_wanted
 
                     store_wanted.settle(
-                        settings, build.wanted_id, ok=build.ok,
+                        settings, build.wanted_id, ok=_wish_worked(build),
                         serial=str(build.serial or ""),
                         detail=build.detail or build.status)
         finally:
@@ -1876,6 +1876,19 @@ def _job_dict(book: Book, job: dict):
             "want": builder.Wanted(**want) if want else None}
 
 
+def _wish_worked(build) -> bool:
+    """Whether the phone somebody asked for came out as asked. `Build.ok`
+    is false for a warm phone - Google in, the app on, no account, which
+    is what "no account" on the card asks for - so the wish read
+    `failed` on the dashboard over a phone that was exactly the order,
+    and stood as a red row above the phone's own (the operator,
+    2026-09-11). The breaker's list of the statuses that worked is the
+    one the jobs table already uses."""
+    from .breaker import WORKED
+
+    return bool(build.ok) or build.status in WORKED
+
+
 def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                stop: threading.Event) -> None:
     """One job, start to finish, on a builder's thread: run it, tell the
@@ -1909,7 +1922,7 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
         store_artifacts.put_dir(settings, _Path(build.artifact_dir),
                                 str(build.serial))
     if build.wanted_id is not None:
-        store_wanted.settle(settings, build.wanted_id, ok=build.ok,
+        store_wanted.settle(settings, build.wanted_id, ok=_wish_worked(build),
                             serial=str(build.serial or ""),
                             detail=build.detail or build.status)
     if job.get("action_id") is not None:

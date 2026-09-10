@@ -2887,3 +2887,20 @@ def test_the_pass_reads_a_bare_phone_wish_like_the_lane_does():
     body = body[:body.index("except Exception")]
     assert 'no_gmail=bool(row.get("no_gmail"))' in body
 
+
+def test_a_warm_phone_asked_for_without_an_account_is_a_wish_that_worked():
+    """`Build.ok` is false for a warm phone, so the wish read `failed` on
+    the dashboard over a phone that was exactly the order (the operator,
+    2026-09-11)."""
+    from types import SimpleNamespace
+
+    for status in ("warm_for_operator", "app_not_asked_for", "no_usable_gpt"):
+        assert serve_mod._wish_worked(SimpleNamespace(ok=False, status=status))
+    assert serve_mod._wish_worked(SimpleNamespace(ok=True, status="ready"))
+    assert not serve_mod._wish_worked(
+        SimpleNamespace(ok=False, status="phone_distrusted"))
+    import inspect
+
+    src = inspect.getsource(serve_mod)
+    assert src.count("ok=_wish_worked(build)") == 2, "both settle sites"
+

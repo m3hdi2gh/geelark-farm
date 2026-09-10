@@ -5305,3 +5305,14 @@ def test_the_login_rate_reader_asks_the_store_for_each_dimension(monkeypatch):
     assert [r["key"] for r in got["by"]["position"]] == ["1", "2"], "in order"
     assert got["totals"]["gmails"] == 5 and got["min_sample"] == 5
 
+
+def test_a_failed_wish_with_its_phone_on_the_shelf_is_not_a_row_of_its_own():
+    import inspect
+
+    from geelark_farm.web import read
+
+    sql = inspect.getsource(read.dashboard)
+    at = sql.index("w.status = 'failed' AND w.dismissed_at IS NULL")
+    assert "NOT EXISTS (SELECT 1 FROM phones p" in sql[at:at + 500]
+    assert "p.serial = w.serial" in sql[at:at + 600]
+
