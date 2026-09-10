@@ -354,24 +354,27 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
     and for how long, without the sheet. Empty when nothing was asked."""
     if not serials:
         return {}
-    # Bound to the run that is holding the phone now. It took the newest
-    # line for the serial with no run and no time about it, so a build ten
-    # seconds old showed yesterday's failure sentence and four hours of
-    # elapsed time - and `started` came from that old run's first line, so
-    # the number beside it was wrong the same way (2026-09-07).
+    # Bound to this phone's own life: lines since its row was opened. It
+    # took the newest line for the serial with no time about it, so a
+    # build ten seconds old showed yesterday's failure sentence and four
+    # hours of elapsed time (2026-09-07). The fix then joined the
+    # `claims` table - which nothing has ever written a row to, so every
+    # building row read "starting" for three days (2026-09-10). A serial
+    # is one phone, and a phone's row is opened once, when it is
+    # created: that moment is the start, and nothing before it is this
+    # build's.
     #
-    # A serial whose current run has said nothing yet returns nothing, and
+    # A serial whose build has said nothing yet returns nothing, and
     # `_progress` falls through to a dim "starting", which is the truth.
     lines = store._rows(
-        "SELECT l.serial, l.logger, l.msg, l.at, l.run, c.taken_at AS started"
+        "SELECT l.serial, l.logger, l.msg, l.at, l.run, p.created_at AS started"
         " FROM logs l"
         " JOIN phones p ON p.serial = l.serial AND p.done_at IS NULL"
-        " JOIN claims c ON c.phone_row = p.id AND c.released_at IS NULL"
-        "   AND l.run = c.run_id AND l.at >= c.taken_at"
+        "   AND l.at >= p.created_at"
         " WHERE l.serial = ANY(%s)"
         "   AND l.id = (SELECT max(m.id) FROM logs m"
-        "               WHERE m.serial = l.serial AND m.run = c.run_id"
-        "                 AND m.at >= c.taken_at)", (list(serials),))
+        "               WHERE m.serial = l.serial"
+        "                 AND m.at >= p.created_at)", (list(serials),))
     return {str(r["serial"]): r for r in lines}
 
 
@@ -380,20 +383,19 @@ def _live_links(store, serials: list[str]) -> dict[str, str]:
 
     The builder logs it the moment GeeLark answers the start call - once
     per start, so after an exit swap the newest line of the phone's
-    current run is the screen as it is now. Bound to the run holding the
-    phone the way `_latest_lines` is, for the same reason: yesterday's
-    link on today's build is a tab that opens on nothing."""
+    life is the screen as it is now. Bound to the phone's row the way
+    `_latest_lines` is, for the same reason: yesterday's link on
+    today's build is a tab that opens on nothing."""
     if not serials:
         return {}
     lines = store._rows(
         "SELECT l.serial, l.msg FROM logs l"
         " JOIN phones p ON p.serial = l.serial AND p.done_at IS NULL"
-        " JOIN claims c ON c.phone_row = p.id AND c.released_at IS NULL"
-        "   AND l.run = c.run_id AND l.at >= c.taken_at"
+        "   AND l.at >= p.created_at"
         " WHERE l.serial = ANY(%s) AND l.msg LIKE 'watch it live: %%'"
         "   AND l.id = (SELECT max(m.id) FROM logs m"
-        "               WHERE m.serial = l.serial AND m.run = c.run_id"
-        "                 AND m.at >= c.taken_at"
+        "               WHERE m.serial = l.serial"
+        "                 AND m.at >= p.created_at"
         "                 AND m.msg LIKE 'watch it live: %%')", (list(serials),))
     out = {}
     for r in lines:

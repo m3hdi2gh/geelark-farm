@@ -4556,11 +4556,14 @@ def test_the_building_row_reads_the_run_that_is_holding_the_phone():
     from geelark_farm.web import read
 
     sql = inspect.getsource(read._latest_lines)
-    assert "claims c" in sql and "c.released_at IS NULL" in sql
-    assert "l.run = c.run_id" in sql and "l.at >= c.taken_at" in sql
-    assert "c.taken_at AS started" in sql, (
-        "and how long it has been going, from the claim rather than from "
-        "the first line of whatever ran last")
+    assert "claims" not in sql, (
+        "the claims table has never had a row; joined on it, every "
+        "building row read 'starting' for three days (2026-09-10)")
+    assert "p.done_at IS NULL" in sql and "l.at >= p.created_at" in sql
+    assert "m.at >= p.created_at" in sql
+    assert "p.created_at AS started" in sql, (
+        "and how long it has been going, from the row's own start rather "
+        "than from the first line of whatever ran last")
 
 
 def test_the_page_starts_at_the_top_and_stays_there():
@@ -5199,7 +5202,8 @@ def test_the_live_link_of_a_building_phone_is_the_builders_newest_start_line():
 
     sql = inspect.getsource(read._live_links)
     assert "l.msg LIKE 'watch it live: %%'" in sql
-    assert "claims c" in sql and "l.run = c.run_id" in sql, "this run's, not last week's"
+    assert "claims" not in sql and "l.at >= p.created_at" in sql, (
+        "this phone's own life, not last week's")
     assert read._live_links(SimpleNamespace(_rows=lambda *a: []), []) == {}
 
     store = SimpleNamespace(_rows=lambda sql, params: [
