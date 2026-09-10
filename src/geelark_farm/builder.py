@@ -604,6 +604,11 @@ class _Session:
     #: existed - but the whole wish rides along so nothing has to be
     #: unpacked and passed twice.
     want: Wanted | None = None
+    #: What each condemned account was refused for, by address - so the
+    #: exoneration at the end can tell the service's own word about a
+    #: credential from a phone that never got as far as judging one
+    #: (the operator, 2026-09-10).
+    judged: dict = field(default_factory=dict)
     #: Addresses this phone has condemned, in order. Counted rather than
     #: merely recorded: past a point they stop being evidence about the
     #: accounts and start being evidence about the phone. See
@@ -713,11 +718,18 @@ def _sign_into_app(session: _Session) -> Build | None:
                 # to the next one (the operator, 2026-09-08).
                 _give_back_condemned(s)
                 if s.attempted or s.set_aside:
+                    judged = "; ".join(
+                        f"{address} - "
+                        f"{failures.verdict(reason, s.book.apps.service).seen}"
+                        for address, reason in s.judged.items())
                     return s.finish(
                         WARM_FOR_OPERATOR,
-                        "the account sent to it did not sign in - see what "
-                        "it tried - and no other was taken; the phone stays "
-                        "warm for the next one")
+                        (f"the account sent to it did not sign in: {judged}. "
+                         f"No other was taken; the phone stays warm for the "
+                         f"next one" if judged else
+                         "the account sent to it did not sign in - see what "
+                         "it tried - and no other was taken; the phone stays "
+                         "warm for the next one"))
                 return s.finish(
                     WARM_FOR_OPERATOR,
                     "warm on purpose: Google is signed in and the app is on "
@@ -820,6 +832,7 @@ def _sign_into_app(session: _Session) -> Build | None:
                                               s.book.apps.service).advice)
         s.app_row = None
         s.condemned.append(condemned)
+        s.judged[condemned] = outcome.reason
     return None
 
 
@@ -862,7 +875,25 @@ def _give_back_condemned(s: _Session) -> None:
     """
     if s.app_signed_in or not s.condemned:
         return
+    # Not for an account a person sent or named. The rule above was
+    # written for the pool path, where a phone works through accounts on
+    # its own and a bad phone would eat the pool; a sent account is one
+    # the operator watched, and "Incorrect email address or password" on
+    # it is the service's word about that credential. Given back, it went
+    # straight back to the pool, was sent again, and was refused again
+    # - twice in an evening on one address (the operator, 2026-09-10).
+    # It stays set aside, with the reason beside it, for a person to
+    # check; the phone stays warm. A refusal that judged nothing - a page
+    # that would not move, a screen that could not be read - is still
+    # the phone's, and still given back.
+    by_hand = bool(s.settings.manual_login
+                   or (s.want is not None and s.want.app_account))
+    kept, given_back = [], []
     for address in s.condemned:
+        reason = s.judged.get(address, "")
+        if by_hand and failures.verdict(reason).costs_the_credential:
+            kept.append(f"{address} ({reason})")
+            continue
         row = s.book.apps.find(address)
         if row is None:
             continue
@@ -870,9 +901,16 @@ def _give_back_condemned(s: _Session) -> None:
             f"Phone {s.build.serial} refused {len(s.condemned)} accounts and "
             f"signed none in, so the phone or its exit is the likelier fault "
             f"and nothing was judged here. Free to try on another phone."))
-    log.warning("phone %s refused %d accounts and signed none in (%s); "
-                "putting them back rather than leaving them condemned",
-                s.build.serial, len(s.condemned), ", ".join(s.condemned))
+        given_back.append(address)
+    if kept:
+        log.warning("phone %s refused %d sent account(s) with the service's "
+                    "own word about them (%s); they stay set aside for a "
+                    "person to check", s.build.serial, len(kept),
+                    ", ".join(kept))
+    if given_back:
+        log.warning("phone %s refused %d accounts and signed none in (%s); "
+                    "putting them back rather than leaving them condemned",
+                    s.build.serial, len(given_back), ", ".join(given_back))
 
 
 def _fresh_proxy(client: Client, book: Book) -> Resource:
@@ -2750,7 +2788,8 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
              lambda: apply_phone_states(client, book, ledger, settings))
     # Before the reload, because both read the Phones tab and this one is what
     # frees a row the last run died holding.
-    step("abandoned", lambda: settle_abandoned(client, book, ledger))
+    step("abandoned", lambda: settle_abandoned(
+        client, book, ledger, busy=_busy_serials(settings)))
     book.reload()
     step("proxies", lambda: sync_proxies(client, book, ledger))
     step("repointed", lambda: sync_phone_proxies(client, book))
@@ -2793,9 +2832,35 @@ def _live_exits(client: Client) -> dict[str, list[dict]]:
     return found
 
 
-def settle_abandoned(client: Client, book: Book,
-                    ledger: Ledger) -> dict[str, list[str]]:
+def _busy_serials(settings: Settings | None) -> frozenset[str]:
+    """The phones a queued or running job is about: a login the lane
+    queued a minute ago that no builder has taken yet has its row marked
+    `building` and no ledger claim, and read as a dead run - three
+    phones were written off as "stopped short" at 01:57 while their
+    logins started at 01:57:46 (2026-09-10). Never raises: a queue that
+    cannot be read protects nothing, and the ledger still answers."""
+    if settings is None or not (getattr(settings, "build_queue", False)
+                                and getattr(settings, "store_enabled", False)):
+        return frozenset()
+    try:
+        from .store import jobs as store_jobs
+
+        return frozenset(store_jobs.open_serials(settings))
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not read which phones the queue is holding (%s)",
+                    exc)
+        return frozenset()
+
+
+def settle_abandoned(client: Client, book: Book, ledger: Ledger,
+                     busy: frozenset[str] | set[str] = frozenset()
+                     ) -> dict[str, list[str]]:
     """Close out rows a run was holding when it died.
+
+    `busy` is the serials a queued or running job is about, from
+    `_busy_serials`: a job in the queue is a process that believes it
+    owns the phone as surely as a ledger claim is, and the claim only
+    comes once a builder takes the job.
 
     `building` means "a run has this right now", which is why every other
     reader skips it - and nothing ever un-set it. A run killed mid-build leaves
@@ -2832,6 +2897,10 @@ def settle_abandoned(client: Client, book: Book,
         if (row.get("Status") or "").strip() != book.phones.BUILDING:
             continue
         serial = row.get("Serial") or ""
+        if str(serial) in busy:
+            log.info("a job in the queue has phone %s; leaving it alone",
+                     serial)
+            continue
         present = live.get(str(serial))
         held = present and ledger.get(present["id"])
         if held is not None and held.is_claimed and not held.is_stale:

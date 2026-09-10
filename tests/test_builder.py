@@ -1548,6 +1548,50 @@ def test_a_row_left_building_with_a_gmail_becomes_finishable(world):
     assert world["deleted"] == []          # it is worth finishing, not deleting
 
 
+def test_a_row_with_a_job_in_the_queue_is_not_abandoned(world):
+    """The lane marks a phone `building` when it queues the login, and a
+    builder claims it in the ledger only when it takes the job - minutes
+    later with four logins already running. In between the row read as
+    a dead run: three phones were written off as stopped short at 01:57
+    while their logins started at 01:57:46 (2026-09-10)."""
+    book = make_book()
+    book.phones = FakePhoneLog([])
+    book.phones.rows = lambda: [
+        {"sheet_row": 4, "Serial": "2243", "Status": "building",
+         "Gmail": "g@example.com", "GPT Account": ""},
+        {"sheet_row": 5, "Serial": "2250", "Status": "building",
+         "Gmail": "h@example.com", "GPT Account": ""}]
+    written = {}
+    book.phones.finish = lambda row, **fields: written.update({row: fields})
+
+    outcome = builder.settle_abandoned(None, book, FakeLedger(),
+                                       busy=frozenset({"2243"}))
+
+    assert outcome["abandoned"] == ["2250"], "the queued one was left alone"
+    assert 4 not in written and written[5]["Status"] == "app_only"
+
+
+def test_the_busy_serials_come_from_the_queue_and_never_raise(
+        make_settings, tmp_path, monkeypatch):
+    import inspect
+
+    from geelark_farm.store import jobs as store_jobs
+
+    src = inspect.getsource(store_jobs.open_serials)
+    assert "status IN ('queued', 'running')" in src
+    assert '"phone") or {}' in src, "a finish names its phone in the payload"
+    off = make_settings(state_dir=tmp_path, store_enabled=False)
+    assert builder._busy_serials(off) == frozenset()
+    assert builder._busy_serials(None) == frozenset()
+
+    on = make_settings(state_dir=tmp_path, store_enabled=True, build_queue=True)
+    monkeypatch.setattr(store_jobs, "open_serials", lambda s: {"2243", "2244"})
+    assert builder._busy_serials(on) == frozenset({"2243", "2244"})
+    monkeypatch.setattr(store_jobs, "open_serials",
+                        lambda s: (_ for _ in ()).throw(RuntimeError("down")))
+    assert builder._busy_serials(on) == frozenset()
+
+
 def test_a_row_left_building_with_nothing_on_it_is_deleted(world):
     """Same rule a build applies to itself: a phone with no Google account is
     not a phone."""
@@ -4340,12 +4384,53 @@ def test_a_sent_account_that_fails_does_not_pull_the_next_one_under_manual_login
 
     assert build.status == builder.WARM_FOR_OPERATOR
     assert "did not sign in" in build.detail
+    assert "a0@example.com - " in build.detail, "named, with the reason"
+    assert "password" in build.detail
     assert tried == ["a0@example.com"], "one attempt, the one that was sent"
-    # A phone that signed nobody in gives its account back rather than
-    # condemning it (2026-08-30) - so all three are stock again, and the
-    # point here is that a1 and a2 were never taken.
+    # The service's own word about a sent account stands: a0 is set aside
+    # with the reason beside it, for a person to check (the operator,
+    # 2026-09-10) - and a1 and a2 were never taken.
     assert [r.credentials.email for r in s.book.apps.available] == [
-        "a0@example.com", "a1@example.com", "a2@example.com"]
+        "a1@example.com", "a2@example.com"]
+    assert s.book.apps._rows[0].values["Status"] == "wrong_password"
+
+
+def test_a_sent_account_the_phone_never_judged_is_still_given_back(
+        monkeypatch, make_settings, tmp_path):
+    """The exoneration is for refusals that judged nothing about the
+    credential - the page would not move, the screen could not be read.
+    Those stay the phone's, sent account or not."""
+    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    monkeypatch.setattr(
+        builder.chatgpt_login, "sign_in",
+        lambda c, p, creds, **k: Outcome("fatal", "stuck_on_password_entry"))
+    s = _session_for(settings, apps=2)
+    s.app_row = s.book.apps.claim("691")
+
+    build = builder._sign_into_app(s)
+
+    assert build.status == "app_stuck_on_password_entry"
+    assert s.condemned == [] and s.judged == {}, "nothing was judged"
+    assert s.book.apps._rows[0].values["Status"] != "stuck_on_password_entry"
+
+
+def test_an_account_named_on_the_card_that_is_refused_stays_set_aside(
+        monkeypatch, make_settings, tmp_path):
+    """Named by a person, not drawn from the pool: the same rule as a sent
+    one, with manual login off."""
+    settings = make_settings(state_dir=tmp_path, manual_login=False)
+    monkeypatch.setattr(
+        builder.chatgpt_login, "sign_in",
+        lambda c, p, creds, **k: Outcome("fatal", "wrong_password"))
+    s = _session_for(settings, apps=2,
+                     want=builder.Wanted(wanted_id=3, app_account="a0@example.com"))
+
+    build = builder._sign_into_app(s)
+
+    assert build is not None and not build.ok
+    assert s.book.apps._rows[0].values["Status"] == "wrong_password"
+    assert [r.credentials.email for r in s.book.apps.available] == [
+        "a1@example.com"]
 
 
 def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():

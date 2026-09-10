@@ -803,7 +803,18 @@ def act_password(ctx: Context) -> Outcome | None:
                        artifacts=[path] if path else [])
     log.info("entering the app account's password")
     fill(ctx, field, ctx.creds.password)
-    submit(ctx)
+    if ctx.seen.get("password_entry", 0) >= 2:
+        # The page came back with the dots still in it: Continue was
+        # tapped and nothing moved, no error either - twice on one
+        # account, on two phones, four taps each time (2026-09-10). The
+        # keyboard's enter is the other way this form submits; the second
+        # visit tries it, and a page that will not move for either is
+        # stuck_on_password_entry as before.
+        log.info("Continue did not move the page last time; submitting with "
+                 "the keyboard's enter")
+        shell.keyevent(ctx.client, ctx.phone_id, 66)
+    else:
+        submit(ctx)
     # Recorded because success depends on it: a composer means nothing unless
     # this run put the password in. See verified_on_device.
     ctx.submitted_password = True

@@ -1469,3 +1469,19 @@ def test_the_nag_fixture_really_hides_the_walk_from_taps():
                     "chatgpt-account-settings.xml"):
         assert screen.find_first(elements_of(fixture),
                                  chatgpt_login.PAYMENT_NAG_LABELS) is None
+
+
+def test_a_password_page_that_came_back_is_submitted_with_enter():
+    """Continue was tapped and nothing moved, no error either - twice on one
+    account, on two phones, four taps each time (2026-09-10). The keyboard's
+    enter is the other way the form submits, and the second visit tries it."""
+    import inspect
+
+    from geelark_farm.flows import chatgpt_login as login
+
+    src = inspect.getsource(login.act_password)
+    assert 'ctx.seen.get("password_entry", 0) >= 2' in src
+    assert "shell.keyevent(ctx.client, ctx.phone_id, 66)" in src
+    assert src.index("fill(ctx, field, ctx.creds.password)") < src.index(
+        "shell.keyevent"), "typed first, then enter"
+

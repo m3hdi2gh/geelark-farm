@@ -103,6 +103,30 @@ def finish(settings: Settings, job_id: int, *, ok: bool, status: str,
         conn.commit()
 
 
+def open_serials(settings: Settings) -> set[str]:
+    """The phones queued or running jobs are about - a finish names its
+    phone in the payload; a build has none until it creates one, and
+    claims it in the ledger the moment it does."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT payload FROM jobs WHERE status IN ('queued', 'running')")
+        rows = cur.fetchall()
+        conn.rollback()
+    out = set()
+    for (payload,) in rows:
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError as exc:
+                log.debug("a job's payload is not JSON (%s); skipped", exc)
+                continue
+        phone = (payload or {}).get("phone") or {}
+        serial = str(phone.get("serial") or "").strip()
+        if serial:
+            out.add(serial)
+    return out
+
+
 def counts(settings: Settings) -> tuple[int, int]:
     """(builds, finishes) queued or running - what the keeper counts as
     already on its way, so it does not order them twice."""
