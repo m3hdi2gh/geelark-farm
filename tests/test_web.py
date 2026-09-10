@@ -5237,3 +5237,71 @@ def test_a_building_row_offers_watch_live_beside_cancel():
             'href="https://phone.geelark.com/x?id=1&amp;a=b"') in r1
     assert "Watch live</a>" in r1 and "Cancel" in r1
     assert "Watch live" not in r2 and "Cancel" in r2, "no link yet: no dead button"
+
+
+# --------------------------------------- the login-rate work (2026-09-10)
+def test_the_login_rate_page_reads_every_dimension_and_is_the_admins(
+        web, monkeypatch):
+    from geelark_farm.web import app as app_mod
+
+    data = {"days": 7, "min_sample": 5,
+            "totals": {"ok": 230, "n": 624, "gmails": 378, "rate": 0.37},
+            "by": {"seller": [{"key": "LEO", "ok": 23, "n": 29, "rate": 0.79},
+                              {"key": "UK", "ok": 0, "n": 65, "rate": 0.0}],
+                   "model": [{"key": "OPPO PLN110", "ok": 5, "n": 6, "rate": 0.83}],
+                   "host": [{"key": "190.2.141.31", "ok": 1, "n": 11, "rate": 0.09}],
+                   "day": [{"key": "2026-09-09", "ok": 107, "n": 181, "rate": 0.59}],
+                   "reason": [{"key": "signed_in", "ok": 230, "n": 230, "rate": 1.0},
+                              {"key": "captcha_shown", "ok": 0, "n": 130, "rate": 0.0}],
+                   "position": [{"key": "1", "ok": 180, "n": 423, "rate": 0.43},
+                                {"key": "2", "ok": 2, "n": 3, "rate": 0.67}]}}
+    asked = []
+    monkeypatch.setattr(app_mod.read, "logins",
+                        lambda s, days=7: asked.append(days) or dict(data, days=days))
+    client = web()
+    client.login()
+
+    status, _, body = client.request("GET", "/logins?days=14")
+    assert status == 200 and asked == [14]
+    assert "<h2>Login rate</h2>" in body and "37%" in body
+    assert "230</b><span>of 624 attempts" in body
+    for word in ("LEO", "UK", "OPPO PLN110", "190.2.141.31", "2026-09-09",
+                 "captcha_shown", "Gmail #"):
+        assert word in body, word
+    assert "79%" in body and "83%" in body and "9%" in body
+    assert 'class=thin' in body, "two attempts is too few to judge"
+    assert 'href="/logins"' in body, "on the rail"
+    assert '<option value="14" selected>' in body
+    # A day count that is not a number is a week.
+    client.request("GET", "/logins?days=x")
+    assert asked[-1] == 7
+
+
+def test_the_login_rate_page_is_not_an_operators():
+    from geelark_farm.web import pages
+
+    who = {"id": 1, "username": "a", "role": "operator", "sees": "own"}
+    assert 'href="/logins"' not in pages.page("t", "body", user=who)
+    admin = {"id": 1, "username": "a", "role": "admin", "sees": "all"}
+    assert 'href="/logins"' in pages.page("t", "body", user=admin)
+
+
+def test_the_login_rate_reader_asks_the_store_for_each_dimension(monkeypatch):
+    from geelark_farm.store import signins as store_signins
+    from geelark_farm.web import read
+
+    asked = []
+    monkeypatch.setattr(store_signins, "rates",
+                        lambda s, name, days: asked.append((name, days)) or [
+                            {"key": "2", "ok": 1, "n": 2, "rate": .5},
+                            {"key": "1", "ok": 3, "n": 4, "rate": .75}])
+    monkeypatch.setattr(store_signins, "totals",
+                        lambda s, days: {"ok": 4, "n": 6, "gmails": 5,
+                                         "rate": 4 / 6})
+    got = read.logins(None, days=400)
+    assert got["days"] == 90, "capped"
+    assert {name for name, _ in asked} == {"seller", "model", "host", "day",
+                                           "reason", "position"}
+    assert [r["key"] for r in got["by"]["position"]] == ["1", "2"], "in order"
+    assert got["totals"]["gmails"] == 5 and got["min_sample"] == 5
+

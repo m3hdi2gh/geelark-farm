@@ -101,7 +101,11 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # is pressed again, and a welcome that keeps coming back is named
     # (2026-09-10, phone 2222).
     assert "stuck_on_play_welcome" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 25
+    # The twenty-sixth is `password_without_a_box`: the password page whose
+    # box the dump left out, once claimed by `dismissable` for its NEXT
+    # (2026-09-10).
+    assert "stuck_on_password_without_a_box" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 26
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

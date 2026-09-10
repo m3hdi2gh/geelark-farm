@@ -69,9 +69,14 @@ DISMISS_LABELS = (
 # Written in plain ASCII: screen.normalize() folds Google's typographic
 # punctuation, so "couldn't" here matches "couldn’t" on screen.
 FATAL_TEXTS = {
+    # Before captcha_shown: reCAPTCHA serves its text and audio challenge
+    # when it does not trust the exit's address at all, and the grid the
+    # solver answers is never shown. Named apart so the build changes the
+    # exit and tries the same address again instead of marking it - 27 of
+    # the week's 130 captcha_shown were this (2026-09-10).
+    "captcha_text": ("type the text you hear or see",),
     "captcha_shown": (
-        "confirm you're not a robot", "type the text you hear or see",
-        "i'm not a robot",
+        "confirm you're not a robot", "i'm not a robot",
     ),
     "wrong_password": ("wrong password", "incorrect password"),
     # Google accepts the address, then says the password on file is the old
@@ -110,6 +115,9 @@ FATAL_TEXTS = {
 
 # Detail lines for the reasons where the fix is not obvious from the name.
 FATAL_ADVICE = {
+    "captcha_text":
+        "reCAPTCHA offered only text or audio: the exit is not trusted at all; "
+        "the build changes it and tries the same address again",
     "captcha_shown":
         "Google is challenging this exit IP; a cleaner proxy is the fix",
     "password_changed":
@@ -1098,6 +1106,42 @@ def password_page(ctx: Context) -> bool:
     return _password_box(ctx) is not None
 
 
+def password_page_without_a_box(ctx: Context) -> bool:
+    """The password page by its words - "Enter a password", "Show password"
+    - with no input in the hierarchy at all. The web view leaves the box
+    out of the dump now and then; the page was then claimed by
+    `dismissable` for its NEXT, which was tapped eight times over an empty
+    box (14 builds in a week, 2026-09-10)."""
+    return ctx.has(*PASSWORD_TEXTS) and _password_box(ctx) is None
+
+
+def act_password_without_a_box(ctx: Context) -> Outcome | None:
+    """Wait once for the box to be drawn; then tap the label that sits on
+    it, which focuses the field the dump cannot see, and type as usual.
+    Bounded by the entry's visits: a page whose box never comes is
+    stuck_on_password_without_a_box, the device's."""
+    if ctx.seen.get("password_without_a_box", 0) <= 1:
+        log.info("the password page has no box in the dump; waiting for it")
+        time.sleep(3)
+        return None
+    for label in ("Enter a password", "Enter your password"):
+        if ctx.tap(label):
+            break
+    else:
+        return None
+    time.sleep(2)
+    ctx.refresh()
+    field = _password_box(ctx)
+    if field is None:
+        log.info("tapped the password label; still no box to type into")
+        return None
+    log.info("entering the password (box found after tapping its label)")
+    fill(ctx, field, ctx.account.password)
+    submit(ctx)
+    time.sleep(5)
+    return None
+
+
 def act_password(ctx: Context) -> Outcome | None:
     field = _password_box(ctx)
     if not field:
@@ -1237,6 +1281,22 @@ def act_verify_phone(ctx: Context) -> Outcome | None:
         return Outcome("fatal", "phone_verification_required",
                        "Try another way brought the phone-number page back; "
                        + FATAL_ADVICE["phone_verification_required"],
+                       artifacts=[path] if path else [])
+    return act_try_another_way(ctx)
+
+
+def act_push_to_other_device(ctx: Context) -> Outcome | None:
+    """"Check your other device and tap Yes." With an authenticator key or
+    a recovery address on the row, Try another way reaches a list this
+    can answer. With neither, it reaches a passkey dead end, "Something
+    went wrong", and the same page again - fifteen builds walked that
+    loop in a week to report the phone stuck (2026-09-10). Said at once
+    instead: the row has nothing to answer with."""
+    if not (ctx.account.totp_secret or ctx.account.recovery_email):
+        path = ctx.save("no-authenticator")
+        return Outcome("fatal", "no_authenticator",
+                       "Google asks for a second factor and the row carries "
+                       "none - no authenticator key, no recovery address",
                        artifacts=[path] if path else [])
     return act_try_another_way(ctx)
 
@@ -1389,7 +1449,7 @@ SCREENS: list[Screen] = [
            lambda c: (c.has("try another way")
                       and c.has("check your", "tap yes", "2-step verification")
                       and not authenticator_offered(c)),
-           act_try_another_way),
+           act_push_to_other_device),
 
     # Three visits, not one: the first list may carry only the SMS row and
     # a Try another way, which the act presses once; the second list is
@@ -1456,6 +1516,10 @@ SCREENS: list[Screen] = [
            is not None,
            act_account_picker),
 
+    # Above dismissable, whose NEXT this page also carries.
+    Screen("password_without_a_box", password_page_without_a_box,
+           act_password_without_a_box, max_visits=5),
+
     Screen("dismissable",
            lambda c: screen.find_first(c.elements, DISMISS_LABELS,
                                        clickable_only=True) is not None,
@@ -1484,8 +1548,11 @@ SCREENS: list[Screen] = [
     # per-minute billing of a phone that is already running; giving up early
     # costs the phone, the Gmail and the proxy together. The login budget
     # bounds it either way.
+    # Sixty visits of five seconds: five minutes. Twenty-five gave two,
+    # and eighteen sign-ins in a week were given up on there whose
+    # accounts were on the device by their next try (2026-09-10).
     Screen("sign_in_closed", sign_in_closed, act_wait_for_the_account,
-           max_visits=25),
+           max_visits=60),
 ]
 
 

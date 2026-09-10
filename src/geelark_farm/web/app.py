@@ -224,6 +224,16 @@ class _Handler(BaseHTTPRequestHandler):
                                      page=_page_number(first)),
                     user, signals=read.signals(self.settings), kind=kind,
                     q=q, day=day, explain=_explain))
+            if path == "/logins":
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                try:
+                    days = int(first.get("days", "7") or 7)
+                except ValueError as exc:
+                    log.debug("days is not a number (%s); a week", exc)
+                    days = 7
+                return self._html(200, pages.logins_page(
+                    read.logins(self.settings, days=days), user))
             if path == "/logs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))

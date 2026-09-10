@@ -126,7 +126,7 @@ class Verdict:
 #: address on a phone signed in 73% of the time, the fifth never; and an
 #: address refused with a captcha signed in on its next try two times in
 #: three (2026-09-10).
-DISTRUST = frozenset({"captcha_shown", "verification_blocked",
+DISTRUST = frozenset({"captcha_shown", "captcha_text", "verification_blocked",
                       "phone_verification_required", "sign_in_refused",
                       "too_many_attempts"})
 

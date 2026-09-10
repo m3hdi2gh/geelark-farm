@@ -1283,6 +1283,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     tried_gmails = 0
     captchas_here = 0                     # on the exit the phone is on now
     exit_swaps = 0
+    # One exit change for a text captcha per build - see below.
+    text_captchas = 0
     session: _Session | None = None
     # Whether the Gmail ended up on the device. Not the same question as "did
     # the build succeed" - see _release. The app account's equivalent lives on
@@ -1506,6 +1508,37 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 except Exception as exc:                           # noqa: BLE001
                     log.warning("could not count the captcha against the "
                                 "exit's host (%s)", exc)
+            if (failures.verdict(outcome.reason).needs_a_new_exit
+                    and proxy_row is not None and text_captchas < 1
+                    and not outcome.ok):
+                # The exit's, not the address's: reCAPTCHA served text or
+                # audio, which it does when it does not trust the address
+                # at all. The exit is changed and the same address goes
+                # again, unmarked, once per build (2026-09-10).
+                text_captchas += 1
+                previous = proxy_row
+                seen = {f"{r.proxy.host}:{r.proxy.port}"
+                        for r, _ in refused_exits if r.proxy}
+                if proxy_row.proxy:
+                    seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
+                try:
+                    proxy_row = _new_exit(
+                        client, settings, book, build, phone_id, proxy_row,
+                        f"reCAPTCHA offered only text or audio on this exit",
+                        remaining(), swaps=exit_swaps, avoid=seen,
+                        cancelled=cancelled)
+                except Aborted as exc:
+                    log.warning("the exit could not be changed (%s); the "
+                                "same address goes again on it", exc)
+                    phones.ensure_running(
+                        client, phone_id,
+                        timeout=min(phones.BOOT_SECONDS, remaining()),
+                        cancelled=cancelled)
+                else:
+                    if previous is not None and previous is not proxy_row:
+                        refused_exits.append((previous, outcome.reason))
+                    exit_swaps += 1
+                continue
             if outcome.ok:
                 build.gmail = account.email
                 gmail_signed_in = True

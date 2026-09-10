@@ -314,10 +314,22 @@ def _drive(ctx: Context, screens: list[Screen], *,
 
         visits = ctx.seen.get(matched.name, 0) + 1
         ctx.seen[matched.name] = visits
-        if visits > matched.max_visits:
+        # Stuck is the same page coming straight back, `max_visits` times
+        # in a row - or, for a loop through other pages, three times that
+        # in all. Counted straight through, a long sign-in was called
+        # stuck on `dismissable` for having dismissed eight different
+        # pages on its way - a consent, three "Not now", a captcha's Next
+        # - while moving the whole time (14 builds in a week, 2026-09-10).
+        streak = 1
+        for earlier in reversed(ctx.trail):
+            if earlier != matched.name:
+                break
+            streak += 1
+        if streak > matched.max_visits or visits > 3 * matched.max_visits:
             path = ctx.save(f"stuck-{matched.name}")
             return Outcome("unknown", f"stuck_on_{matched.name}",
-                           f"handled {visits} times without progress",
+                           f"handled {visits} times without progress"
+                           f" ({streak} in a row)",
                            artifacts=[path] if path else [])
 
         ctx.trail.append(matched.name)

@@ -911,6 +911,22 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
     return out
 
 
+def logins(settings: Settings, days: int = 7) -> dict:
+    """The Login rate page: every Google sign-in of the last `days`, by
+    seller, phone model, exit host, day, reason and position on the
+    phone - what a purchase and a builder change are judged by."""
+    from ..store import signins as store_signins
+
+    days = max(1, min(int(days or 7), 90))
+    by = {name: store_signins.rates(settings, name, days)
+          for name in ("seller", "model", "host", "day", "reason", "position")}
+    by["day"] = sorted(by["day"], key=lambda r: r["key"])
+    by["position"] = sorted(by["position"],
+                            key=lambda r: int(r["key"] or 0))
+    return {"days": days, "totals": store_signins.totals(settings, days),
+            "by": by, "min_sample": store_signins.MIN_SAMPLE}
+
+
 def events(settings: Settings, limit: int = 200) -> list[dict]:
     with Store(settings) as store:
         return store._rows(

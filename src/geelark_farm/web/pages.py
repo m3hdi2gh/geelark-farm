@@ -781,6 +781,7 @@ _RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/proxy", "Proxy Pool", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
+         ("/logins", "Login rate", ""),
          ("/events", "Events", ""), ("/users", "Users", ""))
 
 #: One line icon per rail entry - the mockup's, inlined so no file is
@@ -804,6 +805,8 @@ _ICONS = {
                  '0 0 1-1 1H4a1 1 0 0 1-1-1v-6l2-7z"/>',
     "/needs": '<path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" '
               'cy="18" r="0.6" fill="currentColor"/>',
+    "/logins": '<polyline points="3 17 9 11 13 14 21 6"/>'
+               '<polyline points="15 6 21 6 21 12"/>',
     "/events": '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" '
                'y2="12"/><line x1="4" y1="18" x2="14" y2="18"/>',
     "/users": '<circle cx="9" cy="8" r="3.5"/><path d="M3.5 20c.7-3.2 2.9-5 '
@@ -872,7 +875,8 @@ def page(title: str, body: str, *, user: dict | None = None,
             # to advertise what they may not have.
             if not _keeps_the_console(user) and path != "/":
                 continue
-            if path in ("/events", "/needs") and user.get("sees") != "all":
+            if path in ("/events", "/needs", "/logins") and \
+                    user.get("sees") != "all":
                 continue
             if path == "/users" and not (user.get("role") == "admin"
                                          and user.get("user_admin")):
@@ -5860,6 +5864,93 @@ def _day_chips(day: str, kind: str, q: str) -> str:
     if day not in (now, "all"):
         chips.append(f'<span>{esc(day)}</span>')
     return "".join(chips)
+
+
+#: The dimensions of the Login rate page, in reading order, with the
+#: word each key is called.
+_LOGIN_TABLES = (("seller", "By seller", "sold by"),
+                 ("model", "By phone model", "brand and model"),
+                 ("host", "By exit host", "host address"),
+                 ("position", "By position on the phone", "Gmail #"),
+                 ("reason", "By how it ended", "outcome"),
+                 ("day", "By day", "date"))
+
+
+def logins_page(data: dict, user: dict) -> str:
+    """Every Google sign-in of the last week, by what it depended on.
+
+    Read to judge a purchase (a seller whose addresses never sign in), a
+    phone model or an exit host (the gates set aside what this shows),
+    and every builder change (the rate before and after). Each table is
+    the same shape: the key, signed in / attempts, the rate as a bar.
+    Rows under `min_sample` attempts are shown but greyed: too few to
+    judge (the login-rate work, 2026-09-10).
+    """
+    days = int(data.get("days") or 7)
+    totals = data.get("totals") or {}
+    least = int(data.get("min_sample") or 5)
+    by = data.get("by") or {}
+
+    def pct(rate: float) -> str:
+        return f"{round(float(rate or 0) * 100)}%"
+
+    def table(key: str, title: str, word: str) -> str:
+        rows = by.get(key) or []
+        if not rows:
+            return (f'<div class="panel"><h3>{esc(title)}</h3>'
+                    f'<p class="dim">Nothing recorded yet.</p></div>')
+        lines = []
+        for r in rows:
+            n, ok, rate = int(r.get("n") or 0), int(r.get("ok") or 0), \
+                float(r.get("rate") or 0)
+            thin = n < least
+            colour = ("ready" if rate >= 0.6 else
+                      "warn" if rate >= 0.35 else "failed")
+            lines.append(
+                f'<tr{" class=thin" if thin else ""}>'
+                f'<td>{esc(str(r.get("key") or "") or "&mdash;")}</td>'
+                f'<td class="num">{ok}/{n}</td>'
+                f'<td><span class="bar"><i style="width:{round(rate * 100)}%"'
+                f' class="{colour}"></i></span> '
+                f'<span class="badge {colour}">{pct(rate)}</span>'
+                + (' <span class="dim">too few to judge</span>' if thin else "")
+                + '</td></tr>')
+        return (f'<div class="panel"><h3>{esc(title)} '
+                f'<span class="n">{len(rows)}</span></h3>'
+                f'<table><thead><tr><th>{esc(word)}</th><th>signed in</th>'
+                f'<th>rate</th></tr></thead><tbody>{"".join(lines)}</tbody>'
+                f'</table></div>')
+
+    head = (f'<div class="panel"><h3>Login rate <span class="n">last {days} '
+            f'day{"s" if days != 1 else ""}</span></h3>'
+            f'<div class="strip">'
+            f'<div><b>{pct(totals.get("rate", 0))}</b><span>signed in</span></div>'
+            f'<div><b>{int(totals.get("ok") or 0)}</b><span>of '
+            f'{int(totals.get("n") or 0)} attempts</span></div>'
+            f'<div><b>{int(totals.get("gmails") or 0)}</b><span>addresses '
+            f'tried</span></div></div>'
+            f'<p class="dim">One row per Google sign-in the builder made. '
+            f'Rows with fewer than {least} attempts are too few to judge; '
+            f'the host gate reads the exit-host table, the model gate the '
+            f'phone-model one.</p>'
+            f'<form method="get" action="/logins" class="row">'
+            f'<label class="field"><span>Days</span>'
+            f'<select name="days" onchange="this.form.submit()">'
+            + "".join(f'<option value="{d}"{" selected" if d == days else ""}>'
+                      f'{d}</option>' for d in (1, 3, 7, 14, 30))
+            + '</select></label><noscript><button class="quiet">Show'
+              '</button></noscript></form></div>')
+    body = ('<style>.thin td{opacity:.55}.bar{display:inline-block;width:120px;'
+            'height:8px;background:var(--panel2);border-radius:4px;'
+            'vertical-align:middle;overflow:hidden}.bar i{display:block;height:100%;'
+            'border-radius:4px;background:var(--red)}.bar i.warn{background:'
+            'var(--amber)}.bar i.ready{background:var(--green)}'
+            '.strip{display:flex;gap:28px;flex-wrap:wrap;margin:4px 0 10px}'
+            '.strip b{display:block;font-family:var(--mono);font-size:26px;'
+            'font-weight:500}.strip span{color:var(--dim);font-size:12px}'
+            '</style><h2>Login rate</h2>' + head
+            + "".join(table(*t) for t in _LOGIN_TABLES))
+    return page("Login rate", body, user=user, here="/logins")
 
 
 def events_page(data: dict, user: dict, *, signals: dict | None = None,

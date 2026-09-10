@@ -1947,3 +1947,84 @@ def test_the_phone_page_coming_back_after_try_another_way_is_the_accounts_fault(
     out = login.act_verify_phone(ctx)
     assert out.kind == "fatal" and out.reason == "phone_verification_required"
     assert device.tapped == ["Try another way"], "not pressed again"
+
+
+# --------------------------------------- the login-rate work (2026-09-10)
+def test_a_password_page_whose_box_the_dump_left_out_is_not_dismissable():
+    """The web view can leave the box out of a dump, and the page would
+    then be claimed by `dismissable` for its NEXT. Build 1844's password
+    page (2026-09-06) with its box taken out."""
+    ctx = context_from("google-password-without-box.xml")
+
+    assert login.password_page(ctx) is False, "no box in the hierarchy"
+    assert matched_screen(ctx).name == "password_without_a_box"
+    assert matched_screen(ctx).act is login.act_password_without_a_box
+    assert matched_screen(ctx).max_visits <= 5
+
+
+def test_the_boxless_password_page_waits_once_then_taps_its_label(phone,
+                                                                    monkeypatch):
+    device = phone(taps_that_work={"Enter a password"})
+    ctx = context_from("google-password-without-box.xml")
+    ctx.seen = {"password_without_a_box": 1}
+    refreshed = []
+    monkeypatch.setattr(ctx, "refresh", lambda: refreshed.append(1))
+
+    assert login.act_password_without_a_box(ctx) is None
+    assert device.tapped == [], "the first visit only waits"
+
+    ctx.seen = {"password_without_a_box": 2}
+    assert login.act_password_without_a_box(ctx) is None
+    assert device.tapped == ["Enter a password"] and refreshed == [1]
+    assert device.filled == [], "still no box after the tap: next visit"
+
+    # The box appears after the tap: typed and submitted.
+    box = input_box(password=True)
+    monkeypatch.setattr(ctx, "refresh",
+                        lambda: ctx.elements.append(box))
+    device.tapped.clear()
+    login.act_password_without_a_box(ctx)
+    assert device.filled == [("EditText", "x")]
+
+
+def test_a_text_or_audio_captcha_is_the_exits_not_the_addresss():
+    """reCAPTCHA serves text and audio when it does not trust the exit at
+    all; the grid the solver answers is never shown. 27 of the week's
+    130 captcha_shown were this (2026-09-10)."""
+    xml = ('<?xml version="1.0"?><hierarchy><node text="Type the text you '
+           'hear or see" class="android.widget.TextView" clickable="false" '
+           'enabled="true" focused="false" password="false" '
+           'bounds="[0,0][100,40]" resource-id="" content-desc=""/></hierarchy>')
+    ctx = login.Context(client=None, phone_id="P", account=ACCOUNT,
+                        solver_key="k")
+    ctx.elements = screen.parse(xml)
+    ctx.blob = screen.texts(ctx.elements)
+
+    assert login._fatal_reason(ctx) == "captcha_text"
+    assert matched_screen(ctx).name == "fatal"
+    from geelark_farm import failures
+
+    assert failures.verdict("captcha_text").needs_a_new_exit
+    assert failures.retryable("captcha_text"), "the second one is distrust"
+
+
+def test_tap_yes_on_your_other_device_with_nothing_on_the_row_ends_at_once():
+    """With neither a key nor a recovery address, Try another way reaches
+    a passkey dead end, "Something went wrong" and the same page again -
+    fifteen builds walked that loop in a week (2026-09-10)."""
+    from geelark_farm.accounts import Account
+
+    bare = Account(email="bare@example.com", password="x", totp_secret="")
+    ctx = a_context(account=bare)
+    got = login.act_push_to_other_device(ctx)
+    assert got is not None and got.reason == "no_authenticator"
+
+    keyed = a_context()
+    assert login.act_push_to_other_device(keyed) is None, (
+        "with a key, Try another way is asked as before")
+
+
+def test_the_sign_in_gets_five_minutes_to_land_after_it_closes():
+    closed = next(s for s in login.SCREENS if s.name == "sign_in_closed")
+    assert closed.max_visits == 60, "60 visits of five seconds"
+

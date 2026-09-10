@@ -5162,3 +5162,32 @@ def test_the_keeper_runs_the_ladder_and_the_gate_only_with_the_store(
     assert "pools_in_pg" in src.split('step("retried"')[0][-400:]
     assert "retried" in builder.STEP_NAMES and "hosts" in builder.STEP_NAMES
 
+
+def test_a_text_captcha_changes_the_exit_and_tries_the_same_address_again(
+        device, settings, drive):
+    book = make_book(gmails=2, proxies=3)
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "captcha_text"), SIGNED_IN])
+
+    assert build.ok and build.gmail == "g0@example.com", "the same address"
+    assert len(device.proxies_set) == 1, "one exit change"
+    assert [r.credentials.email for r in book.gmails.available] == [
+        "g1@example.com"], "the other was never touched"
+    assert not any(reason == "captcha_text" for _, reason, _ in build.tried), (
+        "the address was not marked for the exit's fault")
+
+
+def test_a_second_text_captcha_in_one_build_is_a_refusal_like_any_other(
+        device, settings, drive):
+    """Once per build: an exit change that did not help is not repeated."""
+    text = Outcome("fatal", "captcha_text")
+    book = make_book(gmails=2, proxies=3)
+    build = drive(book, settings, google=[text, text, SIGNED_IN])
+
+    assert len(device.proxies_set) == 1
+    assert build.status == "phone_distrusted", (
+        "the second one is distrust: the phone goes, the address climbs "
+        "the ladder")
+    assert [r.credentials.email for r in book.gmails.available] == [
+        "g1@example.com"]
+
