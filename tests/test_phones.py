@@ -1024,3 +1024,17 @@ def test_on_running_fires_once_the_phone_is_up_and_before_the_settle(
     assert phones.ensure_running(object(), "P1",
                                  on_running=lambda: fired.append(1)) is None
     assert fired == [1]
+
+
+def test_create_hands_the_model_to_the_build():
+    import inspect
+
+    from geelark_farm import phones
+
+    src = inspect.getsource(phones.create)
+    assert '("deviceBrand", "deviceModel")' in src
+    assert "entry.model = " in src
+    from geelark_farm.ledger import Entry
+
+    assert Entry(phone_id="p", created_at=0.0).model == ""
+

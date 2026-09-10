@@ -373,6 +373,8 @@ class Build:
     #: with, and the address is already one column away in the Proxy tab.
     proxy_name: str = ""
     gmail: str = ""
+    #: "brand model" as GeeLark reported it, for the sign-in record.
+    model: str = ""
     #: Whether the target app is on the device. The row already said whether
     #: Google was signed in (the Gmail column) and whether the app account
     #: was (GPT Account); this was the one step of the three that nothing
@@ -1043,6 +1045,58 @@ CLAUDE_PACKAGE = "com.anthropic.claude"
 GMAILS_PER_BUILD = 5
 
 
+def _bad_model(settings: Settings, model: str) -> bool:
+    """Whether GeeLark handed out a model the numbers condemned."""
+    said = (model or "").casefold()
+    return bool(said) and any(bad.casefold() in said
+                              for bad in getattr(settings, "bad_models", ()))
+
+
+def _create_kept(client: Client, settings: Settings, ledger: Ledger, proxy,
+                 *, label: str, account: str):
+    """`phones.create`, and again when the model is one of the bad ones -
+    deleted before anything is spent on it, up to `model_retries` times.
+    GeeLark's API takes no model; the only choice is after the fact, and
+    a phone a few seconds old costs nothing but those seconds (the model
+    gate, 2026-09-10). The last one is kept whatever it is."""
+    tries = max(0, int(getattr(settings, "model_retries", 0)))
+    entry = phones.create(client, settings, proxy, ledger=ledger,
+                          label=label, account=account)
+    for n in range(tries):
+        model = str(getattr(entry, "model", "") or "")
+        if not _bad_model(settings, model):
+            return entry
+        log.warning("phone %s is a %s, which signs in rarely; deleting it "
+                    "and creating another (%d of %d)",
+                    entry.serial or entry.phone_id, model, n + 1, tries)
+        try:
+            phones.delete(client, [entry.phone_id], ledger=ledger)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not delete phone %s (%s); keeping it",
+                        entry.serial or entry.phone_id, exc)
+            return entry
+        entry = phones.create(client, settings, proxy, ledger=ledger,
+                              label=label, account=account)
+    return entry
+
+
+def _record_signin(settings: Settings, build: Build, *, gmail: str,
+                   seller: str, host: str, position: int, reason: str,
+                   ok: bool, seconds: float, captcha_rounds: int) -> None:
+    """One row in the store's `signins`, when there is a store."""
+    if not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import signins as store_signins
+
+        store_signins.record(settings, serial=build.serial, gmail=gmail,
+                             seller=seller, host=host, model=build.model,
+                             position=position, reason=reason, ok=ok,
+                             seconds=seconds, captcha_rounds=captcha_rounds)
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("sign-in not recorded (%s)", exc)
+
+
 def _package_for(settings: Settings, app: str) -> str:
     if app == "spotify":
         return SPOTIFY_PACKAGE
@@ -1303,12 +1357,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             build.proxy = str(proxy_row.proxy)
             build.proxy_name = proxy_row.name
 
-            entry = phones.create(client, settings, proxy_row.proxy,
-                                  ledger=ledger, label=f"build {index}",
-                                  account=gmail_row.label if gmail_row else "")
+            entry = _create_kept(client, settings, ledger, proxy_row.proxy,
+                                 label=f"build {index}",
+                                 account=gmail_row.label if gmail_row else "")
         phone_id = entry.phone_id
         build.phone_id = phone_id
         build.serial = str(entry.serial or "")
+        build.model = str(getattr(entry, "model", "") or "")
         _serial.set(build.serial or NO_BUILD)
         # The first line of this phone's story (C8): born behind which
         # exit, for which address.
@@ -1408,6 +1463,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             else:
                 log.info("signing in as %s (Gmail %d of %d on this phone)",
                          account.email, tried_gmails + 1, GMAILS_PER_BUILD)
+            attempt_started = time.monotonic()
             outcome = google_login.sign_in(
                 client, phone_id, account,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
@@ -1433,6 +1489,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # thirteen to forty-three on 190.2.143.20 - or never gets
             # through at all (the operator, 2026-09-09).
             rounds = sum(1 for s in (outcome.trail or []) if s == "captcha")
+            _record_signin(
+                settings, build, gmail=account.email,
+                seller=str((gmail_row.values or {}).get("Seller") or ""),
+                host=str(getattr(getattr(proxy_row, "proxy", None), "host", "")
+                         or ""),
+                position=tried_gmails + 1, reason=outcome.reason,
+                ok=bool(outcome.ok),
+                seconds=time.monotonic() - attempt_started,
+                captcha_rounds=rounds)
             heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
                      or outcome.reason == "captcha_shown")
             if heavy and proxy_row is not None:
@@ -1484,6 +1549,19 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # 2026-09-10).
                 return finish("chosen_gmail_failed",
                               f"{account.email} - {said}")
+            if (failures.retryable(outcome.reason)
+                    and getattr(settings, "one_gmail_per_phone", True)):
+                # One Gmail per phone. Google distrusting the first address
+                # is Google distrusting the device and the exit: the second
+                # address on the same phone signed in 54% of the time
+                # against 73% for the first, the fifth never (2026-09-10).
+                # The phone goes - nothing is signed into it - and the next
+                # address gets a fresh one; this address waits on the
+                # ladder (pgpool.fail) and comes back for a fresh phone too.
+                return finish("phone_distrusted",
+                              f"Google distrusted this phone on "
+                              f"{account.email} ({said}); the next address "
+                              f"goes on a fresh phone and exit")
             if tried_gmails >= GMAILS_PER_BUILD:
                 tally = ", ".join(f"{email} ({reason})"
                                   for email, reason, _ in build.tried[-tried_gmails:])
@@ -2739,6 +2817,8 @@ STEP_NAMES = {
     "unclaimed": "putting back what a dead run was holding",
     "pruned": "clearing out archived pages nothing needs",
     "checked": "testing every free proxy",
+    "retried": "putting back the Gmails whose wait on the ladder is over",
+    "hosts": "setting aside exits on hosts that sign in rarely",
 }
 
 
@@ -2835,6 +2915,10 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
     step("stranded", lambda: strand_check(client, book))
+    if getattr(settings, "store_enabled", False) and getattr(
+            settings, "pools_in_pg", False):
+        step("retried", lambda: _revive_ladder(settings))
+        step("hosts", lambda: gate_hosts(book, settings))
     if stale_claim_seconds:
         step("unclaimed", lambda: free_abandoned_claims(book,
                                                         stale_claim_seconds))
@@ -3201,6 +3285,60 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
     if renamed:
         log.info("renamed %d phone(s) in GeeLark", len(renamed))
     return renamed
+
+
+def _revive_ladder(settings: Settings) -> list[str]:
+    from .store import ladder
+
+    return ladder.revive_due(settings)
+
+
+#: The note every exit the host gate sets aside begins with, so the gate
+#: can tell its own suspects from the captcha tally's and free them when
+#: the host recovers.
+HOST_GATE_NOTE = "Login rate"
+
+
+def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
+    """Set aside the free exits on hosts whose sign-ins over the last week
+    fall under `host_gate_rate` (with at least `host_gate_min` of them),
+    and free the ones it set aside on hosts that recovered. Measured:
+    185.100.235.x 20 in 100, 82.38.66.x 30 against 82.27.118.x 75 among
+    addresses with a key (2026-09-10)."""
+    from .store import signins as store_signins
+
+    least = max(1, int(getattr(settings, "host_gate_min", 5)))
+    floor = float(getattr(settings, "host_gate_rate", 0.5))
+    judged = {r["key"]: r for r in store_signins.host_rates(settings)
+              if r["n"] >= least}
+    aside, freed = [], []
+    for resource in list(book.proxies._rows):
+        host = str(getattr(getattr(resource, "proxy", None), "host", "") or "")
+        seen = judged.get(host)
+        status = str(resource.values.get("Status") or "").strip().lower()
+        note = str(resource.values.get("Note") or "")
+        if seen is None:
+            continue
+        bad = seen["rate"] < floor
+        if bad and status in ("", "free", "unused"):
+            book.proxies.fail(resource, SUSPECT, note=(
+                f"Login rate {seen['ok']}/{seen['n']} on {host} in the "
+                f"last 7 days; set aside on its own. Press Free to use it "
+                f"again, or wait for the host to recover."))
+            aside.append(str(getattr(resource, "name", "") or resource.label))
+        elif (not bad and status == SUSPECT
+              and note.startswith(HOST_GATE_NOTE)):
+            book.proxies.release(resource, note=(
+                f"Free again - {host} signs in {seen['ok']}/{seen['n']} "
+                f"over the last 7 days."))
+            freed.append(str(getattr(resource, "name", "") or resource.label))
+    if aside:
+        log.warning("host gate: %d exit(s) set aside on hosts under %.0f%%: %s",
+                    len(aside), floor * 100, ", ".join(aside))
+    if freed:
+        log.info("host gate: %d exit(s) back on recovered hosts: %s",
+                 len(freed), ", ".join(freed))
+    return {"gated": aside, "ungated": freed}
 
 
 def free_abandoned_claims(book: Book, older_than: float) -> list[str]:

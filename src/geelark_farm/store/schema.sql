@@ -631,3 +631,44 @@ CREATE INDEX IF NOT EXISTS artifacts_by_serial ON artifacts (serial, folder);
 -- whoever asked dismisses it. `dismissed_at` is that press.
 ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS no_gmail boolean NOT NULL DEFAULT false;
 ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;
+
+-- ------------------------------------------ sign-ins and the ladder, rev 23
+-- Every Google sign-in attempt, one row: which address, on which phone
+-- model, behind which exit host, in which position on the phone, and how
+-- it ended. The week's rates by host and model are read off it (the host
+-- gate, the Login rate page), and every builder change is judged by it
+-- (the login-rate work, 2026-09-10).
+CREATE TABLE IF NOT EXISTS signins (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at             timestamptz NOT NULL DEFAULT now(),
+    machine        text NOT NULL DEFAULT '',
+    serial         text NOT NULL DEFAULT '',
+    gmail          text NOT NULL DEFAULT '',
+    seller         text NOT NULL DEFAULT '',
+    host           text NOT NULL DEFAULT '',
+    model          text NOT NULL DEFAULT '',
+    position       integer NOT NULL DEFAULT 1,
+    reason         text NOT NULL DEFAULT '',
+    ok             boolean NOT NULL DEFAULT false,
+    seconds        real,
+    captcha_rounds integer NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS signins_at ON signins (at);
+-- The retry ladder: a Gmail Google distrusted (captcha, verify your
+-- phone, could not verify) is not spent - it waits a day, then two, and
+-- comes back on its own for another phone and exit; the third refusal
+-- is a person's to look at. `tries` counts them, `retry_after` is when it
+-- comes back, `last_reason` what it was refused for.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS tries       integer NOT NULL DEFAULT 0;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS retry_after timestamptz;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS last_reason text NOT NULL DEFAULT '';
+-- Once: the addresses a run set aside for a distrust reason before the
+-- ladder existed, and that carry an authenticator key, get their second
+-- try. Rows without a key never signed in anywhere (0 of 85 in the week
+-- this was written) and are left where they are.
+UPDATE resources SET tries = 1, retry_after = now(), last_reason = status
+ WHERE kind = 'gmail' AND tries = 0 AND retry_after IS NULL AND error IS NULL
+   AND status IN ('captcha_shown', 'verification_blocked',
+                  'phone_verification_required', 'sign_in_refused',
+                  'too_many_attempts')
+   AND coalesce(totp_secret, '') <> '';

@@ -1463,3 +1463,94 @@ def test_stop_requests_live_in_service_state_and_age_out():
         assert "state.put(conn, KEY, asked)" in src and "conn.commit()" in src
     assert stops.KEY == "stop_by_hand"
 
+
+# --------------------------------------- the login-rate work (2026-09-10)
+def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over():
+    import inspect
+
+    from geelark_farm import failures
+    from geelark_farm.store import ladder
+
+    assert ladder.MAX_TRIES == 3 and ladder.WAITS_HOURS == (24, 48)
+    challenge = inspect.getsource(ladder.challenge)
+    assert "tries = tries + 1" in challenge and "last_reason = %s" in challenge
+    assert "retry_after = CASE WHEN tries + 1 >= %s THEN NULL" in challenge
+    assert "RETURNING tries, retry_after IS NOT NULL" in challenge
+    revive = inspect.getsource(ladder.revive_due)
+    assert "retry_after IS NOT NULL AND retry_after <= now()" in revive
+    assert "status = ANY(%s)" in revive and "sorted(failures.DISTRUST)" in revive
+    assert "SET status = '', serial = '', retry_after = NULL" in revive
+    assert "conn.commit()" in revive
+
+    class Conn:
+        def __init__(self, tries, back):
+            self.sql = []; self.row = (tries, back)
+
+        def execute(self, sql, params=None):
+            self.sql.append((sql, params))
+            return self
+
+        def fetchone(self):
+            return self.row
+
+    conn = Conn(1, True)
+    assert ladder.challenge(conn, 7, "captcha_shown") == (1, True)
+    assert "back in the pool in 24 h" in conn.sql[-1][1][0]
+    conn = Conn(3, False)
+    assert ladder.challenge(conn, 7, "captcha_shown") == (3, False)
+    assert "needs a person" in conn.sql[-1][1][0]
+    conn = Conn(2, True)
+    ladder.challenge(conn, 7, "verification_blocked")
+    assert "in 48 h" in conn.sql[-1][1][0]
+
+
+def test_the_gmail_pool_climbs_the_ladder_only_for_distrust():
+    import inspect
+
+    from geelark_farm.store import pgpool
+
+    src = inspect.getsource(pgpool.PgGmailPool.fail)
+    assert "super().fail(resource, reason, note=note)" in src
+    assert "failures.retryable(reason)" in src
+    assert "ladder.challenge(conn, resource.store_id, reason)" in src
+    assert "conn.commit()" in src
+
+
+def test_sign_ins_are_recorded_and_read_back_by_dimension():
+    import inspect
+
+    from geelark_farm.store import signins
+
+    src = inspect.getsource(signins.record)
+    assert "INSERT INTO signins" in src and "conn.commit()" in src
+    assert "except Exception" in src, "never past the build"
+    assert set(signins._BY) == {"host", "model", "seller", "reason",
+                                "position", "day"}
+    rates = inspect.getsource(signins.rates)
+    assert "count(*) FILTER (WHERE ok)" in rates
+    assert "make_interval(days => %s)" in rates
+    assert signins.MIN_SAMPLE == 5
+
+
+def test_the_purge_leaves_the_ladders_rows_alone():
+    import pathlib
+
+    src = pathlib.Path("scripts/purge_gmails.py").read_text(encoding="utf-8")
+    assert "AND r.retry_after IS NULL" in src
+
+
+def test_the_schema_carries_the_ladder_and_the_sign_ins():
+    import pathlib
+
+    from geelark_farm.store import db
+
+    sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
+        encoding="utf-8")
+    assert db.SCHEMA_REV == "23"
+    assert "CREATE TABLE IF NOT EXISTS signins" in sql
+    for column in ("tries", "retry_after", "last_reason"):
+        assert f"ALTER TABLE resources ADD COLUMN IF NOT EXISTS {column}" in sql
+    once = sql[sql.index("UPDATE resources SET tries = 1, retry_after = now()"):]
+    assert "coalesce(totp_secret, '') <> ''" in once, (
+        "only rows with a key get a second try")
+

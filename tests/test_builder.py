@@ -151,6 +151,15 @@ def device(monkeypatch):
     return recorder
 
 
+def _many_gmails_per_phone(settings):
+    """The rule before 2026-09-10: a refused address is followed by the
+    next one on the same phone. Kept behind ONE_GMAIL_PER_PHONE=0, and
+    these tests are its tests."""
+    import dataclasses
+
+    return dataclasses.replace(settings, one_gmail_per_phone=False)
+
+
 @pytest.fixture
 def drive(monkeypatch):
     """Run one build, with the two logins answering from a script."""
@@ -303,6 +312,7 @@ def test_a_captcha_costs_the_gmail_not_the_proxy(device, settings, drive):
     """A CAPTCHA looks like a network verdict and is not one: Google raises it
     on the account it is being shown. Swapping the proxy for it would waste the
     proxy and keep the address that caused it."""
+    settings = _many_gmails_per_phone(settings)
     book = make_book()
     build = drive(book, settings,
                   google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
@@ -1187,6 +1197,7 @@ def test_no_note_makes_the_reader_learn_a_reason_token(device, settings, drive):
     still belong in the Status column, the terminal summary and the logs -
     which is where you grep them. The cell a person reads gets sentences.
     """
+    settings = _many_gmails_per_phone(settings)
     book = make_book(gmails=2, apps=2)
     drive(book, settings,
           google=[Outcome("fatal", "captcha_shown"), SIGNED_IN],
@@ -1205,6 +1216,7 @@ def test_the_phone_note_says_what_happened_rather_than_listing_packages(
         device, settings, drive):
     """A ready phone used to be described by `pm list packages`, which answers
     a question nobody reading that tab was asking."""
+    settings = _many_gmails_per_phone(settings)
     book = make_book(gmails=2)
     drive(book, settings,
           google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
@@ -4685,6 +4697,7 @@ def test_two_captchas_on_one_exit_change_the_exit_not_the_third_gmail(
     way; two in a row on the same exit is the exit. Phone 1995 spent three
     Gmails in an hour on SX44 while every other phone that pass met one
     captcha or none (the operator, 2026-09-08)."""
+    settings = _many_gmails_per_phone(settings)
     captcha = Outcome("fatal", "captcha_shown")
     book = make_book(gmails=3, proxies=3)
     build = drive(book, settings, google=[captcha, captcha, SIGNED_IN])
@@ -4707,6 +4720,7 @@ def test_no_exit_to_move_to_is_not_a_failed_build(device, settings, drive,
                                                     monkeypatch):
     """The next Gmail goes on the same exit, as before - and the phone,
     which `_new_exit` stops before it looks, is brought back up first."""
+    settings = _many_gmails_per_phone(settings)
     captcha = Outcome("fatal", "captcha_shown")
     started = []
     monkeypatch.setattr(builder.phones, "ensure_running",
@@ -4765,6 +4779,7 @@ def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_hos
         device, settings, drive, monkeypatch):
     """A phone that solves thirteen rounds on 190.2.143.20 and signs in is
     still thirteen rounds that host cost (the operator, 2026-09-09)."""
+    settings = _many_gmails_per_phone(settings)
     struck = []
     monkeypatch.setattr(builder, "_strike_captcha_host",
                         lambda s, b, row: struck.append(row.proxy.host) or [])
@@ -4972,3 +4987,178 @@ def test_the_sixth_gmail_is_not_reached_when_the_fifth_signs_in(
     build = drive(make_book(gmails=6), settings,
                   google=[wrong, wrong, wrong, wrong, SIGNED_IN])
     assert build.ok and build.gmail == "g4@example.com"
+
+
+# --------------------------------------- the login-rate work (2026-09-10)
+def test_a_distrusted_first_gmail_ends_the_build_and_spares_the_rest(
+        device, settings, drive):
+    """One Gmail per phone: Google distrusting the first address is Google
+    distrusting the device and the exit - the second address on the same
+    phone signed in 54 times in 100 against 73 for the first, the fifth
+    never. The phone goes, the other addresses are never touched, and
+    the refused one is marked (the ladder brings it back)."""
+    book = make_book(gmails=3)
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "captcha_shown"), SIGNED_IN])
+
+    assert build.status == "phone_distrusted" and not build.ok
+    assert "g0@example.com" in build.detail and "fresh phone" in build.detail
+    assert [r.credentials.email for r in book.gmails.available] == [
+        "g1@example.com", "g2@example.com"], "never handed to this phone"
+    assert book.gmails._rows[0].values["Status"] == "captcha_shown"
+    assert ("g0@example.com", "captcha_shown", "Google") in build.tried
+
+
+def test_a_wrong_password_is_not_distrust_and_the_next_gmail_still_goes_on(
+        device, settings, drive):
+    """The rule is about Google's distrust pages, not about a credential
+    the service judged: a wrong password says nothing about the phone."""
+    build = drive(make_book(gmails=2), settings,
+                  google=[Outcome("fatal", "wrong_password"), SIGNED_IN])
+    assert build.ok and build.gmail == "g1@example.com"
+
+
+def test_the_distrust_reasons_are_the_ladders_reasons():
+    from geelark_farm import failures
+
+    assert failures.retryable("captcha_shown")
+    assert failures.retryable("phone_verification_required")
+    assert failures.retryable("verification_blocked")
+    assert not failures.retryable("wrong_password")
+    assert not failures.retryable("stuck_on_dismissable")
+    assert failures.knows("phone_distrusted") and failures.knows("captcha_text")
+    assert failures.verdict("phone_distrusted").stops_the_phone
+    assert failures.verdict("captcha_text").needs_a_new_exit
+
+
+def test_a_phone_on_a_condemned_model_is_deleted_and_made_again(
+        make_settings, tmp_path, monkeypatch):
+    """GeeLark's API takes no model; the only choice is after the fact,
+    and a phone a few seconds old costs nothing but those seconds."""
+    settings = make_settings(state_dir=tmp_path,
+                             bad_models=("vivo V2362A", "Redmi 2311DRK48C"),
+                             model_retries=3)
+    models = iter(["vivo V2362A", "Redmi 2311DRK48C", "OPPO PLN110"])
+    made, deleted = [], []
+
+    class Entry:
+        def __init__(self, model):
+            self.model, self.phone_id, self.serial = model, f"P{len(made)}", "1"
+
+    def create(client, s, proxy, *, ledger, label, account):
+        e = Entry(next(models)); made.append(e.phone_id); return e
+
+    monkeypatch.setattr(builder.phones, "create", create)
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+
+    entry = builder._create_kept(None, settings, FakeLedger(), None,
+                                 label="build 1", account="a@x.com")
+    assert entry.model == "OPPO PLN110"
+    assert made == ["P0", "P1", "P2"] and deleted == ["P0", "P1"]
+    assert builder._bad_model(settings, "vivo V2362A (something)")
+    assert builder._bad_model(settings, "REDMI 2311DRK48C")
+    assert not builder._bad_model(settings, "OPPO PLN110")
+    assert not builder._bad_model(settings, "")
+
+
+def test_the_last_phone_is_kept_when_every_retry_is_a_bad_model(
+        make_settings, tmp_path, monkeypatch):
+    settings = make_settings(state_dir=tmp_path, bad_models=("vivo",),
+                             model_retries=2)
+    count = {"n": 0}
+
+    class Entry:
+        model, phone_id, serial = "vivo V2362A", "P", "1"
+
+    def create(*a, **k):
+        count["n"] += 1; return Entry()
+
+    monkeypatch.setattr(builder.phones, "create", create)
+    monkeypatch.setattr(builder.phones, "delete", lambda *a, **k: None)
+    assert builder._create_kept(None, settings, FakeLedger(), None,
+                                label="b", account="") is not None
+    assert count["n"] == 3, "the original and two retries"
+    # A delete that fails keeps the phone rather than leaking it.
+    count["n"] = 0
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no")))
+    builder._create_kept(None, settings, FakeLedger(), None, label="b", account="")
+    assert count["n"] == 1
+
+
+def test_every_google_sign_in_is_recorded_with_its_position_and_host(
+        device, make_settings, tmp_path, drive, monkeypatch):
+    from geelark_farm.store import signins as store_signins
+
+    settings = make_settings(state_dir=tmp_path,
+                             artifact_dir=tmp_path / "artifacts",
+                             store_enabled=True, one_gmail_per_phone=False)
+    rows = []
+    monkeypatch.setattr(store_signins, "record",
+                        lambda s, **k: rows.append(k) or True)
+    build = drive(make_book(gmails=2), settings,
+                  google=[Outcome("fatal", "wrong_password"), SIGNED_IN])
+
+    assert build.ok
+    assert [(r["gmail"], r["position"], r["reason"], r["ok"]) for r in rows] == [
+        ("g0@example.com", 1, "wrong_password", False),
+        ("g1@example.com", 2, "signed_in", True)]
+    assert rows[0]["host"] == "10.0.0.0" and rows[0]["serial"] == "622"
+    assert rows[0]["seconds"] >= 0
+    # Off without a store; a record that fails is a debug line.
+    quiet = make_settings(state_dir=tmp_path, store_enabled=False)
+    builder._record_signin(quiet, builder.Build(index=1), gmail="a", seller="",
+                           host="", position=1, reason="x", ok=False,
+                           seconds=1.0, captcha_rounds=0)
+    monkeypatch.setattr(store_signins, "record",
+                        lambda s, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    builder._record_signin(settings, builder.Build(index=1), gmail="a", seller="",
+                           host="", position=1, reason="x", ok=False,
+                           seconds=1.0, captcha_rounds=0)
+
+
+def test_the_host_gate_sets_aside_exits_on_a_bad_host_and_frees_them_back(
+        make_settings, tmp_path, monkeypatch):
+    from geelark_farm.store import signins as store_signins
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True,
+                             pools_in_pg=True, host_gate_min=5,
+                             host_gate_rate=0.5)
+    book = make_book(proxies=2)          # 10.0.0.0 and 10.0.0.1
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+        {"key": "10.0.0.0", "ok": 1, "n": 10, "rate": 0.1},
+        {"key": "10.0.0.1", "ok": 8, "n": 10, "rate": 0.8}])
+
+    outcome = builder.gate_hosts(book, settings)
+
+    assert outcome["gated"] == [book.proxies._rows[0].name or
+                                book.proxies._rows[0].label]
+    assert book.proxies._rows[0].values["Status"] == builder.SUSPECT
+    assert book.proxies._rows[0].values["Note"].startswith("Login rate 1/10")
+    assert book.proxies._rows[1].values["Status"] in ("", "free")
+    # The host recovers: what the gate set aside comes back, and only that.
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+        {"key": "10.0.0.0", "ok": 6, "n": 10, "rate": 0.6}])
+    outcome = builder.gate_hosts(book, settings)
+    assert len(outcome["ungated"]) == 1
+    assert book.proxies._rows[0].values["Status"] in ("", "free")
+    # A suspect the captcha tally made is not the gate's to free.
+    book.proxies.fail(book.proxies._rows[1], builder.SUSPECT,
+                      note="Suspect - 3 Google challenges today")
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+        {"key": "10.0.0.1", "ok": 9, "n": 10, "rate": 0.9}])
+    assert builder.gate_hosts(book, settings)["ungated"] == []
+    assert book.proxies._rows[1].values["Status"] == builder.SUSPECT
+
+
+def test_the_keeper_runs_the_ladder_and_the_gate_only_with_the_store(
+        make_settings, tmp_path, monkeypatch):
+    import inspect
+
+    src = inspect.getsource(builder.sync_sheet)
+    assert 'step("retried", lambda: _revive_ladder(settings))' in src
+    assert 'step("hosts", lambda: gate_hosts(book, settings))' in src
+    assert "pools_in_pg" in src.split('step("retried"')[0][-400:]
+    assert "retried" in builder.STEP_NAMES and "hosts" in builder.STEP_NAMES
+

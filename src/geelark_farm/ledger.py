@@ -106,6 +106,10 @@ class Entry:
     serial: str | int | None = None
     label: str = ""              # e.g. "row 4 / user@example.com"
     proxy: str = ""              # endpoint only, never the password
+    #: "brand model" as GeeLark reported it at creation. Not persisted -
+    #: the build that created the phone is the one that reads it (the
+    #: model gate, 2026-09-10).
+    model: str = ""
     # Set while a run is working with this phone; cleared when it is finished.
     # A claim older than STALE_CLAIM_SECONDS means the owner died.
     claimed_at: float | None = None

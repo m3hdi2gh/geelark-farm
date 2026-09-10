@@ -48,6 +48,9 @@ def doomed(store, kind: str) -> list[dict]:
         "   AND NOT EXISTS (SELECT 1 FROM phones p"
         "                   WHERE p.serial = r.serial AND p.done_at IS NULL"
         "                     AND coalesce(r.serial, '') <> '')"
+        # A row on the retry ladder is not a verdict, it is a wait: it
+        # comes back on its own (store.ladder, 2026-09-10).
+        "   AND r.retry_after IS NULL"
         " ORDER BY r.id", (kind, SPENT[kind], routine, list(KEPT)))
 
 

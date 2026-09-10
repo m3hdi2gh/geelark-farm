@@ -91,6 +91,32 @@ def revision() -> str:
     return done.stdout.strip()
 
 
+#: The models the week's numbers condemned; `BAD_MODELS` in `.env`
+#: replaces the list (comma-separated, empty for none).
+DEFAULT_BAD_MODELS = ("vivo V2362A", "Redmi 2311DRK48C", "OPPO PKT110",
+                      "Xiaomi 2410DPN6CC")
+
+
+def _models(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return DEFAULT_BAD_MODELS
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _ratio(name: str, default: float) -> float:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number between 0 and 1") from exc
+    if not 0 <= value <= 1:
+        raise ConfigError(f"{name} must be between 0 and 1")
+    return value
+
+
 class ConfigError(Exception):
     """A required setting is missing or malformed."""
 
@@ -425,6 +451,24 @@ class Settings:
     #: screens - seven of a warm phone's eleven minutes (2026-09-08). Off,
     #: every install walks Play as before.
     app_install_api: bool = True
+    #: One Gmail per phone: after an address Google distrusted (captcha,
+    #: verify your phone, could not verify) the phone is deleted and the
+    #: next address goes on a fresh phone and exit, instead of up to five
+    #: addresses burning on one device (2026-09-10).
+    one_gmail_per_phone: bool = True
+    #: Phone models GeeLark hands out that sign in rarely; a phone created
+    #: on one is deleted and created again before an address is spent on
+    #: it. Substrings of "brand model", case-insensitive. Measured over a
+    #: week among addresses with an authenticator key: Redmi 2311DRK48C
+    #: 11%, OPPO PKT110 12%, Xiaomi 2410DPN6CC 20%, vivo V2362A 7% over
+    #: all addresses, against OPPO PLN110 83% (2026-09-10).
+    bad_models: tuple[str, ...] = DEFAULT_BAD_MODELS
+    model_retries: int = 3
+    #: The host gate: an exit host whose sign-ins over the last week fall
+    #: under `host_gate_rate` with at least `host_gate_min` of them is set
+    #: aside as suspect until it recovers.
+    host_gate_min: int = 5
+    host_gate_rate: float = 0.5
 
     @classmethod
     def load(cls) -> Settings:
@@ -480,6 +524,12 @@ class Settings:
             captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
             app_install_api=_str("APP_INSTALL_API", "1").strip()
                             in ("1", "true", "yes", "on"),
+            one_gmail_per_phone=_str("ONE_GMAIL_PER_PHONE", "1").strip()
+                                in ("1", "true", "yes", "on"),
+            bad_models=_models("BAD_MODELS"),
+            model_retries=_int("MODEL_RETRIES", 3, minimum=0),
+            host_gate_min=_int("HOST_GATE_MIN", 5, minimum=1),
+            host_gate_rate=_ratio("HOST_GATE_RATE", 0.5),
             wake_on_action=_str("WAKE_ON_ACTION", "0").strip()
                           in ("1", "true", "yes", "on"),
             control_lane=_str("CONTROL_LANE", "0").strip()

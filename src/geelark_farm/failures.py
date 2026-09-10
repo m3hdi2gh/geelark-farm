@@ -118,8 +118,42 @@ class Verdict:
 
 # The table. Reasons are grouped by which flow reports them, because that is
 # how you find one when a run surprises you.
+#: Google not trusting the phone, the exit or the address - the reasons
+#: that say nothing final about the credential. A Gmail refused with one
+#: of these is not spent: it waits and comes back for a fresh phone and
+#: exit (the retry ladder), and the phone it was refused on is not handed
+#: another address (one Gmail per phone). Measured over a week: the first
+#: address on a phone signed in 73% of the time, the fifth never; and an
+#: address refused with a captcha signed in on its next try two times in
+#: three (2026-09-10).
+DISTRUST = frozenset({"captcha_shown", "verification_blocked",
+                      "phone_verification_required", "sign_in_refused",
+                      "too_many_attempts"})
+
+
+def retryable(reason: str) -> bool:
+    """Whether a Gmail refused for `reason` gets the ladder rather than
+    the shelf."""
+    return reason in DISTRUST
+
+
 VERDICTS: dict[str, Verdict] = {
     # -------------------------------------------------- google_login.py
+    "phone_distrusted": Verdict(
+        DEVICE, "Google distrusted this phone on its first address, so no "
+                "other was tried on it",
+        "One Gmail per phone: an address refused with a captcha or a "
+        "verification page is Google distrusting the device and the exit as "
+        "much as the address, and every address after it on the same phone "
+        "did worse (73 in 100 signed in first, none fifth). The phone was deleted, "
+        "nothing was signed into it; the address waits on the ladder and "
+        "comes back for a fresh phone."),
+    "captcha_text": Verdict(
+        EXIT, "reCAPTCHA offered only its text or audio challenge",
+        "The widget serves text and audio when it does not trust the exit's "
+        "address at all; the picture grid this can solve was never shown. "
+        "The exit is changed and the same address tried again; the address "
+        "is not marked."),
     "captcha_shown": Verdict(
         CREDENTIAL, "{service} showed a CAPTCHA",
         "{service} challenged this address. It follows the account, not the "

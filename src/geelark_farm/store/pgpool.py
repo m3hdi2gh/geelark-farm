@@ -26,6 +26,7 @@ import time
 
 from ..accounts import AccountError
 from ..config import Settings
+from .. import failures
 from ..pools import AppPool, GmailPool, Pool, ProxyPool, Resource, clip
 from ..proxy import ProxyError
 
@@ -377,6 +378,28 @@ class _PgPool(Pool):
 
 class PgGmailPool(_PgPool, GmailPool):
     kind = "gmail"
+
+    def fail(self, resource: Resource, reason: str, *, note: str = "") -> None:
+        """The sheet's verb, then the ladder for a distrust reason: the
+        row keeps the reason as its status (the tab still filters on it)
+        and gains a date it comes back on (store.ladder, 2026-09-10)."""
+        super().fail(resource, reason, note=note)
+        if resource.store_id is None or not failures.retryable(reason):
+            return
+        try:
+            from . import ladder
+
+            with self._table._lock, self._table._connect() as conn:
+                tries, back = ladder.challenge(conn, resource.store_id, reason)
+                conn.commit()
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("%s: %s was set aside but not put on the ladder (%s)",
+                        self.tab, resource.label, exc)
+            return
+        log.info("%s: %s refused (%s), try %d of %d%s", self.tab,
+                 resource.label, reason, tries, ladder.MAX_TRIES,
+                 " - it comes back on its own" if back else
+                 " - it stays set aside")
     COLUMNS = {
         "Purchase Date": "purchased_on", "Seller": "seller",
         "Address": "address", "Password": "password", "Secret": "totp_secret",

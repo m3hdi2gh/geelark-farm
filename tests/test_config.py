@@ -543,3 +543,25 @@ def test_the_role_is_one_of_three_words(make_settings, monkeypatch):
     assert config._role("builder") == "builder"
     with pytest.raises(config.ConfigError, match="ROLE"):
         config._role("janitor")
+
+
+def test_the_login_rate_knobs_read_from_the_environment(monkeypatch):
+    from geelark_farm import config
+
+    monkeypatch.delenv("BAD_MODELS", raising=False)
+    assert config._models("BAD_MODELS") == config.DEFAULT_BAD_MODELS
+    monkeypatch.setenv("BAD_MODELS", " vivo V2362A , , Redmi 2311DRK48C ")
+    assert config._models("BAD_MODELS") == ("vivo V2362A", "Redmi 2311DRK48C")
+    monkeypatch.setenv("BAD_MODELS", "")
+    assert config._models("BAD_MODELS") == ()
+    monkeypatch.delenv("HOST_GATE_RATE", raising=False)
+    assert config._ratio("HOST_GATE_RATE", 0.5) == 0.5
+    monkeypatch.setenv("HOST_GATE_RATE", "0.4")
+    assert config._ratio("HOST_GATE_RATE", 0.5) == 0.4
+    for bad in ("x", "1.5", "-1"):
+        monkeypatch.setenv("HOST_GATE_RATE", bad)
+        with pytest.raises(config.ConfigError):
+            config._ratio("HOST_GATE_RATE", 0.5)
+    assert config.Settings.__dataclass_fields__["one_gmail_per_phone"].default is True
+    assert config.Settings.__dataclass_fields__["model_retries"].default == 3
+

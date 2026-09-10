@@ -251,6 +251,11 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
              info.get("countryName"), info.get("timeZone"))
     if info.get("netType") == 0:
         log.info("netType came back 0 (Wi-Fi) despite requesting mobile data")
+    try:
+        entry.model = " ".join(str(info.get(k) or "").strip()
+                               for k in ("deviceBrand", "deviceModel")).strip()
+    except AttributeError as exc:
+        log.debug("the ledger entry takes no model (%s)", exc)
     return entry
 
 
