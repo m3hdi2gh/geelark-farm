@@ -2874,3 +2874,16 @@ def test_the_stores_breaker_counts_like_the_files_and_imports_it_once(
     # Without the flag it is the file, as it always was.
     plain = breaker_mod.open_breaker(make_settings(state_dir=tmp_path), path)
     assert type(plain) is breaker_mod.Breaker
+
+
+def test_the_pass_reads_a_bare_phone_wish_like_the_lane_does():
+    """Two readers of wanted_builds; the pass's dropped no_gmail, and a
+    bare phone asked for on the card was built with a pool Gmail signed
+    into it (the operator, 2026-09-10, phone 2293)."""
+    import inspect
+
+    src = inspect.getsource(serve_mod)
+    body = src[src.index("store_wanted.release_stale(settings)"):]
+    body = body[:body.index("except Exception")]
+    assert 'no_gmail=bool(row.get("no_gmail"))' in body
+

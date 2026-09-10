@@ -1718,11 +1718,16 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
             store_wanted.release_stale(settings)
             for row in store_wanted.take(settings):
+                # The same fields the lane reads (ControlLane.wishes): a
+                # bare phone asked for here came out of this reader with
+                # no_gmail dropped, and the build signed a pool Gmail into
+                # it (the operator, 2026-09-10, phone 2293).
                 wishes.append(builder.Wanted(
                     gmail=row["gmail"], proxy_name=row["proxy_name"],
                     install_app=row["install_app"],
                     app_account=row["app_account"], wanted_id=row["id"],
-                    app=_app_of(row), requested_by=row.get("requested_by")))
+                    app=_app_of(row), requested_by=row.get("requested_by"),
+                    no_gmail=bool(row.get("no_gmail"))))
         except Exception as exc:                                  # noqa: BLE001
             # The same rule as every other store read in a pass: the farm
             # keeps building without the console.
