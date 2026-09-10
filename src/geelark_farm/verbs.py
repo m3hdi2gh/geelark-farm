@@ -857,6 +857,18 @@ def stop_phone(book, ledger, settings, payload, client):
     if not serial:
         return "refused", "no phone named", None
     builder.STOP_BY_HAND.add(serial)
+    if getattr(settings, "store_enabled", False):
+        # The build is in a builder container, not this process: the set
+        # above is heard by nobody there. The store's copy is (the
+        # operator, 2026-09-10: "the Cancel button does nothing").
+        from .store import stops as store_stops
+
+        try:
+            store_stops.ask(settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            return ("failed", f"the stop for phone {serial} could not be "
+                              f"written where the builders read it ({exc})",
+                    None)
     return ("done", f"phone {serial} stops at its next step; whatever it "
                     f"held goes back to its pool", None)
 

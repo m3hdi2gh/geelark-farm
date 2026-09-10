@@ -540,6 +540,48 @@ class Aborted(Exception):
 #: so a set is enough; a serial is taken out the moment it is honoured.
 STOP_BY_HAND: set[str] = set()
 
+#: How often a build asks the store whether somebody pressed Stop on it:
+#: every step, but a store read at most this often. The set above is the
+#: same process's own presses and is read every time.
+STOP_POLL_SECONDS = 5.0
+_STOP_SEEN: dict = {"at": 0.0, "serials": frozenset()}
+
+
+def _stop_asked(settings: Settings | None, serial: str) -> bool:
+    """Whether somebody pressed Stop on this phone - in this process, or
+    on the keeper's console with the build running in a builder container
+    (the store's `stop_by_hand` key). Taken out the moment it is heard,
+    from wherever it was. Never raises: a store that cannot be read is a
+    stop not heard yet, and the next step asks again."""
+    serial = str(serial or "").strip()
+    if not serial:
+        return False
+    if serial in STOP_BY_HAND:
+        STOP_BY_HAND.discard(serial)
+        return True
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return False
+    from .store import stops as store_stops
+
+    now = time.monotonic()
+    if now - _STOP_SEEN["at"] >= STOP_POLL_SECONDS:
+        try:
+            _STOP_SEEN["serials"] = frozenset(store_stops.asked(settings))
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not read the stop requests (%s); asking "
+                        "again in %.0fs", exc, STOP_POLL_SECONDS)
+            _STOP_SEEN["serials"] = frozenset()
+        _STOP_SEEN["at"] = now
+    if serial not in _STOP_SEEN["serials"]:
+        return False
+    _STOP_SEEN["serials"] = _STOP_SEEN["serials"] - {serial}
+    try:
+        store_stops.honoured(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("stop on %s heard but could not be taken out of the "
+                    "store (%s); it ages out", serial, exc)
+    return True
+
 #: The aborts that are a person stopping the work rather than a verdict on
 #: the phone. `Aborted` carries both kinds - `no_usable_proxy` and
 #: `all_exits_refused` are judgements, and a phone with no account on it
@@ -648,9 +690,7 @@ class _Session:
     def check_cancelled(self) -> None:
         if self.cancelled and self.cancelled():
             raise Aborted("interrupted")
-        serial = str(self.build.serial or "").strip()
-        if serial and serial in STOP_BY_HAND:
-            STOP_BY_HAND.discard(serial)
+        if _stop_asked(getattr(self, "settings", None), self.build.serial):
             raise Aborted("stopped_by_hand")
 
     def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
@@ -1212,9 +1252,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         """
         if cancelled and cancelled():
             raise Aborted("interrupted")
-        serial = str(build.serial or "").strip()
-        if serial and serial in STOP_BY_HAND:
-            STOP_BY_HAND.discard(serial)
+        # STOP_BY_HAND, and the store's copy of it for a build running in
+        # another container - see _stop_asked (2026-09-10).
+        if _stop_asked(settings, build.serial):
             raise Aborted("stopped_by_hand")
 
     calls_before = _calls(client)

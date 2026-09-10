@@ -1445,3 +1445,21 @@ def test_a_wish_may_be_bare_and_a_failed_one_is_dismissed_by_its_asker():
     assert "dismissed_at = now()" in dismiss
     assert "status = 'failed' AND dismissed_at IS NULL" in dismiss
     assert "(%s OR requested_by = %s)" in dismiss, "the asker, or an admin"
+
+
+def test_stop_requests_live_in_service_state_and_age_out():
+    import time
+
+    from geelark_farm.store import stops
+
+    now = time.time()
+    kept = stops._pruned({"1": now - 10, "2": now - stops.KEEP_SECONDS - 1,
+                          "3": "junk"}, now)
+    assert kept == {"1": now - 10}
+    import inspect
+
+    for name in ("ask", "honoured"):
+        src = inspect.getsource(getattr(stops, name))
+        assert "state.put(conn, KEY, asked)" in src and "conn.commit()" in src
+    assert stops.KEY == "stop_by_hand"
+

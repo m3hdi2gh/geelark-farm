@@ -1171,3 +1171,43 @@ def test_claude_is_an_app_the_card_may_ask_for():
     assert asked["app"] == "claude" and asked["no_gmail"] is False
     assert asked["app_account"] == "", "an account is ChatGPT's only"
     assert "with Claude" in said
+
+
+def test_stop_this_one_is_written_where_the_builders_read_it(
+        make_settings, tmp_path, monkeypatch):
+    """The set in this process is heard by nobody in the builder container
+    (the operator, 2026-09-10). The store's copy is - and a store that
+    cannot take the press says so rather than answering done."""
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.store import stops as store_stops
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    written = []
+    monkeypatch.setattr(store_stops, "ask",
+                        lambda s, serial: written.append(serial))
+    try:
+        status, said, _ = verbs.stop_phone(None, None, settings,
+                                           {"serial": "2241"}, None)
+        assert status == "done" and "2241" in said
+        assert written == ["2241"]
+        assert "2241" in builder_mod.STOP_BY_HAND
+    finally:
+        builder_mod.STOP_BY_HAND.discard("2241")
+
+    monkeypatch.setattr(store_stops, "ask",
+                        lambda s, serial: (_ for _ in ()).throw(RuntimeError("down")))
+    try:
+        status, said, _ = verbs.stop_phone(None, None, settings,
+                                           {"serial": "2243"}, None)
+        assert status == "failed" and "could not be written" in said
+    finally:
+        builder_mod.STOP_BY_HAND.discard("2243")
+
+    off = make_settings(state_dir=tmp_path, store_enabled=False)
+    written.clear()
+    try:
+        assert verbs.stop_phone(None, None, off, {"serial": "9"}, None)[0] == "done"
+        assert written == [], "no store, no store write"
+    finally:
+        builder_mod.STOP_BY_HAND.discard("9")
+

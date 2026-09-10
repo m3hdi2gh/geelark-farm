@@ -4275,7 +4275,52 @@ def test_the_sign_in_watch_is_the_check_that_hears_a_hand_stop():
     assert "watch=check_cancelled" in source
     body = source.partition("def check_cancelled()")[2].partition(
         "def finish(")[0]
-    assert "STOP_BY_HAND" in body, "the sign-in's watch cannot hear Stop"
+    assert "_stop_asked(settings, build.serial)" in body, (
+        "the sign-in's watch cannot hear Stop")
+    session = inspect.getsource(builder_mod._Session.check_cancelled)
+    assert '_stop_asked(getattr(self, "settings", None), self.build.serial)' in session
+
+
+def test_a_stop_pressed_on_the_console_reaches_a_build_in_another_container(
+        make_settings, tmp_path, monkeypatch):
+    """STOP_BY_HAND was a set in the keeper's memory, and the builds run in
+    a builder container: Cancel on a building row did nothing (the
+    operator, 2026-09-10). The store carries the press now; a build asks
+    it every step, reading at most every few seconds, and takes the
+    request out the moment it is heard."""
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.store import stops as store_stops
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    asked = {"2241"}
+    reads = []
+    monkeypatch.setattr(store_stops, "asked",
+                        lambda s: reads.append(1) or set(asked))
+    gone = []
+    monkeypatch.setattr(store_stops, "honoured",
+                        lambda s, serial: gone.append(serial))
+    monkeypatch.setattr(builder_mod, "_STOP_SEEN",
+                        {"at": 0.0, "serials": frozenset()})
+
+    assert builder_mod._stop_asked(settings, "2240") is False
+    assert builder_mod._stop_asked(settings, "2241") is True
+    assert gone == ["2241"], "taken out where it was written"
+    assert builder_mod._stop_asked(settings, "2241") is False, "heard once"
+    assert len(reads) == 1, "one store read for the three asks - throttled"
+    # The same process's own press is heard without the store.
+    builder_mod.STOP_BY_HAND.add("2242")
+    assert builder_mod._stop_asked(settings, "2242") is True
+    assert "2242" not in builder_mod.STOP_BY_HAND
+    # No store, no serial: nothing to hear.
+    off = make_settings(state_dir=tmp_path, store_enabled=False)
+    assert builder_mod._stop_asked(off, "2241") is False
+    assert builder_mod._stop_asked(settings, "") is False
+    # A store that cannot be read is a stop not heard yet, not a crash.
+    monkeypatch.setattr(builder_mod, "_STOP_SEEN",
+                        {"at": 0.0, "serials": frozenset()})
+    monkeypatch.setattr(store_stops, "asked",
+                        lambda s: (_ for _ in ()).throw(RuntimeError("down")))
+    assert builder_mod._stop_asked(settings, "2241") is False
 
 
 # ------------------------------ warm on purpose, with manual login (2026-09-08)
