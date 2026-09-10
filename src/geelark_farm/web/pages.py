@@ -282,7 +282,6 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand input:disabled,.byhand select:disabled{{opacity:.45}}
 .maker{{display:block;font-size:11px;margin-top:3px;white-space:nowrap}}
 .byhand label.field select{{min-width:230px;height:38px}}
-.byhand .exit{{flex-basis:100%;font-size:12px;color:var(--dim);margin-top:-2px}}
 dialog.editor .or{{font-size:12.5px;color:var(--muted);padding-top:6px;
  border-top:1px solid var(--line2)}}
 dialog.editor .pick{{max-height:170px;overflow:auto;border:1px solid var(--line2);
@@ -1001,8 +1000,8 @@ _DASH_SAID = {
     # row back. Normally the verb's own sentence replaces it, because only
     # that sentence can name the address and say why.
     "no": "That did not go through.",
-    "asked": "Asked for - it is written down, and the next pass starts it. "
-             "It is listed above the phones until it becomes one.",
+    "asked": "Asked for - it is written down and starts within seconds. "
+             "It is a row of the table until it becomes a phone.",
     # The phone buttons each said "Done - it is already in", a sentence
     # written for pasted stock, after a confirm page that talked about
     # deleting the phone (2026-09-07).
@@ -3308,8 +3307,6 @@ def _build_card(data: dict, user: dict) -> str:
         f'{_csrf(user)}'
         + gmail_box + app_box + account_box
         + '<button class="go">Build</button>'
-        + '<span class="exit">Exit: the farm picks one and swaps it '
-          'whenever an install or a sign-in shows the proxy is bad.</span>'
         # What the two dialogs typed rides here; the address itself is the
         # choice's value.
         + "".join(f'<input type="hidden" name="{name}" value="">'
@@ -3458,23 +3455,62 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
 
 
 def _wish_rows(data: dict, user: dict) -> str:
-    """A hand-built phone that failed, as a row of the phones table: which
-    address and why, in the builder's own sentence, until whoever asked
-    presses Dismiss. First in the table - it is the one row that wants a
-    person - and theirs alone to dismiss (an admin's too), since the row
-    is the answer to something they asked for (the build card,
-    2026-09-10).
+    """Phones asked for by hand, as rows of the phones table.
+
+    One that failed says which address and why, in the builder's own
+    sentence, until whoever asked presses Dismiss - theirs alone (an
+    admin's too), since the row is the answer to something they asked
+    for. One that has no phone yet is a dim row saying so, and leaves
+    the moment its phone appears in the table as Building, built by
+    them. First in the table either way: a wish is the one row that is
+    somebody's own. The panel these lived in was one list too many
+    (the operator, 2026-09-10).
     """
     me = str(user.get("username") or "")
     admin = user.get("role") == "admin"
     lines = []
+    phones = data.get("phones") or []
     for w in data.get("wishes") or []:
-        if str(w.get("status") or "") != "failed":
+        status = str(w.get("status") or "")
+        who = str(w.get("asked_by") or "")
+        mine = bool(who) and who == me
+        if status in ("queued", "running"):
+            # Its phone, once there is one, is the Building row built by
+            # the same person after the wish was made; this row would
+            # only say the same thing twice.
+            asked_at = w.get("created_at")
+            taken_over = any(
+                (p.get("status") or "") == "building"
+                and str(p.get("built_by") or "") == who
+                and (asked_at is None or p.get("created_at") is None
+                     or p["created_at"] >= asked_at)
+                for p in phones)
+            if taken_over:
+                continue
+            if w.get("no_gmail"):
+                what = "a bare phone"
+            else:
+                what = str(w.get("gmail") or "") or "the next free Gmail"
+                app = str(w.get("app") or "")
+                what += {"": " &middot; no app", "spotify": " &middot; Spotify",
+                         "claude": " &middot; Claude"}.get(app, "")
+            word = ("a phone is being made for it" if status == "running"
+                    else "waiting for a builder")
+            lines.append(
+                f'<tr data-view="{"mine" if mine else "theirs"}">'
+                f'<td><span class="dim">&mdash;</span></td>'
+                f'<td><span class="badge {"info" if status == "running" else ""}">'
+                f'{"Building" if status == "running" else "Queued"}</span>'
+                + (f'<span class="dim maker">asked by {esc(who)}</span>'
+                   if who else "")
+                + f'</td><td colspan="4" class="progress">{what} '
+                f'<span class="dim">&middot; {word}</span></td>'
+                f'<td class="act"></td></tr>')
+            continue
+        if status != "failed":
             continue
         serial = str(w.get("serial") or "")
-        who = str(w.get("asked_by") or "")
         detail = str(w.get("detail") or "") or "it did not say why"
-        mine = bool(who) and who == me
         if mine or admin:
             act = (f'<form method="post" class="inline" '
                    f'action="/wishes/{int(w["id"])}/dismiss">{_csrf(user)}'
@@ -3491,64 +3527,6 @@ def _wish_rows(data: dict, user: dict) -> str:
             + f'</td><td colspan="4" class="progress">{esc(detail)}</td>'
             f'<td class="act">{act}</td></tr>')
     return "".join(lines)
-
-
-def _wishes(data: dict, explain=None) -> str:
-    """Phones somebody asked for by hand, from the moment they ask - the
-    ones with no phone yet. A wish that failed is a row of the phones
-    table instead (`_wish_rows`), until it is dismissed.
-
-    Nothing in the web package read `wanted_builds`, so a press vanished:
-    the toast is gone in four seconds, the table does not change until a
-    phone exists, and a wish that failed before one did wrote its reason
-    into a column nobody could see. `store.wanted.recent`'s own docstring
-    calls itself "what the person who asked reads to find out whether it
-    happened", and it had no callers at all (2026-09-07).
-    """
-    rows = [w for w in data.get("wishes") or []
-            if str(w.get("status") or "") != "failed"]
-    if not rows:
-        return ""
-    lines = []
-    for w in rows:
-        status = str(w.get("status") or "")
-        who = str(w.get("gmail") or "") or "the next free Gmail"
-        where = f" on {esc(str(w['proxy_name']))}" if w.get("proxy_name") else ""
-        app = (str(w.get("app")) if w.get("app") is not None
-               else ("chatgpt" if w.get("install_app", True) else ""))
-        where += {"": " &middot; no app", "spotify": " &middot; Spotify",
-                  "claude": " &middot; Claude",
-                  "chatgpt": ""}.get(app, f" &middot; {esc(app)}")
-        if w.get("no_gmail"):
-            who, where = "a bare phone", " &middot; nothing signed in"
-        when = _hhmm(w.get("created_at")) if w.get("created_at") else ""
-        if status == "failed":
-            # `explain` answers a pair for a reason it knows and nothing
-            # for words it does not - and a wish that failed on words it
-            # did not know took the whole dashboard down with "not enough
-            # values to unpack" (2026-09-08). Whatever it answers is read.
-            got = explain(str(w.get("detail") or "")) if explain else None
-            if isinstance(got, tuple) and len(got) == 2:
-                said, advice = got
-            else:
-                said, advice = (str(got or ""), "")
-            why = esc(said or str(w.get("detail") or "")
-                      or "it did not say why")
-            tail = (f'<span class="badge bad">did not start</span> '
-                    f'<span class="why">{why}'
-                    + (f' <span class="dim">{esc(advice)}</span>'
-                       if advice else "") + '</span>')
-        elif status == "running":
-            tail = ('<span class="badge info">building</span> '
-                    '<span class="why">a phone is being made for it</span>')
-        else:
-            tail = ('<span class="badge">waiting</span> '
-                    '<span class="why">the next pass starts it</span>')
-        lines.append(f'<div class="wish"><span class="age">{esc(when)}</span>'
-                     f'<span class="who mono">{esc(who)}{where}</span>'
-                     f'{tail}</div>')
-    return (f'<div class="panel wishes"><h3>Asked for by hand '
-            f'<span class="n">{len(rows)}</span></h3>{"".join(lines)}</div>')
 
 
 def dashboard(data: dict, user: dict, said: str = "",
@@ -3617,7 +3595,6 @@ def dashboard(data: dict, user: dict, said: str = "",
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
     main = (_said(said, _DASH_SAID, user, said_note) + warning + tools
-            + _wishes(data, explain)
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
             + _build_card(data, user))

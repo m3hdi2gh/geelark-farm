@@ -3541,7 +3541,7 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert '<option value="">none &mdash; sign in later</option>' in card
     assert 'name="install_app"' not in card, "the tick became the App choice"
     assert '<optgroup label="pick one">' not in card, "the free rows moved into the dialog"
-    assert "Exit: the farm picks one and swaps it" in body
+    assert "Exit:" not in body, "nothing about the exit at all (the operator)"
     for ident in ("gmail-new", "account-new"):
         assert f'<dialog class="editor" id="{ident}"' in body, ident
     # The dialog: the boxes, then the free rows to pick from.
@@ -4362,23 +4362,33 @@ def test_a_phone_asked_for_by_hand_is_on_the_page_from_the_moment_it_is_asked():
          "detail": "bad@x.com - Google refused the password", "serial": "2236",
          "asked_by": "mehdi"},
     ]}
-    drawn = pages._wishes(data, explain=lambda t: ("", ""))
-
-    assert "Asked for by hand" in drawn
-    assert "wait@x.com" in drawn and "SX9" in drawn
-    assert "the next pass starts it" in drawn
-    assert "the next free Gmail" in drawn, "a wish with no address named"
-    assert "a phone is being made for it" in drawn
-    assert "a bare phone" in drawn and "nothing signed in" in drawn
-    # The failed one is not in the panel: it is a row of the phones
-    # table, until whoever asked dismisses it (2026-09-10).
-    assert "bad@x.com" not in drawn and "did not start" not in drawn
-    assert "Asked for by hand <span class=\"n\">3</span>" in drawn
-    assert pages._wishes({"wishes": []}) == "", "nothing pending, nothing said"
-
     me = {"id": 1, "username": "mehdi", "role": "operator", "csrf": "c"}
+    assert not hasattr(pages, "_wishes"), "the panel is gone (the operator)"
     rows = pages._wish_rows(data, me)
-    assert rows.count("<tr") == 1, "only the failed one"
+    assert rows.count("<tr") == 4, "every wish is a row of the table"
+    assert "wait@x.com" in rows and "waiting for a builder" in rows
+    assert "the next free Gmail" in rows, "a wish with no address named"
+    assert "a phone is being made for it" in rows
+    assert "a bare phone" in rows
+    assert '<span class="badge info">Building</span>' in rows
+    assert '<span class="badge ">Queued</span>' in rows
+    assert pages._wish_rows({"wishes": []}, me) == ""
+    # A running wish whose phone is in the table already, Building and
+    # built by the same person, is that row and not a second one.
+    import datetime as dt
+
+    asked = dt.datetime(2026, 9, 10, 1, 0)
+    later = {"wishes": [dict(data["wishes"][1], asked_by="mehdi",
+                             created_at=asked)],
+             "phones": [{"serial": "2250", "status": "building",
+                         "built_by": "mehdi",
+                         "created_at": asked + dt.timedelta(minutes=1)}]}
+    assert pages._wish_rows(later, me) == ""
+    earlier = dict(later, phones=[dict(later["phones"][0],
+                                       created_at=asked - dt.timedelta(minutes=1))])
+    assert "a phone is being made for it" in pages._wish_rows(earlier, me)
+    rows = pages._wish_rows({"wishes": [data["wishes"][3]]}, me)
+    assert rows.count("<tr") == 1, "the failed one"
     assert '<span class="badge failed">Failed</span>' in rows
     assert "built by mehdi" in rows
     assert "bad@x.com - Google refused the password" in rows
@@ -4556,7 +4566,7 @@ def test_the_building_row_reads_the_run_that_is_holding_the_phone():
     from geelark_farm.web import read
 
     sql = inspect.getsource(read._latest_lines)
-    assert "claims" not in sql, (
+    assert "JOIN claims" not in sql, (
         "the claims table has never had a row; joined on it, every "
         "building row read 'starting' for three days (2026-09-10)")
     assert "p.done_at IS NULL" in sql and "l.at >= p.created_at" in sql
@@ -4959,9 +4969,6 @@ def test_a_failed_wish_with_words_explain_does_not_know_still_draws():
                         "app_account": "", "status": "failed",
                         "detail": "the Gmail a@x.com is not free",
                         "created_at": None, "asked_by": "mehdi"}]}
-    for answer in ((), "", None, ("seen", "advice"), ("only",)):
-        panel = pages._wishes(data, lambda detail, a=answer: a)
-        assert panel == "", "a failed wish is a table row now"
     me = {"id": 1, "username": "mehdi", "role": "operator", "csrf": "c"}
     assert "is not free" in pages._wish_rows(data, me)
     assert "it did not say why" in pages._wish_rows(
@@ -5202,7 +5209,7 @@ def test_the_live_link_of_a_building_phone_is_the_builders_newest_start_line():
 
     sql = inspect.getsource(read._live_links)
     assert "l.msg LIKE 'watch it live: %%'" in sql
-    assert "claims" not in sql and "l.at >= p.created_at" in sql, (
+    assert "JOIN claims" not in sql and "l.at >= p.created_at" in sql, (
         "this phone's own life, not last week's")
     assert read._live_links(SimpleNamespace(_rows=lambda *a: []), []) == {}
 
