@@ -2205,6 +2205,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         from .flows import google_login as _google
 
         _shell.HUMAN_CADENCE = bool(settings.human_cadence)
+        _shell.KERNEL_TOUCH = bool(getattr(settings, "kernel_touch", True))
         _google.SIGN_IN_VIA = settings.sign_in_via
         return serve_builder(settings, stop=stop)
     # The hand's cadence for every login this process runs - see
@@ -2213,6 +2214,10 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     _shell.HUMAN_CADENCE = bool(settings.human_cadence)
     if _shell.HUMAN_CADENCE:
         log.info("typing and tapping with a hand's cadence (HUMAN_CADENCE)")
+    _shell.KERNEL_TOUCH = bool(getattr(settings, "kernel_touch", True))
+    if _shell.KERNEL_TOUCH:
+        log.info("taps go into the phone's touch device in the viewer's "
+                 "shape (KERNEL_TOUCH)")
     from .flows import google_login as _google
     _google.SIGN_IN_VIA = settings.sign_in_via
     if _google.SIGN_IN_VIA == "play":

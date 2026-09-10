@@ -120,8 +120,212 @@ def third_party_packages(client: Client, phone_id: str) -> list[str]:
 
 
 # -------------------------------------------------------------- interaction
+#: Touches written into the phone's own touch device (KERNEL_TOUCH), in
+#: the shape the GeeLark viewer's touches have, instead of `input tap`.
+#:
+#: `input tap` never reaches the kernel: it is a MotionEvent injected
+#: straight into the input pipeline, DOWN and UP in the same instant, with
+#: no movement and a pressure and size of exactly 1.0 (AOSP's constants),
+#: from a device that is not the touchscreen. A person's tap on the
+#: GeeLark viewer, recorded with `getevent` on phones 2293 and 2294
+#: (2026-09-10, 117 touches): DOWN with a tracking id and a position, one
+#: repeated position frame 20-75 ms later, UP after 55-270 ms (median
+#: 135), no pressure and no size at all, no jitter - and, after a quarter
+#: of the UPs, three or four spare "released" frames some 400 ms later. A
+#: swipe is 20-60 position frames over 450-900 ms. The operator's
+#: sign-ins pass without a challenge and the builder's do not, and this
+#: is the first of the three differences the recordings left standing.
+#:
+#: Off in this module so the suite never shells out; `serve` turns it on
+#: from `KERNEL_TOUCH` (default on). A phone whose device cannot be
+#: written to, or that has no `sendevent`, falls back to `input tap`
+#: once and for all - the probe is one shell call per phone.
+KERNEL_TOUCH = False
+TOUCH_DEVICE = "/dev/input/event0"
+#: Linux input event codes the recordings used - nothing else.
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+SYN_REPORT, SYN_MT_REPORT = 0, 2
+BTN_TOUCH = 330
+ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID = 53, 54, 57
+#: The measured tap: dwell in ms (log-normal, median 135, p10 79, p90
+#: 221), the repeated frame's delay, the odds and timing of the spare
+#: release frames.
+TAP_DWELL_MEDIAN_MS = 135.0
+TAP_DWELL_SIGMA = 0.40
+TAP_DWELL_MIN_MS, TAP_DWELL_MAX_MS = 55.0, 270.0
+TAP_REPEAT_MS = (20.0, 75.0)
+TAP_SPARE_ODDS = 0.25
+TAP_SPARE_AFTER_MS = (300.0, 500.0)
+#: The measured swipe: frames per hundred pixels and the time they take.
+SWIPE_FRAMES = (20, 58)
+SWIPE_MS = (450.0, 900.0)
+_touch_ready: dict[str, tuple[float, float] | None] = {}
+
+
+def _tracking_id() -> int:
+    return int(time.time() * 10) % 60000 + 100
+
+
+def tap_events(x: int, y: int, *, dwell_ms: float, repeat_ms: float,
+               tracking_id: int, spare_after_ms: float | None,
+               scale: tuple[float, float] = (1.0, 1.0)) -> str:
+    """One tap as a shell script of `sendevent` lines, in the viewer's
+    exact frame order. Coordinates are screen pixels; `scale` maps them
+    onto the device's axis ranges when those differ."""
+    dx, dy = int(round(x * scale[0])), int(round(y * scale[1]))
+    e = f"sendevent {TOUCH_DEVICE}"
+    lines = [
+        f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} {tracking_id}",
+        f"{e} {EV_ABS} {ABS_MT_POSITION_X} {dx}",
+        f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {dy}",
+        f"{e} {EV_KEY} {BTN_TOUCH} 1",
+        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
+        f"{e} {EV_SYN} {SYN_REPORT} 0",
+        f"sleep {repeat_ms / 1000:.3f}",
+        f"{e} {EV_ABS} {ABS_MT_POSITION_X} {dx}",
+        f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {dy}",
+        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
+        f"{e} {EV_SYN} {SYN_REPORT} 0",
+        f"sleep {max(0.0, dwell_ms - repeat_ms) / 1000:.3f}",
+        f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
+        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
+        f"{e} {EV_KEY} {BTN_TOUCH} 0",
+        f"{e} {EV_SYN} {SYN_REPORT} 0",
+    ]
+    if spare_after_ms is not None:
+        lines.append(f"sleep {spare_after_ms / 1000:.3f}")
+        for _ in range(3):
+            lines += [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
+                      f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
+                      f"{e} {EV_SYN} {SYN_REPORT} 0", "sleep 0.012"]
+    return "; ".join(lines)
+
+
+def swipe_events(x1: int, y1: int, x2: int, y2: int, *, frames: int,
+                 total_ms: float, tracking_id: int,
+                 scale: tuple[float, float] = (1.0, 1.0)) -> str:
+    """One swipe: DOWN at the start, `frames` eased position frames, UP
+    at the end - a thumb that starts slowly, moves, and slows down."""
+    e = f"sendevent {TOUCH_DEVICE}"
+    frames = max(2, int(frames))
+    step = total_ms / frames / 1000
+    sx, sy = scale
+
+    def at(k: int) -> tuple[int, int]:
+        t = k / frames
+        ease = t * t * (3 - 2 * t)                 # smoothstep
+        return (int(round((x1 + (x2 - x1) * ease) * sx)),
+                int(round((y1 + (y2 - y1) * ease) * sy)))
+
+    x0, y0 = at(0)
+    lines = [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} {tracking_id}",
+             f"{e} {EV_ABS} {ABS_MT_POSITION_X} {x0}",
+             f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {y0}",
+             f"{e} {EV_KEY} {BTN_TOUCH} 1",
+             f"{e} {EV_SYN} {SYN_MT_REPORT} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
+    for k in range(1, frames + 1):
+        px, py = at(k)
+        lines += [f"sleep {step:.3f}",
+                  f"{e} {EV_ABS} {ABS_MT_POSITION_X} {px}",
+                  f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {py}",
+                  f"{e} {EV_SYN} {SYN_MT_REPORT} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
+    lines += [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
+              f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
+              f"{e} {EV_KEY} {BTN_TOUCH} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
+    return "; ".join(lines)
+
+
+def touch_scale(probe: str) -> tuple[float, float] | None:
+    """The screen-to-device scale from one probe's output, or None when
+    the device cannot be used. The probe prints `wm size`, then the
+    touch device's X and Y axis lines from `getevent -p`, then OK."""
+    if "OK" not in probe:
+        return None
+    m = re.search(r"size:\s*(\d+)x(\d+)", probe)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    axes = {}
+    for code, mx in re.findall(r"^\s*(0035|0036)\s*:.*?max\s+(\d+)", probe,
+                               flags=re.M):
+        axes[code] = int(mx)
+    if not w or not h:
+        return None
+    sx = axes.get("0035", w) / w if axes.get("0035") else 1.0
+    sy = axes.get("0036", h) / h if axes.get("0036") else 1.0
+    return (sx or 1.0, sy or 1.0)
+
+
+def _kernel_touch(client: Client, phone_id: str) -> tuple[float, float] | None:
+    """Whether this phone's touch device takes our events, probed once."""
+    if phone_id in _touch_ready:
+        return _touch_ready[phone_id]
+    try:
+        probe = read(client, phone_id,
+                     f"test -w {TOUCH_DEVICE} && which sendevent >/dev/null && "
+                     f"wm size && getevent -p {TOUCH_DEVICE} | grep -E "
+                     f"'^ *003[56]' && echo OK")
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not probe the touch device of %s (%s); taps go "
+                    "through `input tap`", phone_id, exc)
+        probe = ""
+    scale = touch_scale(probe or "")
+    if scale is None:
+        log.warning("phone %s: the touch device cannot be written to; taps "
+                    "go through `input tap` (probe: %r)", phone_id,
+                    (probe or "")[:120])
+    else:
+        log.info("phone %s: taps go into %s (scale %.2fx%.2f)", phone_id,
+                 TOUCH_DEVICE, *scale)
+    _touch_ready[phone_id] = scale
+    return scale
+
+
+def _dwell_ms() -> float:
+    if not HUMAN_CADENCE:
+        return TAP_DWELL_MEDIAN_MS
+    import math
+
+    value = math.exp(math.log(TAP_DWELL_MEDIAN_MS)
+                     + _rng.gauss(0.0, TAP_DWELL_SIGMA))
+    return min(TAP_DWELL_MAX_MS, max(TAP_DWELL_MIN_MS, value))
+
+
 def tap(client: Client, phone_id: str, x: int, y: int) -> None:
-    run(client, phone_id, f"input tap {x} {y}")
+    scale = _kernel_touch(client, phone_id) if KERNEL_TOUCH else None
+    if scale is None:
+        run(client, phone_id, f"input tap {x} {y}")
+        return
+    if HUMAN_CADENCE:
+        repeat = _rng.uniform(*TAP_REPEAT_MS)
+        spare = (_rng.uniform(*TAP_SPARE_AFTER_MS)
+                 if _rng.random() < TAP_SPARE_ODDS else None)
+    else:
+        repeat, spare = float(round(sum(TAP_REPEAT_MS) / 2)), None
+    run(client, phone_id, tap_events(
+        x, y, dwell_ms=_dwell_ms(), repeat_ms=repeat,
+        tracking_id=_tracking_id(), spare_after_ms=spare, scale=scale))
+
+
+def swipe(client: Client, phone_id: str, x1: int, y1: int, x2: int, y2: int,
+          *, seconds: float | None = None) -> None:
+    """A swipe: eased kernel frames when the device takes them, else
+    `input swipe`."""
+    scale = _kernel_touch(client, phone_id) if KERNEL_TOUCH else None
+    if HUMAN_CADENCE:
+        total = (seconds * 1000) if seconds else _rng.uniform(*SWIPE_MS)
+        frames = _rng.randint(*SWIPE_FRAMES)
+    else:
+        total = (seconds * 1000) if seconds else sum(SWIPE_MS) / 2
+        frames = sum(SWIPE_FRAMES) // 2
+    if scale is None:
+        run(client, phone_id,
+            f"input swipe {x1} {y1} {x2} {y2} {int(total)}")
+        return
+    run(client, phone_id, swipe_events(x1, y1, x2, y2, frames=frames,
+                                       total_ms=total,
+                                       tracking_id=_tracking_id(),
+                                       scale=scale))
 
 
 def keyevent(client: Client, phone_id: str, code: int) -> None:

@@ -213,6 +213,8 @@ def act_wait(ctx: Context) -> Outcome | None:
 #: Empty screen dumps in a row before the device is called unreadable. Two
 #: or three are a phone between pages; twelve (a minute) are a device that
 #: has stopped answering.
+#: How long a page is read before its first touch (with the cadence on).
+READ_SECONDS = (1.5, 4.0)
 EMPTY_DUMPS_LIMIT = 12
 
 
@@ -332,12 +334,19 @@ def _drive(ctx: Context, screens: list[Screen], *,
                            f" ({streak} in a row)",
                            artifacts=[path] if path else [])
 
+        fresh = not ctx.trail or ctx.trail[-1] != matched.name
         ctx.trail.append(matched.name)
         out.info("screen: %s (visit %d)", matched.name, visits)
         if visits == 1:
             # Archive each page the first time it is seen, so every run leaves
             # a record of the path it took without anyone having to ask.
             ctx.save(matched.name)
+        if fresh:
+            # A person reads a page before touching it. The operator's
+            # recorded sign-in put 2-10 seconds between a page and its
+            # first tap; the loop acted within the second (2026-09-10).
+            # Nothing when the cadence is off, so the suite does not wait.
+            shell.pause(*READ_SECONDS)
         outcome = matched.act(ctx)
         if outcome:
             return outcome

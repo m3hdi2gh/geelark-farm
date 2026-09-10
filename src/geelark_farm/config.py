@@ -376,6 +376,9 @@ class Settings:
     serve_workers: int = 0
     #: Type and tap the way a hand does - see shell.HUMAN_CADENCE.
     human_cadence: bool = True
+    #: Taps written into the phone's touch device in the viewer's shape
+    #: (shell.KERNEL_TOUCH) instead of `input tap` (2026-09-10).
+    kernel_touch: bool = True
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -491,6 +494,8 @@ class Settings:
             warm_stock=_int("WARM_STOCK", 10),
             # `SERVE_WORKERS=N` is the setting; `SERVE_CONCURRENT=1` with
             # no count is what it always meant, four workers.
+            kernel_touch=_str("KERNEL_TOUCH", "1").strip().lower()
+                         in ("1", "true", "yes", "on"),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

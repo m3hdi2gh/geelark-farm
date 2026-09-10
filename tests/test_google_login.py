@@ -2028,3 +2028,17 @@ def test_the_sign_in_gets_five_minutes_to_land_after_it_closes():
     closed = next(s for s in login.SCREENS if s.name == "sign_in_closed")
     assert closed.max_visits == 60, "60 visits of five seconds"
 
+
+def test_a_code_is_looked_up_before_it_is_typed(phone, monkeypatch):
+    """A person opens the authenticator, reads six digits and comes back;
+    the flow typed the code the instant the box appeared (2026-09-10)."""
+    paused = []
+    monkeypatch.setattr(login.shell, "pause", lambda lo, hi: paused.append((lo, hi)))
+    device = phone(taps_that_work={"Next"})
+    ctx = a_context(input_box())
+
+    login.act_totp(ctx)
+
+    assert paused and paused[0] == login.CODE_LOOKUP_SECONDS
+    assert device.filled and device.filled[0][0] == "EditText"
+

@@ -702,3 +702,28 @@ def test_a_device_that_stops_answering_is_named_in_a_minute_not_a_budget(
     # A few empty dumps between pages are still a phone between pages.
     device.pages = [EMPTY] * 3 + [page("Continue")]
     assert drive(context(), screens).ok
+
+
+def test_a_new_page_is_read_before_it_is_touched(device, tmp_path, monkeypatch):
+    """The operator's recorded sign-in put seconds between a page and its
+    first tap; the loop acted within the second (2026-09-10). Once per
+    page - the same page straight back is not read again."""
+    from geelark_farm import shell
+
+    paused = []
+    monkeypatch.setattr(shell, "pause", lambda lo, hi: paused.append((lo, hi)))
+    device.pages = [page("Email"), page("Email"), page("Password"),
+                    page("Password")]
+    acted = []
+    screens = [Screen("email_entry", lambda c: c.has("email"),
+                      lambda c: acted.append("e"), max_visits=9),
+               Screen("password_entry", lambda c: c.has("password"),
+                      lambda c: acted.append("p") or Outcome("success", "in"),
+                      max_visits=9)]
+
+    out = drive(context(tmp_path), screens)
+
+    assert out.reason == "in" and acted == ["e", "e", "p"]
+    assert paused == [router.READ_SECONDS, router.READ_SECONDS], (
+        "read on arrival at each page, not on every visit")
+

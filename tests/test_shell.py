@@ -288,3 +288,119 @@ def test_with_the_cadence_on_a_tap_lands_inside_the_control_not_on_its_centre(
     for _ in range(40):
         x, y = shell.human_point((82, 564), (62, 544, 102, 584))
         assert 62 < x < 102 and 544 < y < 584
+
+
+# ------------------------------------------- kernel touches (2026-09-10)
+def test_a_kernel_tap_has_the_viewers_exact_frame_order():
+    """Recorded with getevent on phones 2293 and 2294: DOWN with a tracking
+    id and a position, one repeated position frame, UP after the dwell,
+    and sometimes three spare release frames later. No pressure, no
+    size, no jitter - the viewer sends none."""
+    script = shell.tap_events(360, 700, dwell_ms=135, repeat_ms=40,
+                              tracking_id=154, spare_after_ms=None)
+    steps = script.split("; ")
+    d = f"sendevent {shell.TOUCH_DEVICE}"
+    assert steps[:6] == [f"{d} 3 57 154", f"{d} 3 53 360", f"{d} 3 54 700",
+                         f"{d} 1 330 1", f"{d} 0 2 0", f"{d} 0 0 0"]
+    assert steps[6] == "sleep 0.040"
+    assert steps[7:11] == [f"{d} 3 53 360", f"{d} 3 54 700", f"{d} 0 2 0",
+                           f"{d} 0 0 0"]
+    assert steps[11] == "sleep 0.095", "the rest of the dwell"
+    assert steps[12:] == [f"{d} 3 57 -1", f"{d} 0 2 0", f"{d} 1 330 0",
+                          f"{d} 0 0 0"]
+    assert "pressure" not in script and " 58 " not in script and " 48 " not in script
+    spare = shell.tap_events(1, 1, dwell_ms=100, repeat_ms=30, tracking_id=1,
+                             spare_after_ms=420).split("; ")
+    assert spare[16] == "sleep 0.420"
+    assert spare[17:20] == [f"{d} 3 57 -1", f"{d} 0 2 0", f"{d} 0 0 0"]
+    assert spare.count(f"{d} 3 57 -1") == 4, "the UP's and three spare ones"
+
+
+def test_a_kernel_tap_is_scaled_onto_the_devices_axes():
+    script = shell.tap_events(360, 700, dwell_ms=100, repeat_ms=30,
+                              tracking_id=1, spare_after_ms=None,
+                              scale=(1.5, 2.0))
+    assert f"sendevent {shell.TOUCH_DEVICE} 3 53 540" in script
+    assert f"sendevent {shell.TOUCH_DEVICE} 3 54 1400" in script
+
+
+def test_a_kernel_swipe_eases_through_its_frames():
+    script = shell.swipe_events(100, 1000, 100, 400, frames=10, total_ms=500,
+                                tracking_id=7)
+    steps = script.split("; ")
+    ys = [int(s.rsplit(" ", 1)[1]) for s in steps
+          if s.startswith(f"sendevent {shell.TOUCH_DEVICE} 3 54 ")]
+    assert ys[0] == 1000 and ys[-1] == 400 and len(ys) == 11
+    assert ys == sorted(ys, reverse=True), "monotonic"
+    gaps = [a - b for a, b in zip(ys, ys[1:])]
+    assert gaps[0] < gaps[4] and gaps[-1] < gaps[4], "slow, fast, slow"
+    assert steps.count("sleep 0.050") == 10
+    assert steps[-4:] == [f"sendevent {shell.TOUCH_DEVICE} 3 57 -1",
+                          f"sendevent {shell.TOUCH_DEVICE} 0 2 0",
+                          f"sendevent {shell.TOUCH_DEVICE} 1 330 0",
+                          f"sendevent {shell.TOUCH_DEVICE} 0 0 0"]
+
+
+def test_the_touch_device_is_probed_once_and_read_for_its_scale():
+    probe = ("Physical size: 720x1440\n"
+             "    0035  : value 0, min 0, max 720, fuzz 0, flat 0, resolution 0\n"
+             "    0036  : value 0, min 0, max 1440, fuzz 0, flat 0, resolution 0\n"
+             "OK\n")
+    assert shell.touch_scale(probe) == (1.0, 1.0)
+    wide = probe.replace("max 720", "max 1080").replace("max 1440", "max 2160")
+    assert shell.touch_scale(wide) == (1.5, 1.5)
+    assert shell.touch_scale(probe.replace("OK", "")) is None, "no device"
+    assert shell.touch_scale("") is None
+    assert shell.touch_scale("Physical size: 720x1440\nOK\n") == (1.0, 1.0), (
+        "axes unreadable: assume the screen's pixels")
+
+
+def test_taps_go_into_the_device_when_it_takes_them_and_fall_back_otherwise(
+        monkeypatch):
+    sent = []
+    monkeypatch.setattr(shell, "run",
+                        lambda client, phone_id, cmd, **k: sent.append(cmd) or "")
+    monkeypatch.setattr(shell, "read",
+                        lambda client, phone_id, cmd, **k: (
+                            "Physical size: 720x1440\nOK\n"
+                            if phone_id == "good" else "sh: not found"))
+    monkeypatch.setattr(shell, "_touch_ready", {})
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", False)
+
+    monkeypatch.setattr(shell, "KERNEL_TOUCH", False)
+    shell.tap(None, "good", 10, 20)
+    assert sent == ["input tap 10 20"], "off: what it always was"
+
+    sent.clear()
+    monkeypatch.setattr(shell, "KERNEL_TOUCH", True)
+    shell.tap(None, "good", 10, 20)
+    shell.tap(None, "good", 11, 21)
+    assert all(c.startswith(f"sendevent {shell.TOUCH_DEVICE} 3 57 ")
+               for c in sent), sent
+    assert "sleep 0.048" in sent[0] and "sleep 0.087" in sent[0], (
+        "the cadence off: the median dwell of 135 ms, the repeat at 48")
+    assert shell._touch_ready["good"] == (1.0, 1.0)
+
+    sent.clear()
+    shell.tap(None, "bad", 10, 20)
+    shell.tap(None, "bad", 10, 20)
+    assert sent == ["input tap 10 20", "input tap 10 20"]
+    assert shell._touch_ready["bad"] is None, "probed once, remembered"
+
+    sent.clear()
+    shell.swipe(None, "good", 100, 900, 100, 300)
+    assert sent[0].count(f"sendevent {shell.TOUCH_DEVICE} 3 54 ") == 40
+    shell.swipe(None, "bad", 100, 900, 100, 300, seconds=0.5)
+    assert sent[1] == "input swipe 100 900 100 300 500"
+
+
+def test_with_the_cadence_on_the_dwell_is_the_recorded_distribution(monkeypatch):
+    import random
+
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", True)
+    monkeypatch.setattr(shell, "_rng", random.Random(3))
+    dwells = sorted(shell._dwell_ms() for _ in range(2000))
+    assert shell.TAP_DWELL_MIN_MS <= dwells[0] and dwells[-1] <= shell.TAP_DWELL_MAX_MS
+    assert 115 <= dwells[1000] <= 155, "median about 135 ms"
+    assert 65 <= dwells[200] <= 100 and 190 <= dwells[1800] <= 260
+

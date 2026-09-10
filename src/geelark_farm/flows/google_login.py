@@ -1153,11 +1153,16 @@ def act_password(ctx: Context) -> Outcome | None:
     return None
 
 
+#: A person opens the authenticator, reads six digits and comes back.
+CODE_LOOKUP_SECONDS = (5.0, 11.0)
+
+
 def act_totp(ctx: Context) -> Outcome | None:
     """Type an authenticator code with enough life left to survive submission."""
     field = screen.find_input(ctx.elements)
     if not field:
         return None
+    shell.pause(*CODE_LOOKUP_SECONDS)
     if not ctx.account.has_authenticator:
         # Accounts sold without 2FA normally never reach this screen. When one
         # does, Google is asking for something the row cannot produce, and
