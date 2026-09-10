@@ -291,54 +291,67 @@ def test_with_the_cadence_on_a_tap_lands_inside_the_control_not_on_its_centre(
 
 
 # ------------------------------------------- kernel touches (2026-09-10)
-def test_a_kernel_tap_has_the_viewers_exact_frame_order():
+def _frames(script: str) -> list[list[tuple[int, int, int]]]:
+    """Decode a tap or swipe script back into frames of (type, code, value)."""
+    import re as _re
+    import struct
+
+    out = []
+    for step in script.split("; "):
+        if not step.startswith("printf '"):
+            continue
+        raw = bytes(int(o, 8) for o in _re.findall(r"\\(\d{3})", step))
+        out.append([struct.unpack("<qqHHi", raw[i:i + 24])[2:]
+                    for i in range(0, len(raw), 24)])
+    return out
+
+
+def test_a_kernel_tap_is_two_binary_frames_with_the_dwell_between():
     """Recorded with getevent on phones 2293 and 2294: DOWN with a tracking
-    id and a position, one repeated position frame, UP after the dwell,
-    and sometimes three spare release frames later. No pressure, no
-    size, no jitter - the viewer sends none."""
-    script = shell.tap_events(360, 700, dwell_ms=135, repeat_ms=40,
-                              tracking_id=154, spare_after_ms=None)
+    id and a position, UP after the dwell, no pressure, no size, no
+    jitter. One `printf` per frame: a process costs ~65 ms on these
+    phones, and `sendevent` per event pushed the dwell past the
+    long-press threshold (phone 2297, 2026-09-11)."""
+    script = shell.tap_events(360, 700, dwell_ms=135, tracking_id=154,
+                              spare_after_ms=None)
     steps = script.split("; ")
-    d = f"sendevent {shell.TOUCH_DEVICE}"
-    assert steps[:6] == [f"{d} 3 57 154", f"{d} 3 53 360", f"{d} 3 54 700",
-                         f"{d} 1 330 1", f"{d} 0 2 0", f"{d} 0 0 0"]
-    assert steps[6] == "sleep 0.040"
-    assert steps[7:11] == [f"{d} 3 53 360", f"{d} 3 54 700", f"{d} 0 2 0",
-                           f"{d} 0 0 0"]
-    assert steps[11] == "sleep 0.095", "the rest of the dwell"
-    assert steps[12:] == [f"{d} 3 57 -1", f"{d} 0 2 0", f"{d} 1 330 0",
-                          f"{d} 0 0 0"]
-    assert "pressure" not in script and " 58 " not in script and " 48 " not in script
-    spare = shell.tap_events(1, 1, dwell_ms=100, repeat_ms=30, tracking_id=1,
-                             spare_after_ms=420).split("; ")
-    assert spare[16] == "sleep 0.420"
-    assert spare[17:20] == [f"{d} 3 57 -1", f"{d} 0 2 0", f"{d} 0 0 0"]
-    assert spare.count(f"{d} 3 57 -1") == 4, "the UP's and three spare ones"
+    assert len(steps) == 3 and steps[1] == "sleep 0.060", (
+        "135 ms asked for, 75 ms of spawn already spent")
+    down, up = _frames(script)
+    assert down == [(3, 57, 154), (3, 53, 360), (3, 54, 700), (1, 330, 1),
+                    (0, 2, 0), (0, 0, 0)]
+    assert up == [(3, 57, -1), (1, 330, 0), (0, 2, 0), (0, 0, 0)]
+    assert all(step.endswith(f"> {shell.TOUCH_DEVICE}") for step in
+               (steps[0], steps[2]))
+    assert not any(code in (58, 48) for f in (down, up) for _, code, _ in f), (
+        "no pressure, no size - the viewer sends none")
+    # The floor: a dwell under the spawn cost is two writes back to back.
+    assert "sleep" not in shell.tap_events(1, 1, dwell_ms=60, tracking_id=1,
+                                           spare_after_ms=None)
+    spare = shell.tap_events(1, 1, dwell_ms=100, tracking_id=1,
+                             spare_after_ms=420)
+    assert "sleep 0.420" in spare
+    assert len(_frames(spare)) == 5 and _frames(spare)[-1] == [
+        (3, 57, -1), (0, 2, 0), (0, 0, 0)]
 
 
 def test_a_kernel_tap_is_scaled_onto_the_devices_axes():
-    script = shell.tap_events(360, 700, dwell_ms=100, repeat_ms=30,
-                              tracking_id=1, spare_after_ms=None,
-                              scale=(1.5, 2.0))
-    assert f"sendevent {shell.TOUCH_DEVICE} 3 53 540" in script
-    assert f"sendevent {shell.TOUCH_DEVICE} 3 54 1400" in script
+    script = shell.tap_events(360, 700, dwell_ms=100, tracking_id=1,
+                              spare_after_ms=None, scale=(1.5, 2.0))
+    assert _frames(script)[0][1:3] == [(3, 53, 540), (3, 54, 1400)]
 
 
 def test_a_kernel_swipe_eases_through_its_frames():
-    script = shell.swipe_events(100, 1000, 100, 400, frames=10, total_ms=500,
-                                tracking_id=7)
-    steps = script.split("; ")
-    ys = [int(s.rsplit(" ", 1)[1]) for s in steps
-          if s.startswith(f"sendevent {shell.TOUCH_DEVICE} 3 54 ")]
-    assert ys[0] == 1000 and ys[-1] == 400 and len(ys) == 11
+    script = shell.swipe_events(100, 1000, 100, 400, frames=10, tracking_id=7)
+    frames = _frames(script)
+    assert len(frames) == 12, "DOWN, ten moves, UP"
+    ys = [next(v for t_, c, v in f if c == 54) for f in frames[:-1]]
+    assert ys[0] == 1000 and ys[-1] == 400
     assert ys == sorted(ys, reverse=True), "monotonic"
     gaps = [a - b for a, b in zip(ys, ys[1:])]
     assert gaps[0] < gaps[4] and gaps[-1] < gaps[4], "slow, fast, slow"
-    assert steps.count("sleep 0.050") == 10
-    assert steps[-4:] == [f"sendevent {shell.TOUCH_DEVICE} 3 57 -1",
-                          f"sendevent {shell.TOUCH_DEVICE} 0 2 0",
-                          f"sendevent {shell.TOUCH_DEVICE} 1 330 0",
-                          f"sendevent {shell.TOUCH_DEVICE} 0 0 0"]
+    assert "sleep" not in script, "the writes themselves are the pacing"
+    assert frames[-1] == [(3, 57, -1), (1, 330, 0), (0, 2, 0), (0, 0, 0)]
 
 
 def test_the_touch_device_is_probed_once_and_read_for_its_scale():
@@ -375,10 +388,8 @@ def test_taps_go_into_the_device_when_it_takes_them_and_fall_back_otherwise(
     monkeypatch.setattr(shell, "KERNEL_TOUCH", True)
     shell.tap(None, "good", 10, 20)
     shell.tap(None, "good", 11, 21)
-    assert all(c.startswith(f"sendevent {shell.TOUCH_DEVICE} 3 57 ")
-               for c in sent), sent
-    assert "sleep 0.048" in sent[0] and "sleep 0.087" in sent[0], (
-        "the cadence off: the median dwell of 135 ms, the repeat at 48")
+    assert all(c.startswith("printf '") for c in sent), sent
+    assert "sleep 0.060" in sent[0], "the cadence off: the median dwell"
     assert shell._touch_ready["good"] == (1.0, 1.0)
 
     sent.clear()
@@ -389,7 +400,7 @@ def test_taps_go_into_the_device_when_it_takes_them_and_fall_back_otherwise(
 
     sent.clear()
     shell.swipe(None, "good", 100, 900, 100, 300)
-    assert sent[0].count(f"sendevent {shell.TOUCH_DEVICE} 3 54 ") == 40
+    assert len(_frames(sent[0])) == 9 + 2, "675 ms at 75 ms a frame"
     shell.swipe(None, "bad", 100, 900, 100, 300, seconds=0.5)
     assert sent[1] == "input swipe 100 900 100 300 500"
 
@@ -403,4 +414,3 @@ def test_with_the_cadence_on_the_dwell_is_the_recorded_distribution(monkeypatch)
     assert shell.TAP_DWELL_MIN_MS <= dwells[0] and dwells[-1] <= shell.TAP_DWELL_MAX_MS
     assert 115 <= dwells[1000] <= 155, "median about 135 ms"
     assert 65 <= dwells[200] <= 100 and 190 <= dwells[1800] <= 260
-

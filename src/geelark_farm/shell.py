@@ -128,18 +128,27 @@ def third_party_packages(client: Client, phone_id: str) -> list[str]:
 #: no movement and a pressure and size of exactly 1.0 (AOSP's constants),
 #: from a device that is not the touchscreen. A person's tap on the
 #: GeeLark viewer, recorded with `getevent` on phones 2293 and 2294
-#: (2026-09-10, 117 touches): DOWN with a tracking id and a position, one
-#: repeated position frame 20-75 ms later, UP after 55-270 ms (median
-#: 135), no pressure and no size at all, no jitter - and, after a quarter
-#: of the UPs, three or four spare "released" frames some 400 ms later. A
-#: swipe is 20-60 position frames over 450-900 ms. The operator's
-#: sign-ins pass without a challenge and the builder's do not, and this
-#: is the first of the three differences the recordings left standing.
+#: (2026-09-10, 117 touches): DOWN with a tracking id and a position, UP
+#: after 55-270 ms (median 135), no pressure and no size at all, no
+#: jitter - and, after a quarter of the UPs, three spare "released"
+#: frames some 400 ms later. A swipe is 20-60 position frames over
+#: 450-900 ms. The operator's sign-ins pass without a challenge and the
+#: builder's do not, and this is the first of the three differences the
+#: recordings left standing.
+#:
+#: Each frame is one binary write of `struct input_event`s with `printf`
+#: - one process per frame. `sendevent` is one process per *event*, and
+#: on these phones a process costs about 65 ms: a four-event UP frame
+#: alone took a quarter of a second, the dwell passed the long-press
+#: threshold, and the first build tapped "I agree" eight times to no
+#: effect (2026-09-11, phone 2297). With one write per frame the dwell
+#: is `sleep` plus the spawn of `sleep` and the UP's own write - about
+#: 75 ms - and lands where it is aimed.
 #:
 #: Off in this module so the suite never shells out; `serve` turns it on
 #: from `KERNEL_TOUCH` (default on). A phone whose device cannot be
-#: written to, or that has no `sendevent`, falls back to `input tap`
-#: once and for all - the probe is one shell call per phone.
+#: written to falls back to `input tap` once and for all - the probe is
+#: one shell call per phone.
 KERNEL_TOUCH = False
 TOUCH_DEVICE = "/dev/input/event0"
 #: Linux input event codes the recordings used - nothing else.
@@ -148,16 +157,19 @@ SYN_REPORT, SYN_MT_REPORT = 0, 2
 BTN_TOUCH = 330
 ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID = 53, 54, 57
 #: The measured tap: dwell in ms (log-normal, median 135, p10 79, p90
-#: 221), the repeated frame's delay, the odds and timing of the spare
-#: release frames.
+#: 221), and the odds and timing of the spare release frames.
 TAP_DWELL_MEDIAN_MS = 135.0
 TAP_DWELL_SIGMA = 0.40
 TAP_DWELL_MIN_MS, TAP_DWELL_MAX_MS = 55.0, 270.0
-TAP_REPEAT_MS = (20.0, 75.0)
 TAP_SPARE_ODDS = 0.25
 TAP_SPARE_AFTER_MS = (300.0, 500.0)
-#: The measured swipe: frames per hundred pixels and the time they take.
-SWIPE_FRAMES = (20, 58)
+#: What a process costs on the phone, measured with getevent: a `sleep`
+#: of 80 ms put 153 ms between DOWN and UP, 200 ms put 286 (2026-09-11).
+#: Subtracted from the dwell asked for; the floor is what one write
+#: after another can do.
+SPAWN_MS = 75.0
+#: The measured swipe, in frames this can afford: one write per frame is
+#: one spawn, so a 450-900 ms swipe is 7-14 frames.
 SWIPE_MS = (450.0, 900.0)
 _touch_ready: dict[str, tuple[float, float] | None] = {}
 
@@ -166,49 +178,54 @@ def _tracking_id() -> int:
     return int(time.time() * 10) % 60000 + 100
 
 
-def tap_events(x: int, y: int, *, dwell_ms: float, repeat_ms: float,
-               tracking_id: int, spare_after_ms: float | None,
+def _event(kind: int, code: int, value: int) -> bytes:
+    """One `struct input_event` as the 64-bit kernel reads it: a zero
+    timestamp (the kernel stamps writes itself), then type, code, value,
+    little-endian."""
+    import struct
+
+    return struct.pack("<qqHHi", 0, 0, kind, code, value)
+
+
+def _frame(*events: tuple[int, int, int]) -> str:
+    """Events plus the two SYNs that close a frame, as one `printf` into
+    the device. Octal escapes: `printf` decodes them and nothing is
+    quoted by mistake."""
+    raw = b"".join(_event(*e) for e in events)
+    raw += _event(EV_SYN, SYN_MT_REPORT, 0) + _event(EV_SYN, SYN_REPORT, 0)
+    return ("printf '" + "".join("\\%03o" % b for b in raw) + "' > "
+            + TOUCH_DEVICE)
+
+
+def tap_events(x: int, y: int, *, dwell_ms: float, tracking_id: int,
+               spare_after_ms: float | None,
                scale: tuple[float, float] = (1.0, 1.0)) -> str:
-    """One tap as a shell script of `sendevent` lines, in the viewer's
-    exact frame order. Coordinates are screen pixels; `scale` maps them
-    onto the device's axis ranges when those differ."""
+    """One tap as a shell script: the DOWN frame, a sleep, the UP frame,
+    and sometimes the viewer's spare release frames. Coordinates are
+    screen pixels; `scale` maps them onto the device's axis ranges."""
     dx, dy = int(round(x * scale[0])), int(round(y * scale[1]))
-    e = f"sendevent {TOUCH_DEVICE}"
-    lines = [
-        f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} {tracking_id}",
-        f"{e} {EV_ABS} {ABS_MT_POSITION_X} {dx}",
-        f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {dy}",
-        f"{e} {EV_KEY} {BTN_TOUCH} 1",
-        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
-        f"{e} {EV_SYN} {SYN_REPORT} 0",
-        f"sleep {repeat_ms / 1000:.3f}",
-        f"{e} {EV_ABS} {ABS_MT_POSITION_X} {dx}",
-        f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {dy}",
-        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
-        f"{e} {EV_SYN} {SYN_REPORT} 0",
-        f"sleep {max(0.0, dwell_ms - repeat_ms) / 1000:.3f}",
-        f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
-        f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
-        f"{e} {EV_KEY} {BTN_TOUCH} 0",
-        f"{e} {EV_SYN} {SYN_REPORT} 0",
-    ]
+    lines = [_frame((EV_ABS, ABS_MT_TRACKING_ID, tracking_id),
+                    (EV_ABS, ABS_MT_POSITION_X, dx),
+                    (EV_ABS, ABS_MT_POSITION_Y, dy),
+                    (EV_KEY, BTN_TOUCH, 1))]
+    nap = max(0.0, dwell_ms - SPAWN_MS) / 1000
+    if nap >= 0.005:
+        lines.append(f"sleep {nap:.3f}")
+    lines.append(_frame((EV_ABS, ABS_MT_TRACKING_ID, -1),
+                        (EV_KEY, BTN_TOUCH, 0)))
     if spare_after_ms is not None:
         lines.append(f"sleep {spare_after_ms / 1000:.3f}")
-        for _ in range(3):
-            lines += [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
-                      f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
-                      f"{e} {EV_SYN} {SYN_REPORT} 0", "sleep 0.012"]
+        lines += [_frame((EV_ABS, ABS_MT_TRACKING_ID, -1))] * 3
     return "; ".join(lines)
 
 
 def swipe_events(x1: int, y1: int, x2: int, y2: int, *, frames: int,
-                 total_ms: float, tracking_id: int,
+                 tracking_id: int,
                  scale: tuple[float, float] = (1.0, 1.0)) -> str:
     """One swipe: DOWN at the start, `frames` eased position frames, UP
-    at the end - a thumb that starts slowly, moves, and slows down."""
-    e = f"sendevent {TOUCH_DEVICE}"
+    at the end - a thumb that starts slowly, moves, and slows down. No
+    sleeps: each frame's own write is the pacing."""
     frames = max(2, int(frames))
-    step = total_ms / frames / 1000
     sx, sy = scale
 
     def at(k: int) -> tuple[int, int]:
@@ -218,20 +235,16 @@ def swipe_events(x1: int, y1: int, x2: int, y2: int, *, frames: int,
                 int(round((y1 + (y2 - y1) * ease) * sy)))
 
     x0, y0 = at(0)
-    lines = [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} {tracking_id}",
-             f"{e} {EV_ABS} {ABS_MT_POSITION_X} {x0}",
-             f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {y0}",
-             f"{e} {EV_KEY} {BTN_TOUCH} 1",
-             f"{e} {EV_SYN} {SYN_MT_REPORT} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
+    lines = [_frame((EV_ABS, ABS_MT_TRACKING_ID, tracking_id),
+                    (EV_ABS, ABS_MT_POSITION_X, x0),
+                    (EV_ABS, ABS_MT_POSITION_Y, y0),
+                    (EV_KEY, BTN_TOUCH, 1))]
     for k in range(1, frames + 1):
         px, py = at(k)
-        lines += [f"sleep {step:.3f}",
-                  f"{e} {EV_ABS} {ABS_MT_POSITION_X} {px}",
-                  f"{e} {EV_ABS} {ABS_MT_POSITION_Y} {py}",
-                  f"{e} {EV_SYN} {SYN_MT_REPORT} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
-    lines += [f"{e} {EV_ABS} {ABS_MT_TRACKING_ID} -1",
-              f"{e} {EV_SYN} {SYN_MT_REPORT} 0",
-              f"{e} {EV_KEY} {BTN_TOUCH} 0", f"{e} {EV_SYN} {SYN_REPORT} 0"]
+        lines.append(_frame((EV_ABS, ABS_MT_POSITION_X, px),
+                            (EV_ABS, ABS_MT_POSITION_Y, py)))
+    lines.append(_frame((EV_ABS, ABS_MT_TRACKING_ID, -1),
+                        (EV_KEY, BTN_TOUCH, 0)))
     return "; ".join(lines)
 
 
@@ -262,7 +275,7 @@ def _kernel_touch(client: Client, phone_id: str) -> tuple[float, float] | None:
         return _touch_ready[phone_id]
     try:
         probe = read(client, phone_id,
-                     f"test -w {TOUCH_DEVICE} && which sendevent >/dev/null && "
+                     f"test -w {TOUCH_DEVICE} && which printf >/dev/null && "
                      f"wm size && getevent -p {TOUCH_DEVICE} | grep -E "
                      f"'^ *003[56]' && echo OK")
     except Exception as exc:                                      # noqa: BLE001
@@ -296,15 +309,12 @@ def tap(client: Client, phone_id: str, x: int, y: int) -> None:
     if scale is None:
         run(client, phone_id, f"input tap {x} {y}")
         return
-    if HUMAN_CADENCE:
-        repeat = _rng.uniform(*TAP_REPEAT_MS)
-        spare = (_rng.uniform(*TAP_SPARE_AFTER_MS)
-                 if _rng.random() < TAP_SPARE_ODDS else None)
-    else:
-        repeat, spare = float(round(sum(TAP_REPEAT_MS) / 2)), None
+    spare = None
+    if HUMAN_CADENCE and _rng.random() < TAP_SPARE_ODDS:
+        spare = _rng.uniform(*TAP_SPARE_AFTER_MS)
     run(client, phone_id, tap_events(
-        x, y, dwell_ms=_dwell_ms(), repeat_ms=repeat,
-        tracking_id=_tracking_id(), spare_after_ms=spare, scale=scale))
+        x, y, dwell_ms=_dwell_ms(), tracking_id=_tracking_id(),
+        spare_after_ms=spare, scale=scale))
 
 
 def swipe(client: Client, phone_id: str, x1: int, y1: int, x2: int, y2: int,
@@ -314,16 +324,14 @@ def swipe(client: Client, phone_id: str, x1: int, y1: int, x2: int, y2: int,
     scale = _kernel_touch(client, phone_id) if KERNEL_TOUCH else None
     if HUMAN_CADENCE:
         total = (seconds * 1000) if seconds else _rng.uniform(*SWIPE_MS)
-        frames = _rng.randint(*SWIPE_FRAMES)
     else:
         total = (seconds * 1000) if seconds else sum(SWIPE_MS) / 2
-        frames = sum(SWIPE_FRAMES) // 2
     if scale is None:
         run(client, phone_id,
             f"input swipe {x1} {y1} {x2} {y2} {int(total)}")
         return
+    frames = max(4, int(round(total / SPAWN_MS)))
     run(client, phone_id, swipe_events(x1, y1, x2, y2, frames=frames,
-                                       total_ms=total,
                                        tracking_id=_tracking_id(),
                                        scale=scale))
 
