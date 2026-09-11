@@ -5026,10 +5026,19 @@ def test_the_distrust_reasons_are_the_ladders_reasons():
     from geelark_farm import failures
 
     assert failures.retryable("captcha_shown")
-    assert failures.retryable("phone_verification_required")
     assert failures.retryable("verification_blocked")
+    assert failures.retryable("sign_in_refused")
     assert not failures.retryable("wrong_password")
     assert not failures.retryable("stuck_on_dismissable")
+    # The two the seller owes for: Google wanting a phone number for the
+    # account, and a password that was never right. Another phone and
+    # another exit cannot change either answer, so they leave the pool for
+    # the refund list instead of the queue (the operator, 2026-09-12).
+    assert failures.sellers_fault("phone_verification_required")
+    assert failures.sellers_fault("password_changed")
+    assert not failures.retryable("phone_verification_required")
+    assert not failures.sellers_fault("captcha_shown")
+    assert failures.SELLERS_FAULT <= failures.DISTRUST | {"password_changed"}
     assert failures.knows("phone_distrusted") and failures.knows("captcha_text")
     assert failures.verdict("phone_distrusted").stops_the_phone
     assert failures.verdict("captcha_text").needs_a_new_exit
@@ -5316,3 +5325,42 @@ def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
     assert builder._touch_method("P") == "kernel"
     assert builder._touch_method("Q") == "input"
     assert builder._touch_method("R") == "input"
+
+
+def test_an_exit_is_chosen_away_from_the_host_that_refused_the_address(
+        make_settings, tmp_path, monkeypatch):
+    """The address is claimed before the exit is, so this is where the two
+    are kept apart. If every free exit is on the host that just refused
+    it, no phone is made at all: the address is behind the fresh stock
+    anyway, so waiting costs nothing that was going to be used."""
+    from types import SimpleNamespace
+
+    asked = []
+
+    class Proxies:
+        def claim(self, serial="", avoid_host=""):
+            asked.append(avoid_host)
+            return None if avoid_host else SimpleNamespace(
+                proxy=SimpleNamespace(host="10.0.0.1"), name="SX1",
+                label="SX1", values={})
+
+        def record_exit(self, resource, ip):
+            resource.values["Last Exit IP"] = ip
+
+    book = SimpleNamespace(proxies=Proxies())
+    settings = make_settings(state_dir=tmp_path)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "1.1.1.1"})
+
+    with pytest.raises(builder.Aborted) as refused:
+        builder._fresh_proxy(None, book, settings=settings,
+                             avoid_host="190.2.143.20")
+    assert str(refused.value) == "no_other_exit"
+    assert asked == ["190.2.143.20"], "it does not quietly take that host"
+    assert builder.failures.knows("no_other_exit"), (
+        "a reason a build can end on is a reason the table names")
+
+    # Nothing to avoid: the ordinary claim, unchanged.
+    asked.clear()
+    got = builder._fresh_proxy(None, book, settings=settings)
+    assert got.name == "SX1" and asked == [""]

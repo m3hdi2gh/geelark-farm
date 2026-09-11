@@ -384,6 +384,11 @@ class Settings:
     #: (GEO_ALIGN). Every exit is in Europe and every phone kept a US
     #: clock (2026-09-11).
     geo_align: bool = True
+    #: How long a refused Gmail waits before the pool may hand it out
+    #: again (LADDER_FLOOR_MINUTES). Not a rest - the ladder's ordering
+    #: keeps it behind every fresh address - only long enough that the
+    #: wave of builds it was refused in has passed (2026-09-12).
+    ladder_floor_minutes: int = 20
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -503,6 +508,7 @@ class Settings:
                          in ("1", "true", "yes", "on"),
             geo_align=_str("GEO_ALIGN", "1").strip().lower()
                       in ("1", "true", "yes", "on"),
+            ladder_floor_minutes=_int("LADDER_FLOOR_MINUTES", 20),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

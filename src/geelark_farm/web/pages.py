@@ -4632,8 +4632,8 @@ GMAIL_VIEWS = {
     "used": {"label": "Used",
              "sub": "retired with the phone they were delivered on"},
     "errored": {"label": "Errored", "tone": "red",
-                "sub": "an errored address never re-enters the pool - this "
-                       "list exists so the seller pays it back"},
+                "sub": "two piles: what Google refused for now and comes "
+                       "back on its own, and what the seller owes for"},
 }
 
 
@@ -4785,10 +4785,11 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
     seller = str(data.get("seller") or "")
 
     right = ""
-    if view == "errored" and int(data.get("total") or 0):
+    owed = int((data.get("counts") or {}).get("owed") or 0)
+    if view == "errored" and owed:
         where = f"?seller={_q(seller)}" if seller else ""
         right = (f'<a class="btn" href="/pools/gmail/refund.txt{where}">'
-                 f'Copy {int(data["total"])} addresses</a>')
+                 f'Copy {owed} to claim back</a>')
     body = (f'<div class="narrow">'
             f'<div class="top"><h2>Gmail Pool</h2>'
             f'<span class="sub" style="margin:0">{_gmail_stock(counts)}</span>'
@@ -4801,12 +4802,13 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
     if view == "errored":
         body += _errored_filters(data, seller)
         head = ("<tr><th>address</th><th>reason</th><th>what happened</th>"
-                "<th>failed</th></tr>")
+                "<th>failed</th><th>where it stands</th></tr>")
         lines = "".join(
             f'<tr><td>{esc(r["address"])}</td>'
             f'<td>{_reason_words(str(r["status"]))}</td>'
             f'<td class="muted">{_why(r, advice)}</td>'
-            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
+            f'<td class="muted">{_when(r["updated_at"])}</td>'
+            f'<td class="act">{_refund_cell(r, user, view, seller)}</td></tr>'
             for r in rows)
         empty = ("nothing has failed for this seller" if seller else
                  "nothing has been refused by Google")
@@ -4874,6 +4876,47 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
                  f'<table>{broken}</table></div>')
     return page("Gmail Pool", body + "</div>", user=user,
                 here="/pools/gmail")
+
+
+#: The three words a refund row can wear, and how each reads on the page.
+_REFUND_WORDS = {"to_claim": ("To claim back", "red"),
+                 "claimed": ("Paid back", "green"),
+                 "refused": ("Seller refused", "manual")}
+
+
+def _refund_cell(row: dict, user: dict, view: str, seller: str) -> str:
+    """Where one errored address stands: coming back on its own, or money.
+
+    The two piles used to read the same, so a captcha - which signs in two
+    times in three on its next try - sat in front of a seller beside a
+    password that was never right (the operator, 2026-09-12).
+    """
+    state = str(row.get("refund_state") or "")
+    if not state:
+        tries = int(row.get("tries") or 0)
+        back = row.get("retry_after")
+        if back:
+            return (f'<span class="dim">back in the queue {_when(back)} '
+                    f'&middot; try {tries + 1} of 3</span>')
+        return (f'<span class="dim">tried {tries} time'
+                f'{"" if tries == 1 else "s"} &middot; needs a person</span>')
+    word, tone = _REFUND_WORDS.get(state, (state, "manual"))
+    pill = f'<span class="badge {tone}">{esc(word)}</span>'
+    if state != "to_claim" or not _may(user, "may_add_gmail"):
+        return pill
+    back = "/pools/gmail?view=errored" + (f"&seller={_q(seller)}"
+                                          if seller else "")
+    buttons = "".join(
+        f'<form method="post" class="inline" action="/pools/gmail/refund">'
+        f'{_csrf(user)}<input type="hidden" name="address" '
+        f'value="{esc(str(row.get("address") or ""))}">'
+        f'<input type="hidden" name="state" value="{word}">'
+        f'<input type="hidden" name="back" value="{esc(back)}">'
+        f'<button class="quiet" title="{esc(hint)}">{label}</button></form>'
+        for word, label, hint in (
+            ("claimed", "Paid", "the seller paid this one back"),
+            ("refused", "Not paid", "the seller would not pay it back")))
+    return pill + buttons
 
 
 def _errored_filters(data: dict, seller: str) -> str:

@@ -51,6 +51,9 @@ def doomed(store, kind: str) -> list[dict]:
         # A row on the retry ladder is not a verdict, it is a wait: it
         # comes back on its own (store.ladder, 2026-09-10).
         "   AND r.retry_after IS NULL"
+        # A row on the refund list is money somebody is still
+        # owed; it leaves when that is settled (2026-09-12).
+        "   AND coalesce(r.refund_state, '') = ''"
         " ORDER BY r.id", (kind, SPENT[kind], routine, list(KEPT)))
 
 

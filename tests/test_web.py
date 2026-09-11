@@ -648,6 +648,7 @@ def _gmail_active(monkeypatch, seen=None, queued=None, on_phone=None):
     seen = seen if seen is not None else {}
     known = ["egypt", "usa"]
     counts = {"queued": 2, "on_phone": 1, "used": 5, "errored": 3,
+              "owed": 2, "refunded": 0,
               "broken": 0}
 
     def gmail_pool(settings, view="queued", seller="", page=1, per_page=100):
@@ -658,8 +659,12 @@ def _gmail_active(monkeypatch, seen=None, queued=None, on_phone=None):
                "more": False, "total": counts.get(view, 0)}
         if view == "errored":
             out.update(
-                rows=[_gmail_row("bad1@x.com", "captcha_shown"),
-                      _gmail_row("bad2@x.com", "wrong_2fa_code")],
+                rows=[dict(_gmail_row("bad1@x.com", "captcha_shown"),
+                           tries=1, retry_after="2026-09-12 09:00:00",
+                           refund_state=""),
+                      dict(_gmail_row("bad2@x.com", "wrong_2fa_code"),
+                           tries=3, retry_after=None,
+                           refund_state="to_claim")],
                 reasons=[{"status": "captcha_shown", "c": 1},
                          {"status": "wrong_2fa_code", "c": 1}],
                 broken=[], total=2, pages=3, more=page < 3)
@@ -963,8 +968,14 @@ def test_the_errored_view_filters_by_seller_and_offers_the_refund_list(
         in body
     assert 'href="/pools/gmail?view=errored&seller=egypt&page=3">older' \
         in body
-    assert 'href="/pools/gmail/refund.txt?seller=egypt">Copy 2 addresses' \
+    assert 'href="/pools/gmail/refund.txt?seller=egypt">Copy 2 to claim back' \
         in body
+    # The two piles read differently now: one comes back on its own,
+    # the other is money (the operator, 2026-09-12).
+    assert "back in the queue" in body and "try 2 of 3" in body
+    assert "To claim back" in body
+    assert "action=" not in body.split("To claim back")[1][:80], (
+        "the two buttons need the permission; this user has none")
 
     status, headers, text = client.request(
         "GET", "/pools/gmail/refund.txt?seller=egypt")
@@ -5316,3 +5327,33 @@ def test_a_failed_wish_with_its_phone_on_the_shelf_is_not_a_row_of_its_own():
     assert "NOT EXISTS (SELECT 1 FROM phones p" in sql[at:at + 500]
     assert "p.serial = w.serial" in sql[at:at + 600]
 
+
+
+def test_a_refund_row_offers_the_two_words_to_whoever_may_add_gmails():
+    """Paid, or refused. Nothing here puts the address back in the pool -
+    it left the moment Google said the account itself was the problem -
+    so the only thing left to record is whether the money came back
+    (the operator, 2026-09-12)."""
+    from geelark_farm.web import pages
+
+    owed = {"id": 2, "address": "owed@x.com", "status": "password_changed",
+            "tries": 3, "retry_after": None, "refund_state": "to_claim"}
+    waiting = {"id": 3, "address": "back@x.com", "status": "captcha_shown",
+               "tries": 1, "retry_after": "2026-09-12 09:00:00",
+               "refund_state": ""}
+    admin = {"username": "mehdi", "role": "admin", "mutations": True,
+             "csrf": "t"}
+
+    cell = pages._refund_cell(owed, admin, "errored", "hoavan1")
+    assert "To claim back" in cell
+    assert cell.count('action="/pools/gmail/refund"') == 2
+    assert 'value="claimed"' in cell and 'value="refused"' in cell
+    assert "seller=hoavan1" in cell, "it comes back to the list it was on"
+
+    assert "back in the queue" in pages._refund_cell(waiting, admin,
+                                                     "errored", "")
+    assert pages._refund_cell(
+        dict(owed, refund_state="claimed"), admin, "errored", "") == (
+        '<span class="badge green">Paid back</span>'), "settled, no buttons"
+    looker = {"username": "ali", "role": "operator", "mutations": False}
+    assert "action=" not in pages._refund_cell(owed, looker, "errored", "")

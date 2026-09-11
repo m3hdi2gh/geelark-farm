@@ -956,7 +956,8 @@ def _give_back_condemned(s: _Session) -> None:
 
 
 def _fresh_proxy(client: Client, book: Book, *,
-                 settings: Settings | None = None) -> Resource:
+                 settings: Settings | None = None,
+                 avoid_host: str = "") -> Resource:
     """Claim a proxy GeeLark can actually reach.
 
     Checked before it is used, because an unreachable proxy is the one failure
@@ -978,8 +979,15 @@ def _fresh_proxy(client: Client, book: Book, *,
     which is a fact about the stock rather than about this run.
     """
     skipped = 0
+    wanted_elsewhere = avoid_host
     while True:
-        resource = book.proxies.claim()
+        resource = book.proxies.claim(avoid_host=wanted_elsewhere)
+        if resource is None and wanted_elsewhere:
+            # Nothing on another host is free. The address waits for one
+            # rather than spending its next try where it has already been
+            # refused - it is behind the fresh stock anyway, so waiting
+            # costs the farm nothing it was going to use.
+            raise Aborted("no_other_exit")
         if resource is None:
             raise Aborted("no_working_proxy" if skipped else "no_usable_proxy")
         try:
@@ -1432,8 +1440,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if want and want.proxy_name:
                 proxy_row = _pick(book.proxies, want.proxy_name, "exit")
             else:
-                proxy_row = _fresh_proxy(client, book,
-                                         settings=settings)
+                # A Gmail off the queue carries the host it was refused
+                # on. The address is claimed before the exit is, so this
+                # is where the two are kept apart: a second try from the
+                # same host is the one thing that made the first one
+                # worthless (the operator, 2026-09-12).
+                proxy_row = _fresh_proxy(
+                    client, book, settings=settings,
+                    avoid_host=str((getattr(gmail_row, "values", None) or {})
+                                   .get("Last Host") or ""))
             build.proxy = str(proxy_row.proxy)
             build.proxy_name = proxy_row.name
 
@@ -1524,7 +1539,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # The first was claimed before the phone existed; this is the
                 # next one, after that address was refused on this device - so
                 # this one can say which phone it is on from the start.
-                gmail_row = book.gmails.claim(build.serial)
+                gmail_row = book.gmails.claim(
+                    build.serial,
+                    avoid_host=str(getattr(getattr(proxy_row, "proxy", None),
+                                           "host", "") or ""))
                 if gmail_row is None:
                     return finish("no_usable_gmail",
                                   "the Gmails tab had no other address to try "
@@ -1663,7 +1681,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             # cleaner proxy and the build has just set the address aside.
             book.gmails.fail(gmail_row, outcome.reason,
                              note=failures.verdict(outcome.reason,
-                                                  book.gmails.service).advice)
+                                                  book.gmails.service).advice,
+                             host=str(getattr(getattr(proxy_row, "proxy", None),
+                                              "host", "") or ""),
+                             settings=settings)
             gmail_row = None
             tried_gmails += 1
             said = failures.verdict(outcome.reason, book.gmails.service).seen

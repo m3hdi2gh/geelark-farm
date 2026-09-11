@@ -1471,16 +1471,22 @@ def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over()
     from geelark_farm import failures
     from geelark_farm.store import ladder
 
-    assert ladder.MAX_TRIES == 3 and ladder.WAITS_HOURS == (24, 48)
+    assert ladder.MAX_TRIES == 3 and ladder.FLOOR_MINUTES == 20
     challenge = inspect.getsource(ladder.challenge)
     assert "tries = tries + 1" in challenge and "last_reason = %s" in challenge
     assert "retry_after = CASE WHEN tries + 1 >= %s THEN NULL" in challenge
+    assert "make_interval(mins => %s)" in challenge, (
+        "minutes, not the day and the two days the farm starved through")
+    assert "last_host = CASE WHEN %s <> '' THEN %s ELSE last_host END" in         challenge, "the exit it was refused on, so the next try avoids it"
     assert "RETURNING tries, retry_after IS NOT NULL" in challenge
     revive = inspect.getsource(ladder.revive_due)
     assert "retry_after IS NOT NULL AND retry_after <= now()" in revive
     assert "status = ANY(%s)" in revive and "sorted(failures.DISTRUST)" in revive
     assert "SET status = '', serial = '', retry_after = NULL" in revive
+    assert "refund_state = ''" in revive, "the seller's rows do not come back"
     assert "conn.commit()" in revive
+    refund = inspect.getsource(ladder.to_refund)
+    assert "refund_state = 'to_claim'" in refund and "tries = %s" in refund
 
     class Conn:
         def __init__(self, tries, back):
@@ -1494,14 +1500,23 @@ def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over()
             return self.row
 
     conn = Conn(1, True)
-    assert ladder.challenge(conn, 7, "captcha_shown") == (1, True)
-    assert "back in the pool in 24 h" in conn.sql[-1][1][0]
+    assert ladder.challenge(conn, 7, "captcha_shown", host="9.9.9.9") == (1, True)
+    said = conn.sql[-1][1][0]
+    assert "back in the pool in 20 min" in said
+    assert "behind every fresh address" in said, (
+        "the queue is the wait now, not the clock")
+    assert "9.9.9.9" in conn.sql[0][1], "the host it was refused on"
     conn = Conn(3, False)
     assert ladder.challenge(conn, 7, "captcha_shown") == (3, False)
     assert "needs a person" in conn.sql[-1][1][0]
+    # The floor is one setting, and zero means straight back.
     conn = Conn(2, True)
-    ladder.challenge(conn, 7, "verification_blocked")
-    assert "in 48 h" in conn.sql[-1][1][0]
+
+    class _Settings:
+        ladder_floor_minutes = 0
+
+    ladder.challenge(conn, 7, "verification_blocked", settings=_Settings())
+    assert "in 0 min" in conn.sql[-1][1][0] and conn.sql[0][1][4] == 0
 
 
 def test_the_gmail_pool_climbs_the_ladder_only_for_distrust():
@@ -1512,7 +1527,10 @@ def test_the_gmail_pool_climbs_the_ladder_only_for_distrust():
     src = inspect.getsource(pgpool.PgGmailPool.fail)
     assert "super().fail(resource, reason, note=note)" in src
     assert "failures.retryable(reason)" in src
-    assert "ladder.challenge(conn, resource.store_id, reason)" in src
+    assert "failures.sellers_fault(reason)" in src, (
+        "the two the seller owes for never go back on the ladder")
+    assert "ladder.to_refund(" in src and "ladder.challenge(" in src
+    assert "host=host" in src, "the exit it was refused on travels with it"
     assert "conn.commit()" in src
 
 
@@ -1538,6 +1556,8 @@ def test_the_purge_leaves_the_ladders_rows_alone():
 
     src = pathlib.Path("scripts/purge_gmails.py").read_text(encoding="utf-8")
     assert "AND r.retry_after IS NULL" in src
+    assert "coalesce(r.refund_state, '') = ''" in src, (
+        "nor a row somebody is still owed money for")
 
 
 def test_the_schema_carries_the_ladder_and_the_sign_ins():
@@ -1720,7 +1740,7 @@ def test_the_schema_carries_the_apis_practice_room():
     from geelark_farm.web import api_v1_read as api_read
 
     sql = schema_text()
-    assert db.SCHEMA_REV == "26"
+    assert db.SCHEMA_REV == "27"
     assert "CREATE TABLE IF NOT EXISTS api_sandbox" in sql
     for column in api_read._ACCOUNT_COLUMNS.replace("r.", "").split(","):
         name = column.strip()

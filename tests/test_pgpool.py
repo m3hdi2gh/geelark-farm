@@ -45,7 +45,8 @@ class MemoryTable:
                     email_code_only=False, seller="", host=None, port=None,
                     username=None, proxy_pass="", proxy_name="",
                     last_exit_ip="", used_at="", purchased_on="",
-                    source="sheet", added_by=None, owner_id=None)
+                    source="sheet", added_by=None, owner_id=None,
+                    last_host="", refund_state="", tries=0)
 
     def __init__(self):
         self._rows: dict[int, dict] = {}
@@ -80,10 +81,14 @@ class MemoryTable:
         self.updates.append((row_id, dict(fields)))
 
     def claim(self, kind, *, free, claimed, count_use, serial="",
-              row_id=None):
+              row_id=None, avoid_host="", host_column=""):
         for r in self._ordered(kind, count_use):
             if row_id is not None and r["id"] != row_id:
                 continue
+            if avoid_host and host_column and r.get(host_column) == avoid_host:
+                continue                       # the exit it was refused on
+            if r.get("refund_state"):
+                continue                       # money to claim, not stock
             if r["error"] is None and (r["status"] or "").lower() in free:
                 r["status"] = claimed
                 r["claimed_at"] = _now()
@@ -759,3 +764,51 @@ def test_removing_a_row_archives_it_and_says_who_asked():
     assert "pool_archive.archive(self._settings, [row_id], by=by)" in src
     assert "DELETE FROM resources WHERE id = %s" in src, (
         "a row the archive already holds still has to leave the pool")
+
+
+# --------------------------- the queue, not the clock (2026-09-12)
+def test_a_claim_can_refuse_the_host_the_row_was_refused_on():
+    """A Gmail off the queue carries the exit host that refused it. Given
+    it again, the second try is worth nothing - so the pool skips those
+    rows and the build takes another exit (the operator, 2026-09-12)."""
+    from geelark_farm.store import pgpool
+
+    table = MemoryTable()
+    pool = pgpool.PgGmailPool(table)
+    burnt = table.add("gmail", address="burnt@x.com", password="pw",
+                      sheet_row=1, tries=1, last_host="190.2.143.20")
+    table.add("gmail", address="fresh@x.com", password="pw", sheet_row=2)
+    pool.load()
+
+    got = pool.claim(serial="1600", avoid_host="190.2.143.20")
+
+    assert got is not None and got.values["Address"] == "fresh@x.com"
+    assert table.row(burnt)["status"] == "", "left where it was, not spent"
+    # Any other host, and it is claimable again.
+    pool.load()
+    assert pool.claim(serial="1601",
+                      avoid_host="1.2.3.4").values["Address"] == "burnt@x.com"
+
+
+def test_a_row_waiting_on_a_refund_is_not_stock():
+    """Google wants a phone number for the account: no exit and no phone
+    can answer that, so the row leaves the pool for the refund list and
+    nothing ever claims it again."""
+    from geelark_farm.store import pgpool
+
+    table = MemoryTable()
+    pool = pgpool.PgGmailPool(table)
+    table.add("gmail", address="owed@x.com", password="pw", sheet_row=1,
+              refund_state="to_claim")
+    table.add("gmail", address="fresh@x.com", password="pw", sheet_row=2)
+    pool.load()
+
+    assert pool.claim().values["Address"] == "fresh@x.com"
+    assert pool.claim() is None, "the refund row is not the next one down"
+
+    import inspect
+
+    sql = inspect.getsource(pgpool.ResourceTable.claim)
+    assert "coalesce(refund_state, '') = ''" in sql, (
+        "the real table refuses it in the statement, not in Python")
+    assert 'coalesce({column}, \'\') <> %s' in sql

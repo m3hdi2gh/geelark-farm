@@ -763,3 +763,23 @@ CREATE INDEX IF NOT EXISTS api_sandbox_page
 ALTER TABLE api_clients DROP CONSTRAINT IF EXISTS api_clients_role_check;
 ALTER TABLE api_clients ADD CONSTRAINT api_clients_role_check
     CHECK (role IN ('panel', 'bot', 'sandbox'));
+
+-- ------------------------------- the ladder becomes a queue, rev 27
+-- A Gmail Google refused was rested for a day, then two. The farm ran out
+-- of addresses 80 times in the week this was written while paid ones slept
+-- on that timer, so the wait is now a floor of minutes and the row's place
+-- in the queue does the work: `claim` orders by `tries`, so a row that has
+-- been refused is only ever reached when no fresh address is free (the
+-- operator, 2026-09-12).
+--
+-- `last_host` is the exit host it was refused on, so the next try is given
+-- a different one; `refund_state` takes the rows that are the seller's
+-- fault - Google wanting a phone number for the account, a password that
+-- was never right - out of the pool altogether and into a list to claim
+-- money back with. Those are never retried: no phone and no exit can fix
+-- them.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS last_host    text NOT NULL DEFAULT '';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS refund_state text NOT NULL DEFAULT '';
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS refund_at    timestamptz;
+CREATE INDEX IF NOT EXISTS resources_refunds
+    ON resources (kind, refund_state) WHERE refund_state <> '';

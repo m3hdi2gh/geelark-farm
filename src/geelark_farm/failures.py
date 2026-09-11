@@ -130,11 +130,27 @@ DISTRUST = frozenset({"captcha_shown", "captcha_text", "verification_blocked",
                       "phone_verification_required", "sign_in_refused",
                       "too_many_attempts"})
 
+#: The two refusals no phone and no exit can fix, because they are about
+#: the account somebody sold us. `phone_verification_required` is Google
+#: asking for a phone number for the account itself - measured twice on
+#: 2026-09-11, with the password and the authenticator code both accepted
+#: first; `password_changed` is a password that was never right. These
+#: leave the pool for the refund list instead of the ladder: retrying them
+#: spends a phone and an exit on an answer that will not change (the
+#: operator, 2026-09-12).
+SELLERS_FAULT = frozenset({"phone_verification_required", "password_changed"})
+
 
 def retryable(reason: str) -> bool:
     """Whether a Gmail refused for `reason` gets the ladder rather than
-    the shelf."""
-    return reason in DISTRUST
+    the shelf. Never for the seller's own faults: those are money to claim
+    back, not an address to try again."""
+    return reason in DISTRUST and reason not in SELLERS_FAULT
+
+
+def sellers_fault(reason: str) -> bool:
+    """Whether the row is the seller's to answer for."""
+    return reason in SELLERS_FAULT
 
 
 VERDICTS: dict[str, Verdict] = {
@@ -486,6 +502,12 @@ VERDICTS: dict[str, Verdict] = {
         "No phone was created, so nothing was spent. The Proxy pool has "
         "nothing free: rows are `claimed` or `on a phone` from builds that "
         "still hold them, or `change ip` and `dead` and waiting on you."),
+    "no_other_exit": Verdict(
+        NOBODY, "every free exit was the host this address was just refused on",
+        "The address came back off the queue carrying the host that refused "
+        "it, and no exit on another host was free - so no phone was created "
+        "and nothing was spent. It goes again the moment one is free, behind "
+        "every fresh address, which is where it already was."),
     "no_working_proxy": Verdict(
         NOBODY, "none of the free proxies answered when tested",
         "Every free proxy was tested and none answered, so no phone was "

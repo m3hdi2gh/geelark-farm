@@ -459,7 +459,11 @@ _GMAIL_COLUMNS = ("r.id, r.address, r.status, r.serial, r.seller,"
                   " r.purchased_on, r.used_at, r.note, r.updated_at,"
                   " r.password, r.totp_secret, r.recovery_email,"
                   " r.totp_secret <> '' AS has_totp,"
-                  " r.recovery_email <> '' AS has_recovery, r.source")
+                  " r.recovery_email <> '' AS has_recovery, r.source,"
+                  # What the errored list is really made of: rows on their
+                  # way back into the queue, and rows that are money the
+                  # seller owes. They used to read the same (2026-09-12).
+                  " r.tries, r.retry_after, r.last_host, r.refund_state")
 
 
 def _gmail_sellers(store) -> list[str]:
@@ -633,6 +637,8 @@ def gmail_pool(settings: Settings, view: str = "queued",
             " count(*) FILTER (WHERE status = 'used') AS used,"
             " count(*) FILTER (WHERE error IS NULL"
             "   AND NOT (status = ANY(%s)) AND status <> %s) AS errored,"
+            " count(*) FILTER (WHERE refund_state = 'to_claim') AS owed,"
+            " count(*) FILTER (WHERE refund_state = 'claimed') AS refunded,"
             " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
             " FROM resources WHERE kind = 'gmail'",
             (sorted(ROUTINE["gmail"]), IMPORTED))[0]
@@ -700,14 +706,21 @@ def gmail_pool(settings: Settings, view: str = "queued",
 
 
 def errored_addresses(settings: Settings, seller: str = "") -> list[str]:
-    """Every errored gmail address, one seller's or everyone's, with no
-    page cap: this is the list the seller is asked to refund, and a list
-    cut at a page boundary is a refund never asked for."""
+    """Every address the seller owes for, one seller's or everyone's, with
+    no page cap: a list cut at a page boundary is a refund never asked
+    for.
+
+    The rows marked `to_claim` and no others. Until 2026-09-12 this was
+    every errored address, which put rows that come back on their own -
+    a captcha, a refusal - in front of a seller as though they were
+    broken; the two piles read the same and only one of them is money.
+    """
     wanted = seller.lower()
     with Store(settings) as store:
         rows = store._rows(
             "SELECT address FROM resources"
             " WHERE kind = 'gmail' AND error IS NULL AND address IS NOT NULL"
+            " AND refund_state = 'to_claim'"
             " AND NOT (status = ANY(%s)) AND status <> %s"
             " AND (%s = '' OR lower(seller) = %s)"
             " ORDER BY updated_at DESC, id",

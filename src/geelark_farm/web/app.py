@@ -992,6 +992,14 @@ class _Handler(BaseHTTPRequestHandler):
                              idem=self._minute_key(user, "remove_gmail",
                                                    address),
                              back=back)
+        if path == "/pools/gmail/refund":
+            address = (field.get("address") or "").strip()
+            state = (field.get("state") or "").strip()
+            return self._act(user, "may_add_gmail", "refund_gmail",
+                             {"address": address, "state": state},
+                             idem=self._minute_key(user, "refund_gmail",
+                                                   f"{address}:{state}"),
+                             back=_gmail_back(field))
         if path in ("/pools/gmail/undo", "/pools/gpt/undo"):
             return self._undo_remove(user, path.split("/")[2], field)
         if path in ("/pools/gmail/free", "/pools/gpt/free"):
@@ -1749,7 +1757,7 @@ _OPERATOR_POSTS = (
     "/logout", "/password", "/accounts/login", "/phones/build",
     "/pools/gmail/preview", "/pools/gmail/add",
     "/pools/gmail/edit", "/pools/gmail/remove", "/pools/gmail/undo",
-    "/pools/gmail/free",
+    "/pools/gmail/free", "/pools/gmail/refund",
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
     "/pools/gpt/preview", "/pools/gpt/add",

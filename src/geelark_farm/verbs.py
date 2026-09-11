@@ -646,6 +646,31 @@ def free_app(book, ledger, settings, payload, client):
     return "done", f"{payload.get('address')} is back on the shelf", None
 
 
+def refund_gmail(book, ledger, settings, payload, client):
+    """Move one address along the refund list: claimed, refused, or back
+    to `to_claim` if it was marked by mistake.
+
+    Nothing about stock: these rows left the pool the moment Google said
+    the account itself was the problem, and none of the three words puts
+    one back. What it changes is whether the address is still money
+    somebody is owed (2026-09-12).
+    """
+    from .store import refunds
+
+    address = (payload.get("address") or "").strip()
+    state = (payload.get("state") or "").strip().lower()
+    if state not in refunds.STATES:
+        return "failed", f"{state or '?'} is not one of the refund words", None
+    row = refunds.mark(settings, address=address, state=state,
+                       by=_by(payload))
+    if row is None:
+        return ("failed", f"{address or '?'} is not a Gmail on the refund "
+                          f"list", None)
+    said = {"claimed": "was paid back", "refused": "was refused by the seller",
+            "to_claim": "is back on the list to claim"}[state]
+    return "done", f"{row['address']} {said} ({_by(payload)})", {"state": state}
+
+
 def remove_gmail(book, ledger, settings, payload, client):
     """Out of the pool and into the archive. The row it removed rides in
     the detail, so Requests can put it back the way a removed proxy can -
@@ -1250,6 +1275,7 @@ VERBS = {
     "edit_app": edit_app,
     "remove_app": remove_app,
     "free_gmail": free_gmail,
+    "refund_gmail": refund_gmail,
     "free_app": free_app,
     "add_gpt": add_gpt,
     "add_panel_account": add_panel_account,
@@ -1287,6 +1313,9 @@ for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               # lane's own pool through `launch`, so the lane's thread is
               # free again at once (A-1, 2026-09-08). The pass still drains
               # it too, as the backstop it is for every lane verb.
-              login_accounts):
+              login_accounts,
+              # One UPDATE against the store and nothing else: a person
+              # ticking off a refund should not wait for a pass.
+              refund_gmail):
     _lane.lane_safe = True
 del _lane

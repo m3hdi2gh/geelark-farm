@@ -118,7 +118,8 @@ class ResourceTable:
 
     def claim(self, kind: str, *, free: tuple[str, ...], claimed: str,
               count_use: bool, serial: str = "",
-              row_id: int | None = None) -> dict | None:
+              row_id: int | None = None, avoid_host: str = "",
+              host_column: str = "") -> dict | None:
         """Pick, mark and stamp the first free row of `kind` in one
         statement. The ordering is the sheet's contract: least-used first
         for exits, top of the tab for credentials. `row_id` narrows the
@@ -131,21 +132,33 @@ class ResourceTable:
         # stock first, the ladder's rows when nothing else is free.
         order = ("times_used, sheet_row NULLS LAST, id" if count_use
                  else "tries, sheet_row NULLS LAST, id")
+        # The host this row is tied to, for the caller that wants a
+        # different one: the proxy's own `host`, and for a Gmail the exit
+        # it was last refused on. A column name chosen here, never a
+        # caller's string.
+        column = {"host": "host", "last_host": "last_host"}.get(
+            host_column or "", "")
+        not_here = (f" AND coalesce({column}, '') <> %s" if column and
+                    avoid_host else "")
+        avoided = [avoid_host] if not_here else []
         bump = "times_used + 1" if count_use else "times_used"
         with self._lock, self._connect() as conn:
             cur = conn.execute(
                 f"WITH picked AS ("
                 f"  SELECT id FROM resources"
                 f"  WHERE kind = %s AND error IS NULL"
+                f"    AND coalesce(refund_state, '') = ''"
                 f"    AND lower(status) = ANY(%s)"
                 f"    AND (%s::bigint IS NULL OR id = %s)"
+                f"{not_here}"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
                 f"  times_used = {bump},"
                 f"  serial = CASE WHEN %s <> '' THEN %s ELSE r.serial END,"
                 f"  updated_at = now()"
                 f"  FROM picked WHERE r.id = picked.id RETURNING r.*",
-                (kind, list(free), row_id, row_id, claimed, serial, serial))
+                (kind, list(free), row_id, row_id, *avoided, claimed,
+                 serial, serial))
             names = [d.name for d in cur.description]
             row = cur.fetchone()
             conn.commit()
@@ -286,13 +299,19 @@ class _PgPool(Pool):
                  self.tab, f" for phone {serial}" if serial else "")
         return True
 
-    def claim(self, serial: str = "") -> Resource | None:
+    #: The column that says which exit host a row of this pool is tied to,
+    #: for a caller that wants a different one. A proxy is its host; a
+    #: Gmail carries the host it was last refused on.
+    HOST_COLUMN = ""
+
+    def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
         the sheet's problem; here the engine hands two racers two rows."""
         row = self._table.claim(
             self.kind, free=tuple(self.available_statuses),
             claimed=self.claimed_status,
-            count_use=isinstance(self, ProxyPool), serial=serial)
+            count_use=isinstance(self, ProxyPool), serial=serial,
+            avoid_host=avoid_host, host_column=self.HOST_COLUMN)
         if row is None:
             return None
         resource = next((r for r in self._rows if r.store_id == row["id"]),
@@ -401,32 +420,59 @@ class _PgPool(Pool):
 class PgGmailPool(_PgPool, GmailPool):
     kind = "gmail"
 
-    def fail(self, resource: Resource, reason: str, *, note: str = "") -> None:
-        """The sheet's verb, then the ladder for a distrust reason: the
-        row keeps the reason as its status (the tab still filters on it)
-        and gains a date it comes back on (store.ladder, 2026-09-10)."""
+    HOST_COLUMN = "last_host"
+
+    def fail(self, resource: Resource, reason: str, *, note: str = "",
+             host: str = "", settings=None) -> None:
+        """The sheet's verb, then one of two roads.
+
+        A refusal about the account itself - Google wanting a phone number
+        for it, a password that was never right - takes the row out of the
+        pool and onto the refund list: no phone and no exit can fix it.
+        Everything else Google distrusts goes back in the queue behind
+        every fresh address, carrying the host it was refused on so the
+        next try is given a different exit (store.ladder, 2026-09-12).
+        """
         super().fail(resource, reason, note=note)
-        if resource.store_id is None or not failures.retryable(reason):
+        if resource.store_id is None:
+            return
+        owed = failures.sellers_fault(reason)
+        if not owed and not failures.retryable(reason):
             return
         try:
             from . import ladder
 
             with self._table._lock, self._table._connect() as conn:
-                tries, back = ladder.challenge(conn, resource.store_id, reason)
+                if owed:
+                    ladder.to_refund(
+                        conn, resource.store_id, reason,
+                        seller=str((resource.values or {}).get("Seller") or ""))
+                    tries, back = ladder.MAX_TRIES, False
+                else:
+                    tries, back = ladder.challenge(
+                        conn, resource.store_id, reason, host=host,
+                        settings=settings)
                 conn.commit()
         except Exception as exc:                                  # noqa: BLE001
             log.warning("%s: %s was set aside but not put on the ladder (%s)",
                         self.tab, resource.label, exc)
             return
+        if owed:
+            log.info("%s: %s is the seller's to answer for (%s); it is on the "
+                     "list to claim back", self.tab, resource.label, reason)
+            return
         log.info("%s: %s refused (%s), try %d of %d%s", self.tab,
                  resource.label, reason, tries, ladder.MAX_TRIES,
-                 " - it comes back on its own" if back else
+                 " - back in the queue behind the fresh stock" if back else
                  " - it stays set aside")
     COLUMNS = {
         "Purchase Date": "purchased_on", "Seller": "seller",
         "Address": "address", "Password": "password", "Secret": "totp_secret",
         "Used Date": "used_at", "Phone Serial": "serial", "Status": "status",
         "Note": "note", "Claimed": "claimed_at",
+        # Not a sheet column: the exit host this address was last refused
+        # on, so the build that claims it next can pick another one.
+        "Last Host": "last_host",
     }
 
     def _values_of(self, row: dict) -> dict[str, str]:
@@ -449,6 +495,7 @@ class PgAppPool(_PgPool, AppPool):
 
 class PgProxyPool(_PgPool, ProxyPool):
     kind = "proxy"
+    HOST_COLUMN = "host"
     COLUMNS = {
         # No "Proxy String" column: the table keeps the four parts, and
         # `append` splits the joined string into them. Mapped to a column

@@ -392,8 +392,13 @@ class Pool:
                 if not r.error and self.status_of(r) not in settled]
 
     # ------------------------------------------------------------ claiming
-    def claim(self, serial: str = "") -> Resource | None:
+    def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """Take the first usable row, marking it so nothing else can.
+
+        `avoid_host` is an exit host the caller would rather not have -
+        the one a Gmail was just refused on, or the one a build has
+        already been refused from. The sheet cannot express it and
+        forgets it; the store's pool skips those rows (pgpool).
 
         The sheet write happens under the same lock as the choice. Without
         that, two workers reaching this at once both see the same first row
@@ -638,7 +643,8 @@ class Pool:
             fields[self.serial_column] = str(serial)
         self._set(resource, fields)
 
-    def fail(self, resource: Resource, reason: str, *, note: str = "") -> None:
+    def fail(self, resource: Resource, reason: str, *, note: str = "",
+             host: str = "", settings=None) -> None:
         """Record what was wrong with a row, in the vocabulary of the tab's own
         Status list, so the column stays a thing you can filter on.
 
@@ -650,6 +656,12 @@ class Pool:
         `strand_check` only looks at rows still marked spent. Four rows in the
         Gpt Info tab said `wrong_password` beside a live phone's number
         (2026-08-30).
+
+        `host` is the exit the row was refused on and `settings` the
+        farm's; a sheet row has nowhere to keep either, and the store's
+        Gmail pool uses both - the host so the next try is given a
+        different exit, the settings for how long the floor is. The two
+        signatures match so no caller has to know which pool it holds.
         """
         self._set(resource, self._off_a_phone(reason, note))
 
