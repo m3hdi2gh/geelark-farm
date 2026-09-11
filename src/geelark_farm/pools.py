@@ -769,13 +769,17 @@ class Pool:
         self._rows.append(resource)
         return resource
 
-    def delete_row(self, resource: Resource) -> None:
+    def delete_row(self, resource: Resource, by: str = "") -> None:
         """Remove one row from the tab - the web's "remove from the pool".
 
         Only ever for a row nothing is on: the caller checks the status,
         because a row a phone is behind is not stock to tidy away. The
         rows below it shift up, so every other Resource's sheet_row is
         stale after this; the pass reloads the Book before it acts again.
+
+        `by` is who asked, and a sheet row has nowhere to keep it: the
+        store's pool writes it into the archive instead (pgpool), and the
+        two signatures match so a caller need not know which it holds.
         """
         with self._lock:
             self._ws.spreadsheet.batch_update({"requests": [

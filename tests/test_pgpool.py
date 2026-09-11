@@ -34,7 +34,7 @@ def _now():
 
 
 class MemoryTable:
-    """ResourceTable's contract over dicts: the same five calls, no SQL."""
+    """ResourceTable's contract over dicts: the same six calls, no SQL."""
 
     # `on_sheet` rides along so a row made here looks like a row made by
     # the real table, which defaults it true.
@@ -51,6 +51,9 @@ class MemoryTable:
         self._rows: dict[int, dict] = {}
         self._next = 1
         self.updates: list[tuple[int, dict]] = []
+        #: What Remove took out of the pool, and who asked. The real table
+        #: puts these in `resources_archive` rather than deleting them.
+        self.archived: list[tuple[dict, str]] = []
 
     def add(self, kind: str, **cols) -> int:
         row = dict(self.DEFAULTS, kind=kind, **cols)
@@ -96,8 +99,10 @@ class MemoryTable:
             self._rows[i]["claimed_at"] = _now()
         return len(ids)
 
-    def delete(self, row_id):
-        self._rows.pop(row_id, None)
+    def archive(self, row_id, by=""):
+        row = self._rows.pop(row_id, None)
+        if row is not None:
+            self.archived.append((row, by))
 
     def insert(self, row):
         for r in self._rows.values():
@@ -726,3 +731,31 @@ def test_fresh_gmails_are_claimed_before_the_ladders_rows():
     assert '"times_used, sheet_row NULLS LAST, id" if count_use' in src, (
         "a proxy is still least-used first")
 
+
+
+# ------------------------------------------- Remove archives (2026-09-11)
+def test_removing_a_row_archives_it_and_says_who_asked():
+    """The console's Remove deleted the row outright - address, password
+    and authenticator key with it - and eight rows went that way an hour
+    before this changed (2026-09-11). It moves them now; to the pool that
+    is the same thing, which is that the row is not stock any more."""
+    import inspect
+
+    from geelark_farm.store import pgpool
+
+    table = MemoryTable()
+    pool = pgpool.PgGmailPool(table)
+    table.add("gmail", address="g@x.com", password="pw", sheet_row=1)
+    pool.load()
+    row = pool.find("g@x.com")
+
+    pool.delete_row(row, by="mehdi")
+
+    assert table.archived == [(table.archived[0][0], "mehdi")]
+    assert table.archived[0][0]["address"] == "g@x.com"
+    assert pool.find("g@x.com") is None, "gone from the pool either way"
+
+    src = inspect.getsource(pgpool.ResourceTable.archive)
+    assert "pool_archive.archive(self._settings, [row_id], by=by)" in src
+    assert "DELETE FROM resources WHERE id = %s" in src, (
+        "a row the archive already holds still has to leave the pool")

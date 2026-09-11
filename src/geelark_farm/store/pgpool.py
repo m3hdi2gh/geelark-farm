@@ -162,7 +162,24 @@ class ResourceTable:
             conn.commit()
             return moved
 
-    def delete(self, row_id: int) -> None:
+    def archive(self, row_id: int, by: str = "") -> None:
+        """The console's Remove: out of the pool, into the archive.
+
+        This deleted the row outright until 2026-09-11 - the address, the
+        password and the authenticator key with it - and eight rows went
+        that way an hour before it was changed. `pool_archive.archive`
+        moves the whole row into `resources_archive` instead. Every reader
+        sees what a delete would have left it: the row is not stock, and
+        nothing can claim it. What is different is that it can be read,
+        counted and put back.
+        """
+        from . import pool_archive
+
+        if pool_archive.archive(self._settings, [row_id], by=by):
+            return
+        # Nothing moved: the row is gone already, or the archive holds its
+        # id from an earlier life. Remove must still leave nothing behind
+        # it in the pool.
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM resources WHERE id = %s", (row_id,))
             conn.commit()
@@ -338,9 +355,9 @@ class _PgPool(Pool):
         self._rows.append(resource)
         return resource
 
-    def delete_row(self, resource: Resource) -> None:
+    def delete_row(self, resource: Resource, by: str = "") -> None:
         if resource.store_id is not None:
-            self._table.delete(resource.store_id)
+            self._table.archive(resource.store_id, by=by)
         self._rows = [r for r in self._rows if r is not resource]
 
     def abandoned(self, older_than: float) -> list[Resource]:

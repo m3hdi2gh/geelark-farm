@@ -414,7 +414,7 @@ def remove_proxy(book, ledger, settings, payload, client):
     kept = {"name": resource.name,
             "raw": (resource.values.get("Proxy String") or str(resource.proxy)),
             "status": status, "note": resource.values.get("Note", "")}
-    book.proxies.delete_row(resource)
+    book.proxies.delete_row(resource, by=_by(payload))
     return ("done", f"{resource.name} removed from the pool (GeeLark still "
                     f"holds it - remove it there by hand)", {"removed": kept})
 
@@ -647,8 +647,9 @@ def free_app(book, ledger, settings, payload, client):
 
 
 def remove_gmail(book, ledger, settings, payload, client):
-    """Out of the pool. The row it removed rides in the detail, so
-    Requests can put it back the way a removed proxy can."""
+    """Out of the pool and into the archive. The row it removed rides in
+    the detail, so Requests can put it back the way a removed proxy can -
+    and the archive keeps the whole of it either way (2026-09-11)."""
     resource, refused = _gmail_row(book, payload)
     if refused:
         return refused
@@ -656,9 +657,9 @@ def remove_gmail(book, ledger, settings, payload, client):
     kept = {name: str(resource.values.get(name) or "")
             for name in ("Address", "Password", book.gmails.SECRET_COLUMN,
                          "Seller", "Purchase Date")}
-    book.gmails.delete_row(resource)
-    return ("done", f"{address} removed from the pool by {_by(payload)}",
-            {"removed": kept})
+    book.gmails.delete_row(resource, by=_by(payload))
+    return ("done", f"{address} removed from the pool by {_by(payload)} - "
+                    f"archived, not deleted", {"removed": kept})
 
 
 def _app_row(book, payload):
@@ -737,8 +738,8 @@ def edit_app(book, ledger, settings, payload, client):
 
 
 def remove_app(book, ledger, settings, payload, client):
-    """Out of the pool. The row rides in the detail so Requests can put
-    it back, the way a removed Gmail or proxy can."""
+    """Out of the pool and into the archive. The row rides in the detail
+    so Requests can put it back, the way a removed Gmail or proxy can."""
     resource, refused = _app_row(book, payload)
     if refused:
         return refused
@@ -746,9 +747,9 @@ def remove_app(book, ledger, settings, payload, client):
     kept = {name: str(resource.values.get(name) or "")
             for name in ("Address", "Password", "2FA Secret",
                          book.apps.EMAIL_CODE_COLUMN)}
-    book.apps.delete_row(resource)
-    return ("done", f"{address} removed from the pool by {_by(payload)}",
-            {"removed": kept})
+    book.apps.delete_row(resource, by=_by(payload))
+    return ("done", f"{address} removed from the pool by {_by(payload)} - "
+                    f"archived, not deleted", {"removed": kept})
 
 
 def _panel_row(settings, ref: str):
@@ -843,7 +844,7 @@ def withdraw_panel_account(book, ledger, settings, payload, client):
     if status in (book.apps.claimed_status, book.apps.spent_status):
         return ("refused", f"{row['address']} is {status} - a phone is "
                            f"behind it", None)
-    book.apps.delete_row(resource)
+    book.apps.delete_row(resource, by=_by(payload))
     return ("done", f"{row['address']} taken out of the {book.apps.tab} tab",
             {"ref": ref})
 

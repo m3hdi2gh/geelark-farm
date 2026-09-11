@@ -1707,3 +1707,9 @@ def test_the_archive_script_moves_exactly_what_the_purge_would_delete():
     assert "pool_archive.archive(" in src
     assert "DELETE" not in src, "this one moves rows, it never deletes them"
     assert 'status="archived"' in src and 'status="restored"' in src
+    # The ladder's rows are reached by one flag and nothing else: they
+    # come back on their own, and an address refused with a captcha signs
+    # in two times in three on its next try.
+    assert '"--with-ladder"' in src
+    assert "waiting(store, kind) if args.with_ladder else []" in src
+    assert "r.retry_after IS NOT NULL" in src
