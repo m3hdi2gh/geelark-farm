@@ -955,7 +955,8 @@ def _give_back_condemned(s: _Session) -> None:
                     s.build.serial, len(given_back), ", ".join(given_back))
 
 
-def _fresh_proxy(client: Client, book: Book) -> Resource:
+def _fresh_proxy(client: Client, book: Book, *,
+                 settings: Settings | None = None) -> Resource:
     """Claim a proxy GeeLark can actually reach.
 
     Checked before it is used, because an unreachable proxy is the one failure
@@ -997,6 +998,14 @@ def _fresh_proxy(client: Client, book: Book) -> Resource:
             skipped += 1
             continue
         book.proxies.record_exit(resource, str(result.get("outboundIP") or ""))
+        # The check already said where the exit is; keeping it here is what
+        # lets the clock be set without a second call to anybody.
+        try:
+            from . import geo
+
+            geo.remember_check(settings, result)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the exit's place was not kept (%s)", exc)
         return resource
 
 
@@ -1124,7 +1133,19 @@ def _align_clock(client: Client, settings: Settings, phone_id: str,
     from . import geo
 
     ip = _exit_ip(proxy_row)
-    zone = geo.timezone_for(settings, ip) if ip else ""
+    # What the build's own proxy check already said, then GeeLark asked
+    # again, and only then the address lookup - which on this server
+    # resolves nothing at all, and for a whole day left every clock unset
+    # (2026-09-12). `also` files GeeLark's answer under the exit the row
+    # carried, so the sign-in record finds a country there too.
+    place = dict(geo.known(settings, ip) or {})
+    exit_proxy = getattr(proxy_row, "proxy", None)
+    if not place.get("tz") and exit_proxy is not None:
+        place = dict(geo.by_proxy(client, exit_proxy, settings, also=ip) or {})
+    zone = str(place.get("tz") or "")
+    ip = str(place.get("ip") or "") or ip
+    if not zone and ip:
+        zone = geo.timezone_for(settings, ip)
     if not zone or not re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z_+\-0-9]+){1,2}",
                                     zone):
         return ""
@@ -1411,7 +1432,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if want and want.proxy_name:
                 proxy_row = _pick(book.proxies, want.proxy_name, "exit")
             else:
-                proxy_row = _fresh_proxy(client, book)
+                proxy_row = _fresh_proxy(client, book,
+                                         settings=settings)
             build.proxy = str(proxy_row.proxy)
             build.proxy_name = proxy_row.name
 
@@ -2213,7 +2235,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     # apart nowhere: see the refusal handler.
     borrowed = False
     try:
-        replacement = _fresh_proxy(client, book)
+        replacement = _fresh_proxy(client, book, settings=settings)
     except Aborted as exc:
         if str(exc) != "no_usable_proxy":
             # The stock was unreachable, not refusing. Reported as it is:

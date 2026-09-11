@@ -93,3 +93,51 @@ def test_the_store_remembers_what_was_looked_up(monkeypatch, make_settings,
     monkeypatch.setattr(geo, "_memory", {})
     assert geo.timezone_for(settings, "82.27.118.182") == "Europe/Istanbul"
     assert len(asked) == 1, "the second ask came from the store"
+
+
+# ------------------------------------ GeeLark as the source (2026-09-12)
+def test_geelarks_own_check_places_the_exit_and_is_remembered(
+        monkeypatch, make_settings, tmp_path):
+    """The address lookup answered for none of our exits - this server
+    cannot resolve ip-api.com - while GeeLark answers for every one of
+    them with a country, a city and a timezone. So it is the source."""
+    from geelark_farm import proxy as proxy_mod
+
+    monkeypatch.setattr(proxy_mod, "check", lambda client, proxy: {
+        "detectStatus": True, "outboundIP": "185.68.81.45",
+        "countryCode": "US", "countryName": "United States of America",
+        "city": "Washington", "timezone": "America/New_York",
+        "isp": "Clouvider"})
+    monkeypatch.setattr(geo, "_memory", {})
+    settings = make_settings(state_dir=tmp_path, store_enabled=False)
+
+    place = geo.by_proxy(object(), object(), settings, also="1.2.3.4")
+
+    assert place["tz"] == "America/New_York" and place["cc"] == "US"
+    assert place["ip"] == "185.68.81.45" and place["city"] == "Washington"
+    # Filed under what GeeLark measured, and under the exit the row had -
+    # the same gateway, so the sign-in record finds a country there too.
+    assert geo.timezone_for(settings, "185.68.81.45") == "America/New_York"
+    assert geo.country_for(settings, "1.2.3.4") == "US"
+    assert geo.lookup(settings, "1.2.3.4")["via"].startswith("geelark:")
+
+
+def test_a_proxy_geelark_cannot_place_leaves_the_clock_alone(
+        monkeypatch, make_settings, tmp_path):
+    from geelark_farm import proxy as proxy_mod
+
+    monkeypatch.setattr(geo, "_memory", {})
+    settings = make_settings(state_dir=tmp_path, store_enabled=False)
+
+    def dead(client, proxy):
+        raise proxy_mod.ProxyError("unusable")
+
+    monkeypatch.setattr(proxy_mod, "check", dead)
+    assert geo.by_proxy(object(), object(), settings) is None
+
+    monkeypatch.setattr(proxy_mod, "check",
+                        lambda client, proxy: {"detectStatus": True,
+                                               "outboundIP": "9.9.9.9"})
+    assert geo.by_proxy(object(), object(), settings) is None, (
+        "no country and no zone is not a place")
+    assert geo._memory == {}, "nothing empty was ever remembered"

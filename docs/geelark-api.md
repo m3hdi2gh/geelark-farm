@@ -145,23 +145,33 @@ base32 TOTP secret works.**
 The secret must be normalised first: Google displays it lowercase in groups of
 four, base32 needs uppercase with no spaces and no padding.
 
-## `/proxy/check` reports less than it appears to
+## `/proxy/check` is the geolocation lookup
 
 `detectStatus` is trustworthy: the proxy either carried the request or it did
 not, and a failure here should stop a row before a phone is created.
 
-**`country` is not trustworthy.** Measured 2026-07-30 across four proxies from
-two vendors: GeeLark returned no country for all four, while a public
-geolocation service resolved every one of them to a real US ISP with
-`hosting: false`. An empty `country` is a gap in GeeLark's lookup, not evidence
-of a datacenter or freshly allocated address.
+**It also places the exit, and that is worth more than it looks.** Measured
+2026-09-12 across our own proxies, the answer carries `outboundIP`,
+`countryCode`, `countryName`, `subdivision`, `city`, `timezone` and `isp` - the
+same lookup the panel's "match the IP" setting uses. `geo.remember_check` keeps
+it, and the phone's clock is set from it (`builder._align_clock`), so alignment
+costs no call of its own.
 
-This correction matters because the prototype's notes drew the opposite
-conclusion and treated an empty country as a warning sign of a dirty IP. It is
-not a signal at all.
+An empty `country` still happens and is a gap in GeeLark's lookup, not evidence
+of a datacenter or a freshly allocated address - the prototype's notes drew
+that conclusion and it is not a signal at all. (Measured 2026-07-30: four
+proxies came back with no country while a public service resolved all four to
+real US ISPs with `hosting: false`. Two years of that note said `country` was
+never answered; it is answered now, for every proxy we hold.)
 
 `outboundIP` is worth reading: when it differs from the host you dialled, the
 proxy is a backconnect gateway and the exit address is what Google judges.
+
+There is no endpoint for the phone's own timezone. `/phone/detail/update`
+accepts `proxyConfig` and answers `null` to everything else it is sent -
+`timeZone`, `equipmentConfig`, `timeZoneConfig` and five other shapes were
+tried on a stopped phone (2026-09-12) and none of them moved
+`equipmentInfo.timeZone`. The device's clock is ours to set over the shell.
 
 ## Cost discipline
 

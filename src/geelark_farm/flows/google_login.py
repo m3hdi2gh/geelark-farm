@@ -297,10 +297,27 @@ _GRID_VERIFY = ("Verify", "Skip", "Next")
 #: is what put the grid rectangle out of reach (2026-09-05, phone 1793).
 _GRID_TAIL = ("click verify", "click skip", "if there are none")
 
+#: The controls that sit under the heading, which are not the question
+#: either. The tail line above is not always in the tree - when it was
+#: missing the next three labels were read as the subject and CapSolver
+#: was asked for "traffic lights Get a new challenge Get an audio
+#: challenge" (2026-09-11, phone 2333, four of that day's 77 calls). A
+#: solver given the page's furniture answers for the furniture.
+_GRID_NOISE = ("get a new challenge", "get an audio challenge",
+               "get a liveness challenge", "image challenge", "recaptcha",
+               "privacy", "terms", "help", "skip", "verify", "next",
+               "try another way")
+
 
 def _is_tail(text: str) -> bool:
     low = (text or "").lower()
     return any(needle in low for needle in _GRID_TAIL)
+
+
+def _is_noise(text: str) -> bool:
+    """A control or a legal line rather than a word of the question."""
+    low = (text or "").strip().lower()
+    return any(needle in low for needle in _GRID_NOISE)
 
 
 def _grid_instruction(ctx: Context) -> str:
@@ -322,7 +339,7 @@ def _grid_instruction(ctx: Context) -> str:
         return ""
     words = [labels[start]]
     for text in labels[start + 1:start + 4]:
-        if (not text.strip() or _is_tail(text)
+        if (not text.strip() or _is_tail(text) or _is_noise(text)
                 or _TILE_LABEL in text.lower()):
             break
         words.append(text.strip())

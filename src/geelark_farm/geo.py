@@ -7,6 +7,13 @@ and the timezone the device reports, which is one of the plainest
 proxy signals there is (the sign-in research, 2026-09-10). One lookup
 per address, remembered in the store; never fatal, never on the build's
 critical path for more than a few seconds.
+
+Two sources, in this order: `by_proxy` asks GeeLark's own proxy check,
+which answers with the exit address and its country, city and timezone;
+`lookup` asks ip-api.com by address. The second is the fallback and not
+the first because this server resolves neither `ip-api.com` nor much
+else - the DNS it has answers for some hosts and not others - and a
+source that cannot be reached is not a source (2026-09-12).
 """
 
 from __future__ import annotations
@@ -64,6 +71,71 @@ def _remember(settings: Settings | None, known: dict) -> None:
                 conn.commit()
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not write the geo cache (%s)", exc)
+
+
+def remember_check(settings: Settings | None, seen: dict, *,
+                   also: str = "") -> dict | None:
+    """Keep what a proxy check already said about an exit.
+
+    Every build checks its proxy before a phone goes behind it, and that
+    answer carries the country, the city and the timezone. Reading it here
+    means the clock costs no second call: the build's own check is the
+    lookup (2026-09-12).
+    """
+    place = {"cc": str((seen or {}).get("countryCode") or ""),
+             "tz": str((seen or {}).get("timezone") or ""),
+             "isp": str((seen or {}).get("isp") or "")[:60],
+             "city": str((seen or {}).get("city") or "")[:40],
+             "at": time.time()}
+    if not place["tz"] and not place["cc"]:
+        return None
+    ip = str((seen or {}).get("outboundIP") or "").strip()
+    known = _remembered(settings)
+    if ip:
+        known[ip] = place
+    if also and also != ip:
+        known[also] = dict(place, via=f"geelark:{ip or 'the proxy'}")
+    if ip or also:
+        _remember(settings, known)
+    return dict(place, ip=ip)
+
+
+def known(settings: Settings | None, ip: str) -> dict | None:
+    """What is already remembered about an address, asking nobody."""
+    ip = (ip or "").strip()
+    if not ip:
+        return None
+    hit = _remembered(settings).get(ip)
+    if hit and time.time() - float(hit.get("at") or 0) < KEEP_SECONDS:
+        return hit
+    return None
+
+
+def by_proxy(client, proxy, settings: Settings | None = None, *,
+             also: str = "") -> dict | None:
+    """Where this exit comes out, asked of GeeLark itself.
+
+    `/v1/proxy/check` answers with the outbound address and the country,
+    city and timezone it resolves to - the same lookup the panel's "match
+    the IP" setting uses. It is the source now, and `lookup` below is the
+    fallback, because this server cannot resolve `ip-api.com` at all: for
+    a whole day every build logged "could not place exit ... name
+    resolution" and not one phone's clock was ever set (2026-09-12).
+
+    The answer is remembered under the address GeeLark measured and, when
+    `also` is given, under the exit the proxy row already carried - the
+    same gateway and the same credential, so the country is the country;
+    `via` says the entry was not measured at that address.
+    """
+    from .proxy import check
+
+    try:
+        seen = check(client, proxy) or {}
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("GeeLark could not place %s (%s); the phone keeps its "
+                    "clock", proxy, exc)
+        return None
+    return remember_check(settings, seen, also=also)
 
 
 def lookup(settings: Settings | None, ip: str) -> dict | None:

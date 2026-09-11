@@ -2051,3 +2051,27 @@ def test_captcha_tiles_are_looked_at_before_they_are_pressed():
     src = inspect.getsource(login.act_captcha)
     assert src.count("shell.pause(*TILE_LOOK_SECONDS)") == 2
     assert login.TILE_LOOK_SECONDS == (0.2, 0.9)
+
+
+def test_the_captcha_question_stops_before_the_pages_furniture():
+    """The line that closes the heading is not always in the tree. When it
+    was missing, the next three labels were read as the subject and
+    CapSolver was asked for "traffic lights Get a new challenge Get an
+    audio challenge" - four of that day's 77 calls (2026-09-11, phone
+    2333). A solver given the furniture answers for the furniture."""
+    from types import SimpleNamespace
+
+    from geelark_farm.flows import google_login as gl
+
+    def question(*labels):
+        ctx = SimpleNamespace(elements=[SimpleNamespace(label=t, cls="")
+                                        for t in labels])
+        return gl._grid_instruction(ctx)
+
+    assert question("Select all images with", "traffic lights",
+                    "Get a new challenge", "Get an audio challenge") == (
+        "Select all images with traffic lights")
+    assert question("Select all squares with", "motorcycles",
+                    "If there are none, click skip", "Image challenge") == (
+        "Select all squares with motorcycles")
+    assert question("Verify it's you", "reCAPTCHA") == "", "no question there"

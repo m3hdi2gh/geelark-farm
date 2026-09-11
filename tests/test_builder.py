@@ -744,7 +744,11 @@ def test_a_dead_proxy_is_skipped_and_marked(device, settings, drive, monkeypatch
         calls.append(proxy.host)
         if proxy.host == "10.0.0.0":
             raise ProxyError("no answer")
-        return {"outboundIP": "1.1.1.1"}
+        # Shaped like the real answer: GeeLark places the exit as well as
+        # reaching it, and that is where the phone's clock comes from, so
+        # a check that carried a timezone is not asked again (2026-09-12).
+        return {"outboundIP": "1.1.1.1", "countryCode": "US",
+                "timezone": "America/New_York"}
 
     monkeypatch.setattr(builder.proxy_mod, "check", check)
     book = make_book()
@@ -3032,7 +3036,7 @@ def test_a_borrowed_exit_is_not_handed_back_when_the_swap_is_refused(
     Proxies._rows = [borrowed]
 
     monkeypatch.setattr(builder, "_fresh_proxy",
-                        lambda *a: (_ for _ in ()).throw(
+                        lambda *a, **k: (_ for _ in ()).throw(
                             builder.Aborted("no_usable_proxy")))
     monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
     monkeypatch.setattr(builder.phones, "set_proxy",
@@ -3066,7 +3070,7 @@ def test_an_exit_this_build_claimed_is_handed_back_when_the_swap_is_refused(
     claimed = Resource(sheet_row=4, values={})
     claimed.proxy = builder.proxy_mod.parse("socks5://u:p@5.6.7.8:1080")
 
-    monkeypatch.setattr(builder, "_fresh_proxy", lambda *a: claimed)
+    monkeypatch.setattr(builder, "_fresh_proxy", lambda *a, **k: claimed)
     monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
     monkeypatch.setattr(builder.phones, "set_proxy",
                         lambda *a, **k: (_ for _ in ()).throw(
@@ -5202,6 +5206,11 @@ def test_the_phones_clock_follows_its_exit(make_settings, tmp_path, monkeypatch)
     from geelark_farm import geo
 
     settings = make_settings(state_dir=tmp_path, geo_align=True)
+    # GeeLark silent here; the address lookup is the fallback path. The
+    # remembered places are the process's own dict, so an earlier test's
+    # exit would answer for this one.
+    monkeypatch.setattr(geo, "_memory", {})
+    monkeypatch.setattr(geo, "by_proxy", lambda *a, **k: None)
     monkeypatch.setattr(geo, "timezone_for", lambda s, ip: {
         "212.8.252.6": "Europe/Amsterdam", "1.1.1.1": ""}.get(ip, ""))
     ran = []
@@ -5231,6 +5240,48 @@ def test_the_phones_clock_follows_its_exit(make_settings, tmp_path, monkeypatch)
     monkeypatch.setattr(builder.shell, "run",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no")))
     assert builder._align_clock(None, settings, "P", exit_row) == ""
+
+
+def test_the_clock_asks_geelark_before_the_address_lookup(
+        make_settings, tmp_path, monkeypatch):
+    """For a whole day every build logged "could not place exit ... name
+    resolution" and no phone's clock was ever set: this server cannot
+    resolve ip-api.com. GeeLark's own check answers for every proxy we
+    own, so it goes first and the address lookup is what is left when it
+    says nothing (2026-09-12)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import geo
+
+    settings = make_settings(state_dir=tmp_path, geo_align=True)
+    asked = {}
+
+    def by_proxy(client, proxy, s, *, also=""):
+        asked.update(proxy=proxy, also=also)
+        return {"tz": "America/New_York", "cc": "US", "ip": "185.68.81.45"}
+
+    monkeypatch.setattr(geo, "known", lambda s, ip: None)
+    monkeypatch.setattr(geo, "by_proxy", by_proxy)
+    monkeypatch.setattr(geo, "timezone_for", lambda s, ip: "Europe/Amsterdam")
+    ran = []
+    monkeypatch.setattr(builder.shell, "run",
+                        lambda c, p, cmd, **k: ran.append(cmd) or "EDT")
+    exit_proxy = SimpleNamespace(host="10.0.0.9")
+    row = SimpleNamespace(values={"Last Exit IP": "212.8.252.6"},
+                          proxy=exit_proxy)
+
+    assert builder._align_clock(None, settings, "P", row) == "America/New_York"
+    assert asked == {"proxy": exit_proxy, "also": "212.8.252.6"}, (
+        "the row's own exit is filed too, so the sign-in record has a country")
+    assert "setprop persist.sys.timezone America/New_York" in ran[0]
+
+    # And nobody is asked at all when the build's own proxy check already
+    # said where the exit is - which is the ordinary path.
+    asked.clear(), ran.clear()
+    monkeypatch.setattr(geo, "known",
+                        lambda s, ip: {"tz": "Europe/Amsterdam", "cc": "NL"})
+    assert builder._align_clock(None, settings, "P", row) == "Europe/Amsterdam"
+    assert asked == {}, "the check that claimed the proxy was the lookup"
 
 
 def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
