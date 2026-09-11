@@ -1543,11 +1543,8 @@ def test_the_purge_leaves_the_ladders_rows_alone():
 def test_the_schema_carries_the_ladder_and_the_sign_ins():
     import pathlib
 
-    from geelark_farm.store import db
-
     sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
         encoding="utf-8")
-    assert db.SCHEMA_REV == "24"
     for column in ("age_seconds", "exit_country", "touch", "dumps"):
         assert f"ALTER TABLE signins ADD COLUMN IF NOT EXISTS {column}" in sql
     assert "CREATE TABLE IF NOT EXISTS signins" in sql
@@ -1557,3 +1554,156 @@ def test_the_schema_carries_the_ladder_and_the_sign_ins():
     assert "coalesce(totp_secret, '') <> ''" in once, (
         "only rows with a key get a second try")
 
+
+
+# ------------------------------------------- the pool archive (2026-09-11)
+class _ArchiveConn:
+    """Enough of a connection for pool_archive: a `with` block, statements
+    remembered whitespace-normalised, and one answer per statement."""
+
+    def __init__(self, answers):
+        self.sql: list[tuple[str, object]] = []
+        self._answers = list(answers)
+        self._this: list = []
+        self.committed = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        self.sql.append((" ".join(str(sql).split()), params))
+        self._this = self._answers.pop(0) if self._answers else []
+        return self
+
+    def fetchall(self):
+        return self._this
+
+    def fetchone(self):
+        return self._this[0] if self._this else None
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        pass
+
+
+def _columns_of(insert_sql: str) -> list[str]:
+    return [c.strip() for c in
+            insert_sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+
+
+def test_the_schema_carries_the_pool_archive():
+    """The archive keeps the whole row as json, so it needs no migration of
+    its own when `resources` grows a column, and is keyed by the id the row
+    had - which is what makes archiving twice a no-op."""
+    from geelark_farm.store import db
+
+    sql = schema_text()
+    assert db.SCHEMA_REV == "25"
+    assert "CREATE TABLE IF NOT EXISTS resources_archive" in sql
+    assert "id          bigint PRIMARY KEY" in sql
+    assert "payload     jsonb NOT NULL" in sql
+
+
+def test_archiving_copies_the_whole_row_before_it_deletes(
+        monkeypatch, make_settings):
+    """One statement, in this order: the copy is what the delete reads its
+    ids from, so nothing can be deleted that was not archived first."""
+    from geelark_farm.store import pool_archive
+
+    conn = _ArchiveConn([[(7, "a@gmail.com"), (9, "b@gmail.com")]])
+    monkeypatch.setattr(pool_archive, "connect", lambda s: conn)
+
+    moved = pool_archive.archive(make_settings(), [9, 7, 7], by="the operator")
+
+    assert moved == [{"id": 7, "address": "a@gmail.com"},
+                     {"id": 9, "address": "b@gmail.com"}]
+    sql, params = conn.sql[0]
+    assert "INSERT INTO resources_archive" in sql and "to_jsonb(r)" in sql
+    assert "ON CONFLICT (id) DO NOTHING" in sql
+    assert "DELETE FROM resources WHERE id IN (SELECT id FROM copied)" in sql
+    assert params == ("the operator", [7, 9]), "asked for twice, archived once"
+    assert conn.committed == 1
+
+
+def test_archiving_nothing_asks_the_store_nothing(monkeypatch, make_settings):
+    from geelark_farm.store import pool_archive
+
+    def no(settings):
+        raise AssertionError("opened a connection for an empty list")
+
+    monkeypatch.setattr(pool_archive, "connect", no)
+    assert pool_archive.archive(make_settings(), []) == []
+    assert pool_archive.restore(make_settings(), []) == []
+
+
+def test_restoring_puts_the_row_back_as_free_stock(monkeypatch, make_settings):
+    """A row put back still saying `captcha_shown` would be flagged, and
+    nothing would ever claim it - so the verdict, the phone and the wait
+    are dropped. The refusal count is not: it is the only record that the
+    ladder already ran."""
+    from geelark_farm.store import pool_archive
+
+    payload = {"id": 4, "kind": "gmail", "address": "a@gmail.com",
+               "password": "p", "status": "captcha_shown", "serial": "2288",
+               "retry_after": "2026-09-12", "tries": 2, "used_at": "2026-09-01",
+               "a_column_this_schema_no_longer_has": "x"}
+    conn = _ArchiveConn([
+        [(c,) for c in ("id", "kind", "address", "password", "status",
+                        "serial", "retry_after", "tries", "used_at",
+                        "claimed_at", "error")],
+        [(4, payload)],
+        [(11, "a@gmail.com")],
+        [],
+    ])
+    monkeypatch.setattr(pool_archive, "connect", lambda s: conn)
+
+    back = pool_archive.restore(make_settings(), [4])
+
+    assert back == [{"id": 11, "address": "a@gmail.com"}]
+    insert, values = conn.sql[2]
+    assert "INSERT INTO resources" in insert
+    assert "ON CONFLICT DO NOTHING" in insert, "an address added again"
+    fields = dict(zip(_columns_of(insert), values, strict=True))
+    assert fields["status"] == "" and fields["serial"] == ""
+    assert fields["retry_after"] is None and fields["used_at"] == ""
+    assert fields["password"] == "p" and fields["tries"] == 2
+    assert "id" not in fields, "the pool gives the row a new one"
+    assert "a_column_this_schema_no_longer_has" not in fields
+    assert conn.sql[3][0].startswith("DELETE FROM resources_archive")
+    assert conn.committed == 1
+
+
+def test_a_row_whose_address_is_back_in_the_pool_stays_archived(
+        monkeypatch, make_settings):
+    from geelark_farm.store import pool_archive
+
+    conn = _ArchiveConn([
+        [("id",), ("kind",), ("address",), ("status",)],
+        [(4, {"kind": "gmail", "address": "a@gmail.com"})],
+        [],                                   # the INSERT hit the unique index
+        [],
+    ])
+    monkeypatch.setattr(pool_archive, "connect", lambda s: conn)
+
+    assert pool_archive.restore(make_settings(), [4]) == []
+    assert not any(s.startswith("DELETE FROM resources_archive")
+                   for s, _ in conn.sql), "nothing went back, nothing left"
+
+
+def test_the_archive_script_moves_exactly_what_the_purge_would_delete():
+    """The selection is imported, not copied: the ladder's rows, the
+    set-aside rows and the rows on a live phone are spared by one rule in
+    one place."""
+    import pathlib
+
+    src = pathlib.Path("scripts/archive_gmails.py").read_text(encoding="utf-8")
+    assert "from purge_gmails import SPENT, doomed" in src
+    assert "doomed(store, kind)" in src
+    assert "pool_archive.archive(" in src
+    assert "DELETE" not in src, "this one moves rows, it never deletes them"
+    assert 'status="archived"' in src and 'status="restored"' in src

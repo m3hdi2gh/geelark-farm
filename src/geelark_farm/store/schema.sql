@@ -679,3 +679,31 @@ UPDATE resources SET tries = 1, retry_after = now(), last_reason = status
                   'phone_verification_required', 'sign_in_refused',
                   'too_many_attempts')
    AND coalesce(totp_secret, '') <> '';
+
+-- -------------------------------------------- the pool archive, rev 25
+-- A spent or refused row taken out of stock without being destroyed.
+-- `scripts/purge_gmails.py` deletes such a row - address, password and
+-- authenticator key gone, only `events` remembering it existed - which is
+-- the wrong answer for a pool that costs more than the phones and the
+-- exits together: archive them, do not delete them (the operator,
+-- 2026-09-11).
+--
+-- The whole row is kept as json in `payload`, so this table needs no
+-- migration of its own when `resources` grows a column, and the four
+-- columns beside it are what anyone searching the archive searches by.
+-- `id` is the `resources` id the row had: identity ids are never reused,
+-- so it is also what stops a row being archived twice.
+CREATE TABLE IF NOT EXISTS resources_archive (
+    id          bigint PRIMARY KEY,
+    kind        text NOT NULL DEFAULT '',
+    address     text NOT NULL DEFAULT '',
+    status      text NOT NULL DEFAULT '',
+    seller      text NOT NULL DEFAULT '',
+    payload     jsonb NOT NULL,
+    archived_at timestamptz NOT NULL DEFAULT now(),
+    archived_by text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS resources_archive_kind
+    ON resources_archive (kind, archived_at DESC);
+CREATE INDEX IF NOT EXISTS resources_archive_address
+    ON resources_archive (address);
