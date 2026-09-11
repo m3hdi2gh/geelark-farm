@@ -164,11 +164,17 @@ def _seen(settings, client_id: int) -> None:
 
 
 # ------------------------------------------------------------ the shapes out
-def account_json(row: dict) -> dict:
+def account_json(row: dict, *, sandbox: bool = False) -> dict:
     """One account, the way the contract spells it. Credentials go in and
-    never come out: `email` is the only identifying field echoed back."""
+    never come out: `email` is the only identifying field echoed back.
+
+    `sandbox` is in every object rather than only in `/health`, so a
+    client that is pointed at the wrong key can see it in the first
+    answer it reads instead of wondering why no phone ever arrives.
+    """
     state = api_read.state_of(row)
     return {
+        "sandbox": bool(sandbox),
         "ref": api_read.ref_of(row),
         "product": str(row.get("product") or "") or None,
         "credential_kind": str(row.get("credential_kind") or "") or None,
@@ -267,24 +273,32 @@ def _serve(handler, settings, path: str) -> None:
     rest = path[len("/api/v1"):] if path.startswith("/api/v1") else ""
 
     if handler.command in ("POST", "DELETE"):
-        if not getattr(settings, "web_api_writes", False):
-            return _error(handler, 405, "not_allowed",
-                          "this door reads only")
-        if client["role"] != "panel":
+        if client["role"] not in ("panel", "sandbox"):
             return _error(handler, 403, "forbidden",
                           "this key may not change accounts")
+        # The switch guards what a write costs, and a practice write costs
+        # nothing: it builds no phone, spends no Gmail and no exit, and
+        # touches a table no pool can see. Holding the author of the panel
+        # behind it would leave him unable to write his client at all -
+        # which is why the door has stayed read-only since it was built
+        # (2026-09-11).
+        if not is_sandbox(client) and not getattr(settings, "web_api_writes",
+                                                  False):
+            return _error(handler, 405, "not_allowed",
+                          "this door reads only")
         return _write(handler, settings, client, rest)
     if handler.command not in ("GET", "HEAD"):
         return _error(handler, 405, "not_allowed", "no such method here")
 
+    box = is_sandbox(client)
     if rest == "/health":
-        return _json(handler, 200, api_read.health(settings))
+        return _json(handler, 200, api_read.health(settings, sandbox=box))
     if rest == "/accounts":
         page = api_read.accounts(
             settings, state=first.get("state", ""),
-            cursor=first.get("cursor", ""), limit=_limit(first))
+            cursor=first.get("cursor", ""), limit=_limit(first), sandbox=box)
         return _json(handler, 200, {
-            "accounts": [account_json(r) for r in page["rows"]],
+            "accounts": [account_json(r, sandbox=box) for r in page["rows"]],
             "next_cursor": page["next_cursor"]})
     if rest.startswith("/accounts/"):
         ref, _, tail = rest[len("/accounts/"):].partition("/")
@@ -292,15 +306,26 @@ def _serve(handler, settings, path: str) -> None:
         # store read, or an unknown URL is a way to make the farm work.
         if tail not in ("", "events"):
             return _error(handler, 404, "not_found", "no such endpoint")
-        row = api_read.account(settings, ref)
+        row = api_read.account(settings, ref, sandbox=box)
         if row is None:
             return _error(handler, 404, "not_found", "no account with that ref")
         if not tail:
-            return _json(handler, 200, account_json(row))
+            return _json(handler, 200, account_json(row, sandbox=box))
+        if box:
+            # Nothing happens to a practice row that anybody recorded: no
+            # request took it, no pass judged it. An empty list is the
+            # truth, and it keeps a client's paging code honest.
+            return _json(handler, 200, {"events": []})
         return _json(handler, 200, {"events": [
             {**e, "at": rfc3339(e.get("at"))}
             for e in api_read.events(settings, row)]})
     return _error(handler, 404, "not_found", "no such endpoint")
+
+
+def is_sandbox(client: dict) -> bool:
+    """Whether this key lives in the practice room. One reading of the
+    role, so no route can forget which world it is answering about."""
+    return str(client.get("role") or "") == "sandbox"
 
 
 def _limit(first: dict) -> int:
@@ -394,25 +419,33 @@ def _write(handler, settings, client: dict, rest: str) -> None:
 
 def _do_write(handler, settings, client: dict, rest: str):
     """One write, as (status, body). Raises Refused for a bad payload."""
+    from . import api_sandbox
     from . import api_v1_write as api_write
 
+    box = is_sandbox(client)
     if rest == "/accounts" and handler.command == "POST":
         row = api_write.judge(_body(handler))
-        made = api_write.create(settings, row, client_id=client["id"])
+        made = api_write.create(settings, row, client_id=client["id"],
+                                sandbox=box)
         if isinstance(made, str):
             which = "ref" if made == "already_ref" else "address"
             return 409, {"error": {
                 "code": "already_exists",
                 "message": f"an account with that {which} is already here"}}
-        api_write.enqueue(
-            settings, verb="add_panel_account", payload={"ref": row["panel_ref"]},
-            client_id=client["id"],
-            idem=f"add:{row['panel_ref']}")
-        return 201, account_json(made)
+        if not box:
+            # The half only a pass may do. A practice account never has
+            # it done: no request, no tab, no phone - which is the whole
+            # difference between the two worlds.
+            api_write.enqueue(
+                settings, verb="add_panel_account",
+                payload={"ref": row["panel_ref"]},
+                client_id=client["id"],
+                idem=f"add:{row['panel_ref']}")
+        return 201, account_json(made, sandbox=box)
 
     if rest.startswith("/accounts/"):
         ref, _, tail = rest[len("/accounts/"):].partition("/")
-        row = api_read.account(settings, ref)
+        row = api_read.account(settings, ref, sandbox=box)
         if row is None or not row.get("panel_ref"):
             # A farm-issued ref names a row the sheet owns; the panel may
             # read those and may not change them.
@@ -425,18 +458,38 @@ def _do_write(handler, settings, client: dict, rest: str):
                 return 409, {"error": {"code": "invalid_state",
                                        "message": "it is not waiting for anybody",
                                        "state": state}}
-            api_write.mark_ready(settings, panel_ref)
-            return 202, account_json(api_read.account(settings, panel_ref))
+            api_write.mark_ready(settings, panel_ref, sandbox=box)
+            return 202, account_json(
+                api_read.account(settings, panel_ref, sandbox=box), sandbox=box)
+        if tail == "simulate" and handler.command == "POST":
+            # The practice room's own verb, and the only route in this
+            # door that a panel key may not reach: a state nobody worked
+            # for is a lie everywhere else.
+            if not box:
+                return 404, {"error": {"code": "not_found",
+                                       "message": "no such endpoint"}}
+            body = _body(handler)
+            try:
+                api_sandbox.simulate(
+                    settings, client_id=client["id"], ref=panel_ref,
+                    state=str(body.get("state") or ""),
+                    reason=str(body.get("reason") or ""))
+            except api_sandbox.Refused as exc:
+                raise api_write.Refused(str(exc), exc.field) from exc
+            return 200, account_json(
+                api_read.account(settings, panel_ref, sandbox=box), sandbox=box)
         if not tail and handler.command == "DELETE":
             state = api_read.state_of(row)
             if state in ("signing_in", "ready", "delivered", "withdrawn"):
                 return 409, {"error": {"code": "invalid_state",
                                        "message": "too late to take it back",
                                        "state": state}}
-            api_write.mark_withdrawn(settings, panel_ref)
-            api_write.enqueue(settings, verb="withdraw_panel_account",
-                              payload={"ref": panel_ref},
-                              client_id=client["id"],
-                              idem=f"withdraw:{panel_ref}")
-            return 200, account_json(api_read.account(settings, panel_ref))
+            api_write.mark_withdrawn(settings, panel_ref, sandbox=box)
+            if not box:
+                api_write.enqueue(settings, verb="withdraw_panel_account",
+                                  payload={"ref": panel_ref},
+                                  client_id=client["id"],
+                                  idem=f"withdraw:{panel_ref}")
+            return 200, account_json(
+                api_read.account(settings, panel_ref, sandbox=box), sandbox=box)
     return 404, {"error": {"code": "not_found", "message": "no such endpoint"}}

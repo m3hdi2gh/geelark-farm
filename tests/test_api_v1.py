@@ -116,7 +116,7 @@ def test_the_door_reads_only(web, monkeypatch):  # noqa: F811
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
 def test_health_says_which_kinds_are_actually_served(web, monkeypatch):  # noqa: F811
     _client(monkeypatch)
-    monkeypatch.setattr(read_mod, "health", lambda s: {
+    monkeypatch.setattr(read_mod, "health", lambda s, **k: {
         "ok": True, "served": {"chatgpt": ["password_totp"], "claude": []},
         "not_measured": list(api_mod.NOT_MEASURED),
         "accounts": 312, "warm_phones": 6})
@@ -136,7 +136,7 @@ def test_one_account_reads_by_either_ref(web, monkeypatch):  # noqa: F811
     seen = {}
     _client(monkeypatch)
     monkeypatch.setattr(read_mod, "account",
-                        lambda s, ref: seen.update(ref=ref) or _account())
+                        lambda s, ref, **k: seen.update(ref=ref) or _account())
     client = web()
     status, _, body = _get(client, "/api/v1/accounts/ord_84213-a")
     assert status == 200 and seen["ref"] == "ord_84213-a"
@@ -147,7 +147,7 @@ def test_one_account_reads_by_either_ref(web, monkeypatch):  # noqa: F811
     _get(client, "/api/v1/accounts/farm_41")
     assert seen["ref"] == "farm_41"
 
-    monkeypatch.setattr(read_mod, "account", lambda s, ref: None)
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: None)
     status, _, body = _get(client, "/api/v1/accounts/nope")
     assert status == 404 and body["error"]["code"] == "not_found"
 
@@ -157,7 +157,7 @@ def test_no_answer_ever_carries_a_credential(web, monkeypatch):  # noqa: F811
     """Credentials go in and never come out. The row the reader hands over
     has them; the JSON must not."""
     _client(monkeypatch)
-    monkeypatch.setattr(read_mod, "account", lambda s, ref: dict(
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: dict(
         _account(), password="S9!kdm2Lqa", totp_secret="JBSWY3DPEHPK3PXP",
         recovery_email="backup@x.com", backup_codes=["8291 4472"]))
     client = web()
@@ -172,7 +172,8 @@ def test_no_answer_ever_carries_a_credential(web, monkeypatch):  # noqa: F811
 def test_the_list_pages_by_cursor(web, monkeypatch):  # noqa: F811
     seen = {}
 
-    def accounts(settings, *, state="", cursor="", limit=100):
+    def accounts(settings, *, state="", cursor="", limit=100,
+                 sandbox=False):
         seen.update(state=state, cursor=cursor, limit=limit)
         return {"rows": [_account(), _account(id=42, panel_ref=None)],
                 "more": True, "next_cursor": "Y3Vyc29y"}
@@ -191,10 +192,10 @@ def test_the_list_pages_by_cursor(web, monkeypatch):  # noqa: F811
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
 def test_the_event_list_is_whatever_was_recorded(web, monkeypatch):  # noqa: F811
     _client(monkeypatch)
-    monkeypatch.setattr(read_mod, "account", lambda s, ref: _account())
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account())
     import datetime as dt
 
-    monkeypatch.setattr(read_mod, "events", lambda s, row: [
+    monkeypatch.setattr(read_mod, "events", lambda s, row, **k: [
         {"at": dt.datetime(2026, 9, 5, 10, 12, 40, tzinfo=dt.timezone.utc),
          "type": "request", "verb": "add_gpt", "status": "done",
          "result": "in", "by": "panel"}])
@@ -212,7 +213,7 @@ def test_a_dead_store_is_json_not_the_consoles_page(web, monkeypatch):  # noqa: 
     class OperationalError(Exception):
         pass
 
-    def boom(settings):
+    def boom(settings, **more):
         raise OperationalError("connection refused")
 
     _client(monkeypatch)
@@ -228,7 +229,7 @@ def test_an_unknown_path_under_the_prefix_is_a_json_404(web, monkeypatch):  # no
     _client(monkeypatch)
     client = web()
     monkeypatch.setattr(read_mod, "account",
-                        lambda s, ref: pytest.fail("read before refusing"))
+                        lambda s, ref, **k: pytest.fail("read before refusing"))
     status, headers, body = _get(client, "/api/v1/accounts/x/nonsense")
     assert status == 404 and body["error"]["code"] == "not_found"
     assert headers["Content-Type"].startswith("application/json")
@@ -246,17 +247,18 @@ def _wrote(monkeypatch, made=None):
 
     seen = {"queued": [], "remembered": []}
 
-    def create(settings, row, *, client_id):
+    def create(settings, row, *, client_id, sandbox=False):
         seen["created"] = row
+        seen["sandbox"] = sandbox
         return made or _account()
 
     monkeypatch.setattr(write_mod, "create", create)
     monkeypatch.setattr(write_mod, "enqueue",
                         lambda s, **k: seen["queued"].append(k) or 91)
     monkeypatch.setattr(write_mod, "mark_ready",
-                        lambda s, ref: seen.update(ready=ref))
+                        lambda s, ref, **k: seen.update(ready=ref))
     monkeypatch.setattr(write_mod, "mark_withdrawn",
-                        lambda s, ref: seen.update(withdrawn=ref))
+                        lambda s, ref, **k: seen.update(withdrawn=ref))
     monkeypatch.setattr(write_mod, "replay", lambda s, **k: None)
     monkeypatch.setattr(write_mod, "remember",
                         lambda s, **k: seen["remembered"].append(k))
@@ -368,7 +370,7 @@ def test_the_same_ref_or_address_twice_is_one_account(web, monkeypatch):  # noqa
     for token, word in (("already_ref", "ref"),
                         ("already_address", "address")):
         monkeypatch.setattr(write_mod, "create",
-                            lambda s, row, client_id, t=token: t)
+                            lambda s, row, client_id, sandbox=False, t=token: t)
         status, _, got = _post(client, "/api/v1/accounts", body)
         assert status == 409 and got["error"]["code"] == "already_exists"
         assert word in got["error"]["message"]
@@ -407,7 +409,7 @@ def test_ready_only_moves_an_account_that_is_waiting(web, monkeypatch):  # noqa:
     monkeypatch.setattr(read_mod, "SERVED",
                         {"chatgpt": ("password_totp",),
                          "claude": ("email_code_customer",)})
-    monkeypatch.setattr(read_mod, "account", lambda s, ref: _account(
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account(
         product="claude", credential_kind="email_code_customer"))
     client = web()
     status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/ready", {})
@@ -415,7 +417,7 @@ def test_ready_only_moves_an_account_that_is_waiting(web, monkeypatch):  # noqa:
     assert body["ref"] == "ord_84213-a"
 
     monkeypatch.setattr(read_mod, "account",
-                        lambda s, ref: _account(status="ready"))
+                        lambda s, ref, **k: _account(status="ready"))
     status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/ready", {})
     assert status == 409 and body["error"]["code"] == "invalid_state"
     assert body["error"]["state"] == "ready"
@@ -425,7 +427,7 @@ def test_ready_only_moves_an_account_that_is_waiting(web, monkeypatch):  # noqa:
 def test_withdrawing_stamps_the_row_and_queues_the_sheet(web, monkeypatch):  # noqa: F811
     seen = _wrote(monkeypatch)
     _client(monkeypatch)
-    monkeypatch.setattr(read_mod, "account", lambda s, ref: _account())
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account())
     client = web()
     status, _, body = _delete(client, "/api/v1/accounts/ord_84213-a")
     assert status == 200 and seen["withdrawn"] == "ord_84213-a"
@@ -443,7 +445,7 @@ def test_it_is_too_late_to_take_back_a_phone_that_is_running(
     client = web()
     for word in ("in_use", "ready", "delivered"):
         monkeypatch.setattr(read_mod, "account",
-                            lambda s, ref, w=word: _account(status=w))
+                            lambda s, ref, w=word, **k: _account(status=w))
         code, _, body = _delete(client, "/api/v1/accounts/ord_84213-a")
         assert code == 409, word
         assert body["error"]["code"] == "invalid_state"
@@ -457,7 +459,7 @@ def test_the_panel_may_not_change_a_row_the_sheet_owns(web, monkeypatch):  # noq
     _wrote(monkeypatch)
     _client(monkeypatch)
     monkeypatch.setattr(read_mod, "account",
-                        lambda s, ref: _account(panel_ref=None))
+                        lambda s, ref, **k: _account(panel_ref=None))
     client = web()
     code, _, body = _delete(client, "/api/v1/accounts/farm_41")
     assert code == 404 and body["error"]["code"] == "not_found"
@@ -533,7 +535,7 @@ def test_a_number_nothing_counts_is_null_and_not_a_zero(web,  # noqa: F811
     true while the build flow does not touch these columns."""
     _client(monkeypatch)
     monkeypatch.setattr(read_mod, "account",
-                        lambda s, ref: _account(attempts=3, failures=1))
+                        lambda s, ref, **k: _account(attempts=3, failures=1))
     client = web()
     _, _, body = _get(client, "/api/v1/accounts/ord_84213-a")
     assert body["attempts"] is None and body["failures"] is None
@@ -580,3 +582,155 @@ def test_a_key_is_hashed_fast_and_never_stored():
     assert len(token) > 32 and digest == api_mod.hash_key(token)
     assert prefix == token[:api_mod.PREFIX_LEN] and token != prefix
     assert api_mod.hash_key("a") != api_mod.hash_key("b")
+
+
+# ------------------------------------------- the practice room (2026-09-11)
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_sandbox_key_writes_an_account_that_no_phone_will_ever_be_built_for(
+        web, monkeypatch):  # noqa: F811
+    """The reason the write half was never switched on: a real POST spends
+    a phone, a Gmail and an exit within a pass, so the panel's author had
+    nowhere to try one. A sandbox key's account is written to its own
+    table and, decisively, no request is queued - the queued request is
+    the only thing that carries an account into the pool."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch, role="sandbox")
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts", {
+        "ref": "ord_1", "product": "chatgpt",
+        "credential_kind": "password_totp",
+        "credentials": {"email": "a@x.com", "password": "pw"}})
+
+    assert status == 201 and body["sandbox"] is True
+    assert seen["sandbox"] is True, "written to api_sandbox, not resources"
+    assert seen["queued"] == [], "a practice account never reaches a pass"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_sandbox_key_reads_its_own_room_and_the_panels_key_never_does(
+        web, monkeypatch):  # noqa: F811
+    """One reader, two tables. The flag travels from the key to every
+    read, so neither client can see the other's accounts by asking."""
+    asked = []
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref, **k: asked.append(k) or _account())
+    monkeypatch.setattr(
+        read_mod, "accounts",
+        lambda s, **k: asked.append(k) or {"rows": [], "next_cursor": None})
+    for role, wanted in (("sandbox", True), ("panel", False)):
+        _client(monkeypatch, role=role)
+        client = web()
+        _get(client, "/api/v1/accounts")
+        _get(client, "/api/v1/accounts/ord_1")
+        assert [a.get("sandbox") for a in asked] == [wanted, wanted], role
+        asked.clear()
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_health_says_which_room_the_key_is_in(web, monkeypatch):  # noqa: F811
+    """A client pointed at the wrong key must find out from the first
+    answer it reads, not from a phone that never arrives."""
+    import inspect
+
+    # Read before it is faked away: the fake proves the route passes the
+    # flag, the source proves the answer carries it.
+    assert '"sandbox": bool(sandbox),' in inspect.getsource(read_mod.health)
+    asked = {}
+    monkeypatch.setattr(read_mod, "health",
+                        lambda s, **k: asked.update(k) or {"ok": True, **k})
+    _client(monkeypatch, role="sandbox")
+    client = web()
+    status, _, body = _get(client, "/api/v1/health")
+    assert status == 200 and asked == {"sandbox": True} and body["sandbox"]
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_simulate_is_the_sandboxs_own_verb_and_nobody_elses(
+        web, monkeypatch):  # noqa: F811
+    """A state nobody worked for is a lie on a real account, so the route
+    is not merely refused for a panel key - it does not exist for one."""
+    import geelark_farm.web.api_sandbox as box_mod
+
+    moved = {}
+    monkeypatch.setattr(box_mod, "simulate",
+                        lambda s, **k: moved.update(k))
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account())
+    _wrote(monkeypatch)
+
+    _client(monkeypatch, role="sandbox")
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/simulate",
+                            {"state": "ready"})
+    assert status == 200 and body["sandbox"] is True
+    assert moved == {"client_id": 1, "ref": "ord_84213-a", "state": "ready",
+                     "reason": ""}
+
+    _client(monkeypatch, role="panel")
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/simulate",
+                            {"state": "ready"})
+    assert status == 404 and body["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_state_that_cannot_be_acted_out_is_refused_with_its_field(
+        web, monkeypatch):  # noqa: F811
+    _client(monkeypatch, role="sandbox")
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account())
+    _wrote(monkeypatch)
+    client = web()
+    for state in ("blocked", "teleported"):
+        status, _, body = _post(
+            client, "/api/v1/accounts/ord_84213-a/simulate", {"state": state})
+        assert status == 422 and body["error"]["code"] == "invalid"
+        assert body["error"]["field"] == "state"
+
+
+def test_the_sandbox_drives_every_state_the_contract_has():
+    """The room is only useful if a client can be shown each answer it
+    will one day get. Two states are left out on purpose and say why."""
+    from geelark_farm import failures
+    from geelark_farm.web import api_sandbox
+
+    covered = set(api_sandbox.DRIVEN) | set(api_sandbox.NOT_DRIVEN)
+    assert covered == set(read_mod.API_STATES)
+    for state, fields in api_sandbox.DRIVEN.items():
+        row = {"status": "", "customer_ready": True, **fields}
+        if fields.get("withdrawn_at") == "now":
+            row["withdrawn_at"] = "2026-09-11T00:00:00Z"
+        assert read_mod.state_of(row) == state, state
+    assert failures.knows(api_sandbox.DRIVEN["needs_human"]["status"])
+
+
+def test_simulate_writes_only_the_practice_table_and_only_known_reasons():
+    import inspect
+
+    from geelark_farm.web import api_sandbox
+
+    src = inspect.getsource(api_sandbox.simulate)
+    assert "UPDATE api_sandbox SET" in src and "conn.commit()" in src
+    assert "client_id = %s AND lower(panel_ref) = lower(%s)" in src, (
+        "one author's ord_1 is not another's")
+    assert "failures.knows(reason)" in src, (
+        "a reason the farm never sends would teach the client a wrong word")
+    sweep = inspect.getsource(api_sandbox.sweep)
+    assert "DELETE FROM api_sandbox" in sweep and "conn.commit()" in sweep
+    assert api_sandbox.KEEP_DAYS == 14
+
+
+@pytest.mark.parametrize("web", [API_ON], indirect=True)
+def test_a_sandbox_key_may_write_while_the_farms_own_switch_is_shut(
+        web, monkeypatch):  # noqa: F811
+    """`WEB_API_WRITES` guards what a write costs. A practice write costs
+    nothing, so holding it behind that switch would leave the panel's
+    author unable to write his client at all - which is exactly where the
+    integration has been stuck."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch, role="sandbox")
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts", {
+        "ref": "ord_1", "product": "chatgpt",
+        "credential_kind": "password_totp",
+        "credentials": {"email": "a@x.com", "password": "pw"}})
+    assert status == 201 and body["sandbox"] is True
+    assert seen["queued"] == []

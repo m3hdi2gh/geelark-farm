@@ -64,6 +64,16 @@ inside a second and a missed bell costs a wait and nothing else:
 Never a bare `docker compose up -d` after a build: it recreates every
 service whose image changed, the keeper included.
 
+## The API's practice room
+
+A key whose role is `sandbox` (`geelark api-client <name> --role sandbox`)
+writes into `api_sandbox` instead of `resources`: same routes, same
+validation, same errors, and no pool, console or builder can see one of
+its rows. `POST /accounts/{ref}/simulate {"state": "ready"}` drives a
+practice account to any state the contract has, and the keeper sweeps the
+table after `api_sandbox.KEEP_DAYS`. A sandbox key writes even while
+`WEB_API_WRITES` is off, because a practice write costs nothing.
+
 ## A second host
 
 Point its `.env` at the same store, the same GeeLark key and the same

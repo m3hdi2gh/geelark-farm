@@ -935,6 +935,13 @@ class Housekeeper:
                 store_artifacts.prune(self.settings)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("could not prune the store's screens (%s)", exc)
+        if self.settings.web_api:
+            try:
+                from .web import api_sandbox
+
+                api_sandbox.sweep(self.settings)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not sweep the API's sandbox (%s)", exc)
         now = time.monotonic()
         probe = probe_due(self.probed, now)
         if probe:

@@ -1600,10 +1600,7 @@ def test_the_schema_carries_the_pool_archive():
     """The archive keeps the whole row as json, so it needs no migration of
     its own when `resources` grows a column, and is keyed by the id the row
     had - which is what makes archiving twice a no-op."""
-    from geelark_farm.store import db
-
     sql = schema_text()
-    assert db.SCHEMA_REV == "25"
     assert "CREATE TABLE IF NOT EXISTS resources_archive" in sql
     assert "id          bigint PRIMARY KEY" in sql
     assert "payload     jsonb NOT NULL" in sql
@@ -1713,3 +1710,25 @@ def test_the_archive_script_moves_exactly_what_the_purge_would_delete():
     assert '"--with-ladder"' in src
     assert "waiting(store, kind) if args.with_ladder else []" in src
     assert "r.retry_after IS NOT NULL" in src
+
+
+def test_the_schema_carries_the_apis_practice_room():
+    """A table of its own, shaped like the columns the API reads off
+    `resources` - so the reader is the same code with another table name,
+    and no pool or console query has to remember a flag."""
+    from geelark_farm.store import db
+    from geelark_farm.web import api_v1_read as api_read
+
+    sql = schema_text()
+    assert db.SCHEMA_REV == "26"
+    assert "CREATE TABLE IF NOT EXISTS api_sandbox" in sql
+    for column in api_read._ACCOUNT_COLUMNS.replace("r.", "").split(","):
+        name = column.strip()
+        if not name or " " in name:          # the derived ones, not columns
+            continue
+        assert f"\n    {name} " in sql.split("CREATE TABLE IF NOT EXISTS api_sandbox")[1].split(");")[0], name
+    assert "password" not in sql.split("api_sandbox")[1].split(");")[0], (
+        "a practice room is the last place a real password should be")
+    assert "CHECK (role IN ('panel', 'bot', 'sandbox'))" in sql
+    assert "DROP CONSTRAINT IF EXISTS api_clients_role_check" in sql, (
+        "the file is applied on every start and must converge")

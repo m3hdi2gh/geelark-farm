@@ -707,3 +707,59 @@ CREATE INDEX IF NOT EXISTS resources_archive_kind
     ON resources_archive (kind, archived_at DESC);
 CREATE INDEX IF NOT EXISTS resources_archive_address
     ON resources_archive (address);
+
+-- ------------------------------------------- the API's sandbox, rev 26
+-- Where an account the panel's author POSTs while writing his client
+-- lands: a table of its own, shaped exactly like the columns the API
+-- reads off `resources`, so every query it needs is the same query with
+-- another table name - and so nothing in the farm can ever see one.
+--
+-- A table rather than a flag on `resources`, because a flag is something
+-- fifteen console queries and two pool readers would each have to
+-- remember, and the one that forgot would build a phone for a fake
+-- account. Every account that reaches the pool costs a phone, a Gmail
+-- and an exit, which is why `WEB_API_WRITES` was never turned on: there
+-- was no way to try a POST without spending money (2026-09-11).
+--
+-- No credentials. The API validates what it is sent and keeps only
+-- whether each field was there: a sandbox is where a client's author
+-- experiments, and an experiment is the last place a real password
+-- should end up.
+CREATE TABLE IF NOT EXISTS api_sandbox (
+    id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind             text NOT NULL DEFAULT 'app',
+    source           text NOT NULL DEFAULT 'sandbox',
+    client_id        bigint REFERENCES api_clients(id) ON DELETE CASCADE,
+    panel_ref        text NOT NULL,
+    product          text NOT NULL DEFAULT '',
+    credential_kind  text NOT NULL DEFAULT '',
+    address          text NOT NULL DEFAULT '',
+    -- The pool's own vocabulary, so `state_of` reads this row the way it
+    -- reads a real one. Driven by POST /accounts/{ref}/simulate.
+    status           text NOT NULL DEFAULT '',
+    error            text,
+    serial           text NOT NULL DEFAULT '',
+    note             text NOT NULL DEFAULT '',
+    attempts         integer NOT NULL DEFAULT 0,
+    failures         integer NOT NULL DEFAULT 0,
+    customer_ready   boolean NOT NULL DEFAULT false,
+    state_changed_at timestamptz,
+    delivered_at     timestamptz,
+    withdrawn_at     timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS api_sandbox_ref
+    ON api_sandbox (client_id, lower(panel_ref));
+CREATE UNIQUE INDEX IF NOT EXISTS api_sandbox_address
+    ON api_sandbox (client_id, lower(address));
+CREATE INDEX IF NOT EXISTS api_sandbox_page
+    ON api_sandbox (updated_at DESC, id DESC);
+
+-- The third role. A sandbox key reads and writes only the table above; a
+-- panel key never sees one of its rows. Re-runnable by construction: the
+-- constraint is dropped by name and added again, so the file still
+-- converges when it is applied twice.
+ALTER TABLE api_clients DROP CONSTRAINT IF EXISTS api_clients_role_check;
+ALTER TABLE api_clients ADD CONSTRAINT api_clients_role_check
+    CHECK (role IN ('panel', 'bot', 'sandbox'));

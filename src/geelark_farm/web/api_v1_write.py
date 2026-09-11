@@ -105,13 +105,20 @@ def judge(body: dict) -> dict:
             "backup_codes": list(codes)}
 
 
-def create(settings: Settings, row: dict, *, client_id: int) -> dict | str:
+def create(settings: Settings, row: dict, *, client_id: int,
+           sandbox: bool = False) -> dict | str:
     """The row, born in the store. Returns it, or a token saying why not.
 
     Two identities can already be taken: the panel's own ref, and the
     address - the partial unique index the pool has always had, which is
     what stops the same account being bought twice.
+
+    A sandbox key's row is born in `api_sandbox` instead, and without the
+    credentials: nothing will ever sign in with them, and an experiment is
+    the last place a real password should end up (2026-09-11).
     """
+    if sandbox:
+        return _create_sandbox(settings, row, client_id=client_id)
     with connect(settings) as conn:
         for column in ("panel_ref", "address"):
             taken = conn.execute(
@@ -133,21 +140,49 @@ def create(settings: Settings, row: dict, *, client_id: int) -> dict | str:
     return api_read.account(settings, row["panel_ref"])
 
 
-def mark_ready(settings: Settings, ref: str) -> None:
+def _create_sandbox(settings: Settings, row: dict, *,
+                    client_id: int) -> dict | str:
+    """The same POST, in the practice room. Identity is per key, so two
+    authors may both use `ord_1` without hearing about each other."""
+    with connect(settings) as conn:
+        for column in ("panel_ref", "address"):
+            taken = conn.execute(
+                "SELECT 1 FROM api_sandbox WHERE client_id = %s"
+                f" AND lower({column}) = lower(%s) LIMIT 1",
+                (client_id, row[column])).fetchall()
+            if taken:
+                return "already_ref" if column == "panel_ref" else "already_address"
+        conn.execute(
+            "INSERT INTO api_sandbox (client_id, panel_ref, product,"
+            " credential_kind, address, customer_ready, note)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (client_id, row["panel_ref"], row["product"],
+             row["credential_kind"], row["address"],
+             not row["email_code_only"],
+             "A sandbox account. No phone will ever be built for it."))
+        conn.commit()
+    return api_read.account(settings, row["panel_ref"], sandbox=True)
+
+
+def mark_ready(settings: Settings, ref: str, *,
+               sandbox: bool = False) -> None:
     """The customer is at their keyboard. A column this API owns, so no
     request and no pass: nothing about the sheet changes."""
+    table = api_read.table_for(sandbox)
     with connect(settings) as conn:
-        conn.execute("UPDATE resources SET customer_ready = true,"
+        conn.execute(f"UPDATE {table} SET customer_ready = true,"
                      " state_changed_at = now(), updated_at = now()"
                      " WHERE kind = 'app' AND panel_ref = %s", (ref,))
         conn.commit()
 
 
-def mark_withdrawn(settings: Settings, ref: str) -> None:
+def mark_withdrawn(settings: Settings, ref: str, *,
+                   sandbox: bool = False) -> None:
     """Stamped here so the client sees the answer at once; the request
     that follows takes the row out of the sheet."""
+    table = api_read.table_for(sandbox)
     with connect(settings) as conn:
-        conn.execute("UPDATE resources SET withdrawn_at = now(),"
+        conn.execute(f"UPDATE {table} SET withdrawn_at = now(),"
                      " state_changed_at = now(), updated_at = now()"
                      " WHERE kind = 'app' AND panel_ref = %s", (ref,))
         conn.commit()

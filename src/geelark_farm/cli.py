@@ -170,13 +170,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="one SELECT 1 against the store's cluster")
     p_api_client = sub.add_parser(
         "api-client",
-        help="mint a bearer key for the customer panel or the Telegram "
-             "bot; the key is printed once and only its hash is kept"
+        help="mint a bearer key for the customer panel, the Telegram bot "
+             "or a sandbox; the key is printed once and only its hash is kept"
     )
     p_api_client.add_argument("name", help="what to call this client")
     p_api_client.add_argument("--role", default="panel",
-                              choices=("panel", "bot"),
-                              help="which endpoints the key may call")
+                              choices=("panel", "bot", "sandbox"),
+                              help="which endpoints the key may call; a "
+                                   "sandbox key builds no phones")
 
     sub.add_parser("ping", help="verify API credentials and list phones")
     sub.add_parser("verify",

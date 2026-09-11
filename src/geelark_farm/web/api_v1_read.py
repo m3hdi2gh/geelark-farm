@@ -73,6 +73,15 @@ _ACCOUNT_COLUMNS = (
 )
 
 
+#: The two tables this reader can be pointed at. A sandbox key reads its
+#: own practice room and nothing else; a panel key never sees one of its
+#: rows. Chosen by a boolean here rather than passed in as a name, so no
+#: caller can ever put a string of its own into the SQL.
+def table_for(sandbox: bool) -> str:
+    """`api_sandbox` or `resources` - the same columns either way."""
+    return "api_sandbox" if sandbox else "resources"
+
+
 def ref_of(row: dict) -> str:
     """An account's public id: the panel's own reference when it gave one,
     and a farm-issued one otherwise.
@@ -151,7 +160,8 @@ def _decode(cursor: str) -> tuple[str, int] | None:
         return None
 
 
-def account(settings: Settings, ref: str) -> dict | None:
+def account(settings: Settings, ref: str, *,
+            sandbox: bool = False) -> dict | None:
     """One account by its ref - the panel's own, or the farm-issued one."""
     wanted = str(ref or "").strip()
     if not wanted:
@@ -161,14 +171,14 @@ def account(settings: Settings, ref: str) -> dict | None:
         ident = int(wanted[5:])
     with Store(settings) as store:
         rows = store._rows(
-            f"SELECT {_ACCOUNT_COLUMNS} FROM resources r"
+            f"SELECT {_ACCOUNT_COLUMNS} FROM {table_for(sandbox)} r"
             " WHERE r.kind = 'app' AND (r.panel_ref = %s OR r.id = %s)"
             " LIMIT 1", (wanted, ident))
     return rows[0] if rows else None
 
 
 def accounts(settings: Settings, *, state: str = "", cursor: str = "",
-             limit: int = 100) -> dict:
+             limit: int = 100, sandbox: bool = False) -> dict:
     """A page of accounts, newest change first.
 
     Keyset, not OFFSET: a client walking the list while the farm works
@@ -184,7 +194,7 @@ def accounts(settings: Settings, *, state: str = "", cursor: str = "",
         params += [after[0] or None, after[1]]
     with Store(settings) as store:
         rows = store._rows(
-            f"SELECT {_ACCOUNT_COLUMNS} FROM resources r"
+            f"SELECT {_ACCOUNT_COLUMNS} FROM {table_for(sandbox)} r"
             f" WHERE {' AND '.join(where)}"
             " ORDER BY r.updated_at DESC, r.id DESC LIMIT %s",
             (*params, limit + 1))
@@ -231,9 +241,13 @@ def events(settings: Settings, row: dict) -> list[dict]:
     return out
 
 
-def health(settings: Settings) -> dict:
+def health(settings: Settings, *, sandbox: bool = False) -> dict:
     """Liveness, which kinds are actually served, and how much warm stock
-    there is - one round trip, the way nav_counts does it."""
+    there is - one round trip, the way nav_counts does it.
+
+    A sandbox key is told so here as well as in every account: the whole
+    point of the room is that it answers like the farm, so the one thing
+    it must never be is silent about being a room."""
     with Store(settings) as store:
         rows = store._rows(
             "SELECT count(*) FILTER (WHERE kind = 'app') AS accounts,"
@@ -244,6 +258,7 @@ def health(settings: Settings) -> dict:
     from .api_v1 import NOT_MEASURED
 
     return {"ok": True,
+            "sandbox": bool(sandbox),
             "served": {name: list(kinds) for name, kinds in SERVED.items()},
             "not_measured": list(NOT_MEASURED),
             "accounts": int(counts.get("accounts") or 0),
