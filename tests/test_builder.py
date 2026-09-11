@@ -5191,3 +5191,77 @@ def test_a_second_text_captcha_in_one_build_is_a_refusal_like_any_other(
     assert [r.credentials.email for r in book.gmails.available] == [
         "g1@example.com"]
 
+
+
+
+def test_the_phones_clock_follows_its_exit(make_settings, tmp_path, monkeypatch):
+    """Every exit is in Europe and every phone kept a US clock - six hours
+    of dissonance Google can read (2026-09-11)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import geo
+
+    settings = make_settings(state_dir=tmp_path, geo_align=True)
+    monkeypatch.setattr(geo, "timezone_for", lambda s, ip: {
+        "212.8.252.6": "Europe/Amsterdam", "1.1.1.1": ""}.get(ip, ""))
+    ran = []
+    monkeypatch.setattr(builder.shell, "run",
+                        lambda c, p, cmd, **k: ran.append(cmd) or "CEST")
+    exit_row = SimpleNamespace(values={"Last Exit IP": "212.8.252.6"},
+                               proxy=SimpleNamespace(host="10.0.0.9"))
+
+    assert builder._align_clock(None, settings, "P", exit_row) == "Europe/Amsterdam"
+    assert ran == ["settings put global auto_time_zone 0; "
+                   "setprop persist.sys.timezone Europe/Amsterdam; date +%Z"]
+    # No exit IP recorded yet: the proxy's host is the address.
+    assert builder._exit_ip(SimpleNamespace(values={}, proxy=SimpleNamespace(
+        host="1.1.1.1"))) == "1.1.1.1"
+    ran.clear()
+    assert builder._align_clock(None, settings, "P", SimpleNamespace(
+        values={}, proxy=SimpleNamespace(host="1.1.1.1"))) == ""
+    assert ran == [], "nothing known: the clock stays"
+    # Off, and a zone that is not a zone, do nothing.
+    off = make_settings(state_dir=tmp_path, geo_align=False)
+    assert builder._align_clock(None, off, "P", exit_row) == ""
+    monkeypatch.setattr(geo, "timezone_for", lambda s, ip: "x; rm -rf /")
+    assert builder._align_clock(None, settings, "P", exit_row) == ""
+    assert ran == []
+    # A shell that refuses is a warning, not a failed build.
+    monkeypatch.setattr(geo, "timezone_for", lambda s, ip: "Europe/Amsterdam")
+    monkeypatch.setattr(builder.shell, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no")))
+    assert builder._align_clock(None, settings, "P", exit_row) == ""
+
+
+def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
+        make_settings, tmp_path, monkeypatch):
+    import inspect
+
+    from geelark_farm import geo
+    from geelark_farm.store import signins as store_signins
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    rows = []
+    monkeypatch.setattr(store_signins, "record",
+                        lambda s, **k: rows.append(k) or True)
+    monkeypatch.setattr(geo, "country_for", lambda s, ip: "NL" if ip else "")
+    builder._record_signin(settings, builder.Build(index=1, serial="7"),
+                           gmail="a@x.com", seller="s", host="h", position=1,
+                           reason="signed_in", ok=True, seconds=90.0,
+                           captcha_rounds=0, age_seconds=140.0,
+                           exit_ip="212.8.252.6", touch="kernel", dumps=9)
+    assert rows[0]["age_seconds"] == 140.0 and rows[0]["exit_country"] == "NL"
+    assert rows[0]["touch"] == "kernel" and rows[0]["dumps"] == 9
+    src = inspect.getsource(builder.build_one)
+    for needle in ("age_seconds=attempt_started - phone_made_at",
+                   "exit_ip=_exit_ip(proxy_row)",
+                   "touch=_touch_method(phone_id)",
+                   "_align_clock(client, settings, phone_id, proxy_row)",
+                   "shell.pause(*SIGN_IN_STAGGER_SECONDS)"):
+        assert needle in src, needle
+    assert "_align_clock(client, settings, phone_id, replacement)" in \
+        inspect.getsource(builder._new_exit)
+    monkeypatch.setattr(builder.shell, "_touch_ready", {"P": (1.0, 1.0), "Q": None})
+    assert builder._touch_method("P") == "kernel"
+    assert builder._touch_method("Q") == "input"
+    assert builder._touch_method("R") == "input"

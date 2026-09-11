@@ -24,18 +24,23 @@ MIN_SAMPLE = 5
 def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
            host: str = "", model: str = "", position: int = 1,
            reason: str = "", ok: bool = False, seconds: float | None = None,
-           captcha_rounds: int = 0) -> bool:
+           captcha_rounds: int = 0, age_seconds: float | None = None,
+           exit_country: str = "", touch: str = "", dumps: int = 0) -> bool:
     try:
         with connect(settings) as conn:
             conn.execute(
                 "INSERT INTO signins (machine, serial, gmail, seller, host,"
-                " model, position, reason, ok, seconds, captcha_rounds)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " model, position, reason, ok, seconds, captcha_rounds,"
+                " age_seconds, exit_country, touch, dumps)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+                " %s, %s, %s, %s)",
                 (machine(), str(serial or ""), str(gmail or "").lower(),
                  str(seller or "")[:80], str(host or "")[:80],
                  str(model or "")[:80], int(position or 1),
                  str(reason or "")[:80], bool(ok), seconds,
-                 int(captcha_rounds or 0)))
+                 int(captcha_rounds or 0), age_seconds,
+                 str(exit_country or "")[:8], str(touch or "")[:16],
+                 int(dumps or 0)))
             conn.commit()
         return True
     except Exception as exc:                                      # noqa: BLE001
@@ -46,7 +51,8 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
 
 _BY = {"host": "host", "model": "model", "seller": "seller",
        "reason": "reason", "position": "position::text",
-       "day": "to_char(at, 'YYYY-MM-DD')"}
+       "day": "to_char(at, 'YYYY-MM-DD')", "touch": "touch",
+       "exit_country": "exit_country"}
 
 
 def rates(settings: Settings, by: str, days: int = 7) -> list[dict]:

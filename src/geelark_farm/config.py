@@ -379,6 +379,11 @@ class Settings:
     #: Taps written into the phone's touch device in the viewer's shape
     #: (shell.KERNEL_TOUCH) instead of `input tap` (2026-09-10).
     kernel_touch: bool = True
+    #: The phone's clock follows its exit: timezone set to the exit
+    #: address's before the sign-in and after every exit change
+    #: (GEO_ALIGN). Every exit is in Europe and every phone kept a US
+    #: clock (2026-09-11).
+    geo_align: bool = True
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -496,6 +501,8 @@ class Settings:
             # no count is what it always meant, four workers.
             kernel_touch=_str("KERNEL_TOUCH", "1").strip().lower()
                          in ("1", "true", "yes", "on"),
+            geo_align=_str("GEO_ALIGN", "1").strip().lower()
+                      in ("1", "true", "yes", "on"),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

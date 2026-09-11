@@ -1082,19 +1082,75 @@ def _create_kept(client: Client, settings: Settings, ledger: Ledger, proxy,
 
 def _record_signin(settings: Settings, build: Build, *, gmail: str,
                    seller: str, host: str, position: int, reason: str,
-                   ok: bool, seconds: float, captcha_rounds: int) -> None:
+                   ok: bool, seconds: float, captcha_rounds: int,
+                   age_seconds: float | None = None, exit_ip: str = "",
+                   touch: str = "", dumps: int = 0) -> None:
     """One row in the store's `signins`, when there is a store."""
     if not getattr(settings, "store_enabled", False):
         return
     try:
+        from . import geo
         from .store import signins as store_signins
 
         store_signins.record(settings, serial=build.serial, gmail=gmail,
                              seller=seller, host=host, model=build.model,
                              position=position, reason=reason, ok=ok,
-                             seconds=seconds, captcha_rounds=captcha_rounds)
+                             seconds=seconds, captcha_rounds=captcha_rounds,
+                             age_seconds=age_seconds,
+                             exit_country=geo.country_for(settings, exit_ip)
+                             if exit_ip else "",
+                             touch=touch, dumps=dumps)
     except Exception as exc:                                      # noqa: BLE001
         log.debug("sign-in not recorded (%s)", exc)
+
+
+def _exit_ip(proxy_row) -> str:
+    """The address Google sees through this exit: the last outbound IP
+    the check recorded, else the proxy's own host."""
+    values = getattr(proxy_row, "values", None) or {}
+    ip = str(values.get("Last Exit IP") or "").strip()
+    if ip:
+        return ip
+    return str(getattr(getattr(proxy_row, "proxy", None), "host", "") or "")
+
+
+def _align_clock(client: Client, settings: Settings, phone_id: str,
+                 proxy_row) -> str:
+    """Set the phone's timezone to its exit's (GEO_ALIGN). Returns the
+    zone set, or "". Never fatal: a phone that keeps its clock is what
+    every phone had until today."""
+    if not getattr(settings, "geo_align", True) or proxy_row is None:
+        return ""
+    from . import geo
+
+    ip = _exit_ip(proxy_row)
+    zone = geo.timezone_for(settings, ip) if ip else ""
+    if not zone or not re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z_+\-0-9]+){1,2}",
+                                    zone):
+        return ""
+    try:
+        shell.run(client, phone_id,
+                  f"settings put global auto_time_zone 0; "
+                  f"setprop persist.sys.timezone {zone}; "
+                  f"date +%Z")
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not set the clock of %s to %s (%s)", phone_id,
+                    zone, exc)
+        return ""
+    log.info("clock set to %s, where exit %s is", zone, ip)
+    return zone
+
+
+def _touch_method(phone_id: str) -> str:
+    """How this phone's taps are made - what the sign-in record says."""
+    return "kernel" if shell._touch_ready.get(phone_id) else "input"
+
+
+#: Builds start within seconds of each other, four at a time, and every
+#: sign-in of theirs then reaches Google from one host within a minute.
+#: A pause before the first address, different for each, spreads them
+#: (2026-09-11). Nothing when the cadence is off.
+SIGN_IN_STAGGER_SECONDS = (2.0, 40.0)
 
 
 def _package_for(settings: Settings, app: str) -> str:
@@ -1429,8 +1485,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         phones.ensure_running(client, phone_id,
                               timeout=min(phones.BOOT_SECONDS, remaining()),
                               cancelled=cancelled, on_running=order_apps)
+        phone_made_at = time.monotonic()
         if on_ready:
             on_ready(phone_id)
+        _align_clock(client, settings, phone_id, proxy_row)
+        if not bare:
+            shell.pause(*SIGN_IN_STAGGER_SECONDS)
 
         # ------------------------------------------------------- the Gmail
         while not gmail_signed_in and not bare:
@@ -1506,7 +1566,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 position=tried_gmails + 1, reason=outcome.reason,
                 ok=bool(outcome.ok),
                 seconds=time.monotonic() - attempt_started,
-                captcha_rounds=rounds)
+                captcha_rounds=rounds,
+                age_seconds=attempt_started - phone_made_at,
+                exit_ip=_exit_ip(proxy_row),
+                touch=_touch_method(phone_id),
+                dumps=int(getattr(outcome, "dumps", 0) or 0))
             heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
                      or outcome.reason == "captcha_shown")
             if heavy and proxy_row is not None:
@@ -2210,6 +2274,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     phones.ensure_running(client, phone_id,
                           timeout=min(phones.BOOT_SECONDS, budget),
                           cancelled=cancelled)
+    _align_clock(client, settings, phone_id, replacement)
     return replacement
 
 

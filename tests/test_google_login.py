@@ -2042,3 +2042,12 @@ def test_a_code_is_looked_up_before_it_is_typed(phone, monkeypatch):
     assert paused and paused[0] == login.CODE_LOOKUP_SECONDS
     assert device.filled and device.filled[0][0] == "EditText"
 
+
+
+
+def test_captcha_tiles_are_looked_at_before_they_are_pressed():
+    import inspect
+
+    src = inspect.getsource(login.act_captcha)
+    assert src.count("shell.pause(*TILE_LOOK_SECONDS)") == 2
+    assert login.TILE_LOOK_SECONDS == (0.2, 0.9)

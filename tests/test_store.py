@@ -1525,7 +1525,8 @@ def test_sign_ins_are_recorded_and_read_back_by_dimension():
     assert "INSERT INTO signins" in src and "conn.commit()" in src
     assert "except Exception" in src, "never past the build"
     assert set(signins._BY) == {"host", "model", "seller", "reason",
-                                "position", "day"}
+                                "position", "day", "touch", "exit_country"}
+    assert "age_seconds, exit_country, touch, dumps" in src
     rates = inspect.getsource(signins.rates)
     assert "count(*) FILTER (WHERE ok)" in rates
     assert "make_interval(days => %s)" in rates
@@ -1546,7 +1547,9 @@ def test_the_schema_carries_the_ladder_and_the_sign_ins():
 
     sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
         encoding="utf-8")
-    assert db.SCHEMA_REV == "23"
+    assert db.SCHEMA_REV == "24"
+    for column in ("age_seconds", "exit_country", "touch", "dumps"):
+        assert f"ALTER TABLE signins ADD COLUMN IF NOT EXISTS {column}" in sql
     assert "CREATE TABLE IF NOT EXISTS signins" in sql
     for column in ("tries", "retry_after", "last_reason"):
         assert f"ALTER TABLE resources ADD COLUMN IF NOT EXISTS {column}" in sql

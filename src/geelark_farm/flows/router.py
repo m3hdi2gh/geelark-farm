@@ -41,6 +41,8 @@ class Outcome:
     #: having to remember to. Empty on an outcome decided before the loop ran
     #: - `app_not_installed` never saw a screen, and says so by having none.
     trail: list[str] = field(default_factory=list)
+    #: How many screen dumps the flow took - see Context.dumps.
+    dumps: int = 0
 
     @property
     def ok(self) -> bool:
@@ -60,6 +62,10 @@ class Context:
     elements: list[screen.Element] = field(default_factory=list)
     blob: str = ""
     raw: str = ""
+    #: How many times the screen was dumped - each one an accessibility
+    #: service coming up for a moment, which is a thing to keep count of
+    #: (the sign-in research, 2026-09-11).
+    dumps: int = 0
     artifact_dir: Path | None = None
     seen: dict[str, int] = field(default_factory=dict)
     saved: list[str] = field(default_factory=list)
@@ -82,6 +88,7 @@ class Context:
             self.watch()
 
     def refresh(self) -> None:
+        self.dumps += 1
         xml = screen.capture(self.client, self.phone_id)
         self.raw = xml or ""
         self.elements = screen.parse(xml) if xml else []
@@ -234,6 +241,7 @@ def drive(ctx: Context, screens: list[Screen], *,
                      budget_seconds=budget_seconds, logger=logger,
                      watch=watch)
     outcome.trail = list(ctx.trail)
+    outcome.dumps = ctx.dumps
     return outcome
 
 

@@ -710,6 +710,11 @@ def _screen_width(ctx: Context) -> int:
     return widest
 
 
+#: Between two tiles of a grid: the look at the picture before the
+#: press. With the tap's own pause that is 0.4-1.6 s a tile, never the
+#: whole grid in one second (2026-09-11).
+TILE_LOOK_SECONDS = (0.2, 0.9)
+
 #: How many visits the captcha screen gets across a whole flow. Generous,
 #: because most of them are spent waiting and because one flow may meet
 #: several captchas; `act_captcha` gives up one short of it, so the build
@@ -882,12 +887,15 @@ def act_captcha(ctx: Context) -> Outcome | None:
         log.info("captcha: %r -> tiles %s of %d, tapped where they are",
                  instruction, answer, len(tiles))
         for tile in chosen:
+            # A person looks at each picture before pressing it.
+            shell.pause(*TILE_LOOK_SECONDS)
             screen.tap_element(ctx.client, ctx.phone_id, tile)
     else:
         points = _tile_points(rect, size, answer)
         log.info("captcha: %r -> tiles %s of a %dx%d grid at %s",
                  instruction, answer, size, size, points)
         for x, y in points:
+            shell.pause(*TILE_LOOK_SECONDS)
             shell.tap(ctx.client, ctx.phone_id, x, y)
     _answer(ctx, rect)
     return None

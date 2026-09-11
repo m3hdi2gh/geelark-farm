@@ -727,3 +727,18 @@ def test_a_new_page_is_read_before_it_is_touched(device, tmp_path, monkeypatch):
     assert paused == [router.READ_SECONDS, router.READ_SECONDS], (
         "read on arrival at each page, not on every visit")
 
+
+
+
+def test_the_outcome_counts_the_dumps_the_sign_in_took(device, tmp_path):
+    """Each dump is an accessibility service coming up for a moment; the
+    record keeps the count so fewer of them can be measured (2026-09-11)."""
+    device.pages = [page("Email"), page("Password")]
+    screens = [Screen("email_entry", lambda c: c.has("email"),
+                      lambda c: None, max_visits=9),
+               Screen("password_entry", lambda c: c.has("password"),
+                      lambda c: Outcome("success", "in"), max_visits=9)]
+
+    out = drive(context(tmp_path), screens)
+
+    assert out.reason == "in" and out.dumps == device.captures == 2

@@ -654,6 +654,13 @@ CREATE TABLE IF NOT EXISTS signins (
     captcha_rounds integer NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS signins_at ON signins (at);
+-- Rev 24: how old the phone was, where the exit is, how the taps were
+-- made and how many screen dumps the sign-in took - the four things the
+-- human-sign-in work changes and has to be judged by (2026-09-11).
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS age_seconds  real;
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS exit_country text NOT NULL DEFAULT '';
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS touch        text NOT NULL DEFAULT '';
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS dumps        integer NOT NULL DEFAULT 0;
 -- The retry ladder: a Gmail Google distrusted (captcha, verify your
 -- phone, could not verify) is not spent - it waits a day, then two, and
 -- comes back on its own for another phone and exit; the third refusal
