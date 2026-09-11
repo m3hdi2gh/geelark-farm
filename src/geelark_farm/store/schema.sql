@@ -783,3 +783,16 @@ ALTER TABLE resources ADD COLUMN IF NOT EXISTS refund_state text NOT NULL DEFAUL
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS refund_at    timestamptz;
 CREATE INDEX IF NOT EXISTS resources_refunds
     ON resources (kind, refund_state) WHERE refund_state <> '';
+
+-- Once, for the rows the old timer was holding when this shipped: a wait
+-- longer than three hours cannot be written any more (the floor is
+-- minutes), so anything still carrying one is a row from before and its
+-- wait is over. And the two refusals that are the seller's move to the
+-- refund list wherever they are, including the ones already set aside.
+UPDATE resources SET retry_after = now()
+ WHERE kind = 'gmail' AND refund_state = ''
+   AND retry_after > now() + interval '3 hours';
+UPDATE resources SET refund_state = 'to_claim', refund_at = now(),
+       retry_after = NULL, tries = 3
+ WHERE kind = 'gmail' AND refund_state = '' AND error IS NULL
+   AND status IN ('phone_verification_required', 'password_changed');
