@@ -104,6 +104,16 @@ def _models(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _words(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """A comma-separated list, or the default when nothing set it. An
+    empty setting means an empty list, which is how a list is turned off.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _ratio(name: str, default: float) -> float:
     raw = (os.environ.get(name) or "").strip()
     if not raw:
@@ -476,6 +486,15 @@ class Settings:
     #: screens - seven of a warm phone's eleven minutes (2026-09-08). Off,
     #: every install walks Play as before.
     app_install_api: bool = True
+    #: The apps every phone the builder makes carries, whatever the wish
+    #: asked for, in the order they are ordered from the center. All
+    #: three are in the center now - Spotify is GeeLark's own, ChatGPT
+    #: and Claude are copies uploaded from a Play-signed phone - and it
+    #: takes the three orders at once, so a phone carries all of them
+    #: without a Play Store screen and without costing the build a minute
+    #: (the operator, 2026-09-12). Names out of `builder.APPS`; empty
+    #: installs only what a wish asked for. Bare phones stay bare.
+    apps_on_every_phone: tuple[str, ...] = ("chatgpt", "spotify", "claude")
     #: One Gmail per phone: after an address Google distrusted (captcha,
     #: verify your phone, could not verify) the phone is deleted and the
     #: next address goes on a fresh phone and exit, instead of up to five
@@ -556,6 +575,8 @@ class Settings:
             captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
             app_install_api=_str("APP_INSTALL_API", "1").strip()
                             in ("1", "true", "yes", "on"),
+            apps_on_every_phone=_words("APPS_ON_EVERY_PHONE",
+                                       ("chatgpt", "spotify", "claude")),
             one_gmail_per_phone=_str("ONE_GMAIL_PER_PHONE", "1").strip()
                                 in ("1", "true", "yes", "on"),
             bad_models=_models("BAD_MODELS"),

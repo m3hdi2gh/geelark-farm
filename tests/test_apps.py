@@ -35,9 +35,13 @@ class Center:
 
 @pytest.fixture(autouse=True)
 def fresh_cache():
-    apps._versions.clear()
+    def clear():
+        apps._versions.clear()
+        apps._ours.clear()
+        apps._ours_at = 0.0
+    clear()
     yield
-    apps._versions.clear()
+    clear()
 
 
 def test_the_newest_version_of_the_package_asked_for_is_the_one_ordered():
@@ -119,3 +123,89 @@ def test_the_proof_is_the_package_list_polled_within_the_budget(monkeypatch):
     # Cancelled: out at once.
     assert not apps.wait_installed(object(), "P", "com.spotify.music",
                                    budget_seconds=25, cancelled=lambda: True)
+
+
+# ------------------------------------------- the apps we uploaded ourselves
+def _uploaded(monkeypatch, row, *, asked=None):
+    """`store_state.get` answering with `row`, counting the reads."""
+    from geelark_farm.store import state as store_state
+
+    def get(settings, key, default=None):
+        assert key == apps.STATE_KEY
+        if asked is not None:
+            asked.append(key)
+        return row
+
+    monkeypatch.setattr(store_state, "get", get)
+
+
+def test_an_app_we_uploaded_is_found_in_the_store_not_in_the_listing(
+        monkeypatch, make_settings):
+    """`installable/list` is GeeLark's own catalogue and an upload never
+    joins it - verified on phone 2369, where a search for Claude and one
+    for ChatGPT both came back empty while both were installed. The id
+    comes back once, from the upload, so it is written down (2026-09-12).
+    """
+    settings = make_settings(store_enabled=True)
+    _uploaded(monkeypatch, {"com.openai.chatgpt": "2098579148801630209"})
+    client = Center()
+
+    assert apps.version_id(client, "P", "com.openai.chatgpt", name="ChatGPT",
+                           settings=settings) == "2098579148801630209"
+    assert apps.INSTALLABLE not in [p for p, _ in client.posts], (
+        "the catalogue is not asked about an app it cannot carry")
+
+    # And the catalogue still answers for what is GeeLark's own.
+    assert apps.version_id(client, "P", "com.spotify.music", name="Spotify",
+                           settings=settings) == "2067127873273200642"
+
+
+def test_the_store_is_read_once_in_a_while_not_once_a_build(monkeypatch,
+                                                            make_settings):
+    settings = make_settings(store_enabled=True)
+    asked = []
+    _uploaded(monkeypatch, {"com.anthropic.claude": "42"}, asked=asked)
+
+    assert apps.uploaded(settings, "com.anthropic.claude") == "42"
+    assert apps.uploaded(settings, "com.openai.chatgpt") == ""
+    assert len(asked) == 1, "one read covers every package"
+
+    # A fresh upload is picked up without a restart: the row is believed
+    # for STATE_SECONDS and then read again.
+    monkeypatch.setattr(apps.time, "monotonic",
+                        lambda: apps._ours_at + apps.STATE_SECONDS + 1)
+    assert apps.uploaded(settings, "com.anthropic.claude") == "42"
+    assert len(asked) == 2
+
+
+def test_a_store_that_cannot_be_read_falls_back_to_what_it_last_said(
+        monkeypatch, make_settings):
+    """One unlucky query is not a reason to send an app through the Play
+    Store, and the clock is left where it was so the next caller tries
+    again."""
+    settings = make_settings(store_enabled=True)
+    _uploaded(monkeypatch, {"com.anthropic.claude": "42"})
+    assert apps.uploaded(settings, "com.anthropic.claude") == "42"
+
+    from geelark_farm.store import state as store_state
+    monkeypatch.setattr(store_state, "get", lambda *a, **k: (_ for _ in ())
+                        .throw(ConnectionError("no cluster")))
+    apps._ours_at = 0.0
+    assert apps.uploaded(settings, "com.anthropic.claude") == "42"
+    assert apps._ours_at == 0.0, "not believed, so the next caller re-reads"
+
+    # No store at all: nothing of ours, and the catalogue answers alone.
+    assert apps.uploaded(make_settings(), "com.anthropic.claude") == ""
+    assert apps.uploaded(None, "com.anthropic.claude") == ""
+
+
+def test_a_version_the_center_dropped_is_forgotten_on_both_sides(
+        monkeypatch, make_settings):
+    """`forget` has to clear what the store said as well, or the stale id
+    is handed straight back and every build repeats the refusal."""
+    settings = make_settings(store_enabled=True)
+    _uploaded(monkeypatch, {"com.anthropic.claude": "stale"})
+    assert apps.uploaded(settings, "com.anthropic.claude") == "stale"
+
+    apps.forget("com.anthropic.claude")
+    assert apps._ours == {} and apps._ours_at == 0.0

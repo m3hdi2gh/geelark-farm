@@ -1051,15 +1051,44 @@ class Wanted:
 
 #: The apps a phone can be built with, and what each is called on a page.
 APPS = {"chatgpt": "ChatGPT", "spotify": "Spotify", "claude": "Claude"}
-#: Spotify's package; ChatGPT's is `settings.target_package`. Claude
-#: walks the Play Store the way ChatGPT does (the build card, 2026-09-10).
+#: Spotify's package; ChatGPT's is `settings.target_package`. All three
+#: are in GeeLark's app center - Spotify is its own, ChatGPT and Claude
+#: are copies uploaded from a Play-signed phone - and Play is only the
+#: fallback now (2026-09-12).
 SPOTIFY_PACKAGE = "com.spotify.music"
 CLAUDE_PACKAGE = "com.anthropic.claude"
+#: Names in APPS_ON_EVERY_PHONE that are not apps, said once a process
+#: rather than once a build.
+_NOT_AN_APP: set[str] = set()
 #: How many addresses one build may spend before it stops and says so.
 #: Bounded by the budget alone, a phone on a bad exit or a bad batch of
 #: accounts ate address after address and reported budget_exhausted,
 #: which blames nothing (the build card, 2026-09-10).
 GMAILS_PER_BUILD = 5
+
+
+def _apps_every_phone(settings: Settings) -> tuple[str, ...]:
+    """The apps every phone carries: the names in APPS_ON_EVERY_PHONE this
+    builder knows how to install, in the order given, without repeats."""
+    out: list[str] = []
+    for word in getattr(settings, "apps_on_every_phone", ()):
+        app = str(word).strip().lower()
+        if app in APPS:
+            if app not in out:
+                out.append(app)
+        elif app and app not in _NOT_AN_APP:
+            _NOT_AN_APP.add(app)
+            log.warning("APPS_ON_EVERY_PHONE names %r, which is not one of "
+                        "%s; it is skipped", app, ", ".join(sorted(APPS)))
+    return tuple(out)
+
+
+def _named(joined: str) -> str:
+    """"chatgpt+spotify" the way a person says it."""
+    words = [APPS.get(app, app) for app in joined.split("+") if app]
+    if len(words) > 1:
+        return f"{', '.join(words[:-1])} and {words[-1]}"
+    return words[0] if words else "nothing"
 
 
 def _bad_model(settings: Settings, model: str) -> bool:
@@ -1298,6 +1327,44 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
     return installed, proxy_row
 
 
+def _install_the_rest(client: Client, settings: Settings, build: Build,
+                      phone_id: str, *, done: str, ordered: dict,
+                      remaining, artifacts, cancelled) -> None:
+    """The apps every phone carries beside the one the build is judged on.
+
+    Never a failed phone: the app a wish named is what its account goes
+    into, and one that came up without Claude is still the phone somebody
+    asked for - so each of these is a note on the row instead. All of them
+    were ordered from GeeLark's center the moment the phone booted, so by
+    now most are one `pm list packages` away from done (2026-09-12).
+
+    Writes what ended up on the phone into `build.app`, the word the row
+    carries: "chatgpt+spotify+claude" when all three went on.
+    """
+    on = [done] if done else []
+    for app in _apps_every_phone(settings):
+        if app == done:
+            continue
+        if cancelled is not None and cancelled():
+            break
+        if remaining() <= 0:
+            log.warning("no time left for %s on %s", APPS[app], build.serial)
+            build.tried.append((app, "budget_exhausted", "GeeLark"))
+            continue
+        got = _install(client, phone_id, _package_for(settings, app),
+                       name=APPS[app], ordered=bool(ordered.get(app)),
+                       budget=min(settings.install_budget_seconds, remaining()),
+                       artifacts=artifacts, cancelled=cancelled)
+        build.trails.append(("install", got.trail))
+        if got.ok:
+            on.append(app)
+        else:
+            log.warning("%s did not install on %s (%s); the phone goes on "
+                        "without it", APPS[app], build.serial, got.reason)
+            build.tried.append((app, got.reason, "Play"))
+    build.app = "+".join(on)
+
+
 def _install(client: Client, phone_id: str, package: str, *, name: str,
              ordered: bool, budget: float, artifacts,
              cancelled=None) -> play_install.Outcome:
@@ -1506,18 +1573,23 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                      / f"{stamp}-build{build.serial or index}")
         build.artifact_dir = str(artifacts)
 
-        # Spotify goes in through GeeLark's own installer, ordered the
-        # moment the phone reports running and left to land while the
-        # settle and the Google sign-in go on. ChatGPT is not in the app
-        # center and still walks the Play Store (2026-09-08).
-        ordered = {"spotify": False}
-        spotify_by_api = settings.app_install_api and (
-            want is None or want.app == "spotify")
+        # Every app the phone is to carry goes in through GeeLark's own
+        # installer, ordered the moment the phone reports running and left
+        # to land while the settle and the Google sign-in go on. The
+        # center takes the orders at once: three given inside two seconds
+        # on phone 2184 were all taken, and the missing app was on the
+        # phone fourteen seconds later (2026-09-12). Play is the fallback,
+        # and only for the app the build is judged on. A bare phone is
+        # asked for with nothing on it and gets nothing.
+        ordered: dict[str, bool] = {}
 
         def order_apps() -> None:
-            if spotify_by_api:
-                ordered["spotify"] = apps.begin(client, phone_id,
-                                                SPOTIFY_PACKAGE, name="Spotify")
+            if bare or not settings.app_install_api:
+                return
+            for wanted in _apps_every_phone(settings):
+                ordered[wanted] = apps.begin(
+                    client, phone_id, _package_for(settings, wanted),
+                    name=APPS[wanted], settings=settings)
 
         phones.ensure_running(client, phone_id,
                               timeout=min(phones.BOOT_SECONDS, remaining()),
@@ -1764,21 +1836,29 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                    "app, as asked", ok=True)
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
-        # Which app, if any. The keeper's own phones carry ChatGPT; a
-        # hand-built one carries what was asked for - none, ChatGPT or
-        # Spotify (the operator, 2026-09-08). None is ready the moment
-        # Google is in; Spotify is ready once it is installed, since no
-        # account is ever signed into it here.
+        # Which app the account goes into, if any. The keeper's own
+        # phones sign into ChatGPT; a hand-built one signs into what was
+        # asked for - none, ChatGPT, Spotify or Claude. That choice is
+        # about the account, not about what is on the phone: every phone
+        # carries all three either way (the operator, 2026-09-12). It is
+        # also the one install a build can fail on, which is why it goes
+        # first and through the Play recipe.
         app = want.app if want is not None else "chatgpt"
         build.app = app
         if not app:
+            # Nothing is signed into anything, but the phone still carries
+            # the apps every phone carries (the operator, 2026-09-12).
             build.app_installed = False
-            return finish("ready", "signed into Google; no app was asked for",
-                          ok=True)
+            _install_the_rest(client, settings, build, phone_id, done="",
+                              ordered=ordered, remaining=remaining,
+                              artifacts=artifacts, cancelled=cancelled)
+            return finish("ready", f"signed into Google; no app account was "
+                                   f"asked for. On the phone: "
+                                   f"{_named(build.app)}", ok=True)
         installed, proxy_row = _install_by_recipe(
             client, settings, book, build, phone_id,
             _package_for(settings, app), name=APPS[app],
-            ordered=(app == "spotify" and ordered["spotify"]),
+            ordered=bool(ordered.get(app)),
             remaining=remaining, artifacts=artifacts, cancelled=cancelled,
             proxy_row=proxy_row, refused_exits=refused_exits,
         )
@@ -1788,31 +1868,19 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                           f"the app could not be installed - "
                           f"{failures.verdict(installed.reason).seen}")
         build.app_installed = True
+        # And the rest of them. Every phone carries all three now, the
+        # keeper's own and the ones asked for by hand alike: the center
+        # installs them in the background off one call, so they cost the
+        # build seconds rather than the Play Store's minutes (the
+        # operator, 2026-09-12). One that does not go on is a note, never
+        # a failed phone - the app the wish named is already on.
+        _install_the_rest(client, settings, build, phone_id, done=app,
+                          ordered=ordered, remaining=remaining,
+                          artifacts=artifacts, cancelled=cancelled)
         if app != "chatgpt":
-            return finish("ready", f"signed into Google and {APPS[app]} is "
-                                   f"installed", ok=True)
-        if want is None:
-            # The keeper's own phones carry Spotify beside ChatGPT, and are
-            # warm only once both are on (the operator, 2026-09-08). A
-            # phone asked for by hand gets exactly the app it asked for.
-            # Spotify not installing is a note on the row, not a failed
-            # phone: ChatGPT is what the account goes into.
-            if remaining() <= 0:
-                return finish("budget_exhausted",
-                              "ChatGPT is on, but no time left for Spotify")
-            extra = _install(
-                client, phone_id, SPOTIFY_PACKAGE, name="Spotify",
-                ordered=ordered["spotify"],
-                budget=min(settings.install_budget_seconds, remaining()),
-                artifacts=artifacts, cancelled=cancelled,
-            )
-            build.trails.append(("install", extra.trail))
-            if extra.ok:
-                build.app = "chatgpt+spotify"
-            else:
-                log.warning("Spotify did not install on %s (%s); the phone "
-                            "goes on without it", build.serial, extra.reason)
-                build.tried.append(("spotify", extra.reason, "Play"))
+            return finish("ready", f"signed into Google, and "
+                                   f"{_named(build.app)} on the phone",
+                          ok=True)
 
         # ------------------------------------------------- the app account
         session = _Session(client=client, settings=settings, book=book,

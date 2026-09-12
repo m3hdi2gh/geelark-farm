@@ -4422,7 +4422,7 @@ def test_the_app_a_hand_built_phone_gets_is_what_was_asked_for(make_settings,
 
     src = inspect.getsource(builder.build_one)
     assert 'app = want.app if want is not None else "chatgpt"' in src
-    assert '"signed into Google; no app was asked for"' in src, "none: ready at once"
+    assert "no app account was " in src, "none: no account, the apps still on"
     assert 'if app != "chatgpt":' in src, "Spotify: ready once installed"
     assert '_package_for(settings, app)' in src
 
@@ -4506,10 +4506,12 @@ def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
     assert "if want is not None and want.requested_by else {})" in src
 
 
-def test_the_keepers_phone_carries_spotify_beside_chatgpt(device, settings,
-                                                          drive, monkeypatch):
-    """A warm phone is warm once both are on; a phone asked for by hand
-    gets exactly the app it asked for (the operator, 2026-09-08)."""
+def test_every_phone_carries_all_three_apps(device, settings, drive,
+                                            monkeypatch):
+    """The keeper's own phones and the ones asked for by hand alike: the
+    app center carries all three and installs them off one call, so what
+    a wish names is what its account signs into, not what is on the phone
+    (the operator, 2026-09-12)."""
     installed = []
     monkeypatch.setattr(
         builder.play_install, "install",
@@ -4518,8 +4520,9 @@ def test_the_keepers_phone_carries_spotify_beside_chatgpt(device, settings,
     book = make_book(apps=1)
     build = drive(book, settings, google=[SIGNED_IN])
     assert build.ok and installed == [settings.target_package,
-                                      builder.SPOTIFY_PACKAGE]
-    assert build.app == "chatgpt+spotify"
+                                      builder.SPOTIFY_PACKAGE,
+                                      builder.CLAUDE_PACKAGE]
+    assert build.app == "chatgpt+spotify+claude"
 
     installed.clear()
     monkeypatch.setattr(builder.google_login, "sign_in",
@@ -4530,8 +4533,72 @@ def test_the_keepers_phone_carries_spotify_beside_chatgpt(device, settings,
     build = builder.build_one(None, settings, book, FakeLedger(), 1,
                               want=builder.Wanted(app="chatgpt",
                                                   app_account="a0@example.com"))
-    assert build.ok and installed == [settings.target_package]
-    assert build.app == "chatgpt"
+    assert build.ok and installed == [settings.target_package,
+                                      builder.SPOTIFY_PACKAGE,
+                                      builder.CLAUDE_PACKAGE]
+    assert build.app == "chatgpt+spotify+claude"
+
+
+def test_the_apps_every_phone_carries_are_a_setting(settings, make_settings):
+    """Names out of APPS, in the order given, without repeats - and a name
+    that is not an app is skipped rather than crashing a build."""
+    import dataclasses
+
+    assert builder._apps_every_phone(settings) == ("chatgpt", "spotify",
+                                                   "claude")
+    said = dataclasses.replace(
+        settings, apps_on_every_phone=("claude", "chatgpt", "claude",
+                                       "telegram", ""))
+    assert builder._apps_every_phone(said) == ("claude", "chatgpt")
+    off = dataclasses.replace(settings, apps_on_every_phone=())
+    assert builder._apps_every_phone(off) == ()
+    assert builder._named("chatgpt+spotify+claude") == ("ChatGPT, Spotify "
+                                                        "and Claude")
+    assert builder._named("spotify") == "Spotify"
+    assert builder._named("") == "nothing"
+
+
+def test_a_phone_asked_for_with_no_app_account_still_carries_the_apps(
+        device, settings, monkeypatch):
+    """"None" in the build card is about the account, not about the phone
+    (the operator, 2026-09-12)."""
+    installed = []
+    monkeypatch.setattr(
+        builder.play_install, "install",
+        lambda client, phone_id, package, **k: installed.append(package)
+        or INSTALLED)
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+
+    build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
+                              1, want=builder.Wanted(app=""))
+
+    assert build.ok and not build.app_installed
+    assert installed == [settings.target_package, builder.SPOTIFY_PACKAGE,
+                         builder.CLAUDE_PACKAGE]
+    assert build.app == "chatgpt+spotify+claude"
+    assert "ChatGPT, Spotify and Claude" in build.detail
+
+
+def test_a_bare_phone_is_still_bare(device, settings, monkeypatch):
+    """Nothing is ordered and nothing is installed: it was asked for with
+    nothing on it."""
+    asked, installed = [], []
+    monkeypatch.setattr(builder.phones, "ensure_running",
+                        lambda *a, **k: k.get("on_running")
+                        and k["on_running"]())
+    monkeypatch.setattr(builder.apps, "begin",
+                        lambda c, p, package, **k: asked.append(package)
+                        or True)
+    monkeypatch.setattr(
+        builder.play_install, "install",
+        lambda client, phone_id, package, **k: installed.append(package)
+        or INSTALLED)
+
+    build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
+                              1, want=builder.Wanted(no_gmail=True))
+
+    assert build.ok and asked == [] and installed == []
 
 
 def test_spotify_not_installing_is_a_note_not_a_failed_phone(
@@ -4544,7 +4611,7 @@ def test_spotify_not_installing_is_a_note_not_a_failed_phone(
         return INSTALLED
     monkeypatch.setattr(builder.play_install, "install", install)
     build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
-    assert build.ok and build.app == "chatgpt"
+    assert build.ok and build.app == "chatgpt+claude"
     assert ("spotify", "install_failed", "Play") in build.tried
 
 
@@ -4576,11 +4643,12 @@ def _boot_fires(monkeypatch):
                         lambda *a, **k: k.get("on_running") and k["on_running"]())
 
 
-def test_the_keepers_spotify_is_ordered_at_boot_and_only_chatgpt_walks_play(
+def test_all_three_are_ordered_at_boot_and_nothing_walks_play(
         device, settings, drive, monkeypatch):
-    """Spotify comes from GeeLark's app center, ordered the moment the phone
-    is up and left to land during the sign-in; ChatGPT is not in the center
-    and still walks Play (2026-09-08)."""
+    """All three come from GeeLark's app center, ordered the moment the
+    phone is up and left to land during the sign-in. The center takes the
+    three orders at once (phone 2184, 2026-09-12), so no Play Store screen
+    is walked at all."""
     _boot_fires(monkeypatch)
     ordered, waited, played = [], [], []
     monkeypatch.setattr(builder.apps, "begin",
@@ -4595,10 +4663,11 @@ def test_the_keepers_spotify_is_ordered_at_boot_and_only_chatgpt_walks_play(
 
     build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
 
-    assert build.ok and build.app == "chatgpt+spotify"
-    assert ordered == [builder.SPOTIFY_PACKAGE]
-    assert waited == [builder.SPOTIFY_PACKAGE]
-    assert played == [settings.target_package], "Spotify never walked Play"
+    assert build.ok and build.app == "chatgpt+spotify+claude"
+    assert ordered == [settings.target_package, builder.SPOTIFY_PACKAGE,
+                       builder.CLAUDE_PACKAGE], "ordered before the sign-in"
+    assert waited == ordered
+    assert played == [], "nothing walked Play"
 
 
 def test_an_order_geelark_never_lands_falls_back_to_play(
@@ -4613,8 +4682,9 @@ def test_an_order_geelark_never_lands_falls_back_to_play(
 
     build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
 
-    assert build.ok and build.app == "chatgpt+spotify"
-    assert played == [settings.target_package, builder.SPOTIFY_PACKAGE]
+    assert build.ok and build.app == "chatgpt+spotify+claude"
+    assert played == [settings.target_package, builder.SPOTIFY_PACKAGE,
+                      builder.CLAUDE_PACKAGE]
 
 
 def test_a_center_without_the_app_or_the_door_shut_means_play_as_before(
@@ -4630,7 +4700,8 @@ def test_a_center_without_the_app_or_the_door_shut_means_play_as_before(
                         or INSTALLED)
     build = drive(make_book(apps=1), settings, google=[SIGNED_IN])
     assert build.ok and played == [settings.target_package,
-                                   builder.SPOTIFY_PACKAGE]
+                                   builder.SPOTIFY_PACKAGE,
+                                   builder.CLAUDE_PACKAGE]
 
     # The door shut by hand: GeeLark is never asked.
     asked = []
@@ -4641,7 +4712,8 @@ def test_a_center_without_the_app_or_the_door_shut_means_play_as_before(
     off = dataclasses.replace(settings, app_install_api=False)
     build = drive(make_book(apps=1), off, google=[SIGNED_IN])
     assert build.ok and asked == [] and played == [settings.target_package,
-                                                   builder.SPOTIFY_PACKAGE]
+                                                   builder.SPOTIFY_PACKAGE,
+                                                   builder.CLAUDE_PACKAGE]
 
 
 def test_a_hand_built_spotify_phone_takes_the_same_door(
@@ -4660,18 +4732,21 @@ def test_a_hand_built_spotify_phone_takes_the_same_door(
 
     build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
                               1, want=builder.Wanted(app="spotify"))
-    assert build.ok and build.app == "spotify"
-    assert ordered == [builder.SPOTIFY_PACKAGE] and played == []
+    # The app the account was to go into first, then the rest of them.
+    assert build.ok and build.app == "spotify+chatgpt+claude"
+    assert ordered == [settings.target_package, builder.SPOTIFY_PACKAGE,
+                       builder.CLAUDE_PACKAGE] and played == []
 
-    # A ChatGPT-only hand build orders nothing: the center has no ChatGPT,
-    # and Spotify was not asked for.
+    # And the same three on a ChatGPT build asked for by hand.
     ordered.clear()
     monkeypatch.setattr(builder.chatgpt_login, "sign_in",
                         lambda *a, **k: SIGNED_IN)
     build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
                               1, want=builder.Wanted(app="chatgpt",
                                                      app_account="a0@example.com"))
-    assert build.ok and ordered == []
+    assert build.ok and ordered == [settings.target_package,
+                                    builder.SPOTIFY_PACKAGE,
+                                    builder.CLAUDE_PACKAGE]
 
 
 def test_a_build_bills_its_own_api_calls_and_a_warm_phone_reads_warm(
