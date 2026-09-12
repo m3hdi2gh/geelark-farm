@@ -24,11 +24,12 @@ import logging
 import threading
 import time
 
+from .. import failures
 from ..accounts import AccountError
 from ..config import Settings
-from .. import failures
 from ..pools import AppPool, GmailPool, Pool, ProxyPool, Resource, clip
 from ..proxy import ProxyError
+from . import accounts
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +120,8 @@ class ResourceTable:
     def claim(self, kind: str, *, free: tuple[str, ...], claimed: str,
               count_use: bool, serial: str = "",
               row_id: int | None = None, avoid_host: str = "",
-              host_column: str = "") -> dict | None:
+              host_column: str = "", count_attempt: bool = False
+              ) -> dict | None:
         """Pick, mark and stamp the first free row of `kind` in one
         statement. The ordering is the sheet's contract: least-used first
         for exits, top of the tab for credentials. `row_id` narrows the
@@ -142,6 +144,11 @@ class ResourceTable:
                     avoid_host else "")
         avoided = [avoid_host] if not_here else []
         bump = "times_used + 1" if count_use else "times_used"
+        # The account's own counter, in the same atomic statement that
+        # hands the row out: a claim that returns nothing counts nothing,
+        # and four builders racing cannot lose an increment the way a
+        # read-modify-write through `update` would (2026-09-12).
+        tally = "attempts + 1" if count_attempt else "attempts"
         with self._lock, self._connect() as conn:
             cur = conn.execute(
                 f"WITH picked AS ("
@@ -153,7 +160,8 @@ class ResourceTable:
                 f"{not_here}"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
-                f"  times_used = {bump},"
+                f"  times_used = {bump}, attempts = {tally},"
+                f"  state_changed_at = now(),"
                 f"  serial = CASE WHEN %s <> '' THEN %s ELSE r.serial END,"
                 f"  updated_at = now()"
                 f"  FROM picked WHERE r.id = picked.id RETURNING r.*",
@@ -163,6 +171,38 @@ class ResourceTable:
             row = cur.fetchone()
             conn.commit()
             return dict(zip(names, row, strict=True)) if row else None
+
+    def touch_state(self, row_id: int) -> None:
+        """When this account last moved. The panel reads it, and only the
+        claim writes it for itself - everything else goes through
+        `update`, which writes the columns it was handed and nothing
+        more, so a row that reached `ready` still reported the minute it
+        was claimed (the review, 2026-09-12)."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE resources SET state_changed_at = now(),"
+                " updated_at = now() WHERE id = %s", (int(row_id),))
+            conn.commit()
+
+    def stamp_delivered(self, row_id: int) -> None:
+        """When the account was handed over. Its own column, because
+        `status` is the sheet-era word and a panel reads a stamp."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE resources SET delivered_at = now(),"
+                " state_changed_at = now(), updated_at = now()"
+                " WHERE id = %s AND delivered_at IS NULL", (int(row_id),))
+            conn.commit()
+
+    def count_failure(self, row_id: int) -> None:
+        """One more phone lost under this account, in its own statement so
+        two builders cannot lose one between them."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE resources SET failures = failures + 1,"
+                " state_changed_at = now(), updated_at = now()"
+                " WHERE id = %s", (int(row_id),))
+            conn.commit()
 
     def beat(self, ids: list[int]) -> int:
         if not ids:
@@ -289,7 +329,7 @@ class _PgPool(Pool):
             self.kind, free=tuple(self.available_statuses),
             claimed=self.claimed_status,
             count_use=isinstance(self, ProxyPool), serial=serial,
-            row_id=resource.store_id)
+            row_id=resource.store_id, count_attempt=self.COUNTS_ATTEMPTS)
         if row is None:
             return False
         resource.values.update(self._values_of(row))
@@ -303,6 +343,11 @@ class _PgPool(Pool):
     #: for a caller that wants a different one. A proxy is its host; a
     #: Gmail carries the host it was last refused on.
     HOST_COLUMN = ""
+    #: Whether a claim of this pool is an attempt somebody is counting.
+    #: Only the app pool: `attempts` is a field of the panel API's account
+    #: object, and the panel asks how many phones its account has been on
+    #: (2026-09-12).
+    COUNTS_ATTEMPTS = False
 
     def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
@@ -311,7 +356,8 @@ class _PgPool(Pool):
             self.kind, free=tuple(self.available_statuses),
             claimed=self.claimed_status,
             count_use=isinstance(self, ProxyPool), serial=serial,
-            avoid_host=avoid_host, host_column=self.HOST_COLUMN)
+            avoid_host=avoid_host, host_column=self.HOST_COLUMN,
+            count_attempt=self.COUNTS_ATTEMPTS)
         if row is None:
             return None
         resource = next((r for r in self._rows if r.store_id == row["id"]),
@@ -485,12 +531,94 @@ class PgGmailPool(_PgPool, GmailPool):
 
 class PgAppPool(_PgPool, AppPool):
     kind = "app"
+    COUNTS_ATTEMPTS = True
     COLUMNS = {
         "Address": "address", "Password": "password",
         "2FA Secret": "totp_secret", "Phone Serial": "serial",
         "Status": "status", "Note": "note", "Claimed": "claimed_at",
         "Email code": "email_code_only",
     }
+
+    def claim(self, serial: str = "", avoid_host: str = ""):
+        row = super().claim(serial=serial, avoid_host=avoid_host)
+        if row is not None:
+            accounts.moved(self._table._settings, row, "signing_in",
+                           serial=serial)
+        return row
+
+    def claim_this(self, resource: Resource, serial: str = "") -> bool:
+        took = super().claim_this(resource, serial=serial)
+        if took:
+            accounts.moved(self._table._settings, resource, "signing_in",
+                           serial=serial)
+        return took
+
+    def spend(self, resource: Resource, *, serial: str = "",
+              note: str = "") -> None:
+        super().spend(resource, serial=serial, note=note)
+        if resource.store_id is not None:
+            self._table.touch_state(resource.store_id)
+        accounts.moved(self._table._settings, resource, "ready",
+                       serial=serial)
+
+    def retire(self, resource: Resource, *, note: str = "") -> None:
+        """Handed over. The one place `delivered_at` is written, and on
+        this pool alone: `Pool.retire` is shared with the Gmail pool,
+        whose retired word is `used` and whose rows no panel asks about.
+        """
+        # Read before `super()`: every way off a phone blanks the serial
+        # (pools.Pool._off_a_phone), so an event written afterwards named
+        # no phone at all - and delivered is one of the two transitions a
+        # customer most wants a device for (the review, 2026-09-12).
+        where = str((resource.values or {}).get("Phone Serial") or "")
+        super().retire(resource, note=note)
+        if resource.store_id is not None:
+            self._table.stamp_delivered(resource.store_id)
+        accounts.moved(self._table._settings, resource, "delivered",
+                       serial=where)
+
+    def fail(self, resource: Resource, reason: str, *, note: str = "",
+             host: str = "", settings=None) -> None:
+        """A verdict about the account itself: `needs_human`, and no
+        failure counted.
+
+        `failures` is what both specs say it is - how many times a phone
+        carrying this account was lost and the account went back to the
+        pool - and that is the `release` below, not this. Counting here
+        charged an account for every phone that refused it and then never
+        took it back when `_give_back_condemned` exonerated it, so one
+        bad exit inflated several customers' numbers (the review,
+        2026-09-12).
+        """
+        where = str((resource.values or {}).get("Phone Serial") or "")
+        super().fail(resource, reason, note=note, host=host,
+                     settings=settings)
+        if resource.store_id is not None:
+            self._table.touch_state(resource.store_id)
+        accounts.moved(self._table._settings, resource, "needs_human",
+                       reason=reason, serial=where)
+
+    def release(self, resource: Resource, *, note: str = "",
+                phone_failed: bool = False) -> None:
+        """Back in the pool, and - when the phone was the reason - one
+        device counted against the account.
+
+        This is the contract's `failures`: "every time a phone carrying
+        it was marked failed and the account went back to the pool". Two
+        callers say so: the build that signed nobody in on this device
+        (builder._give_back_condemned) and a person marking the phone
+        failed. The other releases - a dead builder's claim swept up, a
+        person tidying a row - cost the account nothing and are not
+        counted (the review, 2026-09-12).
+        """
+        where = str((resource.values or {}).get("Phone Serial") or "")
+        super().release(resource, note=note)
+        if phone_failed and resource.store_id is not None:
+            self._table.count_failure(resource.store_id)
+        elif resource.store_id is not None:
+            self._table.touch_state(resource.store_id)
+        accounts.moved(self._table._settings, resource, "queued",
+                       serial=where)
 
 
 class PgProxyPool(_PgPool, ProxyPool):

@@ -617,8 +617,15 @@ class Pool:
         return next((r for r in self._rows if r.credentials
                      and r.credentials.email.lower() == wanted), None)
 
-    def release(self, resource: Resource, *, note: str = "") -> None:
+    def release(self, resource: Resource, *, note: str = "",
+                phone_failed: bool = False) -> None:
         """Put a claimed row back, available again.
+
+        `phone_failed` says the device went and the row is coming back
+        because of that, rather than because a person tidied up or a dead
+        builder's claim was swept. A sheet row has nowhere to keep it and
+        forgets it; the store's app pool counts it as the `failures` its
+        contract defines (store.pgpool, 2026-09-12).
 
         For resources a build touched but did not spend - the Gmail that was
         never tried because the proxy was the problem, the proxy swapped out on

@@ -99,6 +99,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._redirect("/")
             if path == "/users":
                 return self._users_get(user)
+            if path == "/api-clients":
+                return self._api_clients_get(user)
             if path == "/":
                 scope = None if user["sees"] == "all" else user["id"]
                 query = parse_qs(self.path.partition("?")[2])
@@ -457,6 +459,17 @@ class _Handler(BaseHTTPRequestHandler):
                                      field)
             if self.path in ("/needs/offer", "/needs/clear"):
                 return self._needs_post(user, field)
+            if self.path == "/api-clients/new":
+                return self._api_clients_new(user, field)
+            if self.path.startswith("/api-clients/"):
+                # Suffix first, then the bare id: the same order the
+                # /users routes below are written in.
+                if self.path.endswith("/rotate"):
+                    return self._api_clients_rotate(user, field)
+                if self.path.endswith("/active"):
+                    return self._api_clients_active(user, field)
+                if self.path.endswith("/webhook"):
+                    return self._api_clients_webhook(user, field)
             if self.path == "/users/new":
                 return self._users_new(user, field)
             if self.path.startswith("/users/") and \
@@ -1219,6 +1232,109 @@ class _Handler(BaseHTTPRequestHandler):
             return pages.forbidden(user)
         return None
 
+    # ------------------------------------------------- the API's own keys
+    def _api_clients_page(self, user: dict, said: str = "",
+                          error: str = "") -> None:
+        """The page, with whatever the last press wants to say on it.
+
+        Admin only, like Users: these are the credentials the machines
+        come in with, and the one that matters most hands the farm real
+        accounts that cost real phones.
+        """
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        self._html(200, pages.api_clients_page(
+            read.api_clients(self.settings), user, said=said, error=error))
+
+    def _api_clients_get(self, user: dict) -> None:
+        if user.get("role") != "admin":
+            # A GET an operator followed goes home, the way every other
+            # admin page here answers one; a POST refuses instead.
+            return self._redirect("/")
+        query = parse_qs(self.path.partition("?")[2])
+        self._api_clients_page(user, said=(query.get("said") or [""])[0],
+                               error=(query.get("error") or [""])[0])
+
+    def _api_clients_new(self, user: dict, field: dict) -> None:
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from ..store import api_clients as store_clients
+
+        name = (field.get("name") or "").strip()
+        try:
+            new_id, token = store_clients.create(
+                self.settings, name=name,
+                role=(field.get("role") or "sandbox").strip())
+        except ValueError as exc:
+            return self._api_clients_page(user, error=str(exc))
+        except Exception as exc:                                  # noqa: BLE001
+            # The unique index on the name is the likely one, and the
+            # answer is not to rotate the key that name already has.
+            log.warning("could not mint api client %r: %s", name, exc)
+            return self._api_clients_page(
+                user, error="that name is taken, or the store refused it - "
+                            "to replace a key, press New key on its row")
+        log.info("api client %r (id %s) minted by %s", name, new_id,
+                 user["username"])
+        # Answered here rather than redirected: a token in an address is
+        # a token in the history, the log and the ?said= banner.
+        self._html(200, pages.new_key_page(name, token, user, minted=True))
+
+    def _api_clients_rotate(self, user: dict, field: dict) -> None:
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from ..store import api_clients as store_clients
+
+        ident = int(self.path.split("/")[2])
+        if field.get("sure") != "1":
+            row = store_clients.get(self.settings, ident)
+            name = str((row or {}).get("name") or ident)
+            return self._html(200, pages.confirm_page(
+                user, title=f"Mint a new key for {name}?",
+                text=("The key it has now stops working the moment this is "
+                      "pressed, and whoever holds it is answered 401 until "
+                      "they are given the new one."),
+                action=f"/api-clients/{ident}/rotate",
+                fields={"sure": "1"}, button="Yes, mint a new key",
+                back="/api-clients"))
+        got = store_clients.rotate(self.settings, ident)
+        if got is None:
+            return self._api_clients_page(user, error="no client with that id")
+        name, token = got
+        log.info("api client %r had its key rotated by %s", name,
+                 user["username"])
+        self._html(200, pages.new_key_page(name, token, user, minted=False))
+
+    def _api_clients_active(self, user: dict, field: dict) -> None:
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from ..store import api_clients as store_clients
+
+        ident = int(self.path.split("/")[2])
+        wanted = (field.get("active") or "").strip() == "1"
+        name = store_clients.set_active(self.settings, ident, wanted)
+        if name is None:
+            return self._api_clients_page(user, error="no client with that id")
+        log.info("api client %r switched %s by %s", name,
+                 "on" if wanted else "off", user["username"])
+        self._redirect("/api-clients?said=" + ("on" if wanted else "off"))
+
+    def _api_clients_webhook(self, user: dict, field: dict) -> None:
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from ..store import api_clients as store_clients
+
+        ident = int(self.path.split("/")[2])
+        try:
+            name = store_clients.set_webhook(
+                self.settings, ident, url=(field.get("url") or ""),
+                secret=(field.get("secret") or ""))
+        except ValueError as exc:
+            return self._api_clients_page(user, error=str(exc))
+        if name is None:
+            return self._api_clients_page(user, error="no client with that id")
+        self._redirect("/api-clients?said=webhook")
+
     def _users_get(self, user: dict) -> None:
         if (refused := self._admin_page(user)) is not None:
             code = 404 if not self.settings.web_user_admin else 403
@@ -1552,11 +1668,13 @@ def _delivered_csv(rows: list[dict]) -> str:
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(["address", "serial", "delivered_at", "source"])
     for r in rows:
-        moment = pages._moment(r.get("updated_at"))
+        # The stamp the hand-over wrote, and the row's last change behind
+        # it for everything delivered before that column was written.
+        raw = r.get("delivered_at") or r.get("updated_at")
+        moment = pages._moment(raw)
         writer.writerow([_csv_cell(v) for v in (
             r.get("address") or "", r.get("serial") or "",
-            moment.isoformat(timespec="minutes") if moment
-            else str(r.get("updated_at") or ""),
+            moment.isoformat(timespec="minutes") if moment else str(raw or ""),
             r.get("source") or "")])
     return out.getvalue()
 

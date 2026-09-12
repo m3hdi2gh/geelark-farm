@@ -939,7 +939,7 @@ def _give_back_condemned(s: _Session) -> None:
         row = s.book.apps.find(address)
         if row is None:
             continue
-        s.book.apps.release(row, note=(
+        s.book.apps.release(row, phone_failed=True, note=(
             f"Phone {s.build.serial} refused {len(s.condemned)} accounts and "
             f"signed none in, so the phone or its exit is the likelier fault "
             f"and nothing was judged here. Free to try on another phone."))
@@ -2903,9 +2903,10 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
                 # It never got a fair phone. Back to the pool, so the next
                 # build can put it on one that works.
                 book.apps.release(
-                    account, note=f"Phone {serial} was marked failed and "
-                                  f"deleted before this account got a fair "
-                                  f"run. Free to try on another phone.")
+                    account, phone_failed=True,
+                    note=f"Phone {serial} was marked failed and "
+                         f"deleted before this account got a fair "
+                         f"run. Free to try on another phone.")
                 outcome["freed"].append(carried)
             else:
                 # `done` means the phone was the product and it has been

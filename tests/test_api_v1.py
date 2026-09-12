@@ -38,6 +38,10 @@ def _client(monkeypatch, role: str = "panel") -> dict:
     """One key that works, and nothing else. Exercises the dispatcher's
     own lockout rather than faking it away."""
     monkeypatch.setattr(api_mod, "_failures", {})
+    # Both windows are this process's own memory and survive between
+    # tests; the lockout's has been reset here since the door was built.
+    monkeypatch.setattr(api_mod, "_calls", {})
+    monkeypatch.setattr(api_mod, "_over_the_day", lambda settings, client: None)
     monkeypatch.setattr(api_mod, "_seen", lambda settings, client_id: None)
     known = {"id": 1, "name": "panel", "role": role,
              "key_hash": api_mod.hash_key(KEY), "webhook_url": "",
@@ -125,8 +129,9 @@ def test_health_says_which_kinds_are_actually_served(web, monkeypatch):  # noqa:
     assert status == 200 and body["ok"] is True
     assert body["served"] == {"chatgpt": ["password_totp"], "claude": []}
     assert body["warm_phones"] == 6
-    assert "attempts" in body["not_measured"], \
-        "a client can tell not-counted from counted-and-none"
+    assert body["not_measured"] == [], (
+        "everything the contract promises is counted now; the list stays "
+        "so the next field that is not can be named in it")
 
 
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
@@ -528,19 +533,26 @@ def test_an_account_whose_code_comes_from_a_person_waits_for_them(
 
 
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
-def test_a_number_nothing_counts_is_null_and_not_a_zero(web,  # noqa: F811
-                                                        monkeypatch):
-    """0 says "this account has never been on a phone". null says "we are
-    not counting". They are different claims, and only one of them is
-    true while the build flow does not touch these columns."""
+def test_the_counters_are_numbers_now_and_null_still_means_not_counted(
+        web, monkeypatch):  # noqa: F811
+    """0 says "this account has never been on a phone", null says "we are
+    not counting", and they are different claims. Both were null until
+    2026-09-12 because nothing wrote them; the pool counts an attempt in
+    the statement that puts the account on a phone now, so the numbers
+    are published - and `NOT_MEASURED` stays as the mechanism for the
+    next field that is promised before it is written."""
     _client(monkeypatch)
     monkeypatch.setattr(read_mod, "account",
                         lambda s, ref, **k: _account(attempts=3, failures=1))
     client = web()
     _, _, body = _get(client, "/api/v1/accounts/ord_84213-a")
-    assert body["attempts"] is None and body["failures"] is None
-    assert set(api_mod.NOT_MEASURED) == {"attempts", "failures",
-                                         "delivered_at"}
+    assert body["attempts"] == 3 and body["failures"] == 1
+    assert api_mod.NOT_MEASURED == ()
+
+    monkeypatch.setattr(api_mod, "NOT_MEASURED", ("failures",))
+    _, _, body = _get(client, "/api/v1/accounts/ord_84213-a")
+    assert body["attempts"] == 3 and body["failures"] is None, (
+        "one word in the tuple, and that field goes back to null")
 
 
 def test_every_account_has_a_ref_including_the_ones_older_than_the_panel():
@@ -734,3 +746,91 @@ def test_a_sandbox_key_may_write_while_the_farms_own_switch_is_shut(
         "credentials": {"email": "a@x.com", "password": "pw"}})
     assert status == 201 and body["sandbox"] is True
     assert seen["queued"] == []
+
+
+
+# ------------------------------------------- the two brakes (2026-09-12)
+@pytest.mark.parametrize("web", [{"web_api": True,
+                                 "web_api_rate_per_minute": 3}], indirect=True)
+def test_a_key_that_polls_too_fast_is_told_when_to_come_back(
+        web, monkeypatch):  # noqa: F811
+    """The contract has promised a per-key limit since the spec was
+    written and nothing enforced it: a client looping on a bug could
+    spend this box's threads for nothing. The refusal says how long to
+    wait, because a 429 without that is a client guessing (2026-09-12)."""
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "health", lambda s, **k: {"ok": True})
+    client = web()
+
+    for _ in range(3):
+        assert _get(client, "/api/v1/health")[0] == 200
+
+    status, headers, body = _get(client, "/api/v1/health")
+    assert status == 429 and body["error"]["code"] == "rate_limited"
+    assert "too many requests" in body["error"]["message"]
+    assert 1 <= int(headers["Retry-After"]) <= 61
+    assert "retry_after" not in body["error"], "a header, not a field"
+
+
+def test_the_window_is_per_key_and_the_lockout_says_its_wait_too(monkeypatch):
+    """One client's loop must not close the door on another's, and the
+    wrong-key lockout - the other 429 this module answers - now carries
+    the same header the new one does."""
+    monkeypatch.setattr(api_mod, "_calls", {})
+    monkeypatch.setattr(api_mod, "_failures", {})
+
+    assert api_mod._too_fast(1, 2) == 0 and api_mod._too_fast(1, 2) == 0
+    assert api_mod._too_fast(1, 2) > 0, "the third is over the limit"
+    assert api_mod._too_fast(2, 2) == 0, "another key is untouched"
+    assert api_mod._too_fast(1, 0) == 0, "0 turns the limit off"
+
+    assert api_mod._locked("abcd1234") == 0
+    for _ in range(api_mod.LOCKOUT_AFTER):
+        api_mod._wrong("abcd1234")
+    wait = api_mod._locked("abcd1234")
+    assert 1 <= wait <= api_mod.LOCKOUT_SECONDS + 1
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_key_gets_so_many_accounts_a_day_and_no_more(web, monkeypatch):  # noqa: F811
+    """Each account past this door becomes a phone, a Gmail and an exit
+    within a pass, so the cap is the money brake: a loop that goes wrong
+    on either side must not order hundreds of phones overnight."""
+    seen = _wrote(monkeypatch)
+    _client(monkeypatch)
+    monkeypatch.setattr(api_mod, "_over_the_day",
+                        lambda settings, client: ("that is the day's lot", 900))
+    client = web()
+
+    status, headers, body = _post(client, "/api/v1/accounts", {
+        "ref": "ord_2", "product": "chatgpt",
+        "credential_kind": "password_totp",
+        "credentials": {"email": "a@x.com", "password": "pw"}}, idem="k-1")
+
+    assert status == 429 and body["error"]["code"] == "rate_limited"
+    assert body["error"]["message"] == "that is the day's lot"
+    assert headers["Retry-After"] == "900"
+    assert "created" not in seen, "nothing was written"
+    assert seen["remembered"] == [], (
+        "and the refusal is not the idempotent answer for that key tomorrow")
+
+
+def test_the_days_tally_counts_real_accounts_only_and_never_refuses_blind(
+        make_settings, monkeypatch):
+    """A sandbox key builds nothing, so it is not counted. And a store
+    that cannot answer is not a reason to refuse work - the cap guards
+    against a loop, not against a caller."""
+    import inspect
+
+    src = inspect.getsource(api_mod._over_the_day)
+    assert "verb = 'add_panel_account' AND client_id = %s" in src, (
+        "what the key handed over, not what survived: a withdrawn account "
+        "is archived out of `resources` and would give the allowance back")
+    assert "date_trunc('day', now() AT TIME ZONE" in src, "the UTC day"
+    assert "is_sandbox(client)" in src
+    assert "the account is taken" in src, "a store that is down lets it in"
+
+    settings = make_settings(web_api_accounts_per_day=0)
+    assert api_mod._over_the_day(settings, {"id": 1, "role": "panel"}) is None
+    assert api_mod._over_the_day(make_settings(web_api_accounts_per_day=5),
+                                 {"id": 2, "role": "sandbox"}) is None

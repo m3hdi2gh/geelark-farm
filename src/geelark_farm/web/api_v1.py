@@ -46,6 +46,10 @@ LOCKOUT_SECONDS = 600
 PREFIX_LEN = 8
 
 _failures: dict[str, list[float]] = {}
+#: One key's request stamps inside the last `WINDOW` seconds. The rate
+#: limit the contract promised and nothing enforced (2026-09-12).
+_calls: dict[int, list[float]] = {}
+WINDOW = 60.0
 _lock = threading.Lock()
 
 
@@ -97,10 +101,19 @@ def _json(handler, code: int, obj: dict, *, headers=()) -> None:
         handler.wfile.write(data)
 
 
-def _error(handler, code: int, kind: str, message: str, **extra) -> None:
-    """One shape for every failure, so a client writes one branch."""
+def _error(handler, code: int, kind: str, message: str, *,
+           retry_after: int | None = None, **extra) -> None:
+    """One shape for every failure, so a client writes one branch.
+
+    `retry_after` is keyword-only and becomes a header, not a field: it is
+    the one part of a refusal a client is expected to obey mechanically,
+    and `**extra` lands inside the error object where a header cannot be
+    seen (2026-09-12).
+    """
     headers = ((("WWW-Authenticate", 'Bearer realm="geelark farm"'),)
                if code == 401 else ())
+    if retry_after is not None:
+        headers = (*headers, ("Retry-After", str(max(1, int(retry_after)))))
     _json(handler, code, {"error": {"code": kind, "message": message,
                                     **extra}}, headers=headers)
 
@@ -113,18 +126,45 @@ def _bearer(handler) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
-def _locked(prefix: str) -> bool:
-    """Whether this key prefix has been wrong too often lately."""
+def _locked(prefix: str) -> int:
+    """Seconds this key prefix must wait for having been wrong too often,
+    or 0. A number rather than a flag, so the 429 can say when to come
+    back instead of leaving a client to guess (2026-09-12)."""
+    now = time.time()
     with _lock:
         recent = [t for t in _failures.get(prefix, [])
-                  if time.time() - t < LOCKOUT_SECONDS]
+                  if now - t < LOCKOUT_SECONDS]
         _failures[prefix] = recent
-        return len(recent) >= LOCKOUT_AFTER
+        if len(recent) < LOCKOUT_AFTER:
+            return 0
+    return max(1, int(LOCKOUT_SECONDS - (now - recent[0])) + 1)
 
 
 def _wrong(prefix: str) -> None:
     with _lock:
         _failures.setdefault(prefix, []).append(time.time())
+
+
+def _too_fast(client_id: int, limit: int) -> int:
+    """Seconds to wait, or 0. One key's requests in the last minute.
+
+    Kept in this process's memory, like the lockout above, because one
+    process serves this door: `geelark-web` has a fixed container name and
+    cannot be scaled, and neither the keeper nor a builder starts a
+    listener. A second web would each enforce the limit on its own share,
+    which is the honest failure mode for a brake (2026-09-12).
+    """
+    if limit <= 0:
+        return 0
+    now = time.time()
+    with _lock:
+        recent = [t for t in _calls.get(client_id, []) if now - t < WINDOW]
+        if len(recent) >= limit:
+            _calls[client_id] = recent
+            return max(1, int(WINDOW - (now - recent[0])) + 1)
+        recent.append(now)
+        _calls[client_id] = recent
+    return 0
 
 
 def client_for(settings, token: str) -> dict | None:
@@ -181,11 +221,11 @@ def account_json(row: dict, *, sandbox: bool = False) -> dict:
         "state": state,
         "email": row.get("address"),
         "phone": str(row.get("serial") or "") or None,
-        # null, not 0. Nothing in the farm counts these yet - the columns
-        # are there and the build flow will fill them - and a 0 would tell
-        # the panel this account has never been on a phone, which is a
-        # different claim from "we are not counting". /health says which
-        # fields are in that state, so a client can branch on it.
+        # Real numbers since 2026-09-12: the pool counts an attempt in
+        # the statement that puts the account on a phone and a failure
+        # when a run judged the account itself. Until then both were
+        # published null - "not counting" rather than "none" - and
+        # /health still names whatever is left in that state.
         "attempts": _measured(row, "attempts"),
         "failures": _measured(row, "failures"),
         "reason": (str(row.get("status") or "")
@@ -206,7 +246,11 @@ def account_json(row: dict, *, sandbox: bool = False) -> dict:
 #: Columns the schema has and nothing yet writes. Published as null
 #: rather than as their zero, and named in /health so a client can tell
 #: "not counted" from "counted, and it is none".
-NOT_MEASURED = ("attempts", "failures", "delivered_at")
+#:
+#: Empty since 2026-09-12, and kept as the mechanism rather than deleted:
+#: the next field the contract promises before the farm writes it goes
+#: here, and both `_measured` and /health follow it without another edit.
+NOT_MEASURED: tuple[str, ...] = ()
 
 
 def _measured(row: dict, field: str):
@@ -259,13 +303,23 @@ def _serve(handler, settings, path: str) -> None:
     prefix = token[:PREFIX_LEN]
     if not token:
         return _error(handler, 401, "unauthorized", "a bearer key is needed")
-    if _locked(prefix):
+    locked = _locked(prefix)
+    if locked:
         return _error(handler, 429, "rate_limited",
-                      "too many wrong keys; try later")
+                      "too many wrong keys; try later", retry_after=locked)
     client = client_for(settings, token)
     if client is None:
         _wrong(prefix)
         return _error(handler, 401, "unauthorized", "that key is not one of ours")
+    wait = _too_fast(client["id"],
+                     int(getattr(settings, "web_api_rate_per_minute", 600)))
+    if wait:
+        # Before `_seen`, so a client hammering the door does not also
+        # write a row a second: the point of the brake is that a refusal
+        # is cheap for us.
+        return _error(handler, 429, "rate_limited",
+                      "too many requests for this key; try later",
+                      retry_after=wait)
     _seen(settings, client["id"])
 
     query = parse_qs(handler.path.partition("?")[2])
@@ -406,6 +460,16 @@ def _write(handler, settings, client: dict, rest: str) -> None:
         if seen is not None:
             return _json(handler, seen["status"], seen["body"],
                          headers=(("Idempotent-Replayed", "true"),))
+    if rest == "/accounts" and handler.command == "POST":
+        # The money brake, and the last place it can be applied without
+        # having written anything: an account past here becomes a phone,
+        # a Gmail and an exit within a pass. A sandbox key is exempt -
+        # its accounts build nothing - and a refusal is never remembered
+        # as an idempotent answer, so the same key works tomorrow.
+        over = _over_the_day(settings, client)
+        if over:
+            return _error(handler, 429, "rate_limited", over[0],
+                          retry_after=over[1])
     try:
         code, body = _do_write(handler, settings, client, rest)
     except api_write.Refused as exc:
@@ -415,6 +479,51 @@ def _write(handler, settings, client: dict, rest: str) -> None:
                            method=handler.command, path=rest,
                            status=code, body=body)
     return _json(handler, code, body)
+
+
+def _over_the_day(settings, client: dict) -> tuple[str, int] | None:
+    """The sentence and the wait when this key has had its day's worth.
+
+    Counted in the store rather than in memory, because the console is
+    deployed by restarting this very process and a day's tally kept here
+    would start again every time. The day is UTC, which is the day every
+    stamp this API publishes is in.
+    """
+    cap = int(getattr(settings, "web_api_accounts_per_day", 100))
+    if cap <= 0 or is_sandbox(client):
+        return None
+    try:
+        from ..store.db import Store
+
+        with Store(settings) as store:
+            # The requests this key made, not the rows that survived them:
+            # `DELETE /accounts/{ref}` archives the row it withdraws, and
+            # so does the console's Remove, so a count of `resources`
+            # gives the allowance back - POST, DELETE, repeat, and the
+            # cap never trips (the review, 2026-09-12).
+            rows = store._rows(
+                "SELECT count(*) AS c FROM actions"
+                " WHERE verb = 'add_panel_account' AND client_id = %s"
+                "   AND requested_at >= date_trunc('day', now() AT TIME ZONE"
+                "                                   'UTC')",
+                (int(client["id"]),))
+        made = int((rows[0] or {}).get("c") or 0) if rows else 0
+    except Exception as exc:                                      # noqa: BLE001
+        # A store that cannot answer is not a reason to refuse work: the
+        # cap is a guard against a loop, not an authorisation check.
+        log.warning("the day's tally for client %s could not be read (%s); "
+                    "the account is taken", client.get("id"), exc)
+        return None
+    if made < cap:
+        return None
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    midnight = (now + datetime.timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return (f"this key has handed the farm {made} accounts today, which is "
+            f"its limit; the count starts again at midnight UTC",
+            int((midnight - now).total_seconds()))
 
 
 def _do_write(handler, settings, client: dict, rest: str):

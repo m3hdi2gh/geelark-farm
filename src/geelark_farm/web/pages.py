@@ -782,7 +782,8 @@ _RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
          ("/logins", "Login rate", ""),
-         ("/events", "Events", ""), ("/users", "Users", ""))
+         ("/events", "Events", ""), ("/api-clients", "API clients", ""),
+         ("/users", "Users", ""))
 
 #: One line icon per rail entry - the mockup's, inlined so no file is
 #: served. Stroke uses currentColor, so the active colour applies.
@@ -809,6 +810,9 @@ _ICONS = {
                '<polyline points="15 6 21 6 21 12"/>',
     "/events": '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" '
                'y2="12"/><line x1="4" y1="18" x2="14" y2="18"/>',
+    "/api-clients": '<rect x="3" y="11" width="8" height="8" rx="2"/>'
+                    '<path d="M7 11V8a5 5 0 0 1 10 0v3"/>'
+                    '<path d="M14 15h7M18 15v4"/>',
     "/users": '<circle cx="9" cy="8" r="3.5"/><path d="M3.5 20c.7-3.2 2.9-5 '
               '5.5-5s4.8 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path '
               'd="M15.5 15.3c2.6.2 4.3 1.8 5 4.7"/>',
@@ -4405,6 +4409,154 @@ def one_time_page(username: str, password: str, user: dict,
             f'<div class="row"><a class="btn quiet" href="/users">Back to '
             f'users</a></div></div>')
     return page("One-time password", body, user=user, here="/users")
+
+
+_CLIENTS_SAID = {
+    "minted": "The key was minted. It is on the page you just left and "
+              "nowhere else.",
+    "rotated": "The key was replaced. The old one stopped working the "
+               "moment it was.",
+    "off": "That key is switched off - every request with it is answered "
+           "401 until it is switched back on.",
+    "on": "That key works again.",
+    "webhook": "Saved. Nothing posts there yet: the sender is not built.",
+}
+
+
+def api_clients_page(data: dict, user: dict, said: str = "",
+                     error: str = "") -> str:
+    """The keys the machines come in with, and what each did today.
+
+    A page rather than a terminal, because the key that matters most -
+    the customer panel's - is handed over and revoked by whoever runs the
+    farm, and until now that meant ssh and a CLI. Minting shows the token
+    once, here, and never again: what is stored is its hash.
+    """
+    csrf = esc(user.get("csrf", ""))
+    rows = data.get("rows") or []
+    live = sum(1 for r in rows if r.get("active"))
+    cap = int(data.get("cap") or 0)
+    per_minute = int(data.get("per_minute") or 0)
+    body = (f'<div class="top"><h2>API clients</h2><span class="status">'
+            f'{live} active &middot; admin only</span></div>')
+    if error:
+        body += f'<p class="err">{esc(error)}</p>'
+    note = _CLIENTS_SAID.get(said, "")
+    if note:
+        body += f'<p class="said">{esc(note)}</p>'
+    body += (f'<p class="hint">Writing is '
+             f'{"on" if data.get("writes") else "off"} for real accounts; '
+             f'a sandbox key writes either way. Each key may ask '
+             f'{per_minute or "any number of"} times a minute and hand over '
+             f'{cap or "any number of"} accounts a day (UTC).</p>')
+    head = ("<tr><th>client</th><th>role</th><th>key</th><th>last seen</th>"
+            "<th>today</th><th>webhook</th><th></th></tr>")
+    lines = []
+    for r in rows:
+        ident = int(r["id"])
+        off = "" if r.get("active") else ' <span class="badge">off</span>'
+        klass = "" if r.get("active") else ' class="off"'
+        seen = _when(r["last_seen_at"]) if r.get("last_seen_at") else "never"
+        # The cap counts a UTC day and the console counts the owner's,
+        # and for three and a half hours every night they disagree: the
+        # page showed the one the door does not enforce, beside a cap
+        # labelled UTC (the review, 2026-09-12). Both are here now, and
+        # the warning is on the one that refuses.
+        made = int(r.get("accounts_today_utc") or 0)
+        here = int(r.get("accounts_today") or 0)
+        asked = int(r.get("requests_today") or 0)
+        near = " warn" if cap and made >= cap else ""
+        hook = ('<span class="badge green">set</span>'
+                if r.get("webhook_url") else '<span class="dim">none</span>')
+        if r.get("webhook_url") and not r.get("has_secret"):
+            hook += ' <span class="badge warn">no secret</span>'
+        lines.append(
+            f'<tr{klass}><td><b style="font-weight:500;'
+            f'color:var(--bright)">{esc(str(r["name"]))}</b>{off}</td>'
+            f'<td><span class="badge {"info" if r["role"] == "panel" else ""}">'
+            f'{esc(str(r["role"]))}</span></td>'
+            f'<td class="muted">{esc(str(r.get("key_prefix") or ""))}&hellip;'
+            f'</td><td class="muted">{seen}</td>'
+            f'<td class="muted"><span class="badge{near}">{made}</span> '
+            f'account{"" if made == 1 else "s"} (UTC), {asked} request'
+            f'{"" if asked == 1 else "s"}'
+            + (f'<span class="dim"> &middot; {here} today here</span>'
+               if here != made else "")
+            + f'</td>'
+            f'<td>{hook}</td>'
+            f'<td class="act">'
+            f'<form method="post" class="inline" '
+            f'action="/api-clients/{ident}/rotate">'
+            f'<input type="hidden" name="csrf" value="{csrf}">'
+            f'<button class="quiet warn" title="mint a new key; the one it '
+            f'has stops working at once">New key</button></form>'
+            f'<form method="post" class="inline" '
+            f'action="/api-clients/{ident}/active">'
+            f'<input type="hidden" name="csrf" value="{csrf}">'
+            f'<input type="hidden" name="active" '
+            f'value="{"0" if r.get("active") else "1"}">'
+            f'<button class="quiet">'
+            f'{"Switch off" if r.get("active") else "Switch on"}</button>'
+            f'</form></td></tr>')
+    listing = (f'<div class="panel wrap"><table>{head}{"".join(lines)}'
+               f'</table><p class="dim">the token itself is never stored - '
+               f'only its hash, and the first eight characters so two keys '
+               f'can be told apart</p></div>')
+    if not rows:
+        listing = ('<div class="panel"><p class="muted">No keys yet. Mint '
+                   'one below and hand it over privately.</p></div>')
+
+    hooks = "".join(
+        f'<form method="post" action="/api-clients/{int(r["id"])}/webhook" '
+        f'class="row" style="gap:8px">'
+        f'<input type="hidden" name="csrf" value="{csrf}">'
+        f'<span class="muted" style="width:110px">{esc(str(r["name"]))}</span>'
+        f'<input name="url" placeholder="https://..." '
+        f'value="{esc(str(r.get("webhook_url") or ""))}" style="flex:1">'
+        f'<input name="secret" type="password" placeholder="'
+        f'{"secret set - blank keeps it" if r.get("has_secret") else "signing secret"}"'
+        f' autocomplete="off" style="width:190px">'
+        f'<button class="quiet">Save</button></form>' for r in rows)
+    webhooks = (f'<div class="panel"><h3>Where events will be posted</h3>'
+                f'<p class="hint">Kept now, used when the sender is built. '
+                f'The secret signs every delivery so a receiver can tell '
+                f'ours from anybody else&#x27;s; it is stored, never shown '
+                f'back, and an empty box leaves the one already there.</p>'
+                f'{hooks}</div>') if rows else ""
+
+    creator = (
+        '<div class="panel"><h3>New client</h3>'
+        f'<form method="post" action="/api-clients/new" class="field" '
+        f'style="gap:12px"><input type="hidden" name="csrf" value="{csrf}">'
+        '<div class="row"><input name="name" placeholder="name" '
+        'autocomplete="off" style="width:200px">'
+        f'<span class="muted">Role</span>'
+        f'{_choice("role", ("panel", "bot", "sandbox"), "sandbox")}</div>'
+        '<p class="hint">A <b>panel</b> key hands the farm real accounts; a '
+        '<b>bot</b> key only answers a code; a <b>sandbox</b> key writes into '
+        'a practice room where no phone is ever built. A name cannot be '
+        'reused - to replace a key, press New key on its row.</p>'
+        '<div class="row"><button>Mint</button><span class="hint">the token '
+        'is shown once, on the next page</span></div></form></div>')
+    body += listing + f'<div class="grid2">{creator}{webhooks}</div>'
+    return page("API clients", body, user=user, here="/api-clients")
+
+
+def new_key_page(name: str, token: str, user: dict, *, minted: bool) -> str:
+    """The token, exactly once. Not in a URL, not in the log, not on any
+    later page - what the store keeps is its hash."""
+    what = "minted" if minted else "key replaced"
+    body = (f'<div class="top"><h2>{esc(name)} &mdash; {esc(what)}</h2></div>'
+            f'<div class="panel ok" style="max-width:560px">'
+            f'<h3>Its key, shown only now</h3>'
+            f'<div class="code">{esc(token)}</div>'
+            f'<p class="hint">Hand it over privately. It goes in one place '
+            f'only - the Authorization header - and never in a URL. Any key '
+            f'this client had before has stopped working. This page cannot '
+            f'be opened again.</p>'
+            f'<div class="row"><a class="btn quiet" href="/api-clients">Back '
+            f'to API clients</a></div></div>')
+    return page("A new key", body, user=user, here="/api-clients")
 
 
 def password_page(user: dict, error: str = "") -> str:

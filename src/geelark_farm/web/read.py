@@ -829,14 +829,21 @@ _DELIVERED_MATCH = ("r.kind = 'app' AND r.status = 'delivered'"
 
 def delivered_rows(settings: Settings, q: str = "") -> list[dict]:
     """The whole delivered archive that matches `q`, uncapped, for the CSV
-    export: address, serial, when it went out (updated_at - the stamp the
-    status change left) and where it came from."""
+    export: address, serial, when it went out and where it came from.
+
+    `delivered_at` is the stamp the hand-over writes (pgpool.PgAppPool),
+    and `updated_at` behind it for every row delivered before that column
+    was written - any later edit moves that one, so it answers "when did
+    this row last change" and not the question the column is named for
+    (2026-09-12).
+    """
     like = f"%{q.strip()}%"
     with Store(settings) as store:
         return store._rows(
-            "SELECT r.address, r.serial, r.updated_at, r.source"
+            "SELECT r.address, r.serial, r.updated_at, r.delivered_at,"
+            " r.source"
             f" FROM resources r WHERE {_DELIVERED_MATCH}"
-            " ORDER BY r.updated_at DESC, r.id DESC",
+            " ORDER BY coalesce(r.delivered_at, r.updated_at) DESC, r.id DESC",
             (q.strip(), like, like, like))
 
 
@@ -943,6 +950,64 @@ def logins(settings: Settings, days: int = 7) -> dict:
                             key=lambda r: int(r["key"] or 0))
     return {"days": days, "totals": store_signins.totals(settings, days),
             "by": by, "min_sample": store_signins.MIN_SAMPLE}
+
+
+def api_clients(settings: Settings) -> dict:
+    """The keys the machines come in with, and what each did today.
+
+    Two numbers beside every row, because a key is administered by what
+    it is doing and not by when it was made: the requests it has asked
+    the farm to carry out today, and the accounts it has handed over
+    today - which is the number the daily cap is about.
+
+    The day is the console's own (the owner's zone), the same day the
+    Events page chips are cut on. The API's cap counts a UTC day: they
+    disagree for three and a half hours, and the page says which is
+    which rather than pretending one number answers both.
+    """
+    import datetime
+
+    from ..store import api_clients as store_clients
+
+    rows = store_clients.listing(settings)
+    day = datetime.datetime.now(_zone(settings)).date().isoformat()
+    # Built before the early return: with no keys minted yet the page was
+    # told there were no limits and that writing was off, on the one page
+    # whose job is to say what the limits are (the review, 2026-09-12).
+    out = {"rows": rows, "day": day,
+           "cap": int(getattr(settings, "web_api_accounts_per_day", 100)),
+           "per_minute": int(getattr(settings, "web_api_rate_per_minute",
+                                     600)),
+           "writes": bool(getattr(settings, "web_api_writes", False))}
+    if not rows:
+        return out
+    ids = [int(r["id"]) for r in rows]
+    bounds = day_bounds(settings, day)
+    since = bounds[0] if bounds else None
+    with Store(settings) as store:
+        asked = store._rows(
+            "SELECT a.client_id AS id, count(*) AS c FROM actions a"
+            " WHERE a.client_id = ANY(%s) AND a.requested_at >= %s"
+            " GROUP BY a.client_id", (ids, since))
+        made = store._rows(
+            "SELECT r.client_id AS id, count(*) AS c FROM resources r"
+            " WHERE r.kind = 'app' AND r.client_id = ANY(%s)"
+            "   AND r.created_at >= %s GROUP BY r.client_id", (ids, since))
+        today_utc = store._rows(
+            "SELECT r.client_id AS id, count(*) AS c FROM resources r"
+            " WHERE r.kind = 'app' AND r.client_id = ANY(%s)"
+            "   AND r.created_at >= date_trunc('day', now() AT TIME ZONE"
+            "                                  'UTC')"
+            " GROUP BY r.client_id", (ids,))
+    counted = {name: {int(r["id"]): int(r["c"] or 0) for r in source}
+               for name, source in (("asked", asked), ("made", made),
+                                    ("utc", today_utc))}
+    for row in rows:
+        ident = int(row["id"])
+        row["requests_today"] = counted["asked"].get(ident, 0)
+        row["accounts_today"] = counted["made"].get(ident, 0)
+        row["accounts_today_utc"] = counted["utc"].get(ident, 0)
+    return out
 
 
 def events(settings: Settings, limit: int = 200) -> list[dict]:

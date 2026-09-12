@@ -5357,3 +5357,189 @@ def test_a_refund_row_offers_the_two_words_to_whoever_may_add_gmails():
         '<span class="badge green">Paid back</span>'), "settled, no buttons"
     looker = {"username": "ali", "role": "operator", "mutations": False}
     assert "action=" not in pages._refund_cell(owed, looker, "errored", "")
+
+
+
+# ------------------------------------------- the API's own keys (2026-09-12)
+def _clients(monkeypatch, rows=None):
+    """read.api_clients and the store module behind the page, faked at
+    their edges the way _people fakes the Users page."""
+    import geelark_farm.store.api_clients as store_clients
+
+    rows = rows if rows is not None else [
+        {"id": 1, "name": "panel", "role": "panel", "key_prefix": "XyQ4iYRl",
+         "active": True, "webhook_url": "", "has_secret": False,
+         "created_at": None, "last_seen_at": None, "requests_today": 4,
+         "accounts_today": 12, "accounts_today_utc": 9}]
+    seen = {"minted": [], "rotated": [], "active": [], "webhook": []}
+
+    monkeypatch.setattr(app_mod.read, "api_clients", lambda s: {
+        "rows": rows, "day": "2026-09-12", "cap": 100, "per_minute": 600,
+        "writes": False})
+    monkeypatch.setattr(store_clients, "listing", lambda s: rows)
+    monkeypatch.setattr(store_clients, "get", lambda s, i: rows[0])
+
+    def create(settings, *, name, role):
+        if name == "panel":
+            raise Exception("duplicate key value violates unique constraint")
+        if not name:
+            raise ValueError("a name of 1 to 60 characters")
+        seen["minted"].append((name, role))
+        return 7, "the-new-token"
+
+    monkeypatch.setattr(store_clients, "create", create)
+    monkeypatch.setattr(store_clients, "rotate",
+                        lambda s, i: seen["rotated"].append(i) or
+                        ("panel", "rotated-token"))
+    monkeypatch.setattr(store_clients, "set_active",
+                        lambda s, i, a: seen["active"].append((i, a)) or "panel")
+    monkeypatch.setattr(
+        store_clients, "set_webhook",
+        lambda s, i, *, url, secret="": seen["webhook"].append((i, url, secret))
+        or "panel")
+    return seen
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_the_api_clients_page_lists_the_keys_and_what_each_did_today(
+        web, monkeypatch):  # noqa: F811
+    """Until this page there was no way to hand out or kill a key without
+    ssh and the CLI - which meant the person who runs the farm could not
+    stop a client that had gone wrong (2026-09-12)."""
+    _clients(monkeypatch)
+    client = web()
+    client.login()
+
+    status, _, body = client.request("GET", "/api-clients")
+
+    assert status == 200
+    assert "API clients" in body and "panel" in body
+    assert "XyQ4iYRl" in body, "the prefix tells two keys apart"
+    assert "9</span> accounts (UTC), 4 requests" in body, (
+        "the number the cap is enforced on, beside the cap that says UTC")
+    assert "12 today here" in body, "and the console's own day beside it"
+    assert 'action="/api-clients/1/rotate"' in body
+    assert 'href="/api-clients"' in body, "and it is on the rail"
+    assert "the token itself is never stored" in body
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_a_minted_key_is_shown_once_and_is_never_in_a_url(
+        web, monkeypatch):  # noqa: F811
+    """A token in an address is a token in the history, the log and the
+    banner - so the POST answers with the page instead of redirecting."""
+    seen = _clients(monkeypatch)
+    client = web()
+    client.login()
+    token = client.csrf()
+
+    status, headers, body = client.request(
+        "POST", "/api-clients/new",
+        _form(csrf=token, name="bot", role="bot"))
+
+    assert status == 200, "answered, not redirected"
+    assert seen["minted"] == [("bot", "bot")]
+    assert "the-new-token" in body and "shown only now" in body
+    assert "Location" not in dict(headers)
+
+    _, _, again = client.request("GET", "/api-clients")
+    assert "the-new-token" not in again, "and never again"
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_a_name_that_exists_is_refused_rather_than_rotated(
+        web, monkeypatch):  # noqa: F811
+    """The CLI's mint ends in ON CONFLICT (name) DO UPDATE, which is right
+    at a terminal and wrong on a page: retyping a name there would
+    silently invalidate a live panel's key."""
+    seen = _clients(monkeypatch)
+    client = web()
+    client.login()
+
+    _, _, body = client.request(
+        "POST", "/api-clients/new",
+        _form(csrf=client.csrf(), name="panel", role="panel"))
+
+    assert "that name is taken" in body
+    assert "New key on its row" in body, "and it says what to do instead"
+    assert seen["minted"] == [] and seen["rotated"] == []
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_a_new_key_asks_first_because_the_old_one_stops_at_once(
+        web, monkeypatch):  # noqa: F811
+    seen = _clients(monkeypatch)
+    client = web()
+    client.login()
+    token = client.csrf()
+
+    _, _, asking = client.request("POST", "/api-clients/1/rotate",
+                                  _form(csrf=token))
+    assert "stops working the moment" in asking and seen["rotated"] == []
+
+    _, _, body = client.request("POST", "/api-clients/1/rotate",
+                                _form(csrf=token, sure="1"))
+    assert seen["rotated"] == [1]
+    assert "rotated-token" in body and "key replaced" in body
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_a_key_can_be_switched_off_and_a_webhook_needs_https(
+        web, monkeypatch):  # noqa: F811
+    import geelark_farm.store.api_clients as store_clients
+
+    seen = _clients(monkeypatch)
+    client = web()
+    client.login()
+    token = client.csrf()
+
+    status, headers, _ = client.request("POST", "/api-clients/1/active",
+                                        _form(csrf=token, active="0"))
+    assert status == 303 and seen["active"] == [(1, False)]
+    assert dict(headers)["Location"] == "/api-clients?said=off"
+
+    status, headers, _ = client.request(
+        "POST", "/api-clients/1/webhook",
+        _form(csrf=token, url="https://panel.example/hook", secret="s3cret"))
+    assert status == 303 and seen["webhook"] == [(1, "https://panel.example/hook",
+                                                  "s3cret")]
+
+    def refuse(settings, client_id, *, url, secret=""):
+        raise ValueError("an https:// address - an event carries an account")
+
+    monkeypatch.setattr(store_clients, "set_webhook", refuse)
+    _, _, body = client.request("POST", "/api-clients/1/webhook",
+                                _form(csrf=token, url="http://panel.example"))
+    assert "an https:// address" in body
+
+
+@pytest.mark.parametrize("web", [{"web_mutations": True}], indirect=True)
+def test_the_keys_are_an_admins_and_an_operator_is_sent_home(
+        web, monkeypatch):  # noqa: F811
+    """A GET goes home the way every other admin page here answers one; a
+    POST refuses, because a form that quietly does nothing is how somebody
+    comes to believe they did something."""
+    _clients(monkeypatch)
+    client = web()
+    client.login()
+    token = client.csrf()
+    import geelark_farm.web.app as mod
+
+    original = mod._Handler._user
+
+    def operator(self):
+        who = original(self)
+        return dict(who, role="operator") if who else who
+
+    monkeypatch.setattr(mod._Handler, "_user", operator)
+
+    status, headers, _ = client.request("GET", "/api-clients")
+    assert status == 303 and dict(headers)["Location"] == "/"
+
+    # With the session's real token, so the refusal is the admin gate's
+    # and not the CSRF check standing in front of it (the review).
+    status, _, body = client.request("POST", "/api-clients/new",
+                                     _form(csrf=token, name="n", role="bot"))
+    assert status == 403 and "Nothing was changed" in body, (
+        "a refusal, not a redirect: a form that quietly does nothing is "
+        "how somebody comes to believe they did something")

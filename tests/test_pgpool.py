@@ -46,9 +46,15 @@ class MemoryTable:
                     username=None, proxy_pass="", proxy_name="",
                     last_exit_ip="", used_at="", purchased_on="",
                     source="sheet", added_by=None, owner_id=None,
-                    last_host="", refund_state="", tries=0)
+                    last_host="", refund_state="", tries=0,
+                    attempts=0, failures=0, delivered_at=None,
+                    state_changed_at=None, client_id=None)
 
     def __init__(self):
+        #: The real table carries the farm's settings, and the app pool
+        #: hands them to the account-event writer; None is what that
+        #: writer is built to survive.
+        self._settings = None
         self._rows: dict[int, dict] = {}
         self._next = 1
         self.updates: list[tuple[int, dict]] = []
@@ -81,7 +87,8 @@ class MemoryTable:
         self.updates.append((row_id, dict(fields)))
 
     def claim(self, kind, *, free, claimed, count_use, serial="",
-              row_id=None, avoid_host="", host_column=""):
+              row_id=None, avoid_host="", host_column="",
+              count_attempt=False):
         for r in self._ordered(kind, count_use):
             if row_id is not None and r["id"] != row_id:
                 continue
@@ -92,12 +99,24 @@ class MemoryTable:
             if r["error"] is None and (r["status"] or "").lower() in free:
                 r["status"] = claimed
                 r["claimed_at"] = _now()
+                if count_attempt:
+                    r["attempts"] = int(r.get("attempts") or 0) + 1
                 if count_use:
                     r["times_used"] += 1
                 if serial:
                     r["serial"] = serial
                 return dict(r)
         return None
+
+    def touch_state(self, row_id):
+        self._rows[row_id]["state_changed_at"] = _now()
+
+    def stamp_delivered(self, row_id):
+        self._rows[row_id]["delivered_at"] = _now()
+
+    def count_failure(self, row_id):
+        row = self._rows[row_id]
+        row["failures"] = int(row.get("failures") or 0) + 1
 
     def beat(self, ids):
         for i in ids:
@@ -812,3 +831,108 @@ def test_a_row_waiting_on_a_refund_is_not_stock():
     assert "coalesce(refund_state, '') = ''" in sql, (
         "the real table refuses it in the statement, not in Python")
     assert 'coalesce({column}, \'\') <> %s' in sql
+
+
+
+# --------------------------- what the panel is told (2026-09-12)
+def test_an_app_account_counts_its_phones_and_says_what_became_of_it(
+        monkeypatch):
+    """`attempts`, `failures` and `delivered_at` were published null for
+    as long as the API existed - the columns were there and nothing wrote
+    them - and `GET /accounts/{ref}/events` answered with the requests a
+    person made and nothing the farm did. The pool is the one place every
+    transition passes through, so it is where both are written."""
+    from geelark_farm.store import accounts, pgpool
+
+    said = []
+    monkeypatch.setattr(accounts, "moved",
+                        lambda s, row, state, **k: said.append((state, k)))
+
+    table = MemoryTable()
+    pool = pgpool.PgAppPool(table)
+    ident = table.add("app", address="a@x.com", password="pw", sheet_row=1)
+    pool.load()
+
+    row = pool.claim(serial="1600")
+    assert row is not None and table.row(ident)["attempts"] == 1
+    assert said[-1] == ("signing_in", {"serial": "1600"})
+
+    pool.spend(row, serial="1600")
+    assert said[-1] == ("ready", {"serial": "1600"})
+
+    pool.fail(row, "wrong_password", note="Refused.")
+    assert table.row(ident)["failures"] == 0, (
+        "a verdict about the credential is not a phone lost under it - and "
+        "the build exonerates half of these a moment later")
+    assert said[-1] == ("needs_human", {"reason": "wrong_password",
+                                        "serial": "1600"})
+
+    pool.release(row)
+    assert table.row(ident)["failures"] == 0, (
+        "a person tidying a row, or a dead builder's claim swept up, cost "
+        "the account nothing")
+    pool.release(row, phone_failed=True)
+    assert table.row(ident)["failures"] == 1, (
+        "this is the contract's failure: the phone went and the account "
+        "came back to the pool")
+    assert said[-1][0] == "queued"
+
+    pool.retire(row, note="Handed over.")
+    assert table.row(ident)["delivered_at"] is not None
+    assert said[-1][0] == "delivered"
+
+    # A second claim is a second phone: the number the panel reads is how
+    # many devices its account has been put on.
+    pool.load()
+    table.row(ident)["status"] = ""
+    pool.load()
+    pool.claim(serial="1601")
+    assert table.row(ident)["attempts"] == 2
+
+
+def test_only_the_app_pool_counts_attempts_and_stamps_a_delivery():
+    """`Pool.retire` is shared with the Gmail pool, whose retired word is
+    `used` and whose rows no panel asks about; a stamp written in the base
+    would be written for both."""
+    import inspect
+
+    from geelark_farm.store import pgpool
+
+    assert pgpool.PgAppPool.COUNTS_ATTEMPTS is True
+    assert pgpool.PgGmailPool.COUNTS_ATTEMPTS is False
+    assert pgpool.PgProxyPool.COUNTS_ATTEMPTS is False
+    assert "stamp_delivered" in inspect.getsource(pgpool.PgAppPool.retire)
+    assert "stamp_delivered" not in inspect.getsource(pgpool._PgPool)
+
+    claim = inspect.getsource(pgpool.ResourceTable.claim)
+    assert 'tally = "attempts + 1" if count_attempt else "attempts"' in claim
+    assert "attempts = {tally}" in claim, (
+        "counted in the statement that hands the row out, so a claim that "
+        "returns nothing counts nothing and two builders cannot lose one")
+
+
+def test_an_account_event_names_the_address_the_panel_will_ask_by(monkeypatch):
+    """`api_v1_read.events` finds these by `kind = 'account'` and a detail
+    that contains the address, and nothing else. An event that is right
+    in every other way and does not name the address is invisible."""
+    from geelark_farm.store import accounts
+
+    from geelark_farm.store import events as store_events
+
+    written = []
+    monkeypatch.setattr(store_events, "emit",
+                        lambda settings, kind, **fields:
+                        written.append((kind, fields)) or True)
+
+    row = {"address": "arman@x.com", "serial": "1601"}
+    assert accounts.moved(object(), row, "ready") is True
+
+    kind, fields = written[0]
+    assert kind == "account" == accounts.KIND
+    assert fields["status"] == "ready" and fields["serial"] == "1601"
+    assert "arman@x.com" in fields["detail"]
+
+    # Nothing to name it, or no settings: recorded as not written, never
+    # raised - a build stopped by a monitoring write is a phone.
+    assert accounts.moved(object(), {"address": ""}, "ready") is False
+    assert accounts.moved(None, {"address": "a@x.com"}, "ready") is False

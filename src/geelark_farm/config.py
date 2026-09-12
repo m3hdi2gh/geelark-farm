@@ -431,6 +431,18 @@ class Settings:
     #: of those is 405 and the door still reads. Needs web_api as well: this
     #: switches on part of that door, it does not open one of its own.
     web_api_writes: bool = False
+    #: How many requests one key may make in a minute before the door
+    #: answers 429 with a Retry-After (WEB_API_RATE_PER_MINUTE). The
+    #: contract has promised 600 since the spec was written and nothing
+    #: enforced it: a client looping on a bug could spend this box's
+    #: threads for nothing. 0 turns the limit off (2026-09-12).
+    web_api_rate_per_minute: int = 600
+    #: How many NEW accounts one key may hand the farm in a day, UTC
+    #: (WEB_API_ACCOUNTS_PER_DAY). Each one takes a phone, a Gmail and
+    #: an exit within a pass, so this is the money brake: a loop that
+    #: goes wrong on either side must not order hundreds of phones
+    #: overnight. 0 turns the cap off (2026-09-12).
+    web_api_accounts_per_day: int = 100
 
 
     #: CapSolver, for the reCAPTCHA image grid Google sometimes throws during
@@ -508,7 +520,9 @@ class Settings:
                          in ("1", "true", "yes", "on"),
             geo_align=_str("GEO_ALIGN", "1").strip().lower()
                       in ("1", "true", "yes", "on"),
-            ladder_floor_minutes=_int("LADDER_FLOOR_MINUTES", 20),
+            # minimum=0, because .env.example says "0 puts it back at
+            # once" and `_int` refuses a zero unless told not to.
+            ladder_floor_minutes=_int("LADDER_FLOOR_MINUTES", 20, minimum=0),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()
@@ -578,9 +592,16 @@ class Settings:
             manual_login=_str("MANUAL_LOGIN", "0").strip()
                          in ("1", "true", "yes", "on"),
             log_db=_str("LOG_DB", "0").strip() in ("1", "true", "yes", "on"),
-            web_api=_str("WEB_API", "0").strip() in ("1", "true", "yes", "on"),
-            web_api_writes=_str("WEB_API_WRITES", "0").strip()
+            # The `.lower()` these two did without until
+            # 2026-09-12: WEB_API=True in a .env read as off, silently.
+            web_api=_str("WEB_API", "0").strip().lower()
+                    in ("1", "true", "yes", "on"),
+            web_api_writes=_str("WEB_API_WRITES", "0").strip().lower()
                             in ("1", "true", "yes", "on"),
+            web_api_rate_per_minute=_int("WEB_API_RATE_PER_MINUTE", 600,
+                                         minimum=0),
+            web_api_accounts_per_day=_int("WEB_API_ACCOUNTS_PER_DAY", 100,
+                                          minimum=0),
             store_host=_str("STORE_HOST"),
             store_port=_int("STORE_PORT", 5432),
             store_db=_str("STORE_DB", "gfarm"),
