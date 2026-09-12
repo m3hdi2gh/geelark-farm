@@ -177,6 +177,27 @@ def account(settings: Settings, ref: str, *,
     return rows[0] if rows else None
 
 
+#: How many pages one filtered request may read before it answers with
+#: what it has. A rare state over a long pool would otherwise walk the
+#: whole table for one request; a short page and a cursor say "keep
+#: going" just as well.
+_SCAN_PAGES = 20
+
+
+def _some(store, sandbox: bool, after, want: int) -> list[dict]:
+    """One page of rows straight off the index, newest change first."""
+    where = ["r.kind = 'app'"]
+    params: list = []
+    if after:
+        where.append("(r.updated_at, r.id) < (%s, %s)")
+        params += [after[0] or None, after[1]]
+    return store._rows(
+        f"SELECT {_ACCOUNT_COLUMNS} FROM {table_for(sandbox)} r"
+        f" WHERE {' AND '.join(where)}"
+        " ORDER BY r.updated_at DESC, r.id DESC LIMIT %s",
+        (*params, want))
+
+
 def accounts(settings: Settings, *, state: str = "", cursor: str = "",
              limit: int = 100, sandbox: bool = False) -> dict:
     """A page of accounts, newest change first.
@@ -184,28 +205,45 @@ def accounts(settings: Settings, *, state: str = "", cursor: str = "",
     Keyset, not OFFSET: a client walking the list while the farm works
     would see rows twice or not at all under an offset, and the cursor is
     exactly the pair the index is on.
+
+    `state` is a view over several columns, so it cannot be a WHERE - the
+    filter happens here, over rows already read. What it must not do is
+    decide whether there is another page: one page of rows that all
+    failed the filter answered `next_cursor: null`, so a client asking
+    for one state read one page and stopped while the rest of the pool
+    sat behind it (2026-09-13). Pages are read until the page is full,
+    the store is drained, or `_SCAN_PAGES` is spent - and the cursor then
+    points at the last row *looked at*, not the last one returned, so a
+    short page is a page to continue from rather than the end.
     """
     limit = max(1, min(int(limit or 100), 500))
     after = _decode(cursor) if cursor else None
-    where = ["r.kind = 'app'"]
-    params: list = []
-    if after:
-        where.append("(r.updated_at, r.id) < (%s, %s)")
-        params += [after[0] or None, after[1]]
+    kept: list = []
+    edge = None
+    drained = False
     with Store(settings) as store:
-        rows = store._rows(
-            f"SELECT {_ACCOUNT_COLUMNS} FROM {table_for(sandbox)} r"
-            f" WHERE {' AND '.join(where)}"
-            " ORDER BY r.updated_at DESC, r.id DESC LIMIT %s",
-            (*params, limit + 1))
-    # `state` is a view over several columns, so it cannot be a WHERE; the
-    # filter happens here, and the page is still bounded by the same limit.
-    if state:
-        rows = [r for r in rows if state_of(r) == state]
-    more = len(rows) > limit
-    rows = rows[:limit]
-    return {"rows": rows, "more": more,
-            "next_cursor": _cursor(rows[-1]) if rows and more else None}
+        for _ in range(_SCAN_PAGES):
+            rows = _some(store, sandbox, after, limit + 1)
+            if rows:
+                edge = rows[-1]
+            if len(rows) <= limit:
+                drained = True
+            kept.extend(r for r in rows
+                        if not state or state_of(r) == state)
+            if drained or len(kept) > limit:
+                break
+            after = (edge["updated_at"], edge["id"])
+    if len(kept) > limit:
+        # A full page and one to spare: the next walk starts after the
+        # last row this one hands over.
+        kept = kept[:limit]
+        return {"rows": kept, "more": True, "next_cursor": _cursor(kept[-1])}
+    if drained:
+        return {"rows": kept, "more": False, "next_cursor": None}
+    # The scan ran out before the page filled. Everything up to `edge` has
+    # been looked at, so that is where the next one starts.
+    return {"rows": kept, "more": True,
+            "next_cursor": _cursor(edge) if edge else None}
 
 
 def events(settings: Settings, row: dict) -> list[dict]:
@@ -258,12 +296,15 @@ def health(settings: Settings, *, sandbox: bool = False) -> dict:
 
     A sandbox key is told so here as well as in every account: the whole
     point of the room is that it answers like the farm, so the one thing
-    it must never be is silent about being a room."""
+    it must never be is silent about being a room - and `accounts` counts
+    the room it is answering for, not the farm's own pool, which a
+    sandbox key cannot see anywhere else and would only misread here
+    (2026-09-13)."""
     with Store(settings) as store:
         rows = store._rows(
             "SELECT count(*) FILTER (WHERE kind = 'app') AS accounts,"
             " (SELECT value FROM service_state WHERE key = 'pass') AS pulse"
-            " FROM resources")
+            f" FROM {table_for(sandbox)}")
     counts = dict(rows[0]) if rows else {"accounts": 0, "pulse": None}
     pulse = counts.get("pulse") or {}
     from .api_v1 import NOT_MEASURED

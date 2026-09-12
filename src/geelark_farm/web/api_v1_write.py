@@ -215,13 +215,40 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
 
 
 # ------------------------------------------------------- idempotency
-def replay(settings: Settings, *, client_id: int, key: str) -> dict | None:
-    """What this client was told the first time it sent this key."""
+#: How long an answer is kept to be replayed. A retry happens in seconds;
+#: a day is generous for one that waited out a network. Past it the key
+#: is a new key, which is what stops a client's own `order_17` from
+#: answering next month's `order_17` with last month's account.
+REPLAY_HOURS = 24
+
+
+class Reused(Exception):
+    """The key is this client's, and was first sent on a different call."""
+
+
+def replay(settings: Settings, *, client_id: int, key: str,
+           method: str = "", path: str = "") -> dict | None:
+    """What this client was told the first time it sent this key.
+
+    Matched on the call as well as the key. It was matched on the key
+    alone, so one key sent to two different routes answered the second
+    with the first one's body and never ran it - a `DELETE` that quietly
+    returned the `POST`'s 201 (2026-09-13). A key sent to a different
+    call now raises rather than answering.
+    """
     with connect(settings) as conn:
         rows = conn.execute(
-            "SELECT status, body FROM api_idempotency"
-            " WHERE client_id = %s AND key = %s", (client_id, key)).fetchall()
-    return {"status": rows[0][0], "body": rows[0][1]} if rows else None
+            "SELECT status, body, method, path FROM api_idempotency"
+            " WHERE client_id = %s AND key = %s"
+            "   AND created_at > now() - make_interval(hours => %s)",
+            (client_id, key, REPLAY_HOURS)).fetchall()
+    if not rows:
+        return None
+    status, body, was_method, was_path = rows[0]
+    if method and (was_method, was_path) != (method, path):
+        raise Reused(f"that Idempotency-Key was used for "
+                     f"{was_method} {was_path}")
+    return {"status": status, "body": body}
 
 
 def remember(settings: Settings, *, client_id: int, key: str, method: str,
@@ -238,8 +265,34 @@ def remember(settings: Settings, *, client_id: int, key: str, method: str,
                 "INSERT INTO api_idempotency"
                 " (client_id, key, method, path, status, body)"
                 " VALUES (%s, %s, %s, %s, %s, %s)"
-                " ON CONFLICT (client_id, key) DO NOTHING",
-                (client_id, key, method, path, status, json.dumps(body)))
+                " ON CONFLICT (client_id, key) DO UPDATE SET"
+                "   method = EXCLUDED.method, path = EXCLUDED.path,"
+                "   status = EXCLUDED.status, body = EXCLUDED.body,"
+                "   created_at = now()"
+                " WHERE api_idempotency.created_at"
+                "       <= now() - make_interval(hours => %s)",
+                (client_id, key, method, path, status, json.dumps(body),
+                 REPLAY_HOURS))
             conn.commit()
     except Exception as exc:                                      # noqa: BLE001
         log.warning("api: the answer to %s was not remembered (%s)", key, exc)
+
+
+def prune(settings: Settings) -> int:
+    """Throw out remembered answers past `REPLAY_HOURS`. Returns how many.
+
+    The table said "pruned by age" from the day it was written and nothing
+    pruned it, so a key would have replayed for the life of the client
+    (2026-09-13).
+    """
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "DELETE FROM api_idempotency"
+            " WHERE created_at <= now() - make_interval(hours => %s)"
+            " RETURNING key", (REPLAY_HOURS,))
+        gone = len(cur.fetchall())
+        conn.commit()
+    if gone:
+        log.info("forgot %d idempotency key(s) older than %d hours",
+                 gone, REPLAY_HOURS)
+    return gone

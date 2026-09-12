@@ -888,3 +888,199 @@ def test_a_method_nobody_serves_is_still_json(web, monkeypatch):  # noqa: F811
         assert status == 405, method
         assert dict(headers)["Content-Type"].startswith("application/json")
         assert json.loads(body)["error"]["code"] == "not_allowed"
+
+
+# ---------------------------------------- what the panel's author would hit
+def _pool(n: int, *, ready_every: int = 0):
+    """`n` account rows, newest change first, with ids counting down."""
+    import datetime
+
+    base = datetime.datetime(2026, 9, 13, tzinfo=datetime.timezone.utc)
+    out = []
+    for k in range(n):
+        out.append({
+            "id": n - k, "address": f"a{n - k}@x.com",
+            "status": ("ready" if ready_every and (n - k) % ready_every == 0
+                       else ""),
+            "error": "", "serial": "", "note": "", "source": "panel",
+            "product": "chatgpt", "credential_kind": "password_totp",
+            "panel_ref": f"ord_{n - k}", "client_id": 1, "attempts": 0,
+            "failures": 0, "customer_ready": False, "withdrawn_at": None,
+            "state_changed_at": base, "delivered_at": None,
+            "created_at": base, "updated_at": base - datetime.timedelta(minutes=k)})
+    return out
+
+
+def _paging_store(monkeypatch, pool):
+    """A store that answers `_some` off `pool`, honouring the keyset."""
+    read_mod = _read()
+    seen = {"pages": 0}
+
+    class _Store:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            seen["pages"] += 1
+            want = params[-1]
+            rest = pool
+            if len(params) > 1:
+                import datetime
+
+                stamp, ident = params[0], params[1]
+                if isinstance(stamp, str):
+                    # What `_decode` hands back; Postgres casts it, and so
+                    # does this.
+                    stamp = datetime.datetime.fromisoformat(stamp)
+                rest = [r for r in pool
+                        if (r["updated_at"], r["id"]) < (stamp, ident)]
+            return rest[:want]
+
+    monkeypatch.setattr(read_mod, "Store", _Store)
+    return seen
+
+
+def _read():
+    from geelark_farm.web import api_v1_read
+    return api_v1_read
+
+
+def test_a_filtered_walk_pages_on_instead_of_stopping_at_the_first_page(
+        monkeypatch, make_settings):
+    """`state` is a view over several columns, so it is filtered after the
+    page is read - and it was also deciding whether there was another
+    page. One page of rows that all failed the filter answered
+    `next_cursor: null`, so a client asking for one state read one page
+    and stopped while the rest of the pool sat behind it (2026-09-13)."""
+    read_mod = _read()
+    # Ten ready rows among ninety, none of them in the first page of ten.
+    pool = _pool(90, ready_every=9)
+    _paging_store(monkeypatch, pool)
+
+    page = read_mod.accounts(make_settings(), state="ready", limit=5)
+
+    assert [r["panel_ref"] for r in page["rows"]], "it found some"
+    assert len(page["rows"]) == 5 and page["more"] is True
+    assert page["next_cursor"], "and there is a page after it"
+
+    # And the whole walk reaches every one of them, exactly once.
+    settings, cursor, seen = make_settings(), "", []
+    for _ in range(40):
+        page = read_mod.accounts(settings, state="ready", cursor=cursor,
+                                 limit=5)
+        seen += [r["panel_ref"] for r in page["rows"]]
+        cursor = page["next_cursor"] or ""
+        if not cursor:
+            break
+    want = [r["panel_ref"] for r in pool if r["status"] == "ready"]
+    assert seen == want and len(seen) == len(set(seen))
+
+
+def test_a_filtered_walk_gives_up_the_scan_rather_than_the_walk(
+        monkeypatch, make_settings):
+    """A state nothing is in must not read the whole table for one
+    request: the scan is bounded, and a short page with a cursor says
+    keep going rather than that there is nothing."""
+    read_mod = _read()
+    _paging_store(monkeypatch, _pool(600))
+
+    page = read_mod.accounts(make_settings(), state="delivered", limit=5)
+
+    assert page["rows"] == [] and page["more"] is True
+    assert page["next_cursor"], "a page to continue from, not the end"
+
+
+def test_an_unfiltered_walk_still_ends(monkeypatch, make_settings):
+    read_mod = _read()
+    _paging_store(monkeypatch, _pool(7))
+    settings, cursor, seen = make_settings(), "", []
+    for _ in range(10):
+        page = read_mod.accounts(settings, cursor=cursor, limit=3)
+        seen += [r["panel_ref"] for r in page["rows"]]
+        cursor = page["next_cursor"] or ""
+        if not cursor:
+            break
+    assert seen == [r["panel_ref"] for r in _pool(7)]
+    assert cursor == "" and len(seen) == 7
+
+
+def test_health_counts_the_room_it_is_answering_for(monkeypatch,
+                                                    make_settings):
+    """A sandbox key was told the real pool's size beside `sandbox: true`
+    - a number about a farm it cannot see anywhere else in this API
+    (2026-09-13)."""
+    read_mod = _read()
+    asked = []
+
+    class _Store:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append(sql)
+            return [{"accounts": 3, "pulse": {"warm": 2}}]
+
+    monkeypatch.setattr(read_mod, "Store", _Store)
+
+    read_mod.health(make_settings(), sandbox=True)
+    assert "FROM api_sandbox" in asked[-1]
+    read_mod.health(make_settings(), sandbox=False)
+    assert "FROM resources" in asked[-1]
+
+
+def test_an_idempotency_key_belongs_to_the_call_it_was_first_sent_on(
+        monkeypatch, make_settings):
+    """It was matched on the key alone, so one key sent to two different
+    routes answered the second with the first one's body and never ran it
+    - a DELETE that quietly returned the POST's 201 (2026-09-13)."""
+    from geelark_farm.web import api_v1_write as write_mod
+
+    kept = {"row": ("201", {"ref": "ord_1"}, "POST", "/accounts")}
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            assert "created_at > now() - make_interval(hours =>" in sql
+            assert params[2] == write_mod.REPLAY_HOURS
+            self.rows = [kept["row"]] if kept["row"] else []
+            return self
+
+        def fetchall(self):
+            return self.rows
+
+    monkeypatch.setattr(write_mod, "connect", lambda s: _Conn())
+    settings = make_settings()
+
+    same = write_mod.replay(settings, client_id=1, key="k",
+                            method="POST", path="/accounts")
+    assert same == {"status": "201", "body": {"ref": "ord_1"}}
+
+    try:
+        write_mod.replay(settings, client_id=1, key="k",
+                         method="DELETE", path="/accounts/ord_1")
+    except write_mod.Reused as exc:
+        assert "POST /accounts" in str(exc)
+    else:
+        raise AssertionError("a key on another call must not replay")
+
+    # Nothing remembered: the write runs.
+    kept["row"] = None
+    assert write_mod.replay(settings, client_id=1, key="k",
+                            method="POST", path="/accounts") is None

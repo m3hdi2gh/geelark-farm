@@ -456,7 +456,11 @@ def _write(handler, settings, client: dict, rest: str) -> None:
 
     key = (handler.headers.get("Idempotency-Key") or "").strip()[:200]
     if key:
-        seen = api_write.replay(settings, client_id=client["id"], key=key)
+        try:
+            seen = api_write.replay(settings, client_id=client["id"], key=key,
+                                    method=handler.command, path=rest)
+        except api_write.Reused as exc:
+            return _error(handler, 409, "already_exists", str(exc))
         if seen is not None:
             return _json(handler, seen["status"], seen["body"],
                          headers=(("Idempotent-Replayed", "true"),))
