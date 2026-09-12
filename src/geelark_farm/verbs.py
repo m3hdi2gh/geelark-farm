@@ -188,13 +188,16 @@ def build_by_hand(book, ledger, settings, payload, client):
                              requested_by=payload.get("by_id"), app=app,
                              no_gmail=no_gmail)
     where = f" on {proxy_name}" if proxy_name else ""
-    carrying = {"": " without an app", "chatgpt": " with ChatGPT",
-                "spotify": " with Spotify", "claude": " with Claude"}[app]
-    if app_account:
-        carrying += f" and {app_account} signed in"
+    # Every phone carries all three apps, so what is worth saying back is
+    # the account, not the apps (the operator, 2026-09-12).
+    named = {"": "", "chatgpt": "ChatGPT", "spotify": "Spotify",
+             "claude": "Claude"}[app]
+    carrying = (f" and {app_account} signed into {named}" if app_account
+                else " with no account signed into anything")
     if no_gmail:
-        return "done", (f"asked for a bare phone{where} - no Google account, "
-                        f"no app - request {asked}. It starts within seconds."
+        return "done", (f"asked for a bare phone{where} - no Google account "
+                        f"and nothing signed in, though it still carries the "
+                        f"apps - request {asked}. It starts within seconds."
                         ), None
     who = gmail or "the next free Gmail"
     return "done", (f"asked for a phone{where} for {who}{carrying} - "

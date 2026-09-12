@@ -3411,14 +3411,13 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert 'name="proxy_name"' not in body
     assert "auto &mdash; the next free one" in body, "blank means the pool decides"
     assert 'value="none">none &mdash; no Google account' in body
-    assert 'value="claude">Claude' in body
-    assert 'value="">none &mdash; Google only' in body
+    assert 'select name="app"' not in body, "which app is not a choice"
+    assert "ChatGPT, Spotify and Claude already on it" in body
 
     status, headers, _ = client.request(
         "POST", "/phones/build",
         _form(csrf=client.csrf(), gmail="pick@example.com",
-              proxy_name="SX9", app="chatgpt",
-              app_account="gpt@example.com"))
+              proxy_name="SX9", app_account="gpt@example.com"))
 
     assert status == 303 and dict(headers)["Location"].startswith("/")
     assert got["verb"] == "build_by_hand"
@@ -3429,35 +3428,30 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert got["payload"]["install_app"] is True
     assert got["payload"]["app_account"] == "gpt@example.com"
 
-    # Spotify: no account rides along, whatever the box said.
+    # No account: the phone comes up warm, with all three apps on it and
+    # nothing signed into any of them.
+    client.request("POST", "/phones/build", _form(csrf=client.csrf()))
+    assert got["payload"]["app"] == "chatgpt"
+    assert got["payload"]["app_account"] == ""
+
+    # An app named in the form is ignored: the card has no such box any
+    # more, and a phone carries all three whatever anybody posts.
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), app="spotify",
                          app_account="gpt@example.com"))
-    assert got["payload"]["app"] == "spotify"
-    assert got["payload"]["install_app"] is True
-    assert got["payload"]["app_account"] == ""
-    # None: no app at all.
+    assert got["payload"]["app"] == "chatgpt"
+    assert got["payload"]["app_account"] == "gpt@example.com"
+
+    # No Gmail: a bare phone, signed in nowhere, whatever the other boxes
+    # carried. It still comes with the three apps - that is the builder's
+    # business, not the card's.
     client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), app="none"))
-    assert got["payload"]["app"] == "" and got["payload"]["install_app"] is False
-    # Claude is an app now.
-    client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), app="claude",
-                         app_account="gpt@example.com"))
-    assert got["payload"]["app"] == "claude"
-    assert got["payload"]["app_account"] == "", "an account is ChatGPT's only"
-    # No Gmail: a bare phone, whatever the other boxes carried.
-    client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), gmail="none", app="chatgpt",
+                   _form(csrf=client.csrf(), gmail="none",
                          app_account="gpt@example.com"))
     assert got["payload"]["no_gmail"] is True
     assert got["payload"]["gmail"] == "" and got["payload"]["app"] == ""
     assert got["payload"]["app_account"] == ""
     assert got["payload"]["gmail_typed"] is False
-    # The old form's tick still means ChatGPT.
-    client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), install_app="1"))
-    assert got["payload"]["app"] == "chatgpt"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3531,13 +3525,14 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
-    # Three choices, each a select - the exit is the build's own business
-    # now: the Gmail (auto, none, or "choose...", which opens a dialog to
-    # type one or pick a free one), the app, and the account (the
-    # operator, 2026-09-10).
+    # Two choices, each a select - the exit is the build's own business,
+    # and so is which app (the operator, 2026-09-12): the Gmail (auto,
+    # none, or "choose...", which opens a dialog to type one or pick a
+    # free one) and the account.
     card = body[body.index('class="byhand"'):body.index("Build</button>")]
-    for name in ("gmail", "app", "app_account"):
+    for name in ("gmail", "app_account"):
         assert f'<select name="{name}"' in card, name
+    assert '<select name="app"' not in card, "every phone carries all three"
     assert 'name="proxy_name"' not in card, "an exit is never chosen here"
     assert 'name="gmail" data-new="gmail-new"' in card
     assert 'name="app_account" data-new="account-new"' in card
@@ -3545,12 +3540,8 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert "type a new one" not in card
     assert '<option value="">auto &mdash; the next free one (1 free)</option>' in card
     assert '<option value="none">none &mdash; no Google account</option>' in card
-    assert '<option value="chatgpt" selected>ChatGPT</option>' in card
-    assert '<option value="spotify">Spotify</option>' in card
-    assert '<option value="claude">Claude</option>' in card
-    assert '<option value="">none &mdash; Google only</option>' in card
     assert '<option value="">none &mdash; sign in later</option>' in card
-    assert 'name="install_app"' not in card, "the tick became the App choice"
+    assert 'name="install_app"' not in card, "the tick is long gone"
     assert '<optgroup label="pick one">' not in card, "the free rows moved into the dialog"
     assert "Exit:" not in body, "nothing about the exit at all (the operator)"
     for ident in ("gmail-new", "account-new"):
@@ -3566,17 +3557,20 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     for name in ("gmail_password", "gmail_secret", "app_password", "app_secret"):
         assert f'<input type="hidden" name="{name}" value="">' in body, name
     script = pages._DASH_SCRIPT
-    assert "acctPick.disabled = !on" in script, "an account only with ChatGPT"
-    assert "gmailPick.value === 'none'" in script, "no Gmail: no app, no account"
-    assert "appPick.disabled = bare" in script
+    assert "gmailPick.value === 'none'" in script, "no Gmail: no account"
+    assert "acctPick.disabled = bare" in script
+    assert 'select[name="app"]' not in script, "there is no App box to gate"
     assert "function openNew(pick, was)" in script
     assert "' (from the pool)'" in script, "a picked row says where it came from"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_without_the_app_no_gpt_account_is_asked_for(web, monkeypatch):
-    """Unticking the app is asking for a warm phone. Carrying an account
-    alongside would spend one on a phone that has nowhere to sign it in."""
+def test_a_bare_phone_carries_no_account_however_the_boxes_were_left(
+        web, monkeypatch):
+    """No Google account means nothing to sign an app account into, so
+    one named alongside would be spent on a phone with nowhere to put it.
+    The apps themselves still go on - that is not the card's question any
+    more (the operator, 2026-09-12)."""
     import geelark_farm.store.actions as actions_mod
 
     _dash(monkeypatch)
@@ -3587,11 +3581,19 @@ def test_without_the_app_no_gpt_account_is_asked_for(web, monkeypatch):
     client.login()
 
     client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), gmail="a@example.com",
+                   _form(csrf=client.csrf(), gmail="none",
                          app_account="gpt@example.com"))
 
+    assert got["payload"]["no_gmail"] is True
     assert got["payload"]["install_app"] is False
     assert got["payload"]["app_account"] == ""
+
+    # And with a Gmail, the account is exactly what was chosen.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         app_account="gpt@example.com"))
+    assert got["payload"]["install_app"] is True
+    assert got["payload"]["app_account"] == "gpt@example.com"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -5571,3 +5573,47 @@ def test_a_phone_being_built_for_somebody_says_building_first():
     # And once it is built, whose it is is the whole answer again.
     done = pages._phone_badge(dict(building, status="ready"), me="mehdi")
     assert "With you" in done and "Building" not in done
+
+
+def test_the_account_column_only_promises_an_account_a_phone_can_take():
+    """It used to read the wish's single app out of the phone's `App name`
+    cell - "spotify" meant no account was coming, empty meant the phone
+    was done. Every phone carries all three now, so that cell says
+    "chatgpt+spotify+claude" on every row and both branches went quiet: a
+    bare phone read "waiting for one" over an account nothing can send,
+    because a finished phone is on no warm list (the operator,
+    2026-09-12)."""
+    from geelark_farm.web import pages
+
+    three = "chatgpt+spotify+claude"
+
+    # Warm: an account really is coming, whatever is installed.
+    warm = pages._account_cell({"status": "app_only", "app": three,
+                                "gmail": "g@x.com", "app_account": ""})
+    assert "waiting for one" in warm
+
+    # Bare and finished: nothing is coming, and it says why.
+    bare = pages._account_cell({"status": "ready", "app": three,
+                                "gmail": "", "app_account": "✗"})
+    assert "no Google account" in bare and "waiting" not in bare
+
+    # Finished with Google on it but no account signed in.
+    alone = pages._account_cell({"status": "ready", "app": three,
+                                 "gmail": "g@x.com", "app_account": ""})
+    assert "none signed in" in alone and "waiting" not in alone
+
+    # And the address itself whenever there is one.
+    done = pages._account_cell({"status": "ready", "app": three,
+                                "gmail": "g@x.com", "app_account": "a@x.com"})
+    assert "a@x.com" in done
+
+
+def test_a_choice_put_back_by_the_dialog_re_gates_the_card():
+    """Setting .value fires nothing, so Cancel on the Gmail dialog left
+    the account box live over a bare build (2026-09-12)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "pick.dispatchEvent(new Event('change'));" in script
+    assert script.index("pick.value = was;") < script.index(
+        "pick.dispatchEvent(new Event('change'));")

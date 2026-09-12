@@ -4580,25 +4580,51 @@ def test_a_phone_asked_for_with_no_app_account_still_carries_the_apps(
     assert "ChatGPT, Spotify and Claude" in build.detail
 
 
-def test_a_bare_phone_is_still_bare(device, settings, monkeypatch):
-    """Nothing is ordered and nothing is installed: it was asked for with
-    nothing on it."""
-    asked, installed = [], []
+def test_a_bare_phone_carries_the_apps_and_nothing_else(device, settings,
+                                                        monkeypatch):
+    """Bare is about the accounts: no Google account and so nothing signed
+    in anywhere, but the three apps still go on, because from the center
+    they cost it seconds (the operator, 2026-09-12)."""
+    asked, waited = [], []
     monkeypatch.setattr(builder.phones, "ensure_running",
                         lambda *a, **k: k.get("on_running")
                         and k["on_running"]())
     monkeypatch.setattr(builder.apps, "begin",
                         lambda c, p, package, **k: asked.append(package)
                         or True)
-    monkeypatch.setattr(
-        builder.play_install, "install",
-        lambda client, phone_id, package, **k: installed.append(package)
-        or INSTALLED)
+    monkeypatch.setattr(builder.apps, "wait_installed",
+                        lambda c, p, package, **k: waited.append(package)
+                        or True)
+    monkeypatch.setattr(builder.play_install, "install",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("all three were ordered")))
+    signed = []
+    monkeypatch.setattr(builder.google_login, "sign_in",
+                        lambda *a, **k: signed.append(1) or SIGNED_IN)
 
     build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
                               1, want=builder.Wanted(no_gmail=True))
 
-    assert build.ok and asked == [] and installed == []
+    assert build.ok and signed == [], "no Google account, as asked"
+    assert asked == [settings.target_package, builder.SPOTIFY_PACKAGE,
+                     builder.CLAUDE_PACKAGE]
+    assert waited == asked
+    assert build.app == "chatgpt+spotify+claude"
+    assert not build.app_installed, "nothing is signed into any of them"
+    assert "bare phone" in build.detail
+    assert "ChatGPT, Spotify and Claude" in build.detail
+
+    # And when the center does not deliver, Play is not walked: the Store
+    # asks to be signed in, and this phone has no Google account at all.
+    monkeypatch.setattr(builder.apps, "wait_installed", lambda *a, **k: False)
+    build = builder.build_one(None, settings, make_book(apps=1), FakeLedger(),
+                              1, want=builder.Wanted(no_gmail=True))
+    assert build.ok and build.app == "", "none of them went on"
+    assert [app for app, _, _ in build.tried] == ["chatgpt", "spotify",
+                                                  "claude"]
+    assert all(reason == "install_failed" for _, reason, _ in build.tried)
+    assert {service for _, _, service in build.tried} == {"GeeLark"}, (
+        "it was the center that did not deliver, not Play")
 
 
 def test_spotify_not_installing_is_a_note_not_a_failed_phone(
@@ -5003,8 +5029,9 @@ def test_the_recipe_stops_at_three_exits(device, settings, drive, monkeypatch):
 def test_a_bare_phone_claims_no_gmail_signs_nothing_in_and_is_kept(
         device, settings, monkeypatch):
     """No Google account: the Gmail phase is skipped whole, the phone is
-    ready the moment it is up, and the rule that deletes a phone with
-    nothing signed into it does not apply - it has nothing on purpose."""
+    ready the moment its apps are on, and the rule that deletes a phone
+    with nothing signed into it does not apply - it has nothing signed in
+    on purpose."""
     asked = []
     monkeypatch.setattr(builder.google_login, "sign_in",
                         lambda *a, **k: asked.append(1) or SIGNED_IN)
@@ -5016,7 +5043,12 @@ def test_a_bare_phone_claims_no_gmail_signs_nothing_in_and_is_kept(
     assert build.ok and build.status == "ready", build.detail
     assert "bare phone" in build.detail
     assert asked == [], "nothing was signed in"
-    assert build.gmail == "" and build.app == ""
+    assert build.gmail == ""
+    # With no client, the center refuses all three and Play is not walked
+    # on a phone with no Google account - the apps are still not what
+    # bare is about, which
+    # test_a_bare_phone_carries_the_apps_and_nothing_else proves.
+    assert build.app == ""
     assert build.phone_id, "kept, not discarded"
     assert len(book.gmails.available) == 2, "no address was claimed"
     assert len(book.apps.available) == 1

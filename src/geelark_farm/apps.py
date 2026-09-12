@@ -73,6 +73,38 @@ def forget(package: str) -> None:
         _ours_at = 0.0
 
 
+def _entry(value) -> dict:
+    """One package's record, whichever shape it was written in.
+
+    The row began as {package: id} and grew the version name that id
+    carries, because "is the copy in the center still the one Play
+    serves?" cannot be answered by an id alone - and Play's own installs
+    are not in `/v1/app/list` to compare against, so the answer has to
+    have been written down (2026-09-12). Both shapes read.
+    """
+    if isinstance(value, dict):
+        return {"id": str(value.get("id") or ""),
+                "version": str(value.get("version") or ""),
+                "at": str(value.get("at") or "")}
+    return {"id": str(value or ""), "version": "", "at": ""}
+
+
+def recorded(settings) -> dict[str, dict]:
+    """Every app we uploaded, by package: the center's id, the version
+    name that id carries, and the day it was written down. Raises if the
+    store cannot be read - this is the recorder's own view, not a
+    build's."""
+    from .store import state as store_state
+
+    row = store_state.get(settings, STATE_KEY, {}) or {}
+    out = {}
+    for package, value in dict(row).items():
+        entry = _entry(value)
+        if entry["id"]:
+            out[str(package)] = entry
+    return out
+
+
 def uploaded(settings, package: str) -> str:
     """The center's id for the copy of `package` we put there ourselves,
     or "" when we put none there - which is every app GeeLark's own
@@ -89,7 +121,8 @@ def uploaded(settings, package: str) -> str:
         from .store import state as store_state
 
         row = store_state.get(settings, STATE_KEY, {}) or {}
-        known = {str(k): str(v) for k, v in dict(row).items() if v}
+        known = {str(k): _entry(v)["id"] for k, v in dict(row).items()}
+        known = {k: v for k, v in known.items() if v}
     except Exception as exc:                                       # noqa: BLE001
         # The last read stands rather than the app falling back to Play
         # on one unlucky query, and the clock is left where it was so the
@@ -104,20 +137,26 @@ def uploaded(settings, package: str) -> str:
     return known.get(package, "")
 
 
-def remember(settings, package: str, version: str) -> None:
+def remember(settings, package: str, version_id: str, *,
+             version_name: str = "", at: str = "") -> None:
     """Write down the center's id for an app we uploaded, so every builder
-    installs it. A blank version forgets the package.
+    installs it. A blank id forgets the package.
 
-    Raises rather than reporting trouble: a recorder that quietly did
-    nothing would be found out one slow build at a time.
+    `version_name` is what the app calls that build - "1.2026.244" - and
+    it is what a check against Play compares. Raises rather than
+    reporting trouble: a recorder that quietly did nothing would be found
+    out one slow build at a time.
     """
     from .store import db
     from .store import state as store_state
 
-    known = {str(k): str(v) for k, v in
-             dict(store_state.get(settings, STATE_KEY, {}) or {}).items() if v}
-    if version:
-        known[package] = str(version)
+    known = {str(k): _entry(v) for k, v in
+             dict(store_state.get(settings, STATE_KEY, {}) or {}).items()}
+    known = {k: v for k, v in known.items() if v["id"]}
+    if version_id:
+        known[package] = {"id": str(version_id),
+                          "version": str(version_name),
+                          "at": at or time.strftime("%Y-%m-%d")}
     else:
         known.pop(package, None)
     with db.connect(settings) as conn:

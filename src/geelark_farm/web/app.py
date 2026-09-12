@@ -355,11 +355,12 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path == "/phones/build":
-                # Three choices: the Gmail, the app, the account. The exit
-                # is not one of them any more - the build picks one and
-                # swaps it when an install or a sign-in shows it is bad
-                # (the operator, 2026-09-10); a `proxy_name` the panel API
-                # still sends is passed on, and honoured.
+                # Two choices: the Gmail and the account. The exit is not
+                # one of them - the build picks one and swaps it when an
+                # install or a sign-in shows it is bad (the operator,
+                # 2026-09-10); a `proxy_name` the panel API still sends is
+                # passed on, and honoured. Nor is the app, since every
+                # phone carries all three (2026-09-12).
                 #
                 # A typed address wins over a picked one: somebody who
                 # filled the box meant the box. Said here rather than in
@@ -372,18 +373,16 @@ class _Handler(BaseHTTPRequestHandler):
                 no_gmail = gmail.lower() == "none"
                 if no_gmail:
                     gmail = ""
-                # Which app: none, ChatGPT, Spotify or Claude. The old
-                # form sent a tick instead; it still means ChatGPT or
-                # nothing.
-                if "app" in field:
-                    which = (field.get("app") or "").strip().lower()
-                    which = "" if which == "none" else which
-                else:
-                    which = "chatgpt" if field.get("install_app") else ""
-                if no_gmail:
-                    which = ""
-                account = ((field.get("app_account") or "").strip()
-                           if which == "chatgpt" else "")
+                # Which app is not the card's question any more: every
+                # phone carries ChatGPT, Spotify and Claude, so what is
+                # left to choose is whether an account signs into one -
+                # and the only accounts this farm holds are ChatGPT's
+                # (the operator, 2026-09-12). A bare phone signs in
+                # nowhere. The panel API still names an app of its own,
+                # and the verb still honours it.
+                which = "" if no_gmail else "chatgpt"
+                account = ("" if no_gmail
+                           else (field.get("app_account") or "").strip())
                 payload = {
                     "gmail": gmail,
                     "no_gmail": no_gmail,

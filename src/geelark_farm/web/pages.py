@@ -1609,16 +1609,30 @@ def _phone_rows(data: dict, user: dict) -> str:
 
 
 def _account_cell(row: dict) -> str:
-    """The GPT account column: the address, or why there is none. A
-    Spotify phone never gets one, and a phone built with no app is done
-    the moment Google is in (2026-09-08)."""
-    app = str(row.get("app") or "")
-    if app == "spotify":
-        return '<span class="dim">Spotify &middot; no account</span>'
-    if (not app and (row.get("status") or "") == "ready"
-            and _no_address(row.get("app_account"))):
-        return '<span class="dim">no app</span>'
-    return _addr_cell(row.get("app_account"), "waiting for one")
+    """The GPT account column: the address, or why there is none.
+
+    Which app the phone carries stopped being the answer. It used to be
+    one - "spotify" meant no account was ever coming, empty meant the
+    phone was done the moment Google was in (2026-09-08) - and the
+    column read that word out of `App name`. Every phone carries all
+    three now, so that cell says "chatgpt+spotify+claude" on every row
+    and both of those branches went quiet: a bare phone read "waiting
+    for one", promising an account that nothing can send, because a
+    finished phone is not on the warm list any door offers (the
+    operator, 2026-09-12).
+
+    What decides the word is whether the phone can still take one. Only
+    an unfinished phone can; a `ready` one is done, and the honest word
+    is why it has none.
+    """
+    address = row.get("app_account")
+    if not _no_address(address):
+        return _addr_cell(address, "")
+    if (row.get("status") or "") != "ready":
+        return '<span class="dim">waiting for one</span>'
+    if _no_address(row.get("gmail")):
+        return '<span class="dim">no Google account</span>'
+    return '<span class="dim">none signed in</span>'
 
 
 def _addr_cell(value, empty: str) -> str:
@@ -1824,27 +1838,24 @@ _DASH_SCRIPT = """
       setTimeout(function(){ said.remove(); }, stay + 600);
     }
 
-    // Build one now: three choices. No Gmail means no app and no account,
-    // so those two boxes go off; the account is a choice only with
-    // ChatGPT. "choose..." on the Gmail and the account opens a small
-    // dialog - type one, or pick a free one - and what is typed rides in
-    // the card's hidden boxes while the choice shows the address
-    // (2026-09-10).
+    // Build one now: two choices. No Gmail means nothing is signed in,
+    // so the account box goes off with it. Which app is not a choice any
+    // more - every phone carries all three (2026-09-12). "choose..." on
+    // the Gmail and the account opens a small dialog - type one, or pick
+    // a free one - and what is typed rides in the card's hidden boxes
+    // while the choice shows the address (2026-09-10).
     var byhand = document.querySelector('.byhand');
     if (byhand) {
       var gmailPick = byhand.querySelector('select[name="gmail"]');
-      var appPick = byhand.querySelector('select[name="app"]');
       var acctPick = byhand.querySelector('select[name="app_account"]');
       var gate = function(){
         var bare = !!gmailPick && gmailPick.value === 'none';
-        if (appPick) appPick.disabled = bare;
-        var on = !bare && !!appPick && appPick.value === 'chatgpt';
         if (acctPick) {
-          acctPick.disabled = !on;
-          if (!on) acctPick.value = '';
+          acctPick.disabled = bare;
+          if (bare) acctPick.value = '';
         }
       };
-      [gmailPick, appPick].forEach(function(p){
+      [gmailPick].forEach(function(p){
         if (p) p.addEventListener('change', gate);
       });
       gate();
@@ -2280,6 +2291,10 @@ _DASH_SCRIPT = """
       } else {
         pick.value = was;
       }
+      // Setting .value fires nothing, so the card's own gate never heard
+      // that the Gmail had gone back to "none" on Cancel and left the
+      // account box live over a bare build (2026-09-12).
+      pick.dispatchEvent(new Event('change'));
       closeEditor(dlg);
     };
     dlg.querySelector('[data-use]').onclick = function(){ done(true); };
@@ -3285,17 +3300,26 @@ def _build_card(data: dict, user: dict) -> str:
     # address the pool has never seen, and an account bought this morning
     # is exactly what this form is for. The hint says so instead of the
     # form hiding (2026-09-05).
+    # The App box is gone: every phone carries all three apps now, so
+    # which app was never a question about the phone, only about the
+    # account - and the only accounts this farm holds are ChatGPT's (the
+    # operator, 2026-09-12). Named here rather than read out of
+    # APPS_ON_EVERY_PHONE, because the web layer does not import the
+    # builder; whoever changes that setting changes this sentence in the
+    # same breath.
     hint = ("Each box starts on what the farm would do by itself; pick "
-            "something else, or choose your own.")
+            "something else, or choose your own. Every phone comes with "
+            "ChatGPT, Spotify and Claude already on it.")
     if pulse.get("tripped") or pulse.get("paused"):
         hint += (" The keeper is held back right now, but a phone asked "
                  "for here is still built.")
     gmails = _label_list(choose.get("gmails"))
     apps = _label_list(choose.get("apps"))
-    # Three boxes. The exit is not one of them any more: the build picks
-    # one and swaps it whenever an install or a sign-in shows it is bad -
-    # a choice made here was a choice the build had to undo (the
-    # operator, 2026-09-10). A Gmail is the pool's next, none at all, or
+    # Two boxes. The exit is not one of them: the build picks one and
+    # swaps it whenever an install or a sign-in shows it is bad - a
+    # choice made here was a choice the build had to undo (the operator,
+    # 2026-09-10). Nor is the app: all three go on every phone (the
+    # operator, 2026-09-12). A Gmail is the pool's next, none at all, or
     # one chosen in the dialog - typed, or picked from the free ones.
     if gmails:
         first = (f'<option value="">auto &mdash; the next free one '
@@ -3310,12 +3334,6 @@ def _build_card(data: dict, user: dict) -> str:
                  f'<select name="gmail" data-new="gmail-new">{first}'
                  f'<option value="__new__">choose&hellip;</option>'
                  f'</select></label>')
-    app_box = ('<label class="field"><span>App</span><select name="app">'
-               '<option value="chatgpt" selected>ChatGPT</option>'
-               '<option value="spotify">Spotify</option>'
-               '<option value="claude">Claude</option>'
-               '<option value="">none &mdash; Google only</option>'
-               '</select></label>')
     account_box = ('<label class="field"><span>GPT account</span>'
                    '<select name="app_account" data-new="account-new">'
                    '<option value="">none &mdash; sign in later</option>'
@@ -3326,7 +3344,7 @@ def _build_card(data: dict, user: dict) -> str:
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        + gmail_box + app_box + account_box
+        + gmail_box + account_box
         + '<button class="go">Build</button>'
         # What the two dialogs typed rides here; the address itself is the
         # choice's value.

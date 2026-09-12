@@ -1170,7 +1170,8 @@ def test_claude_is_an_app_the_card_may_ask_for():
     assert status == "done", said
     assert asked["app"] == "claude" and asked["no_gmail"] is False
     assert asked["app_account"] == "", "an account is ChatGPT's only"
-    assert "with Claude" in said
+    # Every phone carries all three, so what is said back is the account.
+    assert "no account signed into anything" in said
 
 
 def test_stop_this_one_is_written_where_the_builders_read_it(

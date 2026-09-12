@@ -209,3 +209,51 @@ def test_a_version_the_center_dropped_is_forgotten_on_both_sides(
 
     apps.forget("com.anthropic.claude")
     assert apps._ours == {} and apps._ours_at == 0.0
+
+
+def test_the_record_carries_the_version_name_its_id_names(monkeypatch,
+                                                          make_settings):
+    """An id alone cannot answer "has Play moved past ours?" - and Play's
+    own installs are in neither of GeeLark's listings to compare against,
+    so the version name has to have been written down (2026-09-12)."""
+    settings = make_settings(store_enabled=True)
+    written = {}
+    from geelark_farm.store import db
+    from geelark_farm.store import state as store_state
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def commit(self):
+            written["committed"] = True
+
+    monkeypatch.setattr(db, "connect", lambda s: _Conn())
+    monkeypatch.setattr(store_state, "get",
+                        lambda s, key, default=None: dict(written.get("row", {})))
+    monkeypatch.setattr(store_state, "put",
+                        lambda conn, key, value: written.update(row=value))
+
+    apps.remember(settings, "com.anthropic.claude", "42",
+                  version_name="1.260910.12", at="2026-09-12")
+    assert written["committed"]
+    assert written["row"] == {"com.anthropic.claude": {
+        "id": "42", "version": "1.260910.12", "at": "2026-09-12"}}
+    assert apps.recorded(settings) == written["row"]
+    assert apps.uploaded(settings, "com.anthropic.claude") == "42"
+
+    # The shape it started as - a bare id - still reads, and a rewrite
+    # lifts it into the fuller one.
+    written["row"] = {"com.openai.chatgpt": "99"}
+    apps.forget("com.openai.chatgpt")
+    assert apps.uploaded(settings, "com.openai.chatgpt") == "99"
+    assert apps.recorded(settings) == {"com.openai.chatgpt": {
+        "id": "99", "version": "", "at": ""}}
+
+    # Forgetting takes the package out and leaves the rest.
+    written["row"] = {"a": {"id": "1"}, "b": {"id": "2"}}
+    apps.remember(settings, "a", "")
+    assert written["row"] == {"b": {"id": "2", "version": "", "at": ""}}

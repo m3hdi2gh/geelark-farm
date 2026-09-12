@@ -1043,9 +1043,11 @@ class Wanted:
     #: exists: taken, owned, marked built by them - and not the keeper's
     #: stock while they hold it (2026-09-08).
     requested_by: int | None = None
-    #: A bare phone: no Google account at all, and so no app and no
-    #: account either. Nothing is claimed, nothing is signed in, and the
-    #: phone is ready the moment it is up (the build card, 2026-09-10).
+    #: A bare phone: no Google account at all, and so no app account
+    #: either. Nothing is claimed and nothing is signed in. It still
+    #: carries the apps every phone carries - bare is about the accounts
+    #: (the operator, 2026-09-12) - and it is ready the moment they are
+    #: on it.
     no_gmail: bool = False
 
 
@@ -1329,7 +1331,8 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
 
 def _install_the_rest(client: Client, settings: Settings, build: Build,
                       phone_id: str, *, done: str, ordered: dict,
-                      remaining, artifacts, cancelled) -> None:
+                      remaining, artifacts, cancelled, play: bool = True
+                      ) -> None:
     """The apps every phone carries beside the one the build is judged on.
 
     Never a failed phone: the app a wish named is what its account goes
@@ -1351,27 +1354,40 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
             log.warning("no time left for %s on %s", APPS[app], build.serial)
             build.tried.append((app, "budget_exhausted", "GeeLark"))
             continue
+        taken = bool(ordered.get(app))
+        if not taken and settings.app_install_api:
+            # The order at boot is an optimisation, not the only chance:
+            # a phone that was already up never fired that hook, and a
+            # bare phone has no Play Store to fall back on - the Store
+            # asks to be signed in (2026-09-12).
+            taken = apps.begin(client, phone_id, _package_for(settings, app),
+                               name=APPS[app], settings=settings)
         got = _install(client, phone_id, _package_for(settings, app),
-                       name=APPS[app], ordered=bool(ordered.get(app)),
+                       name=APPS[app], ordered=taken,
                        budget=min(settings.install_budget_seconds, remaining()),
-                       artifacts=artifacts, cancelled=cancelled)
+                       artifacts=artifacts, cancelled=cancelled, play=play)
         build.trails.append(("install", got.trail))
         if got.ok:
             on.append(app)
         else:
             log.warning("%s did not install on %s (%s); the phone goes on "
                         "without it", APPS[app], build.serial, got.reason)
-            build.tried.append((app, got.reason, "Play"))
+            build.tried.append((app, got.reason, "Play" if play else "GeeLark"))
     build.app = "+".join(on)
 
 
 def _install(client: Client, phone_id: str, package: str, *, name: str,
              ordered: bool, budget: float, artifacts,
-             cancelled=None) -> play_install.Outcome:
+             cancelled=None, play: bool = True) -> play_install.Outcome:
     """The app onto the phone: by the order GeeLark's installer already
     took at boot when there was one, and by the Play Store otherwise -
     or as well, if the order never landed. The Play outcome is the type
-    either way, since the builder reads `.trail` and `.reason` off it."""
+    either way, since the builder reads `.trail` and `.reason` off it.
+
+    `play` is false where there is no Play Store to walk: the Store asks
+    to be signed in, and a bare phone has no Google account at all, so
+    the walk could only end in screens nobody can answer (2026-09-12).
+    """
     if ordered:
         wait = min(API_INSTALL_WAIT_SECONDS, budget)
         if apps.wait_installed(client, phone_id, package, budget_seconds=wait,
@@ -1379,9 +1395,15 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
             log.info("%s is on, from GeeLark's installer", name)
             return play_install.Outcome("success", "installed",
                                         f"{name} installed by GeeLark")
-        log.warning("%s has not landed from GeeLark's installer in %.0fs; "
-                    "the Play Store is walked for it", name, wait)
+        log.warning("%s has not landed from GeeLark's installer in %.0fs",
+                    name, wait)
         budget = max(0.0, budget - wait)
+    if not play:
+        return play_install.Outcome(
+            "fatal", "install_failed",
+            f"{name} did not come from GeeLark's installer, and there is no "
+            f"Google account on this phone to walk the Play Store with")
+    log.info("the Play Store is walked for %s", name)
     return play_install.install(client, phone_id, package,
                                 budget_seconds=budget, artifact_dir=artifacts)
 
@@ -1579,12 +1601,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # center takes the orders at once: three given inside two seconds
         # on phone 2184 were all taken, and the missing app was on the
         # phone fourteen seconds later (2026-09-12). Play is the fallback,
-        # and only for the app the build is judged on. A bare phone is
-        # asked for with nothing on it and gets nothing.
+        # and only for the app the build is judged on. A bare phone gets
+        # them too: bare is about the accounts, and the Play Store it
+        # cannot walk is not needed for any of this.
         ordered: dict[str, bool] = {}
 
         def order_apps() -> None:
-            if bare or not settings.app_install_api:
+            if not settings.app_install_api:
                 return
             for wanted in _apps_every_phone(settings):
                 ordered[wanted] = apps.begin(
@@ -1832,8 +1855,17 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                           f"somebody wrote {marked!r} in its State while this "
                           f"was running, so it was left alone")
         if bare:
-            return finish("ready", "a bare phone - no Google account and no "
-                                   "app, as asked", ok=True)
+            # Bare is about the accounts, not the apps: nothing is signed
+            # in anywhere, and the phone still carries all three, because
+            # from the center they cost it seconds rather than the Play
+            # Store's minutes (the operator, 2026-09-12).
+            _install_the_rest(client, settings, build, phone_id, done="",
+                              ordered=ordered, remaining=remaining,
+                              artifacts=artifacts, cancelled=cancelled,
+                              play=False)
+            return finish("ready", f"a bare phone - no Google account, as "
+                                   f"asked. On the phone: "
+                                   f"{_named(build.app)}", ok=True)
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
         # Which app the account goes into, if any. The keeper's own
