@@ -1070,6 +1070,19 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
                     f'title="{esc(_phone_word(status))} - on in GeeLark, '
                     f'nobody here holds it">Running</span>')
         return pill
+    if status == "building":
+        # A phone ordered from the card is reserved for whoever asked for
+        # it from the moment it exists, so the taken pill took the place
+        # of the only word that matters while a build is running on it:
+        # four rows read "With you" while they were being made, which
+        # reads as finished and handed over (the operator, 2026-09-11).
+        # The word first, whose it is after it.
+        owner = str(row.get("owner") or "")
+        whose = ("yours" if me is not None and owner == me
+                 else (esc(owner) if owner else ""))
+        return (f'<span class="badge info" title="being built'
+                f'{f" for {esc(owner)}" if owner else ""}">Building'
+                f'{f" &middot; {whose}" if whose else ""}</span>')
     if me is None:
         return f'<span class="badge manual">taken{on}</span>'
     owner = str(row.get("owner") or "")

@@ -5543,3 +5543,31 @@ def test_the_keys_are_an_admins_and_an_operator_is_sent_home(
     assert status == 403 and "Nothing was changed" in body, (
         "a refusal, not a redirect: a form that quietly does nothing is "
         "how somebody comes to believe they did something")
+
+
+
+def test_a_phone_being_built_for_somebody_says_building_first():
+    """A phone ordered from the card is reserved for whoever asked for it
+    from the moment it exists, so the taken pill took the place of the
+    only word that matters while a build is running on it: four rows read
+    "With you" while they were being made, which reads as finished and
+    handed over (the operator, 2026-09-11)."""
+    from geelark_farm.web import pages
+
+    building = {"serial": "2358", "status": "building", "state": "taken",
+                "owner": "mehdi", "running": True}
+
+    mine = pages._phone_badge(building, me="mehdi")
+    assert "Building" in mine and "With you" not in mine
+    assert "yours" in mine and 'class="badge info"' in mine
+
+    theirs = pages._phone_badge(dict(building, owner="alirez"), me="mehdi")
+    assert "Building" in theirs and "alirez" in theirs
+
+    # Nobody holds it: the word on its own, as before.
+    loose = pages._phone_badge(dict(building, state="", owner=""), me="mehdi")
+    assert loose == '<span class="badge info">Building</span>'
+
+    # And once it is built, whose it is is the whole answer again.
+    done = pages._phone_badge(dict(building, status="ready"), me="mehdi")
+    assert "With you" in done and "Building" not in done
