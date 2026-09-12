@@ -234,9 +234,20 @@ def events(settings: Settings, row: dict) -> list[dict]:
     out = [{"at": r["at"], "type": "request", "verb": r["verb"],
             "status": r["status"], "result": r["result"], "by": r["who"]}
            for r in asked]
-    out += [{"at": r["at"], "type": "account", "status": r["status"],
-             "phone": r["serial"], "detail": r["detail"], "by": "farm"}
-            for r in seen]
+    # A state change carries the word the contract knows, under the type
+    # the contract names; anything else in this kind - the farm has
+    # written `account` events since before the API had states, and
+    # `set_aside` is one of them - keeps its own word under the plain
+    # type, rather than being dressed up as a state no client has heard
+    # of (2026-09-12).
+    for r in seen:
+        word = str(r["status"] or "")
+        moved = word in API_STATES
+        out.append({"at": r["at"],
+                    "type": "account.state_changed" if moved else "account",
+                    "to": word if moved else None,
+                    "status": word, "phone": str(r["serial"] or "") or None,
+                    "detail": r["detail"], "by": "farm"})
     out.sort(key=lambda e: (e["at"] is not None, e["at"]))
     return out
 

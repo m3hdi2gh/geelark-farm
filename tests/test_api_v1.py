@@ -834,3 +834,40 @@ def test_the_days_tally_counts_real_accounts_only_and_never_refuses_blind(
     assert api_mod._over_the_day(settings, {"id": 1, "role": "panel"}) is None
     assert api_mod._over_the_day(make_settings(web_api_accounts_per_day=5),
                                  {"id": 2, "role": "sandbox"}) is None
+
+
+
+def test_a_timeline_says_which_entries_are_state_changes(monkeypatch,
+                                                         make_settings):
+    """The farm has written `account` events since before this API had
+    states - `set_aside` is one of them - so the timeline labels the ones
+    that are a state change and leaves the rest their own word rather
+    than dressing them up as a state no client has heard of."""
+    rows = {"asked": [], "seen": [
+        {"id": 1, "at": "2026-09-12T00:00:00+00:00", "kind": "account",
+         "status": "ready", "serial": "1601", "detail": "a@x.com is ready."},
+        {"id": 2, "at": "2026-09-12T00:01:00+00:00", "kind": "account",
+         "status": "set_aside", "serial": "", "detail": "a@x.com: no_code"}]}
+
+    class _Store:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            return rows["seen"] if "FROM events" in sql else rows["asked"]
+
+    monkeypatch.setattr(read_mod, "Store", _Store)
+
+    timeline = read_mod.events(make_settings(), {"address": "a@x.com"})
+
+    assert [e["type"] for e in timeline] == ["account.state_changed",
+                                             "account"]
+    assert timeline[0]["to"] == "ready" and timeline[0]["phone"] == "1601"
+    assert timeline[1]["to"] is None and timeline[1]["status"] == "set_aside"
+    assert timeline[1]["phone"] is None, "no phone is null, not an empty word"
