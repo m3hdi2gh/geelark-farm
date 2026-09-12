@@ -573,3 +573,47 @@ def test_the_solver_is_asked_to_stop_between_its_tries(monkeypatch):
     with pytest.raises(Stopped):
         capsolver.solve_grid("K", "b", "cars", session=Flaky(), watch=watch)
     assert seen == [1, 1], "asked before each try, and stopped on the second"
+
+
+
+def test_five_grids_answered_is_the_exit_being_refused(monkeypatch):
+    """Measured over a week (2026-09-12): of the twenty-four sign-ins that
+    passed a captcha, twenty-one passed within three grids and none passed
+    past three. A chain that keeps coming is Google refusing the device
+    and the exit, and answering it anyway cost 350 to 500 seconds of a
+    phone's billing per build and ended `captcha_shown` regardless."""
+    solved = []
+    monkeypatch.setattr(g, "_grab_grid_b64",
+                        lambda *a, **k: solved.append(1) or ("img", (0, 0, 9, 9)))
+
+    c, _ = _tiles_ctx()
+    c.captcha_solved = g.GRIDS_PER_SIGN_IN
+
+    outcome = g.act_captcha(c)
+
+    assert outcome is not None and outcome.reason == "captcha_shown"
+    assert "still" in outcome.detail and "5 grids answered" in outcome.detail
+    assert solved == [], "and the sixth was never even taken"
+
+
+def test_the_grid_count_is_the_whole_sign_ins_and_not_one_captchas(
+        monkeypatch):
+    """`captcha_tries` starts again with each captcha - its rounds are its
+    own - but three captchas of three rounds each is nine grids against
+    one exit, which is the thing being measured."""
+    sent = []
+
+    def grab(ctx, window, size, scan=True):
+        sent.append(size)
+        return None                      # nothing to solve; the count stands
+
+    monkeypatch.setattr(g, "_grab_grid_b64", grab)
+    c, _ = _tiles_ctx()
+    c.captcha_solved = 2
+    c.captcha_tries, c.captcha_met = 9, 1
+    c.trail = ["captcha", "password_entry", "captcha"]
+
+    assert g.act_captcha(c) is None, "a fresh captcha, and rounds of its own"
+    assert c.captcha_tries == 0, "the round counter started again"
+    assert c.captcha_solved == 2, "the grid counter did not"
+    assert sent, "and it did go on to look at the grid"

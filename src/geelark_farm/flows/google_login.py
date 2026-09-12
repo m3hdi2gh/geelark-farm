@@ -160,6 +160,12 @@ class Context(router.Context):
     #: Attempts actually made - a tick, or a grid sent to the solver.
     #: Waiting for reCAPTCHA to answer is not one of them.
     captcha_tries: int = 0
+    #: Grids answered across the whole sign-in, however many separate
+    #: captchas they belonged to. `captcha_tries` starts again with each
+    #: captcha; this one does not, because what it measures is not this
+    #: page's patience but whether Google is going to be satisfied at all
+    #: (2026-09-12).
+    captcha_solved: int = 0
     #: The visit the tick box was last tapped on. Tapped again on the next
     #: visit it would untick what it just ticked; never tapped again at all,
     #: a challenge that closes itself is waited out to the limit.
@@ -745,6 +751,24 @@ CAPTCHA_VISITS = 44
 #: settle.
 _ROUNDS_PER_CAPTCHA = 10
 
+#: Grids answered in one sign-in before the flow stops answering them.
+#:
+#: Measured over a week (2026-09-12), by how many grids a sign-in sent to
+#: the solver before it ended:
+#:
+#:     grids   1    2    3    4    6    7    9
+#:     signed  1   17    3    0    0    0    0
+#:     in
+#:
+#: Twenty-one of the twenty-four sign-ins that passed a captcha passed it
+#: within three grids, and past three nothing passed at all: the chain
+#: that keeps coming is Google refusing the device and the exit, not a
+#: puzzle being got wrong. Answering it anyway cost 350 to 500 seconds of
+#: a phone's billing per build and ended `captcha_shown` regardless. Five
+#: leaves two grids of margin over anything that has ever worked, and the
+#: address goes back to the queue for a fresh phone and exit either way.
+GRIDS_PER_SIGN_IN = 5
+
 #: Visits to give a grid to finish drawing before answering it from the
 #: picture instead. Waited on without a bound, a grid that never settles
 #: took twenty-four visits and the phone with it (2026-09-06, phone 1839).
@@ -881,11 +905,20 @@ def act_captcha(ctx: Context) -> Outcome | None:
     # size it goes out at is what the solver reads the shape from.
     size = (3 if len(tiles) == 9 else 4) if tiles else (
         4 if "squares" in instruction.lower() else 3)
+    if ctx.captcha_solved >= GRIDS_PER_SIGN_IN:
+        # Not this page's patience but Google's: past three grids nothing
+        # has ever signed in, and each further one is sixteen seconds of
+        # a phone that is going to be deleted anyway (2026-09-12).
+        return _captcha_gave_up(
+            ctx, f"{ctx.captcha_solved} grids answered and it is still "
+                 f"asking, which is the exit being refused rather than a "
+                 f"puzzle being got wrong")
     got = _grab_grid_b64(ctx, window, size, scan=not tiles)
     if got is None:
         return None
     image, rect = got
     ctx.captcha_tries += 1
+    ctx.captcha_solved += 1
     try:
         from .. import capsolver
         answer, read = capsolver.solve_grid(ctx.solver_key, image,
