@@ -871,3 +871,20 @@ def test_a_timeline_says_which_entries_are_state_changes(monkeypatch,
     assert timeline[0]["to"] == "ready" and timeline[0]["phone"] == "1601"
     assert timeline[1]["to"] is None and timeline[1]["status"] == "set_aside"
     assert timeline[1]["phone"] is None, "no phone is null, not an empty word"
+
+
+
+@pytest.mark.parametrize("web", [API_ON], indirect=True)
+def test_a_method_nobody_serves_is_still_json(web, monkeypatch):  # noqa: F811
+    """The stdlib answers an unhandled method with a 501 in HTML, and a
+    client that parses JSON cannot read it. A PUT to /api/v1/health came
+    back that way until the audit went looking (2026-09-12)."""
+    _client(monkeypatch)
+    client = web()
+    for method in ("PUT", "PATCH", "OPTIONS"):
+        status, headers, body = client.request(
+            method, "/api/v1/health", "",
+            headers={"Authorization": f"Bearer {KEY}"})
+        assert status == 405, method
+        assert dict(headers)["Content-Type"].startswith("application/json")
+        assert json.loads(body)["error"]["code"] == "not_allowed"

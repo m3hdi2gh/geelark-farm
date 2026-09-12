@@ -1577,6 +1577,25 @@ class _Handler(BaseHTTPRequestHandler):
         means with a form and a confirm page, and the stdlib's own answer
         to an unknown method is a 501 in HTML - which a client parsing
         JSON cannot read (2026-09-05)."""
+        return self._other_method()
+
+    #: Nothing here serves these, and the door must still answer in its
+    #: own shape: a PUT to /api/v1/health was the one request that came
+    #: back as the stdlib's 501 in HTML, past every promise the contract
+    #: makes about errors (the audit, 2026-09-12).
+    def do_PUT(self) -> None:
+        return self._other_method()
+
+    def do_PATCH(self) -> None:
+        return self._other_method()
+
+    def do_OPTIONS(self) -> None:
+        return self._other_method()
+
+    def _other_method(self) -> None:
+        """A method this program does not serve, answered the way the
+        part of it that was addressed would answer: JSON under /api/,
+        an empty 405 anywhere else."""
         path = self.path.split("?")[0]
         if path.startswith("/api/"):
             return api_v1.dispatch(self, path)
