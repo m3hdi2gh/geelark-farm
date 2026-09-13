@@ -5791,3 +5791,39 @@ def _source(fn):
     import inspect
 
     return inspect.getsource(fn)
+
+
+def test_the_dashboard_script_is_valid_javascript(tmp_path):
+    """The whole console's behaviour is one script in one string, and a
+    single bad character in it is not a broken feature - it is a page
+    with no working buttons at all, because the browser stops at the
+    first syntax error and never reaches `init`.
+
+    One regex escape mangled on its way through Python's string rules
+    did exactly that: a character class arrived with its backslash
+    halved, it did not parse, and Manage, the chips and every door died
+    together while the page still drew perfectly (the operator,
+    2026-09-14: "Manage does nothing"). Nothing in the suite could see
+    it - the other script tests ask whether a sentence is present,
+    which it was.
+
+    Skipped where node is not installed.
+    """
+    import re
+    import shutil
+    import subprocess
+
+    from geelark_farm.web import pages
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the script is unchecked here")
+    body = re.sub(r"^\s*<script>|</script>\s*$", "",
+                  pages._DASH_SCRIPT.strip(), flags=re.S)
+    path = tmp_path / "dash.js"
+    path.write_text(body, encoding="utf-8")
+    done = subprocess.run([node, "--check", str(path)],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, (
+        "the dashboard's script does not parse, so every button on the "
+        "console is dead: " + done.stderr.strip())

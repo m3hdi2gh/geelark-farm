@@ -2255,15 +2255,25 @@ _DASH_SCRIPT = """
       }
       // Pressing the chip is how the sift is told: it sets the others
       // false, this one true, and runs. Idempotent on the one already on.
-      var chip = was.group === null ? null : sheet.querySelector(
-        '.filters .pill[data-group="' + cssQuote(was.group) + '"]');
+      var chip = was.group === null ? null
+        : pickData(sheet, '.filters .pill[data-group]', 'group', was.group);
       if (chip) chip.click();
       else if (find) find.dispatchEvent(new Event('input'));
       var scroll = sheet.querySelector('.tscroll');
       if (scroll && was.top) scroll.scrollTop = was.top;
     });
   }
-  function cssQuote(v){ return String(v).replace(/["\\]/g, '\\$&'); }
+  // Finding a row or a chip by what it carries, rather than building a
+  // selector out of it. A value with a quote or a backslash in it makes
+  // a selector that does not parse - and one bad character in this file
+  // is a dashboard with no working buttons at all, because the whole
+  // script stops at it (the operator, 2026-09-14: "Manage does nothing").
+  function pickData(root, within, name, value){
+    var all = root.querySelectorAll(within);
+    for (var i = 0; i < all.length; i++)
+      if (all[i].dataset[name] === value) return all[i];
+    return null;
+  }
 
   // The rows a press is about: its own, or - for a door that answers a
   // whole group, like Free all - every row under that group.
@@ -2306,10 +2316,8 @@ _DASH_SCRIPT = """
   // `main` for it is why the list jumped. The fresh document already
   // holds that row; take it and leave everything else alone.
   function swapRow(doc, key){
-    var mine = document.querySelector('#poolov tr[data-key="' + cssQuote(key)
-                                      + '"]');
-    var theirs = doc.querySelector('#poolov tr[data-key="' + cssQuote(key)
-                                   + '"]');
+    var mine = pickData(document, '#poolov tr[data-key]', 'key', key);
+    var theirs = pickData(doc, '#poolov tr[data-key]', 'key', key);
     if (!mine || !theirs) return false;
     var sheet = mine.closest('.sheet');
     mine.replaceWith(theirs);
