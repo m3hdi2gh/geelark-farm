@@ -67,7 +67,14 @@ WORKED = frozenset({"no_usable_gpt", "app_not_asked_for",
 #: 20 were refused again - ten in a row opened the breaker and stopped
 #: the farm over accounts the numbers had already judged (2026-09-10).
 #: What that wave means is read on the Login rate page, not here.
+#: `no_other_exit` is here because it is the emptiest of all of them: the
+#: build stops before the phone is created, having claimed an address and
+#: given it straight back. Five of them in a row - 0 seconds each, the
+#: same address every time - opened the breaker in two and a half minutes
+#: and stopped the farm for three hours over a shortage of exits
+#: (2026-09-13). What it means is read on the Proxy tab, not here.
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
+                              "no_working_proxy", "no_other_exit",
                               "no_capacity", "in_use_by_hand",
                               "given_up_on", "phone_distrusted"})
 

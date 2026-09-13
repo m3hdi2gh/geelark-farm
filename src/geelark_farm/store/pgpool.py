@@ -117,6 +117,19 @@ class ResourceTable:
                 f" WHERE id = %s", [*fields.values(), row_id])
             conn.commit()
 
+    def free_count(self, kind: str, *, free: tuple[str, ...]) -> int:
+        """How many rows of `kind` a claim could take right now - the same
+        conditions the claim itself uses, minus the pick."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT count(*) FROM resources"
+                " WHERE kind = %s AND error IS NULL"
+                "   AND coalesce(refund_state, '') = ''"
+                "   AND lower(status) = ANY(%s)", (kind, list(free)))
+            row = cur.fetchone()
+            conn.rollback()
+        return int(row[0]) if row else 0
+
     def claim(self, kind: str, *, free: tuple[str, ...], claimed: str,
               count_use: bool, serial: str = "",
               row_id: int | None = None, avoid_host: str = "",
@@ -348,6 +361,12 @@ class _PgPool(Pool):
     #: object, and the panel asks how many phones its account has been on
     #: (2026-09-12).
     COUNTS_ATTEMPTS = False
+
+    def free_now(self) -> int:
+        """What the store says is claimable, rather than what this Book's
+        snapshot said when the pass began."""
+        return self._table.free_count(
+            self.kind, free=tuple(self.available_statuses))
 
     def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are

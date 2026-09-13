@@ -5437,14 +5437,22 @@ def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
 def test_an_exit_is_chosen_away_from_the_host_that_refused_the_address(
         make_settings, tmp_path, monkeypatch):
     """The address is claimed before the exit is, so this is where the two
-    are kept apart. If every free exit is on the host that just refused
-    it, no phone is made at all: the address is behind the fresh stock
-    anyway, so waiting costs nothing that was going to be used."""
+    are kept apart. And when nothing comes back, the two ways that can
+    happen are told apart: every free exit is on the host that just
+    refused this address, or there are no free exits at all. Saying the
+    first when it is the second sends the reader looking at hosts over a
+    pool that is simply empty (2026-09-13)."""
     from types import SimpleNamespace
 
     asked = []
 
     class Proxies:
+        def __init__(self, free=3):
+            self.free = free
+
+        def free_now(self):
+            return self.free
+
         def claim(self, serial="", avoid_host=""):
             asked.append(avoid_host)
             return None if avoid_host else SimpleNamespace(
@@ -5467,7 +5475,149 @@ def test_an_exit_is_chosen_away_from_the_host_that_refused_the_address(
     assert builder.failures.knows("no_other_exit"), (
         "a reason a build can end on is a reason the table names")
 
+    # The same refusal with an empty pool behind it is a different word.
+    asked.clear()
+    book = SimpleNamespace(proxies=Proxies(free=0))
+    with pytest.raises(builder.Aborted) as empty:
+        builder._fresh_proxy(None, book, settings=settings,
+                             avoid_host="190.2.143.20")
+    assert str(empty.value) == "no_usable_proxy"
+
+    # A pool that cannot be counted falls back to what this Book holds.
+    class Sheet(Proxies):
+        free_now = None
+        available = ()
+
+    book = SimpleNamespace(proxies=Sheet())
+    with pytest.raises(builder.Aborted) as none_here:
+        builder._fresh_proxy(None, book, settings=settings,
+                             avoid_host="190.2.143.20")
+    assert str(none_here.value) == "no_usable_proxy"
+
     # Nothing to avoid: the ordinary claim, unchanged.
     asked.clear()
+    book = SimpleNamespace(proxies=Proxies())
     got = builder._fresh_proxy(None, book, settings=settings)
     assert got.name == "SX1" and asked == [""]
+
+
+# ------------------------------- the loop that opened the breaker (2026-09-13)
+class _Queue:
+    """A Gmail pool of addresses that each carry the host they were
+    refused on, handing them out one at a time the way the store does."""
+
+    def __init__(self, avoiding):
+        from types import SimpleNamespace
+
+        self.rows = [SimpleNamespace(label=f"a{n}@x.com",
+                                     values={"Last Host": host})
+                     for n, host in enumerate(avoiding)]
+        self.out = []
+        self.back = []
+
+    def claim(self, serial="", avoid_host=""):
+        for row in self.rows:
+            if row not in self.out and row not in self.back:
+                self.out.append(row)
+                return row
+        return None
+
+    def release(self, resource, *, note="", phone_failed=False):
+        self.out.remove(resource)
+        self.back.append(resource)
+
+
+def _exits(on_host):
+    """An exit pool whose whole free stock sits on `on_host`."""
+    from types import SimpleNamespace
+
+    class Proxies:
+        def free_now(self):
+            return 3
+
+        def claim(self, serial="", avoid_host=""):
+            if avoid_host == on_host:
+                return None
+            return SimpleNamespace(proxy=SimpleNamespace(host=on_host),
+                                   name="SX1", label="SX1", values={})
+
+        def record_exit(self, resource, ip):
+            resource.values["Last Exit IP"] = ip
+
+    return Proxies()
+
+
+def test_an_address_the_exits_cannot_serve_is_looked_past_not_handed_back(
+        make_settings, tmp_path, monkeypatch):
+    """Five builds in a row took the same address, found no exit off the
+    host it was refused on, gave it straight back and were each counted a
+    failure - a loop at the speed of a pass, and it opened the breaker in
+    two and a half minutes and stopped the farm for three hours
+    (2026-09-13)."""
+    from types import SimpleNamespace
+
+    settings = make_settings(state_dir=tmp_path)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "1.1.1.1"})
+    # The first two addresses were refused on the only host with exits;
+    # the third was refused somewhere else, so it can be built.
+    gmails = _Queue(["10.0.0.9", "10.0.0.9", "10.0.0.1"])
+    book = SimpleNamespace(gmails=gmails, proxies=_exits("10.0.0.9"))
+
+    row, exit_row = builder._pair_up(None, book, settings)
+
+    assert row.label == "a2@x.com", "it looked past the two it could not serve"
+    assert exit_row.name == "SX1"
+    assert [r.label for r in gmails.back] == ["a0@x.com", "a1@x.com"], (
+        "and put every one it held back exactly as it was")
+    assert row not in gmails.back, "the one it is building with stays claimed"
+
+
+def test_when_no_address_can_be_served_nothing_is_left_claimed(
+        make_settings, tmp_path, monkeypatch):
+    """And it is a no-op, not a failure: nothing was created and nothing
+    was spent, so the breaker must not count it."""
+    from types import SimpleNamespace
+
+    settings = make_settings(state_dir=tmp_path)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "1.1.1.1"})
+    gmails = _Queue(["10.0.0.9"] * 3)
+    book = SimpleNamespace(gmails=gmails, proxies=_exits("10.0.0.9"))
+
+    with pytest.raises(builder.Aborted) as refused:
+        builder._pair_up(None, book, settings)
+
+    assert str(refused.value) == "no_other_exit"
+    assert gmails.out == [], "every address it took went back"
+    assert len(gmails.back) == 3
+    stopped = builder.Build(index=1, ok=False, status="no_other_exit")
+    assert not builder.breaker.counts_against(stopped), (
+        "a build that created nothing is not evidence the farm is broken")
+
+
+def test_an_empty_gmail_pool_is_still_no_usable_gmail(make_settings, tmp_path):
+    """Told apart from "the exits cannot serve these": one is out of
+    stock, the other is out of exits, and they are read differently."""
+    from types import SimpleNamespace
+
+    settings = make_settings(state_dir=tmp_path)
+    book = SimpleNamespace(gmails=_Queue([]), proxies=_exits("10.0.0.9"))
+    assert builder._pair_up(None, book, settings) == (None, None)
+
+
+def test_how_far_past_it_looks_is_bounded(make_settings, tmp_path, monkeypatch):
+    """Past a handful the answer is "there are no exits for these", not
+    "ask again" - so it does not walk the whole pool holding every row."""
+    from types import SimpleNamespace
+
+    settings = make_settings(state_dir=tmp_path)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "1.1.1.1"})
+    gmails = _Queue(["10.0.0.9"] * 50)
+    book = SimpleNamespace(gmails=gmails, proxies=_exits("10.0.0.9"))
+
+    with pytest.raises(builder.Aborted):
+        builder._pair_up(None, book, settings)
+
+    assert len(gmails.back) == builder.GMAILS_PAST == 4

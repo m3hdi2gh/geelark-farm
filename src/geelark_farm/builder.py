@@ -955,6 +955,74 @@ def _give_back_condemned(s: _Session) -> None:
                     s.build.serial, len(given_back), ", ".join(given_back))
 
 
+def _any_exit_free(book: Book) -> bool:
+    """Whether the exit pool could hand anything out at all right now.
+
+    Asked of the store when it can answer, because the Book's own rows
+    are a snapshot taken when the pass began and the question decides
+    which of two words a person reads in the log.
+    """
+    counted = getattr(book.proxies, "free_now", None)
+    if counted is not None:
+        try:
+            return counted() > 0
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not count the free exits (%s)", exc)
+    return bool(book.proxies.available)
+
+
+#: How many addresses one build looks past when the exit pool cannot
+#: serve the first. Each one is a single statement, and the pool's hosts
+#: are few: past a handful the answer is "there are no exits for these
+#: addresses", not "ask again".
+GMAILS_PAST = 4
+
+
+def _pair_up(client: Client, book: Book, settings: Settings):
+    """A free Gmail, and an exit that is not on the host it was refused on.
+
+    The address is claimed first - a phone must never be created with
+    nothing to sign into it - and the address is also what says which
+    host to keep away from. So when the pool has no exit off that host,
+    the address is held and the next one asked for, rather than the build
+    dying and handing it straight back: five builds in a row took the
+    same address, found no exit for it, released it untouched and were
+    each counted a failure. That is a loop at the speed of a pass, and it
+    opened the breaker in two and a half minutes (2026-09-13).
+
+    Returns (None, None) when the pool has no free address at all. Raises
+    `no_other_exit` when it had addresses and the exits could serve none
+    of them - nothing is created and nothing is spent either way.
+    """
+    held: list = []
+    try:
+        for _ in range(GMAILS_PAST):
+            row = book.gmails.claim()
+            if row is None:
+                if held:
+                    raise Aborted("no_other_exit")
+                return None, None
+            avoid = str((getattr(row, "values", None) or {})
+                        .get("Last Host") or "")
+            try:
+                return row, _fresh_proxy(client, book, settings=settings,
+                                         avoid_host=avoid)
+            except Aborted as refused:
+                held.append(row)
+                if str(refused) != "no_other_exit":
+                    raise
+                log.info("no exit off %s for %s; holding it and asking for "
+                         "the next address", avoid, row.label)
+        raise Aborted("no_other_exit")
+    finally:
+        # Held, never used: every one of them goes back exactly as it was.
+        for row in held:
+            try:
+                book.gmails.release(row)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not put %s back (%s)", row.label, exc)
+
+
 def _fresh_proxy(client: Client, book: Book, *,
                  settings: Settings | None = None,
                  avoid_host: str = "") -> Resource:
@@ -983,10 +1051,16 @@ def _fresh_proxy(client: Client, book: Book, *,
     while True:
         resource = book.proxies.claim(avoid_host=wanted_elsewhere)
         if resource is None and wanted_elsewhere:
-            # Nothing on another host is free. The address waits for one
-            # rather than spending its next try where it has already been
-            # refused - it is behind the fresh stock anyway, so waiting
-            # costs the farm nothing it was going to use.
+            # Nothing came back, and two different things look like this:
+            # every free exit is on the host this address was refused on,
+            # or there are no free exits at all. Saying the first when it
+            # is the second sends the reader looking at hosts over a pool
+            # that is simply empty (2026-09-13).
+            if not _any_exit_free(book):
+                raise Aborted("no_working_proxy" if skipped
+                              else "no_usable_proxy")
+            # Every one of them is where this address has already been
+            # refused. The caller looks past it to the next address.
             raise Aborted("no_other_exit")
         if resource is None:
             raise Aborted("no_working_proxy" if skipped else "no_usable_proxy")
@@ -1516,24 +1590,31 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # phase is skipped whole, and the phone is ready once it is up.
         bare = bool(want is not None and want.no_gmail)
         with _starting:
+            # Somebody who named an exit gets that exit, so the pairing
+            # below - which is about choosing one - has no part to play.
+            chosen_exit = bool(want and want.proxy_name)
+            proxy_row = None
             if bare:
                 gmail_row = None
             elif want and want.gmail:
                 gmail_row = _pick(book.gmails, want.gmail, "Gmail")
-            else:
+            elif chosen_exit:
                 gmail_row = book.gmails.claim()
+            else:
+                # A Gmail off the queue carries the host it was refused
+                # on, and a second try from the same host is the one thing
+                # that made the first one worthless (the operator,
+                # 2026-09-12). The two are chosen together, and an address
+                # the exits cannot serve is looked past rather than handed
+                # back for the next pass to pick up again (2026-09-13).
+                gmail_row, proxy_row = _pair_up(client, book, settings)
             if gmail_row is None and not bare:
                 return finish("no_usable_gmail",
                               "the Gmails tab has no unused address left, so "
                               "no phone was created")
-            if want and want.proxy_name:
+            if chosen_exit:
                 proxy_row = _pick(book.proxies, want.proxy_name, "exit")
-            else:
-                # A Gmail off the queue carries the host it was refused
-                # on. The address is claimed before the exit is, so this
-                # is where the two are kept apart: a second try from the
-                # same host is the one thing that made the first one
-                # worthless (the operator, 2026-09-12).
+            elif proxy_row is None:
                 proxy_row = _fresh_proxy(
                     client, book, settings=settings,
                     avoid_host=str((getattr(gmail_row, "values", None) or {})
