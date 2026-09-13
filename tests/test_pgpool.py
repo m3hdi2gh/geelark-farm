@@ -936,3 +936,68 @@ def test_an_account_event_names_the_address_the_panel_will_ask_by(monkeypatch):
     # raised - a build stopped by a monitoring write is a phone.
     assert accounts.moved(object(), {"address": ""}, "ready") is False
     assert accounts.moved(None, {"address": "a@x.com"}, "ready") is False
+
+
+def test_a_phone_number_asked_for_is_the_sellers_only_once_the_ladder_is_spent(
+        monkeypatch):
+    """One phone asking is the session; three phones on three exits all
+    asking is the account (2026-09-13). The row climbs like a captcha,
+    and the third refusal writes the refund row the first one used to."""
+    import threading
+
+    from geelark_farm.store import ladder, pgpool
+
+    calls = []
+    monkeypatch.setattr(ladder, "challenge",
+                        lambda conn, row_id, reason, **k: calls.append(
+                            ("challenge", reason, k.get("host"))) or
+                        (len([c for c in calls if c[0] == "challenge"]),
+                         len([c for c in calls if c[0] == "challenge"])
+                         < ladder.MAX_TRIES))
+    monkeypatch.setattr(ladder, "to_refund",
+                        lambda conn, row_id, reason, **k: calls.append(
+                            ("to_refund", reason, k.get("seller"))))
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def commit(self):
+            calls.append(("commit",))
+
+    class _Table:
+        _lock = threading.Lock()
+
+        def _connect(self):
+            return _Conn()
+
+        def update(self, *a, **k):
+            pass
+
+    pool = pgpool.PgGmailPool.__new__(pgpool.PgGmailPool)
+    pool._table = _Table()
+    monkeypatch.setattr(pgpool.GmailPool, "fail", lambda *a, **k: None)
+    row = type("R", (), {"store_id": 7, "label": "a@x.com",
+                         "values": {"Seller": "LEO"}})()
+
+    pool.fail(row, "phone_verification_required", host="10.0.0.1")
+    pool.fail(row, "phone_verification_required", host="10.0.0.2")
+    assert [c[0] for c in calls if c[0] != "commit"] == ["challenge",
+                                                          "challenge"]
+    pool.fail(row, "phone_verification_required", host="10.0.0.3")
+    assert [c[0] for c in calls if c[0] != "commit"] == [
+        "challenge", "challenge", "challenge", "to_refund"]
+    assert calls[-2] == ("to_refund", "phone_verification_required", "LEO")
+
+    # A password that was never right still goes straight to the list.
+    calls.clear()
+    pool.fail(row, "password_changed")
+    assert [c[0] for c in calls if c[0] != "commit"] == ["to_refund"]
+    # And a captcha spent on three phones stays set aside, owed to nobody.
+    calls.clear()
+    for n in range(3):
+        pool.fail(row, "captcha_shown", host=f"10.0.0.{n}")
+    assert "to_refund" not in [c[0] for c in calls]

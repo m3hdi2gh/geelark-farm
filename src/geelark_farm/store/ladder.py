@@ -15,9 +15,11 @@ without it a single address could spend all three of its tries inside ten
 minutes, on the same wave and the same gateways (the operator,
 2026-09-12).
 
-Two refusals never come back here at all: `failures.SELLERS_FAULT` - the
-account wants a phone number, the password was never right - go to the
-refund list, because no phone and no exit can fix them.
+One refusal never comes back here at all: `failures.SELLERS_FAULT`, the
+password that was never right, goes to the refund list because no phone
+and no exit can fix it. Google asking for a phone number climbs the
+ladder like a captcha and goes to that list only when the ladder is
+spent - `failures.OWED_WHEN_EXHAUSTED` (2026-09-13).
 
 `challenge` is written by the pool's `fail`, `revive_due` is a keeper step.
 """

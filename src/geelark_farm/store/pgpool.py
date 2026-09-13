@@ -491,12 +491,15 @@ class PgGmailPool(_PgPool, GmailPool):
              host: str = "", settings=None) -> None:
         """The sheet's verb, then one of two roads.
 
-        A refusal about the account itself - Google wanting a phone number
-        for it, a password that was never right - takes the row out of the
-        pool and onto the refund list: no phone and no exit can fix it.
-        Everything else Google distrusts goes back in the queue behind
-        every fresh address, carrying the host it was refused on so the
-        next try is given a different exit (store.ladder, 2026-09-12).
+        A refusal about the account itself - a password that was never
+        right - takes the row out of the pool and onto the refund list: no
+        phone and no exit can fix it. Everything else Google distrusts
+        goes back in the queue behind every fresh address, carrying the
+        host it was refused on so the next try is given a different exit
+        (store.ladder, 2026-09-12). Google asking for a phone number is
+        the second kind until the ladder is spent, and then the first:
+        three phones on three exits all asked is the account, one is the
+        session (2026-09-13).
         """
         super().fail(resource, reason, note=note)
         if resource.store_id is None:
@@ -507,16 +510,20 @@ class PgGmailPool(_PgPool, GmailPool):
         try:
             from . import ladder
 
+            seller = str((resource.values or {}).get("Seller") or "")
             with self._table._lock, self._table._connect() as conn:
                 if owed:
-                    ladder.to_refund(
-                        conn, resource.store_id, reason,
-                        seller=str((resource.values or {}).get("Seller") or ""))
+                    ladder.to_refund(conn, resource.store_id, reason,
+                                     seller=seller)
                     tries, back = ladder.MAX_TRIES, False
                 else:
                     tries, back = ladder.challenge(
                         conn, resource.store_id, reason, host=host,
                         settings=settings)
+                    if not back and failures.owed_when_exhausted(reason):
+                        ladder.to_refund(conn, resource.store_id, reason,
+                                         seller=seller)
+                        owed = True
                 conn.commit()
         except Exception as exc:                                  # noqa: BLE001
             log.warning("%s: %s was set aside but not put on the ladder (%s)",

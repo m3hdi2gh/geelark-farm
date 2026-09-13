@@ -130,15 +130,26 @@ DISTRUST = frozenset({"captcha_shown", "captcha_text", "verification_blocked",
                       "phone_verification_required", "sign_in_refused",
                       "too_many_attempts"})
 
-#: The two refusals no phone and no exit can fix, because they are about
-#: the account somebody sold us. `phone_verification_required` is Google
-#: asking for a phone number for the account itself - measured twice on
-#: 2026-09-11, with the password and the authenticator code both accepted
-#: first; `password_changed` is a password that was never right. These
-#: leave the pool for the refund list instead of the ladder: retrying them
-#: spends a phone and an exit on an answer that will not change (the
-#: operator, 2026-09-12).
-SELLERS_FAULT = frozenset({"phone_verification_required", "password_changed"})
+#: The one refusal no phone and no exit can fix, because it is about the
+#: account somebody sold us: a password that was never right. It leaves
+#: the pool for the refund list straight away.
+#:
+#: `phone_verification_required` was here too for a day (2026-09-12) - it
+#: had been seen twice with the password and the authenticator code both
+#: accepted first, and that read as Google wanting a phone number for the
+#: account itself. On 2026-09-13 it arrived 34 times in five hours, on
+#: every exit and every model at once, starting at 08:58:46 with nothing
+#: deployed; 33 of the 34 had just typed a valid authenticator code, and
+#: the same batch had gone 8 of 9 that morning. That is Google distrusting
+#: the session, and a verdict about the session must not be charged to
+#: the seller on one phone's word. So it climbs the ladder like a captcha
+#: - fresh phone, different exit - and only when three phones and three
+#: exits have all been asked for a phone number does it go on the list.
+SELLERS_FAULT = frozenset({"password_changed"})
+
+#: Distrust that becomes the seller's bill once the ladder is spent: the
+#: refusal is the session's until it has been the session's three times.
+OWED_WHEN_EXHAUSTED = frozenset({"phone_verification_required"})
 
 
 def retryable(reason: str) -> bool:
@@ -149,8 +160,14 @@ def retryable(reason: str) -> bool:
 
 
 def sellers_fault(reason: str) -> bool:
-    """Whether the row is the seller's to answer for."""
+    """Whether the row is the seller's to answer for at once."""
     return reason in SELLERS_FAULT
+
+
+def owed_when_exhausted(reason: str) -> bool:
+    """Whether the row becomes the seller's once the ladder gives up on
+    it - a refusal that is the session's until three sessions agree."""
+    return reason in OWED_WHEN_EXHAUSTED
 
 
 VERDICTS: dict[str, Verdict] = {

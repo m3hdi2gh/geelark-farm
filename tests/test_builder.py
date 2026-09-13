@@ -5137,15 +5137,22 @@ def test_the_distrust_reasons_are_the_ladders_reasons():
     assert failures.retryable("sign_in_refused")
     assert not failures.retryable("wrong_password")
     assert not failures.retryable("stuck_on_dismissable")
-    # The two the seller owes for: Google wanting a phone number for the
-    # account, and a password that was never right. Another phone and
-    # another exit cannot change either answer, so they leave the pool for
-    # the refund list instead of the queue (the operator, 2026-09-12).
-    assert failures.sellers_fault("phone_verification_required")
+    # The one the seller owes for at once: a password that was never
+    # right. Another phone and another exit cannot change that answer,
+    # so it leaves the pool for the refund list instead of the queue.
     assert failures.sellers_fault("password_changed")
-    assert not failures.retryable("phone_verification_required")
     assert not failures.sellers_fault("captcha_shown")
-    assert failures.SELLERS_FAULT <= failures.DISTRUST | {"password_changed"}
+    # Google asking for a phone number was there too for a day. On
+    # 2026-09-13 it came 34 times in five hours on every exit and every
+    # model at once, 33 of them after a valid authenticator code: the
+    # session's refusal, not the account's. It climbs the ladder, and
+    # only a spent ladder makes it the seller's bill.
+    assert not failures.sellers_fault("phone_verification_required")
+    assert failures.retryable("phone_verification_required")
+    assert failures.owed_when_exhausted("phone_verification_required")
+    assert not failures.owed_when_exhausted("captcha_shown")
+    assert failures.OWED_WHEN_EXHAUSTED <= failures.DISTRUST
+    assert not (failures.SELLERS_FAULT & failures.DISTRUST)
     assert failures.knows("phone_distrusted") and failures.knows("captcha_text")
     assert failures.verdict("phone_distrusted").stops_the_phone
     assert failures.verdict("captcha_text").needs_a_new_exit
@@ -5621,3 +5628,36 @@ def test_how_far_past_it_looks_is_bounded(make_settings, tmp_path, monkeypatch):
         builder._pair_up(None, book, settings)
 
     assert len(gmails.back) == builder.GMAILS_PAST == 4
+
+
+# ---------------------------- a phone number asked for is the session's
+def test_a_phone_number_asked_for_ends_the_phone_like_a_captcha_does(
+        device, settings, drive):
+    """One Gmail per phone was silently off for this reason: it sat in
+    SELLERS_FAULT, `retryable` said no, and one refusal burned up to five
+    addresses on the same phone and the same exit - 29 addresses and 2.6
+    phone-hours in one morning (2026-09-13)."""
+    book = make_book(gmails=3)
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "phone_verification_required"),
+                          SIGNED_IN])
+
+    assert build.status == "phone_distrusted" and not build.ok
+    assert "g0@example.com" in build.detail and "fresh phone" in build.detail
+    assert [r.credentials.email for r in book.gmails.available] == [
+        "g1@example.com", "g2@example.com"], "never handed to this phone"
+
+
+def test_two_phone_number_refusals_on_one_exit_change_the_exit(
+        device, settings, drive):
+    """The swap counted captchas alone, so a phone asked for a phone
+    number five addresses running kept the same exit throughout
+    (2026-09-13). Every distrust page is the exit's to answer for."""
+    settings = _many_gmails_per_phone(settings)
+    asked = Outcome("fatal", "phone_verification_required")
+    book = make_book(gmails=3, proxies=3)
+    build = drive(book, settings, google=[asked, asked, SIGNED_IN])
+
+    assert build.ok and build.gmail == "g2@example.com"
+    assert len(device.proxies_set) == 1, "one swap, after the second refusal"
+    assert device.proxies_set[0] in build.proxy

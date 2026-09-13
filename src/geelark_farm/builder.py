@@ -1891,12 +1891,16 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 return finish("gmails_exhausted",
                               f"{tried_gmails} Gmails from the pool were "
                               f"refused on this phone in a row - {tally}")
-            # Two captchas on this exit: the exit is changed before the
-            # next address is tried on it. The address just set aside
-            # stays set aside - it did meet a captcha - and the next one
-            # gets a fresh exit. No exit to move to is not a failed
-            # build: the next address goes on the same exit, as before.
-            if outcome.reason == "captcha_shown":
+            # Two refusals of Google's distrust kind on this exit: the
+            # exit is changed before the next address is tried on it. The
+            # address just set aside stays set aside, and the next one
+            # gets a fresh exit. No exit to move to is not a failed build:
+            # the next address goes on the same exit, as before. It
+            # counted captchas alone, so a phone asked for a phone number
+            # five addresses running kept the same exit throughout -
+            # every one of Google's distrust pages is the exit's to
+            # answer for (2026-09-13).
+            if failures.retryable(outcome.reason):
                 captchas_here += 1
             if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
                 previous = proxy_row

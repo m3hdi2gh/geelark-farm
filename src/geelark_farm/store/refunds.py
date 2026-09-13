@@ -1,10 +1,12 @@
 """The addresses the seller owes for.
 
-Two refusals say nothing about the phone or the exit and everything about
-the account somebody sold us: Google asking for a phone number for the
-account itself, and a password that was never right. `store.ladder`
-takes those rows out of the pool as `to_claim`; this is the other half -
-what a person does about one once the seller has been asked.
+Two refusals end up here. A password that was never right says nothing
+about the phone or the exit and everything about the account somebody
+sold us, and goes straight to `to_claim`. Google asking for a phone
+number goes only once three phones on three exits have all been asked -
+one asking is the session's (2026-09-13). `store.ladder` writes the
+rows; this is the other half - what a person does about one once the
+seller has been asked.
 
 Three words and no more: `to_claim` is owed, `claimed` is paid back,
 `refused` is the seller saying no. A row that is settled either way stops
