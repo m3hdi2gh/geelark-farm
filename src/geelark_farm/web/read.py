@@ -553,7 +553,14 @@ def _pool_rows(store) -> dict:
                 " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
                 " error, updated_at, claimed_at"
                 " FROM resources WHERE kind = 'proxy'"
-                " ORDER BY times_used, sheet_row NULLS LAST, id LIMIT %s",
+                # By the number in the name, which is the order the
+                # vendor's own panel lists them in and the order a person
+                # works down when they are changing addresses. It was by
+                # `times_used`, the builder's order, which shuffled the
+                # list under the hand using it (the operator, 2026-09-14).
+                " ORDER BY nullif(regexp_replace(coalesce(proxy_name, ''),"
+                "                 '[^0-9]', '', 'g'), '')::bigint NULLS LAST,"
+                "          proxy_name, id LIMIT %s",
                 (POOL_LIMIT,)),
     }
     # How many there are, against how many are drawn, live and spent

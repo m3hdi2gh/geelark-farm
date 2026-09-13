@@ -1081,6 +1081,13 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
                              back=_proxy_back(field))
+        if path == "/pools/proxy/free-all":
+            # The whole set-aside list, after their addresses were changed
+            # at the vendor. Each is tested first, so this frees what
+            # answers and leaves what does not (2026-09-14).
+            return self._act(user, "may_change_proxy", "free_all_proxies", {},
+                             idem=self._minute_key(user, "free_all", "-"),
+                             back=_proxy_back(field))
         if path == "/pools/proxy/ignore":
             # "Ignore" on an exit GeeLark holds that the tab never heard
             # of: the triple goes on a list the pass keeps, and the page
@@ -1896,6 +1903,7 @@ _OPERATOR_POSTS = (
     "/pools/gmail/free", "/pools/gmail/refund",
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
+    "/pools/proxy/free-all",
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",

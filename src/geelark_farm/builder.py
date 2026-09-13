@@ -225,6 +225,10 @@ CAPTCHA_STRIKES_PER_HOST = 3
 #: worth setting aside ran to thirteen and forty-three (2026-09-09).
 HEAVY_CAPTCHA_ROUNDS = 6
 SUSPECT = "suspect"
+#: The words for an exit that is out of the pool but not dead: the host
+#: gate set it aside, or a build asked for a new address on it. A test
+#: reads them; only a person's press frees them.
+HELD_BACK = (SUSPECT, "change ip")
 #: Where the day's tally lives with no store: one process, one dict.
 _captcha_hosts_memory: dict = {}
 
@@ -3921,6 +3925,14 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
     cell by hand. The check costs one call either way; the only difference is
     whether the answer can put a row back.
 
+    Every exit no build is holding is tested - `suspect` and `change ip` as
+    well, which "Test all" said it covered and did not: it tested the free
+    ones and the dead ones, so half the work list answered nothing at all
+    (the operator, 2026-09-14). What their answer may do is narrower: a
+    `dead` one that answers is free again, while one the host gate set
+    aside keeps its word and only has its exit address and test stamp
+    written down. Freeing that one is the operator's press, not a test's.
+
     A proxy already behind a phone is not tested: it is not a candidate for
     this run, and the call would learn something that changes nothing. Checked
     in parallel because they are independent and each takes a few seconds; the
@@ -3930,7 +3942,9 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
     """
     buried = [r for r in book.proxies._rows if not r.error and r.proxy
               and book.proxies.status_of(r) == book.proxies.dead_status]
-    free = book.proxies.available + buried
+    aside = [r for r in book.proxies._rows if not r.error and r.proxy
+             and book.proxies.status_of(r) in HELD_BACK]
+    free = book.proxies.available + buried + aside
     if not free:
         return [], []
 
@@ -3947,8 +3961,9 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
                             thread_name_prefix="proxy-check") as pool:
         for resource, exit_ip, error in pool.map(test, free):
             if exit_ip is None:
-                if id(resource) in was_dead:
-                    continue                      # still dead, still says so
+                if (id(resource) in was_dead
+                        or book.proxies.status_of(resource) in HELD_BACK):
+                    continue          # already out of the pool, and says why
                 # The name, not the label, for the reason given where the
                 # build reports the same thing: the error already carries the
                 # address, and the label carries it again.

@@ -424,8 +424,56 @@ def test_all_proxies(book, ledger, settings, payload, client):
     if client is None:
         return "failed", "no GeeLark client on this pass", None
     dead, revived = builder.check_proxies(client, book)
-    return ("done", f"tested every free and dead exit: {len(dead)} newly "
-                    f"dead, {len(revived)} revived", None)
+    return ("done", f"tested every exit no build is holding: {len(dead)} "
+                    f"newly dead, {len(revived)} revived", None)
+
+
+def free_all_proxies(book, ledger, settings, payload, client):
+    """Test every exit that is out of the pool, and free the ones that
+    answer - the whole set-aside list in one press.
+
+    What a person does before pressing it is change the addresses at the
+    vendor for the exits in that list; doing them one at a time was nine
+    presses in an afternoon (the operator, 2026-09-14). Each host is
+    cleared the way a single Free clears it, so the gate judges it afresh
+    rather than setting the exit straight back aside.
+    """
+    if client is None:
+        return "failed", "no GeeLark client on this pass", None
+    from . import builder
+
+    held = (builder.HELD_BACK + (book.proxies.dead_status,))
+    rows = [r for r in book.proxies._rows
+            if not r.error and r.proxy
+            and book.proxies.status_of(r) in held]
+    if not rows:
+        return "done", "nothing is set aside - every exit is in play", None
+    freed, silent = [], []
+    for resource in rows:
+        name = str(getattr(resource, "name", "") or resource.label)
+        ok, exit_ip, why = _test(book, client, resource, tries=2)
+        if not ok:
+            if book.proxies.status_of(resource) != book.proxies.dead_status:
+                book.proxies.fail(resource, book.proxies.dead_status, note=(
+                    f"Freed with the rest by {_by(payload)} on {_stamp()}, "
+                    f"but it did not answer: {why}"))
+            silent.append(name)
+            _stamp_test(settings, name, False, "")
+            continue
+        book.proxies.release(resource, note=(
+            f"Freed with the rest by {_by(payload)} on {_stamp()} - it "
+            f"answers, and its host is judged afresh from here."))
+        if exit_ip:
+            book.proxies.record_exit(resource, exit_ip)
+        _stamp_test(settings, name, True, exit_ip)
+        _forgive(settings, resource, _by(payload))
+        freed.append(name)
+    said = f"{len(freed)} exit(s) are free again"
+    if silent:
+        said += (f"; {len(silent)} still did not answer and stay dead "
+                 f"({', '.join(silent[:6])}"
+                 f"{' and more' if len(silent) > 6 else ''})")
+    return "done", said, None
 
 
 def remove_proxy(book, ledger, settings, payload, client):
@@ -1315,6 +1363,7 @@ VERBS = {
     "mark_proxy_free": mark_proxy_free,
     "test_proxy": test_proxy,
     "test_all_proxies": test_all_proxies,
+    "free_all_proxies": free_all_proxies,
     "remove_proxy": remove_proxy,
 }
 
@@ -1335,6 +1384,7 @@ VERBS = {
 #: client keeps a session per thread behind one locked limiter. Add nothing
 #: here without doing that, and nothing that can take minutes.
 for _lane in (control, boot_phone, test_proxy, test_all_proxies,
+              free_all_proxies,
               change_proxy, mark_proxy_free, adopt_proxy, add_proxies,
               ignore_proxy, remove_proxy, set_phone_state, stop_phone,
               power_off_phone,

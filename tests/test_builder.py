@@ -5699,7 +5699,8 @@ def test_a_host_cleared_by_hand_is_judged_from_the_clear_onwards(
 
 def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
         make_settings, tmp_path, monkeypatch):
-    from geelark_farm.store import db, state as store_state
+    from geelark_farm.store import db
+    from geelark_farm.store import state as store_state
 
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
     kept = {"captcha_hosts": {"10.0.0.0": {"day": "2026-09-13", "count": 3},
@@ -5732,3 +5733,44 @@ def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
     assert builder.host_clears(settings) == {"10.0.0.0": 5_000.0}
     # Without a store there is nothing to write, and nothing breaks.
     builder.forgive_host(make_settings(store_enabled=False), "10.0.0.0")
+
+
+def test_test_all_asks_about_every_exit_no_build_is_holding(monkeypatch):
+    """It tested the free ones and the dead ones, so half the work list -
+    the exits the host gate set aside and the ones waiting for a new
+    address - answered nothing at all (the operator, 2026-09-14). A
+    `dead` one that answers is free again; one the gate set aside keeps
+    its word and only has its exit written down."""
+    book = make_book(proxies=4)
+    rows = book.proxies._rows
+    for row, status in zip(rows, ("", "dead", builder.SUSPECT, "change ip"),
+                          strict=True):
+        row.values["Status"] = status
+    asked = []
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: asked.append(proxy.host)
+                        or {"outboundIP": "9.9.9.9"})
+
+    dead, revived = builder.check_proxies(object(), book)
+
+    assert sorted(asked) == sorted(str(r.proxy.host) for r in rows), (
+        "every one of them, not the free and the dead alone")
+    assert dead == [] and [r.name or r.label for r in revived] == [
+        rows[1].name or rows[1].label], "only the dead one is put back"
+    assert rows[2].values["Status"] == builder.SUSPECT
+    assert rows[3].values["Status"] == "change ip"
+    assert rows[2].values["Last Exit IP"] == "9.9.9.9", (
+        "the answer is written down even when the word does not change")
+
+    # One that does not answer: the free one dies, and the two already
+    # held back are left saying what they already said.
+    for row, status in zip(rows, ("", builder.SUSPECT, "change ip", "dead"),
+                          strict=True):
+        row.values["Status"] = status
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: (_ for _ in ()).throw(
+                            builder.proxy_mod.ProxyError("no route")))
+    dead, revived = builder.check_proxies(object(), book)
+    assert [r.name or r.label for r in dead] == [rows[0].name or rows[0].label]
+    assert rows[1].values["Status"] == builder.SUSPECT
+    assert rows[2].values["Status"] == "change ip"

@@ -5054,10 +5054,10 @@ def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
-    """What the Proxy tab said, said here: free / on a phone / starting /
-    dead, with why and since when, all of it on one list with the tab's
-    chips - and `claimed` no longer filed as an error, since it is a
-    build that took the exit seconds ago (the operator, 2026-09-09)."""
+    """What the Proxy tab said, said here, with why and since when - and
+    two chips, not four: an exit is either in play or it is a job (the
+    operator, 2026-09-14). `claimed` is not an error, it is a build that
+    took the exit seconds ago (2026-09-09)."""
     import datetime as dt
 
     now = dt.datetime.now(dt.timezone.utc)
@@ -5101,19 +5101,27 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     sheet = body[body.index('data-sheet="proxy"'):]
     head = sheet[:sheet.index("<tbody")]
 
-    # The tab's chips, `all` pressed, each with its count.
+    # Two chips and `all`, each with its count: in play is free, on a
+    # phone and starting; the rest is the work list.
     assert 'data-group="" aria-pressed="true">all<b>6</b>' in head
-    assert 'data-group="free" aria-pressed="false">free<b>1</b>' in head
-    assert 'data-group="on a phone" aria-pressed="false">on a phone<b>2</b>' \
-        in head
-    assert 'data-group="dead" aria-pressed="false">dead<b>3</b>' in head
+    assert ('data-group="free / on a phone" aria-pressed="false">'
+            'free / on a phone<b>3</b>') in head
+    assert ('data-group="dead / set aside" aria-pressed="false">'
+            'dead / set aside<b>3</b>') in head
+    assert 'data-group="dead"' not in head, "four chips became two"
     # The tab's columns.
     for col in ("Name", "State", "Address", "Exit IP", "Used", "Phone"):
         assert f"<th>{col}</th>" in head
     assert "<th>Note</th>" not in head, "no Note column (the operator, 2026-09-09)"
-    # Test all, saying how many dead ones it would give another chance.
+    # Test all covers every exit no build is holding - the dead one, the
+    # one waiting for an address and the one the gate set aside - so the
+    # count it shows is the whole work list, not the dead alone.
     assert 'action="/pools/proxy/test-all"' in head
-    assert "Test all · 2 dead" in head
+    assert "Test all · 3 set aside" in head
+    # Free all answers that whole list, and is shown only under its chip.
+    assert 'action="/pools/proxy/free-all"' in head
+    assert 'data-for-group="dead / set aside" hidden' in head
+    assert "Free all · 3" in head
 
     def row(name):
         at = sheet.index(f"<td>{name}</td>")
@@ -5126,8 +5134,9 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     # - the phone decides.
     assert "<td>2013</td>" in row("SX2") and 'title="since 40m ago"' in row("SX2")
     assert "/pools/proxy/" not in row("SX2")
-    # Starting: filed with the phones, says a build took it, Free only.
-    assert 'data-group="on a phone"' in row("SX3")
+    # Starting: in play - that is where it is going - says a build took
+    # it, Free only.
+    assert 'data-group="free / on a phone"' in row("SX3")
     assert 'title="a build took it 20s ago' in row("SX3")
     assert "/pools/proxy/free" in row("SX3")
     assert "/pools/proxy/test" not in row("SX3")
@@ -5135,12 +5144,12 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     assert "Proxy connection failed" in row("SX4")
     assert "<td>Proxy" not in row("SX4") and "<td>GeeLark" not in row("SX4")
     assert "/pools/proxy/test" in row("SX4") and "/pools/proxy/free" not in row("SX4")
-    # Needs a new IP: filed with the dead, Free (tested first) offered.
-    assert 'data-group="dead"' in row("SX5")
+    # Needs a new IP: a job, Free (tested first) offered.
+    assert 'data-group="dead / set aside"' in row("SX5")
     assert "/pools/proxy/free" in row("SX5")
     # Suspect - a host Google kept challenging - the same three doors,
     # and the count on the hover (2026-09-09).
-    assert 'data-group="dead"' in row("SX6")
+    assert 'data-group="dead / set aside"' in row("SX6")
     assert "/pools/proxy/free" in row("SX6") and "/pools/proxy/test" in row("SX6")
     assert "3 Google challenges" in row("SX6")
 
@@ -5617,3 +5626,18 @@ def test_a_choice_put_back_by_the_dialog_re_gates_the_card():
     assert "pick.dispatchEvent(new Event('change'));" in script
     assert script.index("pick.value = was;") < script.index(
         "pick.dispatchEvent(new Event('change'));")
+
+
+def test_the_proxy_manager_is_ordered_by_the_number_in_the_name():
+    """The vendor's panel lists them SX1, SX2, SX3, and that is the order
+    a person works down when they are changing addresses. It was by
+    `times_used`, the builder's order, which shuffled the list under the
+    hand using it (the operator, 2026-09-14)."""
+    import inspect
+
+    from geelark_farm.web import read as read_mod
+
+    src = inspect.getsource(read_mod._pool_rows)
+    assert "regexp_replace(coalesce(proxy_name, '')" in src
+    assert "'[^0-9]', '', 'g'), '')::bigint NULLS LAST" in src
+    assert "ORDER BY times_used" not in src, "not the builder's order"

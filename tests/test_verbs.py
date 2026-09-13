@@ -1314,3 +1314,77 @@ def test_a_test_that_revives_a_dead_exit_forgives_its_host_too(
     book, row, said = _exit(status="free")
     verbs.test_proxy(book, None, settings, {"name": "SX1"}, object())
     assert forgiven == []
+
+
+def test_free_all_tests_the_whole_set_aside_list_and_frees_what_answers(
+        monkeypatch, make_settings):
+    """One press for the list a person has just changed the addresses of
+    at the vendor; one at a time was nine presses in an afternoon (the
+    operator, 2026-09-14)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import builder
+
+    settings = make_settings(store_enabled=True)
+    rows = [SimpleNamespace(name=n, label=n, error=None,
+                            values={"Status": s},
+                            proxy=SimpleNamespace(host=h, port=1080))
+            for n, s, h in (("SX1", "free", "10.0.0.1"),
+                            ("SX2", "dead", "10.0.0.2"),
+                            ("SX3", "suspect", "10.0.0.3"),
+                            ("SX4", "change ip", "10.0.0.4"),
+                            ("SX5", "on a phone", "10.0.0.5"),
+                            ("SX6", "dead", "10.0.0.6"))]
+
+    class Proxies:
+        dead_status = "dead"
+        _rows = rows
+
+        def status_of(self, r):
+            return r.values["Status"]
+
+        def fail(self, r, status, *, note=""):
+            r.values["Status"] = status
+
+        def release(self, r, *, note=""):
+            r.values["Status"] = "free"
+
+        def record_exit(self, r, ip):
+            r.values["exit"] = ip
+
+    book = SimpleNamespace(proxies=Proxies())
+    # SX6 is the one that still does not answer.
+    monkeypatch.setattr(
+        verbs.proxy_mod, "check",
+        lambda c, p: (_ for _ in ()).throw(verbs.proxy_mod.ProxyError("no"))
+        if p.host == "10.0.0.6" else {"outboundIP": "1.2.3.4"})
+    monkeypatch.setattr(verbs.time, "sleep", lambda s: None)
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    forgiven = []
+    monkeypatch.setattr(builder, "forgive_host",
+                        lambda s, host, by="": forgiven.append(host))
+
+    status, said, _ = verbs.free_all_proxies(
+        book, None, settings, {"by": "mehdi"}, object())
+
+    assert status == "done"
+    assert [r.values["Status"] for r in rows] == [
+        "free",        # SX1 free already - not touched
+        "free",        # SX2 dead, answers
+        "free",        # SX3 the gate set aside, answers
+        "free",        # SX4 waiting for an address, answers
+        "on a phone",  # SX5 a build holds it - never touched
+        "dead"]        # SX6 still silent
+    assert "3 exit(s) are free again" in said and "SX6" in said
+    assert forgiven == ["10.0.0.2", "10.0.0.3", "10.0.0.4"], (
+        "each freed host is judged afresh, the way one Free does")
+
+    # Nothing set aside: it says so and asks GeeLark nothing.
+    for r in rows:
+        r.values["Status"] = "free"
+    status, said, _ = verbs.free_all_proxies(
+        book, None, settings, {"by": "mehdi"}, object())
+    assert status == "done" and "nothing is set aside" in said
+
+    # No client on this pass is a refusal, not a silent no-op.
+    assert verbs.free_all_proxies(book, None, settings, {}, None)[0] == "failed"

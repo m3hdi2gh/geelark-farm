@@ -1922,6 +1922,12 @@ _DASH_SCRIPT = """
         if (tally) tally.textContent = shown === body.length
           ? shown + (shown === 1 ? ' row' : ' rows')
           : shown + ' of ' + body.length + ' shown';
+        // A door that answers one group belongs under that group: Free
+        // all acts on the whole set-aside list, and a press while you
+        // are looking at the working exits would be a surprise.
+        sheet.querySelectorAll('[data-for-group]').forEach(function(el){
+          el.hidden = el.dataset.forGroup !== group;
+        });
       };
       if (find) find.addEventListener('input', sift);
       if (seller) seller.addEventListener('change', sift);
@@ -2536,27 +2542,34 @@ _POOL_KINDS = {
         "how": ("name, then the address - socks5://user:pass@host:port - "
                 "one exit per line"),
         "test_all": "/pools/proxy/test-all",
+        "free_all": "/pools/proxy/free-all",
         "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone"),
     },
 }
 
-#: The proxy sheet's chips: the tab's own states, and `all` pressed when
-#: it opens - the exits are one list a person reads whole, not a queue
-#: with a working end (the operator, 2026-09-09). `all` is the empty
-#: group, which is how the sift says "no chip".
-_PROXY_GROUPS = ("", "free", "on a phone", "dead")
+#: The proxy sheet's chips, and `all` pressed when it opens - the exits
+#: are one list a person reads whole, not a queue with a working end (the
+#: operator, 2026-09-09). `all` is the empty group, which is how the sift
+#: says "no chip".
+#:
+#: Two groups, not four: what a person does with the exits is one of two
+#: things, and the split is exactly the one they act on. Either an exit
+#: is working - free, or under a phone - or it is a job: dead, wanting a
+#: new address, or set aside by the host gate. The second is the list
+#: they work down with the vendor's panel open, and then free in one
+#: press (the operator, 2026-09-14).
+IN_PLAY = "free / on a phone"
+SET_ASIDE = "dead / set aside"
+_PROXY_GROUPS = ("", IN_PLAY, SET_ASIDE)
 
 
 def _proxy_group(state: str) -> str:
     """Which proxy chip a row is under. A build that has just taken an
-    exit (`starting`) is filed with the phones - that is where it is
-    going; an exit that wants a new address is filed with the dead ones,
-    since neither will be handed out until somebody acts."""
-    if state == "free":
-        return "free"
-    if state in ("on a phone", "starting"):
-        return "on a phone"
-    return "dead"
+    exit (`starting`) is in play - that is where it is going; everything
+    that is not in play is a job, whatever word it wears."""
+    if state in ("free", "on a phone", "starting"):
+        return IN_PLAY
+    return SET_ASIDE
 
 
 def _row_group(kind: str, state: str) -> str:
@@ -3129,20 +3142,54 @@ def _seller_filter(kind: str, rows: list[dict]) -> str:
             f'<option value="">every seller</option>{options}</select>')
 
 
+def _set_aside_rows(rows: list[dict]) -> list[dict]:
+    """The exits that are somebody's job: dead, wanting a new address, or
+    set aside by the host gate."""
+    return [r for r in rows
+            if _proxy_group(str(r.get("state") or "")) == SET_ASIDE]
+
+
 def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
-    """One button that tests every free and dead exit - the check the
-    pass runs on its own schedule, on demand. Says how many dead ones
-    it would give another chance."""
+    """One button that tests every exit no build is holding - the check
+    the pass runs on its own schedule, on demand. Says how many are set
+    aside, since those are the ones an answer can change."""
     meta = _POOL_KINDS[kind]
     if not meta.get("test_all") or not _may(user, meta["manage"]):
         return ""
-    dead = sum(1 for r in rows
-               if str(r.get("state") or "") in ("dead", "needs new IP"))
+    aside = len(_set_aside_rows(rows))
     return (f'<form method="post" action="{meta["test_all"]}" class="inline">'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
-            f'<button class="quiet" title="ask GeeLark about every free and '
-            f'dead exit; a dead one that answers is free again">'
-            f'Test all{f" · {dead} dead" if dead else ""}</button></form>')
+            f'<button class="quiet" title="ask GeeLark about every exit no '
+            f'build is holding; a dead one that answers is free again">'
+            f'Test all{f" · {aside} set aside" if aside else ""}</button>'
+            f'</form>')
+
+
+def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
+    """The press that answers the whole set-aside list at once.
+
+    A person changes the addresses at the vendor for the exits in that
+    list and then wants them all back; one at a time was nine presses in
+    an afternoon (the operator, 2026-09-14). Each is tested first, so
+    this frees what answers and leaves what does not as dead - and it
+    clears each host's judgement the way a single Free does.
+
+    Shown only under its own chip: it is the answer to that list, and a
+    button that acts on rows you are not looking at is a trap. `sift`
+    does the showing.
+    """
+    meta = _POOL_KINDS[kind]
+    if not meta.get("free_all") or not _may(user, meta["manage"]):
+        return ""
+    aside = len(_set_aside_rows(rows))
+    return (f'<form method="post" action="{meta["free_all"]}" class="inline"'
+            f' data-for-group="{esc(SET_ASIDE)}" hidden>'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<button class="quiet ok" title="test every exit in this list '
+            f'and free the ones that answer - for after you have changed '
+            f'their addresses at the vendor"'
+            f'{"" if aside else " disabled"}>'
+            f'Free all{f" · {aside}" if aside else ""}</button></form>')
 
 
 def _pool_manager(data: dict, user: dict,
@@ -3178,6 +3225,7 @@ def _pool_manager(data: dict, user: dict,
             f' placeholder="search {_plural(len(rows), "row")}">'
             f'{_seller_filter(kind, rows)}'
             f'{_test_all_door(kind, rows, user)}'
+            f'{_free_all_door(kind, rows, user)}'
             # The script has always written "12 of 190 shown" into this,
             # and the CSS has always reserved the space for it, and it was
             # never rendered - so the count nobody could see is how you
