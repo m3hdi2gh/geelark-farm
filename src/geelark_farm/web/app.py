@@ -29,7 +29,7 @@ from urllib.parse import parse_qs
 
 from .. import signals
 from ..config import Settings
-from . import api_v1, pages, read
+from . import api_v1, live, pages, read
 
 log = logging.getLogger(__name__)
 
@@ -55,9 +55,23 @@ def start(settings: Settings) -> ThreadingHTTPServer:
 
     Handler.settings = settings
     pages.set_zone(settings.web_tz)
+    # Every stream held open asks it: a server being shut down is not a
+    # place to wait twenty seconds for a tick that is not coming.
     server = ThreadingHTTPServer((settings.web_bind, settings.web_port),
                                  Handler)
     server.daemon_threads = True
+    # Every stream held open on /live asks this: a server being shut down
+    # is not a place to wait twenty seconds for a tick that is not coming,
+    # and a test that stops the server must not hang on one.
+    server.stopping = threading.Event()
+    shut = server.shutdown
+
+    def stop_streams():
+        server.stopping.set()
+        shut()
+
+    server.shutdown = stop_streams
+    live.start(settings, server.stopping)
     thread = threading.Thread(target=server.serve_forever,
                               name="web", daemon=True)
     thread.start()
@@ -97,6 +111,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # bookmark - was one more page between them and the work
                 # (the operator, 2026-09-05: "this page is superfluous").
                 return self._redirect("/")
+            if path == "/live":
+                return self._live(user)
             if path == "/users":
                 return self._users_get(user)
             if path == "/api-clients":
@@ -1545,6 +1561,51 @@ class _Handler(BaseHTTPRequestHandler):
         return ""
 
     # ----------------------------------------------------------- plumbing
+    def _live(self, user: dict) -> None:
+        """The stream a page listens on so it moves when the farm does.
+
+        Server-Sent Events, which is one long GET and a line of text per
+        change - no library on either side. The page still has its timer;
+        this only means it usually does not have to wait for it.
+
+        Held open by a thread of this server, so the number of them is
+        capped: a browser refused here keeps the timer and loses nothing
+        but the second.
+        """
+        from . import live
+
+        if live.pulse.hold(1) > live.MAX_STREAMS:
+            live.pulse.hold(-1)
+            return self._text(503, "too many listeners; the page keeps its "
+                                   "own timer")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            # Caddy buffers by default, which holds every tick until the
+            # connection ends - which is never.
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            seen = live.pulse.revision
+            self.wfile.write(f"retry: 5000\ndata: {seen}\n\n".encode())
+            self.wfile.flush()
+            while not self.server.stopping.is_set():
+                now = live.pulse.wait(seen, live.KEEPALIVE)
+                if now is None:
+                    # A comment: it keeps the connection warm and tells a
+                    # browser nothing, which is what nothing happening is.
+                    self.wfile.write(b": still here\n\n")
+                else:
+                    seen = now
+                    self.wfile.write(f"data: {seen}\n\n".encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            # The tab was closed, which is how every one of these ends.
+            log.debug("a live stream closed (%s)", exc)
+        finally:
+            live.pulse.hold(-1)
+
     def _html(self, code: int, body: str) -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -1867,10 +1928,11 @@ def _add_back(field, default: str) -> str:
 #: rail and this list are the same decision written twice, and this is the
 #: half that holds.
 #:
-#: The dashboard, the password page, and one phone - its story, the tab
-#: Boot opens, and the screens in that story. Clicking a serial is the one
-#: place the design sends an operator off the dashboard.
-_OPERATOR_PAGES = ("/", "/password")
+#: The dashboard, the password page, the stream the dashboard listens on,
+#: and one phone - its story, the tab Boot opens, and the screens in that
+#: story. Clicking a serial is the one place the design sends an operator
+#: off the dashboard.
+_OPERATOR_PAGES = ("/", "/password", "/live")
 
 
 def _operator_may_get(path: str) -> bool:

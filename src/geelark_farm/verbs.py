@@ -352,6 +352,33 @@ def _test(book, client, resource, *, tries: int = 1,
     return False, "", why
 
 
+#: How long the vendor's gateway may take to carry an address changed a
+#: moment ago. SX29 was freed at 16:33 and refused, and answered at 16:37
+#: (2026-09-13).
+_GATEWAY_SECONDS = 15.0
+#: How many exits are asked about at once. The same width `check_proxies`
+#: uses, and the API limiter keeps the burst honest either way.
+_TEST_WIDTH = 8
+
+
+def _test_many(client, rows) -> dict:
+    """Ask about all of them at once: {id(row): (ok, exit_ip, why)}."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(resource):
+        try:
+            got = proxy_mod.check(client, resource.proxy)
+            return id(resource), (True, str(got.get("outboundIP") or ""), "")
+        except (proxy_mod.ProxyError, ApiError) as exc:
+            return id(resource), (False, "", str(exc)[:200])
+
+    if not rows:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(_TEST_WIDTH, len(rows)),
+                            thread_name_prefix="free-all") as pool:
+        return dict(pool.map(one, rows))
+
+
 def _forgive(settings, resource, by: str) -> None:
     from . import builder
 
@@ -448,10 +475,19 @@ def free_all_proxies(book, ledger, settings, payload, client):
             and book.proxies.status_of(r) in held]
     if not rows:
         return "done", "nothing is set aside - every exit is in play", None
+    # Two passes, in parallel, rather than patience per row: a serial walk
+    # with a fifteen-second retry on each silent one is three minutes of a
+    # browser waiting on fourteen exits, and the gateway needs that minute
+    # once, not fourteen times (2026-09-14).
+    answers = _test_many(client, rows)
+    late = [r for r in rows if not answers[id(r)][0]]
+    if late:
+        time.sleep(_GATEWAY_SECONDS)
+        answers.update(_test_many(client, late))
     freed, silent = [], []
     for resource in rows:
         name = str(getattr(resource, "name", "") or resource.label)
-        ok, exit_ip, why = _test(book, client, resource, tries=2)
+        ok, exit_ip, why = answers[id(resource)]
         if not ok:
             if book.proxies.status_of(resource) != book.proxies.dead_status:
                 book.proxies.fail(resource, book.proxies.dead_status, note=(

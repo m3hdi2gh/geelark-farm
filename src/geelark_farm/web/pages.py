@@ -193,6 +193,11 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .preview td:first-child{{color:var(--ink)}}
 form.busy{{cursor:progress}}
 form.busy button{{opacity:.45;filter:grayscale(1);pointer-events:none}}
+/* The rows a press is working on. Dimmed, not hidden: what is happening
+   is happening to these, and a row that vanished mid-press would read as
+   done (2026-09-14). */
+tr.acting{{opacity:.45;transition:opacity .12s}}
+tr.acting td{{cursor:progress}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
  border-radius:9px;padding:12px;margin-bottom:14px}}
 .addbox label{{display:block;font-size:11px;letter-spacing:.6px;
@@ -1950,6 +1955,7 @@ _DASH_SCRIPT = """
       clearTimeout(init.timer);
       init.timer = setTimeout(reloadWhenSettled, every * 1000);
     }
+    listen();
   }
 
   // Not while somebody is in the middle of something. A refresh that lands
@@ -1975,6 +1981,32 @@ _DASH_SCRIPT = """
     // has a paste box and an editor in it (2026-09-07).
     return !(o && !o.hidden && openKind !== 'phone') && !typing;
   }
+  // The farm's own tick. `/live` holds one connection open and sends a
+  // number whenever anything a page draws has changed; the timer above
+  // stays as the fallback for a browser or a proxy that will not carry
+  // it. Opened once for the life of the tab - `init` runs on every swap,
+  // and a stream per swap would be a stream per thirty seconds
+  // (2026-09-14).
+  function listen(){
+    if (listen.on || typeof EventSource === 'undefined') return;
+    listen.on = true;
+    var feed = new EventSource('/live');
+    feed.onmessage = function(e){
+      var now = parseInt(e.data, 10);
+      if (!now || now === listen.seen) { listen.seen = now; return; }
+      // The first number is where the farm is, not a change: note it and
+      // wait for the next one.
+      if (listen.seen === undefined) { listen.seen = now; return; }
+      listen.seen = now;
+      clearTimeout(init.timer);
+      init.timer = setTimeout(reloadWhenSettled, 250);
+    };
+    feed.onerror = function(){
+      // EventSource retries on its own; the timer is untouched, so a
+      // stream that never comes back costs nothing but the second.
+    };
+  }
+
   function reloadWhenSettled(){
     if (settled()) { reload(); return; }
     clearTimeout(init.timer);
@@ -2187,6 +2219,67 @@ _DASH_SCRIPT = """
   function parse(html){
     return new DOMParser().parseFromString(html, 'text/html');
   }
+  // What the manager looks like right now, so a swap can put it back.
+  // `swapMain` kept which sheet was open and nothing else, so every
+  // press - and the timer, every thirty seconds, unasked - threw the
+  // chip back to `all`, emptied the search and lost the scroll. The list
+  // moved under the hand using it (the operator, 2026-09-14).
+  function viewNow(){
+    var seen = {};
+    document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
+      var kind = sheet.dataset.sheet;
+      var on = sheet.querySelector('.filters .pill[aria-pressed="true"]');
+      var find = sheet.querySelector('.poolfind');
+      var seller = sheet.querySelector('.sellerpick');
+      var scroll = sheet.querySelector('.tscroll');
+      seen[kind] = {group: on ? on.dataset.group : null,
+                    find: find ? find.value : '',
+                    seller: seller ? seller.value : '',
+                    top: scroll ? scroll.scrollTop : 0};
+    });
+    return seen;
+  }
+  function viewBack(seen){
+    if (!seen) return;
+    document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
+      var was = seen[sheet.dataset.sheet];
+      if (!was) return;
+      var find = sheet.querySelector('.poolfind');
+      var seller = sheet.querySelector('.sellerpick');
+      if (find && was.find) find.value = was.find;
+      if (seller && was.seller) {
+        // A seller that is no longer in the list leaves the box alone.
+        var there = Array.prototype.some.call(seller.options, function(o){
+          return o.value === was.seller; });
+        if (there) seller.value = was.seller;
+      }
+      // Pressing the chip is how the sift is told: it sets the others
+      // false, this one true, and runs. Idempotent on the one already on.
+      var chip = was.group === null ? null : sheet.querySelector(
+        '.filters .pill[data-group="' + cssQuote(was.group) + '"]');
+      if (chip) chip.click();
+      else if (find) find.dispatchEvent(new Event('input'));
+      var scroll = sheet.querySelector('.tscroll');
+      if (scroll && was.top) scroll.scrollTop = was.top;
+    });
+  }
+  function cssQuote(v){ return String(v).replace(/["\\]/g, '\\$&'); }
+
+  // The rows a press is about: its own, or - for a door that answers a
+  // whole group, like Free all - every row under that group.
+  function actOn(form, sheet){
+    var own = form.closest('tr');
+    if (own) return [own];
+    var group = form.dataset.forGroup;
+    if (!sheet) return [];
+    if (!group) return Array.prototype.slice.call(
+      sheet.querySelectorAll('tbody tr:not(.none)'));
+    return Array.prototype.filter.call(
+      sheet.querySelectorAll('tbody tr:not(.none)'), function(tr){
+        return tr.dataset.group === group;
+      });
+  }
+
   function swapMain(doc){
     var fresh = doc.querySelector('main'), here = document.querySelector('main');
     if (!fresh || !here) { location.reload(); return; }
@@ -2196,7 +2289,7 @@ _DASH_SCRIPT = """
     if (mine && theirs && mine.content !== theirs.content) {
       location.reload(); return;
     }
-    var kept = openKind;
+    var kept = openKind, seen = viewNow();
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
     });
@@ -2205,6 +2298,37 @@ _DASH_SCRIPT = """
     init();
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref);
     else if (kept && kept !== 'send') show(kept);
+    viewBack(seen);
+  }
+
+  // 3. One row changed, so one row is replaced - not the page under it.
+  // A Test or a Free is about a single exit, and swapping the whole of
+  // `main` for it is why the list jumped. The fresh document already
+  // holds that row; take it and leave everything else alone.
+  function swapRow(doc, key){
+    var mine = document.querySelector('#poolov tr[data-key="' + cssQuote(key)
+                                      + '"]');
+    var theirs = doc.querySelector('#poolov tr[data-key="' + cssQuote(key)
+                                   + '"]');
+    if (!mine || !theirs) return false;
+    var sheet = mine.closest('.sheet');
+    mine.replaceWith(theirs);
+    // The counts on the chips are now a row out. Counted off the table
+    // rather than read from the answer, so they cannot drift.
+    if (sheet) {
+      var tally = {};
+      sheet.querySelectorAll('tbody tr:not(.none)').forEach(function(tr){
+        tally[tr.dataset.group] = (tally[tr.dataset.group] || 0) + 1;
+      });
+      var all = 0;
+      Object.keys(tally).forEach(function(g){ all += tally[g]; });
+      sheet.querySelectorAll('.filters .pill[data-group]').forEach(function(c){
+        var n = c.querySelector('b'); if (!n) return;
+        n.textContent = c.dataset.group ? (tally[c.dataset.group] || 0) : all;
+      });
+    }
+    init();
+    return true;
   }
   function reload(){
     fetch(location.pathname + location.search, {credentials: 'same-origin'})
@@ -2409,6 +2533,18 @@ _DASH_SCRIPT = """
     // `pointer-events:none` does not stop Enter on a focused submit, so
     // the same press went twice (2026-09-07).
     if (pressed) pressed.disabled = true;
+    // What it is doing, and to what. A Test all against sixteen exits is
+    // sixteen calls to GeeLark and the button said nothing for all of
+    // them, which reads as a hang (the operator, 2026-09-14). The rows
+    // it is acting on go dim, so the wait has a shape.
+    var wasLabel = null;
+    if (pressed && pressed.dataset.busy) {
+      wasLabel = pressed.textContent;
+      pressed.textContent = pressed.dataset.busy;
+    }
+    var acting = actOn(form, sheet);
+    acting.forEach(function(tr){ tr.classList.add('acting'); });
+    var key = form.closest('tr') ? form.closest('tr').dataset.key : null;
     // As the browser would send it - urlencoded. FormData on its own goes
     // out multipart, which the server does not read, and every field
     // including the csrf token arrived as nothing: "Stale session"
@@ -2429,6 +2565,8 @@ _DASH_SCRIPT = """
         // while looking perfectly ordinary (the operator, 2026-09-07).
         form.classList.remove('busy');
         if (pressed) pressed.disabled = false;
+        if (pressed && wasLabel !== null) pressed.textContent = wasLabel;
+        acting.forEach(function(tr){ tr.classList.remove('acting'); });
         if (!got) return;
         // The editor has said its piece: whatever the answer is, it
         // shows in the sheet, not under a dialog that is still up.
@@ -2441,6 +2579,8 @@ _DASH_SCRIPT = """
           clearTimeout(init.timer);
           init.timer = setTimeout(reloadWhenSettled, 2500);
         }
+        // One row's press: put that row back and leave the rest alone.
+        if (isHere(got.url) && key && swapRow(doc, key)) return;
         if (isHere(got.url)) { swapMain(doc); return; }
         // Not the dashboard: a preview, a confirm, a refusal. Inside the
         // sheet it came from, if it came from one; else in place of the
@@ -2927,7 +3067,7 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
-                f'<button class="quiet ok" title="'
+                f'<button class="quiet ok" data-busy="Testing…" title="'
                 + ("tested, and back on the shelf if it answers"
                    if state in ("needs new IP", "suspect") else
                    "back on the shelf - only if the build that took it is "
@@ -2938,7 +3078,7 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
-                f'<button class="quiet" title="'
+                f'<button class="quiet" data-busy="Asking…" title="'
                 + ("ask GeeLark whether it answers; one that does is free "
                    "again" if state != "free" else
                    "ask GeeLark whether it answers; one that does not is "
@@ -3066,7 +3206,11 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
                 f' data-secret="{esc(str(row.get("secret") or ""))}"'
                 f' data-sellername="{esc(str(row.get("seller") or "").strip())}"'
                 if doors else "")
+        # What a single-row answer is put back by, so a Test or a Free
+        # replaces its own row instead of the page under it (2026-09-14).
+        key = f'{kind}:{row.get("address") or row.get("id") or ""}'
         lines.append(f'<tr data-state="{esc(state)}"'
+                     f' data-key="{esc(key)}"'
                      f' data-group="{_row_group(kind, state)}"'
                      f' data-find="{esc(findable)}"'
                      f' data-seller="{esc(_seller_key(row))}"{held}>'
@@ -3159,8 +3303,9 @@ def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
     aside = len(_set_aside_rows(rows))
     return (f'<form method="post" action="{meta["test_all"]}" class="inline">'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
-            f'<button class="quiet" title="ask GeeLark about every exit no '
-            f'build is holding; a dead one that answers is free again">'
+            f'<button class="quiet" data-busy="Testing…" '
+            f'title="ask GeeLark about every exit no build is holding; a '
+            f'dead one that answers is free again">'
             f'Test all{f" · {aside} set aside" if aside else ""}</button>'
             f'</form>')
 
@@ -3185,10 +3330,10 @@ def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
     return (f'<form method="post" action="{meta["free_all"]}" class="inline"'
             f' data-for-group="{esc(SET_ASIDE)}" hidden>'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
-            f'<button class="quiet ok" title="test every exit in this list '
-            f'and free the ones that answer - for after you have changed '
-            f'their addresses at the vendor"'
-            f'{"" if aside else " disabled"}>'
+            f'<button class="quiet ok" data-busy="Testing {aside}…" '
+            f'title="test every exit in this list and free the ones that '
+            f'answer - for after you have changed their addresses at the '
+            f'vendor"{"" if aside else " disabled"}>'
             f'Free all{f" · {aside}" if aside else ""}</button></form>')
 
 

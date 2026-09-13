@@ -1358,7 +1358,8 @@ def test_free_all_tests_the_whole_set_aside_list_and_frees_what_answers(
         verbs.proxy_mod, "check",
         lambda c, p: (_ for _ in ()).throw(verbs.proxy_mod.ProxyError("no"))
         if p.host == "10.0.0.6" else {"outboundIP": "1.2.3.4"})
-    monkeypatch.setattr(verbs.time, "sleep", lambda s: None)
+    slept = []
+    monkeypatch.setattr(verbs.time, "sleep", lambda s: slept.append(s))
     monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
     forgiven = []
     monkeypatch.setattr(builder, "forgive_host",
@@ -1366,6 +1367,11 @@ def test_free_all_tests_the_whole_set_aside_list_and_frees_what_answers(
 
     status, said, _ = verbs.free_all_proxies(
         book, None, settings, {"by": "mehdi"}, object())
+
+    # The gateway's minute is paid once for the whole list, not per row:
+    # serial patience on fourteen exits is three minutes of a browser
+    # waiting (2026-09-14).
+    assert slept == [verbs._GATEWAY_SECONDS]
 
     assert status == "done"
     assert [r.values["Status"] for r in rows] == [

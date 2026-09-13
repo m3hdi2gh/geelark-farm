@@ -11,6 +11,7 @@ from __future__ import annotations
 import http.client
 import re
 import threading
+import time
 
 import pytest
 
@@ -5641,3 +5642,152 @@ def test_the_proxy_manager_is_ordered_by_the_number_in_the_name():
     assert "regexp_replace(coalesce(proxy_name, '')" in src
     assert "'[^0-9]', '', 'g'), '')::bigint NULLS LAST" in src
     assert "ORDER BY times_used" not in src, "not the builder's order"
+
+
+# ----------------------------------- the page moves when the farm does
+def test_the_pulse_bumps_only_when_the_fingerprint_moves():
+    """One number for the whole console: a page that hears it swaps, and
+    one that hears nothing does nothing (2026-09-14)."""
+    from geelark_farm.web import live
+
+    pulse = live.Pulse()
+    assert pulse.revision == 0
+    # The first fingerprint is where the farm is, not a change - it must
+    # not wake a page that has just loaded.
+    assert pulse.bump(("a", "b")) is False and pulse.revision == 1
+    assert pulse.bump(("a", "b")) is False, "the same mark is not news"
+    assert pulse.revision == 1
+    assert pulse.bump(("a", "c")) is True and pulse.revision == 2
+    # Waiting: past the number you have, or nothing before the timeout.
+    assert pulse.wait(1, 0.01) == 2
+    assert pulse.wait(2, 0.01) is None
+    assert pulse.hold(1) == 1 and pulse.hold(1) == 2 and pulse.hold(-1) == 1
+
+
+def test_a_waiter_is_woken_by_the_bump_not_by_the_clock():
+    import threading
+
+    from geelark_farm.web import live
+
+    pulse = live.Pulse()
+    pulse.bump(("first",))
+    got = []
+    waiter = threading.Thread(
+        target=lambda: got.append(pulse.wait(pulse.revision, 5.0)))
+    waiter.start()
+    time.sleep(0.05)
+    pulse.bump(("second",))
+    waiter.join(timeout=2)
+    assert got == [2], "it came back on the bump, not on the five seconds"
+
+
+def test_the_fingerprint_asks_about_every_table_a_page_draws(monkeypatch,
+                                                             make_settings):
+    from geelark_farm.store import db as store_db
+    from geelark_farm.web import live
+
+    asked = []
+
+    class _Store:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append(sql)
+            return [{"pools": "2026-09-14", "phones": None, "events": 7,
+                     "actions": 3, "wanted": None}]
+
+    monkeypatch.setattr(store_db, "Store", _Store)
+    mark = live.take(make_settings(store_enabled=True))
+
+    assert mark == ("2026-09-14", "", "7", "3", "")
+    for table in ("resources", "phones", "events", "actions", "wanted_builds"):
+        assert table in asked[0], table
+
+    # A store that will not answer is not a crash and not a change.
+    monkeypatch.setattr(store_db, "Store",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError("down")))
+    assert live.take(make_settings(store_enabled=True)) is None
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_stream_sends_the_revision_and_keeps_itself_warm(
+        web, monkeypatch):
+    """Server-Sent Events: one long GET, a number per change. The page
+    still has its timer, so a browser that cannot hold this loses the
+    second and nothing else."""
+    from geelark_farm.web import live
+
+    client = web()
+    client.login()
+    # Capped, so a runaway cannot take every thread of the server.
+    monkeypatch.setattr(live, "MAX_STREAMS", 0)
+    status, _, body = client.request("GET", "/live")
+    assert status == 503 and "timer" in body
+
+
+def test_the_dashboard_listens_on_the_stream_and_keeps_its_timer():
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "new EventSource('/live')" in script
+    assert "listen.on" in script, "one stream per tab, not one per swap"
+    assert "listen();" in script
+    # The timer stays: a proxy that will not carry a stream must not mean
+    # a page that never updates.
+    assert "setTimeout(reloadWhenSettled, every * 1000)" in script
+    assert "feed.onerror" in script
+
+
+def test_a_swap_puts_the_manager_back_the_way_it_was():
+    """It kept which sheet was open and nothing else, so every press -
+    and the timer, every thirty seconds, unasked - threw the chip back to
+    `all` and emptied the search (the operator, 2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function viewNow()" in script and "function viewBack(" in script
+    for kept in ("aria-pressed=\"true\"", ".poolfind", ".sellerpick",
+                 "scrollTop"):
+        assert kept in script, kept
+    # Taken before the swap, put back after it.
+    assert "var kept = openKind, seen = viewNow();" in script
+    assert "viewBack(seen);" in script
+
+
+def test_one_rows_press_replaces_one_row():
+    """A Test or a Free is about a single exit; swapping the whole of
+    `main` for it is why the list jumped (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function swapRow(doc, key)" in script
+    assert "if (isHere(got.url) && key && swapRow(doc, key)) return;" in script
+    # The chip counts are recounted off the table, so they cannot drift.
+    assert "tally[tr.dataset.group]" in script
+    # And the row carries the key that finds it.
+    assert 'data-key="{esc(key)}"' in _source(pages._pool_table)
+
+
+def test_a_press_says_what_it_is_doing_and_to_what():
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "pressed.dataset.busy" in script
+    assert "function actOn(form, sheet)" in script
+    assert "tr.classList.add('acting')" in script
+    drawn = pages.page("x", "", user={"username": "a", "role": "admin"})
+    assert "tr.acting{opacity:.45" in drawn, "the dimmed rows are styled"
+
+
+def _source(fn):
+    import inspect
+
+    return inspect.getsource(fn)
