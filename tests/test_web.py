@@ -4892,8 +4892,9 @@ def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
     script = pages._DASH_SCRIPT
     assert "toast('Starting ' + (which || 'the phone')" in script
     assert "in the new tab as soon as GeeLark hands the link back" in script
-    assert "if (/[?&]said=queued/.test(got.url))" in script, (
+    assert "var waiting = /[?&]said=queued/.test(got.url);" in script, (
         "queued is not done: look again shortly")
+    assert "if (waiting) lookAgain(2500);" in script
 
 
 def test_the_mirror_marks_what_is_running_in_one_statement():
@@ -5741,8 +5742,11 @@ def test_the_dashboard_listens_on_the_stream_and_keeps_its_timer():
     assert "listen.on" in script, "one stream per tab, not one per swap"
     assert "listen();" in script
     # The timer stays: a proxy that will not carry a stream must not mean
-    # a page that never updates.
-    assert "setTimeout(reloadWhenSettled, every * 1000)" in script
+    # a page that never updates - and every re-check goes through the one
+    # clock, so the soonest one stands.
+    assert "function lookAgain(ms)" in script
+    assert "if (init.timer && init.due && init.due <= due) return;" in script
+    assert "lookAgain(250);" in script, "the stream asks for the soonest"
     assert "feed.onerror" in script
 
 
@@ -5769,7 +5773,11 @@ def test_one_rows_press_replaces_one_row():
 
     script = pages._DASH_SCRIPT
     assert "function swapRow(doc, key)" in script
-    assert "if (isHere(got.url) && key && swapRow(doc, key)) return;" in script
+    # A queued answer is the row BEFORE the press - the lane carries it
+    # out a moment later - so it is never swapped in, and the page looks
+    # again shortly instead (2026-09-14).
+    assert "if (!waiting && isHere(got.url) && key && swapRow(doc, key)) return;"         in script
+    assert "if (waiting) lookAgain(2500);" in script
     # The chip counts are recounted off the table, so they cannot drift.
     assert "tally[tr.dataset.group]" in script
     # And the row carries the key that finds it.

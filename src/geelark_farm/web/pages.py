@@ -1951,9 +1951,7 @@ _DASH_SCRIPT = """
     // here, that is a quiet swap rather than a reload.
     var meta = document.querySelector('meta[name="gf-refresh"]');
     if (meta) {
-      var every = parseInt(meta.getAttribute('content'), 10) || 30;
-      clearTimeout(init.timer);
-      init.timer = setTimeout(reloadWhenSettled, every * 1000);
+      lookAgain((parseInt(meta.getAttribute('content'), 10) || 30) * 1000);
     }
     listen();
   }
@@ -1998,8 +1996,7 @@ _DASH_SCRIPT = """
       // wait for the next one.
       if (listen.seen === undefined) { listen.seen = now; return; }
       listen.seen = now;
-      clearTimeout(init.timer);
-      init.timer = setTimeout(reloadWhenSettled, 250);
+      lookAgain(250);
     };
     feed.onerror = function(){
       // EventSource retries on its own; the timer is untouched, so a
@@ -2007,10 +2004,25 @@ _DASH_SCRIPT = """
     };
   }
 
+  // Every re-check goes through here, and the soonest one stands. They
+  // each used to call `setTimeout` over whatever was pending, so a press
+  // that asked to look again in two and a half seconds had its answer
+  // thrown away by the next `init` - which arms the thirty-second one -
+  // and the row stayed as it was until the operator pressed a second
+  // time (2026-09-14: "the first press does nothing").
+  function lookAgain(ms){
+    var due = Date.now() + ms;
+    if (init.timer && init.due && init.due <= due) return;
+    clearTimeout(init.timer);
+    init.due = due;
+    init.timer = setTimeout(function(){
+      init.due = 0;
+      reloadWhenSettled();
+    }, ms);
+  }
   function reloadWhenSettled(){
     if (settled()) { reload(); return; }
-    clearTimeout(init.timer);
-    init.timer = setTimeout(reloadWhenSettled, 5000);
+    lookAgain(5000);
   }
 
   // ------------------------------------------------------ the manager
@@ -2583,12 +2595,15 @@ _DASH_SCRIPT = """
         // Queued is not done: the lane carries it out a moment later, so
         // look again shortly and the table shows what happened - a marked
         // phone gone, a taken one wearing its name (2026-09-08).
-        if (/[?&]said=queued/.test(got.url)) {
-          clearTimeout(init.timer);
-          init.timer = setTimeout(reloadWhenSettled, 2500);
-        }
-        // One row's press: put that row back and leave the rest alone.
-        if (isHere(got.url) && key && swapRow(doc, key)) return;
+        // Queued is not done: the lane carries it out a moment later, so
+        // what came back does not show it yet. Look again shortly - and
+        // do NOT put that row back, because the row in this answer is the
+        // row before the press (2026-09-14).
+        var waiting = /[?&]said=queued/.test(got.url);
+        if (waiting) lookAgain(2500);
+        // One row's press, already carried out: put that row back and
+        // leave the rest of the page alone.
+        if (!waiting && isHere(got.url) && key && swapRow(doc, key)) return;
         if (isHere(got.url)) { swapMain(doc); return; }
         // Not the dashboard: a preview, a confirm, a refusal. Inside the
         // sheet it came from, if it came from one; else in place of the
