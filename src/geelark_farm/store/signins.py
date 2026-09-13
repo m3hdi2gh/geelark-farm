@@ -72,10 +72,37 @@ def rates(settings: Settings, by: str, days: int = 7) -> list[dict]:
             for key, ok, n in rows]
 
 
-def host_rates(settings: Settings, days: int = 7) -> list[dict]:
-    """The hosts with enough attempts to be judged."""
-    return [r for r in rates(settings, "host", days)
-            if r["key"] and r["n"] >= MIN_SAMPLE]
+def host_rates(settings: Settings, days: int = 7,
+               since: dict | None = None) -> list[dict]:
+    """The hosts with enough attempts to be judged.
+
+    `since` is {host: unix time}: for those hosts only the sign-ins after
+    that moment count. It is what a person's Free on the console means -
+    "I changed the address at the vendor; judge it from now" - and
+    without it the week's tally set the exit straight back aside on the
+    next pass, every time (the operator, 2026-09-13).
+    """
+    if not since:
+        return [r for r in rates(settings, "host", days)
+                if r["key"] and r["n"] >= MIN_SAMPLE]
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT host, ok, extract(epoch FROM at) FROM signins"
+            " WHERE at > now() - make_interval(days => %s)", (int(days),))
+        rows = cur.fetchall()
+        conn.rollback()
+    tally: dict[str, list[int]] = {}
+    for host, ok, at in rows:
+        host = str(host or "")
+        if not host or float(at or 0) <= float(since.get(host) or 0):
+            continue
+        got = tally.setdefault(host, [0, 0])
+        got[0] += 1 if ok else 0
+        got[1] += 1
+    out = [{"key": host, "ok": ok, "n": n, "rate": ok / n}
+           for host, (ok, n) in tally.items() if n >= MIN_SAMPLE]
+    out.sort(key=lambda r: (-r["n"], r["key"]))
+    return out
 
 
 def totals(settings: Settings, days: int = 7) -> dict:

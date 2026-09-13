@@ -5253,7 +5253,7 @@ def test_the_host_gate_sets_aside_exits_on_a_bad_host_and_frees_them_back(
                              pools_in_pg=True, host_gate_min=5,
                              host_gate_rate=0.5)
     book = make_book(proxies=2)          # 10.0.0.0 and 10.0.0.1
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
         {"key": "10.0.0.0", "ok": 1, "n": 10, "rate": 0.1},
         {"key": "10.0.0.1", "ok": 8, "n": 10, "rate": 0.8}])
 
@@ -5265,7 +5265,7 @@ def test_the_host_gate_sets_aside_exits_on_a_bad_host_and_frees_them_back(
     assert book.proxies._rows[0].values["Note"].startswith("Login rate 1/10")
     assert book.proxies._rows[1].values["Status"] in ("", "free")
     # The host recovers: what the gate set aside comes back, and only that.
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
         {"key": "10.0.0.0", "ok": 6, "n": 10, "rate": 0.6}])
     outcome = builder.gate_hosts(book, settings)
     assert len(outcome["ungated"]) == 1
@@ -5273,7 +5273,7 @@ def test_the_host_gate_sets_aside_exits_on_a_bad_host_and_frees_them_back(
     # A suspect the captcha tally made is not the gate's to free.
     book.proxies.fail(book.proxies._rows[1], builder.SUSPECT,
                       note="Suspect - 3 Google challenges today")
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7: [
+    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
         {"key": "10.0.0.1", "ok": 9, "n": 10, "rate": 0.9}])
     assert builder.gate_hosts(book, settings)["ungated"] == []
     assert book.proxies._rows[1].values["Status"] == builder.SUSPECT
@@ -5661,3 +5661,74 @@ def test_two_phone_number_refusals_on_one_exit_change_the_exit(
     assert build.ok and build.gmail == "g2@example.com"
     assert len(device.proxies_set) == 1, "one swap, after the second refusal"
     assert device.proxies_set[0] in build.proxy
+
+
+# ------------------------------- a person's Free resets the host's judgement
+def test_a_host_cleared_by_hand_is_judged_from_the_clear_onwards(
+        make_settings, tmp_path, monkeypatch):
+    """Free was a status write and nothing more: the gate re-derived
+    `suspect` from the week's sign-ins on the next pass and set the exit
+    straight back aside - nine times in one afternoon (2026-09-13)."""
+    from geelark_farm.store import signins as store_signins
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True,
+                             pools_in_pg=True, host_gate_min=5,
+                             host_gate_rate=0.5)
+    book = make_book(proxies=2)          # 10.0.0.0 and 10.0.0.1
+    asked = []
+
+    def host_rates(s, days=7, since=None):
+        asked.append(dict(since or {}))
+        # Cleared: only fresh sign-ins count, and there are two of them.
+        if since and "10.0.0.0" in since:
+            return []
+        return [{"key": "10.0.0.0", "ok": 1, "n": 10, "rate": 0.1}]
+
+    monkeypatch.setattr(store_signins, "host_rates", host_rates)
+    monkeypatch.setattr(builder, "host_clears", lambda s: {})
+    assert builder.gate_hosts(book, settings)["gated"], "bad host, set aside"
+    book.proxies.release(book.proxies._rows[0], note="freed by hand")
+
+    monkeypatch.setattr(builder, "host_clears",
+                        lambda s: {"10.0.0.0": 1_000.0})
+    assert builder.gate_hosts(book, settings)["gated"] == [], (
+        "the week's verdict is about the old address; judged from the clear")
+    assert asked[-1] == {"10.0.0.0": 1_000.0}
+    assert book.proxies._rows[0].values["Status"] in ("", "free")
+
+
+def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
+        make_settings, tmp_path, monkeypatch):
+    from geelark_farm.store import db, state as store_state
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    kept = {"captcha_hosts": {"10.0.0.0": {"day": "2026-09-13", "count": 3},
+                              "10.0.0.1": {"day": "2026-09-13", "count": 1}},
+            builder.HOST_CLEARS: {}}
+    monkeypatch.setattr(store_state, "get",
+                        lambda s, key, default=None: dict(kept.get(key) or {}))
+    monkeypatch.setattr(store_state, "put",
+                        lambda conn, key, value: kept.__setitem__(key, value))
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def commit(self):
+            kept["committed"] = True
+
+    monkeypatch.setattr(db, "connect", lambda s: _Conn())
+    monkeypatch.setattr(builder.time, "time", lambda: 5_000.0)
+
+    builder.forgive_host(settings, "10.0.0.0", by="mehdi")
+
+    assert kept[builder.HOST_CLEARS] == {"10.0.0.0": 5_000.0}
+    assert "10.0.0.0" not in kept["captcha_hosts"], "the day's strikes go"
+    assert kept["captcha_hosts"]["10.0.0.1"]["count"] == 1, "others stay"
+    assert kept["committed"]
+    assert builder.host_clears(settings) == {"10.0.0.0": 5_000.0}
+    # Without a store there is nothing to write, and nothing breaks.
+    builder.forgive_host(make_settings(store_enabled=False), "10.0.0.0")

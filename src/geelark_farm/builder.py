@@ -3631,6 +3631,57 @@ def _revive_ladder(settings: Settings) -> list[str]:
 #: can tell its own suspects from the captcha tally's and free them when
 #: the host recovers.
 HOST_GATE_NOTE = "Login rate"
+#: Where a person's Free is written down, by host: {host: unix time}.
+#: The gate judges a host from its last clear onwards, and the captcha
+#: tally forgets the host's strikes for the day.
+HOST_CLEARS = "host_clears"
+
+
+def host_clears(settings: Settings) -> dict[str, float]:
+    """When each host was last cleared by hand, or {} without a store."""
+    if not getattr(settings, "store_enabled", False):
+        return {}
+    try:
+        from .store import state as store_state
+
+        got = store_state.get(settings, HOST_CLEARS, {}) or {}
+        return {str(k): float(v) for k, v in dict(got).items() if v}
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not read the host clears (%s)", exc)
+        return {}
+
+
+def forgive_host(settings: Settings, host: str, *, by: str = "") -> None:
+    """A person freed an exit on `host` on the console: judge the host
+    from now on, and forget the day's captcha strikes against it.
+
+    Free was a status write and nothing more, so the gate - which
+    re-derives `suspect` from the week's sign-ins on every pass - set the
+    exit straight back aside within a minute, and the captcha tally did
+    the same at the next challenge. The operator changed the exit's
+    address at the vendor, pressed Free, and read the same row in the
+    same list again nine times in an afternoon (2026-09-13). Never fatal.
+    """
+    host = str(host or "").strip()
+    if not host or not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import db
+        from .store import state as store_state
+
+        cleared = host_clears(settings)
+        cleared[host] = time.time()
+        strikes = _captcha_hosts(settings)
+        strikes.pop(host, None)
+        with db.connect(settings) as conn:
+            store_state.put(conn, HOST_CLEARS, cleared)
+            store_state.put(conn, "captcha_hosts", strikes)
+            conn.commit()
+        log.info("host %s cleared by %s: judged from now on", host,
+                 by or "hand")
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not clear host %s (%s); the gate may set its "
+                    "exits aside again", host, exc)
 
 
 def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
@@ -3638,12 +3689,17 @@ def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
     fall under `host_gate_rate` (with at least `host_gate_min` of them),
     and free the ones it set aside on hosts that recovered. Measured:
     185.100.235.x 20 in 100, 82.38.66.x 30 against 82.27.118.x 75 among
-    addresses with a key (2026-09-10)."""
+    addresses with a key (2026-09-10).
+
+    A host a person cleared is judged from the clear onwards - it needs
+    `host_gate_min` fresh sign-ins before it can be set aside again - so
+    that Free means something (2026-09-13)."""
     from .store import signins as store_signins
 
     least = max(1, int(getattr(settings, "host_gate_min", 5)))
     floor = float(getattr(settings, "host_gate_rate", 0.5))
-    judged = {r["key"]: r for r in store_signins.host_rates(settings)
+    judged = {r["key"]: r for r in store_signins.host_rates(
+                  settings, since=host_clears(settings) or None)
               if r["n"] >= least}
     aside, freed = [], []
     for resource in list(book.proxies._rows):
@@ -3657,8 +3713,9 @@ def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
         if bad and status in ("", "free", "unused"):
             book.proxies.fail(resource, SUSPECT, note=(
                 f"Login rate {seen['ok']}/{seen['n']} on {host} in the "
-                f"last 7 days; set aside on its own. Press Free to use it "
-                f"again, or wait for the host to recover."))
+                f"last 7 days; set aside on its own. Press Free once the "
+                f"address is changed at the vendor - the host is then "
+                f"judged afresh - or wait for it to recover."))
             aside.append(str(getattr(resource, "name", "") or resource.label))
         elif (not bad and status == SUSPECT
               and note.startswith(HOST_GATE_NOTE)):

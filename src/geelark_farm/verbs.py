@@ -330,14 +330,34 @@ def offer_again(book, ledger, settings, payload, client):
 
 
 # ---------------------------------------------------------------- proxies
-def _test(book, client, resource) -> tuple[bool, str, str]:
+def _test(book, client, resource, *, tries: int = 1,
+          pause: float = 15.0) -> tuple[bool, str, str]:
+    """Ask GeeLark whether the exit answers. `tries` above one is patience
+    for an address just changed at the vendor: SX29 was freed at 16:33
+    and refused, and answered at 16:37 - the gateway takes a minute or
+    two to carry the new address (2026-09-13)."""
     if client is None:
         return False, "", "no GeeLark client on this pass"
-    try:
-        result = proxy_mod.check(client, resource.proxy)
-        return True, str(result.get("outboundIP") or ""), ""
-    except (proxy_mod.ProxyError, ApiError) as exc:
-        return False, "", str(exc)[:200]
+    why = ""
+    for n in range(max(1, int(tries))):
+        if n:
+            time.sleep(pause)
+        try:
+            result = proxy_mod.check(client, resource.proxy)
+            return True, str(result.get("outboundIP") or ""), ""
+        except (proxy_mod.ProxyError, ApiError) as exc:
+            why = str(exc)[:200]
+            log.info("%s did not answer on try %d of %d: %s",
+                     resource.name or resource.label, n + 1, tries, why)
+    return False, "", why
+
+
+def _forgive(settings, resource, by: str) -> None:
+    from . import builder
+
+    builder.forgive_host(
+        settings, str(getattr(getattr(resource, "proxy", None), "host", "")
+                      or ""), by=by)
 
 
 def _named(book, payload):
@@ -355,19 +375,24 @@ def mark_proxy_free(book, ledger, settings, payload, client):
     resource, refused = _named(book, payload)
     if refused:
         return refused
-    ok, exit_ip, why = _test(book, client, resource)
+    ok, exit_ip, why = _test(book, client, resource, tries=3)
     if not ok:
         book.proxies.fail(resource, book.proxies.dead_status, note=(
             f"Marked free from the web by {_by(payload)} on {_stamp()}, but "
-            f"it did not answer: {why}"))
-        return "failed", f"{resource.name} did not answer: {why}", None
+            f"it did not answer in three tries over half a minute: {why}"))
+        return ("failed", f"{resource.name} did not answer in three tries: "
+                          f"{why}", None)
     book.proxies.release(resource, note=(
         f"IP changed - marked free from the web by {_by(payload)} on "
-        f"{_stamp()}."))
+        f"{_stamp()}. Its host is judged afresh from here."))
     if exit_ip:
         book.proxies.record_exit(resource, exit_ip)
     _stamp_test(settings, resource.name, True, exit_ip)
-    return "done", f"{resource.name} is free again (exit {exit_ip})", None
+    # The person says the address changed: the week's verdict on the host
+    # is about the old address, and the day's captcha strikes too.
+    _forgive(settings, resource, _by(payload))
+    return ("done", f"{resource.name} is free again (exit {exit_ip}); its "
+                    f"host is judged afresh from now", None)
 
 
 def test_proxy(book, ledger, settings, payload, client):
@@ -382,6 +407,7 @@ def test_proxy(book, ledger, settings, payload, client):
             book.proxies.release(resource, note=(
                 f"Answered again on {_stamp()} - tested from the web by "
                 f"{_by(payload)}."))
+            _forgive(settings, resource, _by(payload))
         if exit_ip:
             book.proxies.record_exit(resource, exit_ip)
         return "done", f"{resource.name} answers (exit {exit_ip})", None

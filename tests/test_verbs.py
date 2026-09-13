@@ -1212,3 +1212,105 @@ def test_stop_this_one_is_written_where_the_builders_read_it(
     finally:
         builder_mod.STOP_BY_HAND.discard("9")
 
+
+
+# ------------------------------------ Free means "judge this host afresh"
+def _exit(name="SX1", host="10.0.0.9", status="suspect"):
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(name=name, label=name, values={"Status": status},
+                          proxy=SimpleNamespace(host=host, port=1080))
+    said = []
+
+    class Proxies:
+        dead_status = "dead"
+        available_statuses = frozenset({"", "free", "unused"})
+
+        def find_by_name(self, n):
+            return row if n == name else None
+
+        def status_of(self, r):
+            return r.values["Status"]
+
+        def fail(self, r, status, *, note=""):
+            r.values["Status"] = status; said.append(("fail", status))
+
+        def release(self, r, *, note=""):
+            r.values["Status"] = "free"; said.append(("release", note))
+
+        def record_exit(self, r, ip):
+            said.append(("exit", ip))
+
+    from types import SimpleNamespace as NS
+    return NS(proxies=Proxies()), row, said
+
+
+def test_free_tests_with_patience_then_forgives_the_host(monkeypatch,
+                                                         make_settings):
+    """SX29 was freed at 16:33 and refused, and answered at 16:37: the
+    vendor's gateway takes a minute or two to carry a changed address. And
+    a Free that sticks has to reach the host gate, or the next pass sets
+    the exit straight back aside (2026-09-13)."""
+    from geelark_farm import builder
+
+    settings = make_settings(store_enabled=True)
+    book, row, said = _exit()
+    answers = iter([RuntimeError, RuntimeError, {"outboundIP": "1.2.3.4"}])
+
+    def check(client, proxy):
+        got = next(answers)
+        if got is RuntimeError:
+            raise verbs.proxy_mod.ProxyError("gateway not ready")
+        return got
+
+    monkeypatch.setattr(verbs.proxy_mod, "check", check)
+    slept = []
+    monkeypatch.setattr(verbs.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    forgiven = []
+    monkeypatch.setattr(builder, "forgive_host",
+                        lambda s, host, by="": forgiven.append((host, by)))
+
+    status, msg, _ = verbs.mark_proxy_free(
+        book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
+
+    assert status == "done" and "judged afresh" in msg
+    assert slept == [15.0, 15.0], "two waits between three tries"
+    assert row.values["Status"] == "free"
+    assert forgiven == [("10.0.0.9", "mehdi")]
+
+    # Three refusals: dead, and the host is not forgiven for nothing.
+    book, row, said = _exit()
+    forgiven.clear()
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda c, p: (_ for _ in ()).throw(
+                            verbs.proxy_mod.ProxyError("no")))
+    status, msg, _ = verbs.mark_proxy_free(
+        book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
+    assert status == "failed" and "three tries" in msg
+    assert row.values["Status"] == "dead" and forgiven == []
+
+
+def test_a_test_that_revives_a_dead_exit_forgives_its_host_too(
+        monkeypatch, make_settings):
+    from geelark_farm import builder
+
+    settings = make_settings(store_enabled=True)
+    book, row, said = _exit(status="dead")
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda c, p: {"outboundIP": "1.2.3.4"})
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    forgiven = []
+    monkeypatch.setattr(builder, "forgive_host",
+                        lambda s, host, by="": forgiven.append(host))
+
+    status, _, _ = verbs.test_proxy(book, None, settings,
+                                    {"name": "SX1", "by": "mehdi"}, object())
+    assert status == "done" and row.values["Status"] == "free"
+    assert forgiven == ["10.0.0.9"]
+
+    # A plain test of a free exit changes nothing and forgives nothing.
+    forgiven.clear()
+    book, row, said = _exit(status="free")
+    verbs.test_proxy(book, None, settings, {"name": "SX1"}, object())
+    assert forgiven == []
