@@ -122,3 +122,12 @@ def test_the_dashboard_says_probing_and_when_the_next_probe_goes():
     word, _ = pages._keeper_words({"warm": 0, "target": 10,
                                    "gate": {"closed": False}})
     assert word.startswith("Building")
+
+
+def test_the_operator_can_switch_the_gate_off(monkeypatch):
+    """"Phones now, whatever they cost": SIGNIN_GATE=0 and the full batch
+    goes out whatever the last twelve say."""
+    _wire(monkeypatch, [False] * 12)
+    off = SimpleNamespace(store_enabled=True, signin_gate=False)
+    cut, gate = signin_gate.throttle(off, Decision(build=10), now=1.0)
+    assert cut.build == 10 and not gate.closed

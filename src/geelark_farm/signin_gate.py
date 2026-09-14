@@ -108,6 +108,10 @@ def throttle(settings: Settings, decision, *, now: float | None = None):
     ordered separately by the caller and are not touched here."""
     if not getattr(settings, "store_enabled", False):
         return decision, Gate()
+    # The operator's own switch: "phones now, whatever they cost". Off,
+    # the gate reads nothing and holds nothing (2026-09-14).
+    if not getattr(settings, "signin_gate", True):
+        return decision, Gate()
     now = time.time() if now is None else now
     try:
         latest = _latest(settings, WINDOW)

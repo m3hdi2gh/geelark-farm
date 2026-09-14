@@ -406,6 +406,11 @@ class Settings:
     #: days on US exits: 80-100% signed in at 19-02 UTC, 0-19% at 05-10 -
     #: the same exits, sellers and models (2026-09-14).
     signin_good_hours_utc: str = ""
+    #: The sign-in rate gate (signin_gate): off, the keeper orders its
+    #: full warm batch whatever the last twelve sign-ins say. The
+    #: operator's own switch for "phones now, whatever they cost"
+    #: (2026-09-14). SIGNIN_GATE=0.
+    signin_gate: bool = True
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -550,6 +555,8 @@ class Settings:
             # once" and `_int` refuses a zero unless told not to.
             ladder_floor_minutes=_int("LADDER_FLOOR_MINUTES", 20, minimum=0),
             signin_good_hours_utc=_str("SIGNIN_GOOD_HOURS_UTC", "").strip(),
+            signin_gate=_str("SIGNIN_GATE", "1").strip().lower()
+            in ("1", "true", "yes", "on"),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()
