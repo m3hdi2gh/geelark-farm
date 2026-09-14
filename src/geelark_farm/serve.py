@@ -1673,6 +1673,14 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                                   else max(0, free - coming)),
                       accounts_waiting=auto_waiting, cap=cap, paused=paused,
                       gmails=gmails, exits=exits, coming=coming)
+    # After the arithmetic and before the order: Google's own verdicts,
+    # which the breaker leaves out on purpose, and which ordered ten
+    # builds a pass into an hour that let none of fifty-nine in
+    # (2026-09-14). The warm builds are cut to a probe while the gate
+    # is closed; the wishes below are not - a person asked for those.
+    from . import signin_gate
+
+    decision, sign_in_gate = signin_gate.throttle(settings, decision)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
@@ -1714,6 +1722,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         "failing": _failing(settings),
         "unknown_running": len(outcome.get("unknown_running") or []),
         "gmails_free": gmails, "exits_free": exits,
+        # Whether Google is letting these exits in, as the gate read it.
+        "gate": sign_in_gate.as_dict(),
         "took": round(time.monotonic() - began, 1)})
 
     # Phones somebody asked for by hand. Taken here, between the drain that

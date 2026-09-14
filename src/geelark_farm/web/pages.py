@@ -3992,6 +3992,16 @@ def _keeper_words(pulse: dict) -> tuple[str, str]:
         return "Stopped by the breaker — nothing is being built", "red"
     if pulse.get("paused"):
         return "Paused — nothing new is being built", "amber"
+    gate = pulse.get("gate") or {}
+    if gate.get("closed"):
+        # Google is refusing nearly everything; the keeper probes rather
+        # than pours, and says so instead of "Building" (2026-09-14).
+        wait = int(gate.get("next_probe_in") or 0)
+        soon = ("a probe is going out now" if wait <= 0
+                else f"next probe in {max(1, round(wait / 60))} min")
+        return (f"Probing — Google let in {int(gate.get('ok') or 0)} of the "
+                f"last {int(gate.get('of') or 0)} sign-ins; {soon}, and "
+                f"building resumes once 2 of 4 get in", "amber")
     if warm < target and pulse.get("warning"):
         # Short, and the pass has said why nothing can be built. Calling
         # that "Building" is the page telling a story the loop is not.

@@ -72,6 +72,18 @@ def rates(settings: Settings, by: str, days: int = 7) -> list[dict]:
             for key, ok, n in rows]
 
 
+def latest_ok(settings: Settings, n: int) -> list[bool]:
+    """The newest `n` sign-ins, newest first, as whether each got in -
+    what the sign-in gate reads (signin_gate)."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT ok FROM signins ORDER BY at DESC, id DESC LIMIT %s",
+            (int(n),))
+        rows = cur.fetchall()
+        conn.rollback()
+    return [bool(r[0]) for r in rows]
+
+
 def host_rates(settings: Settings, days: int = 7,
                since: dict | None = None) -> list[dict]:
     """The hosts with enough attempts to be judged.
