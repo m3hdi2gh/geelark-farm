@@ -862,11 +862,16 @@ def _who_and_out(user: dict) -> str:
 
 
 def page(title: str, body: str, *, user: dict | None = None,
-         refresh: int = 0, here: str = "") -> str:
+         refresh: int = 0, here: str = "", live: str = "farm") -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
     that the next serve pass will change; zero (the default) means none.
     `here` is the rail entry to light. Without a user there is no rail:
-    the page stands alone, centred - the sign-in card."""
+    the page stands alone, centred - the sign-in card.
+
+    `live` is which stream the page listens on: "farm" (the default) for
+    everything the dashboard draws, "logs" for a page that also draws
+    the log lines, "" for a page that must not listen or swap at all -
+    the Boot tab, which reloads itself whole."""
     header = ""
     if user is not None and not _keeps_the_console(user):
         # No rail at all, rather than a rail with one entry on it. An
@@ -925,6 +930,19 @@ def page(title: str, body: str, *, user: dict | None = None,
     tag += f'<meta name="gf-rev" content="{esc(revision())}">'
     if user is not None:
         body = _alert_strip(user) + body
+    # The one script, on every page a signed-in person sees - not only
+    # the dashboard. The others carried the same "live" dot and the same
+    # refresh meta, and the meta sits inside <noscript> on purpose, so in
+    # a browser with scripts on they never refreshed at all: Requests,
+    # Events and Logs sat still under a breathing green dot (2026-09-14,
+    # found by audit). The pool pages' presses promised "the page shows
+    # the answer" with nothing on the page to show it. One script, one
+    # behaviour: forms go by fetch, <main> is swapped in place, and the
+    # stream says when.
+    if user is not None and live:
+        tag += f'<meta name="gf-live" content="{esc(live)}">'
+        if _DASH_SCRIPT not in body:
+            body += _DASH_SCRIPT
     # `.wide` is what widens the page. This class only says whether the
     # body is one card floating in the middle - the sign-in - or a page
     # that starts at the top and stays there.
@@ -1016,6 +1034,8 @@ _DASH_SAID = {
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
     "already": "Already asked - that request is still pending.",
+    "twice": "That press already went through the first time; the page "
+             "shows what it did.",
     # The general word, for the rare case the handler could not read the
     # row back. Normally the verb's own sentence replaces it, because only
     # that sentence can name the address and say why.
@@ -1027,10 +1047,13 @@ _DASH_SAID = {
     # deleting the phone (2026-09-07).
     "took": "It is yours - it stays on the list as With you.",
     "released": "Back on the shelf for anybody.",
-    "closed": "Marked done - the next sync deletes the phone and retires "
-              "what was on it.",
-    "written-off": "Marked failed - the next sync deletes the phone and "
-                   "frees the account that was on it.",
+    # "The next sync" was true when only a pass could carry a mark out.
+    # The lane hears the bell now: measured over a day, the phone is gone
+    # about two seconds after the press (2026-09-14).
+    "closed": "Marked done - the phone is deleted in a moment and what was "
+              "on it retired.",
+    "written-off": "Marked failed - the phone is deleted in a moment and "
+                   "the account that was on it freed.",
     "cancelled": "The build gives up at its next step and puts back what "
                  "it held.",
     "dismissed": "Taken off the list.",
@@ -1241,14 +1264,15 @@ PHONE_STATES = {
                "text": "", "said": "released"},
     "done": {"label": "Done", "klass": "quiet ok", "sure": True,
              "said": "closed",
-             "text": "The next sync deletes the phone in GeeLark and "
-                     "retires the gmail and the account on it as "
-                     "delivered. There is no undo: the phone is gone."},
+             "text": "The phone is deleted in GeeLark within a few "
+                     "seconds and the gmail and the account on it retired "
+                     "as delivered. There is no undo: the phone is gone."},
     "failed": {"label": "Failed", "klass": "quiet bad", "sure": True,
                "said": "written-off",
-               "text": "The next sync deletes the phone in GeeLark, marks "
-                       "its gmail used and frees the account for another "
-                       "phone. There is no undo: the phone is gone."},
+               "text": "The phone is deleted in GeeLark within a few "
+                       "seconds, its gmail marked used and the account "
+                       "freed for another phone. There is no undo: the "
+                       "phone is gone."},
 }
 
 #: Order of the phones table: what can be handed over first, then what is
@@ -1456,7 +1480,8 @@ def _cancel_form(user: dict, serial: str, back: str = "/") -> str:
             f'action="/phones/{esc(serial)}/stop">{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<button class="quiet bad" title="the build gives up at its next '
-            f'step and puts back what it held">Cancel</button></form>')
+            f'step and puts back what it held; a phone nothing was signed '
+            f'into yet is deleted">Cancel</button></form>')
 
 
 def _boot_form(user: dict, serial: str) -> str:
@@ -1491,7 +1516,7 @@ def _theirs(user: dict, row: dict) -> str:
 
     The rule was written inside `_row_actions` and enforced only there, so
     the table refused a colleague's phone and the phone's own page offered
-    Done and Failed on it - and Failed deletes the phone at the next sync
+    Done and Failed on it - and Failed deletes the phone within seconds
     and frees the account on it. One contract, one function (2026-09-07).
 
     No exception for an admin, which is how the table has always read it:
@@ -1762,13 +1787,16 @@ def _stock_strip(data: dict) -> str:
 _DASH_SCRIPT = """
 <script>
 (function(){
-  // The one page with a script, and what the script is allowed to do:
-  // arrange what is already on the page, and send the page's own forms
-  // without leaving it. Every request it makes is one a form on the page
-  // declared - the same action, the same fields - and the answer is the
-  // same HTML the browser would have shown; only <main> is swapped, so
-  // the manager stays open and the scroll stays put. Without the script,
-  // every form still posts and every page still reloads (2026-09-05).
+  // The one script, and what it is allowed to do: arrange what is
+  // already on the page, and send the page's own forms without leaving
+  // it. Every request it makes is one a form on the page declared - the
+  // same action, the same fields - and the answer is the same HTML the
+  // browser would have shown; only <main> is swapped, so the manager
+  // stays open and the scroll stays put. Without the script, every form
+  // still posts and every page still reloads (2026-09-05). It was the
+  // dashboard's alone until 2026-09-14; every page a signed-in person
+  // sees carries it now, and everything dashboard-only in it checks for
+  // its element first.
   var store = null;
   try { store = window.sessionStorage; } catch (err) {}
 
@@ -2039,8 +2067,13 @@ _DASH_SCRIPT = """
   // (2026-09-14).
   function listen(){
     if (listen.on || typeof EventSource === 'undefined') return;
+    // Which stream, said by the page: the farm's, or the one that also
+    // moves for a log line. No meta, no listening - the Boot tab.
+    var which = document.querySelector('meta[name="gf-live"]');
+    if (!which || !which.content) return;
     listen.on = true;
-    var feed = new EventSource('/live');
+    var feed = new EventSource(which.content === 'logs' ? '/live?logs=1'
+                                                        : '/live');
     feed.onmessage = function(e){
       var now = parseInt(e.data, 10);
       if (!now || now === listen.seen) { listen.seen = now; return; }
@@ -2594,8 +2627,10 @@ _DASH_SCRIPT = """
       })
       .catch(function(){ lookAgain(5000); });
   }
+  // The page this is, not the dashboard: on Requests, a Retry answers
+  // with Requests, and that is "here".
   function isHere(url){
-    try { return new URL(url, location.href).pathname === '/'; }
+    try { return new URL(url, location.href).pathname === location.pathname; }
     catch (err) { return false; }
   }
 
@@ -2851,7 +2886,12 @@ _DASH_SCRIPT = """
         // Named the other way round on purpose: the words that mean
         // nothing changed are a short closed list, and the ones that
         // mean something did are added to every time a verb is.
-        var nothing = /[?&]said=(queued|no|refused|already|gone|off|none|bad|auto)/;
+        // Followed by the request number, the next field or the end - a
+        // word boundary. It was written as backslash-b, which Python's string rules
+        // turned into a backspace character before the browser saw it,
+        // so the test matched nothing and every refusal took the row
+        // shortcut after all (2026-09-14).
+        var nothing = /[?&]said=(queued|no|refused|already|twice|gone|off|none|bad|auto)(?:[:&]|$)/;
         var worked = !nothing.test(got.url);
         if (worked && isHere(got.url) && key && swapRow(doc, key)) {
           sayIt(doc);
@@ -4205,7 +4245,9 @@ def live_page(serial: str, user: dict, said: str = "",
             f'<p class="muted">{esc(note)}</p>'
             f'<a class="btn quiet" href="/">Back to the dashboard</a></div>'
             f'{again}')
-    return page(f"Boot {serial}", body, user=user, here="/", refresh=wait)
+    # No listening and no swap: this tab reloads itself whole, above.
+    return page(f"Boot {serial}", body, user=user, here="/", refresh=wait,
+                live="")
 
 
 def _awaiting_panel(data: dict, user: dict, manual_login: bool,
@@ -4435,6 +4477,8 @@ _SAID = {
     "not_failed": "Only a failed request can be retried.",
     "refused": "You may not do that - ask an admin for the permission.",
     "already": "Already asked - that request is still pending.",
+    "twice": "That press already went through the first time; the page "
+             "shows what it did.",
 }
 
 #: The pills above the list, in order. "" is everything.
@@ -4659,8 +4703,10 @@ def requests_page(rows: list[dict], user: dict, said: str = "", *,
         flip = f"/requests?view={view}" + ("" if mine else "&mine=1")
         top += (f'<a class="btn quiet" href="{flip}">'
                 f'{"everyone" if mine else "mine only"}</a>')
-    if pending:
-        top += '<span class="live">live</span>'
+    # Always, not only while something is pending: the page listens on
+    # the stream whatever its rows say, and a request somebody else files
+    # arrives on it by itself.
+    top += '<span class="live">live</span>'
     head = ("<tr><th>#</th><th>what</th><th>by</th><th>asked</th>"
             "<th>state</th><th>result / progress</th><th></th></tr>")
     lines = []
@@ -5109,6 +5155,8 @@ _POOL_SAID = {
            "password and the secret.",
     "gone": "That exit is no longer in GeeLark's list - nothing to adopt.",
     "already": "Already asked - that request is still pending.",
+    "twice": "That press already went through the first time; the page "
+             "shows what it did.",
     "auto": "Manual login is off: accounts log in on their own on the next "
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
@@ -5122,8 +5170,19 @@ def _may(user: dict, permission: str) -> bool:
 
 
 def _csrf(user: dict) -> str:
+    """The token every form carries, and beside it the press: a stamp
+    minted when the form is drawn, so the server can tell "the same
+    button, pressed again after the page moved" from "the same drawing
+    of it, sent twice". The request key was the wall-clock minute, so a
+    second Test inside the same minute was folded into the first - which
+    had already run - and answered "Queued" over nothing (2026-09-14).
+    """
+    import secrets
+
     return (f'<input type="hidden" name="csrf" '
-            f'value="{esc(user.get("csrf", ""))}">')
+            f'value="{esc(user.get("csrf", ""))}">'
+            f'<input type="hidden" name="press" '
+            f'value="{secrets.token_urlsafe(6)}">')
 
 
 #: Tokens whose banner is an answer of "no", not of "done". Green with a
@@ -6706,8 +6765,8 @@ def events_page(data: dict, user: dict, *, signals: dict | None = None,
     body = ('<div class="top"><h2>Events</h2>'
             '<div class="pills"><span>Events</span>'
             '<a href="/logs">Logs</a></div>'
-            '<span class="status">admin only · refreshes every 30s</span>'
-            '</div>'
+            '<span class="status">admin only · '
+            '<span class="live">live</span></span></div>'
             + (f'<div class="tiles" style="grid-template-columns:repeat(5,'
                f'minmax(0,1fr))">{_signal_tiles(signals)}</div>'
                if signals is not None else "")
@@ -6833,7 +6892,8 @@ def logs_page(data: dict, user: dict, *, level: str = "INFO",
     body = (f'<div class="top"><h2>Events</h2>'
             f'<div class="pills"><a href="/events">Events</a><span>Logs'
             f'</span></div><span class="status">{_capture_line(capture, log_db)}'
-            f' · INFO and up · kept 30 days</span></div>'
+            f' · INFO and up · kept 30 days · <span class="live">live'
+            f'</span></span></div>'
             f'<form method="get" action="/logs" class="row">'
             f'<input type="hidden" name="level" value="{esc(level)}">'
             f'<div class="chips">{pill("INFO")}{pill("WARNING")}'
@@ -6855,7 +6915,10 @@ def logs_page(data: dict, user: dict, *, level: str = "INFO",
               f'disables itself with one warning — it can never slow a build '
               f'· the JSON file on disk stays the complete record · '
               f'{int(data.get("today") or 0):,} lines today</p></div>')
-    return page("Logs", body, user=user, here="/events", refresh=15)
+    # On the logs stream: the farm's own fingerprint does not move for a
+    # log line, and this page is nothing but log lines.
+    return page("Logs", body, user=user, here="/events", refresh=15,
+                live="logs")
 
 
 # ----------------------------------------------------------- the story
@@ -7171,5 +7234,11 @@ def store_down_page(retry: tuple | None = None) -> str:
             f'<h2>The store is not answering</h2>'
             f'<p class="muted">Nothing was read or queued. The service on '
             f'the server keeps building from the sheet; this page retries '
-            f'in 30 seconds.</p>{again}</div>')
+            f'in 30 seconds.</p>{again}</div>'
+            # Its own retry. The browser's meta refresh sits inside
+            # <noscript>, and there is no user here and so no script - so
+            # "retries in 30 seconds" was a sentence and nothing else
+            # (2026-09-14).
+            f'<script>setTimeout(function(){{ location.reload(); }}, '
+            f'30000);</script>')
     return page("Store down", body, refresh=30)

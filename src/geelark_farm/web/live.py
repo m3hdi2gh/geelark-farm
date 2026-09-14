@@ -51,13 +51,20 @@ MAX_STREAMS = 12
 #: The fingerprint: the newest thing each of the drawn tables knows. The
 #: counts are not in it on purpose - a row deleted moves no `updated_at`,
 #: and `events` records the deletion anyway.
+#:
+#: The log lines are the last column and are counted apart: they move
+#: for every line a build writes, and only the Logs page draws them. A
+#: page on the farm's stream does not hear them (2026-09-14).
 _FINGERPRINT = (
     "SELECT (SELECT max(updated_at) FROM resources) AS pools,"
     "       (SELECT max(updated_at) FROM phones) AS phones,"
     "       (SELECT max(id) FROM events) AS events,"
     "       (SELECT max(id) FROM actions) AS actions,"
-    "       (SELECT max(id) FROM wanted_builds) AS wanted"
+    "       (SELECT max(id) FROM wanted_builds) AS wanted,"
+    "       (SELECT max(id) FROM logs) AS logs"
 )
+#: Which columns of it are the farm's own; the rest is the log lines.
+FARM_COLUMNS = 5
 
 
 class Pulse:
@@ -65,31 +72,46 @@ class Pulse:
 
     def __init__(self) -> None:
         self._seen = threading.Condition()
+        #: The farm's own moves - what every page but Logs listens to.
         self.revision = 0
+        #: Every move, log lines included.
+        self.everything = 0
         self.watching = 0
         self._mark: tuple | None = None
 
     def bump(self, mark: tuple) -> bool:
-        """Note a fingerprint. True when it was new."""
+        """Note a fingerprint. True when it was new.
+
+        The last column is the log lines: a fingerprint that moved only
+        there bumps `everything` and leaves `revision` alone."""
         with self._seen:
             if mark == self._mark:
                 return False
             first = self._mark is None
-            self._mark, self.revision = mark, self.revision + 1
+            farm = mark[:FARM_COLUMNS]
+            if first or farm != self._mark[:FARM_COLUMNS]:
+                self.revision += 1
+            self.everything += 1
+            self._mark = mark
             self._seen.notify_all()
         return not first
 
-    def wait(self, since: int, timeout: float) -> int | None:
-        """The revision once it is past `since`, or None if it did not
-        move before `timeout`."""
+    def count(self, *, logs: bool = False) -> int:
+        return self.everything if logs else self.revision
+
+    def wait(self, since: int, timeout: float, *,
+             logs: bool = False) -> int | None:
+        """The count once it is past `since`, or None if it did not move
+        before `timeout`. `logs` picks the count that also moves for a
+        log line."""
         deadline = time.monotonic() + timeout
         with self._seen:
-            while self.revision <= since:
+            while self.count(logs=logs) <= since:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return None
                 self._seen.wait(left)
-            return self.revision
+            return self.count(logs=logs)
 
     def hold(self, delta: int) -> int:
         with self._seen:
@@ -117,7 +139,8 @@ def take(settings: Settings) -> tuple | None:
         return None
     row = rows[0]
     return tuple(str(row.get(k) or "")
-                 for k in ("pools", "phones", "events", "actions", "wanted"))
+                 for k in ("pools", "phones", "events", "actions", "wanted",
+                           "logs"))
 
 
 def watch(settings: Settings, stop: threading.Event) -> None:

@@ -603,9 +603,11 @@ VERDICTS: dict[str, Verdict] = {
         "and can be finished."),
     "stopped_by_hand": Verdict(
         NOBODY, "somebody pressed Stop this one on the web",
-        "A person stopped this phone's job from the Requests page. The "
-        "phone was stopped and every row it held went back to its pool, so "
-        "nothing was lost - the phone is still listed and can be finished."),
+        "A person stopped this phone's job from the console. The phone was "
+        "stopped and every row it held went back to its pool. A phone with "
+        "its Google account already on it stays listed and can be finished; "
+        "one nothing was signed into yet is deleted, since there is nothing "
+        "on it worth keeping."),
 }
 
 #: The reasons nothing is to blame for. Derived, so it cannot disagree with the

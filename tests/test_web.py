@@ -3377,15 +3377,69 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     assert 'id="seg" role="group" aria-label="Show" hidden' in body
     assert 'id="phones"' in body and 'id="nohits"' in body
 
-def test_only_the_dashboard_carries_a_script(web, monkeypatch):
-    """The exception is one page wide. If a second page ever needs one,
-    that is a decision somebody makes on purpose, not a drift."""
+def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
+    """It was the dashboard's alone, and "if a second page ever needs one,
+    that is a decision somebody makes on purpose". Made on 2026-09-14:
+    Requests, Events and Logs wore the same breathing "live" dot and the
+    same refresh meta, and the meta sits inside <noscript> on purpose -
+    so in any browser with scripts on they never refreshed at all. The
+    pool pages promised "the page shows the answer" with nothing on them
+    to show it. One script, the same one, on every page a signed-in
+    person sees; and one only - the dashboard must not get it twice."""
+    import geelark_farm.store.actions as actions_mod
+
     _dash(monkeypatch)
+    _c8_reads(monkeypatch)
+    _gmail_active(monkeypatch)
+    _proxy_pool(monkeypatch)
+    _gpt_active(monkeypatch)
+    monkeypatch.setattr(actions_mod, "listing", lambda s, **k: [])
+    monkeypatch.setattr(app_mod.read, "events_rows", lambda s, **k: [])
+    monkeypatch.setattr(app_mod.read, "logs", lambda s, **k: {
+        "rows": [], "more": False, "today": 0, "loggers": []})
     client = web()
     client.login()
-    for path in ("/pools/gmail", "/pools/proxy", "/pools/gpt", "/phones"):
-        _, _, body = client.request("GET", path)
-        assert "<script>" not in body, path
+    for path in ("/", "/pools/gmail", "/pools/proxy", "/pools/gpt",
+                 "/phones", "/requests", "/events", "/logs"):
+        status, _, body = client.request("GET", path)
+        assert status == 200, path
+        assert body.count("function swapMain(doc)") == 1, path
+        assert '<meta name="gf-live" content="' in body, path
+    # Which stream: the Logs page is the one that draws log lines, so it
+    # is the one that hears them.
+    _, _, logs = client.request("GET", "/logs")
+    assert '<meta name="gf-live" content="logs">' in logs
+    _, _, events = client.request("GET", "/events")
+    assert '<meta name="gf-live" content="farm">' in events
+    # And the dot means it now: Requests is live with nothing pending,
+    # Events no longer claims a thirty-second refresh it never did.
+    _, _, requests = client.request("GET", "/requests")
+    assert 'class="live">live' in requests
+    assert "refreshes every 30s" not in events
+    assert 'class="live">live' in events and 'class="live">live' in logs
+
+
+def test_the_script_listens_only_where_the_page_says_to():
+    """The Boot tab reloads itself whole and must not also swap; the
+    store-down page has no user and so no script - it reloads itself the
+    way Boot does, since its <noscript> meta never fired in a browser."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "document.querySelector('meta[name=\"gf-live\"]')" in script
+    assert "if (!which || !which.content) return;" in script
+    assert "which.content === 'logs' ? '/live?logs=1'" in script
+    user = {"id": 1, "username": "test", "role": "operator", "csrf": "c"}
+    boot = pages.live_page("1862", user, said="queued:70", row={})
+    assert "gf-live" not in boot
+    assert "addEventListener('submit'" not in boot
+    down = pages.store_down_page(None)
+    assert "setTimeout(function(){ location.reload(); }, 30000)" in down
+    assert "gf-live" not in down and "addEventListener('submit'" not in down
+    # Here is the page this is, not the dashboard: on Requests a Retry
+    # answers with Requests.
+    assert ("new URL(url, location.href).pathname === location.pathname"
+            in script)
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4796,9 +4850,11 @@ def test_done_and_failed_ask_beside_the_button(web, monkeypatch):
 
     start = body.index('href="/phones/1856"')
     row = body[start:body.index("</tr>", start)]
-    assert 'data-ask="Phone 1856 failed? The next sync deletes' in row
+    assert ('data-ask="Phone 1856 failed? The phone is deleted in GeeLark '
+            'within a few seconds') in row
     assert 'data-yes="Yes, phone 1856 is failed"' in row
-    assert 'data-ask="Phone 1856 done? The next sync deletes' in row
+    assert ('data-ask="Phone 1856 done? The phone is deleted in GeeLark '
+            'within a few seconds') in row
     assert row.count("data-ask=") == 2, "Release asks nothing"
     script = pages._DASH_SCRIPT
     assert "askFirst(form, form.dataset.ask, form.dataset.yes || 'Yes')" in script
@@ -5652,16 +5708,26 @@ def test_the_pulse_bumps_only_when_the_fingerprint_moves():
     from geelark_farm.web import live
 
     pulse = live.Pulse()
-    assert pulse.revision == 0
+    assert pulse.revision == 0 and pulse.everything == 0
+    farm = ("p", "ph", "e", "a", "w")
     # The first fingerprint is where the farm is, not a change - it must
     # not wake a page that has just loaded.
-    assert pulse.bump(("a", "b")) is False and pulse.revision == 1
-    assert pulse.bump(("a", "b")) is False, "the same mark is not news"
+    assert pulse.bump(farm + ("l1",)) is False and pulse.revision == 1
+    assert pulse.bump(farm + ("l1",)) is False, "the same mark is not news"
     assert pulse.revision == 1
-    assert pulse.bump(("a", "c")) is True and pulse.revision == 2
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "l1")) is True
+    assert pulse.revision == 2 and pulse.everything == 2
+    # A log line alone moves `everything` and not the farm's own count:
+    # the dashboard does not redraw for a build's chatter, the Logs page
+    # does (2026-09-14).
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "l2")) is True
+    assert pulse.revision == 2 and pulse.everything == 3
+    assert pulse.count() == 2 and pulse.count(logs=True) == 3
     # Waiting: past the number you have, or nothing before the timeout.
     assert pulse.wait(1, 0.01) == 2
     assert pulse.wait(2, 0.01) is None
+    assert pulse.wait(2, 0.01, logs=True) == 3
+    assert pulse.wait(3, 0.01, logs=True) is None
     assert pulse.hold(1) == 1 and pulse.hold(1) == 2 and pulse.hold(-1) == 1
 
 
@@ -5702,14 +5768,17 @@ def test_the_fingerprint_asks_about_every_table_a_page_draws(monkeypatch,
         def _rows(self, sql, params=()):
             asked.append(sql)
             return [{"pools": "2026-09-14", "phones": None, "events": 7,
-                     "actions": 3, "wanted": None}]
+                     "actions": 3, "wanted": None, "logs": 900}]
 
     monkeypatch.setattr(store_db, "Store", _Store)
     mark = live.take(make_settings(store_enabled=True))
 
-    assert mark == ("2026-09-14", "", "7", "3", "")
-    for table in ("resources", "phones", "events", "actions", "wanted_builds"):
+    assert mark == ("2026-09-14", "", "7", "3", "", "900")
+    for table in ("resources", "phones", "events", "actions", "wanted_builds",
+                  "logs"):
         assert table in asked[0], table
+    # The log lines are the last column, apart from the farm's own.
+    assert mark[:live.FARM_COLUMNS] == ("2026-09-14", "", "7", "3", "")
 
     # A store that will not answer is not a crash and not a change.
     monkeypatch.setattr(store_db, "Store",
@@ -5738,7 +5807,8 @@ def test_the_dashboard_listens_on_the_stream_and_keeps_its_timer():
     from geelark_farm.web import pages
 
     script = pages._DASH_SCRIPT
-    assert "new EventSource('/live')" in script
+    assert "new EventSource(which.content === 'logs' ? '/live?logs=1'" in script
+    assert ": '/live');" in script
     assert "listen.on" in script, "one stream per tab, not one per swap"
     assert "listen();" in script
     # The timer stays: a proxy that will not carry a stream must not mean
@@ -5782,7 +5852,12 @@ def test_one_rows_press_replaces_one_row():
     # words that mean nothing changed are a closed list, so a new verb's
     # success word never lands in it by accident.
     assert "var worked = !nothing.test(got.url);" in script
-    assert "queued|no|refused|already|gone|off|none|bad|auto" in script
+    assert ("(queued|no|refused|already|twice|gone|off|none|bad|auto)"
+            "(?:[:&]|$)") in script
+    # A word boundary, written as one. `\\b` in the Python string arrived
+    # in the browser as a backspace character, so the test matched
+    # nothing and every refusal redrew its row after all (2026-09-14).
+    assert "\x08" not in script
     assert "if (worked && isHere(got.url) && key && swapRow(doc, key)) {" in script
     assert "sayIt(doc);" in script, "the answer's own sentence is shown"
     # The chip counts are recounted off the table, so they cannot drift.
@@ -5978,3 +6053,107 @@ def test_a_background_refresh_that_failed_never_lands():
     assert "if (html === null) { lookAgain(5000); return; }" in script
     # Asked again when the answer comes back, not only before it is sent.
     assert "if (!settled()) { lookAgain(5000); return; }" in script
+
+
+def test_the_nothing_changed_words_match_as_words(tmp_path):
+    """Run, not read: the regex that decides whether a press changed
+    anything, evaluated by node against the addresses a press answers
+    with. Skipped where node is not installed."""
+    import re
+    import shutil
+    import subprocess
+
+    from geelark_farm.web import pages
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the regex is unchecked here")
+    line = re.search(r"var nothing = (/.+?/);", pages._DASH_SCRIPT).group(1)
+    probe = tmp_path / "probe.js"
+    probe.write_text(
+        "var nothing = " + line + ";\n"
+        "var out = ['/?said=queued:71', '/?said=no:71', '/?said=none',"
+        " '/?said=twice:3', '/?said=done:71', '/?said=freed:71',"
+        " '/pools/proxy?view=dead&said=refused:2&x=1',"
+        " '/?said=nothing:9'].map(function(u){ return +nothing.test(u); });\n"
+        "process.stdout.write(out.join(''));\n", encoding="utf-8")
+    got = subprocess.run([node, str(probe)], capture_output=True, text=True)
+    assert got.returncode == 0, got.stderr
+    # queued, no, none, twice and refused mean nothing changed; done and
+    # freed did; "nothing" is not "no" - the boundary holds.
+    assert got.stdout == "11110010", got.stdout
+
+
+def test_every_form_carries_a_press_and_no_two_are_the_same():
+    """The stamp beside the csrf token: minted when the form is drawn, so
+    the same button pressed again after the page moved is a new request
+    and the same drawing sent twice is one (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "username": "test", "role": "operator", "csrf": "c"}
+    one, two = pages._csrf(user), pages._csrf(user)
+    assert 'name="csrf" value="c"' in one
+    assert one.count('name="press" value="') == 1
+    assert one != two, "one stamp per drawing"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_press_is_the_request_key_and_the_minute_is_the_fallback(
+        web, monkeypatch):
+    """The key was the wall-clock minute, so a second Test inside the same
+    minute folded into the first - already finished - and was answered
+    "Queued" over nothing (the operator, 2026-09-14). With the stamp, two
+    presses are two rows; without it, an old tab still gets the minute."""
+    import geelark_farm.store.actions as actions_mod
+
+    _proxy_pool(monkeypatch, rows=[_proxy_row("D01", "dead")])
+    keys = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: keys.append(k["idem_key"]) or 71)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda s, i: None)
+    client = web()
+    client.login()
+    for stamp in ("abc123", "def456"):
+        client.request("POST", "/pools/proxy/test",
+                       _form(csrf=client.csrf(), name="D01", press=stamp))
+    client.request("POST", "/pools/proxy/test",
+                   _form(csrf=client.csrf(), name="D01"))
+    assert keys[0].endswith(":abc123") and keys[1].endswith(":def456")
+    assert keys[0][:-6] == keys[1][:-6], "same verb, same target, same person"
+    assert keys[2].split(":")[-1].isdigit(), "no stamp: the minute, as before"
+    assert len(set(keys)) == 3
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_same_drawing_sent_twice_is_told_so_not_queued(web, monkeypatch):
+    """A double-tap or a back-button re-POST hands `enqueue` the row the
+    first press made. That row has run; "Queued" over it was a lie, and
+    the page looked again for a change that had already happened."""
+    import datetime as dt
+
+    import geelark_farm.store.actions as actions_mod
+
+    _proxy_pool(monkeypatch, rows=[_proxy_row("D01", "dead")])
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 71)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    now = dt.datetime.now(dt.timezone.utc)
+    when = {"at": now}
+    monkeypatch.setattr(actions_mod, "one",
+                        lambda s, i: {"id": i, "status": "done",
+                                      "requested_at": when["at"]})
+    client = web()
+    client.login()
+    # Written a moment ago: this press, answered as the press it is.
+    _, headers, _ = client.request(
+        "POST", "/pools/proxy/test",
+        _form(csrf=client.csrf(), name="D01", press="same"))
+    assert dict(headers)["Location"] == "/pools/proxy?said=queued:71"
+    # Written five seconds ago: the first press, sent again.
+    when["at"] = now - dt.timedelta(seconds=5)
+    _, headers, _ = client.request(
+        "POST", "/pools/proxy/test",
+        _form(csrf=client.csrf(), name="D01", press="same"))
+    assert dict(headers)["Location"] == "/pools/proxy?said=twice:71"
+    _, _, body = client.request("GET", "/pools/proxy?said=twice:71")
+    assert "That press already went through the first time" in body

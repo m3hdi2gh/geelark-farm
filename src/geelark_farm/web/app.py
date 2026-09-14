@@ -331,6 +331,9 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             form = parse_qs(self.rfile.read(length).decode("utf-8"))
             field = {k: v[0] for k, v in form.items()}
+            # The stamp the page minted when it drew the form - see
+            # pages._csrf and _minute_key.
+            self._press = str(field.get("press") or "")[:32]
             if self.path == "/login":
                 return self._login(field)
             entry = self._entry()
@@ -578,6 +581,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect(_said_url(back, f"already:{twin}"))
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
                                     requested_by=user["id"], idem_key=idem)
+        # The same drawing of the button, sent again: one row, and it was
+        # carried out the first time. Said so, rather than "Queued" over a
+        # row that is already finished (2026-09-14).
+        if self._pressed_before(req):
+            return self._redirect(_said_url(back, f"twice:{req}"))
         # Ring, so the service looks now instead of at the top of its next
         # pass. The row is already written and the pass would find it
         # anyway; this only decides whether that is in a second or in
@@ -760,7 +768,37 @@ class _Handler(BaseHTTPRequestHandler):
             return {}
 
     def _minute_key(self, user: dict, verb: str, target: str) -> str:
-        return f"{verb}:{target}:{user['id']}:{int(time.time()) // 60}"
+        """One key per press.
+
+        The page stamps every form when it draws it, so the same button
+        pressed again after the page moved is a new request and the same
+        drawing sent twice - a double-tap, a back-button re-POST - is
+        one. A form without the stamp (an old tab, a POST made by hand)
+        falls back to the wall-clock minute, which is what this always
+        was: and what folded a second Test inside the same minute into
+        the first, already finished, and answered "Queued" over nothing
+        (the operator, 2026-09-14)."""
+        press = getattr(self, "_press", "") or str(int(time.time()) // 60)
+        return f"{verb}:{target}:{user['id']}:{press}"
+
+    def _pressed_before(self, req: int) -> bool:
+        """Whether `enqueue` handed back a row that already existed - the
+        same stamp, sent again. A row written a moment ago is this press;
+        one older than a second was the first press, and it has run."""
+        from ..store import actions as store_actions
+
+        try:
+            row = store_actions.one(self.settings, req) or {}
+            when = row.get("requested_at")
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not read request %s back (%s)", req, exc)
+            return False
+        if when is None:
+            return False
+        try:
+            return (time.time() - when.timestamp()) > 1.0
+        except (AttributeError, TypeError, ValueError):
+            return False
 
     def _proxy_state(self) -> tuple[list, list, dict]:
         """What the pass keeps about exits outside the rows: the ones
@@ -793,7 +831,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         The page drew the rule and nothing enforced it, so the press went
         through on a POST the page had not offered - and Failed deletes
-        the phone at the next sync and frees the account on it
+        the phone within seconds and frees the account on it
         (2026-09-07). Read here, once, for every door that acts on a
         phone.
         """
@@ -1587,11 +1625,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("Connection", "close")
             self.end_headers()
-            seen = live.pulse.revision
+            # `?logs=1`: the count that also moves for a log line, for the
+            # one page that draws them. Everything else hears only the
+            # farm's own moves, so a build's chatter does not redraw the
+            # dashboard every few seconds (2026-09-14).
+            logs = bool(parse_qs(self.path.partition("?")[2]).get("logs"))
+            seen = live.pulse.count(logs=logs)
             self.wfile.write(f"retry: 5000\ndata: {seen}\n\n".encode())
             self.wfile.flush()
             while not self.server.stopping.is_set():
-                now = live.pulse.wait(seen, live.KEEPALIVE)
+                now = live.pulse.wait(seen, live.KEEPALIVE, logs=logs)
                 if now is None:
                     # A comment: it keeps the connection warm and tells a
                     # browser nothing, which is what nothing happening is.

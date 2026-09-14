@@ -145,12 +145,13 @@ def one(settings: Settings, action_id: int) -> dict | None:
     button's new tab watches its own row until the pass settles it."""
     with connect(settings) as conn:
         rows = conn.execute(
-            "SELECT id, verb, status, result, detail, requested_by"
+            "SELECT id, verb, status, result, detail, requested_by,"
+            " requested_at"
             " FROM actions WHERE id = %s", (int(action_id),)).fetchall()
     if not rows:
         return None
     return dict(zip(("id", "verb", "status", "result", "detail",
-                     "requested_by"), rows[0], strict=True))
+                     "requested_by", "requested_at"), rows[0], strict=True))
 
 
 def listing(settings: Settings, *, user_id: int,

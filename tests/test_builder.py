@@ -4208,20 +4208,51 @@ def _settings_for_jobs():
         stale_claim_seconds=3600, max_concurrent_phones=1)
 
 
-def test_a_stop_by_hand_does_not_delete_the_phone_it_stopped():
-    """The discard guard compared against the literal word "interrupted",
-    so `Aborted("stopped_by_hand")` was not spared: a phone stopped before
-    its Google account was in would be deleted, while the operator was told
-    "nothing was lost - the phone is in the tab and can be finished"
-    (failures.py). It was safe only by accident, because the sole reader of
-    STOP_BY_HAND ran after the sign-in, and it stops being safe the moment
-    a stop can reach the sign-in (2026-09-06)."""
+def test_a_stop_by_hand_before_the_account_is_in_deletes_the_phone(
+        device, settings, monkeypatch, drive):
+    """It used to be spared "so it can be finished", and nobody ever
+    finished one: phone 2520 was stopped twelve seconds after it was
+    created and sat in the table as `incomplete` with a cross for a
+    Gmail, holding an exit, until a person marked it failed by hand (the
+    operator, 2026-09-14: "a phone with no Gmail on it is worth nothing
+    unless I asked for one"). Now it goes the way a fault's phone goes -
+    and without asking the device whether it is signed in after all,
+    because no sign-in was ever started on it, and a phone that may not
+    even be up answers "could not say", which kept it."""
     from geelark_farm import builder as builder_mod
 
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: (_ for _ in ()).throw(
+                            RuntimeError("not up")))
+    book = make_book(gmails=1)
+    builder_mod.STOP_BY_HAND.add("622")
+    try:
+        build = drive(book, settings, google=[SIGNED_IN])
+    finally:
+        builder_mod.STOP_BY_HAND.discard("622")
+
+    assert build.status == "stopped_by_hand"
+    assert deleted == ["PHONE1"], "nothing on it, so it goes"
+    assert [r["Event"] for r in history_rows(book)] == ["discarded"]
+    assert len(book.gmails.available) == 1, "the address goes back"
+    assert len(book.proxies.available) == 2, "and so does the exit"
+
+
+def test_only_the_runs_own_shutdown_keeps_a_phone_nothing_is_on():
+    """The one stop that still keeps an empty phone: the process going
+    down, where a delete that needs a stop, a wait and a call is the
+    half-done thing worse than a row. Both words still name a person -
+    that set is about blame, not about keeping."""
+    from geelark_farm import builder as builder_mod
+
+    assert builder_mod.KEPT_WHEN_EMPTY == frozenset({"interrupted"})
+    assert builder_mod.KEPT_WHEN_EMPTY < builder_mod.STOPPED_BY_A_PERSON
     assert "stopped_by_hand" in builder_mod.STOPPED_BY_A_PERSON
-    assert "interrupted" in builder_mod.STOPPED_BY_A_PERSON
-    # And only those: an abort that judges the build still discards the
-    # phone it could not use.
+    # And an abort that judges the build still discards the phone it
+    # could not use.
     for verdict in ("no_usable_proxy", "no_working_proxy",
                     "all_exits_refused", "proxy_change_refused"):
         assert verdict not in builder_mod.STOPPED_BY_A_PERSON

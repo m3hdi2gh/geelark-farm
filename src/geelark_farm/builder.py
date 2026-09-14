@@ -590,19 +590,27 @@ def _stop_asked(settings: Settings | None, serial: str) -> bool:
 
 #: The aborts that are a person stopping the work rather than a verdict on
 #: the phone. `Aborted` carries both kinds - `no_usable_proxy` and
-#: `all_exits_refused` are judgements, and a phone with no account on it
-#: earned its deletion - so the two are told apart here rather than by the
-#: literal word "interrupted", which is what the discard guard compared
-#: against. Under that comparison `stopped_by_hand` was not spared: press
-#: Stop this one before the Google account is in and the phone GeeLark had
-#: just created is stopped, waited out and deleted, while the operator is
-#: told "nothing was lost - the phone is in the tab and can be finished"
-#: (failures.py). It was safe only by accident, because the only reader of
-#: STOP_BY_HAND ran after the sign-in; it stops being safe the moment a
-#: stop can reach the sign-in, which is the whole point of the next change.
-#: Anything raised as `Aborted` that means a person, not a fault, belongs
-#: in here (2026-09-06, found by audit).
+#: `all_exits_refused` are judgements; these two name a person. Anything
+#: raised as `Aborted` that means a person, not a fault, belongs in here
+#: (2026-09-06, found by audit).
+#:
+#: What the set no longer decides is whether the phone is kept. It used
+#: to: a phone stopped by hand before its Google account was in was
+#: spared the discard "so it can be finished" - and nobody ever finished
+#: one. It sat in the table as `incomplete` with a cross for a Gmail,
+#: holding an exit and a plan slot, until a person marked it failed by
+#: hand (the operator, 2026-09-14, phone 2520: "a phone with no Gmail on
+#: it is worth nothing unless I asked for one"). So a stop by hand now
+#: deletes a phone nothing was signed into, exactly as a fault would; the
+#: phone worth keeping without an account is the one a wish asked for
+#: that way. See KEPT_WHEN_EMPTY.
 STOPPED_BY_A_PERSON = frozenset({"interrupted", "stopped_by_hand"})
+
+#: The one stop that still keeps a phone nothing was signed into: the
+#: run's own shutdown. The process is going down, and a delete that
+#: needs a stop, a wait and a call is the half-done thing worse than a
+#: row - the next run's sync finds the phone either way.
+KEPT_WHEN_EMPTY = frozenset({"interrupted"})
 
 
 @dataclass
@@ -1542,6 +1550,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # the build succeed" - see _release. The app account's equivalent lives on
     # the session, which owns that phase.
     gmail_signed_in = False
+    # Whether a sign-in was ever started on it. A phone stopped before that
+    # has nothing to be asked about - and asking a phone that may not even
+    # be up answers "could not say", which keeps it (see _discard's caller).
+    asked_google = False
 
     def remaining() -> float:
         return deadline - time.monotonic()
@@ -1753,6 +1765,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 log.info("signing in as %s (Gmail %d of %d on this phone)",
                          account.email, tried_gmails + 1, GMAILS_PER_BUILD)
             attempt_started = time.monotonic()
+            asked_google = True
             outcome = google_login.sign_in(
                 client, phone_id, account,
                 budget_seconds=min(settings.login_budget_seconds, remaining()),
@@ -2080,10 +2093,16 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         #
         # Not while the run is shutting down: an interrupt is not a verdict on
         # the phone, and the next run's sync sees it either way.
-        # A bare phone has none on purpose, and stays.
+        # A bare phone has none on purpose, and stays. A stop by hand does
+        # not spare it any more - see STOPPED_BY_A_PERSON for why - only
+        # the run's own shutdown does. And the device is asked whether it
+        # is signed in after all only when a sign-in was ever started on
+        # it: a phone stopped twelve seconds after it was created cannot
+        # be, and asking it anyway answered "could not say" and kept it.
         discarded = (phone_id and not gmail_signed_in and not bare
-                     and build.status not in STOPPED_BY_A_PERSON
-                     and not _signed_in_after_all(client, build)
+                     and build.status not in KEPT_WHEN_EMPTY
+                     and not (asked_google
+                              and _signed_in_after_all(client, build))
                      and _discard(client, book, ledger, build))
         # By serial, not by the row number `start` handed back ten minutes ago.
         # Any sibling discarding its phone deletes a row, and every row below it

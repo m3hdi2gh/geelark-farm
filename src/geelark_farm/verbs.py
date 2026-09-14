@@ -1009,7 +1009,8 @@ def stop_phone(book, ledger, settings, payload, client):
                               f"written where the builders read it ({exc})",
                     None)
     return ("done", f"phone {serial} stops at its next step; whatever it "
-                    f"held goes back to its pool", None)
+                    f"held goes back to its pool, and if nothing was signed "
+                    f"into it yet the phone is deleted", None)
 
 
 def power_off_phone(book, ledger, settings, payload, client):
@@ -1237,8 +1238,10 @@ def _is_building(settings, serial: str) -> bool:
 
 def set_phone_state(book, ledger, settings, payload, client):
     """Write the State cell - taken / done / failed / (blank) - the way a
-    hand does in the sheet; the sync carries it out on the next pass.
-    A phone somebody takes is stamped with who took it in the mirror."""
+    hand does in the sheet; the keeper's lane carries it out the moment
+    it hears the bell (measured over a day: about two seconds from the
+    press to the phone being gone). A phone somebody takes is stamped
+    with who took it in the mirror."""
     serial = str(payload.get("serial") or "").strip()
     state = str(payload.get("state") or "").strip().lower()
     if state not in ("taken", "done", "failed", "", "unused"):
@@ -1252,9 +1255,11 @@ def set_phone_state(book, ledger, settings, payload, client):
         return "failed", f"phone {serial or '?'} is not on the farm", None
     _stamp_owner(settings, serial,
                  payload.get("by_id") if word == "taken" else None)
-    meaning = {"taken": "out with somebody - the sync leaves it alone",
-               "done": "the sync deletes the phone and retires what was on it",
-               "failed": "the sync deletes the phone and frees its account",
+    meaning = {"taken": "out with somebody - the farm leaves it alone",
+               "done": "the phone is deleted in a moment and what was on it "
+                       "retired",
+               "failed": "the phone is deleted in a moment and its account "
+                         "freed",
                "": "back on the shelf"}[word]
     return ("done", f"phone {serial} marked {word or 'unused'} by "
                     f"{_by(payload)}: {meaning}", {"state": word})
