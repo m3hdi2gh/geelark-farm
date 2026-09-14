@@ -33,6 +33,17 @@ services:
       TZ: UTC
       # One object per line, so something other than a person can read it.
       LOG_FORMAT: json
+      # The GeeLark key's budget is 200 calls a minute for the whole
+      # account, and going over bans the key for two hours
+      # (docs/geelark-api.md). The limiter in api.RateLimiter is per
+      # process and knows nothing of the other containers, so the budget
+      # is split here rather than set once in .env: 50 for the keeper (a
+      # listing a pass, the marks, Test all in bursts) and 65 for each of
+      # the two builders - 180 in all, a tenth in hand. Measured over 304
+      # builds (2026-09-14): a build makes about 10 calls a minute on
+      # average and 20 at the 90th percentile, so four to a builder is
+      # 40-80 and 65 throttles only the busiest minutes, never the key.
+      API_REQUESTS_PER_MINUTE: "50"
 
     volumes:
       # The ledger. This is the one that costs money to lose: it is what says
@@ -108,8 +119,9 @@ services:
   # was on, which the keeper names `lost` and orders again; restarting the
   # keeper or the console touches no build (phase 4, 2026-09-10). Needs
   # BUILD_QUEUE=1 in .env for the keeper to order into the queue at all.
-  # No container_name and no fixed machine name, so it scales by number:
-  #   docker compose up -d --scale builder=3
+  # No container_name and no fixed machine name, so it scales by number -
+  # `deploy.replicas` below is the number, and `up -d builder` keeps it;
+  # a one-off `--scale builder=N` is undone by the next `up`.
   # Each replica is named by its own hostname (the container id) in the
   # logs and the ledger, keeps no log file (LOG_FILE=0 - the store's log
   # table has every line) and mirrors its screens into the store
@@ -118,12 +130,26 @@ services:
   builder:
     image: geelark-farm:local
     env_file: .env
+    # Two, since 2026-09-14: WARM_STOCK is ten and one builder of four
+    # workers built four at a time while six waited in the queue. Not
+    # three: the GeeLark key allows 200 calls a minute across the account,
+    # a build spends up to 20 of them at its busiest, and eight builds
+    # plus the keeper is what that budget carries with room to spare -
+    # see API_REQUESTS_PER_MINUTE on the keeper. More builders means a
+    # smaller share each, not more calls.
+    deploy:
+      replicas: 2
     environment:
       ROLE: builder
       GEELARK_MACHINE: ""
       LOG_FILE: "0"
       TZ: UTC
       LOG_FORMAT: json
+      # This builder's share of the account's 200 a minute - see the
+      # keeper's note. Four workers at the measured average need 40;
+      # at the 90th percentile 80, and then the limiter waits a second
+      # or two rather than let the key be banned.
+      API_REQUESTS_PER_MINUTE: "65"
     volumes:
       - ./state:/app/state
       - ./artifacts:/app/artifacts
