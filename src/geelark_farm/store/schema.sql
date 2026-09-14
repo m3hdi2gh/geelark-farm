@@ -661,6 +661,10 @@ ALTER TABLE signins ADD COLUMN IF NOT EXISTS age_seconds  real;
 ALTER TABLE signins ADD COLUMN IF NOT EXISTS exit_country text NOT NULL DEFAULT '';
 ALTER TABLE signins ADD COLUMN IF NOT EXISTS touch        text NOT NULL DEFAULT '';
 ALTER TABLE signins ADD COLUMN IF NOT EXISTS dumps        integer NOT NULL DEFAULT 0;
+-- Rev 28: which exit, by name. Google sees the exit's own address, not
+-- the vendor host it shares with six others, so the gate judges the exit
+-- and reaches for the host only when the whole host is dead (2026-09-15).
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS proxy_name   text NOT NULL DEFAULT '';
 -- The retry ladder: a Gmail Google distrusted (captcha, verify your
 -- phone, could not verify) is not spent - it waits a day, then two, and
 -- comes back on its own for another phone and exit; the third refusal

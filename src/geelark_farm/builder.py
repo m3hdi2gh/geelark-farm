@@ -1229,7 +1229,8 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                    seller: str, host: str, position: int, reason: str,
                    ok: bool, seconds: float, captcha_rounds: int,
                    age_seconds: float | None = None, exit_ip: str = "",
-                   touch: str = "", dumps: int = 0) -> None:
+                   touch: str = "", dumps: int = 0,
+                   proxy_name: str = "") -> None:
     """One row in the store's `signins`, when there is a store."""
     if not getattr(settings, "store_enabled", False):
         return
@@ -1244,7 +1245,8 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                              age_seconds=age_seconds,
                              exit_country=geo.country_for(settings, exit_ip)
                              if exit_ip else "",
-                             touch=touch, dumps=dumps)
+                             touch=touch, dumps=dumps,
+                             proxy_name=proxy_name)
     except Exception as exc:                                      # noqa: BLE001
         log.debug("sign-in not recorded (%s)", exc)
 
@@ -1814,7 +1816,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 age_seconds=attempt_started - phone_made_at,
                 exit_ip=_exit_ip(proxy_row),
                 touch=_touch_method(phone_id),
-                dumps=int(getattr(outcome, "dumps", 0) or 0))
+                dumps=int(getattr(outcome, "dumps", 0) or 0),
+                proxy_name=str(getattr(proxy_row, "name", "") or ""))
             heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
                      or outcome.reason == "captcha_shown")
             if heavy and proxy_row is not None:
@@ -3718,48 +3721,88 @@ def forgive_host(settings: Settings, host: str, *, by: str = "") -> None:
                     "exits aside again", host, exc)
 
 
-def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
-    """Set aside the free exits on hosts whose sign-ins over the last week
-    fall under `host_gate_rate` (with at least `host_gate_min` of them),
-    and free the ones it set aside on hosts that recovered. Measured:
-    185.100.235.x 20 in 100, 82.38.66.x 30 against 82.27.118.x 75 among
-    addresses with a key (2026-09-10).
+def gate_threshold(settings: Settings, farm_rate: float) -> float:
+    """The rate under which an exit is suspect: the absolute floor
+    (`host_gate_rate`) or `host_gate_relative` of what the farm as a
+    whole signs in over the same week, whichever is lower. When Google
+    refuses everyone the farm's rate falls and the threshold with it, so
+    no exit is blamed for the hour (2026-09-15)."""
+    floor = float(getattr(settings, "host_gate_rate", 0.5))
+    relative = float(getattr(settings, "host_gate_relative", 0.5))
+    return min(floor, relative * max(0.0, float(farm_rate or 0.0)))
 
-    A host a person cleared is judged from the clear onwards - it needs
-    `host_gate_min` fresh sign-ins before it can be set aside again - so
-    that Free means something (2026-09-13)."""
+
+def gate_hosts(book: Book, settings: Settings) -> dict[str, list[str]]:
+    """Set aside the free exits whose sign-ins over the last week fall
+    under `gate_threshold` (with at least `host_gate_min` of them), and
+    free the ones it set aside once their host recovers.
+
+    Judged per exit first: Google sees the exit's own address, and a
+    vendor host carries seven of them, so one bad address must not take
+    six good ones with it (the operator, 2026-09-15: "my proxies are
+    limited"). The host as a whole is judged only when it is plainly
+    dead - twice the sample, half the threshold - which is what catches
+    a host before every one of its exits has burned eight sign-ins.
+    Measured on 2026-09-10: 185.100.235.x 20 in 100, 82.38.66.x 30
+    against 82.27.118.x 75 among addresses with a key.
+
+    Relative, not absolute: an exit is suspect when it does worse than
+    half the farm's own rate over the same week. The absolute floor set
+    fourteen exits aside in one afternoon when Google was refusing 95%
+    of everything, and none of them was the reason (2026-09-14).
+
+    A host a person cleared is judged from the clear onwards - its
+    exits need `host_gate_min` fresh sign-ins before they can be set
+    aside again - so that Free means something (2026-09-13). An exit set
+    aside on its own numbers gets no new sign-ins, so it is freed when
+    its HOST is back over the threshold - the host's other exits keep
+    the sample moving - or by a hand."""
     from .store import signins as store_signins
 
-    least = max(1, int(getattr(settings, "host_gate_min", 5)))
-    floor = float(getattr(settings, "host_gate_rate", 0.5))
-    judged = {r["key"]: r for r in store_signins.host_rates(
-                  settings, since=host_clears(settings) or None)
-              if r["n"] >= least}
+    least = max(1, int(getattr(settings, "host_gate_min", 8)))
+    cleared = host_clears(settings) or None
+    farm = store_signins.totals(settings)
+    threshold = gate_threshold(settings, farm.get("rate", 0.0))
+    hosts = {r["key"]: r for r in store_signins.host_rates(
+                 settings, since=cleared) if r["n"] >= least}
+    exits = {r["key"]: r for r in store_signins.exit_rates(
+                 settings, since=cleared) if r["n"] >= least}
     aside, freed = [], []
     for resource in list(book.proxies._rows):
         host = str(getattr(getattr(resource, "proxy", None), "host", "") or "")
-        seen = judged.get(host)
+        name = str(getattr(resource, "name", "") or resource.label)
         status = str(resource.values.get("Status") or "").strip().lower()
         note = str(resource.values.get("Note") or "")
-        if seen is None:
+        own = exits.get(name)
+        whole = hosts.get(host)
+        if own is not None:
+            bad = own["rate"] < threshold
+            seen = (f"{own['ok']}/{own['n']} on {name} in the last 7 days, "
+                    f"against {farm['ok']}/{farm['n']} on the farm")
+        elif whole is not None and whole["n"] >= 2 * least:
+            bad = whole["rate"] < threshold / 2
+            seen = (f"{whole['ok']}/{whole['n']} on host {host} in the last "
+                    f"7 days, against {farm['ok']}/{farm['n']} on the farm")
+        else:
             continue
-        bad = seen["rate"] < floor
         if bad and status in ("", "free", "unused"):
             book.proxies.fail(resource, SUSPECT, note=(
-                f"Login rate {seen['ok']}/{seen['n']} on {host} in the "
-                f"last 7 days; set aside on its own. Press Free once the "
-                f"address is changed at the vendor - the host is then "
-                f"judged afresh - or wait for it to recover."))
-            aside.append(str(getattr(resource, "name", "") or resource.label))
-        elif (not bad and status == SUSPECT
-              and note.startswith(HOST_GATE_NOTE)):
+                f"Login rate {seen}; set aside on its own. Press Free once "
+                f"the address is changed at the vendor - the host is then "
+                f"judged afresh - or wait for the host to recover."))
+            aside.append(name)
+        elif (status == SUSPECT and note.startswith(HOST_GATE_NOTE)
+              and whole is not None and whole["rate"] >= threshold):
+            # Its host is back over the line. Its own numbers cannot say
+            # so - a suspect gets no sign-ins - so the host speaks for it.
             book.proxies.release(resource, note=(
-                f"Free again - {host} signs in {seen['ok']}/{seen['n']} "
+                f"Free again - {host} signs in {whole['ok']}/{whole['n']} "
                 f"over the last 7 days."))
-            freed.append(str(getattr(resource, "name", "") or resource.label))
+            freed.append(name)
     if aside:
-        log.warning("host gate: %d exit(s) set aside on hosts under %.0f%%: %s",
-                    len(aside), floor * 100, ", ".join(aside))
+        log.warning("host gate: %d exit(s) set aside under %.0f%% (the farm "
+                    "signs in %.0f%%): %s", len(aside), threshold * 100,
+                    farm.get("rate", 0.0) * 100, ", ".join(aside))
     if freed:
         log.info("host gate: %d exit(s) back on recovered hosts: %s",
                  len(freed), ", ".join(freed))

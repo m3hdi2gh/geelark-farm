@@ -520,11 +520,18 @@ class Settings:
     #: all addresses, against OPPO PLN110 83% (2026-09-10).
     bad_models: tuple[str, ...] = DEFAULT_BAD_MODELS
     model_retries: int = 3
-    #: The host gate: an exit host whose sign-ins over the last week fall
-    #: under `host_gate_rate` with at least `host_gate_min` of them is set
-    #: aside as suspect until it recovers.
-    host_gate_min: int = 5
+    #: The host gate. An exit whose sign-ins over the last week - at
+    #: least `host_gate_min` of them - fall under BOTH `host_gate_rate`
+    #: and `host_gate_relative` times the farm's own rate over the same
+    #: week is set aside as suspect until its host recovers. Relative,
+    #: because an absolute floor set aside fourteen exits in an afternoon
+    #: when Google refused everyone (2026-09-14); per exit, because Google
+    #: sees the exit's own address and a vendor host carries seven of
+    #: them. The host as a whole is judged only when it is plainly dead:
+    #: twice the sample, half the threshold (2026-09-15).
+    host_gate_min: int = 8
     host_gate_rate: float = 0.5
+    host_gate_relative: float = 0.5
 
     @classmethod
     def load(cls) -> Settings:
@@ -596,8 +603,9 @@ class Settings:
                                 in ("1", "true", "yes", "on"),
             bad_models=_models("BAD_MODELS"),
             model_retries=_int("MODEL_RETRIES", 3, minimum=0),
-            host_gate_min=_int("HOST_GATE_MIN", 5, minimum=1),
+            host_gate_min=_int("HOST_GATE_MIN", 8, minimum=1),
             host_gate_rate=_ratio("HOST_GATE_RATE", 0.5),
+            host_gate_relative=_ratio("HOST_GATE_RELATIVE", 0.5),
             wake_on_action=_str("WAKE_ON_ACTION", "0").strip()
                           in ("1", "true", "yes", "on"),
             control_lane=_str("CONTROL_LANE", "0").strip()

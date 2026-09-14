@@ -5276,38 +5276,111 @@ def test_every_google_sign_in_is_recorded_with_its_position_and_host(
                            seconds=1.0, captcha_rounds=0)
 
 
-def test_the_host_gate_sets_aside_exits_on_a_bad_host_and_frees_them_back(
-        make_settings, tmp_path, monkeypatch):
+def _gate_reads(monkeypatch, *, farm, hosts=(), exits=()):
+    """What the gate reads: the farm's own rate, then the hosts and the
+    exits with enough sign-ins to be judged."""
     from geelark_farm.store import signins as store_signins
 
+    ok, n = farm
+    monkeypatch.setattr(store_signins, "totals", lambda s, days=7: {
+        "ok": ok, "n": n, "gmails": n, "rate": ok / n if n else 0.0})
+    monkeypatch.setattr(store_signins, "host_rates",
+                        lambda s, days=7, since=None: [
+                            {"key": h, "ok": o, "n": c, "rate": o / c}
+                            for h, o, c in hosts])
+    monkeypatch.setattr(store_signins, "exit_rates",
+                        lambda s, days=7, since=None: [
+                            {"key": e, "host": h, "ok": o, "n": c,
+                             "rate": o / c} for e, h, o, c in exits])
+
+
+def _exit_name(book, i):
+    row = book.proxies._rows[i]
+    return row.name or row.label
+
+
+def test_the_host_gate_judges_each_exit_against_the_farm_and_frees_it_back(
+        make_settings, tmp_path, monkeypatch):
+    """Per exit: one bad address on a host does not take its neighbours
+    with it. Relative: the line is half the farm's own rate, so a bad
+    week for everyone is nobody's fault (the operator, 2026-09-15: "my
+    proxies are limited")."""
     settings = make_settings(state_dir=tmp_path, store_enabled=True,
-                             pools_in_pg=True, host_gate_min=5,
-                             host_gate_rate=0.5)
-    book = make_book(proxies=2)          # 10.0.0.0 and 10.0.0.1
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
-        {"key": "10.0.0.0", "ok": 1, "n": 10, "rate": 0.1},
-        {"key": "10.0.0.1", "ok": 8, "n": 10, "rate": 0.8}])
+                             pools_in_pg=True, host_gate_min=8,
+                             host_gate_rate=0.5, host_gate_relative=0.5)
+    book = make_book(proxies=2)          # both on 10.0.0.x, judged apart
+    bad, good = _exit_name(book, 0), _exit_name(book, 1)
+    # The farm signs in 80%: the line is min(0.5, 0.4) = 40%.
+    _gate_reads(monkeypatch, farm=(80, 100),
+                hosts=[("10.0.0.0", 3, 10), ("10.0.0.1", 8, 10)],
+                exits=[(bad, "10.0.0.0", 1, 10), (good, "10.0.0.1", 8, 10)])
 
     outcome = builder.gate_hosts(book, settings)
 
-    assert outcome["gated"] == [book.proxies._rows[0].name or
-                                book.proxies._rows[0].label]
+    assert outcome["gated"] == [bad]
     assert book.proxies._rows[0].values["Status"] == builder.SUSPECT
-    assert book.proxies._rows[0].values["Note"].startswith("Login rate 1/10")
+    note = book.proxies._rows[0].values["Note"]
+    assert note.startswith(f"Login rate 1/10 on {bad}")
+    assert "against 80/100 on the farm" in note
     assert book.proxies._rows[1].values["Status"] in ("", "free")
-    # The host recovers: what the gate set aside comes back, and only that.
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
-        {"key": "10.0.0.0", "ok": 6, "n": 10, "rate": 0.6}])
+    # The exit's own numbers cannot move while it is aside; its host's
+    # can. The host recovers over the line and the gate frees it back.
+    _gate_reads(monkeypatch, farm=(80, 100),
+                hosts=[("10.0.0.0", 6, 10)],
+                exits=[(bad, "10.0.0.0", 1, 10)])
     outcome = builder.gate_hosts(book, settings)
-    assert len(outcome["ungated"]) == 1
+    assert outcome["ungated"] == [bad]
     assert book.proxies._rows[0].values["Status"] in ("", "free")
     # A suspect the captcha tally made is not the gate's to free.
     book.proxies.fail(book.proxies._rows[1], builder.SUSPECT,
                       note="Suspect - 3 Google challenges today")
-    monkeypatch.setattr(store_signins, "host_rates", lambda s, days=7, since=None: [
-        {"key": "10.0.0.1", "ok": 9, "n": 10, "rate": 0.9}])
+    _gate_reads(monkeypatch, farm=(80, 100), hosts=[("10.0.0.1", 9, 10)])
     assert builder.gate_hosts(book, settings)["ungated"] == []
     assert book.proxies._rows[1].values["Status"] == builder.SUSPECT
+
+
+def test_a_bad_week_for_the_whole_farm_sets_nobody_aside(
+        make_settings, tmp_path, monkeypatch):
+    """The absolute floor set fourteen exits aside in an afternoon when
+    Google refused 95% of everything (2026-09-14). With the line at half
+    the farm's rate, an exit at 8% on a farm at 10% is ordinary."""
+    settings = make_settings(state_dir=tmp_path, store_enabled=True,
+                             pools_in_pg=True, host_gate_min=8)
+    book = make_book(proxies=2)
+    name = _exit_name(book, 0)
+    _gate_reads(monkeypatch, farm=(10, 100),
+                hosts=[("10.0.0.0", 1, 12)],
+                exits=[(name, "10.0.0.0", 1, 12)])
+    assert builder.gate_hosts(book, settings)["gated"] == []
+    assert book.proxies._rows[0].values["Status"] in ("", "free")
+    # And a farm that signs nobody in has a line of zero.
+    assert builder.gate_threshold(settings, 0.0) == 0.0
+    assert builder.gate_threshold(settings, 0.8) == 0.4
+    assert builder.gate_threshold(settings, 1.0) == 0.5, "the floor still caps"
+
+
+def test_a_host_is_judged_as_a_whole_only_when_it_is_plainly_dead(
+        make_settings, tmp_path, monkeypatch):
+    """An exit with too few sign-ins of its own is set aside on its host's
+    numbers only when the host has twice the sample and sits under half
+    the line - a host that is dead, not one that is merely below par."""
+    settings = make_settings(state_dir=tmp_path, store_enabled=True,
+                             pools_in_pg=True, host_gate_min=8)
+    book = make_book(proxies=2)
+    # Farm at 80%: line 40%, the host line 20%. Host 0 is at 10% over
+    # twenty sign-ins, none of them this exit's: dead. Host 1 is at 30%
+    # over twenty: below the line, above the host line - left alone.
+    _gate_reads(monkeypatch, farm=(80, 100),
+                hosts=[("10.0.0.0", 2, 20), ("10.0.0.1", 6, 20)])
+    outcome = builder.gate_hosts(book, settings)
+    assert outcome["gated"] == [_exit_name(book, 0)]
+    assert "on host 10.0.0.0" in book.proxies._rows[0].values["Note"]
+    assert book.proxies._rows[1].values["Status"] in ("", "free")
+    # Twice the sample is the price of judging a whole host: fifteen
+    # sign-ins at 10% are not enough.
+    book = make_book(proxies=1)
+    _gate_reads(monkeypatch, farm=(80, 100), hosts=[("10.0.0.0", 1, 15)])
+    assert builder.gate_hosts(book, settings)["gated"] == []
 
 
 def test_the_keeper_runs_the_ladder_and_the_gate_only_with_the_store(
@@ -5454,9 +5527,11 @@ def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
                            gmail="a@x.com", seller="s", host="h", position=1,
                            reason="signed_in", ok=True, seconds=90.0,
                            captcha_rounds=0, age_seconds=140.0,
-                           exit_ip="212.8.252.6", touch="kernel", dumps=9)
+                           exit_ip="212.8.252.6", touch="kernel", dumps=9,
+                           proxy_name="SX9")
     assert rows[0]["age_seconds"] == 140.0 and rows[0]["exit_country"] == "NL"
     assert rows[0]["touch"] == "kernel" and rows[0]["dumps"] == 9
+    assert rows[0]["proxy_name"] == "SX9", "which exit, by name (2026-09-15)"
     src = inspect.getsource(builder.build_one)
     for needle in ("age_seconds=attempt_started - phone_made_at",
                    "exit_ip=_exit_ip(proxy_row)",
@@ -5716,6 +5791,12 @@ def test_a_host_cleared_by_hand_is_judged_from_the_clear_onwards(
         return [{"key": "10.0.0.0", "ok": 1, "n": 10, "rate": 0.1}]
 
     monkeypatch.setattr(store_signins, "host_rates", host_rates)
+    # Judged as a whole host: ten sign-ins is twice the sample of five,
+    # and 10% is under half the line (the farm at 80% -> a line of 40%).
+    monkeypatch.setattr(store_signins, "totals", lambda s, days=7: {
+        "ok": 80, "n": 100, "gmails": 100, "rate": 0.8})
+    monkeypatch.setattr(store_signins, "exit_rates",
+                        lambda s, days=7, since=None: [])
     monkeypatch.setattr(builder, "host_clears", lambda s: {})
     assert builder.gate_hosts(book, settings)["gated"], "bad host, set aside"
     book.proxies.release(book.proxies._rows[0], note="freed by hand")

@@ -25,22 +25,23 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
            host: str = "", model: str = "", position: int = 1,
            reason: str = "", ok: bool = False, seconds: float | None = None,
            captcha_rounds: int = 0, age_seconds: float | None = None,
-           exit_country: str = "", touch: str = "", dumps: int = 0) -> bool:
+           exit_country: str = "", touch: str = "", dumps: int = 0,
+           proxy_name: str = "") -> bool:
     try:
         with connect(settings) as conn:
             conn.execute(
                 "INSERT INTO signins (machine, serial, gmail, seller, host,"
                 " model, position, reason, ok, seconds, captcha_rounds,"
-                " age_seconds, exit_country, touch, dumps)"
+                " age_seconds, exit_country, touch, dumps, proxy_name)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-                " %s, %s, %s, %s)",
+                " %s, %s, %s, %s, %s)",
                 (machine(), str(serial or ""), str(gmail or "").lower(),
                  str(seller or "")[:80], str(host or "")[:80],
                  str(model or "")[:80], int(position or 1),
                  str(reason or "")[:80], bool(ok), seconds,
                  int(captcha_rounds or 0), age_seconds,
                  str(exit_country or "")[:8], str(touch or "")[:16],
-                 int(dumps or 0)))
+                 int(dumps or 0), str(proxy_name or "")[:80]))
             conn.commit()
         return True
     except Exception as exc:                                      # noqa: BLE001
@@ -52,7 +53,7 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
 _BY = {"host": "host", "model": "model", "seller": "seller",
        "reason": "reason", "position": "position::text",
        "day": "to_char(at, 'YYYY-MM-DD')", "touch": "touch",
-       "exit_country": "exit_country"}
+       "exit_country": "exit_country", "proxy": "proxy_name"}
 
 
 def rates(settings: Settings, by: str, days: int = 7) -> list[dict]:
@@ -113,6 +114,37 @@ def host_rates(settings: Settings, days: int = 7,
         got[1] += 1
     out = [{"key": host, "ok": ok, "n": n, "rate": ok / n}
            for host, (ok, n) in tally.items() if n >= MIN_SAMPLE]
+    out.sort(key=lambda r: (-r["n"], r["key"]))
+    return out
+
+
+def exit_rates(settings: Settings, days: int = 7,
+               since: dict | None = None) -> list[dict]:
+    """The exits with enough attempts to be judged, each with the host it
+    sits on: [{key: proxy_name, host, ok, n, rate}].
+
+    `since` is the same {host: unix time} `host_rates` takes - a person's
+    Free clears the host, and every exit on it is judged from that moment.
+    Rows written before the exit's name was recorded (blank) are not an
+    exit's and are left out."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT proxy_name, host, ok, extract(epoch FROM at) FROM signins"
+            " WHERE at > now() - make_interval(days => %s)"
+            "   AND proxy_name <> ''", (int(days),))
+        rows = cur.fetchall()
+        conn.rollback()
+    cleared = since or {}
+    tally: dict[str, list] = {}
+    for name, host, ok, at in rows:
+        host = str(host or "")
+        if float(at or 0) <= float(cleared.get(host) or 0):
+            continue
+        got = tally.setdefault(str(name), [host, 0, 0])
+        got[1] += 1 if ok else 0
+        got[2] += 1
+    out = [{"key": name, "host": host, "ok": ok, "n": n, "rate": ok / n}
+           for name, (host, ok, n) in tally.items() if n >= MIN_SAMPLE]
     out.sort(key=lambda r: (-r["n"], r["key"]))
     return out
 
