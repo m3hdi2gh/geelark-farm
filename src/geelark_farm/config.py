@@ -399,6 +399,13 @@ class Settings:
     #: keeps it behind every fresh address - only long enough that the
     #: wave of builds it was refused in has passed (2026-09-12).
     ladder_floor_minutes: int = 20
+    #: The hours, UTC, in which Google lets these exits in: "17-3" is
+    #: 17:00 up to 03:00, wrapping past midnight. Outside them an
+    #: address on its last try is held back rather than spent
+    #: (SIGNIN_GOOD_HOURS_UTC; empty holds nothing). Measured over seven
+    #: days on US exits: 80-100% signed in at 19-02 UTC, 0-19% at 05-10 -
+    #: the same exits, sellers and models (2026-09-14).
+    signin_good_hours_utc: str = ""
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -542,6 +549,7 @@ class Settings:
             # minimum=0, because .env.example says "0 puts it back at
             # once" and `_int` refuses a zero unless told not to.
             ladder_floor_minutes=_int("LADDER_FLOOR_MINUTES", 20, minimum=0),
+            signin_good_hours_utc=_str("SIGNIN_GOOD_HOURS_UTC", "").strip(),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

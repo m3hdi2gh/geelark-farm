@@ -26,6 +26,7 @@ spent - `failures.OWED_WHEN_EXHAUSTED` (2026-09-13).
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 
 from .. import failures
@@ -47,6 +48,56 @@ def _floor(settings: Settings | None = None) -> int:
         return max(0, int(minutes)) if minutes is not None else FLOOR_MINUTES
     except (TypeError, ValueError):
         return FLOOR_MINUTES
+
+
+def good_hours(settings: Settings | None) -> tuple[int, int] | None:
+    """The window as (start, end) hours UTC, or None for "no window".
+    "17-3" is 17:00 up to 03:00 the next day; "9-17" is a plain daytime
+    span. Anything unreadable is no window - a typo must not hold the
+    whole pool back."""
+    said = str(getattr(settings, "signin_good_hours_utc", "") or "").strip()
+    if not said:
+        return None
+    try:
+        start, end = (int(part) for part in said.split("-", 1))
+    except ValueError:
+        log.warning("SIGNIN_GOOD_HOURS_UTC=%r is not two hours; holding "
+                    "nothing", said)
+        return None
+    if not (0 <= start < 24 and 0 <= end < 24) or start == end:
+        log.warning("SIGNIN_GOOD_HOURS_UTC=%r is not a window; holding "
+                    "nothing", said)
+        return None
+    return start, end
+
+
+def in_good_hours(settings: Settings | None,
+                  now: _dt.datetime | None = None) -> bool:
+    """Whether this is an hour Google lets these exits in. Always, when
+    no window is set."""
+    window = good_hours(settings)
+    if window is None:
+        return True
+    start, end = window
+    hour = (now or _dt.datetime.now(_dt.timezone.utc)).hour
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def held_from(settings: Settings | None,
+              now: _dt.datetime | None = None) -> int | None:
+    """The `tries` from which a row is held back right now, or None when
+    nothing is: outside the good hours an address on its last try waits.
+
+    The pool was spending last chances in the hours that refuse nearly
+    everything: 44 addresses at try 2 of 3, one builder-wave from the
+    refund list, at 5% (2026-09-14, 15-18 UTC). A fresh or once-refused
+    address still goes out - the operator needs phones around the clock
+    - but the last try is worth keeping for the hours it will succeed."""
+    if in_good_hours(settings, now):
+        return None
+    return MAX_TRIES - 1
 
 
 def challenge(conn, row_id: int, reason: str, *, host: str = "",

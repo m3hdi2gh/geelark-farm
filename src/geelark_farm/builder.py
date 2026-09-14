@@ -990,6 +990,17 @@ def _any_exit_free(book: Book) -> bool:
 GMAILS_PAST = 4
 
 
+def _held_note(book: Book) -> str:
+    """The addresses the hour is keeping back, named - or a pool that
+    reads "no unused address left" while 44 sit in it looks empty for
+    no reason (2026-09-14)."""
+    count = getattr(book.gmails, "held_now", lambda: 0)()
+    if not count:
+        return ""
+    return (f"; {count} address(es) on their last try are held back until "
+            f"the hours Google lets these exits in (SIGNIN_GOOD_HOURS_UTC)")
+
+
 def _pair_up(client: Client, book: Book, settings: Settings):
     """A free Gmail, and an exit that is not on the host it was refused on.
 
@@ -1627,7 +1638,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if gmail_row is None and not bare:
                 return finish("no_usable_gmail",
                               "the Gmails tab has no unused address left, so "
-                              "no phone was created")
+                              "no phone was created" + _held_note(book))
             if chosen_exit:
                 proxy_row = _pick(book.proxies, want.proxy_name, "exit")
             elif proxy_row is None:
@@ -1738,7 +1749,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 if gmail_row is None:
                     return finish("no_usable_gmail",
                                   "the Gmails tab had no other address to try "
-                                  "on this phone")
+                                  "on this phone" + _held_note(book))
             # Every field, rather than the three somebody remembered. `Account`
             # subclasses `Credentials`, and this list was a copy of its fields
             # as they stood the day it was written: `email_code_only` was added

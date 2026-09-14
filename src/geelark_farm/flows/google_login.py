@@ -738,11 +738,18 @@ def _screen_width(ctx: Context) -> int:
 #: whole grid in one second (2026-09-11).
 TILE_LOOK_SECONDS = (0.2, 0.9)
 
-#: How many visits the captcha screen gets across a whole flow. Generous,
-#: because most of them are spent waiting and because one flow may meet
-#: several captchas; `act_captcha` gives up one short of it, so the build
-#: ends on `captcha_shown` and never on the router's own phrase.
-CAPTCHA_VISITS = 44
+#: How many visits the captcha screen gets across a whole flow;
+#: `act_captcha` gives up one short of it, so the build ends on
+#: `captcha_shown` and never on the router's own phrase.
+#:
+#: Forty-four for a week, "generous, because most of them are spent
+#: waiting". Measured over 206 sign-ins (2026-09-14): no captcha visit at
+#: all signed in 56 of 58 times; four to ten visits, 33 of 107; eleven or
+#: more, ONE of 61 - and those 61 each spent five more minutes of a phone
+#: and thirty more CapSolver answers finding that out. Twelve keeps every
+#: visit that ever led anywhere and stops paying for the rest. The Gmail
+#: costs the same either way: a refusal is a refusal on the ladder.
+CAPTCHA_VISITS = 12
 
 #: Rounds one captcha gets - a tick of its box, or one grid sent to the
 #: solver. Google's 3x3 takes tiles away as they are answered and draws

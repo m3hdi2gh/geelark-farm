@@ -565,3 +565,16 @@ def test_the_login_rate_knobs_read_from_the_environment(monkeypatch):
     assert config.Settings.__dataclass_fields__["one_gmail_per_phone"].default is True
     assert config.Settings.__dataclass_fields__["model_retries"].default == 3
 
+
+
+def test_the_good_hours_come_from_the_environment(tmp_path, monkeypatch):
+    from geelark_farm.config import Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "s"))
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "a"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "l"))
+    assert Settings.load().signin_good_hours_utc == "", "off unless set"
+    monkeypatch.setenv("SIGNIN_GOOD_HOURS_UTC", " 17-3 ")
+    assert Settings.load().signin_good_hours_utc == "17-3"

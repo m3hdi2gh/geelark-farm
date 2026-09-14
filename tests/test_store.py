@@ -1752,3 +1752,35 @@ def test_the_schema_carries_the_apis_practice_room():
     assert "CHECK (role IN ('panel', 'bot', 'sandbox'))" in sql
     assert "DROP CONSTRAINT IF EXISTS api_clients_role_check" in sql, (
         "the file is applied on every start and must converge")
+
+
+def test_the_good_hours_window_wraps_past_midnight_and_a_typo_holds_nothing():
+    """"17-3" is 17:00 up to 03:00 the next day. Empty is no window;
+    a value that is not two hours holds nothing rather than everything -
+    a typo in .env must not stop the last tries for ever (2026-09-14)."""
+    import datetime as dt
+    from types import SimpleNamespace
+
+    from geelark_farm.store import ladder
+
+    def at(hour):
+        return dt.datetime(2026, 9, 14, hour, 30, tzinfo=dt.timezone.utc)
+
+    night = SimpleNamespace(signin_good_hours_utc="17-3")
+    assert ladder.good_hours(night) == (17, 3)
+    for hour in (17, 20, 23, 0, 2):
+        assert ladder.in_good_hours(night, at(hour)), hour
+        assert ladder.held_from(night, at(hour)) is None
+    for hour in (3, 9, 12, 16):
+        assert not ladder.in_good_hours(night, at(hour)), hour
+        assert ladder.held_from(night, at(hour)) == ladder.MAX_TRIES - 1
+
+    day = SimpleNamespace(signin_good_hours_utc="9-17")
+    assert ladder.in_good_hours(day, at(12)) and not ladder.in_good_hours(day, at(20))
+
+    for nothing in ("", "17", "17-x", "25-3", "5-5", None):
+        off = SimpleNamespace(signin_good_hours_utc=nothing)
+        assert ladder.good_hours(off) is None, nothing
+        assert ladder.in_good_hours(off, at(9)), nothing
+        assert ladder.held_from(off, at(9)) is None, nothing
+    assert ladder.held_from(None, at(9)) is None, "no settings at all"

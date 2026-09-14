@@ -5805,3 +5805,18 @@ def test_test_all_asks_about_every_exit_no_build_is_holding(monkeypatch):
     assert [r.name or r.label for r in dead] == [rows[0].name or rows[0].label]
     assert rows[1].values["Status"] == builder.SUSPECT
     assert rows[2].values["Status"] == "change ip"
+
+
+def test_an_empty_pool_names_the_addresses_the_hour_is_holding():
+    """"No unused address left" while 44 sit in the pool looks empty for
+    no reason; the note says they are held for the good hours."""
+    from types import SimpleNamespace
+
+    held = SimpleNamespace(gmails=SimpleNamespace(held_now=lambda: 3))
+    note = builder._held_note(held)
+    assert "3 address(es) on their last try are held back" in note
+    assert "SIGNIN_GOOD_HOURS_UTC" in note
+    assert builder._held_note(SimpleNamespace(gmails=object())) == "", (
+        "a sheet-era pool holds nothing and says nothing")
+    assert builder._held_note(
+        SimpleNamespace(gmails=SimpleNamespace(held_now=lambda: 0))) == ""

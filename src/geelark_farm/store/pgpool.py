@@ -117,15 +117,20 @@ class ResourceTable:
                 f" WHERE id = %s", [*fields.values(), row_id])
             conn.commit()
 
-    def free_count(self, kind: str, *, free: tuple[str, ...]) -> int:
+    def free_count(self, kind: str, *, free: tuple[str, ...],
+                   hold_tries_from: int | None = None) -> int:
         """How many rows of `kind` a claim could take right now - the same
-        conditions the claim itself uses, minus the pick."""
+        conditions the claim itself uses, minus the pick. `hold_tries_from`
+        leaves out the rows a claim would hold back (store.ladder)."""
+        held = (" AND coalesce(tries, 0) < %s"
+                if hold_tries_from is not None else "")
         with self._connect() as conn:
             cur = conn.execute(
                 "SELECT count(*) FROM resources"
                 " WHERE kind = %s AND error IS NULL"
                 "   AND coalesce(refund_state, '') = ''"
-                "   AND lower(status) = ANY(%s)", (kind, list(free)))
+                f"   AND lower(status) = ANY(%s){held}",
+                (kind, list(free), *([hold_tries_from] if held else [])))
             row = cur.fetchone()
             conn.rollback()
         return int(row[0]) if row else 0
@@ -133,13 +138,15 @@ class ResourceTable:
     def claim(self, kind: str, *, free: tuple[str, ...], claimed: str,
               count_use: bool, serial: str = "",
               row_id: int | None = None, avoid_host: str = "",
-              host_column: str = "", count_attempt: bool = False
-              ) -> dict | None:
+              host_column: str = "", count_attempt: bool = False,
+              hold_tries_from: int | None = None) -> dict | None:
         """Pick, mark and stamp the first free row of `kind` in one
         statement. The ordering is the sheet's contract: least-used first
         for exits, top of the tab for credentials. `row_id` narrows the
         pick to one chosen row (C6's "log in selected"): None if that row
-        is not free any more, never the next one down."""
+        is not free any more, never the next one down. `hold_tries_from`
+        is the ladder's hold: a row with that many tries or more is left
+        where it is, for an hour Google will let it in (store.ladder)."""
         # `tries` first: a row back off the ladder is an address Google
         # refused once already, and it is older than every fresh one, so
         # by id it went first - the revival wave took the pool's first
@@ -156,6 +163,9 @@ class ResourceTable:
         not_here = (f" AND coalesce({column}, '') <> %s" if column and
                     avoid_host else "")
         avoided = [avoid_host] if not_here else []
+        held = (" AND coalesce(tries, 0) < %s"
+                if hold_tries_from is not None else "")
+        withheld = [hold_tries_from] if held else []
         bump = "times_used + 1" if count_use else "times_used"
         # The account's own counter, in the same atomic statement that
         # hands the row out: a claim that returns nothing counts nothing,
@@ -170,7 +180,7 @@ class ResourceTable:
                 f"    AND coalesce(refund_state, '') = ''"
                 f"    AND lower(status) = ANY(%s)"
                 f"    AND (%s::bigint IS NULL OR id = %s)"
-                f"{not_here}"
+                f"{not_here}{held}"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
                 f"  times_used = {bump}, attempts = {tally},"
@@ -178,8 +188,8 @@ class ResourceTable:
                 f"  serial = CASE WHEN %s <> '' THEN %s ELSE r.serial END,"
                 f"  updated_at = now()"
                 f"  FROM picked WHERE r.id = picked.id RETURNING r.*",
-                (kind, list(free), row_id, row_id, *avoided, claimed,
-                 serial, serial))
+                (kind, list(free), row_id, row_id, *avoided, *withheld,
+                 claimed, serial, serial))
             names = [d.name for d in cur.description]
             row = cur.fetchone()
             conn.commit()
@@ -364,9 +374,27 @@ class _PgPool(Pool):
 
     def free_now(self) -> int:
         """What the store says is claimable, rather than what this Book's
-        snapshot said when the pass began."""
+        snapshot said when the pass began. Counted the way the claim
+        picks, so a keeper sizing a batch by it never orders a build for
+        a row the claim would hold back."""
         return self._table.free_count(
-            self.kind, free=tuple(self.available_statuses))
+            self.kind, free=tuple(self.available_statuses),
+            hold_tries_from=self._held_from())
+
+    def held_now(self) -> int:
+        """How many free rows the hour is keeping back - for the sentence
+        that says why nothing was built."""
+        hold = self._held_from()
+        if hold is None:
+            return 0
+        every = self._table.free_count(self.kind,
+                                       free=tuple(self.available_statuses))
+        return max(0, every - self.free_now())
+
+    def _held_from(self) -> int | None:
+        """Which rows the claim leaves where they are. Nothing, for any
+        pool but the Gmails - see PgGmailPool."""
+        return None
 
     def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
@@ -376,7 +404,8 @@ class _PgPool(Pool):
             claimed=self.claimed_status,
             count_use=isinstance(self, ProxyPool), serial=serial,
             avoid_host=avoid_host, host_column=self.HOST_COLUMN,
-            count_attempt=self.COUNTS_ATTEMPTS)
+            count_attempt=self.COUNTS_ATTEMPTS,
+            hold_tries_from=self._held_from())
         if row is None:
             return None
         resource = next((r for r in self._rows if r.store_id == row["id"]),
@@ -486,6 +515,14 @@ class PgGmailPool(_PgPool, GmailPool):
     kind = "gmail"
 
     HOST_COLUMN = "last_host"
+
+    def _held_from(self) -> int | None:
+        """Outside the good hours an address on its last try stays in the
+        pool (store.ladder.held_from); fresh and once-refused ones still
+        go out."""
+        from . import ladder
+
+        return ladder.held_from(getattr(self._table, "_settings", None))
 
     def fail(self, resource: Resource, reason: str, *, note: str = "",
              host: str = "", settings=None) -> None:

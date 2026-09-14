@@ -88,7 +88,7 @@ class MemoryTable:
 
     def claim(self, kind, *, free, claimed, count_use, serial="",
               row_id=None, avoid_host="", host_column="",
-              count_attempt=False):
+              count_attempt=False, hold_tries_from=None):
         for r in self._ordered(kind, count_use):
             if row_id is not None and r["id"] != row_id:
                 continue
@@ -96,6 +96,9 @@ class MemoryTable:
                 continue                       # the exit it was refused on
             if r.get("refund_state"):
                 continue                       # money to claim, not stock
+            if (hold_tries_from is not None
+                    and int(r.get("tries") or 0) >= hold_tries_from):
+                continue                       # held for the good hours
             if r["error"] is None and (r["status"] or "").lower() in free:
                 r["status"] = claimed
                 r["claimed_at"] = _now()
@@ -107,6 +110,14 @@ class MemoryTable:
                     r["serial"] = serial
                 return dict(r)
         return None
+
+    def free_count(self, kind, *, free, hold_tries_from=None):
+        return sum(
+            1 for r in self._ordered(kind)
+            if r["error"] is None and (r["status"] or "").lower() in free
+            and not r.get("refund_state")
+            and (hold_tries_from is None
+                 or int(r.get("tries") or 0) < hold_tries_from))
 
     def touch_state(self, row_id):
         self._rows[row_id]["state_changed_at"] = _now()
@@ -1001,3 +1012,43 @@ def test_a_phone_number_asked_for_is_the_sellers_only_once_the_ladder_is_spent(
     for n in range(3):
         pool.fail(row, "captcha_shown", host=f"10.0.0.{n}")
     assert "to_refund" not in [c[0] for c in calls]
+
+
+# ------------------------------ the last try waits for the good hours
+def test_outside_the_good_hours_an_address_on_its_last_try_is_held(
+        monkeypatch):
+    """Measured over seven days on US exits: 80-100% signed in at 19-02
+    UTC, 0-19% at 05-10 - the same exits, sellers and models. The pool
+    was spending last chances in the refusing hours: 44 addresses at try
+    2 of 3, one builder-wave from the refund list, at 5% (2026-09-14).
+    Fresh and once-refused addresses still go out around the clock; the
+    last try waits, and the keeper's count says so."""
+    from types import SimpleNamespace
+
+    from geelark_farm.store import ladder
+
+    table = MemoryTable()
+    table._settings = SimpleNamespace(signin_good_hours_utc="17-3")
+    pool = PgGmailPool(table)
+    fresh = table.add("gmail", address="fresh@x.com", password="pw",
+                      sheet_row=1, tries=0)
+    once = table.add("gmail", address="once@x.com", password="pw",
+                     sheet_row=2, tries=1)
+    last = table.add("gmail", address="last@x.com", password="pw",
+                     sheet_row=3, tries=2)
+    pool.load()
+
+    monkeypatch.setattr(ladder, "in_good_hours", lambda s, now=None: False)
+    assert pool.free_now() == 2 and pool.held_now() == 1
+    assert pool.claim().store_id == fresh
+    assert pool.claim().store_id == once
+    assert pool.claim() is None, "the last try is not spent in a bad hour"
+    assert table.row(last)["status"] == "", "and it is still in the pool"
+    assert pool.free_now() == 0 and pool.held_now() == 1
+
+    monkeypatch.setattr(ladder, "in_good_hours", lambda s, now=None: True)
+    assert pool.held_now() == 0
+    assert pool.claim().store_id == last, "in the good hours it goes"
+
+    # The proxy pool holds nothing: tries is a Gmail's ladder.
+    assert PgProxyPool(table)._held_from() is None

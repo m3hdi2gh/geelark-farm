@@ -617,3 +617,11 @@ def test_the_grid_count_is_the_whole_sign_ins_and_not_one_captchas(
     assert c.captcha_tries == 0, "the round counter started again"
     assert c.captcha_solved == 2, "the grid counter did not"
     assert sent, "and it did go on to look at the grid"
+
+
+def test_the_captcha_gives_up_after_twelve_visits():
+    """Over 206 sign-ins (2026-09-14): no captcha visit signed in 56 of 58
+    times, four to ten visits 33 of 107, eleven or more ONE of 61 - each
+    of those 61 spending five more minutes of a phone and thirty more
+    CapSolver answers. Twelve keeps every visit that ever led anywhere."""
+    assert g.CAPTCHA_VISITS == 12
