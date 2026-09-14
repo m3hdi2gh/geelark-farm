@@ -1001,8 +1001,15 @@ _DASH_SAID = {
     "removed-gpt": "Removed - the row is out of the GPT pool.",
     "gone": "That cannot be undone any more - the request that removed it "
             "kept nothing to put back.",
-    "queued": "Queued - the next pass starts it within about thirty "
-              "seconds; this page keeps itself up to date.",
+    # It said "the next pass starts it within about thirty seconds",
+    # which was true when only a pass could write the sheet. A command
+    # rings a bell now and a lane takes it: measured over a day,
+    # set_phone_state 0.2s, remove_proxy 0.1s, boot_phone 1.4s,
+    # mark_proxy_free 4.6s - and the slowest, Test all, 27s because it
+    # asks GeeLark about every exit. So: it starts at once, and how long
+    # it takes is the work's own business (2026-09-14).
+    "queued": "Queued - it starts within a second, and this page shows "
+              "the answer as soon as it is done.",
     "refused": "You may not do that - ask an admin for the permission.",
     "off": "Actions are not switched on yet.",
     "auto": "Manual login is off: accounts log in on their own on the next "
@@ -1960,6 +1967,20 @@ _DASH_SCRIPT = """
   // while the manager is open, or while a box is being typed in, wipes
   // what they were doing - which read as the page crashing back to the
   // start (the operator, 2026-09-05). It waits, and tries again shortly.
+  // How long after the last scroll a redraw waits. Long enough that a
+  // flick of the wheel is one gesture, short enough that a page put down
+  // is up to date by the time it is looked at again.
+  var SCROLL_QUIET = 1200;
+  // And the floor between two redraws. The live stream ticks whenever
+  // anything the page draws has changed, which while the farm builds is
+  // every second or two - honest, and far more often than a person can
+  // read (2026-09-14).
+  var SWAP_FLOOR = 4000;
+  function scrolled(){ scrolled.at = Date.now(); }
+  addEventListener('scroll', scrolled, {capture: true, passive: true});
+  addEventListener('wheel', scrolled, {capture: true, passive: true});
+  addEventListener('touchmove', scrolled, {capture: true, passive: true});
+
   function settled(){
     var o = ov();
     // Anything the keyboard is on inside the page, not just a box to type
@@ -1974,6 +1995,14 @@ _DASH_SCRIPT = """
       && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(live.tagName) >= 0
           || (!!main && main.contains(live)
               && live.matches(':focus-visible')));
+    // A hand on the wheel. The place is put back after a swap, but a
+    // redraw in the middle of the gesture still stutters under it, and
+    // nothing is so urgent that it cannot wait for the scroll to stop.
+    if (Date.now() - (scrolled.at || 0) < SCROLL_QUIET) return false;
+    // Reading something they chose: a swap drops the selection.
+    var picked = window.getSelection && window.getSelection();
+    if (picked && !picked.isCollapsed && String(picked).trim().length > 1)
+      return false;
     // The drawer holds no box to type in, so a page frozen behind it is
     // a build nobody can watch move. A manager still holds the page: it
     // has a paste box and an editor in it (2026-09-07).
@@ -1996,7 +2025,9 @@ _DASH_SCRIPT = """
       // wait for the next one.
       if (listen.seen === undefined) { listen.seen = now; return; }
       listen.seen = now;
-      lookAgain(250);
+      // Soon, but no sooner than the floor since the last redraw.
+      var since = Date.now() - (swapMain.at || 0);
+      lookAgain(Math.max(250, SWAP_FLOOR - since));
     };
     feed.onerror = function(){
       // EventSource retries on its own; the timer is untouched, so a
@@ -2236,6 +2267,37 @@ _DASH_SCRIPT = """
   // press - and the timer, every thirty seconds, unasked - threw the
   // chip back to `all`, emptied the search and lost the scroll. The list
   // moved under the hand using it (the operator, 2026-09-14).
+  // Where the page is scrolled, inside and out. A swap replaces every
+  // child of `main`, so every scrollport in it is built again at zero -
+  // and the dashboard's phone table is one: `.slab>.tscroll` has its own
+  // max-height. Reading row ninety, the operator was thrown back to the
+  // top about every thirteen seconds, which is how often the farm moved
+  // while it was building (2026-09-14).
+  //
+  // Matched by position, not by id: the same page redrawn has the same
+  // boxes in the same order, and giving each one a name would be a name
+  // to keep in step with the markup. The manager's own sheets are left
+  // to `viewNow`, which knows which sheet is open.
+  function boxes(){
+    var here = document.querySelector('main');
+    if (!here) return [];
+    return Array.prototype.filter.call(
+      here.querySelectorAll('.tscroll, .queue'), function(el){
+        return !el.closest('#poolov');
+      });
+  }
+  function placeNow(){
+    return {win: window.scrollY || 0,
+            tops: boxes().map(function(el){ return el.scrollTop; })};
+  }
+  function placeBack(kept){
+    if (!kept) return;
+    boxes().forEach(function(el, i){
+      if (kept.tops[i]) el.scrollTop = kept.tops[i];
+    });
+    if (kept.win) window.scrollTo(0, kept.win);
+  }
+
   function viewNow(){
     var seen = {};
     document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
@@ -2311,7 +2373,7 @@ _DASH_SCRIPT = """
     if (mine && theirs && mine.content !== theirs.content) {
       location.reload(); return;
     }
-    var kept = openKind, seen = viewNow();
+    var kept = openKind, seen = viewNow(), place = placeNow();
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
     });
@@ -2321,6 +2383,8 @@ _DASH_SCRIPT = """
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref);
     else if (kept && kept !== 'send') show(kept);
     viewBack(seen);
+    placeBack(place);
+    swapMain.at = Date.now();
   }
 
   // 3. One row changed, so one row is replaced - not the page under it.
@@ -4173,7 +4237,9 @@ _SAID = {
     #: asked for it - there is nothing left for a
     #: pass to do.
     "done": "Done - it is already in.",
-    "queued": "Queued - the next pass (within ~30s) will run it.",
+    # See _POOL_SAID: a command rings a bell and a lane takes it, so the
+    # thirty seconds was the old world's answer (2026-09-14).
+    "queued": "Queued - it starts within a second.",
     "cancelled": "Cancelled - it never ran.",
     "too_late": "Too late - a pass had already taken it; see its row below.",
     "not_yours": "That request is not yours to touch.",
@@ -4839,8 +4905,15 @@ _POOL_SAID = {
     #: asked for it - there is nothing left for a
     #: pass to do.
     "done": "Done - it is already in.",
-    "queued": "Queued - the next pass (within ~30s) carries it out; watch "
-              "Requests.",
+    # It said "the next pass (within ~30s) carries it out", which was
+    # true when only a pass could write the sheet. A command rings a bell
+    # now and a lane takes it: measured over a day, set_phone_state 0.2s,
+    # remove_proxy 0.1s, boot_phone 1.4s, mark_proxy_free 4.6s - and the
+    # slowest, Test all, 27s, because it asks GeeLark about every exit.
+    # So: it starts at once, and how long it takes is the work's own
+    # business (2026-09-14).
+    "queued": "Queued - it starts within a second; the page shows the "
+              "answer as soon as it is done. Watch Requests.",
     "refused": "You may not do that - ask an admin for the permission.",
     "off": "Actions are not switched on yet.",
     "bad": "That account was refused at the form - check the address, the "

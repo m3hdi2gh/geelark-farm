@@ -5746,7 +5746,8 @@ def test_the_dashboard_listens_on_the_stream_and_keeps_its_timer():
     # clock, so the soonest one stands.
     assert "function lookAgain(ms)" in script
     assert "if (init.timer && init.due && init.due <= due) return;" in script
-    assert "lookAgain(250);" in script, "the stream asks for the soonest"
+    assert "lookAgain(Math.max(250, SWAP_FLOOR - since));" in script, (
+        "the stream asks for soon, but no sooner than the floor")
     assert "feed.onerror" in script
 
 
@@ -5762,7 +5763,7 @@ def test_a_swap_puts_the_manager_back_the_way_it_was():
                  "scrollTop"):
         assert kept in script, kept
     # Taken before the swap, put back after it.
-    assert "var kept = openKind, seen = viewNow();" in script
+    assert "var kept = openKind, seen = viewNow(), place = placeNow();" in script
     assert "viewBack(seen);" in script
 
 
@@ -5835,3 +5836,59 @@ def test_the_dashboard_script_is_valid_javascript(tmp_path):
     assert done.returncode == 0, (
         "the dashboard's script does not parse, so every button on the "
         "console is dead: " + done.stderr.strip())
+
+
+def test_a_swap_keeps_the_reader_where_they_were():
+    """Reading row ninety of the phone table, the operator was thrown
+    back to the top about every thirteen seconds - which is how often the
+    farm moved while it was building. `.slab>.tscroll` is its own
+    scrollport, and a swap builds it again at zero (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function placeNow()" in script and "function placeBack(" in script
+    assert "window.scrollY" in script and "window.scrollTo(0, kept.win)" in script
+    assert "querySelectorAll('.tscroll, .queue')" in script
+    assert "!el.closest('#poolov')" in script, (
+        "the manager's own sheets are viewBack's, not this one's")
+    assert "var kept = openKind, seen = viewNow(), place = placeNow();" in script
+    assert "placeBack(place);" in script
+
+
+def test_the_page_waits_for_a_hand_that_is_moving():
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "var SCROLL_QUIET = 1200;" in script
+    assert "Date.now() - (scrolled.at || 0) < SCROLL_QUIET" in script
+    # Registered once for the tab, not once per swap - `init` runs on
+    # every swap and a listener per swap is a listener per thirty seconds.
+    assert script.count("addEventListener('scroll', scrolled") == 1
+    assert "passive: true" in script, "a scroll listener must not block it"
+    # And a selection the reader made is not thrown away mid-read.
+    assert "window.getSelection" in script
+
+
+def test_the_live_stream_does_not_redraw_faster_than_a_person_reads():
+    """The fingerprint moves every second or two while the farm builds -
+    honest, and far more often than anybody can read (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "var SWAP_FLOOR = 4000;" in script
+    assert "lookAgain(Math.max(250, SWAP_FLOOR - since));" in script
+    assert "swapMain.at = Date.now();" in script
+
+
+def test_the_queued_toast_says_what_actually_happens():
+    """It promised "the next pass starts it within about thirty seconds",
+    which was true when only a pass could write the sheet. A command
+    rings a bell now and a lane takes it - 0.1s to 5s for almost all of
+    them (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    for said in (pages._POOL_SAID["queued"], pages._SAID["queued"],
+                 pages._DASH_SAID["queued"]):
+        assert "thirty" not in said and "next pass" not in said
+        assert "~30s" not in said
+        assert "starts within a second" in said
