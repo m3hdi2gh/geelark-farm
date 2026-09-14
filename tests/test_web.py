@@ -5777,8 +5777,14 @@ def test_one_rows_press_replaces_one_row():
     # A queued answer is the row BEFORE the press - the lane carries it
     # out a moment later - so it is never swapped in, and the page looks
     # again shortly instead (2026-09-14).
-    assert "if (!waiting && isHere(got.url) && key && swapRow(doc, key)) return;"         in script
     assert "if (waiting) lookAgain(2500);" in script
+    # And a refusal is not a row to redraw: it is a sentence to read. The
+    # words that mean nothing changed are a closed list, so a new verb's
+    # success word never lands in it by accident.
+    assert "var worked = !nothing.test(got.url);" in script
+    assert "queued|no|refused|already|gone|off|none|bad|auto" in script
+    assert "if (worked && isHere(got.url) && key && swapRow(doc, key)) {" in script
+    assert "sayIt(doc);" in script, "the answer's own sentence is shown"
     # The chip counts are recounted off the table, so they cannot drift.
     assert "tally[tr.dataset.group]" in script
     # And the row carries the key that finds it.
@@ -5892,3 +5898,83 @@ def test_the_queued_toast_says_what_actually_happens():
         assert "thirty" not in said and "next pass" not in said
         assert "~30s" not in said
         assert "starts within a second" in said
+
+
+# ---------------- a swap must never destroy what the person is doing
+def test_a_swap_keeps_what_was_typed_and_not_yet_sent():
+    """Filling the build card with an account bought this morning, then
+    clicking away to glance at the table: the next tick emptied the card
+    silently, and Build then spent a pool Gmail instead of the one that
+    was typed (the audit, 2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function typedNow()" in script and "function typedBack(" in script
+    assert "el.value !== was" in script, "only what differs from the server's"
+    assert "o.defaultSelected" in script and "el.defaultValue" in script
+    assert "var typed = typedNow();" in script and "typedBack(typed);" in script
+    # A value the dialog added to a select is not in the fresh copy of
+    # it, so it is put back too - or the select falls to its first
+    # option, which is the whole trap.
+    assert "el.insertBefore(made, el.firstChild);" in script
+
+
+def test_a_question_waiting_for_an_answer_holds_the_page():
+    """`askFirst` puts the bubble in `main`, so a swap deleted it
+    mid-read and the press was lost - and with the stream that is
+    seconds, not thirty (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "document.querySelector('.mini')" in script
+    assert "|| document.querySelector('dialog[open]')) return false;" in script
+
+
+def test_the_page_is_never_held_silently_for_ever():
+    """A selection is not a gesture - it lasts until they click
+    elsewhere - so the guard that waits for one would wait for ever,
+    while the status line kept its breathing live dot (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "var HELD_CEILING = 20000;" in script
+    assert "function mayRedraw()" in script
+    assert "Date.now() - settled.since > HELD_CEILING" in script
+
+
+def test_the_managers_scroll_is_read_off_the_box_that_scrolls():
+    """`.sheetbody>.tscroll` is overflow:visible on purpose so the sticky
+    headers work, and an overflow:visible box always reports scrollTop 0
+    - so the manager's place was never actually kept (2026-09-14)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert script.count("sheet.querySelector('.sheetbody')") >= 2
+    assert "|| sheet.querySelector('.tscroll')" in script, "the fallback"
+    # And reopening the sheet must not focus the paste box, which scrolls
+    # the body back to the top under the restore.
+    assert "function show(kind, fresh)" in script
+    assert "if (fresh === false) return;" in script
+    assert "show(kept, false);" in script
+
+
+def test_the_drawer_refreshes_in_place_instead_of_blinking():
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function openDrawer(href, again)" in script
+    assert "openDrawer(drawerHref, true);" in script
+    assert "var mark = ++openDrawer.turn;" in script, "a stale answer is dropped"
+    assert "if (reading && top) reading.scrollTop = top;" in script
+    assert "if (!again) location.assign(href);" in script, (
+        "a blip while reading does not throw them off the dashboard")
+
+
+def test_a_background_refresh_that_failed_never_lands():
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "if (!r.ok || (r.redirected && !isHere(r.url))) return null;" in script
+    assert "if (html === null) { lookAgain(5000); return; }" in script
+    # Asked again when the answer comes back, not only before it is sent.
+    assert "if (!settled()) { lookAgain(5000); return; }" in script

@@ -1981,7 +1981,7 @@ _DASH_SCRIPT = """
   addEventListener('wheel', scrolled, {capture: true, passive: true});
   addEventListener('touchmove', scrolled, {capture: true, passive: true});
 
-  function settled(){
+  function mayRedraw(){
     var o = ov();
     // Anything the keyboard is on inside the page, not just a box to type
     // in: the swap replaces every child of `main`, so a redraw threw the
@@ -1995,6 +1995,12 @@ _DASH_SCRIPT = """
       && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(live.tagName) >= 0
           || (!!main && main.contains(live)
               && live.matches(':focus-visible')));
+    // A question waiting for an answer. `askFirst` puts the bubble in
+    // `main`, so a swap deletes it mid-read and the press is lost - and
+    // with the live stream that is a few seconds, not thirty
+    // (2026-09-14).
+    if (document.querySelector('.mini')
+        || document.querySelector('dialog[open]')) return false;
     // A hand on the wheel. The place is put back after a swap, but a
     // redraw in the middle of the gesture still stutters under it, and
     // nothing is so urgent that it cannot wait for the scroll to stop.
@@ -2003,6 +2009,23 @@ _DASH_SCRIPT = """
     var picked = window.getSelection && window.getSelection();
     if (picked && !picked.isCollapsed && String(picked).trim().length > 1)
       return false;
+    return true;
+  }
+  // Every one of the tests above is a reason to wait, and a person can
+  // leave any of them standing for ever - a selection is not a gesture,
+  // it lasts until they click elsewhere. A page that waits for ever
+  // still shows a breathing green dot, so it reads as live while it has
+  // quietly stopped. The ceiling is what keeps the promise: held while
+  // you are busy, never held silently (2026-09-14).
+  var HELD_CEILING = 20000;
+  function settled(){
+    if (mayRedraw()) { settled.since = 0; return true; }
+    settled.since = settled.since || Date.now();
+    if (Date.now() - settled.since > HELD_CEILING) {
+      settled.since = 0;
+      return true;
+    }
+    return false;
     // The drawer holds no box to type in, so a page frozen behind it is
     // a build nobody can watch move. A manager still holds the page: it
     // has a paste box and an editor in it (2026-09-07).
@@ -2084,7 +2107,7 @@ _DASH_SCRIPT = """
     var page = document.querySelector('.wide');
     if (page) page.inert = !!off;
   }
-  function show(kind){
+  function show(kind, fresh){
     var o = ov(); if (!o) return;
     o.querySelectorAll('.sheet').forEach(function(el){
       el.hidden = el.dataset.sheet !== kind;
@@ -2097,6 +2120,11 @@ _DASH_SCRIPT = """
     // the search unless `focusAdd` was passed, and nothing passed it any
     // more - so a pasted line filtered the list instead of entering it.
     // The `/` shortcut still reaches the search (2026-09-07).
+    // Only when a person opened it. A swap reopens the sheet behind
+    // them, and focusing the paste box there scrolls the body back to
+    // the top - undoing the very place `viewBack` is about to restore
+    // (2026-09-14).
+    if (fresh === false) return;
     var box = open.querySelector('.addbox textarea')
            || open.querySelector('.poolfind');
     if (box) box.focus();
@@ -2192,14 +2220,38 @@ _DASH_SCRIPT = """
   // The phone's own page, in a drawer. Its forms post like any other
   // and land back on the dashboard, which reopens the drawer refreshed.
   var drawerHref = null;
-  function openDrawer(href){
+  // `again` is a swap reopening the drawer somebody is already reading,
+  // not a serial they just clicked. Reading a phone's story, the drawer
+  // vanished with its backdrop and slid back in every few seconds, at
+  // the top, with its folds shut and the focus on the heading - because
+  // a swap rebuilds `#poolov` and this was called afresh each time
+  // (2026-09-14).
+  function openDrawer(href, again){
     var o = ov(); if (!o) return;
     var sheet = o.querySelector('.sheet[data-sheet="phone"]');
     if (!sheet) { location.assign(href); return; }
     drawerHref = href;
+    // Held open across the refetch, so there is no blink and no gap onto
+    // the page underneath.
+    if (again) {
+      o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = el !== sheet; });
+      o.classList.add('right');
+      o.hidden = false; openKind = 'phone'; behind(true);
+    }
+    var mark = ++openDrawer.turn;
     fetch(href, {credentials: 'same-origin'})
-      .then(function(r){ return r.text(); })
+      .then(function(r){
+        // A session that ended while the drawer was open goes to the
+        // sign-in page, not into the drawer.
+        if (r.redirected && /\\/login(\\?|$)/.test(r.url)) {
+          location.assign(r.url); return null;
+        }
+        return r.ok ? r.text() : null;
+      })
       .then(function(html){
+        // A later click already asked for another phone: this answer is
+        // last week's news and must not land on top of it.
+        if (html === null || mark !== openDrawer.turn) return;
         var doc = parse(html), main = doc.querySelector('main');
         if (!main) { location.assign(href); return; }
         var h2 = main.querySelector('.top h2');
@@ -2211,6 +2263,13 @@ _DASH_SCRIPT = """
           hint, head ? Array.prototype.slice.call(head.childNodes) : []);
         var body = sheet.querySelector('[data-drawer]');
         if (!body) { location.assign(href); return; }
+        // Where they were in the story, and which folds they had open.
+        var reading = sheet.querySelector('.sheetbody');
+        var top = reading ? reading.scrollTop : 0;
+        var open = [];
+        body.querySelectorAll('details[open]').forEach(function(d){
+          open.push((d.querySelector('summary') || {}).textContent || '');
+        });
         var nodes = [];
         if (acts) { acts.className = 'acts'; nodes.push(acts); }
         Array.prototype.slice.call(main.children).forEach(function(n){
@@ -2227,13 +2286,27 @@ _DASH_SCRIPT = """
         o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = el !== sheet; });
         o.classList.add('right');
         o.hidden = false; openKind = 'phone'; behind(true);
+        if (again) {
+          body.querySelectorAll('details').forEach(function(d){
+            var word = (d.querySelector('summary') || {}).textContent || '';
+            if (open.indexOf(word) >= 0) d.open = true;
+          });
+          if (reading && top) reading.scrollTop = top;
+          return;               // and the focus stays where they put it
+        }
         // Its own heading, not its first button: a stray Enter after the
         // drawer opened pressed whatever that button was (2026-09-07).
         var head = sheet.querySelector('[data-title]');
         if (head) { head.tabIndex = -1; head.focus(); }
       })
-      .catch(function(){ location.assign(href); });
+      .catch(function(){
+        // A blip while reading is not a reason to throw them off the
+        // dashboard: the drawer keeps what it has and the next tick
+        // tries again.
+        if (!again) location.assign(href);
+      });
   }
+  openDrawer.turn = 0;
 
   // A sheet can show a page of its own - the preview of a paste, the
   // "are you sure" of a remove - in place of its list, and come back.
@@ -2298,6 +2371,69 @@ _DASH_SCRIPT = """
     if (kept.win) window.scrollTo(0, kept.win);
   }
 
+  // Anything typed and not yet sent. A swap replaces every child of
+  // `main`, and the guard only holds while the box still has the
+  // keyboard - click away from the build card to glance at the table and
+  // the next tick empties it. Worst of all silently: the Gmail select
+  // goes back to "auto", the hidden password and secret boxes are blank,
+  // and Build then spends a pool address instead of the one that was
+  // typed (2026-09-14).
+  //
+  // Only what differs from what the server drew, so a page that has been
+  // touched by nobody restores nothing.
+  function typedNow(){
+    var here = document.querySelector('main');
+    if (!here) return [];
+    var kept = [];
+    here.querySelectorAll('input, textarea, select').forEach(function(el){
+      if (!el.name || el.type === 'hidden' && !el.value) return;
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        if (el.checked !== el.defaultChecked)
+          kept.push({key: whichField(el), on: el.checked});
+        return;
+      }
+      var was = el.tagName === 'SELECT'
+        ? (Array.prototype.filter.call(el.options, function(o){
+            return o.defaultSelected; })[0] || {}).value || ''
+        : el.defaultValue;
+      if (el.value !== was)
+        kept.push({key: whichField(el), value: el.value,
+                   word: el.tagName === 'SELECT' && el.selectedOptions[0]
+                     ? el.selectedOptions[0].textContent : ''});
+    });
+    return kept;
+  }
+  function whichField(el){
+    var form = el.form;
+    return (form ? (form.getAttribute('action') || '') : '') + '|' + el.name;
+  }
+  function typedBack(kept){
+    if (!kept || !kept.length) return;
+    var here = document.querySelector('main');
+    if (!here) return;
+    var by = {};
+    here.querySelectorAll('input, textarea, select').forEach(function(el){
+      if (el.name && !(whichField(el) in by)) by[whichField(el)] = el;
+    });
+    kept.forEach(function(was){
+      var el = by[was.key];
+      if (!el) return;
+      if ('on' in was) { el.checked = was.on; return; }
+      // A value the dialog added to the list is not in the fresh copy of
+      // it, so it is put back too - or the select would silently fall to
+      // its first option, which is the whole trap.
+      if (el.tagName === 'SELECT'
+          && !Array.prototype.some.call(el.options, function(o){
+               return o.value === was.value; })) {
+        var made = document.createElement('option');
+        made.value = was.value;
+        made.textContent = was.word || was.value;
+        el.insertBefore(made, el.firstChild);
+      }
+      el.value = was.value;
+    });
+  }
+
   function viewNow(){
     var seen = {};
     document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
@@ -2305,7 +2441,13 @@ _DASH_SCRIPT = """
       var on = sheet.querySelector('.filters .pill[aria-pressed="true"]');
       var find = sheet.querySelector('.poolfind');
       var seller = sheet.querySelector('.sellerpick');
-      var scroll = sheet.querySelector('.tscroll');
+      // `.sheetbody` is the scrollport, not `.tscroll`: the CSS gives
+      // `.sheetbody>.tscroll` overflow:visible on purpose so the sticky
+      // headers work, and an overflow:visible box always reports a
+      // scrollTop of zero. So this saved nothing at all, every time
+      // (2026-09-14).
+      var scroll = sheet.querySelector('.sheetbody')
+                || sheet.querySelector('.tscroll');
       seen[kind] = {group: on ? on.dataset.group : null,
                     find: find ? find.value : '',
                     seller: seller ? seller.value : '',
@@ -2333,7 +2475,9 @@ _DASH_SCRIPT = """
         : pickData(sheet, '.filters .pill[data-group]', 'group', was.group);
       if (chip) chip.click();
       else if (find) find.dispatchEvent(new Event('input'));
-      var scroll = sheet.querySelector('.tscroll');
+      var scroll = sheet.querySelector('.sheetbody')
+                || sheet.querySelector('.tscroll');
+      // After the chip's re-sift, which changes how tall the body is.
       if (scroll && was.top) scroll.scrollTop = was.top;
     });
   }
@@ -2374,14 +2518,16 @@ _DASH_SCRIPT = """
       location.reload(); return;
     }
     var kept = openKind, seen = viewNow(), place = placeNow();
+    var typed = typedNow();
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
     });
     var mini = document.querySelector('.mini'); if (mini) mini.remove();
     here.replaceChildren.apply(here, nodes);
     init();
-    if (kept === 'phone' && drawerHref) openDrawer(drawerHref);
-    else if (kept && kept !== 'send') show(kept);
+    if (kept === 'phone' && drawerHref) openDrawer(drawerHref, true);
+    else if (kept && kept !== 'send') show(kept, false);
+    typedBack(typed);
     viewBack(seen);
     placeBack(place);
     swapMain.at = Date.now();
@@ -2391,6 +2537,18 @@ _DASH_SCRIPT = """
   // A Test or a Free is about a single exit, and swapping the whole of
   // `main` for it is why the list jumped. The fresh document already
   // holds that row; take it and leave everything else alone.
+  // The banner the answer came with, put where the page shows banners.
+  // A one-row swap replaced the row and dropped everything else the
+  // server had said about it.
+  function sayIt(doc){
+    var said = doc.querySelector('main .said');
+    var here = document.querySelector('main');
+    if (!said || !here) return;
+    var old = here.querySelector('.said');
+    if (old) old.replaceWith(said);
+    else here.insertBefore(said, here.firstChild);
+  }
+
   function swapRow(doc, key){
     var mine = pickData(document, '#poolov tr[data-key]', 'key', key);
     var theirs = pickData(doc, '#poolov tr[data-key]', 'key', key);
@@ -2416,9 +2574,25 @@ _DASH_SCRIPT = """
   }
   function reload(){
     fetch(location.pathname + location.search, {credentials: 'same-origin'})
-      .then(function(r){ return r.text(); })
-      .then(function(html){ swapMain(parse(html)); })
-      .catch(function(){ location.reload(); });
+      .then(function(r){
+        // A session that ended, or a store that is down while the farm
+        // keeps building: neither is a reason to swap the dashboard for
+        // a sign-in card or an error page nobody asked for. The page
+        // keeps what it has and looks again shortly (2026-09-14).
+        if (r.redirected && /\\/login(\\?|$)/.test(r.url)) {
+          location.assign(r.url); return null;
+        }
+        if (!r.ok || (r.redirected && !isHere(r.url))) return null;
+        return r.text();
+      })
+      .then(function(html){
+        if (html === null) { lookAgain(5000); return; }
+        // Asked again, because the answer took a moment to come back and
+        // a hand may have arrived on the page meanwhile.
+        if (!settled()) { lookAgain(5000); return; }
+        swapMain(parse(html));
+      })
+      .catch(function(){ lookAgain(5000); });
   }
   function isHere(url){
     try { return new URL(url, location.href).pathname === '/'; }
@@ -2667,7 +2841,22 @@ _DASH_SCRIPT = """
         if (waiting) lookAgain(2500);
         // One row's press, already carried out: put that row back and
         // leave the rest of the page alone.
-        if (!waiting && isHere(got.url) && key && swapRow(doc, key)) return;
+        //
+        // Only when it actually did something. The shortcut was taken
+        // for anything that was not `queued`, so a refusal - `said=no`,
+        // `refused`, `already`, a 409 from the verb - redrew the row
+        // exactly as it was and threw away the sentence that said why.
+        // The press looked like it had simply done nothing (2026-09-14).
+        //
+        // Named the other way round on purpose: the words that mean
+        // nothing changed are a short closed list, and the ones that
+        // mean something did are added to every time a verb is.
+        var nothing = /[?&]said=(queued|no|refused|already|gone|off|none|bad|auto)/;
+        var worked = !nothing.test(got.url);
+        if (worked && isHere(got.url) && key && swapRow(doc, key)) {
+          sayIt(doc);
+          return;
+        }
         if (isHere(got.url)) { swapMain(doc); return; }
         // Not the dashboard: a preview, a confirm, a refusal. Inside the
         // sheet it came from, if it came from one; else in place of the
