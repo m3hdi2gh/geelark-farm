@@ -1084,3 +1084,18 @@ def test_an_idempotency_key_belongs_to_the_call_it_was_first_sent_on(
     kept["row"] = None
     assert write_mod.replay(settings, client_id=1, key="k",
                             method="POST", path="/accounts") is None
+
+
+def test_spotify_is_a_product_the_door_accepts_and_holds_as_blocked():
+    """The panel will sell Spotify accounts one day; until the farm can
+    sign into the app, a POST for one is stored and reported `blocked`,
+    exactly like claude - never a 422 that makes the panel special-case
+    it (the operator, 2026-09-14)."""
+    from geelark_farm.web import api_v1_read as read_mod
+
+    assert "spotify" in read_mod.PRODUCTS
+    assert read_mod.SERVED["spotify"] == ()
+    assert read_mod.state_of({"status": "", "credential_kind": "password_totp",
+                              "product": "spotify"}) == "blocked"
+    assert read_mod.state_of({"status": "", "credential_kind": "password_totp",
+                              "product": "chatgpt"}) == "queued"

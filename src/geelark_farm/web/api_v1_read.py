@@ -55,8 +55,11 @@ _DIRECT = {
 #: panel sees the truth rather than a queue that never moves.
 CREDENTIAL_KINDS = ("password_totp", "google_backup_codes",
                     "email_code_auto", "email_code_customer")
-PRODUCTS = ("chatgpt", "claude")
-SERVED = {"chatgpt": ("password_totp",), "claude": ()}
+#: `spotify` is accepted since 2026-09-15 so the panel can send it from
+#: day one and see `blocked` rather than a 422; its sign-in flow does not
+#: exist yet, so it serves nothing (the operator, 2026-09-14).
+PRODUCTS = ("chatgpt", "claude", "spotify")
+SERVED = {"chatgpt": ("password_totp",), "claude": (), "spotify": ()}
 
 #: The kind whose code comes from a person, so the account waits for the
 #: panel to say that person is at their keyboard.
