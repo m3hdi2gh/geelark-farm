@@ -512,8 +512,13 @@ def test_a_kind_the_farm_cannot_serve_yet_is_blocked_not_queued():
     """The panel sees the truth rather than a queue that never moves."""
     say = read_mod.state_of
     assert say(_account(credential_kind="google_backup_codes")) == "blocked"
+    assert say(_account(product="spotify",
+                        credential_kind="password_totp")) == "blocked"
+    # claude + email_code_customer is served since 2026-09-16: not
+    # blocked, but waiting for its customer.
     assert say(_account(product="claude",
-                        credential_kind="email_code_customer")) == "blocked"
+                        credential_kind="email_code_customer")
+               ) == "waiting_customer"
     assert read_mod.blocked_of(
         _account(credential_kind="email_code_auto")) == "kind_not_served_yet"
     assert read_mod.blocked_of(_account()) is None

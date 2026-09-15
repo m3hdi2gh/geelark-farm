@@ -48,7 +48,11 @@ GOOGLE_DOMAINS = ("gmail.com", "googlemail.com")
 #: the rest as `blocked`; the pool reads the same table so a blocked row
 #: is never handed to a phone (it was - the API said blocked while the
 #: claim did not know the word, 2026-09-16). A product goes live here.
-SERVED = {"chatgpt": ("password_totp",), "claude": (), "spotify": ()}
+SERVED = {"chatgpt": ("password_totp",),
+          # Since 2026-09-16: flows/claude_login.py, the code answered by
+          # the panel (store.codes).
+          "claude": ("email_code_customer",),
+          "spotify": ()}
 
 #: The kind whose code a person supplies through the panel: the account
 #: waits until the panel says that person is at their keyboard

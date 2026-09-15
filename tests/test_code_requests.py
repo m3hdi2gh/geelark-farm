@@ -228,17 +228,12 @@ def test_held_back_is_blocked_or_waiting_customer_and_nothing_else():
     assert not domain.held_back("", "", False)
     assert not domain.held_back("chatgpt", "password_totp", False)
     assert domain.held_back("chatgpt", "google_backup_codes", True), "not served"
-    assert domain.held_back("claude", "email_code_customer", True), "not served"
-    assert domain.held_back("spotify", "password_totp", True)
-    # Once claude serves the customer-answered kind, the customer decides.
-    served = dict(domain.SERVED)
-    domain.SERVED["claude"] = ("email_code_customer",)
-    try:
-        assert domain.held_back("claude", "email_code_customer", False)
-        assert not domain.held_back("claude", "email_code_customer", True)
-    finally:
-        domain.SERVED.clear()
-        domain.SERVED.update(served)
+    assert domain.held_back("spotify", "password_totp", True), "not served"
+    assert domain.held_back("claude", "password_totp", True), "not served"
+    # Claude serves the customer-answered kind (2026-09-16): the customer
+    # decides.
+    assert domain.held_back("claude", "email_code_customer", False)
+    assert not domain.held_back("claude", "email_code_customer", True)
 
 
 def test_the_pool_leaves_held_back_accounts_where_they_are(monkeypatch):
@@ -251,7 +246,7 @@ def test_the_pool_leaves_held_back_accounts_where_they_are(monkeypatch):
     table = MemoryTable()
     table.add("app", address="free@x.com", password="p", totp_secret="")
     table.add("app", address="blocked@x.com", password="", totp_secret="",
-              product="claude", credential_kind="email_code_customer",
+              product="spotify", credential_kind="password_totp",
               customer_ready=True)
     table.add("app", address="notyet@x.com", password="", totp_secret="",
               product="chatgpt", credential_kind="email_code_customer",
@@ -261,11 +256,13 @@ def test_the_pool_leaves_held_back_accounts_where_they_are(monkeypatch):
 
     assert [r.values["Address"] for r in pool.available] == ["free@x.com"]
     sql, params = pool.held_back()
-    assert "(coalesce(product, 'chatgpt'), credential_kind) IN ((%s, %s))" in sql
+    assert ("(coalesce(product, 'chatgpt'), credential_kind) IN "
+            "((%s, %s), (%s, %s))") in sql
     assert "coalesce(credential_kind, '') = ''" in sql
     assert "NOT (coalesce(credential_kind, '') = %s" in sql
     assert "AND NOT coalesce(customer_ready, false))" in sql
-    assert params == ("chatgpt", "password_totp", "email_code_customer")
+    assert params == ("chatgpt", "password_totp", "claude",
+                      "email_code_customer", "email_code_customer")
 
 
 def test_the_real_table_appends_the_pools_condition_to_claim_and_count():

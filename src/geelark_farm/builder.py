@@ -794,10 +794,12 @@ def _sign_into_app(session: _Session) -> Build | None:
                 _give_back_condemned(s)
                 return s.finish("no_usable_gpt",
                                 "the Gpt Info tab has no unused account left")
-        log.info("signing into the app as %s", s.app_row.credentials.email)
-        outcome = chatgpt_login.sign_in(
+        flow, package = _flow_for(s.settings, s.app_row)
+        log.info("signing into %s as %s", package,
+                 s.app_row.credentials.email)
+        outcome = flow.sign_in(
             s.client, s.phone_id, s.app_row.credentials,
-            package=s.settings.target_package,
+            package=package,
             budget_seconds=min(s.settings.app_login_budget_seconds,
                                s.remaining()),
             artifact_dir=s.artifacts,
@@ -1310,6 +1312,25 @@ def _touch_method(phone_id: str) -> str:
 #: A pause before the first address, different for each, spreads them
 #: (2026-09-11). Nothing when the cadence is off.
 SIGN_IN_STAGGER_SECONDS = (2.0, 40.0)
+
+
+def _product_of(app_row) -> str:
+    """Which product an account row is for: the panel's `product` column,
+    read through the pool's "Product" value; a row with none is the
+    console's and the sheet's, and those were always ChatGPT."""
+    values = getattr(app_row, "values", None) or {}
+    return str(values.get("Product") or "").strip().lower() or "chatgpt"
+
+
+def _flow_for(settings: Settings, app_row):
+    """The sign-in flow and the package for this account's product. One
+    place, so a third product is one more line here and not a fourth copy
+    of the sign-in loop (flows/claude_login.py, 2026-09-16)."""
+    if _product_of(app_row) == "claude":
+        from .flows import claude_login
+
+        return claude_login, CLAUDE_PACKAGE
+    return chatgpt_login, settings.target_package
 
 
 def _package_for(settings: Settings, app: str) -> str:

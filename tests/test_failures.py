@@ -105,7 +105,10 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # box the dump left out, once claimed by `dismissable` for its NEXT
     # (2026-09-10).
     assert "stuck_on_password_without_a_box" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 26
+    # The twenty-seventh is `code_entry`: the Claude flow's code page, which
+    # comes straight back after every refused code (2026-09-16).
+    assert "stuck_on_code_entry" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 27
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])
