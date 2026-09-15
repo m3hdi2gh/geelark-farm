@@ -439,8 +439,11 @@ class _Handler(BaseHTTPRequestHandler):
                 # One press: start the phone in GeeLark, take it, and hand
                 # the live-view link to the tab that is waiting for it.
                 serial = self.path[len("/phones/"):-len("/boot")]
-                held = self._held_by_somebody_else(user, serial)
-                if held:
+                # Boot takes the phone: refused on anybody else's, an
+                # admin's included - ending a hold is theirs (2026-09-15),
+                # taking it over is not.
+                held = self._holder_of(user, serial)[0]
+                if held and held != user.get("username"):
                     return self._refuse(
                         user, "boot_phone", {"serial": serial},
                         f"phone {serial} is with {held}")
@@ -835,12 +838,19 @@ class _Handler(BaseHTTPRequestHandler):
         (2026-09-07). Read here, once, for every door that acts on a
         phone.
         """
+        return self._holder_of(user, serial)[1]
+
+    def _holder_of(self, user: dict, serial: str) -> tuple[str, str]:
+        """(who holds the phone, who holds it against this person). The
+        second is "" for the holder and for an admin (2026-09-15); the
+        first is the name an admin's request carries."""
         try:
             story = read.phone_story(self.settings, serial)
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not read phone %s back (%s)", serial, exc)
-            return ""
-        return pages._theirs(user, (story or {}).get("phone") or {})
+            return "", ""
+        phone = (story or {}).get("phone") or {}
+        return pages._holder(phone), pages._theirs(user, phone)
 
     def _refuse(self, user: dict, verb: str, payload: dict,
                 why: str) -> None:
@@ -865,12 +875,18 @@ class _Handler(BaseHTTPRequestHandler):
         if plan is None or not serial.isdigit():
             return self._html(404, pages.page(
                 "404", "<h2>Not a State word</h2>", user=user))
-        held = self._held_by_somebody_else(user, serial)
-        if held:
+        held, theirs = self._holder_of(user, serial)
+        if theirs:
             return self._refuse(
                 user, "set_phone_state", {"serial": serial, "state": state},
-                f"phone {serial} is with {held} - the three ways a phone "
+                f"phone {serial} is with {theirs} - the three ways a phone "
                 f"comes back belong to whoever is holding it")
+        payload = {"serial": serial, "state": state}
+        if held and held != user.get("username"):
+            # An admin ending somebody else's hold (2026-09-15): said on
+            # the request, so whoever comes back to find their phone
+            # gone can read who did it and why.
+            payload["held_by"] = held
         back = _phone_back(field, serial)
         if plan["sure"] and field.get("sure") != "1":
             return self._html(200, pages.confirm_page(
@@ -880,8 +896,7 @@ class _Handler(BaseHTTPRequestHandler):
                 button=f"Yes, phone {serial} is {state}", back=back))
         if state == "unused":
             self._power_off(user, serial)
-        return self._act(user, "may_take_phones", "set_phone_state",
-                         {"serial": serial, "state": state},
+        return self._act(user, "may_take_phones", "set_phone_state", payload,
                          idem=self._minute_key(user, f"state-{state}", serial),
                          back=back, said_word=plan["said"])
 

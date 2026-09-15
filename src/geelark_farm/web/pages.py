@@ -1511,25 +1511,36 @@ def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
             _state_form(user, serial, "failed", back)]
 
 
+def _holder(row: dict) -> str:
+    """Who is holding this phone - its owner's name while it is taken,
+    "somebody" for a taken phone with no name on it, "" otherwise."""
+    if (row.get("state") or "") != "taken":
+        return ""
+    return str(row.get("owner") or "") or "somebody"
+
+
 def _theirs(user: dict, row: dict) -> str:
-    """The name of whoever else is holding this phone, or "".
+    """The name of whoever else is holding this phone, when that keeps
+    this person's hands off it - or "".
 
     The rule was written inside `_row_actions` and enforced only there, so
     the table refused a colleague's phone and the phone's own page offered
     Done and Failed on it - and Failed deletes the phone within seconds
     and frees the account on it. One contract, one function (2026-09-07).
 
-    No exception for an admin, which is how the table has always read it:
-    the three ways a phone comes back belong to whoever is holding it, and
-    an admin taking one out from under somebody is the same surprise
-    whatever their role.
+    An admin is the exception, since 2026-09-15: operators forget phones
+    (see forgotten.py), and the person running the farm needs to end a
+    hold without waiting for whoever took it - Release, Done or Failed on
+    anybody's phone. The row still says whose it is, and the request
+    records that it was taken from under them. For everybody else the
+    three ways a phone comes back belong to whoever is holding it.
     """
-    if (row.get("state") or "") != "taken":
+    holder = _holder(row)
+    if not holder or holder == str(user.get("username") or ""):
         return ""
-    owner = str(row.get("owner") or "")
-    if owner and owner == str(user.get("username") or ""):
+    if user.get("role") == "admin":
         return ""
-    return owner or "somebody"
+    return holder
 
 
 def _row_actions(user: dict, row: dict, back: str = "/") -> str:
@@ -4569,8 +4580,13 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
     if verb == "boot_phone":
         return f"Boot phone {p.get('serial', '?')}", "start it and take it"
     if verb == "set_phone_state":
+        # An admin ending somebody else's hold: the request says whose
+        # phone it was, so the Requests page answers "who released my
+        # phone" without a search.
+        held = str(p.get("held_by") or "")
         return (f"Mark phone {p.get('serial', '?')} "
-                f"{p.get('state') or 'unused'}"), ""
+                f"{p.get('state') or 'unused'}"), (
+            f"it was with {held}" if held else "")
     if verb == "clear_tries":
         return f"Clear tries on {p.get('serial', '?')}", ""
     return verb.replace("_", " ").capitalize(), ""
@@ -7143,7 +7159,11 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
         actions = [f'<span class="age">with {esc(held_by)}</span>']
     elif phone and not phone.get("done_at"):
         building = (phone.get("status") or "") == "building"
-        if not building and _may(user, "may_take_phones"):
+        # Boot starts the phone and takes it. Its holder reopens the
+        # screen with it; an admin on somebody else's phone may end the
+        # hold (2026-09-15), not take it over.
+        mine = _holder(phone) in ("", str(user.get("username") or ""))
+        if not building and mine and _may(user, "may_take_phones"):
             actions.append(_boot_form(user, serial))
         actions += _state_forms(user, dict(phone, serial=serial), back)
         if _may(user, "may_change_proxy") and not building:

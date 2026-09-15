@@ -1713,13 +1713,19 @@ def test_the_story_offers_the_phone_buttons_and_returns_there(web,
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 63)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True,
+                         "may_change_proxy": True,
+                         "may_login_accounts": True})
     client = web()
-    client.login()
-    # 1523 is taken by "ali" and the reader is not ali. The table has
-    # always answered that with the holder's name and no buttons; this
-    # page answered it with Done and Failed - and Failed deletes the phone
-    # at the next sync and frees the account on it. One contract, both
-    # surfaces (2026-09-07).
+    client.login(username="sara")
+    # 1523 is taken by "ali" and the reader is another operator. The
+    # table has always answered that with the holder's name and no
+    # buttons; this page answered it with Done and Failed - and Failed
+    # deletes the phone at the next sync and frees the account on it.
+    # One contract, both surfaces (2026-09-07). An admin is the one
+    # exception, since 2026-09-15 - tested below.
     _, _, body = client.request("GET", "/phones/1523")
     assert "with ali" in body
     for door in ("boot", "state", "proxy"):
@@ -1737,6 +1743,24 @@ def test_the_story_offers_the_phone_buttons_and_returns_there(web,
     assert status == 303
     assert dict(headers)["Location"] == "/?said=refused"
     assert got == {}, "nothing was queued against somebody else's phone"
+
+    # The admin sees the three ways back on ali's phone, and the press
+    # lands - with ali's name on the request.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 7, "username": "mehdi", "role": "admin",
+                         "sees": "all"})
+    admin = web()
+    admin.login()
+    _, _, body = admin.request("GET", "/phones/1523")
+    assert 'action="/phones/1523/state"' in body
+    assert 'action="/phones/1523/boot"' not in body, "taken: not Boot"
+    status, headers, _ = admin.request(
+        "POST", "/phones/1523/state",
+        _form(csrf=admin.csrf(), state="failed", sure="1",
+              back="/phones/1523"))
+    assert status == 303 and "refused" not in dict(headers)["Location"]
+    assert {k: got["payload"][k] for k in ("serial", "state", "held_by")} == {
+        "serial": "1523", "state": "failed", "held_by": "ali"}
 
 
     monkeypatch.setattr(FakeStore, "user",
@@ -2587,12 +2611,16 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_a_phone_somebody_else_holds_offers_only_their_name(web, monkeypatch):
     """The three ways a phone comes back belong to the person holding it.
-    Offering them to anybody else is offering to act on a phone that is
-    not theirs (the contract, 2026-09-05)."""
+    Offering them to another operator is offering to act on a phone that
+    is not theirs (the contract, 2026-09-05)."""
     _dash(monkeypatch, phones=[{"serial": "1501", "status": "ready",
                                 "state": "taken", "owner": "ali"}])
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True,
+                         "may_change_proxy": True})
     client = web()
-    client.login()
+    client.login(username="sara")
     _, _, body = client.request("GET", "/")
     start = body.index('href="/phones/1501"')
     row = body[start:body.index("</tr>", start)]
@@ -2600,6 +2628,54 @@ def test_a_phone_somebody_else_holds_offers_only_their_name(web, monkeypatch):
     for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
         assert f">{label}<" not in row, label
     assert 'class="badge manual" title="Ready">With ali</span>' in row
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_an_admin_may_end_anybody_s_hold_from_the_table(web, monkeypatch):
+    """Operators forget phones; the person running the farm needs to
+    release, close or write off one without waiting for whoever took it
+    (the operator, 2026-09-15). The row still says whose it is, and the
+    two that delete the phone still ask first. Boot, Take and Change IP
+    stay off a taken row, as they are for its holder."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[{"serial": "1501", "status": "ready",
+                                "state": "taken", "owner": "ali"}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 64)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    start = body.index('href="/phones/1501"')
+    row = body[start:body.index("</tr>", start)]
+    for label in ("Release", "Done", "Failed"):
+        assert f">{label}<" in row, label
+    for label in ("Boot", "Take", "Change IP"):
+        assert f">{label}<" not in row, label
+    assert '<span class="age">with ali</span>' not in row
+    assert 'title="Ready">With ali</span>' in row, "still says whose it is"
+
+    # The POST goes through, and the request says whose phone it was.
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "taken", "owner": "ali"},
+        "timeline": []})
+    status, headers, _ = client.request(
+        "POST", "/phones/1501/state",
+        _form(csrf=client.csrf(), state="unused", back="/"))
+    assert status == 303 and "refused" not in dict(headers)["Location"]
+    assert got["verb"] == "set_phone_state"
+    assert got["payload"]["held_by"] == "ali"
+    assert got["payload"]["state"] == "unused"
+    from geelark_farm.web import pages as pages_mod
+
+    head, aside = pages_mod.describe("set_phone_state", got["payload"])
+    assert (head, aside) == ("Mark phone 1501 unused", "it was with ali")
+    # Their own phone carries no such note.
+    assert pages_mod.describe("set_phone_state",
+                              {"serial": "1501", "state": "done"}) == (
+        "Mark phone 1501 done", "")
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
