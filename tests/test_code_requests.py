@@ -208,11 +208,16 @@ def test_the_schema_carries_the_request_table():
 
     sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
         encoding="utf-8")
-    assert "CREATE TABLE IF NOT EXISTS code_requests" in sql
-    for column in ("asked_at", "until", "tries_left", "code", "answered_at",
-                   "closed_at", "outcome"):
-        assert f"\n    {column} " in sql[sql.index("code_requests ("):]
-    assert "ON code_requests (lower(address)) WHERE closed_at IS NULL" in sql
+    # The table is the "codes" one from before the panel existed; the
+    # code path's shape is added to it column by column, because a second
+    # CREATE TABLE IF NOT EXISTS was a no-op and the index on a column
+    # the old table lacked failed at every start (2026-09-16).
+    assert sql.count("CREATE TABLE IF NOT EXISTS code_requests") == 1
+    for column in ("machine", "until", "tries_left", "closed_at", "outcome"):
+        assert f"ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS {column}" in sql
+    assert ("CREATE INDEX IF NOT EXISTS code_requests_waiting\n"
+            "    ON code_requests (lower(address)) WHERE closed_at IS NULL") in sql
+    assert "code_requests_open" in sql, "the old index keeps its name"
 
 
 # ------------------------------------------------------- what the pool holds

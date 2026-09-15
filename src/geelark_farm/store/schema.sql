@@ -825,17 +825,18 @@ UPDATE phones SET running_since = now()
 -- `code` into it; `closed_at`/`outcome` say how the wait ended (typed,
 -- wrong, timeout, superseded). Never deleted: how long a customer takes
 -- to answer is worth knowing. store/codes.py.
-CREATE TABLE IF NOT EXISTS code_requests (
-    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    address     text NOT NULL,
-    machine     text NOT NULL DEFAULT '',
-    asked_at    timestamptz NOT NULL DEFAULT now(),
-    until       timestamptz NOT NULL,
-    tries_left  integer NOT NULL DEFAULT 3,
-    code        text,
-    answered_at timestamptz,
-    closed_at   timestamptz,
-    outcome     text NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS code_requests_open
+--
+-- The table itself is the one made above ("codes"), which nothing ever
+-- wrote to: a second CREATE TABLE IF NOT EXISTS was a no-op against it
+-- and the index on `closed_at` failed at every start (2026-09-16). So
+-- the new shape is added to the old, column by column, and the old
+-- columns (deadline, answered_by, refusal) stay, unused.
+ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS machine    text NOT NULL DEFAULT '';
+ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS until      timestamptz NOT NULL DEFAULT now();
+ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS tries_left integer NOT NULL DEFAULT 3;
+ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS closed_at  timestamptz;
+ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS outcome    text NOT NULL DEFAULT '';
+-- Its own name: `code_requests_open` is the old index, and IF NOT EXISTS
+-- goes by the name.
+CREATE INDEX IF NOT EXISTS code_requests_waiting
     ON code_requests (lower(address)) WHERE closed_at IS NULL;
