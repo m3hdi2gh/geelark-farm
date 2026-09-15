@@ -1180,11 +1180,24 @@ def test_the_code_the_customer_gave_reaches_the_waiting_flow(web,
     assert status == 409 and body["error"]["code"] == "invalid_state"
     assert body["error"]["state"] == "ready"
 
+    # The window closed on the last attempt: 410, as the contract says.
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref, **k: _account(status="code_timeout"))
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "482913"})
+    assert status == 410 and body["error"]["code"] == "expired"
+    assert body["error"] == {"code": "expired",
+                             "message": "the window closed; the account has "
+                                        "moved to needs_human",
+                             "state": "needs_human", "reason": "code_timeout"}
+
+    # ...and while the code was on its way.
     monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _waiting())
     monkeypatch.setattr(write_mod, "supply_code", lambda *a, **k: False)
     status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
                             {"code": "482913"})
-    assert status == 409 and "stopped waiting" in body["error"]["message"]
+    assert status == 410 and body["error"]["code"] == "expired"
+    assert "on its way" in body["error"]["message"]
 
 
 @pytest.mark.parametrize("web", [WRITE_ON], indirect=True)

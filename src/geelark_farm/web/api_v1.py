@@ -32,6 +32,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
+from ..store import codes as store_codes
 from . import api_v1_read as api_read
 
 log = logging.getLogger(__name__)
@@ -612,6 +613,16 @@ def _do_write(handler, settings, client: dict, rest: str):
             # before anything is written, like every payload here.
             state = api_read.state_of(row)
             if state != "needs_code":
+                reason = str(row.get("status") or "").strip().lower()
+                if reason in store_codes.REASONS:
+                    # The window closed on the last attempt: 410, as the
+                    # contract says, so a bot can tell "too late" from
+                    # "never asked" without reading the state word.
+                    return 410, {"error": {
+                        "code": "expired",
+                        "message": "the window closed; the account has "
+                                   "moved to needs_human",
+                        "state": state, "reason": reason}}
                 return 409, {"error": {"code": "invalid_state",
                                        "message": "it is not waiting for a code",
                                        "state": state}}
@@ -624,9 +635,11 @@ def _do_write(handler, settings, client: dict, rest: str):
                 # The clock ran out between the panel's read and this
                 # write: the flow has given up and released the phone.
                 fresh = api_read.account(settings, panel_ref, sandbox=box)
-                return 409, {"error": {"code": "invalid_state",
-                                       "message": "it stopped waiting for a code",
-                                       "state": api_read.state_of(fresh or row)}}
+                return 410, {"error": {
+                    "code": "expired",
+                    "message": "the window closed while the code was on "
+                               "its way",
+                    "state": api_read.state_of(fresh or row)}}
             fresh = api_read.account(settings, panel_ref, sandbox=box)
             return 202, dict(account_json(fresh or row, sandbox=box),
                              accepted=True)
