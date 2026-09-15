@@ -13,13 +13,15 @@ What is left alone:
 
 - a phone a build or a finish has: `status = building`, or a live claim
   in the ledger. The run switches its own phone off when it is done;
-- a hand-built phone's reservation. It is switched off like any other
-  phone, but stays with the person who asked for it - the build card
-  promised them that phone, and an hour of not using it is not the same
-  as forgetting it;
 - everything, when GeeLark would not list its phones this pass. The
   store's picture of what is on may be stale, and stopping is an API
   call best made against the listing it was decided from.
+
+A hand-built phone is no exception (the operator, 2026-09-15: "release
+the hand-built one too"): the build card wrote it taken for whoever
+asked, and an hour of not using it ends that like any other Take. Its
+clock starts when the row was made, and the sweep never reads a row
+still building, so a long build is not counted against them.
 
 The clock is two columns on the phone row (schema rev 29): `state_at`,
 stamped by every write of `state`, and `running_since`, set by the pass
@@ -39,21 +41,20 @@ ON = (phones_mod.RUNNING, phones_mod.STARTING)
 
 
 def overdue(settings, minutes: int) -> list[dict]:
-    """The phones over the clock: taken by a person (not by a build card)
-    for longer than `minutes`, or on for longer with nobody's run on them.
-    A row still `building` belongs to its run and is never here."""
+    """The phones over the clock: taken for longer than `minutes`, or on
+    for longer with nobody's run on them. A row still `building` belongs
+    to its run and is never here."""
     from .store.db import Store
 
     with Store(settings) as store:
         return store._rows(
             "SELECT p.serial, p.status, p.state,"
-            " p.built_by IS NOT NULL AS hand_built,"
             " coalesce(u.username, '') AS owner,"
             " extract(epoch FROM now() - p.state_at) AS taken_seconds,"
             " extract(epoch FROM now() - p.running_since) AS on_seconds"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL AND p.status <> 'building'"
-            "   AND ((p.state = 'taken' AND p.built_by IS NULL"
+            "   AND ((p.state = 'taken'"
             "         AND p.state_at < now() - %s * interval '1 minute')"
             "     OR (p.running AND p.running_since IS NOT NULL"
             "         AND p.running_since < now() - %s * interval '1 minute'))"
@@ -92,10 +93,6 @@ def _sentence(row: dict, *, off: bool, released: bool) -> str:
         return (f"put back after {since}{with_whom} - nobody pressed "
                 f"Release (it was already off)")
     since = _span(row.get("on_seconds"))
-    if row.get("hand_built"):
-        whose = owner or "its builder"
-        return (f"switched off after {since} on - still {whose}'s, as the "
-                f"build card promised")
     if row.get("state") == "taken":
         return f"switched off after {since} on{with_whom}"
     return (f"switched off after {since} on with nobody here holding it "
@@ -147,7 +144,7 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
                 continue
             outcome["off"].append(serial)
         released = False
-        if row.get("state") == "taken" and not row.get("hand_built"):
+        if row.get("state") == "taken":
             try:
                 released = _release(settings, serial)
             except Exception as exc:                              # noqa: BLE001

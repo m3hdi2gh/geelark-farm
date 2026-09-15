@@ -412,9 +412,9 @@ class Settings:
     #: (2026-09-14). SIGNIN_GATE=0.
     signin_gate: bool = True
     #: Phones somebody took or booted from the console and forgot: after
-    #: this many minutes taken, or on with no run holding it, the keeper
-    #: switches the phone off and puts it back (forgotten.sweep). 0 leaves
-    #: them alone. RELEASE_AFTER_MINUTES.
+    #: this many minutes taken (hand-built ones too), or on with no run
+    #: holding it, the keeper switches the phone off and puts it back
+    #: (forgotten.sweep). 0 leaves them alone. RELEASE_AFTER_MINUTES.
     release_after_minutes: int = 60
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.

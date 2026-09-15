@@ -13,12 +13,11 @@ from geelark_farm import phones as phones_mod
 from geelark_farm.store import events as store_events
 
 
-def _row(serial, *, state="taken", owner="ali", hand_built=False,
-         taken=4320, on=None, status="ready"):
+def _row(serial, *, state="taken", owner="ali", taken=4320, on=None,
+         status="ready"):
     """One row the way `overdue` hands it back."""
     return {"serial": serial, "status": status, "state": state,
-            "hand_built": hand_built, "owner": owner,
-            "taken_seconds": taken, "on_seconds": on}
+            "owner": owner, "taken_seconds": taken, "on_seconds": on}
 
 
 def _on(serial, status=phones_mod.RUNNING):
@@ -112,21 +111,20 @@ def test_a_phone_a_run_holds_is_left_to_the_run(farm):
     assert outcome["off"] == ["2713"], "a stale claim holds nothing"
 
 
-def test_a_hand_built_phone_is_switched_off_but_stays_with_its_builder(
-        farm):
-    """The build card promised them that phone: it stops billing like any
-    other, but it is not put back on the shelf for a Send to take."""
-    farm.rows.append(_row("2713", hand_built=True, on=5400))
+def test_a_hand_built_phone_is_put_back_like_any_other(farm):
+    """The build card wrote it taken for whoever asked; an hour of not
+    using it ends that like any Take (the operator, 2026-09-15: "release
+    the hand-built one too"). The row carries nothing that says it was
+    hand-built, and the sweep does not ask."""
+    farm.rows.append(_row("2713", taken=5400, on=5400))
 
     outcome = forgotten.sweep(object(), farm.settings, farm.ledger,
                               [_on("2713")])
 
-    assert farm.stopped == ["P2713"] and farm.released == []
-    assert outcome["off"] == ["2713"] and outcome["released"] == []
-    assert farm.events == [("phone", {
-        "serial": "2713", "status": "switched off",
-        "detail": "switched off after 1 h 30 min on - still ali's, as the "
-                  "build card promised"})]
+    assert farm.stopped == ["P2713"] and farm.released == ["2713"]
+    assert outcome["off"] == ["2713"] and outcome["released"] == ["2713"]
+    assert "built_by" not in inspect.getsource(forgotten), (
+        "no exception for the build card's phones")
 
 
 def test_a_phone_on_with_nobody_holding_it_is_switched_off(farm):
@@ -236,12 +234,11 @@ def test_the_span_reads_like_a_person_would_say_it():
 
 
 def test_what_the_store_is_asked_and_told():
-    """The reads and the write, as SQL: a building phone is never read; a
-    hand-built phone is read only for being on, never for being taken;
+    """The reads and the write, as SQL: a building phone is never read;
     the release puts the owner and the clock back with the state."""
     read = inspect.getsource(forgotten.overdue)
     assert "p.status <> 'building'" in read
-    assert ("p.state = 'taken' AND p.built_by IS NULL"
+    assert ("p.state = 'taken'"
             "         AND p.state_at < now() - %s * interval '1 minute'") in (
         read.replace('"\n            "', ""))
     assert "p.running AND p.running_since IS NOT NULL" in read
