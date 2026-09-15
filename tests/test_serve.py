@@ -2933,3 +2933,33 @@ def test_the_pass_counts_the_gmails_a_claim_could_take_not_the_snapshot(
     # And the sheet-era pool, which has no `free_now`, is its snapshot.
     book.gmails = SimpleNamespace(available=["g", "h", "i"], broken=[])
     assert serve_mod._look(object(), settings, book)[2] == 3
+
+
+def test_a_pass_sweeps_the_forgotten_phones_after_the_shadow(
+        monkeypatch, settings):
+    """On this pass's own listing - the one the shadow just marked
+    `running` from - and after it, so the clock the sweep reads was set a
+    moment ago and no second listing is spent (2026-09-15)."""
+    from geelark_farm import forgotten
+
+    Recorder(warm=0, free=10).install(monkeypatch)
+    listed = [{"serialNo": "2713", "id": "P2713", "status": 0}]
+    order: list = []
+    monkeypatch.setattr(serve_mod, "_listing", lambda client: listed)
+    monkeypatch.setattr(serve_mod, "_shadow",
+                        lambda *a, **k: order.append("shadow"))
+    monkeypatch.setattr(forgotten, "sweep",
+                        lambda c, s, l, listing: order.append(
+                            ("sweep", c, s, listing)))
+    client = object()
+
+    serve_mod.once(client, settings, Fuse(), serve_mod.Slots())
+
+    assert order == ["shadow", ("sweep", client, settings, listed)]
+
+    # A sweep that raises costs a warning, never the pass.
+    def boom(*a, **k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(forgotten, "sweep", boom)
+    serve_mod.once(client, settings, Fuse(), serve_mod.Slots())

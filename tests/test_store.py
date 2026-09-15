@@ -1786,3 +1786,25 @@ def test_the_good_hours_window_wraps_past_midnight_and_a_typo_holds_nothing():
         assert ladder.in_good_hours(off, at(9)), nothing
         assert ladder.held_from(off, at(9)) is None, nothing
     assert ladder.held_from(None, at(9)) is None, "no settings at all"
+
+
+def test_the_schema_carries_the_forgotten_phone_clock():
+    """Two columns, one per way a phone bills unattended: `state_at` for
+    a Take or Boot nobody released, `running_since` for a phone on with
+    nobody's run on it. And every write of `state` moves the first."""
+    import inspect
+    import pathlib
+
+    from geelark_farm.store import person, pgphones
+
+    sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
+        encoding="utf-8")
+    assert ("ALTER TABLE phones ADD COLUMN IF NOT EXISTS state_at      "
+            "timestamptz NOT NULL DEFAULT now()") in sql
+    assert ("ALTER TABLE phones ADD COLUMN IF NOT EXISTS running_since "
+            "timestamptz") in sql
+    assert "WHERE done_at IS NULL AND running AND running_since IS NULL" in sql, (
+        "the phones on at the deploy start their clock then, not never")
+    assert "state = %s, state_at = now()" in inspect.getsource(person.set_state)
+    assert 'sets.append("state_at = now()")' in inspect.getsource(
+        pgphones.PgPhoneLog.finish), "Boot writes State through the log"

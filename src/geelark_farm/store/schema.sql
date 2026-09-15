@@ -800,3 +800,20 @@ UPDATE resources SET refund_state = 'to_claim', refund_at = now(),
        retry_after = NULL, tries = 3
  WHERE kind = 'gmail' AND refund_state = '' AND error IS NULL
    AND status IN ('phone_verification_required', 'password_changed');
+
+-- ------------------------------------ phones, rev 29 (forgotten phones)
+-- When the person channel last changed, and since when GeeLark has had
+-- the phone on. Boot and Take write `taken`, and some operators never
+-- press Release, so the phone bills by the minute until somebody sees
+-- it under Running (the operator, 2026-09-15: "their phones just burn
+-- money"). `state_at` is stamped by every write of `state`;
+-- `running_since` by the pass that first sees the phone on, and cleared
+-- by the one that sees it off. forgotten.sweep reads both and switches
+-- off what is over RELEASE_AFTER_MINUTES.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS state_at      timestamptz NOT NULL DEFAULT now();
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS running_since timestamptz;
+-- Once, for the phones on when this shipped: their clock starts now
+-- rather than never (a NULL is "not seen coming on", which the sweep
+-- leaves alone).
+UPDATE phones SET running_since = now()
+ WHERE done_at IS NULL AND running AND running_since IS NULL;

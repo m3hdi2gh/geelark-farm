@@ -137,6 +137,9 @@ class PgPhoneLog(PhoneLog):
                 continue
             sets.append(f"{column} = %s")
             values.append(value)
+            if column == "state":
+                # The clock the forgotten-phone sweep reads (rev 29).
+                sets.append("state_at = now()")
         if not sets:
             return
         with Store(self._settings) as store:

@@ -197,9 +197,14 @@ def mark_running(cur, running) -> int:
     if running is None:
         return 0
     on = [str(s) for s in running]
+    # `running_since` rides with the flip: set when a phone is first seen
+    # on, cleared when it is seen off. Only changed rows are touched, so
+    # it is the moment the change was seen and never "this pass".
     cur.execute(
-        "UPDATE phones SET running = (serial = ANY(%s))"
-        " WHERE done_at IS NULL AND running <> (serial = ANY(%s))", (on, on))
+        "UPDATE phones SET running = (serial = ANY(%s)),"
+        " running_since = CASE WHEN serial = ANY(%s) THEN now() END"
+        " WHERE done_at IS NULL AND running <> (serial = ANY(%s))",
+        (on, on, on))
     return int(cur.rowcount or 0)
 
 

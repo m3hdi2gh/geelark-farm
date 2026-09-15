@@ -411,6 +411,11 @@ class Settings:
     #: operator's own switch for "phones now, whatever they cost"
     #: (2026-09-14). SIGNIN_GATE=0.
     signin_gate: bool = True
+    #: Phones somebody took or booted from the console and forgot: after
+    #: this many minutes taken, or on with no run holding it, the keeper
+    #: switches the phone off and puts it back (forgotten.sweep). 0 leaves
+    #: them alone. RELEASE_AFTER_MINUTES.
+    release_after_minutes: int = 60
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -564,6 +569,8 @@ class Settings:
             signin_good_hours_utc=_str("SIGNIN_GOOD_HOURS_UTC", "").strip(),
             signin_gate=_str("SIGNIN_GATE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
+            release_after_minutes=_int("RELEASE_AFTER_MINUTES", 60,
+                                       minimum=0),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

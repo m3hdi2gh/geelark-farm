@@ -4969,7 +4969,9 @@ def test_the_mirror_marks_what_is_running_in_one_statement():
     assert shadow.mark_running(cur, ["1862", "1848"]) == 2
     sql, params = cur.executed[0]
     assert "SET running = (serial = ANY(%s))" in sql
-    assert "done_at IS NULL" in sql and params == (["1862", "1848"],) * 2
+    assert "running_since = CASE WHEN serial = ANY(%s) THEN now() END" in sql, (
+        "the clock the forgotten-phone sweep reads starts with the flip")
+    assert "done_at IS NULL" in sql and params == (["1862", "1848"],) * 3
     assert shadow.mark_running(cur, None) == 0 and len(cur.executed) == 1, (
         "a listing that could not be read says nothing")
 

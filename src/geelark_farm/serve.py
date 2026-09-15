@@ -1745,6 +1745,16 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         "gate": sign_in_gate.as_dict(),
         "took": round(time.monotonic() - began, 1)})
 
+    # Phones somebody took or booted and forgot: switched off and put back
+    # after RELEASE_AFTER_MINUTES (2026-09-15). After the shadow, which
+    # just set the clock from this pass's listing, and on that listing.
+    try:
+        from . import forgotten
+
+        forgotten.sweep(client, settings, ledger, listing=listed)
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not sweep the forgotten phones (%s)", exc)
+
     # Phones somebody asked for by hand. Taken here, between the drain that
     # wrote the wish and the batch that will build it - and taken even when
     # the shortfall is nil, because a full shelf is not a reason to ignore

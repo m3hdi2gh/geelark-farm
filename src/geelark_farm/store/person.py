@@ -63,7 +63,8 @@ def set_state(settings: Settings, serial: str, state: str) -> bool:
     serial, which is what the caller says back rather than guessing."""
     with Store(settings) as store:
         rows = store._write(
-            "UPDATE phones SET state = %s, updated_at = now()"
+            "UPDATE phones SET state = %s, state_at = now(),"
+            " updated_at = now()"
             " WHERE serial = %s AND done_at IS NULL RETURNING id",
             (state, str(serial).strip()))
     return bool(rows)
