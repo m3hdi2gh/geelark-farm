@@ -1072,6 +1072,25 @@ def _running(client: Client,
             if p.get("status") in (phones.RUNNING, phones.STARTING)]
 
 
+def _free_gmails(book: Book) -> int:
+    """How many Gmails a build could claim right now.
+
+    The store's pool asks the store, which leaves out the addresses the
+    hour is holding back (store.ladder.held_from). The Book's snapshot
+    counted them, so with thirty-six last-try addresses held and nothing
+    else free the keeper ordered ten builds a pass and every one ended
+    `no_usable_gmail` in 0 s - 190 in ten minutes (2026-09-15). The
+    sheet-era pool has no store to ask and its snapshot is the truth."""
+    free_now = getattr(book.gmails, "free_now", None)
+    if callable(free_now):
+        try:
+            return int(free_now())
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not count the claimable Gmails (%s); the "
+                      "snapshot stands", exc)
+    return len(book.gmails.available)
+
+
 def _look(client: Client, settings: Settings, book: Book,
           listing: list[dict] | None = None
           ) -> tuple[int, int, int, int, dict, int]:
@@ -1100,7 +1119,7 @@ def _look(client: Client, settings: Settings, book: Book,
         installed = getattr(book.phones, "INSTALLED", "yes")
         warm = [p for p in warm if p.get("app") == installed]
     return (len(warm), len(book.apps.available),
-            len(book.gmails.available), len(book.proxies.available),
+            _free_gmails(book), len(book.proxies.available),
             book.phones.counts(),
             # Free, like the depths above it: `broken` is a comprehension over
             # rows already in memory, and the reload ran a line before this.

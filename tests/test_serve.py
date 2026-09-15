@@ -2904,3 +2904,32 @@ def test_a_warm_phone_asked_for_without_an_account_is_a_wish_that_worked():
     src = inspect.getsource(serve_mod)
     assert src.count("ok=_wish_worked(build)") == 2, "both settle sites"
 
+
+
+def test_the_pass_counts_the_gmails_a_claim_could_take_not_the_snapshot(
+        monkeypatch, settings):
+    """With thirty-six last-try addresses held back for the good hours and
+    nothing else free, the Book's snapshot said 36 and the keeper ordered
+    ten builds a pass; every one ended `no_usable_gmail` in 0 s - 190 in
+    ten minutes (2026-09-15). The store's pool knows what is claimable
+    right now, and that is the number the batch is sized by."""
+    from geelark_farm import builder
+
+    monkeypatch.setattr(builder, "_unfinished", lambda c, b, **k: ([], []))
+    held = SimpleNamespace(available=["g"] * 36, broken=[], free_now=lambda: 0)
+    book = SimpleNamespace(
+        apps=SimpleNamespace(available=["a"], broken=[]),
+        gmails=held,
+        proxies=SimpleNamespace(available=["p"], broken=[]),
+        phones=SimpleNamespace(counts=lambda: {}))
+    assert serve_mod._look(object(), settings, book)[2] == 0
+
+    # A store that will not answer the count is not a reason to stop:
+    # the snapshot stands, as it always did.
+    def down():
+        raise RuntimeError("store down")
+    book.gmails = SimpleNamespace(available=["g", "h"], broken=[], free_now=down)
+    assert serve_mod._look(object(), settings, book)[2] == 2
+    # And the sheet-era pool, which has no `free_now`, is its snapshot.
+    book.gmails = SimpleNamespace(available=["g", "h", "i"], broken=[])
+    assert serve_mod._look(object(), settings, book)[2] == 3
