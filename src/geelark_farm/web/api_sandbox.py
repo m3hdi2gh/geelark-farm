@@ -45,6 +45,11 @@ DRIVEN = {
     "delivered": {"status": "delivered", "customer_ready": True,
                   "serial": "1601"},
     "needs_human": {"status": "sign_in_refused", "customer_ready": True},
+    # The practice room's code page: the state itself, so a client can
+    # be written against `code: {expires_at, tries_left}` and POST /code
+    # before the Claude flow exists (2026-09-16).
+    "needs_code": {"status": "needs_code", "customer_ready": True,
+                   "serial": "1601"},
     "invalid": {"error": "a sandbox row made invalid on purpose"},
     "withdrawn": {"withdrawn_at": "now"},
 }
@@ -58,7 +63,7 @@ DRIVEN = {
 #:   only kinds that reach them are not served by anything today - so a
 #:   row put in one would be showing a client a state the farm cannot
 #:   currently produce. They arrive together with that path.
-NOT_DRIVEN = ("blocked", "waiting_customer", "needs_code")
+NOT_DRIVEN = ("blocked", "waiting_customer")
 
 
 class Refused(Exception):
@@ -131,3 +136,18 @@ def sweep(settings: Settings) -> int:
         log.info("swept %d sandbox account(s) older than %d days",
                  gone, KEEP_DAYS)
     return gone
+
+
+def answered(settings: Settings, *, client_id: int, ref: str) -> bool:
+    """POST /code in the practice room: a row on its code page moves to
+    `signing_in`, the way the real one does when the flow types the
+    code. False if it was not on the code page."""
+    with connect(settings) as conn:
+        rows = conn.execute(
+            "UPDATE api_sandbox SET status = 'in_use',"
+            " state_changed_at = now(), updated_at = now()"
+            " WHERE client_id = %s AND panel_ref = %s"
+            "   AND status = 'needs_code' RETURNING id",
+            (client_id, ref)).fetchall()
+        conn.commit()
+    return bool(rows)

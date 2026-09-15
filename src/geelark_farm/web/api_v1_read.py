@@ -25,6 +25,7 @@ import base64
 import binascii
 import logging
 
+from .. import accounts as _accounts
 from ..config import Settings
 from ..store.db import Store
 from .read import IMPORTED, ROUTINE
@@ -59,11 +60,23 @@ CREDENTIAL_KINDS = ("password_totp", "google_backup_codes",
 #: day one and see `blocked` rather than a 422; its sign-in flow does not
 #: exist yet, so it serves nothing (the operator, 2026-09-14).
 PRODUCTS = ("chatgpt", "claude", "spotify")
-SERVED = {"chatgpt": ("password_totp",), "claude": (), "spotify": ()}
+#: Kept in accounts.py since 2026-09-16, so the pool's claim reads the
+#: same table this door reports from; named here as it always was.
+SERVED = _accounts.SERVED
 
 #: The kind whose code comes from a person, so the account waits for the
 #: panel to say that person is at their keyboard.
-_ASKS_A_PERSON = "email_code_customer"
+_ASKS_A_PERSON = _accounts.ASKS_A_PERSON
+
+#: The code an app is waiting on, read off `code_requests` beside the
+#: row (store/codes.py): open, unanswered and not yet expired. NULL for
+#: every account that is not at that point, which is what makes
+#: `needs_code` a view over the table rather than a word written to it -
+#: the pool's `status` says `in_use` throughout, as it should.
+_CODE_WAITING = ("FROM code_requests c WHERE lower(c.address) ="
+                 " lower(r.address) AND c.closed_at IS NULL"
+                 " AND c.code IS NULL AND c.until > now()"
+                 " ORDER BY c.id DESC LIMIT 1")
 
 #: One row's worth of columns, r.-qualified because every query here joins
 #: phones and both tables carry an id, a status and an updated_at - the
@@ -72,7 +85,10 @@ _ACCOUNT_COLUMNS = (
     "r.id, r.address, r.status, r.error, r.serial, r.note, r.source,"
     " r.product, r.credential_kind, r.panel_ref, r.client_id,"
     " r.attempts, r.failures, r.customer_ready, r.withdrawn_at,"
-    " r.state_changed_at, r.delivered_at, r.created_at, r.updated_at"
+    " r.state_changed_at, r.delivered_at, r.created_at, r.updated_at,"
+    f" (SELECT c.asked_at {_CODE_WAITING}) AS code_asked_at,"
+    f" (SELECT c.until {_CODE_WAITING}) AS code_until,"
+    f" (SELECT c.tries_left {_CODE_WAITING}) AS code_tries_left"
 )
 
 
@@ -111,6 +127,11 @@ def state_of(row: dict) -> str:
         return "withdrawn"
     if row.get("error"):
         return "invalid"
+    if row.get("code_until"):
+        # The app on the phone is standing on its code page: the pool's
+        # word is still `in_use`, and the request beside the row is what
+        # says so (section 7 of the contract, built 2026-09-16).
+        return "needs_code"
     status = str(row.get("status") or "").strip().lower()
     if status in _DIRECT:
         return _DIRECT[status]

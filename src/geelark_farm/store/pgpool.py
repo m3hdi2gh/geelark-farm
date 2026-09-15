@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 #: Columns the adapter stores as something other than text. A value
 #: arrives from the pool as the string the sheet would have held.
 _INTS = frozenset({"times_used", "port"})
-_BOOLS = frozenset({"email_code_only"})
+_BOOLS = frozenset({"email_code_only", "customer_ready"})
 _STAMPS = frozenset({"claimed_at"})
 
 
@@ -118,19 +118,24 @@ class ResourceTable:
             conn.commit()
 
     def free_count(self, kind: str, *, free: tuple[str, ...],
-                   hold_tries_from: int | None = None) -> int:
+                   hold_tries_from: int | None = None,
+                   held_back: tuple[str, tuple] = ("", ())) -> int:
         """How many rows of `kind` a claim could take right now - the same
         conditions the claim itself uses, minus the pick. `hold_tries_from`
-        leaves out the rows a claim would hold back (store.ladder)."""
+        leaves out the rows a claim would hold back (store.ladder);
+        `held_back` is the pool's own extra condition (SQL, params), the
+        app pool's "served, and the customer is ready"."""
         held = (" AND coalesce(tries, 0) < %s"
                 if hold_tries_from is not None else "")
+        aside, aside_params = held_back
         with self._connect() as conn:
             cur = conn.execute(
                 "SELECT count(*) FROM resources"
                 " WHERE kind = %s AND error IS NULL"
                 "   AND coalesce(refund_state, '') = ''"
-                f"   AND lower(status) = ANY(%s){held}",
-                (kind, list(free), *([hold_tries_from] if held else [])))
+                f"   AND lower(status) = ANY(%s){held}{aside}",
+                (kind, list(free), *([hold_tries_from] if held else []),
+                 *aside_params))
             row = cur.fetchone()
             conn.rollback()
         return int(row[0]) if row else 0
@@ -139,7 +144,8 @@ class ResourceTable:
               count_use: bool, serial: str = "",
               row_id: int | None = None, avoid_host: str = "",
               host_column: str = "", count_attempt: bool = False,
-              hold_tries_from: int | None = None) -> dict | None:
+              hold_tries_from: int | None = None,
+              held_back: tuple[str, tuple] = ("", ())) -> dict | None:
         """Pick, mark and stamp the first free row of `kind` in one
         statement. The ordering is the sheet's contract: least-used first
         for exits, top of the tab for credentials. `row_id` narrows the
@@ -166,6 +172,10 @@ class ResourceTable:
         held = (" AND coalesce(tries, 0) < %s"
                 if hold_tries_from is not None else "")
         withheld = [hold_tries_from] if held else []
+        # The pool's own condition, after the ladder's: the app pool
+        # leaves a row the API calls blocked or waiting_customer where it
+        # is (accounts.held_back).
+        aside, aside_params = held_back
         bump = "times_used + 1" if count_use else "times_used"
         # The account's own counter, in the same atomic statement that
         # hands the row out: a claim that returns nothing counts nothing,
@@ -180,7 +190,7 @@ class ResourceTable:
                 f"    AND coalesce(refund_state, '') = ''"
                 f"    AND lower(status) = ANY(%s)"
                 f"    AND (%s::bigint IS NULL OR id = %s)"
-                f"{not_here}{held}"
+                f"{not_here}{held}{aside}"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
                 f"  times_used = {bump}, attempts = {tally},"
@@ -189,7 +199,7 @@ class ResourceTable:
                 f"  updated_at = now()"
                 f"  FROM picked WHERE r.id = picked.id RETURNING r.*",
                 (kind, list(free), row_id, row_id, *avoided, *withheld,
-                 claimed, serial, serial))
+                 *aside_params, claimed, serial, serial))
             names = [d.name for d in cur.description]
             row = cur.fetchone()
             conn.commit()
@@ -378,7 +388,7 @@ class _PgPool(Pool):
         picks, so a keeper sizing a batch by it never orders a build for
         a row the claim would hold back."""
         return self._table.free_count(
-            self.kind, free=tuple(self.available_statuses),
+            self.kind, held_back=self.held_back(), free=tuple(self.available_statuses),
             hold_tries_from=self._held_from())
 
     def held_now(self) -> int:
@@ -387,7 +397,7 @@ class _PgPool(Pool):
         hold = self._held_from()
         if hold is None:
             return 0
-        every = self._table.free_count(self.kind,
+        every = self._table.free_count(self.kind, held_back=self.held_back(),
                                        free=tuple(self.available_statuses))
         return max(0, every - self.free_now())
 
@@ -395,6 +405,11 @@ class _PgPool(Pool):
         """Which rows the claim leaves where they are. Nothing, for any
         pool but the Gmails - see PgGmailPool."""
         return None
+
+    def held_back(self) -> tuple[str, tuple]:
+        """The pool's own condition on a claim: (SQL, params), empty for
+        every pool but the app pool's - see `PgAppPool.held_back`."""
+        return "", ()
 
     def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
@@ -405,7 +420,8 @@ class _PgPool(Pool):
             count_use=isinstance(self, ProxyPool), serial=serial,
             avoid_host=avoid_host, host_column=self.HOST_COLUMN,
             count_attempt=self.COUNTS_ATTEMPTS,
-            hold_tries_from=self._held_from())
+            hold_tries_from=self._held_from(),
+            held_back=self.held_back())
         if row is None:
             return None
         resource = next((r for r in self._rows if r.store_id == row["id"]),
@@ -600,7 +616,46 @@ class PgAppPool(_PgPool, AppPool):
         "2FA Secret": "totp_secret", "Phone Serial": "serial",
         "Status": "status", "Note": "note", "Claimed": "claimed_at",
         "Email code": "email_code_only",
+        # The panel's three, read so `available` can leave out what the
+        # claim leaves out (accounts.held_back). Nothing writes them
+        # through the pool.
+        "Product": "product", "Credential kind": "credential_kind",
+        "Customer ready": "customer_ready",
     }
+
+    def held_back(self) -> tuple[str, tuple]:
+        """A row the API reports `blocked` (a kind no flow serves yet) or
+        `waiting_customer` (a customer-answered kind whose customer is
+        not ready) stays on the shelf. The API said so and the claim did
+        not know, so such a row would have gone to a phone and failed
+        there (2026-09-16). The same rule, in SQL, as accounts.held_back."""
+        from .. import accounts as domain
+
+        pairs = [(product, kind) for product, kinds in domain.SERVED.items()
+                 for kind in kinds]
+        served = (" OR (coalesce(product, 'chatgpt'), credential_kind) IN ("
+                  + ", ".join(["(%s, %s)"] * len(pairs)) + ")"
+                  if pairs else "")
+        sql = (" AND (coalesce(credential_kind, '') = ''"
+               f"{served})"
+               " AND NOT (coalesce(credential_kind, '') = %s"
+               "          AND NOT coalesce(customer_ready, false))")
+        params = tuple(x for pair in pairs for x in pair) + (
+            domain.ASKS_A_PERSON,)
+        return sql, params
+
+    @property
+    def available(self) -> list[Resource]:
+        """The base pool's free rows, less the ones the claim would leave
+        where they are - so the keeper never orders a finish for an
+        account it cannot claim."""
+        from .. import accounts as domain
+
+        return [r for r in super().available
+                if not domain.held_back(
+                    r.values.get("Product") or "",
+                    r.values.get("Credential kind") or "",
+                    (r.values.get("Customer ready") or "") == "TRUE")]
 
     def claim(self, serial: str = "", avoid_host: str = ""):
         row = super().claim(serial=serial, avoid_host=avoid_host)

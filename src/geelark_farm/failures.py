@@ -380,6 +380,22 @@ VERDICTS: dict[str, Verdict] = {
         "earlier run survived where a fresh login was expected. Nothing is "
         "wrong with the credentials. Rebuild the phone, or clear the app "
         "and finish it again."),
+    "code_timeout": Verdict(
+        CHALLENGED,
+        "{service} asked for the emailed code and the customer supplied "
+        "none in the time allowed",
+        "The app asked for the code it emailed the customer, and the panel "
+        "supplied none within CODE_WAIT_MINUTES. Nothing was judged about "
+        "the account - it is set aside rather than marked, and keeps its "
+        "place in the pool. The panel puts it back in the queue with "
+        "POST /ready when the customer is at their keyboard."),
+    "wrong_code": Verdict(
+        CHALLENGED,
+        "{service} refused the emailed code three times",
+        "Three codes the customer supplied were each refused by the app. "
+        "Nothing was judged about the account beyond that - it is set aside "
+        "rather than marked. The panel puts it back in the queue with "
+        "POST /ready; a fresh code is asked for on the next attempt."),
     "email_code_never_arrived": Verdict(
         CHALLENGED,
         "OpenAI emailed a one-time code and none arrived in the time allowed",

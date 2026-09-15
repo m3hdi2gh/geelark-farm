@@ -43,6 +43,31 @@ INVISIBLE = "​‌‍⁠﻿ ㅤ⠀᠎"
 #: Google treats these two domains as one mailbox, and both ignore dots.
 GOOGLE_DOMAINS = ("gmail.com", "googlemail.com")
 
+#: What the farm can sign in today, by product: the credential kinds a
+#: sign-in flow exists for. The panel's API accepts every kind and reports
+#: the rest as `blocked`; the pool reads the same table so a blocked row
+#: is never handed to a phone (it was - the API said blocked while the
+#: claim did not know the word, 2026-09-16). A product goes live here.
+SERVED = {"chatgpt": ("password_totp",), "claude": (), "spotify": ()}
+
+#: The kind whose code a person supplies through the panel: the account
+#: waits until the panel says that person is at their keyboard
+#: (`customer_ready`), and the pool leaves it alone until then.
+ASKS_A_PERSON = "email_code_customer"
+
+
+def held_back(product: str, kind: str, customer_ready: bool) -> bool:
+    """Whether the pool must leave an account where it is: a kind no flow
+    serves yet, or a customer-answered one whose customer is not ready.
+    Rows with no kind are the sheet's and the console's, and are never
+    held back."""
+    kind = str(kind or "").strip()
+    if not kind:
+        return False
+    if kind not in SERVED.get(str(product or "").strip() or "chatgpt", ()):
+        return True
+    return kind == ASKS_A_PERSON and not customer_ready
+
 
 def same_google_account(one: str, other: str) -> bool:
     """Whether two spellings are the same Google account.

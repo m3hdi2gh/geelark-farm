@@ -1099,3 +1099,154 @@ def test_spotify_is_a_product_the_door_accepts_and_holds_as_blocked():
                               "product": "spotify"}) == "blocked"
     assert read_mod.state_of({"status": "", "credential_kind": "password_totp",
                               "product": "chatgpt"}) == "queued"
+
+
+# ------------------------------------------------------------ the code path
+def _waiting(**more) -> dict:
+    """An account standing on the app's code page: the pool says in_use,
+    the open request beside the row says needs_code."""
+    row = dict(status="in_use", serial="1601", product="claude",
+               credential_kind="email_code_customer", customer_ready=True,
+               code_asked_at="2026-09-16T10:00:00+00:00",
+               code_until="2026-09-16T10:10:00+00:00", code_tries_left=3)
+    row.update(more)
+    return _account(**row)
+
+
+def test_needs_code_is_a_view_over_an_open_request_not_a_status_word():
+    """Section 7: the pool's word stays `in_use` while the app waits; the
+    request the flow opened is what the panel reads as `needs_code`, and
+    the `code` object rides only on that state."""
+    row = _waiting(code_tries_left=2)
+    assert read_mod.state_of(row) == "needs_code"
+    body = api_mod.account_json(row)
+    assert body["state"] == "needs_code"
+    assert body["code"] == {"asked_at": "2026-09-16T10:00:00+00:00",
+                            "expires_at": "2026-09-16T10:10:00+00:00",
+                            "tries_left": 2}
+    assert api_mod.account_json(_account(status="in_use"))["code"] is None
+    assert read_mod.state_of(_account(status="in_use")) == "signing_in"
+    # An expired request is not in the row at all (the SQL says
+    # `until > now()`), so a row past its clock reads as the pool's word.
+    assert read_mod.state_of(_waiting(code_until=None,
+                                      code_asked_at=None)) == "signing_in"
+    # The practice room has no request: its clock is drawn from the
+    # moment the row was walked onto the code page, ten minutes long.
+    body = api_mod.account_json(
+        _account(status="needs_code",
+                 state_changed_at="2026-09-16T10:00:00+00:00"), sandbox=True)
+    assert body["state"] == "needs_code"
+    assert body["code"]["asked_at"] == "2026-09-16T10:00:00+00:00"
+    assert body["code"]["expires_at"] == "2026-09-16T10:10:00Z"
+    assert body["code"]["tries_left"] == 3
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_the_code_the_customer_gave_reaches_the_waiting_flow(web,
+                                                             monkeypatch):
+    """Step 5 of section 7. Judged before anything is written; refused
+    when nothing is waiting, and again when the clock ran out between
+    the panel's read and its write."""
+    import geelark_farm.web.api_v1_write as write_mod
+
+    _wrote(monkeypatch)
+    _client(monkeypatch)
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _waiting())
+    supplied = []
+    monkeypatch.setattr(write_mod, "supply_code",
+                        lambda s, row, code, **k:
+                        supplied.append((row["panel_ref"], code, k)) or True)
+    client = web()
+
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": " 482913 "})
+    assert status == 202, body
+    assert body["accepted"] is True and body["ref"] == "ord_84213-a"
+    assert body["state"] == "needs_code", "the faked read has not moved yet"
+    assert supplied == [("ord_84213-a", "482913",
+                         {"client_id": 1, "sandbox": False})]
+
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "12"})
+    assert status == 422 and body["error"]["field"] == "code"
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code", {})
+    assert status == 422 and body["error"]["field"] == "code"
+    assert len(supplied) == 1, "nothing written for a bad code"
+
+    monkeypatch.setattr(read_mod, "account",
+                        lambda s, ref, **k: _account(status="ready"))
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "482913"})
+    assert status == 409 and body["error"]["code"] == "invalid_state"
+    assert body["error"]["state"] == "ready"
+
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _waiting())
+    monkeypatch.setattr(write_mod, "supply_code", lambda *a, **k: False)
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "482913"})
+    assert status == 409 and "stopped waiting" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_bots_key_may_supply_a_code_and_nothing_else(web, monkeypatch):
+    """The bot is a second client, not a hop: it says what the code is,
+    and it neither buys nor readies nor withdraws."""
+    import geelark_farm.web.api_v1_write as write_mod
+
+    _wrote(monkeypatch)
+    _client(monkeypatch, role="bot")
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _waiting())
+    monkeypatch.setattr(write_mod, "supply_code", lambda *a, **k: True)
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "482913"})
+    assert status == 202, body
+    for path in ("/api/v1/accounts/ord_84213-a/ready", "/api/v1/accounts"):
+        status, _, body = _post(client, path, {})
+        assert status == 403 and body["error"]["code"] == "forbidden", path
+    status, _, body = _delete(client, "/api/v1/accounts/ord_84213-a")
+    assert status == 403
+
+
+@pytest.mark.parametrize("web", [API_ON], indirect=True)
+def test_a_sandbox_key_walks_its_row_off_the_code_page_with_a_code(
+        web, monkeypatch):
+    """The practice room drives `needs_code` now, so a client can be
+    written against POST /code before the Claude flow exists."""
+    import inspect
+
+    from geelark_farm.web import api_sandbox
+
+    src = inspect.getsource(api_sandbox.answered)
+    assert "SET status = 'in_use'" in src and "AND status = 'needs_code'" in src
+    _wrote(monkeypatch)
+    _client(monkeypatch, role="sandbox")
+    monkeypatch.setattr(read_mod, "account", lambda s, ref, **k: _account(
+        status="needs_code", state_changed_at="2026-09-16T10:00:00+00:00"))
+    answered = []
+    monkeypatch.setattr(api_sandbox, "answered",
+                        lambda s, **k: answered.append(k) or True)
+    client = web()
+    status, _, body = _post(client, "/api/v1/accounts/ord_84213-a/code",
+                            {"code": "482913"})
+    assert status == 202 and body["sandbox"] is True
+    assert answered == [{"client_id": 1, "ref": "ord_84213-a"}]
+    assert api_sandbox.DRIVEN["needs_code"]["status"] == "needs_code"
+    assert "needs_code" not in api_sandbox.NOT_DRIVEN
+
+
+def test_ready_puts_an_account_back_after_a_code_ended_the_attempt():
+    """"The panel may POST /ready again when the customer is back": the
+    two code verdicts (and the mailbox one) go back to the queue with
+    it; any other verdict stays, since a customer being present answers
+    nothing about a refused password."""
+    import inspect
+
+    import geelark_farm.web.api_v1_write as write_mod
+    from geelark_farm.store import codes as store_codes
+
+    src = inspect.getsource(write_mod.mark_ready)
+    assert "status = CASE WHEN lower(status) = ANY(%s) THEN ''" in src
+    assert "serial = CASE WHEN lower(status) = ANY(%s) THEN ''" in src
+    assert "store_codes.REASONS" in src
+    assert "code_timeout" in store_codes.REASONS

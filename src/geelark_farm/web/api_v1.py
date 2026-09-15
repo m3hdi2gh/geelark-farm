@@ -29,7 +29,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 from . import api_v1_read as api_read
@@ -232,6 +232,9 @@ def account_json(row: dict, *, sandbox: bool = False) -> dict:
                    if state == "needs_human" else None),
         "reason_text": _reason_text(row) if state == "needs_human" else None,
         "blocked": api_read.blocked_of(row),
+        # Section 7: what the app is waiting for, while it waits. Null
+        # everywhere else, like every other field that does not apply.
+        "code": _code_of(row) if state == "needs_code" else None,
         "invalid": row.get("error") if state == "invalid" else None,
         "source": str(row.get("source") or ""),
         "received_at": rfc3339(row.get("created_at")),
@@ -241,6 +244,32 @@ def account_json(row: dict, *, sandbox: bool = False) -> dict:
         "withdrawn_at": rfc3339(row.get("withdrawn_at")),
         "updated_at": rfc3339(row.get("updated_at")),
     }
+
+
+def _code_of(row: dict) -> dict:
+    """The code object of a `needs_code` account: when the app asked,
+    until when the answer is taken, how many wrong ones are left. A
+    sandbox row has no request behind it, so the clock is drawn from the
+    moment it was walked into the state."""
+    from ..store import codes as store_codes
+
+    asked = row.get("code_asked_at") or row.get("state_changed_at")
+    until = row.get("code_until")
+    if until is None and asked is not None:
+        moment = asked
+        if isinstance(moment, str):
+            try:
+                moment = datetime.fromisoformat(moment.replace("Z", "+00:00"))
+            except ValueError:
+                log.debug("a sandbox row's state_changed_at %r is not a "
+                          "stamp; its code clock has no end", moment)
+                moment = None
+        if moment is not None:
+            until = moment + timedelta(minutes=10)
+    tries = row.get("code_tries_left")
+    return {"asked_at": rfc3339(asked), "expires_at": rfc3339(until),
+            "tries_left": int(tries if tries is not None
+                              else store_codes.TRIES)}
 
 
 #: Columns the schema has and nothing yet writes. Published as null
@@ -327,7 +356,11 @@ def _serve(handler, settings, path: str) -> None:
     rest = path[len("/api/v1"):] if path.startswith("/api/v1") else ""
 
     if handler.command in ("POST", "DELETE"):
-        if client["role"] not in ("panel", "sandbox"):
+        # The bot's whole job is one code (section 7): the one write a
+        # bot key may make, and the only one.
+        codes_door = handler.command == "POST" and rest.endswith("/code")
+        if client["role"] not in ("panel", "sandbox") and not (
+                client["role"] == "bot" and codes_door):
             return _error(handler, 403, "forbidden",
                           "this key may not change accounts")
         # The switch guards what a write costs, and a practice write costs
@@ -574,6 +607,29 @@ def _do_write(handler, settings, client: dict, rest: str):
             api_write.mark_ready(settings, panel_ref, sandbox=box)
             return 202, account_json(
                 api_read.account(settings, panel_ref, sandbox=box), sandbox=box)
+        if tail == "code" and handler.command == "POST":
+            # Section 7, step 5: the code the customer gave. Judged
+            # before anything is written, like every payload here.
+            state = api_read.state_of(row)
+            if state != "needs_code":
+                return 409, {"error": {"code": "invalid_state",
+                                       "message": "it is not waiting for a code",
+                                       "state": state}}
+            code = str(_body(handler).get("code") or "").strip()
+            if not api_write.CODE.fullmatch(code):
+                raise api_write.Refused("4 to 8 digits", "code")
+            took = api_write.supply_code(settings, row, code, client_id=client["id"],
+                                         sandbox=box)
+            if not took:
+                # The clock ran out between the panel's read and this
+                # write: the flow has given up and released the phone.
+                fresh = api_read.account(settings, panel_ref, sandbox=box)
+                return 409, {"error": {"code": "invalid_state",
+                                       "message": "it stopped waiting for a code",
+                                       "state": api_read.state_of(fresh or row)}}
+            fresh = api_read.account(settings, panel_ref, sandbox=box)
+            return 202, dict(account_json(fresh or row, sandbox=box),
+                             accepted=True)
         if tail == "simulate" and handler.command == "POST":
             # The practice room's own verb, and the only route in this
             # door that a panel key may not reach: a state nobody worked

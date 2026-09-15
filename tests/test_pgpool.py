@@ -88,7 +88,10 @@ class MemoryTable:
 
     def claim(self, kind, *, free, claimed, count_use, serial="",
               row_id=None, avoid_host="", host_column="",
-              count_attempt=False, hold_tries_from=None):
+              count_attempt=False, hold_tries_from=None,
+              held_back=("", ())):
+        # `held_back` is SQL the real table appends; the pool's own
+        # `available` applies the same rule in Python, tested apart.
         for r in self._ordered(kind, count_use):
             if row_id is not None and r["id"] != row_id:
                 continue
@@ -111,7 +114,8 @@ class MemoryTable:
                 return dict(r)
         return None
 
-    def free_count(self, kind, *, free, hold_tries_from=None):
+    def free_count(self, kind, *, free, hold_tries_from=None,
+                   held_back=("", ())):
         return sum(
             1 for r in self._ordered(kind)
             if r["error"] is None and (r["status"] or "").lower() in free

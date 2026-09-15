@@ -29,6 +29,7 @@ import logging
 
 from .. import signals
 from ..config import Settings
+from ..store import codes as store_codes
 from ..store.db import connect
 from . import api_v1_read as api_read
 
@@ -164,16 +165,51 @@ def _create_sandbox(settings: Settings, row: dict, *,
     return api_read.account(settings, row["panel_ref"], sandbox=True)
 
 
+#: What a code looks like at this door - the store's own rule, so the
+#: door and the flow refuse exactly the same strings.
+CODE = store_codes.CODE
+
+
 def mark_ready(settings: Settings, ref: str, *,
                sandbox: bool = False) -> None:
     """The customer is at their keyboard. A column this API owns, so no
-    request and no pass: nothing about the sheet changes."""
+    request and no pass: nothing about the sheet changes.
+
+    An account whose last attempt ended on the code - nobody answered,
+    or three wrong ones - goes back in the queue with it (section 7:
+    "the panel may POST /ready again when the customer is back"). Any
+    other verdict stays: a refused password is not answered by a
+    customer being present.
+    """
     table = api_read.table_for(sandbox)
     with connect(settings) as conn:
-        conn.execute(f"UPDATE {table} SET customer_ready = true,"
-                     " state_changed_at = now(), updated_at = now()"
-                     " WHERE kind = 'app' AND panel_ref = %s", (ref,))
+        conn.execute(
+            f"UPDATE {table} SET customer_ready = true,"
+            " status = CASE WHEN lower(status) = ANY(%s) THEN ''"
+            "              ELSE status END,"
+            " serial = CASE WHEN lower(status) = ANY(%s) THEN ''"
+            "              ELSE serial END,"
+            " state_changed_at = now(), updated_at = now()"
+            " WHERE kind = 'app' AND panel_ref = %s",
+            (list(store_codes.REASONS), list(store_codes.REASONS), ref))
         conn.commit()
+
+
+def supply_code(settings: Settings, row: dict, code: str, *,
+                client_id: int, sandbox: bool = False) -> bool:
+    """Hand a waiting flow the code. True if one was waiting.
+
+    The real room writes it into the request the flow is polling
+    (store/codes.py). The practice room has no flow: the row is walked
+    to `signing_in`, which is what the client would see a moment later.
+    """
+    if sandbox:
+        from . import api_sandbox
+
+        return api_sandbox.answered(settings, client_id=client_id,
+                                    ref=str(row["panel_ref"]))
+    return store_codes.answer(settings, str(row.get("address") or ""),
+                              code) == "accepted"
 
 
 def mark_withdrawn(settings: Settings, ref: str, *,

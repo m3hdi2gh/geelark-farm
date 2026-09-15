@@ -1950,7 +1950,8 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
         made = _job_dict(book, job)
         builds = builder._run_jobs(client, settings, book, [made],
                                    workers=1, reporter=None, on_ready=None,
-                                   cancel=stop, ledger=ledger)
+                                   cancel=stop, ledger=ledger,
+                                   codes_source=_codes_source(settings))
         build = builds[0]
     except Exception as exc:                                       # noqa: BLE001
         log.exception("job %s died in the builder", job.get("id"))
@@ -1975,6 +1976,18 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                             detail=build.detail or build.status)
     if job.get("action_id") is not None:
         _settle_action(settings, job["action_id"], [made], builds)
+
+
+def _codes_source(settings: Settings):
+    """Where a sign-in flow standing on a code page gets its code: the
+    store's request table, answered by the panel (section 7 of the
+    contract, 2026-09-16). None - the flow's NoSource - without a store,
+    which is `no_code_source` on the row, as it always was."""
+    if not getattr(settings, "store_enabled", False):
+        return None
+    from .store import codes as store_codes
+
+    return store_codes.PgCodes(settings)
 
 
 def serve_builder(settings: Settings, *, stop: threading.Event | None = None,

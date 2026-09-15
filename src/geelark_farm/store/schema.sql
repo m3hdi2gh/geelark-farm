@@ -817,3 +817,25 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS running_since timestamptz;
 -- leaves alone).
 UPDATE phones SET running_since = now()
  WHERE done_at IS NULL AND running AND running_since IS NULL;
+
+-- ------------------------------------------------- the code path, rev 30
+-- One row per time an app asked for an emailed code and a person had
+-- to supply it (the contract's section 7). The sign-in flow opens the
+-- row and polls it from its builder container; the panel's API writes
+-- `code` into it; `closed_at`/`outcome` say how the wait ended (typed,
+-- wrong, timeout, superseded). Never deleted: how long a customer takes
+-- to answer is worth knowing. store/codes.py.
+CREATE TABLE IF NOT EXISTS code_requests (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    address     text NOT NULL,
+    machine     text NOT NULL DEFAULT '',
+    asked_at    timestamptz NOT NULL DEFAULT now(),
+    until       timestamptz NOT NULL,
+    tries_left  integer NOT NULL DEFAULT 3,
+    code        text,
+    answered_at timestamptz,
+    closed_at   timestamptz,
+    outcome     text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS code_requests_open
+    ON code_requests (lower(address)) WHERE closed_at IS NULL;
