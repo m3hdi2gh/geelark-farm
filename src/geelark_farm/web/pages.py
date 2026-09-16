@@ -4298,7 +4298,9 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
     The viewer's own width parameter decides how tall it draws itself,
     and at GeeLark's default the phone's Back and Home ran off the bottom
     of an ordinary window. The width is set from the window's height, so
-    the whole phone fits.
+    the whole phone fits: measured on the operator's screen, the viewer
+    draws 2.12 times its width plus a 46px title bar (a first guess of
+    2.45 left a third of the window empty, 2026-09-16).
     """
     beat = (
         "(function(){"
@@ -4308,7 +4310,7 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         "var word=document.getElementById('gf-watch');"
         "function fit(){"
         " var h=window.innerHeight-36;"
-        " var w=Math.max(200,Math.min(420,Math.floor((h-50)/2.45)));"
+        " var w=Math.max(200,Math.min(640,Math.floor((h-46)/2.12)));"
         " var u=new URL(base); u.searchParams.set('w',String(w));"
         " if(frame.getAttribute('src')!==u.href) frame.setAttribute('src',u.href);"
         "}"
