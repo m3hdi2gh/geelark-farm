@@ -532,6 +532,16 @@ button.quiet.go:hover,.btn.quiet.go:hover{{background:var(--blue-bg);
 button.quiet.live,.btn.quiet.live{{border-color:#3a2c55;color:var(--violet)}}
 button.quiet.live:hover,.btn.quiet.live:hover{{background:var(--violet-bg);
  color:#e2d8ff}}
+/* Boot: the one button on a free row, and the one that starts something
+   - filled, where every other row button is an outline. */
+button.boot,.btn.boot{{background:linear-gradient(135deg,#5b47c9,#8a6cf5);
+ color:#fff;border:0;border-radius:999px;padding:5px 13px 5px 10px;
+ font-size:12px;font-weight:600;letter-spacing:.02em;gap:5px;
+ box-shadow:0 1px 2px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.16)}}
+button.boot:hover,.btn.boot:hover{{background:linear-gradient(135deg,#6a56dc,#9d82ff);
+ color:#fff;box-shadow:0 2px 8px rgba(124,92,230,.45),
+ inset 0 1px 0 rgba(255,255,255,.2)}}
+button.boot svg{{flex:none}}
 button.big{{height:44px;justify-content:center;width:100%;font-size:14px}}
 form.inline{{display:inline}}
 .row{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
@@ -1493,6 +1503,16 @@ def _cancel_form(user: dict, serial: str, back: str = "/") -> str:
             f'into yet is deleted">Cancel</button></form>')
 
 
+#: The power sign on the Boot button. Drawn here rather than typed as a
+#: glyph, since the fonts on the operators' machines disagree about it.
+_POWER_ICON = (
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+    '<path d="M8 1.6v6.2" stroke="currentColor" stroke-width="1.9" '
+    'stroke-linecap="round" fill="none"/>'
+    '<path d="M4.7 4.3a4.9 4.9 0 1 0 6.6 0" stroke="currentColor" '
+    'stroke-width="1.9" stroke-linecap="round" fill="none"/></svg>')
+
+
 def _boot_form(user: dict, serial: str) -> str:
     """"Boot": start the phone in GeeLark, take it, and watch the screen.
 
@@ -1500,22 +1520,32 @@ def _boot_form(user: dict, serial: str) -> str:
     else, so the press cannot hand one over on the spot. It opens a new
     tab instead (`target`), and that tab waits for the pass and then goes
     to the screen itself - this one stays on the dashboard.
+
+    Since 2026-09-16 Boot is the one way a phone is taken (Take went
+    when the Live tab's closing became the way it is released), so it
+    is the one button on a free row and is drawn as such: filled, with a
+    power sign, and the only one that is (the operator: "make Boot a
+    bit prettier").
     """
     return (f'<form method="post" class="inline" target="_blank" '
             f'action="/phones/{esc(serial)}/boot">{_csrf(user)}'
-            f'<button class="quiet" title="start it, take it, and '
-            f'watch the screen in a new tab">Boot</button></form>')
+            f'<button class="boot" title="start it, take it, and '
+            f'watch the screen in a new tab">{_POWER_ICON}Boot</button>'
+            f'</form>')
 
 
 def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
-    """The phone-state buttons a row offers: Take or Back, then Done and
-    Failed. Empty while it is being built or for someone who may not."""
+    """The phone-state buttons a taken row offers: Release, Done and
+    Failed. Empty for a phone nobody holds - Boot is how one is taken,
+    since the Live tab's closing became how it is released and Take was
+    the one door left with no way back (the operator, 2026-09-16) - and
+    while it is being built, and for someone who may not."""
     if (row.get("status") or "") == "building" or \
-            not _may(user, "may_take_phones"):
+            not _may(user, "may_take_phones") or \
+            (row.get("state") or "") != "taken":
         return []
     serial = str(row.get("serial") or "")
-    taken = (row.get("state") or "") == "taken"
-    return [_state_form(user, serial, "unused" if taken else "taken", back),
+    return [_state_form(user, serial, "unused", back),
             _state_form(user, serial, "done", back),
             _state_form(user, serial, "failed", back)]
 
@@ -1556,7 +1586,7 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     """What one phone offers from the table.
 
     A phone on the shelf offers the one thing anybody does with it -
-    Take - and Change IP beside it. Once it is out with somebody the row
+    Boot - and Change IP beside it. Once it is out with somebody the row
     turns into the three ways that ends: Release, Done, Failed. Closing
     a phone nobody took is rarer and lives on the phone's own page, so
     the table stays two buttons wide. A phone being built offers
@@ -1585,11 +1615,12 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     actions = []
     if not building and _may(user, "may_take_phones"):
         # Not on a phone GeeLark already has on: Boot would start what
-        # is started, and bill it again (2026-09-08). Take is the door.
+        # is started, and bill it again (2026-09-08). Such a phone - on
+        # with nobody here holding it - is the keeper's to switch off
+        # (forgotten.sweep), and the row offers nothing until it does.
         if not taken and not row.get("running"):
             actions.append(_boot_form(user, serial))
-        actions += (_state_forms(user, row, back) if taken
-                    else _state_forms(user, row, back)[:1])
+        actions += _state_forms(user, row, back)
     if _may(user, "may_change_proxy") and not building and not taken:
         actions.append(_change_ip_form(user, serial, back))
     return " ".join(actions)

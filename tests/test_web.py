@@ -2430,7 +2430,10 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     assert 'class="badge ready">Ready</span> <span class="badge manual"' \
         not in body, "one pill, not two, once it is taken (2026-09-08)"
     assert app_mod.pages._ago("2026-09-03 10:00:00+00") in body
-    assert '/phones/1500/state' in body and 'value="taken"' in body
+    # The free phone offers Boot, not Take (2026-09-16); the door still
+    # knows the word, below.
+    assert '/phones/1500/boot' in body
+    assert '/phones/1500/state' not in body and 'value="taken"' not in body
     assert 'value="unused"' in body and "Release" in body, \
         "a taken phone can be let go"
     assert body.count('value="done"') == 1, "only the taken phone closes here"
@@ -2438,7 +2441,7 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     # Only on the free phone: a phone you hold comes back first - Done,
     # Failed, Release - and its exit is changed once it is back.
     assert body.count("Change IP") == 1, "on the free phone only"
-    shelf = body.index('/phones/1500/state')
+    shelf = body.index('/phones/1500/boot')
     assert shelf < body.index('/phones/1501/state'), \
         "the shelf first, then what is out with somebody"
 
@@ -2624,15 +2627,17 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    # Colour is for the three that end something - and Take, which is the
-    # one thing a row is for. Boot and the exit button are ordinary work
-    # on an ordinary phone: they wore green and amber, which is a page
-    # shouting five times and so emphasising nothing (2026-09-05).
-    for klass, label in (("quiet go", "Take"), ("quiet", "Release"),
-                         ("quiet ok", "Done"), ("quiet bad", "Failed"),
-                         ("quiet", "Change IP")):
+    # Colour is for the three that end something. The exit button is
+    # ordinary work on an ordinary phone: it wore amber, which is a page
+    # shouting and so emphasising nothing (2026-09-05). Boot is the one
+    # button on a free row since Take went (2026-09-16), and the one
+    # filled one: a power sign and no outline.
+    for klass, label in (("quiet", "Release"), ("quiet ok", "Done"),
+                         ("quiet bad", "Failed"), ("quiet", "Change IP")):
         assert f'class="{klass}">{label}<' in body, label
-    assert ">Boot<" in body
+    assert '<button class="boot" title=' in body
+    assert "</svg>Boot</button>" in body
+    assert ">Take<" not in body, "Take went with the Live tab's close"
     assert 'class="quiet live"' not in body, "Boot is not a fourth colour"
     assert 'class="quiet warn">Change IP' not in body, "nor is the exit"
 
@@ -5012,7 +5017,10 @@ def test_a_phone_geelark_has_on_reads_running_and_offers_no_boot(web,
         return body[start:body.index("</tr>", start)]
 
     assert 'nobody here holds it">Running</span>' in row("1862")
-    assert ">Boot<" not in row("1862") and ">Take<" in row("1862")
+    # Neither Boot (it is on) nor Take (gone, 2026-09-16): the keeper
+    # switches it off after an hour and the row offers Boot again then.
+    assert ">Boot<" not in row("1862") and ">Take<" not in row("1862")
+    assert ">Change IP<" in row("1862")
     # A phone being built is on because the build has it: Building.
     _dash(monkeypatch, phones=[{"serial": "1939", "status": "building",
                                 "state": "", "running": True}])
@@ -6560,3 +6568,39 @@ def test_the_live_tab_offers_done_and_failed_beside_its_controls(web,
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
     assert 'class="gf-acts"' not in body and "window.confirm" not in body
     assert 'id="gf-reload"' in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_take_is_gone_and_boot_is_the_one_door_onto_a_free_phone(web,
+                                                                 monkeypatch):
+    """Boot takes the phone and the Live tab's closing releases it, so
+    Take - a hold with no way back but a button somebody forgets - went
+    (the operator, 2026-09-16). A free row offers Boot and Change IP; a
+    taken one Release, Done and Failed; the phone's own page the same.
+    The state door still knows the word, for the requests already in
+    flight and the panel's own rows."""
+    _dash(monkeypatch, phones=[
+        {"serial": "1500", "status": "ready", "state": ""},
+        {"serial": "1501", "status": "ready", "state": "taken",
+         "owner": "mehdi"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    def row(serial):
+        start = body.index(f'href="/phones/{serial}"')
+        return body[start:body.index("</tr>", start)]
+
+    free, taken = row("1500"), row("1501")
+    assert ">Take<" not in body and 'value="taken"' not in body
+    assert "</svg>Boot</button>" in free and ">Change IP<" in free
+    for label in ("Release", "Done", "Failed"):
+        assert f">{label}<" not in free and f">{label}<" in taken, label
+    assert "</svg>Boot</button>" not in taken
+
+    from geelark_farm.web import pages
+    user = {"csrf": "c", "mutations": True, "role": "admin",
+            "username": "mehdi", "id": 1}
+    assert pages._state_forms(user, {"serial": "1500", "state": ""}) == []
+    assert len(pages._state_forms(user, {"serial": "1500",
+                                         "state": "taken"})) == 3
