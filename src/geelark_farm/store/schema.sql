@@ -849,3 +849,13 @@ CREATE INDEX IF NOT EXISTS code_requests_waiting
 -- 2026-09-16: "when we close the tab the phone stays on and keeps
 -- burning money"). NULL = no console tab ever watched it.
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz;
+
+-- ----------------------------------------- phones, rev 32 (tab closed)
+-- When the console's Live tab said it was closing (a beacon on pagehide),
+-- cleared by the next beat. The beat alone was the signal, and Chrome
+-- slows a hidden tab's clock to once a minute after five minutes out of
+-- sight - so a phone in use behind another window read as abandoned and
+-- was switched off under the operator (2026-09-16). Now the close is
+-- said outright, and the beat's silence is judged over minutes, not
+-- seconds.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS tab_closed_at timestamptz;

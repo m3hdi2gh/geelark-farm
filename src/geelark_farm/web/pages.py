@@ -4284,9 +4284,11 @@ def live_page(serial: str, user: dict, said: str = "",
                 live="")
 
 
-#: How often the Live tab tells the farm it is open, in milliseconds.
-#: The keeper's grace (LIVE_TAB_GRACE_SECONDS, 45) allows one missed beat.
-LIVE_BEAT_MS = 20000
+#: How often the Live tab tells the farm it is open, in milliseconds. A
+#: hidden tab's clock runs once a minute in Chrome whatever this says;
+#: the keeper's grace (LIVE_TAB_GRACE_SECONDS, three minutes) allows for
+#: that, and a real close is said by the pagehide beacon, not by silence.
+LIVE_BEAT_MS = 15000
 #: The width the viewer is asked for, and the box it draws itself in at
 #: that width (measured: w + 56 wide, 2w + 32 tall). The box is then
 #: scaled to the window, so these only fix the drawing's resolution.
@@ -4333,19 +4335,38 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         " frame.style.transform='scale('+k+')';"
         "}"
         "fit(); window.addEventListener('resize',fit);"
+        "var form='csrf='+encodeURIComponent(csrf);"
+        "var gone=false;"
         "function beat(){"
+        " if(gone) return;"
         " fetch('/phones/'+serial+'/watching',{method:'POST',"
         "  credentials:'same-origin',keepalive:true,"
         "  headers:{'Content-Type':'application/x-www-form-urlencoded'},"
-        "  body:'csrf='+encodeURIComponent(csrf)})"
+        "  body:form})"
         " .then(function(r){"
-        "  if(r.status===410){word.textContent='released - this phone is "
-        "no longer yours; close the tab';}"
+        "  if(r.status===410){gone=true; released();}"
         "  else if(r.ok){word.textContent='watching - close this tab to "
         "switch the phone off';}"
         " }).catch(function(){});"
         "}"
+        "function released(){"
+        " word.textContent='released - this phone is no longer yours';"
+        " document.getElementById('gf-stage').innerHTML="
+        "  '<div class=\"gf-gone\"><h2>This phone was put back</h2>"
+        "<p>It is no longer yours - switched off after its tab closed, "
+        "or released from the dashboard. Close this tab; to use it again, "
+        "boot it from the dashboard.</p>"
+        "<a class=\"btn\" href=\"/\">Dashboard</a></div>';"
+        "}"
+        "function closing(){"
+        " if(gone) return;"
+        " navigator.sendBeacon('/phones/'+serial+'/closing',"
+        "  new Blob([form],{type:'application/x-www-form-urlencoded'}));"
+        "}"
         f"beat(); setInterval(beat,{LIVE_BEAT_MS});"
+        "window.addEventListener('pagehide',closing);"
+        "document.addEventListener('visibilitychange',function(){"
+        " if(document.visibilityState==='visible') beat();});"
         "})();"
     )
     body = (
@@ -4360,6 +4381,7 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         '#gf-box{position:relative;overflow:hidden}'
         f'#gf-view{{border:0;width:{VIEWER_BOX[0]}px;height:{VIEWER_BOX[1]}px;'
         'background:#000;display:block;transform-origin:0 0}'
+        '.gf-gone{max-width:420px;margin:80px auto;text-align:center}'
         '</style>'
         f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
         f'<span id="gf-watch">connecting</span>'

@@ -2571,7 +2571,15 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
             'allow="clipboard-read; clipboard-write; fullscreen">') in body
     assert 'base="https://phone.geelark.com/i?t=abc"' in body
     assert "fetch('/phones/'+serial+'/watching'" in body
-    assert "setInterval(beat,20000)" in body
+    assert "setInterval(beat,15000)" in body
+    # A real close is said outright, so it never waits on the beat's
+    # grace - and a released phone is said on the page, not only in the
+    # bar (operators found "token has expired" instead, 2026-09-16).
+    assert "navigator.sendBeacon('/phones/'+serial+'/closing'" in body
+    assert "window.addEventListener('pagehide',closing)" in body
+    assert "if(document.visibilityState==='visible') beat();" in body
+    assert "if(r.status===410){gone=true; released();}" in body
+    assert "This phone was put back" in body
     assert 'var serial="1500"' in body and "<nav>" not in body, "bare"
     # One fixed width for the viewer, and its box scaled to the window:
     # the phone fits any monitor, Back and Home included (2026-09-16).
@@ -6290,3 +6298,29 @@ def test_the_live_tabs_beat_stamps_the_phone_and_says_when_it_is_over(
     status, _, _ = client.request("POST", "/phones/1500/watching",
                                   _form(csrf="wrong"))
     assert status == 403
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tabs_closing_beacon_is_noted_and_the_next_beat_clears_it(
+        web, monkeypatch):
+    """pagehide fires on a reload as well as a close; the beacon stamps
+    the closing, the reloaded page's first beat clears it, and the sweep
+    waits longer than that before acting (forgotten.TAB_CLOSED_SECONDS).
+    """
+    from geelark_farm.store import person
+
+    assert "tab_closed_at = NULL" in inspect.getsource(person.watch)
+    closed = inspect.getsource(person.tab_closed)
+    assert "SET tab_closed_at = now()" in closed
+    assert "AND state = 'taken'" in closed
+    seen = []
+    monkeypatch.setattr(person, "tab_closed",
+                        lambda s, serial: seen.append(serial) or True)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True})
+    client = web()
+    client.login(username="sara")
+    status, _, body = client.request("POST", "/phones/1500/closing",
+                                     _form(csrf=client.csrf()))
+    assert status == 200 and body == "noted" and seen == ["1500"]

@@ -1818,3 +1818,5 @@ def test_the_schema_carries_the_live_tabs_beat():
     sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
         encoding="utf-8")
     assert "ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz" in sql
+    assert ("ALTER TABLE phones ADD COLUMN IF NOT EXISTS tab_closed_at "
+            "timestamptz") in sql

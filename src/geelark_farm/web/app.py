@@ -450,6 +450,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._text(200 if still else 410,
                                   "watching" if still else "released")
             if self.path.startswith("/phones/") and \
+                    self.path.endswith("/closing"):
+                # The Live tab's pagehide beacon: the tab is closing (or
+                # reloading - the next beat says which). The sweep acts
+                # on it twenty seconds later (forgotten.TAB_CLOSED_SECONDS).
+                from ..store import person
+
+                serial = self.path[len("/phones/"):-len("/closing")]
+                try:
+                    person.tab_closed(self.settings, serial)
+                except Exception as exc:                          # noqa: BLE001
+                    log.debug("closing of %s not written (%s)", serial, exc)
+                return self._text(200, "noted")
+            if self.path.startswith("/phones/") and \
                     self.path.endswith("/boot"):
                 # One press: start the phone in GeeLark, take it, and hand
                 # the live-view link to the tab that is waiting for it.
@@ -2055,7 +2068,7 @@ def _operator_may_post(path: str) -> bool:
         return True
     # One phone: boot it, take it, hand it back, change its exit.
     if path.startswith("/phones/") and path.rsplit("/", 1)[-1] in (
-            "boot", "state", "proxy", "stop", "watching"):
+            "boot", "state", "proxy", "stop", "watching", "closing"):
         return True
     # One failed hand-built request: take it off the list.
     return path.startswith("/wishes/") and path.endswith("/dismiss")

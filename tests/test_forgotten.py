@@ -226,11 +226,11 @@ def test_a_ledger_that_is_none_holds_nothing(farm):
 
 
 def test_the_span_reads_like_a_person_would_say_it():
-    assert forgotten._span(0) == "0 min"
-    assert forgotten._span(3599) == "59 min"
+    assert forgotten._span(0) == "0 s"
+    assert forgotten._span(3599) == "59 min" and forgotten._span(35) == "35 s"
     assert forgotten._span(3600) == "1 h 0 min"
     assert forgotten._span(4320.7) == "1 h 12 min"
-    assert forgotten._span(None) == "0 min"
+    assert forgotten._span(None) == "0 s"
 
 
 def test_what_the_store_is_asked_and_told():
@@ -249,16 +249,18 @@ def test_what_the_store_is_asked_and_told():
     assert forgotten.ON == (phones_mod.RUNNING, phones_mod.STARTING)
 
 
-def test_a_phone_whose_live_tab_closed_is_switched_off_within_the_grace(
-        farm):
-    """The console's tab beats every twenty seconds; forty-five seconds
-    of silence is a closed tab, and that - not the hour - is the reason
-    said (the operator, 2026-09-16)."""
+def test_a_phone_whose_live_tab_said_it_closed_is_switched_off(farm):
+    """The tab's pagehide beacon is the signal; twenty seconds later, with
+    no beat since (a reload would have sent one), the phone is off - and
+    that, not the hour, is the reason said (the operator, 2026-09-16)."""
     from datetime import datetime, timezone
 
     row = _row("2713", on=2100, taken=2100)
     row["watched_at"] = datetime(2026, 9, 16, 10, 0, tzinfo=timezone.utc)
-    row["unwatched_seconds"] = 61
+    row["tab_closed_at"] = datetime(2026, 9, 16, 10, 0, 5,
+                                    tzinfo=timezone.utc)
+    row["unwatched_seconds"] = 40
+    row["closed_seconds"] = 35
     farm.rows.append(row)
 
     outcome = forgotten.sweep(object(), farm.settings, farm.ledger,
@@ -266,7 +268,29 @@ def test_a_phone_whose_live_tab_closed_is_switched_off_within_the_grace(
 
     assert outcome["off"] == ["2713"] and outcome["released"] == ["2713"]
     assert farm.events[0][1]["detail"] == (
-        "switched off and put back 1 min after its live tab closed with ali")
+        "switched off and put back 35 s after its live tab closed with ali")
+
+
+def test_a_tab_that_went_silent_for_minutes_is_taken_as_closed_and_says_so(
+        farm):
+    """The browser was killed, or the laptop shut: no beacon, and no beat
+    for the grace. Minutes of it, because a hidden tab's clock runs once
+    a minute in Chrome and forty-five seconds switched phones off under
+    operators working behind another window (2026-09-16)."""
+    from datetime import datetime, timezone
+
+    row = _row("2713", on=2100, taken=2100)
+    row["watched_at"] = datetime(2026, 9, 16, 10, 0, tzinfo=timezone.utc)
+    row["unwatched_seconds"] = 200
+    farm.rows.append(row)
+
+    outcome = forgotten.sweep(object(), farm.settings, farm.ledger,
+                              [_on("2713")])
+
+    assert outcome["off"] == ["2713"]
+    assert farm.events[0][1]["detail"] == (
+        "switched off and put back 3 min after its live tab went silent "
+        "with ali - the browser was closed without the tab saying so")
 
 
 def test_the_hour_rules_spare_a_phone_whose_tab_is_beating():
@@ -281,7 +305,9 @@ def test_the_hour_rules_spare_a_phone_whose_tab_is_beating():
     assert ("p.running AND p.watched_at IS NOT NULL"
             "         AND p.watched_at < now() - %s * interval '1 second'"
             ) in read
-    sig = inspect.signature(forgotten.overdue)
-    assert sig.parameters["grace"].default == 45
+    assert ("p.running AND p.tab_closed_at IS NOT NULL"
+            "         AND p.tab_closed_at < now() - %s * interval '1 second'"
+            ) in read
+    assert forgotten.TAB_CLOSED_SECONDS == 20, "longer than a reload takes"
     src = inspect.getsource(forgotten.sweep)
     assert 'getattr(settings, "live_tab_grace_seconds", 45)' in src

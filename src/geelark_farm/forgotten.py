@@ -27,12 +27,17 @@ The clock is two columns on the phone row (schema rev 29): `state_at`,
 stamped by every write of `state`, and `running_since`, set by the pass
 that first sees the phone on and cleared by the one that sees it off.
 
-A third, `watched_at` (rev 31), is the console's Live tab: it keeps
-GeeLark's viewer inside itself and beats every twenty seconds while it
-is open. A phone whose beat stopped LIVE_TAB_GRACE_SECONDS ago had its
-tab closed, and is switched off and put back within a minute - which is
-what the operator wanted the tab's close button to do (2026-09-16). And
-a phone whose tab is beating is in use, however long ago it was taken:
+A third and fourth, `watched_at` and `tab_closed_at` (revs 31-32), are
+the console's Live tab: it keeps GeeLark's viewer inside itself, beats
+every fifteen seconds while it is open, and sends a beacon as it closes.
+A phone whose tab said it closed TAB_CLOSED_SECONDS ago - and has not
+beaten since, which a reload would - is switched off and put back within
+a minute, which is what the operator wanted the tab's close button to do
+(2026-09-16). A phone whose beat has been silent for
+LIVE_TAB_GRACE_SECONDS (minutes: a hidden tab's clock runs once a
+minute in Chrome, and a shorter grace switched phones off under
+operators working behind another window) is taken as closed too. And a
+phone whose tab is beating is in use, however long ago it was taken:
 the hour rules leave it alone until the beat stops.
 """
 
@@ -47,6 +52,11 @@ log = logging.getLogger(__name__)
 #: The two GeeLark states in which a phone is billing.
 ON = (phones_mod.RUNNING, phones_mod.STARTING)
 
+#: How long after a Live tab's closing beacon its phone is switched off,
+#: unless a beat came after it: a reload fires the beacon too, and the
+#: reloaded page beats within a second or two of loading.
+TAB_CLOSED_SECONDS = 20
+
 
 def overdue(settings, minutes: int, grace: int = 45) -> list[dict]:
     """The phones over the clock: taken for longer than `minutes`, or on
@@ -59,11 +69,12 @@ def overdue(settings, minutes: int, grace: int = 45) -> list[dict]:
              " OR p.watched_at < now() - %s * interval '1 second')")
     with Store(settings) as store:
         return store._rows(
-            "SELECT p.serial, p.status, p.state, p.watched_at,"
+            "SELECT p.serial, p.status, p.state, p.watched_at, p.tab_closed_at,"
             " coalesce(u.username, '') AS owner,"
             " extract(epoch FROM now() - p.state_at) AS taken_seconds,"
             " extract(epoch FROM now() - p.running_since) AS on_seconds,"
-            " extract(epoch FROM now() - p.watched_at) AS unwatched_seconds"
+            " extract(epoch FROM now() - p.watched_at) AS unwatched_seconds,"
+            " extract(epoch FROM now() - p.tab_closed_at) AS closed_seconds"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL AND p.status <> 'building'"
             "   AND ((p.state = 'taken'"
@@ -72,10 +83,13 @@ def overdue(settings, minutes: int, grace: int = 45) -> list[dict]:
             "     OR (p.running AND p.running_since IS NOT NULL"
             "         AND p.running_since < now() - %s * interval '1 minute'"
             f"        AND {quiet})"
+            "     OR (p.running AND p.tab_closed_at IS NOT NULL"
+            "         AND p.tab_closed_at < now() - %s * interval '1 second')"
             "     OR (p.running AND p.watched_at IS NOT NULL"
             "         AND p.watched_at < now() - %s * interval '1 second'))"
             " ORDER BY p.serial",
-            (int(minutes), int(grace), int(minutes), int(grace), int(grace)))
+            (int(minutes), int(grace), int(minutes), int(grace),
+             int(TAB_CLOSED_SECONDS), int(grace)))
 
 
 def _release(settings, serial: str) -> bool:
@@ -96,17 +110,25 @@ def _span(seconds) -> str:
     """"1 h 12 min", or "48 min"."""
     whole = max(0, int(float(seconds or 0)))
     hours, minutes = divmod(whole // 60, 60)
+    if not hours and not minutes:
+        return f"{whole} s"
     return f"{hours} h {minutes} min" if hours else f"{minutes} min"
 
 
 def _sentence(row: dict, *, off: bool, released: bool) -> str:
     owner = str(row.get("owner") or "")
     with_whom = f" with {owner}" if owner else ""
-    if row.get("watched_at") is not None and off:
-        # The console's tab was closed: that, not the hour, is the reason.
-        since = _span(row.get("unwatched_seconds"))
+    if row.get("tab_closed_at") is not None and off:
+        # The console's tab said it was closing: that, not the hour, is
+        # the reason.
+        since = _span(row.get("closed_seconds"))
         what = "switched off and put back" if released else "switched off"
         return f"{what} {since} after its live tab closed{with_whom}"
+    if row.get("watched_at") is not None and off:
+        since = _span(row.get("unwatched_seconds"))
+        what = "switched off and put back" if released else "switched off"
+        return (f"{what} {since} after its live tab went silent{with_whom} "
+                f"- the browser was closed without the tab saying so")
     if released:
         since = _span(row.get("taken_seconds"))
         if off:

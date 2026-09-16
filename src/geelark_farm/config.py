@@ -422,10 +422,13 @@ class Settings:
     #: CODE_WAIT_MINUTES.
     code_wait_minutes: int = 10
     #: How long after a console Live tab's last beat the phone it was
-    #: watching is switched off and put back (forgotten.sweep). The tab
-    #: beats every twenty seconds; forty-five leaves one missed beat.
-    #: LIVE_TAB_GRACE_SECONDS.
-    live_tab_grace_seconds: int = 45
+    #: watching is switched off and put back (forgotten.sweep). Minutes,
+    #: not seconds: Chrome slows a hidden tab's clock to one beat a minute
+    #: after five minutes out of sight, and forty-five seconds switched
+    #: phones off under operators working behind another window
+    #: (2026-09-16). A closed tab is said outright by its beacon and does
+    #: not wait for this. LIVE_TAB_GRACE_SECONDS.
+    live_tab_grace_seconds: int = 180
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -582,8 +585,8 @@ class Settings:
             release_after_minutes=_int("RELEASE_AFTER_MINUTES", 60,
                                        minimum=0),
             code_wait_minutes=_int("CODE_WAIT_MINUTES", 10),
-            live_tab_grace_seconds=_int("LIVE_TAB_GRACE_SECONDS", 45,
-                                        minimum=10),
+            live_tab_grace_seconds=_int("LIVE_TAB_GRACE_SECONDS", 180,
+                                        minimum=60),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),
             sign_in_via=(_str("SIGN_IN_VIA", "settings").strip().lower()

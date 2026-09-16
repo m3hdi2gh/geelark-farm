@@ -133,7 +133,22 @@ def watch(settings: Settings, serial: str) -> bool:
         return False
     with Store(settings) as store:
         rows = store._write(
-            "UPDATE phones SET watched_at = now()"
+            "UPDATE phones SET watched_at = now(), tab_closed_at = NULL"
+            " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
+            " RETURNING id", (wanted,))
+    return bool(rows)
+
+
+def tab_closed(settings: Settings, serial: str) -> bool:
+    """A console Live tab on this phone is closing - its pagehide beacon.
+    A reload fires it too, and the reloaded page's first beat clears it
+    within seconds; the sweep waits longer than that before acting."""
+    wanted = str(serial or "").strip()
+    if not wanted:
+        return False
+    with Store(settings) as store:
+        rows = store._write(
+            "UPDATE phones SET tab_closed_at = now()"
             " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
             " RETURNING id", (wanted,))
     return bool(rows)
