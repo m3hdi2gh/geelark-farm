@@ -6324,3 +6324,63 @@ def test_the_live_tabs_closing_beacon_is_noted_and_the_next_beat_clears_it(
     status, _, body = client.request("POST", "/phones/1500/closing",
                                      _form(csrf=client.csrf()))
     assert status == 200 and body == "noted" and seen == ["1500"]
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
+        web, monkeypatch):
+    """Address, password (hidden until shown), the authenticator's code
+    computed in the page and its key - beside the screen, for whoever
+    holds the phone (the operator, 2026-09-16). Somebody else's phone
+    gets no margin at all."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import pages
+    from geelark_farm.web import read as read_mod
+
+    row = {"id": 71, "verb": "boot_phone", "status": "done", "result": "ok",
+           "detail": {"state": "taken",
+                      "url": "https://phone.geelark.com/i?t=abc"},
+           "requested_by": 7}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    creds = {"address": "islandalaskans@gmail.com", "password": "pa$$w<rd",
+             "totp_secret": "JBSWY3DPEHPK3PXP"}
+    monkeypatch.setattr(read_mod, "gmail_on_phone",
+                        lambda s, serial: dict(creds, asked=serial))
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "app_only",
+                                    "state": "taken", "owner": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
+    assert '<aside id="gf-side"><h3>On this phone</h3>' in body
+    assert '<code id="gf-mail">islandalaskans@gmail.com</code>' in body
+    assert 'data-value="pa$$w&lt;rd"' in body, "escaped, and hidden"
+    assert "\u2022" * 8 in body and "pa$$w<rd" not in body
+    assert 'data-secret="JBSWY3DPEHPK3PXP"' in body
+    assert "crypto.subtle.importKey('raw',b32(secret)" in body
+    assert "%1000000" in body and "setInterval(tick,1000)" in body
+    assert "navigator.clipboard.writeText" in body
+
+    # Somebody else's phone: the margin is not drawn, whatever the
+    # store would say.
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "app_only",
+                                    "state": "taken", "owner": "ali"},
+        "timeline": []})
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True})
+    other = web()
+    other.login(username="sara")
+    _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
+    assert '<aside id="gf-side"' not in body and "JBSWY3DPEHPK3PXP" not in body
+
+    # No Gmail on the phone: no margin, and the page still draws.
+    drawn = pages.viewer_page("1500", {"csrf": "c"}, "https://x/", creds=None)
+    assert '<aside id="gf-side"' not in drawn and 'id="gf-view"' in drawn
+    # A row with no key says so rather than computing nothing.
+    drawn = pages.viewer_page("1500", {"csrf": "c"}, "https://x/",
+                              creds={"address": "a@b.com", "password": "",
+                                     "totp_secret": ""})
+    assert "none on the row" in drawn and 'id="gf-totp"' not in drawn

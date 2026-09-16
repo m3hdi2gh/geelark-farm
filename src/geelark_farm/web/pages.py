@@ -4228,6 +4228,7 @@ def dashboard(data: dict, user: dict, said: str = "",
 
 
 def live_page(serial: str, user: dict, said: str = "",
+              creds: dict | None = None,
               row: dict | None = None) -> str:
     """The tab Boot opens.
 
@@ -4242,7 +4243,7 @@ def live_page(serial: str, user: dict, said: str = "",
     url = str((row.get("detail") or {}).get("url") or "") if isinstance(
         row.get("detail"), dict) else ""
     if status == "done" and url:
-        return viewer_page(serial, user, url)
+        return viewer_page(serial, user, url, creds=creds)
     wait = 0
     if said == "refused":
         title, note, colour = ("Not allowed",
@@ -4296,9 +4297,16 @@ VIEWER_WIDTH = 360
 VIEWER_BOX = (VIEWER_WIDTH + 56, 2 * VIEWER_WIDTH + 32)
 
 
-def viewer_page(serial: str, user: dict, url: str) -> str:
+def viewer_page(serial: str, user: dict, url: str,
+                creds: dict | None = None) -> str:
     """The Live tab once the phone is up: GeeLark's viewer inside this
-    page, and a beat every twenty seconds that says the tab is open.
+    page, and a beat every fifteen seconds that says the tab is open.
+
+    `creds` is the Gmail signed into the phone - address, password and
+    authenticator key - drawn in the margin for whoever holds the phone,
+    with the authenticator's current code computed in the page and
+    counted down (the operator, 2026-09-16: "write the Gmail's details
+    cleanly beside the screen"). None draws no margin.
 
     It used to send the tab to GeeLark's own page, whose closing nobody
     could see - so a phone booted from the console ran on after its tab
@@ -4323,12 +4331,13 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         f" base={_js(url)};"
         "var frame=document.getElementById('gf-view');"
         "var box=document.getElementById('gf-box');"
+        "var stage=document.getElementById('gf-stage');"
         "var word=document.getElementById('gf-watch');"
         f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]};"
         "var u=new URL(base); u.searchParams.set('w',String(W));"
         "frame.setAttribute('src',u.href);"
         "function fit(){"
-        " var h=window.innerHeight-36, w=window.innerWidth;"
+        " var h=window.innerHeight-36, w=stage.clientWidth||window.innerWidth;"
         " var k=Math.min(h/BOX_H,w/BOX_W);"
         " box.style.width=Math.floor(BOX_W*k)+'px';"
         " box.style.height=Math.floor(BOX_H*k)+'px';"
@@ -4369,6 +4378,7 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         " if(document.visibilityState==='visible') beat();});"
         "})();"
     )
+    margin = _gmail_margin(creds) if creds else ""
     body = (
         '<style>html,body{overflow:hidden}'
         '#gf-wrap{position:fixed;inset:0;display:flex;flex-direction:column;'
@@ -4382,14 +4392,33 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         f'#gf-view{{border:0;width:{VIEWER_BOX[0]}px;height:{VIEWER_BOX[1]}px;'
         'background:#000;display:block;transform-origin:0 0}'
         '.gf-gone{max-width:420px;margin:80px auto;text-align:center}'
+        '#gf-body{flex:1;display:flex;min-height:0}'
+        '#gf-side{flex:none;width:300px;padding:18px 16px;overflow:auto;'
+        'border-left:1px solid var(--line);font-size:13px}'
+        '#gf-side h3{margin:0 0 12px;font-size:12px;letter-spacing:.06em;'
+        'text-transform:uppercase;color:var(--muted)}'
+        '.gf-row{margin:0 0 14px}'
+        '.gf-row .lbl{display:block;color:var(--muted);font-size:11px;'
+        'margin-bottom:3px}'
+        '.gf-row .val{display:flex;align-items:center;gap:8px}'
+        '.gf-row .val code{flex:1;min-width:0;overflow-wrap:anywhere;'
+        'font-size:13px}'
+        '.gf-row button{flex:none;font-size:11px;padding:2px 8px}'
+        '.gf-code{font-size:28px;letter-spacing:.14em;font-weight:600;'
+        'font-variant-numeric:tabular-nums}'
+        '.gf-bar{height:3px;background:var(--line);border-radius:2px;'
+        'margin-top:6px;overflow:hidden}'
+        '.gf-bar i{display:block;height:100%;background:var(--ok,#3c9)}'
+        '@media (max-width:820px){#gf-body{flex-direction:column}'
+        '#gf-side{width:auto;border-left:0;border-top:1px solid var(--line)}}'
         '</style>'
         f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
         f'<span id="gf-watch">connecting</span>'
         f'<a class="dim" href="/" style="margin-left:auto">Dashboard</a></div>'
-        f'<div id="gf-stage"><div id="gf-box">'
+        f'<div id="gf-body"><div id="gf-stage"><div id="gf-box">'
         f'<iframe id="gf-view" data-src="{esc(url)}" '
         f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
-        f'</div></div></div>'
+        f'</div></div>{margin}</div></div>'
         f'<script>{beat}</script>')
     return page(f"Phone {serial}", body, user=user, here="/", live="",
                 bare=True)
@@ -7403,3 +7432,96 @@ def store_down_page(retry: tuple | None = None) -> str:
             f'<script>setTimeout(function(){{ location.reload(); }}, '
             f'30000);</script>')
     return page("Store down", body, refresh=30)
+
+
+#: The authenticator, in the page: base32 to bytes, HMAC-SHA1 through
+#: WebCrypto, the RFC 6238 truncation - so the code is right to the
+#: second and counts down, instead of riding on a beat that is fifteen
+#: seconds old. The page is served over TLS, which WebCrypto requires.
+_TOTP_SCRIPT = (
+    "(function(){"
+    "var el=document.getElementById('gf-totp'); if(!el) return;"
+    "var secret=el.getAttribute('data-secret');"
+    "var bar=document.getElementById('gf-totp-bar');"
+    "function b32(s){s=s.replace(/[^A-Za-z2-7]/g,'').toUpperCase();"
+    " var A='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',bits='',out=[];"
+    " for(var i=0;i<s.length;i++){bits+=A.indexOf(s[i]).toString(2).padStart(5,'0');}"
+    " for(var j=0;j+8<=bits.length;j+=8){out.push(parseInt(bits.slice(j,j+8),2));}"
+    " return new Uint8Array(out);}"
+    "var keyP=crypto.subtle.importKey('raw',b32(secret),{name:'HMAC',hash:'SHA-1'},false,['sign']);"
+    "var last=-1;"
+    "function tick(){"
+    " var now=Math.floor(Date.now()/1000), step=Math.floor(now/30), left=30-(now%30);"
+    " if(bar) bar.style.width=(left/30*100)+'%';"
+    " if(step===last) return; last=step;"
+    " keyP.then(function(key){"
+    "  var msg=new Uint8Array(8), t=step;"
+    "  for(var i=7;i>=0;i--){msg[i]=t&255; t=Math.floor(t/256);}"
+    "  return crypto.subtle.sign('HMAC',key,msg);"
+    " }).then(function(sig){"
+    "  var h=new Uint8Array(sig), o=h[19]&15;"
+    "  var c=((h[o]&127)<<24|h[o+1]<<16|h[o+2]<<8|h[o+3])%1000000;"
+    "  el.textContent=String(c).padStart(6,'0');"
+    " }).catch(function(){el.textContent='------';});"
+    "}"
+    "tick(); setInterval(tick,1000);"
+    "document.querySelectorAll('[data-copy]').forEach(function(b){"
+    " b.addEventListener('click',function(){"
+    "  var t=document.getElementById(b.getAttribute('data-copy'));"
+    "  var text=t.getAttribute('data-value')||t.textContent;"
+    "  navigator.clipboard.writeText(text).then(function(){"
+    "   b.textContent='copied'; setTimeout(function(){b.textContent='copy';},1500);});"
+    " });});"
+    "var pw=document.getElementById('gf-pw');"
+    "var show=document.getElementById('gf-pw-show');"
+    "if(pw&&show){show.addEventListener('click',function(){"
+    " var on=pw.textContent==='\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';"
+    " pw.textContent=on?pw.getAttribute('data-value'):'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';"
+    " show.textContent=on?'hide':'show';});}"
+    "})();"
+)
+
+
+def _gmail_margin(creds: dict) -> str:
+    """The Gmail beside the screen: address, password (hidden until
+    shown, copied without showing), the authenticator's code as it
+    stands, and the key it is made from."""
+    address = str(creds.get("address") or "")
+    password = str(creds.get("password") or "")
+    secret = str(creds.get("totp_secret") or "")
+    dots = "\u2022" * 8
+    rows = [
+        f'<div class="gf-row"><span class="lbl">Gmail</span>'
+        f'<div class="val"><code id="gf-mail">{esc(address)}</code>'
+        f'<button type="button" class="quiet" data-copy="gf-mail">copy'
+        f'</button></div></div>']
+    if password:
+        rows.append(
+            f'<div class="gf-row"><span class="lbl">Password</span>'
+            f'<div class="val"><code id="gf-pw" data-value="{esc(password)}">'
+            f'{dots}</code>'
+            f'<button type="button" class="quiet" id="gf-pw-show">show</button>'
+            f'<button type="button" class="quiet" data-copy="gf-pw">copy'
+            f'</button></div></div>')
+    else:
+        rows.append('<div class="gf-row"><span class="lbl">Password</span>'
+                    '<div class="val"><code class="dim">none on the row'
+                    '</code></div></div>')
+    if secret:
+        rows.append(
+            f'<div class="gf-row"><span class="lbl">Authenticator code</span>'
+            f'<div class="val"><code id="gf-totp" class="gf-code" '
+            f'data-secret="{esc(secret)}">------</code>'
+            f'<button type="button" class="quiet" data-copy="gf-totp">copy'
+            f'</button></div>'
+            f'<div class="gf-bar"><i id="gf-totp-bar"></i></div></div>'
+            f'<div class="gf-row"><span class="lbl">Authenticator key</span>'
+            f'<div class="val"><code id="gf-key">{esc(secret)}</code>'
+            f'<button type="button" class="quiet" data-copy="gf-key">copy'
+            f'</button></div></div>')
+    else:
+        rows.append('<div class="gf-row"><span class="lbl">Authenticator'
+                    '</span><div class="val"><code class="dim">none on the '
+                    'row</code></div></div>')
+    return (f'<aside id="gf-side"><h3>On this phone</h3>{"".join(rows)}'
+            f'<script>{_TOTP_SCRIPT}</script></aside>')

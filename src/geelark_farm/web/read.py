@@ -1425,3 +1425,21 @@ def screen_file(settings: Settings, serial: str, folder: str, name: str):
         log.debug("screen %s/%s not served (%s)", folder, name, exc)
         return None
     return path
+
+
+def gmail_on_phone(settings: Settings, serial: str) -> dict | None:
+    """The Gmail signed into this phone, with what the operator needs
+    beside the screen: the address, its password and its authenticator
+    key. Read for the Live tab (pages.viewer_page), and only handed to
+    the person holding the phone - see app.py. None when the phone has
+    no Gmail, or the pool no longer has the row."""
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT r.address, coalesce(r.password, '') AS password,"
+            " coalesce(r.totp_secret, '') AS totp_secret"
+            " FROM phones p JOIN resources r"
+            "   ON r.kind = 'gmail' AND lower(r.address) = lower(p.gmail)"
+            " WHERE p.serial = %s AND p.done_at IS NULL"
+            "   AND coalesce(p.gmail, '') <> ''"
+            " ORDER BY r.id DESC LIMIT 1", (str(serial),))
+    return rows[0] if rows else None

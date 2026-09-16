@@ -289,8 +289,11 @@ class _Handler(BaseHTTPRequestHandler):
                 # Once the link is there the page frames GeeLark's viewer
                 # rather than sending the tab to it: the tab's closing is
                 # the phone's off switch (pages.viewer_page, 2026-09-16).
+                creds = None
+                if row and row.get("status") == "done":
+                    creds = self._gmail_for_the_holder(user, serial)
                 return self._html(200, pages.live_page(
-                    serial, user, said=said, row=row))
+                    serial, user, said=said, row=row, creds=creds))
             if path.startswith("/phones/") and "/screens/" in path:
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -867,6 +870,20 @@ class _Handler(BaseHTTPRequestHandler):
         phone.
         """
         return self._holder_of(user, serial)[1]
+
+    def _gmail_for_the_holder(self, user: dict, serial: str) -> dict | None:
+        """The phone's Gmail, password and authenticator key, for the
+        Live tab's margin (the operator, 2026-09-16) - to whoever holds
+        the phone, or an admin, and nobody else. Never fatal: a store
+        that will not answer costs the margin, not the screen."""
+        try:
+            held, theirs = self._holder_of(user, serial)
+            if theirs:
+                return None
+            return read.gmail_on_phone(self.settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("gmail for %s not read (%s)", serial, exc)
+            return None
 
     def _holder_of(self, user: dict, serial: str) -> tuple[str, str]:
         """(who holds the phone, who holds it against this person). The
