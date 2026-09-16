@@ -4282,6 +4282,11 @@ def live_page(serial: str, user: dict, said: str = "",
 #: How often the Live tab tells the farm it is open, in milliseconds.
 #: The keeper's grace (LIVE_TAB_GRACE_SECONDS, 45) allows one missed beat.
 LIVE_BEAT_MS = 20000
+#: The width the viewer is asked for, and the box it draws itself in at
+#: that width (measured: w + 55 wide, 2w + 40 tall). The box is then
+#: scaled to the window, so these only fix the drawing's resolution.
+VIEWER_WIDTH = 360
+VIEWER_BOX = (VIEWER_WIDTH + 55, 2 * VIEWER_WIDTH + 40)
 
 
 def viewer_page(serial: str, user: dict, url: str) -> str:
@@ -4295,26 +4300,34 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
     beat stops the keeper switches the phone off and puts it back
     (forgotten.sweep), which is what closing the tab means.
 
-    The viewer's own width parameter decides how tall it draws itself,
-    and at GeeLark's default the phone's Back and Home ran off the bottom
-    of an ordinary window. The width is set from the window's height, so
-    the whole phone fits: measured on the operator's screen, the viewer
-    draws 2.12 times its width plus a 46px title bar (a first guess of
-    2.45 left a third of the window empty, 2026-09-16).
+    The viewer draws itself at a size of its own - its `w` parameter,
+    plus a title bar and a toolbar - and at GeeLark's default the phone's
+    Back and Home ran off the bottom of an ordinary window, while a
+    width picked from the window's height left a third of it empty on
+    the operator's screen (2026-09-16). So the viewer is asked for one
+    fixed width and drawn in a box of its natural size, and the box is
+    scaled with CSS to whatever the window is - both ways, on any
+    monitor. Measured on two screens: a phone of width w draws
+    (w + 55) wide and (2w + 40) tall.
     """
     beat = (
         "(function(){"
         f"var serial={_js(serial)}, csrf={_js(str(user.get('csrf') or ''))},"
         f" base={_js(url)};"
         "var frame=document.getElementById('gf-view');"
+        "var box=document.getElementById('gf-box');"
         "var word=document.getElementById('gf-watch');"
+        f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]};"
+        "var u=new URL(base); u.searchParams.set('w',String(W));"
+        "frame.setAttribute('src',u.href);"
         "function fit(){"
-        " var h=window.innerHeight-36;"
-        " var w=Math.max(200,Math.min(640,Math.floor((h-46)/2.12)));"
-        " var u=new URL(base); u.searchParams.set('w',String(w));"
-        " if(frame.getAttribute('src')!==u.href) frame.setAttribute('src',u.href);"
+        " var h=window.innerHeight-36, w=window.innerWidth;"
+        " var k=Math.min(h/BOX_H,w/BOX_W);"
+        " box.style.width=Math.floor(BOX_W*k)+'px';"
+        " box.style.height=Math.floor(BOX_H*k)+'px';"
+        " frame.style.transform='scale('+k+')';"
         "}"
-        "fit();"
+        "fit(); window.addEventListener('resize',fit);"
         "function beat(){"
         " fetch('/phones/'+serial+'/watching',{method:'POST',"
         "  credentials:'same-origin',keepalive:true,"
@@ -4337,13 +4350,19 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
         '.viewbar{height:36px;flex:none;display:flex;align-items:center;'
         'gap:14px;padding:0 14px;font-size:13px;color:var(--muted)}'
         '.viewbar b{color:var(--ink)}'
-        '#gf-view{border:0;width:100%;flex:1;background:#000;display:block}'
+        '#gf-stage{flex:1;display:flex;justify-content:center;'
+        'align-items:flex-start;overflow:hidden}'
+        '#gf-box{position:relative;overflow:hidden}'
+        f'#gf-view{{border:0;width:{VIEWER_BOX[0]}px;height:{VIEWER_BOX[1]}px;'
+        'background:#000;display:block;transform-origin:0 0}'
         '</style>'
         f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
         f'<span id="gf-watch">connecting</span>'
         f'<a class="dim" href="/" style="margin-left:auto">Dashboard</a></div>'
-        f'<iframe id="gf-view" src="{esc(url)}" '
-        f'allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>'
+        f'<div id="gf-stage"><div id="gf-box">'
+        f'<iframe id="gf-view" data-src="{esc(url)}" '
+        f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
+        f'</div></div></div>'
         f'<script>{beat}</script>')
     return page(f"Phone {serial}", body, user=user, here="/", live="",
                 bare=True)

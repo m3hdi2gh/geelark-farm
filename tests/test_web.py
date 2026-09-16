@@ -2567,14 +2567,19 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     # The viewer inside this tab, not a redirect to GeeLark's page: the
     # tab's closing is the phone's off switch (2026-09-16).
     assert status == 200
-    assert ('<iframe id="gf-view" src="https://phone.geelark.com/i?t=abc" '
+    assert ('<iframe id="gf-view" data-src="https://phone.geelark.com/i?t=abc" '
             'allow="clipboard-read; clipboard-write; fullscreen">') in body
+    assert 'base="https://phone.geelark.com/i?t=abc"' in body
     assert "fetch('/phones/'+serial+'/watching'" in body
     assert "setInterval(beat,20000)" in body
     assert 'var serial="1500"' in body and "<nav>" not in body, "bare"
-    assert "u.searchParams.set('w',String(w))" in body, (
-        "the viewer's width follows the window's height so Back and Home "
-        "fit (the operator, 2026-09-16)")
+    # One fixed width for the viewer, and its box scaled to the window:
+    # the phone fits any monitor, Back and Home included (2026-09-16).
+    assert "u.searchParams.set('w',String(W))" in body
+    assert "var k=Math.min(h/BOX_H,w/BOX_W);" in body
+    assert "frame.style.transform='scale('+k+')'" in body
+    assert "window.addEventListener('resize',fit)" in body
+    assert "width:415px;height:760px" in body
     assert "gf-live" not in body and "addEventListener('submit'" not in body
 
     row.update(status="failed", result="phone 1500 would not start: "
