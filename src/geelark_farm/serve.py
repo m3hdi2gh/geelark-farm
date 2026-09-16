@@ -1072,6 +1072,20 @@ def _running(client: Client,
             if p.get("status") in (phones.RUNNING, phones.STARTING)]
 
 
+def _panel_waiting(book: Book) -> int:
+    """How many claimable accounts the panel sent - the ones the keeper
+    finishes by itself under manual login. Zero on a pool that cannot
+    say (the sheet's), which is what manual login always meant there."""
+    count = getattr(getattr(book, "apps", None), "panel_waiting", None)
+    if not callable(count):
+        return 0
+    try:
+        return int(count())
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not count the panel's accounts (%s)", exc)
+        return 0
+
+
 def _free_gmails(book: Book) -> int:
     """How many Gmails a build could claim right now.
 
@@ -1666,7 +1680,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # is concerned: an account sits in the pool until a person picks it on
     # the dashboard, and that command - not this arithmetic - starts the
     # finish. The real count still goes in the log line and the pulse.
-    auto_waiting = 0 if settings.manual_login else waiting
+    # The panel's accounts are the exception since 2026-09-16: the panel
+    # sent them, so the keeper finishes them by itself (builder claims
+    # panel rows only under manual login).
+    auto_waiting = (min(waiting, _panel_waiting(book)) if settings.manual_login
+                    else waiting)
     # `0` is "no ceiling of my own": the pass takes on whatever the real stock
     # allows. `decide` still bounds it by the accounts waiting, the warm phones
     # there are, the shortfall, the free slots and the pool depths.

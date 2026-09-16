@@ -414,6 +414,10 @@ class _PgPool(Pool):
     def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
         the sheet's problem; here the engine hands two racers two rows."""
+        return self._claim(serial, avoid_host, self.held_back())
+
+    def _claim(self, serial: str, avoid_host: str,
+               held_back: tuple[str, tuple]) -> Resource | None:
         row = self._table.claim(
             self.kind, free=tuple(self.available_statuses),
             claimed=self.claimed_status,
@@ -421,7 +425,7 @@ class _PgPool(Pool):
             avoid_host=avoid_host, host_column=self.HOST_COLUMN,
             count_attempt=self.COUNTS_ATTEMPTS,
             hold_tries_from=self._held_from(),
-            held_back=self.held_back())
+            held_back=held_back)
         if row is None:
             return None
         resource = next((r for r in self._rows if r.store_id == row["id"]),
@@ -621,6 +625,9 @@ class PgAppPool(_PgPool, AppPool):
         # through the pool.
         "Product": "product", "Credential kind": "credential_kind",
         "Customer ready": "customer_ready",
+        # Where the row came from: `panel` is the one the keeper finishes
+        # by itself under manual login (2026-09-16).
+        "Source": "source",
     }
 
     def held_back(self) -> tuple[str, tuple]:
@@ -663,6 +670,28 @@ class PgAppPool(_PgPool, AppPool):
             accounts.moved(self._table._settings, row, "signing_in",
                            serial=serial)
         return row
+
+    def claim_panel(self, serial: str = ""):
+        """The next account the panel sent, and only one of those.
+
+        With manual login on, the keeper signs in nothing an operator
+        did not send - but an account that came through the API was
+        sent, by the panel, and waiting for a hand to press Send made
+        the Claude path a manual one (the operator, 2026-09-16). The
+        same claim, narrowed to `source = 'panel'`.
+        """
+        sql, params = self.held_back()
+        row = self._claim(serial, "", (sql + " AND source = 'panel'", params))
+        if row is not None:
+            accounts.moved(self._table._settings, row, "signing_in",
+                           serial=serial)
+        return row
+
+    def panel_waiting(self) -> int:
+        """How many of the claimable accounts the panel sent - what the
+        keeper finishes by itself under manual login."""
+        return sum(1 for r in self.available
+                   if (r.values.get("Source") or "") == "panel")
 
     def claim_this(self, resource: Resource, serial: str = "") -> bool:
         took = super().claim_this(resource, serial=serial)

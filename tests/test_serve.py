@@ -2963,3 +2963,29 @@ def test_a_pass_sweeps_the_forgotten_phones_after_the_shadow(
 
     monkeypatch.setattr(forgotten, "sweep", boom)
     serve_mod.once(client, settings, Fuse(), serve_mod.Slots())
+
+
+def test_with_manual_login_on_the_pass_finishes_the_panels_accounts(
+        monkeypatch, make_settings, tmp_path):
+    """The exception to C6: accounts the panel sent are finished by the
+    keeper itself, and only those - bounded by what is waiting at all
+    (2026-09-16)."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=2,
+                             max_concurrent_phones=10, manual_login=True)
+    Recorder(warm=3, free=10, waiting=3).install(monkeypatch)
+    real = serve_mod._panel_waiting
+    monkeypatch.setattr(serve_mod, "_panel_waiting", lambda book: 2)
+
+    decision = serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+    assert decision.finish == 2, "the panel's two, not the third"
+
+    # A pool that cannot say - the sheet's - counts nothing.
+    monkeypatch.setattr(serve_mod, "_panel_waiting", real)
+    assert serve_mod._panel_waiting(SimpleNamespace(apps=None)) == 0
+    assert serve_mod._panel_waiting(SimpleNamespace(
+        apps=SimpleNamespace(panel_waiting=lambda: 4))) == 4
+
+    def down():
+        raise RuntimeError("store down")
+    assert serve_mod._panel_waiting(SimpleNamespace(
+        apps=SimpleNamespace(panel_waiting=down))) == 0

@@ -762,6 +762,15 @@ def _sign_into_app(session: _Session) -> Build | None:
                     WARM_FOR_OPERATOR,
                     "asked for without an account: Google is signed in and "
                     "the app is on it; send an account to it when you want")
+            elif (s.settings.manual_login and s.want is None
+                  and not (s.attempted or s.set_aside)
+                  and (panel := _claim_panel(s)) is not None):
+                # Manual login keeps the keeper's hands off the pool - but
+                # an account the panel sent through the API was sent, and
+                # waiting for a person to press Send made the panel's own
+                # path a manual one (2026-09-16). Those, and only those,
+                # the keeper signs in by itself.
+                s.app_row = panel
             elif s.settings.manual_login and (s.want is None or s.attempted
                                               or s.set_aside):
                 # With manual login on, no account goes onto a phone that
@@ -1311,6 +1320,15 @@ def _touch_method(phone_id: str) -> str:
 #: A pause before the first address, different for each, spreads them
 #: (2026-09-11). Nothing when the cadence is off.
 SIGN_IN_STAGGER_SECONDS = (2.0, 40.0)
+
+
+def _claim_panel(s):
+    """The next panel-sent account for this phone, or None - and None
+    on a pool that has no such notion (the sheet's)."""
+    claim = getattr(s.book.apps, "claim_panel", None)
+    if not callable(claim):
+        return None
+    return claim(str(s.build.serial or ""))
 
 
 def _product_of(app_row) -> str:

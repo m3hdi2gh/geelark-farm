@@ -1055,3 +1055,23 @@ def test_outside_the_good_hours_an_address_on_its_last_try_is_held(
 
     # The proxy pool holds nothing: tries is a Gmail's ladder.
     assert PgProxyPool(table)._held_from() is None
+
+
+def test_the_panel_only_claim_narrows_the_same_statement_to_panel_rows():
+    """`claim_panel` is `claim` with one more condition, so the ladder,
+    the served-kinds rule and the customer-ready rule all still apply."""
+    import inspect
+
+    from geelark_farm.store.pgpool import PgAppPool
+
+    src = inspect.getsource(PgAppPool.claim_panel)
+    assert "self._claim(serial, \"\", (sql + \" AND source = 'panel'\", params))" in src
+    table = MemoryTable()
+    table.add("app", address="hand@x.com", password="p", totp_secret="")
+    table.add("app", address="panel@x.com", password="p", totp_secret="",
+              source="panel", product="chatgpt",
+              credential_kind="password_totp", customer_ready=True)
+    pool = PgAppPool(table)
+    pool.load()
+    assert pool.panel_waiting() == 1
+    assert [r.values["Source"] for r in pool.available] == ["sheet", "panel"]

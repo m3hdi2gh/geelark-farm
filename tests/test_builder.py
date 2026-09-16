@@ -5903,3 +5903,39 @@ def test_an_empty_pool_names_the_addresses_the_hour_is_holding():
         "a sheet-era pool holds nothing and says nothing")
     assert builder._held_note(
         SimpleNamespace(gmails=SimpleNamespace(held_now=lambda: 0))) == ""
+
+
+def test_under_manual_login_the_keeper_still_signs_in_what_the_panel_sent(
+        monkeypatch, make_settings, tmp_path):
+    """Manual login keeps the keeper's hands off the pool - except the
+    accounts the panel sent through the API: the panel sent them, and
+    waiting for a hand to press Send made the panel's own path a manual
+    one (the operator, 2026-09-16). Claimed through the pool's own
+    panel-only claim, so no hand-added account is touched."""
+    settings = make_settings(state_dir=tmp_path, manual_login=True)
+    monkeypatch.setattr(builder.chatgpt_login, "sign_in",
+                        lambda *a, **k: SIGNED_IN)
+    s = _session_for(settings, apps=2)
+    asked = []
+    pool = s.book.apps
+
+    def claim_panel(serial=""):
+        asked.append(serial)
+        return pool.claim(serial)
+
+    monkeypatch.setattr(pool, "claim_panel", claim_panel, raising=False)
+
+    assert builder._sign_into_app(s) is None
+    assert s.build.app_account == "a0@example.com"
+    assert asked == [str(s.build.serial)]
+
+    # Nothing from the panel: warm, as manual login always was.
+    s = _session_for(settings, apps=2)
+    monkeypatch.setattr(s.book.apps, "claim_panel", lambda serial="": None,
+                        raising=False)
+    build = builder._sign_into_app(s)
+    assert build is not None and build.status == builder.WARM_FOR_OPERATOR
+    assert len(s.book.apps.available) == 2
+
+    # The sheet-era pool has no such claim, and that is a plain no.
+    assert builder._claim_panel(_session_for(settings, apps=1)) is None
