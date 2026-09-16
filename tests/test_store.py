@@ -1808,3 +1808,11 @@ def test_the_schema_carries_the_forgotten_phone_clock():
     assert "state = %s, state_at = now()" in inspect.getsource(person.set_state)
     assert 'sets.append("state_at = now()")' in inspect.getsource(
         pgphones.PgPhoneLog.finish), "Boot writes State through the log"
+
+
+def test_the_schema_carries_the_live_tabs_beat():
+    import pathlib
+
+    sql = pathlib.Path("src/geelark_farm/store/schema.sql").read_text(
+        encoding="utf-8")
+    assert "ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz" in sql

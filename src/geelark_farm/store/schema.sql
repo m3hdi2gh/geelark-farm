@@ -840,3 +840,12 @@ ALTER TABLE code_requests ADD COLUMN IF NOT EXISTS outcome    text NOT NULL DEFA
 -- goes by the name.
 CREATE INDEX IF NOT EXISTS code_requests_waiting
     ON code_requests (lower(address)) WHERE closed_at IS NULL;
+
+-- --------------------------------------------- phones, rev 31 (watched)
+-- When a console Live tab last said it was open on this phone. The tab
+-- Boot opens keeps the GeeLark viewer inside itself and beats every
+-- twenty seconds; a phone whose beat stopped is a phone whose tab was
+-- closed, and the sweep switches it off within a minute (the operator,
+-- 2026-09-16: "when we close the tab the phone stays on and keeps
+-- burning money"). NULL = no console tab ever watched it.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz;

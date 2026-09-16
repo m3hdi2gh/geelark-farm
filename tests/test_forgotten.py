@@ -44,7 +44,7 @@ def farm(monkeypatch, make_settings, tmp_path):
     f = Farm(make_settings(state_dir=tmp_path, store_enabled=True,
                            release_after_minutes=60))
     monkeypatch.setattr(forgotten, "overdue",
-                        lambda s, m: f.asked.append(m) or list(f.rows))
+                        lambda s, m, g=45: f.asked.append(m) or list(f.rows))
     monkeypatch.setattr(phones_mod, "stop",
                         lambda c, pid: f.stopped.append(pid))
     monkeypatch.setattr(forgotten, "_release",
@@ -247,3 +247,41 @@ def test_what_the_store_is_asked_and_told():
     assert "state_at = now()" in write
     assert "AND state = 'taken'" in write, "put back only what is still taken"
     assert forgotten.ON == (phones_mod.RUNNING, phones_mod.STARTING)
+
+
+def test_a_phone_whose_live_tab_closed_is_switched_off_within_the_grace(
+        farm):
+    """The console's tab beats every twenty seconds; forty-five seconds
+    of silence is a closed tab, and that - not the hour - is the reason
+    said (the operator, 2026-09-16)."""
+    from datetime import datetime, timezone
+
+    row = _row("2713", on=2100, taken=2100)
+    row["watched_at"] = datetime(2026, 9, 16, 10, 0, tzinfo=timezone.utc)
+    row["unwatched_seconds"] = 61
+    farm.rows.append(row)
+
+    outcome = forgotten.sweep(object(), farm.settings, farm.ledger,
+                              [_on("2713")])
+
+    assert outcome["off"] == ["2713"] and outcome["released"] == ["2713"]
+    assert farm.events[0][1]["detail"] == (
+        "switched off and put back 1 min after its live tab closed with ali")
+
+
+def test_the_hour_rules_spare_a_phone_whose_tab_is_beating():
+    """In use for two hours with the tab open is not forgotten. The query
+    leaves a watched phone alone on both hour rules and takes it on the
+    tab rule only once the beat has stopped."""
+    read = inspect.getsource(forgotten.overdue).replace(
+        '"\n            f"', "").replace('"\n            "', "")
+    assert read.count("{quiet}") == 2, "both hour rules"
+    assert "(p.watched_at IS NULL" in read
+    assert " OR p.watched_at < now() - %s * interval '1 second')" in read
+    assert ("p.running AND p.watched_at IS NOT NULL"
+            "         AND p.watched_at < now() - %s * interval '1 second'"
+            ) in read
+    sig = inspect.signature(forgotten.overdue)
+    assert sig.parameters["grace"].default == 45
+    src = inspect.getsource(forgotten.sweep)
+    assert 'getattr(settings, "live_tab_grace_seconds", 45)' in src

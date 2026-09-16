@@ -594,3 +594,16 @@ def test_the_forgotten_phone_clock_comes_from_the_environment(tmp_path,
     assert Settings.load().release_after_minutes == 0, "0 leaves them alone"
     monkeypatch.setenv("RELEASE_AFTER_MINUTES", "90")
     assert Settings.load().release_after_minutes == 90
+
+
+def test_the_live_tab_grace_comes_from_the_environment(tmp_path, monkeypatch):
+    from geelark_farm.config import Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "s"))
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "a"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "l"))
+    assert Settings.load().live_tab_grace_seconds == 45
+    monkeypatch.setenv("LIVE_TAB_GRACE_SECONDS", "90")
+    assert Settings.load().live_tab_grace_seconds == 90

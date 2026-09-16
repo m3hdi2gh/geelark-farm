@@ -122,3 +122,18 @@ def marked(settings: Settings) -> list[dict]:
             " coalesce(app_account, '') AS app_account"
             " FROM phones WHERE done_at IS NULL AND state = ANY(%s)"
             " ORDER BY serial", (list(ACTED_ON),))
+
+
+def watch(settings: Settings, serial: str) -> bool:
+    """A console Live tab is open on this phone right now. True while the
+    phone is taken; False once it has been put back or has gone, so the
+    tab can say so instead of beating for nobody."""
+    wanted = str(serial or "").strip()
+    if not wanted:
+        return False
+    with Store(settings) as store:
+        rows = store._write(
+            "UPDATE phones SET watched_at = now()"
+            " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
+            " RETURNING id", (wanted,))
+    return bool(rows)

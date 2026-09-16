@@ -862,7 +862,8 @@ def _who_and_out(user: dict) -> str:
 
 
 def page(title: str, body: str, *, user: dict | None = None,
-         refresh: int = 0, here: str = "", live: str = "farm") -> str:
+         refresh: int = 0, here: str = "", live: str = "farm",
+         bare: bool = False) -> str:
     """`refresh` seconds of meta-refresh, when a page shows pending state
     that the next serve pass will change; zero (the default) means none.
     `here` is the rail entry to light. Without a user there is no rail:
@@ -871,9 +872,12 @@ def page(title: str, body: str, *, user: dict | None = None,
     `live` is which stream the page listens on: "farm" (the default) for
     everything the dashboard draws, "logs" for a page that also draws
     the log lines, "" for a page that must not listen or swap at all -
-    the Boot tab, which reloads itself whole."""
+    the Boot tab, which reloads itself whole. `bare` is the viewer tab:
+    no rail and no alert strip, the frame owns the window."""
     header = ""
-    if user is not None and not _keeps_the_console(user):
+    if bare:
+        pass
+    elif user is not None and not _keeps_the_console(user):
         # No rail at all, rather than a rail with one entry on it. An
         # operator has one page: a column down the side of it whose only
         # link is the page they are already on is furniture, and the name
@@ -928,7 +932,7 @@ def page(title: str, body: str, *, user: dict | None = None,
     from ..config import revision
 
     tag += f'<meta name="gf-rev" content="{esc(revision())}">'
-    if user is not None:
+    if user is not None and not bare:
         body = _alert_strip(user) + body
     # The one script, on every page a signed-in person sees - not only
     # the dashboard. The others carried the same "live" dot and the same
@@ -4230,6 +4234,10 @@ def live_page(serial: str, user: dict, said: str = "",
     row = row or {}
     status = str(row.get("status") or "")
     result = str(row.get("result") or "")
+    url = str((row.get("detail") or {}).get("url") or "") if isinstance(
+        row.get("detail"), dict) else ""
+    if status == "done" and url:
+        return viewer_page(serial, user, url)
     wait = 0
     if said == "refused":
         title, note, colour = ("Not allowed",
@@ -4269,6 +4277,81 @@ def live_page(serial: str, user: dict, said: str = "",
     # No listening and no swap: this tab reloads itself whole, above.
     return page(f"Boot {serial}", body, user=user, here="/", refresh=wait,
                 live="")
+
+
+#: How often the Live tab tells the farm it is open, in milliseconds.
+#: The keeper's grace (LIVE_TAB_GRACE_SECONDS, 45) allows one missed beat.
+LIVE_BEAT_MS = 20000
+
+
+def viewer_page(serial: str, user: dict, url: str) -> str:
+    """The Live tab once the phone is up: GeeLark's viewer inside this
+    page, and a beat every twenty seconds that says the tab is open.
+
+    It used to send the tab to GeeLark's own page, whose closing nobody
+    could see - so a phone booted from the console ran on after its tab
+    was gone, until somebody found it under Running (the operator,
+    2026-09-16). Framed here, the tab's life is the phone's: when the
+    beat stops the keeper switches the phone off and puts it back
+    (forgotten.sweep), which is what closing the tab means.
+
+    The viewer's own width parameter decides how tall it draws itself,
+    and at GeeLark's default the phone's Back and Home ran off the bottom
+    of an ordinary window. The width is set from the window's height, so
+    the whole phone fits.
+    """
+    beat = (
+        "(function(){"
+        f"var serial={_js(serial)}, csrf={_js(str(user.get('csrf') or ''))},"
+        f" base={_js(url)};"
+        "var frame=document.getElementById('gf-view');"
+        "var word=document.getElementById('gf-watch');"
+        "function fit(){"
+        " var h=window.innerHeight-36;"
+        " var w=Math.max(200,Math.min(420,Math.floor((h-50)/2.45)));"
+        " var u=new URL(base); u.searchParams.set('w',String(w));"
+        " if(frame.getAttribute('src')!==u.href) frame.setAttribute('src',u.href);"
+        "}"
+        "fit();"
+        "function beat(){"
+        " fetch('/phones/'+serial+'/watching',{method:'POST',"
+        "  credentials:'same-origin',keepalive:true,"
+        "  headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+        "  body:'csrf='+encodeURIComponent(csrf)})"
+        " .then(function(r){"
+        "  if(r.status===410){word.textContent='released - this phone is "
+        "no longer yours; close the tab';}"
+        "  else if(r.ok){word.textContent='watching - close this tab to "
+        "switch the phone off';}"
+        " }).catch(function(){});"
+        "}"
+        f"beat(); setInterval(beat,{LIVE_BEAT_MS});"
+        "})();"
+    )
+    body = (
+        '<style>html,body{overflow:hidden}'
+        '#gf-wrap{position:fixed;inset:0;display:flex;flex-direction:column;'
+        'background:var(--bg)}'
+        '.viewbar{height:36px;flex:none;display:flex;align-items:center;'
+        'gap:14px;padding:0 14px;font-size:13px;color:var(--muted)}'
+        '.viewbar b{color:var(--ink)}'
+        '#gf-view{border:0;width:100%;flex:1;background:#000;display:block}'
+        '</style>'
+        f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
+        f'<span id="gf-watch">connecting</span>'
+        f'<a class="dim" href="/" style="margin-left:auto">Dashboard</a></div>'
+        f'<iframe id="gf-view" src="{esc(url)}" '
+        f'allow="clipboard-read; clipboard-write; fullscreen"></iframe></div>'
+        f'<script>{beat}</script>')
+    return page(f"Phone {serial}", body, user=user, here="/", live="",
+                bare=True)
+
+
+def _js(value: str) -> str:
+    """A string as a JavaScript literal, safe inside a <script>."""
+    import json
+
+    return json.dumps(str(value)).replace("</", "<\\/")
 
 
 def _awaiting_panel(data: dict, user: dict, manual_login: bool,

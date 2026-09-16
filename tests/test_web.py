@@ -9,6 +9,7 @@ on a machine that has never seen the cluster.
 from __future__ import annotations
 
 import http.client
+import inspect
 import re
 import threading
 import time
@@ -2561,10 +2562,20 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     row.update(status="done", result="phone 1500 started and taken by mehdi",
                detail={"state": "taken",
                        "url": "https://phone.geelark.com/i?t=abc"})
-    status, headers, _ = client.request(
+    status, _, body = client.request(
         "GET", "/phones/1500/live?said=queued:71")
-    assert status == 303
-    assert dict(headers)["Location"] == "https://phone.geelark.com/i?t=abc"
+    # The viewer inside this tab, not a redirect to GeeLark's page: the
+    # tab's closing is the phone's off switch (2026-09-16).
+    assert status == 200
+    assert ('<iframe id="gf-view" src="https://phone.geelark.com/i?t=abc" '
+            'allow="clipboard-read; clipboard-write; fullscreen">') in body
+    assert "fetch('/phones/'+serial+'/watching'" in body
+    assert "setInterval(beat,20000)" in body
+    assert 'var serial="1500"' in body and "<nav>" not in body, "bare"
+    assert "u.searchParams.set('w',String(w))" in body, (
+        "the viewer's width follows the window's height so Back and Home "
+        "fit (the operator, 2026-09-16)")
+    assert "gf-live" not in body and "addEventListener('submit'" not in body
 
     row.update(status="failed", result="phone 1500 would not start: "
                                        "[43043] no capacity", detail=None)
@@ -6235,3 +6246,38 @@ def test_the_same_drawing_sent_twice_is_told_so_not_queued(web, monkeypatch):
     assert dict(headers)["Location"] == "/pools/proxy?said=twice:71"
     _, _, body = client.request("GET", "/pools/proxy?said=twice:71")
     assert "That press already went through the first time" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tabs_beat_stamps_the_phone_and_says_when_it_is_over(
+        web, monkeypatch):
+    """Twenty seconds apart while the tab is open: a plain stamp, no
+    request. 410 once the phone is not taken any more, so the tab stops
+    beating for nobody and says so. Operators may send it - it is their
+    tab."""
+    from geelark_farm.store import person
+
+    src = inspect.getsource(person.watch)
+    assert "SET watched_at = now()" in src
+    assert "AND state = 'taken'" in src, "a beat on a phone put back is nothing"
+    seen = []
+    monkeypatch.setattr(person, "watch",
+                        lambda s, serial: seen.append(serial) or True)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True})
+    client = web()
+    client.login(username="sara")
+    status, _, body = client.request("POST", "/phones/1500/watching",
+                                     _form(csrf=client.csrf()))
+    assert status == 200 and body == "watching" and seen == ["1500"]
+
+    monkeypatch.setattr(person, "watch", lambda s, serial: False)
+    status, _, body = client.request("POST", "/phones/1500/watching",
+                                     _form(csrf=client.csrf()))
+    assert status == 410 and body == "released"
+
+    # No CSRF, no stamp: the beat is a form post like every other.
+    status, _, _ = client.request("POST", "/phones/1500/watching",
+                                  _form(csrf="wrong"))
+    assert status == 403

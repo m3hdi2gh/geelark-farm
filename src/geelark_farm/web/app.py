@@ -286,10 +286,9 @@ class _Handler(BaseHTTPRequestHandler):
                         row = store_actions.one(self.settings, int(req))
                     except Exception as exc:                      # noqa: BLE001
                         log.debug("boot %s: request not read (%s)", req, exc)
-                if row and row.get("status") == "done":
-                    url = (row.get("detail") or {}).get("url")
-                    if url:
-                        return self._redirect(str(url))
+                # Once the link is there the page frames GeeLark's viewer
+                # rather than sending the tab to it: the tab's closing is
+                # the phone's off switch (pages.viewer_page, 2026-09-16).
                 return self._html(200, pages.live_page(
                     serial, user, said=said, row=row))
             if path.startswith("/phones/") and "/screens/" in path:
@@ -434,6 +433,22 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/retry"):
                 return self._retry_action(user)
+            if self.path.startswith("/phones/") and \
+                    self.path.endswith("/watching"):
+                # The Live tab's beat: a plain stamp, no request and no
+                # event - twenty seconds apart for as long as the tab is
+                # open (pages.viewer_page). 410 once the phone is no
+                # longer taken, so the tab can say so.
+                from ..store import person
+
+                serial = self.path[len("/phones/"):-len("/watching")]
+                try:
+                    still = person.watch(self.settings, serial)
+                except Exception as exc:                          # noqa: BLE001
+                    log.debug("beat for %s not written (%s)", serial, exc)
+                    return self._text(503, "store down")
+                return self._text(200 if still else 410,
+                                  "watching" if still else "released")
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/boot"):
                 # One press: start the phone in GeeLark, take it, and hand
@@ -2040,7 +2055,7 @@ def _operator_may_post(path: str) -> bool:
         return True
     # One phone: boot it, take it, hand it back, change its exit.
     if path.startswith("/phones/") and path.rsplit("/", 1)[-1] in (
-            "boot", "state", "proxy", "stop"):
+            "boot", "state", "proxy", "stop", "watching"):
         return True
     # One failed hand-built request: take it off the list.
     return path.startswith("/wishes/") and path.endswith("/dismiss")
