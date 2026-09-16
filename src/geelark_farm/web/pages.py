@@ -4337,7 +4337,8 @@ def viewer_page(serial: str, user: dict, url: str,
         "var u=new URL(base); u.searchParams.set('w',String(W));"
         "frame.setAttribute('src',u.href);"
         "function fit(){"
-        " var h=window.innerHeight-36, w=stage.clientWidth||window.innerWidth;"
+        " var h=stage.clientHeight||window.innerHeight,"
+        "     w=stage.clientWidth||window.innerWidth;"
         " var k=Math.min(h/BOX_H,w/BOX_W);"
         " box.style.width=Math.floor(BOX_W*k)+'px';"
         " box.style.height=Math.floor(BOX_H*k)+'px';"
@@ -4381,25 +4382,31 @@ def viewer_page(serial: str, user: dict, url: str,
         " if(document.visibilityState==='visible') beat();});"
         "})();"
     )
-    margin = _gmail_margin(creds) if creds else ""
+    rows = _gmail_margin(creds) if creds else ""
     body = (
         '<style>html,body{overflow:hidden}'
-        '#gf-wrap{position:fixed;inset:0;display:flex;flex-direction:column;'
-        'background:var(--bg)}'
-        '.viewbar{height:36px;flex:none;display:flex;align-items:center;'
-        'gap:14px;padding:0 14px;font-size:13px;color:var(--muted)}'
-        '.viewbar b{color:var(--ink)}'
-        '#gf-stage{flex:1;display:flex;justify-content:center;'
+        # The whole window, side by side: the stage takes every pixel of
+        # height it can, the margin carries everything else - what used
+        # to be a bar across the top (the operator, 2026-09-16: "move the
+        # bar into the margin so the phone can be full size").
+        '#gf-wrap{position:fixed;inset:0;display:flex;background:var(--bg)}'
+        '#gf-stage{flex:1;min-width:0;display:flex;justify-content:center;'
         'align-items:flex-start;overflow:hidden}'
         '#gf-box{position:relative;overflow:hidden}'
         f'#gf-view{{border:0;width:{VIEWER_BOX[0]}px;height:{VIEWER_BOX[1]}px;'
         'background:#000;display:block;transform-origin:0 0}'
         '.gf-gone{max-width:420px;margin:80px auto;text-align:center}'
-        '#gf-body{flex:1;display:flex;min-height:0}'
-        '#gf-side{flex:none;width:300px;padding:18px 16px;overflow:auto;'
-        'border-left:1px solid var(--line);font-size:13px}'
-        '#gf-side h3{margin:0 0 12px;font-size:12px;letter-spacing:.06em;'
+        '#gf-side{flex:none;width:300px;padding:16px;overflow:auto;'
+        'border-left:1px solid var(--line);font-size:13px;display:flex;'
+        'flex-direction:column;gap:2px}'
+        '#gf-side h3{margin:18px 0 12px;font-size:12px;letter-spacing:.06em;'
         'text-transform:uppercase;color:var(--muted)}'
+        '.gf-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}'
+        '.gf-head b{font-size:18px;color:var(--ink)}'
+        '.gf-head .dim{margin-left:auto}'
+        '#gf-watch{display:block;color:var(--muted);margin-bottom:10px;'
+        'line-height:1.4}'
+        '#gf-reload{align-self:flex-start;margin-bottom:6px}'
         '.gf-row{margin:0 0 14px}'
         '.gf-row .lbl{display:block;color:var(--muted);font-size:11px;'
         'margin-bottom:3px}'
@@ -4412,20 +4419,21 @@ def viewer_page(serial: str, user: dict, url: str,
         '.gf-bar{height:3px;background:var(--line);border-radius:2px;'
         'margin-top:6px;overflow:hidden}'
         '.gf-bar i{display:block;height:100%;background:var(--ok,#3c9)}'
-        '@media (max-width:820px){#gf-body{flex-direction:column}'
+        '@media (max-width:820px){#gf-wrap{flex-direction:column}'
         '#gf-side{width:auto;border-left:0;border-top:1px solid var(--line)}}'
         '</style>'
-        f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
+        f'<div id="gf-wrap"><div id="gf-stage"><div id="gf-box">'
+        f'<iframe id="gf-view" data-src="{esc(url)}" '
+        f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
+        f'</div></div>'
+        f'<aside id="gf-side"><div class="gf-head"><b>{esc(serial)}</b>'
+        f'<a class="dim" href="/">Dashboard</a></div>'
         f'<span id="gf-watch">connecting</span>'
         f'<button type="button" class="quiet" id="gf-reload" title="Loads '
         f'GeeLark&#39;s viewer again without closing the tab - for when it says '
         f'the connection timed out; that is the route from your network to '
         f'phone.geelark.com, not the phone">Reload viewer</button>'
-        f'<a class="dim" href="/" style="margin-left:auto">Dashboard</a></div>'
-        f'<div id="gf-body"><div id="gf-stage"><div id="gf-box">'
-        f'<iframe id="gf-view" data-src="{esc(url)}" '
-        f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
-        f'</div></div>{margin}</div></div>'
+        f'{rows}</aside></div>'
         f'<script>{beat}</script>')
     return page(f"Phone {serial}", body, user=user, here="/", live="",
                 bare=True)
@@ -7490,7 +7498,7 @@ _TOTP_SCRIPT = (
 
 
 def _gmail_margin(creds: dict) -> str:
-    """The Gmail beside the screen: address, password (hidden until
+    """The Gmail's rows for the margin: address, password (hidden until
     shown, copied without showing), the authenticator's code as it
     stands, and the key it is made from."""
     address = str(creds.get("address") or "")
@@ -7530,5 +7538,5 @@ def _gmail_margin(creds: dict) -> str:
         rows.append('<div class="gf-row"><span class="lbl">Authenticator'
                     '</span><div class="val"><code class="dim">none on the '
                     'row</code></div></div>')
-    return (f'<aside id="gf-side"><h3>On this phone</h3>{"".join(rows)}'
-            f'<script>{_TOTP_SCRIPT}</script></aside>')
+    return (f'<h3>On this phone</h3>{"".join(rows)}'
+            f'<script>{_TOTP_SCRIPT}</script>')

@@ -6358,8 +6358,13 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
-    assert '<aside id="gf-side"><h3>On this phone</h3>' in body
+    assert '<aside id="gf-side">' in body and "<h3>On this phone</h3>" in body
     assert '<code id="gf-mail">islandalaskans@gmail.com</code>' in body
+    # The bar that ran across the top lives in the margin now, so the
+    # stage is the window's whole height (the operator, 2026-09-16).
+    assert '<div class="viewbar">' not in body
+    assert '<aside id="gf-side"><div class="gf-head"><b>1500</b>' in body
+    assert "var h=stage.clientHeight||window.innerHeight," in body
     assert 'data-value="pa$$w&lt;rd"' in body, "escaped, and hidden"
     assert "\u2022" * 8 in body and "pa$$w<rd" not in body
     assert 'data-secret="JBSWY3DPEHPK3PXP"' in body
@@ -6379,11 +6384,12 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     other = web()
     other.login(username="sara")
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
-    assert '<aside id="gf-side"' not in body and "JBSWY3DPEHPK3PXP" not in body
+    assert "On this phone" not in body and "JBSWY3DPEHPK3PXP" not in body
+    assert 'id="gf-reload"' in body, "the margin still carries the controls"
 
     # No Gmail on the phone: no margin, and the page still draws.
     drawn = pages.viewer_page("1500", {"csrf": "c"}, "https://x/", creds=None)
-    assert '<aside id="gf-side"' not in drawn and 'id="gf-view"' in drawn
+    assert "On this phone" not in drawn and 'id="gf-view"' in drawn
     # A row with no key says so rather than computing nothing.
     drawn = pages.viewer_page("1500", {"csrf": "c"}, "https://x/",
                               creds={"address": "a@b.com", "password": "",
