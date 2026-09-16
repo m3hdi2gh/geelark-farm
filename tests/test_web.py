@@ -2579,6 +2579,10 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     assert "window.addEventListener('pagehide',closing)" in body
     assert "if(document.visibilityState==='visible') beat();" in body
     assert "if(r.status===410){gone=true; released();}" in body
+    # GeeLark's viewer times out on some operators' routes (Firefox's own
+    # page inside the frame, 2026-09-16): a reload of the frame alone,
+    # without closing the tab that keeps the phone on.
+    assert 'id="gf-reload"' in body and "frame.setAttribute('src','about:blank')" in body
     assert "This phone was put back" in body
     assert 'var serial="1500"' in body and "<nav>" not in body, "bare"
     # One fixed width for the viewer, and its box scaled to the window:

@@ -4344,6 +4344,9 @@ def viewer_page(serial: str, user: dict, url: str,
         " frame.style.transform='scale('+k+')';"
         "}"
         "fit(); window.addEventListener('resize',fit);"
+        "document.getElementById('gf-reload').addEventListener('click',"
+        " function(){ frame.setAttribute('src','about:blank');"
+        "  setTimeout(function(){ frame.setAttribute('src',u.href); },300); });"
         "var form='csrf='+encodeURIComponent(csrf);"
         "var gone=false;"
         "function beat(){"
@@ -4414,6 +4417,10 @@ def viewer_page(serial: str, user: dict, url: str,
         '</style>'
         f'<div id="gf-wrap"><div class="viewbar"><b>{esc(serial)}</b>'
         f'<span id="gf-watch">connecting</span>'
+        f'<button type="button" class="quiet" id="gf-reload" title="Loads '
+        f'GeeLark&#39;s viewer again without closing the tab - for when it says '
+        f'the connection timed out; that is the route from your network to '
+        f'phone.geelark.com, not the phone">Reload viewer</button>'
         f'<a class="dim" href="/" style="margin-left:auto">Dashboard</a></div>'
         f'<div id="gf-body"><div id="gf-stage"><div id="gf-box">'
         f'<iframe id="gf-view" data-src="{esc(url)}" '
