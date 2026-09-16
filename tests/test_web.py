@@ -2579,7 +2579,7 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     assert "var k=Math.min(h/BOX_H,w/BOX_W);" in body
     assert "frame.style.transform='scale('+k+')'" in body
     assert "window.addEventListener('resize',fit)" in body
-    assert "width:415px;height:760px" in body
+    assert "width:416px;height:752px" in body
     assert "gf-live" not in body and "addEventListener('submit'" not in body
 
     row.update(status="failed", result="phone 1500 would not start: "

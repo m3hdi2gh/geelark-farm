@@ -4283,10 +4283,10 @@ def live_page(serial: str, user: dict, said: str = "",
 #: The keeper's grace (LIVE_TAB_GRACE_SECONDS, 45) allows one missed beat.
 LIVE_BEAT_MS = 20000
 #: The width the viewer is asked for, and the box it draws itself in at
-#: that width (measured: w + 55 wide, 2w + 40 tall). The box is then
+#: that width (measured: w + 56 wide, 2w + 32 tall). The box is then
 #: scaled to the window, so these only fix the drawing's resolution.
 VIEWER_WIDTH = 360
-VIEWER_BOX = (VIEWER_WIDTH + 55, 2 * VIEWER_WIDTH + 40)
+VIEWER_BOX = (VIEWER_WIDTH + 56, 2 * VIEWER_WIDTH + 32)
 
 
 def viewer_page(serial: str, user: dict, url: str) -> str:
@@ -4307,8 +4307,8 @@ def viewer_page(serial: str, user: dict, url: str) -> str:
     the operator's screen (2026-09-16). So the viewer is asked for one
     fixed width and drawn in a box of its natural size, and the box is
     scaled with CSS to whatever the window is - both ways, on any
-    monitor. Measured on two screens: a phone of width w draws
-    (w + 55) wide and (2w + 40) tall.
+    monitor. Measured on three screens: a phone of width w draws
+    (w + 56) wide and (2w + 32) tall.
     """
     beat = (
         "(function(){"
