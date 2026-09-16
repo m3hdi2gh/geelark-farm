@@ -2060,22 +2060,23 @@ def test_a_closed_sheet_never_opens_the_workbook(monkeypatch, make_settings):
     assert opened == [], "it asked for sheet credentials it does not need"
 
 
-def test_a_sheet_closed_without_the_pools_moved_is_refused_at_startup():
+def test_a_sheet_closed_without_the_pools_moved_is_refused_at_startup(
+        tmp_path, monkeypatch):
     """`Book.pools_only` builds Postgres pools unconditionally, so the pair
     would not fail honestly - it would hand back a Book whose pools
-    disagree with what the rest of the process believes."""
-    import os
+    disagree with what the rest of the process believes.
 
+    The credentials every load needs are set here: on a machine with no
+    .env - CI - the load refused those first, and this test read that
+    refusal as the wrong one (2026-09-16)."""
     from geelark_farm.config import ConfigError, Settings
 
-    was = {k: os.environ.get(k) for k in ("SHEET_CLOSED", "POOLS_IN_PG")}
-    try:
-        os.environ["SHEET_CLOSED"], os.environ["POOLS_IN_PG"] = "1", "0"
-        with pytest.raises(ConfigError, match="POOLS_IN_PG is off"):
-            Settings.load()
-    finally:
-        for key, value in was.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    monkeypatch.setenv("GEELARK_APP_ID", "x")
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "s"))
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "a"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "l"))
+    monkeypatch.setenv("SHEET_CLOSED", "1")
+    monkeypatch.setenv("POOLS_IN_PG", "0")
+    with pytest.raises(ConfigError, match="POOLS_IN_PG is off"):
+        Settings.load()
