@@ -4677,7 +4677,6 @@ def test_a_hand_built_phones_own_take_is_not_a_stranger_giving_up_on_it(
     """Taken by its builder from the moment its row exists, and read as a
     stranger's take, every hand-built phone gave up on itself at its
     first check: "somebody wrote taken in its State" (2026-09-08)."""
-    from geelark_farm.store import person
 
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
     _SAID["1958"] = "taken"
@@ -5204,7 +5203,9 @@ def test_a_phone_on_a_condemned_model_is_deleted_and_made_again(
             self.model, self.phone_id, self.serial = model, f"P{len(made)}", "1"
 
     def create(client, s, proxy, *, ledger, label, account):
-        e = Entry(next(models)); made.append(e.phone_id); return e
+        e = Entry(next(models))
+        made.append(e.phone_id)
+        return e
 
     monkeypatch.setattr(builder.phones, "create", create)
     monkeypatch.setattr(builder.phones, "delete",
@@ -5230,7 +5231,8 @@ def test_the_last_phone_is_kept_when_every_retry_is_a_bad_model(
         model, phone_id, serial = "vivo V2362A", "P", "1"
 
     def create(*a, **k):
-        count["n"] += 1; return Entry()
+        count["n"] += 1
+        return Entry()
 
     monkeypatch.setattr(builder.phones, "create", create)
     monkeypatch.setattr(builder.phones, "delete", lambda *a, **k: None)

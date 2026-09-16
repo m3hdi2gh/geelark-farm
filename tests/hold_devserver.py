@@ -45,7 +45,7 @@ def _rows():
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_hold(web, monkeypatch):
+def test_hold(web, monkeypatch):  # noqa: F811
     from geelark_farm.store import sessions as store_sessions
 
     _dash(monkeypatch, pool_rows={

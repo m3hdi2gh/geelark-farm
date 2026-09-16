@@ -33,7 +33,7 @@ _COLUMNS = "id, kind, payload, action_id, status, claimed_by"
 
 
 def _row(cols: str, values) -> dict:
-    out = dict(zip([c.strip() for c in cols.split(",")], values))
+    out = dict(zip([c.strip() for c in cols.split(",")], values, strict=True))
     if isinstance(out.get("payload"), str):
         out["payload"] = json.loads(out["payload"])
     return out
@@ -150,7 +150,8 @@ def unseen(settings: Settings) -> list[dict]:
             " AND NOT seen ORDER BY id")
         rows = []
         for r in cur.fetchall():
-            row = dict(zip([c.strip() for c in cols.split(",")], r))
+            row = dict(zip([c.strip() for c in cols.split(",")], r,
+                           strict=True))
             if isinstance(row.get("result"), str):
                 row["result"] = json.loads(row["result"])
             rows.append(row)

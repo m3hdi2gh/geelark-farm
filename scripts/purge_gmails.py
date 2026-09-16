@@ -24,10 +24,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from geelark_farm.config import Settings                          # noqa: E402
-from geelark_farm.store import events as store_events             # noqa: E402
-from geelark_farm.store.db import Store                            # noqa: E402
-from geelark_farm.web.read import IMPORTED, ROUTINE                # noqa: E402
+from geelark_farm.config import Settings  # noqa: E402
+from geelark_farm.store import events as store_events  # noqa: E402
+from geelark_farm.store.db import Store  # noqa: E402
+from geelark_farm.web.read import IMPORTED, ROUTINE  # noqa: E402
 
 #: Words that are not errors and not spent: the row is stock, or parked.
 KEPT = ("", "in_use", "ready", "set_aside", IMPORTED)

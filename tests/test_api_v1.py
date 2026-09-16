@@ -1147,8 +1147,8 @@ def test_needs_code_is_a_view_over_an_open_request_not_a_status_word():
 
 
 @pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
-def test_the_code_the_customer_gave_reaches_the_waiting_flow(web,
-                                                             monkeypatch):
+def test_the_code_the_customer_gave_reaches_the_waiting_flow(
+        web, monkeypatch):  # noqa: F811
     """Step 5 of section 7. Judged before anything is written; refused
     when nothing is waiting, and again when the clock ran out between
     the panel's read and its write."""
@@ -1206,7 +1206,7 @@ def test_the_code_the_customer_gave_reaches_the_waiting_flow(web,
 
 
 @pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
-def test_a_bots_key_may_supply_a_code_and_nothing_else(web, monkeypatch):
+def test_a_bots_key_may_supply_a_code_and_nothing_else(web, monkeypatch):  # noqa: F811
     """The bot is a second client, not a hop: it says what the code is,
     and it neither buys nor readies nor withdraws."""
     import geelark_farm.web.api_v1_write as write_mod
@@ -1228,7 +1228,7 @@ def test_a_bots_key_may_supply_a_code_and_nothing_else(web, monkeypatch):
 
 @pytest.mark.parametrize("web", [API_ON], indirect=True)
 def test_a_sandbox_key_walks_its_row_off_the_code_page_with_a_code(
-        web, monkeypatch):
+        web, monkeypatch):  # noqa: F811
     """The practice room drives `needs_code` now, so a client can be
     written against POST /code before the Claude flow exists."""
     import inspect

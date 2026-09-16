@@ -1233,10 +1233,12 @@ def _exit(name="SX1", host="10.0.0.9", status="suspect"):
             return r.values["Status"]
 
         def fail(self, r, status, *, note=""):
-            r.values["Status"] = status; said.append(("fail", status))
+            r.values["Status"] = status
+            said.append(("fail", status))
 
         def release(self, r, *, note=""):
-            r.values["Status"] = "free"; said.append(("release", note))
+            r.values["Status"] = "free"
+            said.append(("release", note))
 
         def record_exit(self, r, ip):
             said.append(("exit", ip))

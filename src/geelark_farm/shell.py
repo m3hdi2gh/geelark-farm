@@ -193,7 +193,7 @@ def _frame(*events: tuple[int, int, int]) -> str:
     quoted by mistake."""
     raw = b"".join(_event(*e) for e in events)
     raw += _event(EV_SYN, SYN_MT_REPORT, 0) + _event(EV_SYN, SYN_REPORT, 0)
-    return ("printf '" + "".join("\\%03o" % b for b in raw) + "' > "
+    return ("printf '" + "".join(f"\\{b:03o}" for b in raw) + "' > "
             + TOUCH_DEVICE)
 
 

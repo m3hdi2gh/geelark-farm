@@ -931,7 +931,6 @@ def test_an_account_event_names_the_address_the_panel_will_ask_by(monkeypatch):
     that contains the address, and nothing else. An event that is right
     in every other way and does not name the address is invisible."""
     from geelark_farm.store import accounts
-
     from geelark_farm.store import events as store_events
 
     written = []

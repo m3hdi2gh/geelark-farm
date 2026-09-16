@@ -758,10 +758,8 @@ def cmd_breaker(settings: Settings, args) -> int:
 
     Exits 1 while it is open, so a script watching the service can tell.
     """
-    from .breaker import Breaker
-    from .serve import BREAKER_FILE
-
     from .breaker import open_breaker
+    from .serve import BREAKER_FILE
 
     fuse = open_breaker(settings, settings.state_dir / BREAKER_FILE)
 

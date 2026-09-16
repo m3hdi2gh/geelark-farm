@@ -177,7 +177,8 @@ nav form button:hover{{color:#fff;background:#141c2b}}
    with its table cut off at the edge (the operator, 2026-09-08). */
 .sheetbody.shown{{display:flex;flex-direction:column;gap:12px}}
 .sheetbody.shown>*{{width:100%;max-width:none;margin:0}}
-.sheetbody.shown .top,.sheetbody.shown .narrow>.top,.sheetbody.shown .alerts{{display:none}}
+.sheetbody.shown .top,.sheetbody.shown .narrow>.top,
+.sheetbody.shown .alerts{{display:none}}
 /* The edit-and-preview-again box of the preview page is the paste box the
    sheet already has - Back returns to it with the paste still in it. */
 .sheetbody.shown form[action$="/preview"],
@@ -1073,6 +1074,10 @@ _PHONE_CLASS = {"ready": "ready", "app_only": "warn", "building": "info",
 #: is missing from it, which is the one thing the word has to carry.
 _PHONE_WORD = {"app_only": "App only", "ready": "Ready",
                "incomplete": "Incomplete", "building": "Building"}
+
+
+#: What a table cell shows for a row that names no phone.
+_NO_SERIAL = "<span class=dim>&mdash;</span>"
 
 
 def _phone_word(status: str) -> str:
@@ -2706,7 +2711,8 @@ _DASH_SCRIPT = """
       if (ev.target.type === 'radio') {
         dlg.querySelectorAll('[data-field]').forEach(function(i){ i.value = ''; });
       } else {
-        dlg.querySelectorAll('input[type="radio"]').forEach(function(r){ r.checked = false; });
+        dlg.querySelectorAll('input[type="radio"]')
+           .forEach(function(r){ r.checked = false; });
       }
     };
     var done = function(use){
@@ -3805,7 +3811,6 @@ def _build_card(data: dict, user: dict) -> str:
     choose = data.get("choose") or {}
     stock = data.get("stock") or {}
     pulse = data.get("pulse") or {}
-    free = int((stock.get("gmail") or {}).get("free") or 0)
     exits = int((stock.get("proxy") or {}).get("free") or 0)
     if pulse.get("stopped"):
         # A stopped pass returns long before it takes the wishes, so a
@@ -4093,7 +4098,7 @@ def _wish_rows(data: dict, user: dict) -> str:
             act = f'<span class="age">with {esc(who or "somebody")}</span>'
         lines.append(
             f'<tr data-view="{"mine" if mine else "theirs"}">'
-            f'<td>{_serial_link(serial) if serial else "<span class=dim>&mdash;</span>"}</td>'
+            f'<td>{_serial_link(serial) if serial else _NO_SERIAL}</td>'
             f'<td><span class="badge failed">Failed</span>'
             + (f'<span class="dim maker">built by {esc(who)}</span>' if who
                else "")
@@ -6555,8 +6560,8 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
     carried = "\n".join(
         f"{r['address']}\t{r['password']}\t{r.get('recovery') or r.get('secret') or ''}"
         for r in good)
-    body = (f'<div class="top"><h2>Gmail Pool</h2><span class="status">'
-            f'preview — nothing is added yet</span></div>'
+    body = ('<div class="top"><h2>Gmail Pool</h2><span class="status">'
+            'preview — nothing is added yet</span></div>'
             + _preview_card(
                 "/pools/gmail/add", rows, good, user, idem, back, lines,
                 carried,
@@ -6589,8 +6594,8 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
     carried = "\n".join(
         f"{r['address']}\t{r['password']}\t{r.get('secret') or ''}"
         for r in good)
-    body = (f'<div class="top"><h2>Gpt Pool</h2><span class="status">'
-            f'preview — nothing is added yet</span></div>'
+    body = ('<div class="top"><h2>Gpt Pool</h2><span class="status">'
+            'preview — nothing is added yet</span></div>'
             + _preview_card("/pools/gpt/add", rows, good, user, idem, back,
                             lines, carried,
                             note="each waits for a phone to be sent to")
@@ -6616,9 +6621,9 @@ def proxy_preview(rows: list[dict], user: dict, idem: str, *,
         f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
     carried = "\n".join(f"{r['name']}\t{r['raw']}" if r.get("name")
                         else r["raw"] for r in good)
-    body = (f'<div class="top"><h2>Proxy Pool</h2><span class="status">'
-            f'preview — each is tested by the pass before it joins</span>'
-            f'</div>'
+    body = ('<div class="top"><h2>Proxy Pool</h2><span class="status">'
+            'preview — each is tested by the pass before it joins</span>'
+            '</div>'
             + _preview_card("/pools/proxy/add", rows, good, user, idem, back,
                             lines, carried,
                             note="each is tested before it joins; one that "

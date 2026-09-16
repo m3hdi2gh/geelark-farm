@@ -67,9 +67,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import apps
+from . import apps, breaker, codes, failures, phones, shell
 from . import artifacts as archive
-from . import breaker, codes, failures, phones, shell
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
@@ -1863,7 +1862,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 try:
                     proxy_row = _new_exit(
                         client, settings, book, build, phone_id, proxy_row,
-                        f"reCAPTCHA offered only text or audio on this exit",
+                        "reCAPTCHA offered only text or audio on this exit",
                         remaining(), swaps=exit_swaps, avoid=seen,
                         cancelled=cancelled)
                 except Aborted as exc:

@@ -240,8 +240,8 @@ def test_the_pool_leaves_held_back_accounts_where_they_are(monkeypatch):
     """The API said `blocked` while the claim did not know the word, so a
     Claude account posted today would have gone to a phone and failed
     there. The claim's SQL and `available` apply accounts.held_back."""
-    from tests.test_pgpool import MemoryTable
     from geelark_farm.store.pgpool import PgAppPool
+    from tests.test_pgpool import MemoryTable
 
     table = MemoryTable()
     table.add("app", address="free@x.com", password="p", totp_secret="")

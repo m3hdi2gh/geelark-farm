@@ -1997,10 +1997,9 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
     no decisions. Blocks until `stop`."""
     from concurrent.futures import ThreadPoolExecutor
 
+    from . import config as _config
     from . import signals
     from .store import jobs as store_jobs
-
-    from . import config as _config
 
     stop = stop or threading.Event()
     worker = _config.machine()

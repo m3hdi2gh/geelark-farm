@@ -2368,7 +2368,6 @@ def test_the_housekeeper_runs_the_periodic_steps_without_the_marks(
 
 def test_a_pass_with_a_housekeeper_reads_its_last_turn_and_syncs_nothing(
         monkeypatch, settings):
-    from geelark_farm import builder
 
     recorder = Recorder(warm=5, free=10).install(monkeypatch)
     shown = {}
@@ -2833,7 +2832,8 @@ def test_the_stores_breaker_counts_like_the_files_and_imports_it_once(
     from types import SimpleNamespace
 
     from geelark_farm import breaker as breaker_mod
-    from geelark_farm.store import db, state as store_state
+    from geelark_farm.store import db
+    from geelark_farm.store import state as store_state
 
     kept = {}
     monkeypatch.setattr(store_state, "get",
@@ -2949,7 +2949,7 @@ def test_a_pass_sweeps_the_forgotten_phones_after_the_shadow(
     monkeypatch.setattr(serve_mod, "_shadow",
                         lambda *a, **k: order.append("shadow"))
     monkeypatch.setattr(forgotten, "sweep",
-                        lambda c, s, l, listing: order.append(
+                        lambda c, s, ledger, listing: order.append(
                             ("sweep", c, s, listing)))
     client = object()
 

@@ -10,6 +10,7 @@ of them condemns a perfectly good account.
 from __future__ import annotations
 
 import re
+
 import pytest
 
 from geelark_farm import shell
@@ -348,7 +349,7 @@ def test_a_kernel_swipe_eases_through_its_frames():
     ys = [next(v for t_, c, v in f if c == 54) for f in frames[:-1]]
     assert ys[0] == 1000 and ys[-1] == 400
     assert ys == sorted(ys, reverse=True), "monotonic"
-    gaps = [a - b for a, b in zip(ys, ys[1:])]
+    gaps = [a - b for a, b in zip(ys, ys[1:], strict=False)]
     assert gaps[0] < gaps[4] and gaps[-1] < gaps[4], "slow, fast, slow"
     assert "sleep" not in script, "the writes themselves are the pacing"
     assert frames[-1] == [(3, 57, -1), (1, 330, 0), (0, 2, 0), (0, 0, 0)]

@@ -3689,7 +3689,8 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert '<option value="none">none &mdash; no Google account</option>' in card
     assert '<option value="">none &mdash; sign in later</option>' in card
     assert 'name="install_app"' not in card, "the tick is long gone"
-    assert '<optgroup label="pick one">' not in card, "the free rows moved into the dialog"
+    assert '<optgroup label="pick one">' not in card, (
+        "the free rows moved into the dialog")
     assert "Exit:" not in body, "nothing about the exit at all (the operator)"
     for ident in ("gmail-new", "account-new"):
         assert f'<dialog class="editor" id="{ident}"' in body, ident
@@ -3700,7 +3701,8 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert '<input type="radio" name="pick-gmail-new" value="a@x.com"> a@x.com' in gdlg
     adlg = body[body.index('id="account-new"'):]
     assert 'data-field="app_secret"' in adlg
-    assert '<input type="radio" name="pick-account-new" value="g@x.com"> g@x.com' in adlg
+    assert ('<input type="radio" name="pick-account-new" value="g@x.com"> '
+            'g@x.com') in adlg
     for name in ("gmail_password", "gmail_secret", "app_password", "app_secret"):
         assert f'<input type="hidden" name="{name}" value="">' in body, name
     script = pages._DASH_SCRIPT
@@ -3757,7 +3759,8 @@ def test_the_build_form_is_absent_with_nothing_to_build_from(web, monkeypatch):
     # this morning is in no pool - so the form stays and the hint says so.
     assert 'action="/phones/build"' in body
     assert '<option value="" disabled>auto &mdash; the pool is empty</option>' in body
-    assert '<option value="none" selected>none &mdash; no Google account</option>' in body
+    assert ('<option value="none" selected>none &mdash; no Google account'
+            '</option>') in body
     assert "The pool has nothing free - type one above." in body
 
     _dash(monkeypatch, stock={"gmail": {"free": 3}, "proxy": {"free": 0},
@@ -5046,8 +5049,8 @@ def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
 
 
 def test_the_mirror_marks_what_is_running_in_one_statement():
-    from geelark_farm import serve as serve_mod
     from geelark_farm import phones as phones_mod
+    from geelark_farm import serve as serve_mod
     from geelark_farm.store import shadow
 
     class Cur:
@@ -5119,7 +5122,8 @@ def test_a_hand_built_phone_says_who_built_it(web, monkeypatch):
         start = body.index(f'href="/phones/{serial}"')
         return body[start:body.index("</tr>", start)]
 
-    assert 'class="dim maker" title="asked for on the build card">built by ali</span>' in row("1950")
+    assert ('class="dim maker" title="asked for on the build card">'
+            'built by ali</span>') in row("1950")
     assert "built by" not in row("1951"), "the keeper's own phone"
 
 

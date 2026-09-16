@@ -266,7 +266,8 @@ def test_the_flow_is_wired_to_the_product_and_the_panel_serves_it():
 
     assert accounts.SERVED["claude"] == ("email_code_customer",)
     assert accounts.SERVED["spotify"] == ()
-    assert builder._product_of(type("R", (), {"values": {"Product": "claude"}})()) == "claude"
+    claude_row = type("R", (), {"values": {"Product": "claude"}})()
+    assert builder._product_of(claude_row) == "claude"
     assert builder._product_of(type("R", (), {"values": {}})()) == "chatgpt"
     assert builder._product_of(None) == "chatgpt"
 

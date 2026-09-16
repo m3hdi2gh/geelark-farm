@@ -1468,7 +1468,6 @@ def test_stop_requests_live_in_service_state_and_age_out():
 def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over():
     import inspect
 
-    from geelark_farm import failures
     from geelark_farm.store import ladder
 
     assert ladder.MAX_TRIES == 3 and ladder.FLOOR_MINUTES == 20
@@ -1477,7 +1476,8 @@ def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over()
     assert "retry_after = CASE WHEN tries + 1 >= %s THEN NULL" in challenge
     assert "make_interval(mins => %s)" in challenge, (
         "minutes, not the day and the two days the farm starved through")
-    assert "last_host = CASE WHEN %s <> '' THEN %s ELSE last_host END" in         challenge, "the exit it was refused on, so the next try avoids it"
+    assert ("last_host = CASE WHEN %s <> '' THEN %s ELSE last_host END"
+            in challenge), "the exit it was refused on, so the next try avoids it"
     assert "RETURNING tries, retry_after IS NOT NULL" in challenge
     revive = inspect.getsource(ladder.revive_due)
     assert "retry_after IS NOT NULL AND retry_after <= now()" in revive
@@ -1490,7 +1490,8 @@ def test_the_ladder_counts_refusals_and_puts_rows_back_when_their_wait_is_over()
 
     class Conn:
         def __init__(self, tries, back):
-            self.sql = []; self.row = (tries, back)
+            self.sql = []
+            self.row = (tries, back)
 
         def execute(self, sql, params=None):
             self.sql.append((sql, params))
@@ -1748,7 +1749,8 @@ def test_the_schema_carries_the_apis_practice_room():
         name = column.strip()
         if not name or " " in name:          # the derived ones, not columns
             continue
-        assert f"\n    {name} " in sql.split("CREATE TABLE IF NOT EXISTS api_sandbox")[1].split(");")[0], name
+        table = sql.split("CREATE TABLE IF NOT EXISTS api_sandbox")[1]
+        assert f"\n    {name} " in table.split(");")[0], name
     assert "password" not in sql.split("api_sandbox")[1].split(");")[0], (
         "a practice room is the last place a real password should be")
     assert "CHECK (role IN ('panel', 'bot', 'sandbox'))" in sql
