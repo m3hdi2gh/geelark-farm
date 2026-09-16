@@ -6368,6 +6368,9 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     assert 'data-value="pa$$w&lt;rd"' in body, "escaped, and hidden"
     assert "\u2022" * 8 in body and "pa$$w<rd" not in body
     assert 'data-secret="JBSWY3DPEHPK3PXP"' in body
+    # The code, not the key it is made from (the operator, 2026-09-16).
+    assert "Authenticator key" not in body and 'id="gf-key"' not in body
+    assert ">JBSWY3DPEHPK3PXP<" not in body
     assert "crypto.subtle.importKey('raw',b32(secret)" in body
     assert "%1000000" in body and "setInterval(tick,1000)" in body
     assert "navigator.clipboard.writeText" in body
@@ -6498,3 +6501,62 @@ def test_the_live_tab_changes_the_ip_without_leaving_the_page(web,
                        "url": "https://phone.geelark.com/i?t=abc"})
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
     assert 'id="gf-ip"' not in body and 'id="gf-reload"' in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tab_offers_done_and_failed_beside_its_controls(web,
+                                                                 monkeypatch):
+    """The dashboard's two ends of a phone, in the margin (the operator,
+    2026-09-16). Both delete the phone, so both ask - in the page, by the
+    browser's own dialog - and go home afterwards, since the screen they
+    were beside is gone. The server's own confirm still stands for a
+    press without the script, and the state door is the same one."""
+    import geelark_farm.store.actions as actions_mod
+
+    row = {"id": 71, "verb": "boot_phone", "status": "done", "result": "ok",
+           "detail": {"state": "taken",
+                      "url": "https://phone.geelark.com/i?t=abc"},
+           "requested_by": 1}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "app_only",
+                                    "state": "taken", "owner": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
+    acts = body[body.index('<div class="gf-acts">'):]
+    acts = acts[:acts.index("</div>") + 6]
+    assert acts.count('action="/phones/1500/state"') == 2
+    assert 'name="state" value="done"' in acts
+    assert 'name="state" value="failed"' in acts
+    assert acts.count('name="back" value="/"') == 2, "the phone is gone"
+    assert acts.count("data-ask=") == 2
+    assert 'class="quiet ok">Done<' in acts and 'class="quiet bad">Failed<' in acts
+    assert body.index('id="gf-ip"') < body.index('<div class="gf-acts">')
+    assert body.index('<div class="gf-acts">') < body.index("</aside>")
+    assert "window.confirm(f.getAttribute('data-ask'))" in body
+    assert "s.name='sure'; s.value='1'" in body
+
+    # The press, answered: one set_phone_state, and home.
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 73)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/state",
+        _form(csrf=client.csrf(), state="failed", sure="1", back="/"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/?said=queued:73", "home, not here"
+    assert got["verb"] == "set_phone_state"
+    assert got["payload"]["state"] == "failed"
+
+    # Somebody who may not take phones sees neither, and no dialog.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": False})
+    other = web()
+    other.login(username="sara")
+    _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
+    assert 'class="gf-acts"' not in body and "window.confirm" not in body
+    assert 'id="gf-reload"' in body

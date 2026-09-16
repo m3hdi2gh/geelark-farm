@@ -4402,6 +4402,17 @@ def viewer_page(serial: str, user: dict, url: str,
         "})();"
     )
     rows = _gmail_margin(creds) if creds else ""
+    ends = ""
+    if _may(user, "may_take_phones"):
+        # Done and Failed, as the dashboard's row offers them (the
+        # operator, 2026-09-16: "beside the other buttons"). Both delete
+        # the phone, so both ask first - here, in the page, by the same
+        # data-ask the dashboard's script reads; answered yes, the form
+        # carries the server's own `sure` and the tab goes home, since
+        # the phone it was showing is gone.
+        ends = (f'<div class="gf-acts">'
+                f'{_state_form(user, serial, "done", "/")}'
+                f'{_state_form(user, serial, "failed", "/")}</div>')
     change_ip = ""
     if _may(user, "may_change_proxy"):
         # Beside Reload: the phone is stopped, moved to the next free
@@ -4442,6 +4453,7 @@ def viewer_page(serial: str, user: dict, url: str,
         'line-height:1.4}'
         '#gf-reload{align-self:flex-start;margin-bottom:6px}'
         '#gf-ip,#gf-boot{align-self:flex-start;margin-bottom:6px}'
+        '.gf-acts{display:flex;gap:8px;margin:4px 0 6px}'
         '.gf-row{margin:0 0 14px}'
         '.gf-row .lbl{display:block;color:var(--muted);font-size:11px;'
         'margin-bottom:3px}'
@@ -4468,11 +4480,24 @@ def viewer_page(serial: str, user: dict, url: str,
         f'GeeLark&#39;s viewer again without closing the tab - for when it says '
         f'the connection timed out; that is the route from your network to '
         f'phone.geelark.com, not the phone">Reload viewer</button>'
-        f'{change_ip}{rows}</aside></div>'
-        f'<script>{beat}</script>')
+        f'{change_ip}{ends}{rows}</aside></div>'
+        f'<script>{beat}{_ASK_SCRIPT if ends else ""}</script>')
     return page(f"Phone {serial}", body, user=user, here="/", live="",
                 bare=True)
 
+
+#: The Live tab's Done and Failed: the question the form carries, asked
+#: by the browser's own dialog, and `sure` added so the server does not
+#: ask again on a page of its own.
+_ASK_SCRIPT = (
+    "document.querySelectorAll('form[data-ask]').forEach(function(f){"
+    " f.onsubmit=function(){"
+    "  if(!window.confirm(f.getAttribute('data-ask'))) return false;"
+    "  var s=document.createElement('input'); s.type='hidden';"
+    "  s.name='sure'; s.value='1'; f.appendChild(s); return true;"
+    " };"
+    "});"
+)
 
 #: The Live tab's Change IP, inside the beat's closure (it uses `serial`,
 #: `form`, `frame`, `word`, `base` and `show`). The press is the same POST
@@ -7598,8 +7623,10 @@ _TOTP_SCRIPT = (
 
 def _gmail_margin(creds: dict) -> str:
     """The Gmail's rows for the margin: address, password (hidden until
-    shown, copied without showing), the authenticator's code as it
-    stands, and the key it is made from."""
+    shown, copied without showing) and the authenticator's code as it
+    stands. Not the key it is made from: the code is what a person
+    types, and the key beside it was one more thing to read past (the
+    operator, 2026-09-16). It stays on the pool row."""
     address = str(creds.get("address") or "")
     password = str(creds.get("password") or "")
     secret = str(creds.get("totp_secret") or "")
@@ -7628,11 +7655,7 @@ def _gmail_margin(creds: dict) -> str:
             f'data-secret="{esc(secret)}">------</code>'
             f'<button type="button" class="quiet" data-copy="gf-totp">copy'
             f'</button></div>'
-            f'<div class="gf-bar"><i id="gf-totp-bar"></i></div></div>'
-            f'<div class="gf-row"><span class="lbl">Authenticator key</span>'
-            f'<div class="val"><code id="gf-key">{esc(secret)}</code>'
-            f'<button type="button" class="quiet" data-copy="gf-key">copy'
-            f'</button></div></div>')
+            f'<div class="gf-bar"><i id="gf-totp-bar"></i></div></div>')
     else:
         rows.append('<div class="gf-row"><span class="lbl">Authenticator'
                     '</span><div class="val"><code class="dim">none on the '
