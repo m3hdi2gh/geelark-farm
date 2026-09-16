@@ -5939,3 +5939,47 @@ def test_under_manual_login_the_keeper_still_signs_in_what_the_panel_sent(
 
     # The sheet-era pool has no such claim, and that is a plain no.
     assert builder._claim_panel(_session_for(settings, apps=1)) is None
+
+
+def test_a_gmail_that_signs_in_under_another_name_is_renamed_to_it(
+        device, settings, drive):
+    """The device is the only truth for what is signed in, and it said a
+    different name: the phone's row and the pool row both go by what the
+    device holds, and the note keeps what it was sold as (2026-09-16)."""
+    book = make_book(gmails=1, apps=1)
+    build = drive(book, settings, google=[
+        Outcome("success", "signed_in", "x is on the device",
+                signed_in_as="dearinki2wwiih@gmail.com")])
+
+    assert build.ok, build.status
+    assert build.gmail == "dearinki2wwiih@gmail.com"
+    row = book.gmails._rows[0]
+    assert row.values["Address"] == "dearinki2wwiih@gmail.com"
+    assert row.values["Status"] == "ready", "spent on the phone as ever"
+    assert row.values["Note"].startswith("On phone 622")
+    assert "Sold as g0@example.com; signs in as dearinki2wwiih" in \
+        row.values["Note"], "the sold address survives the spend"
+    phone = next(r for r in book.phones.rows() if r["Serial"] == "622")
+    assert phone["Gmail"] == "dearinki2wwiih@gmail.com"
+
+    # The same account under another spelling is no rename (Google
+    # ignores case and, on its own domains, dots).
+    book = make_book(gmails=1, apps=1)
+    build = drive(book, settings, google=[
+        Outcome("success", "signed_in", "", signed_in_as="G0@Example.com")])
+    assert build.ok and build.gmail == "g0@example.com"
+    assert book.gmails._rows[0].values["Address"] == "g0@example.com"
+
+    # A pool without `rename` - or one that refuses - costs the build
+    # nothing: the phone's row still says the name.
+    class Refuses:
+        def rename(self, *a, **k):
+            raise RuntimeError("no")
+
+    out = Outcome("success", "signed_in", "", signed_in_as="b@gmail.com")
+    assert builder._signed_in_as(SimpleNamespace(gmails=Refuses()), object(),
+                                 "a@gmail.com", out) == "b@gmail.com"
+    assert builder._signed_in_as(SimpleNamespace(gmails=object()), None,
+                                 "a@gmail.com", out) == "b@gmail.com"
+    assert builder._signed_in_as(SimpleNamespace(gmails=object()), None,
+                                 "a@gmail.com", SIGNED_IN) == "a@gmail.com"

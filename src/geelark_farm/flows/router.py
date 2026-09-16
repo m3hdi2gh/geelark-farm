@@ -43,6 +43,11 @@ class Outcome:
     trail: list[str] = field(default_factory=list)
     #: How many screen dumps the flow took - see Context.dumps.
     dumps: int = 0
+    #: The address the device holds after a Google sign-in, when it is not
+    #: the one the flow was given: an account sold under a sign-in alias
+    #: lands on the device under its own name (2026-09-16). Empty when
+    #: they are the same account.
+    signed_in_as: str = ""
 
     @property
     def ok(self) -> bool:

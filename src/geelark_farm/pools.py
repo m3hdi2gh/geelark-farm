@@ -650,6 +650,18 @@ class Pool:
             fields[self.serial_column] = str(serial)
         self._set(resource, fields)
 
+    def rename(self, resource: Resource, address: str, *,
+               note: str = "") -> None:
+        """The row's address as the service knows it, once the service has
+        said: an account sold under a sign-in alias is on the device under
+        its own name, and that is the name every later look - the device's
+        account list, the customer's hand-over - goes by (2026-09-16). The
+        note keeps the address it was sold under."""
+        fields = {"Address": str(address).strip()}
+        if note:
+            fields[self.note_column] = note
+        self._set(resource, fields)
+
     def fail(self, resource: Resource, reason: str, *, note: str = "",
              host: str = "", settings=None) -> None:
         """Record what was wrong with a row, in the vocabulary of the tab's own

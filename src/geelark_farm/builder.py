@@ -1896,12 +1896,14 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                     exit_swaps += 1
                 continue
             if outcome.ok:
-                build.gmail = account.email
+                signed_as = _signed_in_as(book, gmail_row, account.email,
+                                          outcome)
+                build.gmail = signed_as
                 gmail_signed_in = True
                 # On the row now, not at the end. This is the column that
                 # decides whether a phone a killed run left behind is
                 # finishable or gets deleted, and it is true from this moment.
-                _note_on_row(book, build.serial, Gmail=account.email)
+                _note_on_row(book, build.serial, Gmail=signed_as)
                 break
             # Every way a Google sign-in fails is about the account or the
             # device, never the exit: a CAPTCHA is Google distrusting this
@@ -2701,11 +2703,15 @@ def _release(book: Book, build: Build, held: list[tuple], *,
                                   serial=str(build.serial or ""),
                                   detail=f"{resource.label}: {reason}")
             elif action == SPEND:
+                # A rename's note - "Sold as x; signs in as y" - survives
+                # the spend: it is the one place the sold address is kept.
+                sold = str((resource.values or {}).get("Note") or "")
+                sold = f" {sold}" if sold.startswith("Sold as ") else ""
                 pool.spend(resource, serial=build.serial, note=(
-                    f"On phone {build.serial}."
+                    f"On phone {build.serial}.{sold}"
                     if build.ok else
                     f"On phone {build.serial}, which stopped short of ready - "
-                    f"see that row in the Phones tab."))
+                    f"see that row in the Phones tab.{sold}"))
             elif (pool is book.proxies and suspect_hosts
                   and str(getattr(getattr(resource, "proxy", None), "host", ""))
                   in suspect_hosts):
@@ -2855,6 +2861,31 @@ def _phone_note(build: Build) -> str:
                          for line in attempts_of(build))
     lead = "Also tried" if build.ok else "Tried"
     return f"{opening} {lead}: {attempts}."
+
+
+def _signed_in_as(book: Book, gmail_row, given: str, outcome) -> str:
+    """The address the device holds, and the pool row renamed to it when
+    that is not the address it was sold under (2026-09-16: lrinki795
+    signed in as dearinki2wwiih). Never fatal: a row that will not take
+    the rename still signed in, and the phone's own row says the name."""
+    from .accounts import same_google_account
+
+    held = str(getattr(outcome, "signed_in_as", "") or "").strip()
+    if not held or same_google_account(held, given):
+        return given
+    log.warning("%s signed in as %s - the address on the row is a sign-in "
+                "alias; the row is renamed to what the device holds",
+                given, held)
+    rename = getattr(book.gmails, "rename", None)
+    if callable(rename) and gmail_row is not None:
+        try:
+            rename(gmail_row, held,
+                   note=f"Sold as {given}; signs in as {held} (the device "
+                        f"said so on {time.strftime('%Y-%m-%d')}).")
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the Gmail row could not be renamed to %s (%s)",
+                        held, exc)
+    return held
 
 
 def _note_on_row(book: Book, serial: str, **fields: str) -> None:

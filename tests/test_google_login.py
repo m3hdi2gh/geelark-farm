@@ -2075,3 +2075,43 @@ def test_the_captcha_question_stops_before_the_pages_furniture():
                     "If there are none, click skip", "Image challenge") == (
         "Select all squares with motorcycles")
     assert question("Verify it's you", "reCAPTCHA") == "", "no question there"
+
+
+def test_an_account_that_appears_under_another_name_is_signed_in(monkeypatch):
+    """A seller's address can be a sign-in alias: `lrinki795@gmail.com`
+    typed in, password and code accepted, and the device held
+    `dearinki2wwiih@gmail.com` - which the poll did not recognise, so two
+    phones the account was on were failed as unknown_screen (2026-09-16).
+    An account that was not on the device when the sign-in began is the
+    one it put there, whatever it is called."""
+    from geelark_farm.flows import google_login
+
+    answers = [["other@gmail.com"], ["other@gmail.com"],
+               ["dearinki2wwiih@gmail.com", "other@gmail.com"]]
+    monkeypatch.setattr(google_login.shell, "device_accounts",
+                        lambda *a, **k: answers.pop(0) if len(answers) > 1
+                        else answers[0])
+    monkeypatch.setattr(google_login, "open_add_account", lambda *a, **k: None)
+    monkeypatch.setattr(google_login, "ACCOUNT_CHECK_SECONDS", 0)
+    driven = {}
+
+    def fake_drive(ctx, screens, *, is_done, budget_seconds, logger=None,
+                   watch=None):
+        driven["is_done"] = is_done
+        return google_login.Outcome("budget", "budget_exhausted")
+
+    monkeypatch.setattr(google_login.router, "drive", fake_drive)
+    google_login.sign_in(None, "P1", _account())
+
+    # The account that was there before is not this sign-in's doing.
+    assert driven["is_done"]() is None
+    out = driven["is_done"]()
+    assert out is not None and out.ok and out.reason == "signed_in"
+    assert out.signed_in_as == "dearinki2wwiih@gmail.com"
+    assert "signs in as it" in out.detail
+
+    # The given address itself says nothing of an alias.
+    answers[:] = [[], [_account().email]]
+    google_login.sign_in(None, "P1", _account())
+    out = driven["is_done"]()
+    assert out is not None and out.ok and out.signed_in_as == ""

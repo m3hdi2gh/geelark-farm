@@ -1702,6 +1702,9 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
         # A different account on a device we are about to sign into is a
         # mismatch worth naming: Play can refuse installs for the wrong one.
         log.warning("device already has %s", present)
+    # What was there before the sign-in began: an account that appears
+    # during it is the one this sign-in put there, whatever it is called.
+    before = set(present)
 
     if not already_open:
         open_add_account(client, phone_id)
@@ -1737,6 +1740,19 @@ def sign_in(client: Client, phone_id: str, account: Account, *,
         if any(accounts.same_google_account(account.email, a) for a in present):
             return Outcome("success", "signed_in",
                            f"{account.email} is on the device")
+        # An account that was not on the device when this began is the one
+        # this sign-in put there - under its own name. A seller's address
+        # can be a sign-in alias of an account called something else:
+        # `lrinki795@gmail.com` typed in, password and code accepted, and
+        # Play read "Signed in as dearinki2wwiih@gmail.com" while the run
+        # waited for the alias, ran out of screens it knew and gave up on
+        # two phones the account was already on (2026-09-16).
+        added = sorted(a for a in present if a not in before)
+        if added:
+            return Outcome("success", "signed_in",
+                           f"{added[0]} is on the device - the address given "
+                           f"was {account.email}, which signs in as it",
+                           signed_in_as=added[0])
         return None
 
     return router.drive(ctx, SCREENS, is_done=signed_in, watch=watch,
