@@ -6395,3 +6395,106 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
                               creds={"address": "a@b.com", "password": "",
                                      "totp_secret": ""})
     assert "none on the row" in drawn and 'id="gf-totp"' not in drawn
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tab_changes_the_ip_without_leaving_the_page(web,
+                                                              monkeypatch):
+    """Change IP beside Reload viewer (the operator, 2026-09-16): the same
+    POST the dashboard's button sends, with `boot=1` and this page as
+    `back`, sent by fetch - so the tab never navigates, its beat never
+    stops, and the phone stays theirs while it is stopped, moved and
+    started again. The page Boot's tab waits on is read, not shown: its
+    title says whether to keep asking, swap screens, or offer Boot."""
+    import geelark_farm.store.actions as actions_mod
+
+    row = {"id": 71, "verb": "boot_phone", "status": "done", "result": "ok",
+           "detail": {"state": "taken",
+                      "url": "https://phone.geelark.com/i?t=abc"},
+           "requested_by": 1}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "app_only",
+                                    "state": "taken", "owner": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
+    assert 'id="gf-ip"' in body and ">Change IP</button>" in body
+    assert body.index('id="gf-reload"') < body.index('id="gf-ip"')
+    assert ('<form method="post" class="inline" id="gf-boot" hidden '
+            'action="/phones/1500/boot">') in body
+    assert "fetch('/phones/'+serial+'/proxy',{method:'POST'," in body
+    assert "body:form+'&boot=1&back='+encodeURIComponent(here)" in body
+    assert "new DOMParser().parseFromString(t," in body
+    assert "if(title.indexOf('Changing')===0&&asks<40)" in body
+    assert "base=view.getAttribute('data-src'); show();" in body
+    assert "if(title.indexOf(' is off')>0)" in body
+    assert "if(bootf) bootf.hidden=false" in body
+    assert "if(at.pathname!==here)" in body, "a refusal lands on /"
+
+    # The press: one change_proxy request with `boot`, and the redirect
+    # is to this page, which is where the fetch reads the answer.
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 72)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/proxy",
+        _form(csrf=client.csrf(), boot="1", back="/phones/1500/live"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/phones/1500/live?said=queued:72"
+    assert got["verb"] == "change_proxy"
+    assert got["payload"]["serial"] == "1500"
+    assert got["payload"]["boot"] is True
+    # The dashboard's press carries `boot` false, and goes back home.
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/proxy", _form(csrf=client.csrf()))
+    assert dict(headers)["Location"] == "/?said=queued:72"
+    assert got["payload"]["boot"] is False
+    # And no address the form made up.
+    status, headers, _ = client.request(
+        "POST", "/phones/1500/proxy",
+        _form(csrf=client.csrf(), boot="1", back="/phones/1501/live"))
+    assert dict(headers)["Location"] == "/?said=queued:72"
+
+    # What the fetch reads back, state by state.
+    row = {"id": 72, "verb": "change_proxy", "status": "queued",
+           "result": "", "detail": None, "requested_by": 1}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
+    assert "<h2" in body and "Changing the IP of 1500" in body
+    assert "next free exit" in body
+
+    row.update(status="done", result="phone 1500 is on SX2 now and started "
+                                     "again",
+               detail={"was": "SX1", "now": "SX2",
+                       "url": "https://phone.geelark.com/i?t=new"})
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
+    assert 'data-src="https://phone.geelark.com/i?t=new"' in body
+
+    row.update(status="failed", result="phone 1500 is on SX2 now but GeeLark "
+                                       "has no machine free to start it",
+               detail={"was": "SX1", "now": "SX2", "off": True})
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
+    assert "1500 is off" in body and "no machine free" in body
+    assert 'http-equiv="refresh"' not in body
+
+    row.update(status="failed", result="the Proxy tab has no free exit left",
+               detail=None)
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
+    assert "1500 kept its exit" in body and "no free exit" in body
+    assert "did not start" not in body, "it is still running as it was"
+
+    # Not the holder's tick: no button, and the margin still draws.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True,
+                         "may_change_proxy": False})
+    other = web()
+    other.login(username="sara")
+    row.update(status="done", result="ok",
+               detail={"state": "taken",
+                       "url": "https://phone.geelark.com/i?t=abc"})
+    _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
+    assert 'id="gf-ip"' not in body and 'id="gf-reload"' in body

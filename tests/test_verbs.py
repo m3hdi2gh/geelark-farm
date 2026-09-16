@@ -1396,3 +1396,105 @@ def test_free_all_tests_the_whole_set_aside_list_and_frees_what_answers(
 
     # No client on this pass is a refusal, not a silent no-op.
     assert verbs.free_all_proxies(book, None, settings, {}, None)[0] == "failed"
+
+
+def test_change_proxy_from_the_live_tab_starts_the_phone_again(monkeypatch):
+    """`boot` in the payload is the Live tab's press: after the exit is
+    changed the phone is started again and the live-view link rides in
+    the detail, as Boot's does (the operator, 2026-09-16). A phone that
+    then would not start is `failed` with `off` said, and the exit stays
+    changed - it was."""
+    from geelark_farm import phones as phones_mod
+
+    def fresh_book():
+        book = make_book(proxies=2)
+        sx1, sx2 = book.proxies._rows
+        sx1.values["Name"], sx2.values["Name"] = "SX1", "SX2"
+        book.proxies.spend(sx1, serial="1500", note="on it")
+        _phone_on(book, "1500", "SX1")
+        return book, sx1, sx2
+
+    book, sx1, sx2 = fresh_book()
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.RUNNING}])
+    done = []
+    monkeypatch.setattr(phones_mod, "stop",
+                        lambda client, pid: done.append(("stop", pid)))
+    monkeypatch.setattr(phones_mod, "wait_until_stopped",
+                        lambda client, pid, **k:
+                        done.append(("wait", pid)) or True)
+    monkeypatch.setattr(phones_mod, "set_proxy",
+                        lambda client, pid, proxy:
+                        done.append(("set", pid, proxy.host)))
+    asked = {}
+
+    def start(client, pid, **k):
+        asked.update(k)
+        done.append(("start", pid))
+        return "https://phone.geelark.com/i?t=new"
+
+    monkeypatch.setattr(phones_mod, "start", start)
+
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara", "boot": True},
+        object())
+
+    assert status == "done", said
+    assert done == [("stop", "P1500"), ("wait", "P1500"),
+                    ("set", "P1500", "10.0.0.1"), ("start", "P1500")]
+    assert asked == {"attempts": 1}, "one try, as Boot's"
+    assert detail == {"was": "SX1", "now": "SX2",
+                      "url": "https://phone.geelark.com/i?t=new"}
+    assert "started again" in said
+    assert book.proxies.status_of(sx2) == "on a phone"
+
+    # Without `boot` nothing starts: the dashboard's button as it was.
+    book, sx1, sx2 = fresh_book()
+    done.clear()
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara"}, object())
+    assert status == "done" and ("start", "P1500") not in done
+    assert detail == {"was": "SX1", "now": "SX2"}
+
+    # No machine free: the exit is changed, the phone is off, Boot later.
+    book, sx1, sx2 = fresh_book()
+
+    def busy(client, pid, **k):
+        raise phones_mod.PhoneCapacityError("[43043] no capacity")
+
+    monkeypatch.setattr(phones_mod, "start", busy)
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara", "boot": True},
+        object())
+    assert status == "failed" and "press Boot again" in said
+    assert detail == {"was": "SX1", "now": "SX2", "off": True}
+    assert book.proxies.status_of(sx2) == "on a phone", "the change stands"
+    row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
+    assert row["Proxy"] == "SX2"
+
+    # GeeLark refused the exit itself, after the stop: off, exit kept.
+    book, sx1, sx2 = fresh_book()
+
+    def refuse(client, pid, proxy):
+        raise phones_mod.PhoneError("[45004] proxy check failed")
+
+    monkeypatch.setattr(phones_mod, "set_proxy", refuse)
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara", "boot": True},
+        object())
+    assert status == "failed" and "45004" in said
+    assert detail == {"off": True}
+    assert book.proxies.status_of(sx2) == "free", "given back"
+
+    # The same refusal on a phone that was already off says so too, and
+    # the dashboard's press still carries no detail at all.
+    monkeypatch.setattr(phones_mod, "listing", lambda client: [
+        {"id": "P1500", "serialNo": "1500", "status": phones_mod.STOPPED}])
+    book, sx1, sx2 = fresh_book()
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara", "boot": True},
+        object())
+    assert status == "failed" and detail == {"off": True}
+    status, said, detail = verbs.change_proxy(
+        book, None, None, {"serial": "1500", "by": "sara"}, object())
+    assert status == "failed" and detail is None

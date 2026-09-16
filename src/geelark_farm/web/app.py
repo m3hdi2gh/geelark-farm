@@ -498,8 +498,12 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._refuse(
                         user, "change_proxy", {"serial": serial},
                         f"phone {serial} is with {held}")
+                # `boot` is the Live tab's press: the phone comes back up
+                # on its new exit and the tab swaps to the new screen
+                # without leaving the page (2026-09-16).
                 return self._act(user, "may_change_proxy", "change_proxy",
-                                 {"serial": serial},
+                                 {"serial": serial,
+                                  "boot": str(field.get("boot") or "") == "1"},
                                  idem=self._minute_key(user, "proxy", serial),
                                  back=_phone_back(field, serial))
             if self.path.startswith("/phones/") and \
@@ -1901,10 +1905,13 @@ def _capture_health() -> dict | None:
 
 
 def _phone_back(field: dict, serial: str) -> str:
-    """Where a phone button returns to: its story when the form said so,
-    the dashboard otherwise - never an address the form made up."""
+    """Where a phone button returns to: its story or its Live tab when
+    the form said so, the dashboard otherwise - never an address the
+    form made up."""
     back = str(field.get("back") or "")
-    return back if back == f"/phones/{serial}" else "/"
+    if back in (f"/phones/{serial}", f"/phones/{serial}/live"):
+        return back
+    return "/"
 
 
 def _store_down(exc: BaseException) -> bool:

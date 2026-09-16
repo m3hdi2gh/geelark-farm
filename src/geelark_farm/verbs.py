@@ -1055,11 +1055,19 @@ def change_proxy(book, ledger, settings, payload, client):
     the old exit back to free, the new one spent on this serial. A phone a
     run holds right now is refused; a run swapping exits underneath a
     build is the one thing worse than a bad exit.
+
+    `boot` in the payload is the Live tab's press (the operator,
+    2026-09-16: "change the IP without leaving this page"): the phone is
+    started again on its new exit and the live-view link rides in the
+    detail, exactly as Boot's does, for the tab that is waiting on it. A
+    phone that then would not start is `failed` with `off` in the
+    detail, so the tab knows to offer Boot rather than the old screen.
     """
     from . import phones as phones_mod
     from .phones import PhoneError
 
     serial = str(payload.get("serial") or "").strip()
+    boot = bool(payload.get("boot"))
     row = next((r for r in book.phones.rows()
                 if str(r.get("Serial") or "").strip() == serial), None)
     if row is None:
@@ -1078,17 +1086,22 @@ def change_proxy(book, ledger, settings, payload, client):
     fresh = book.proxies.claim(serial)
     if fresh is None or fresh.proxy is None:
         return "failed", "the Proxy tab has no free exit left", None
+    # Whether the phone is off by the time this returns: it was, or the
+    # stop below went through. Only the Live tab asks.
+    off = live.get("status") not in (phones_mod.RUNNING, phones_mod.STARTING)
     try:
-        if live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING):
+        if not off:
             phones_mod.stop(client, live["id"])
             phones_mod.wait_until_stopped(client, live["id"])
+            off = True
         phones_mod.set_proxy(client, live["id"], fresh.proxy)
     except (PhoneError, ApiError) as exc:
         log.warning("phone %s kept its exit: %s", serial, exc)
         book.proxies.release(fresh, note=(
             f"Phone {serial} would not take it on {_stamp()}: "
             f"{str(exc)[:120]}"))
-        return "failed", f"GeeLark refused the change: {str(exc)[:160]}", None
+        return ("failed", f"GeeLark refused the change: {str(exc)[:160]}",
+                {"off": off} if boot else None)
     old = book.proxies.find_by_name((row.get("Proxy") or "").strip())
     if old is not None and old is not fresh:
         book.proxies.release(old, note=(
@@ -1099,9 +1112,26 @@ def change_proxy(book, ledger, settings, payload, client):
         f"{_by(payload)}."))
     name = fresh.name or str(fresh.proxy)
     book.phones.write(serial, Proxy=name)
-    return ("done", f"phone {serial} is on {name} now (it is stopped; it "
-                    f"reads the new exit when it next starts)",
-            {"was": (row.get("Proxy") or "").strip(), "now": name})
+    moved = {"was": (row.get("Proxy") or "").strip(), "now": name}
+    if not boot:
+        return ("done", f"phone {serial} is on {name} now (it is stopped; it "
+                        f"reads the new exit when it next starts)", moved)
+    try:
+        # One attempt, as Boot's: the person is watching a tab that can
+        # offer Boot again in a minute.
+        url = phones_mod.start(client, live["id"], attempts=1)
+    except phones_mod.PhoneCapacityError:
+        return ("failed", f"phone {serial} is on {name} now but GeeLark has "
+                          f"no machine free to start it - press Boot again "
+                          f"in a minute", dict(moved, off=True))
+    except (PhoneError, ApiError) as exc:
+        return ("failed", f"phone {serial} is on {name} now but would not "
+                          f"start: {exc}", dict(moved, off=True))
+    if not url:
+        return ("done", f"phone {serial} is on {name} now and started again "
+                        f"- GeeLark gave no live-view link back", moved)
+    return ("done", f"phone {serial} is on {name} now and started again",
+            dict(moved, url=url))
 
 
 # ------------------------------------------------ the service (controls)

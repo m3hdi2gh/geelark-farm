@@ -4240,18 +4240,27 @@ def live_page(serial: str, user: dict, said: str = "",
     row = row or {}
     status = str(row.get("status") or "")
     result = str(row.get("result") or "")
-    url = str((row.get("detail") or {}).get("url") or "") if isinstance(
-        row.get("detail"), dict) else ""
+    detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+    url = str(detail.get("url") or "")
     if status == "done" and url:
         return viewer_page(serial, user, url, creds=creds)
+    # The Live tab's Change IP waits on a change_proxy request the same
+    # way Boot's tab waits on its boot - and reads these titles to know
+    # whether to keep waiting, swap screens, or offer Boot (2026-09-16).
+    changing = str(row.get("verb") or "") == "change_proxy"
     wait = 0
     if said == "refused":
         title, note, colour = ("Not allowed",
-                               "You may not boot phones - ask an admin.",
-                               "red")
+                               "You may not do this to a phone - ask an "
+                               "admin.", "red")
     elif said == "off":
         title, note, colour = ("Actions are not switched on yet",
                                "Nothing was queued.", "amber")
+    elif status in ("failed", "refused", "cancelled") and changing:
+        title, note, colour = (f"{serial} is off" if detail.get("off")
+                               else f"{serial} kept its exit",
+                               result or "the request did not go through",
+                               "red")
     elif status in ("failed", "refused", "cancelled"):
         title, note, colour = (f"{serial} did not start",
                                result or "the request did not go through",
@@ -4260,6 +4269,13 @@ def live_page(serial: str, user: dict, said: str = "",
         title, note, colour = (f"{serial} started",
                                result or "GeeLark gave no live-view link "
                                "back for it", "green")
+    elif changing:
+        title, note, colour, wait = (
+            f"Changing the IP of {serial}",
+            "The phone is stopped, moved to the next free exit and started "
+            "again - usually under a minute. This tab goes back to the "
+            "screen by itself; keep it open.",
+            "amber", 3)
     else:
         title, note, colour, wait = (
             f"Starting {serial}",
@@ -4335,7 +4351,9 @@ def viewer_page(serial: str, user: dict, url: str,
         "var word=document.getElementById('gf-watch');"
         f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]};"
         "var u=new URL(base); u.searchParams.set('w',String(W));"
-        "frame.setAttribute('src',u.href);"
+        "function show(){ u=new URL(base); u.searchParams.set('w',String(W));"
+        " frame.setAttribute('src',u.href); }"
+        "show();"
         "function fit(){"
         " var h=stage.clientHeight||window.innerHeight,"
         "     w=stage.clientWidth||window.innerWidth;"
@@ -4347,9 +4365,10 @@ def viewer_page(serial: str, user: dict, url: str,
         "fit(); window.addEventListener('resize',fit);"
         "document.getElementById('gf-reload').addEventListener('click',"
         " function(){ frame.setAttribute('src','about:blank');"
-        "  setTimeout(function(){ frame.setAttribute('src',u.href); },300); });"
+        "  setTimeout(show,300); });"
         "var form='csrf='+encodeURIComponent(csrf);"
         "var gone=false;"
+        + _CHANGE_IP_SCRIPT +
         "function beat(){"
         " if(gone) return;"
         " fetch('/phones/'+serial+'/watching',{method:'POST',"
@@ -4383,6 +4402,21 @@ def viewer_page(serial: str, user: dict, url: str,
         "})();"
     )
     rows = _gmail_margin(creds) if creds else ""
+    change_ip = ""
+    if _may(user, "may_change_proxy"):
+        # Beside Reload: the phone is stopped, moved to the next free
+        # exit and started again, and the screen swaps in place - the
+        # tab never leaves this page, so its beat never stops and the
+        # phone stays theirs (the operator, 2026-09-16). Boot is kept
+        # hidden for the one outcome where the phone is off afterwards.
+        change_ip = (
+            f'<button type="button" class="quiet" id="gf-ip" title="Stops '
+            f'the phone, moves it to the next free exit and starts it again '
+            f'- about a minute, and the screen comes back here by itself">'
+            f'Change IP</button>'
+            f'<form method="post" class="inline" id="gf-boot" hidden '
+            f'action="/phones/{esc(serial)}/boot">{_csrf(user)}'
+            f'<button class="quiet">Boot again</button></form>')
     body = (
         '<style>html,body{overflow:hidden}'
         # The whole window, side by side: the stage takes every pixel of
@@ -4407,6 +4441,7 @@ def viewer_page(serial: str, user: dict, url: str,
         '#gf-watch{display:block;color:var(--muted);margin-bottom:10px;'
         'line-height:1.4}'
         '#gf-reload{align-self:flex-start;margin-bottom:6px}'
+        '#gf-ip,#gf-boot{align-self:flex-start;margin-bottom:6px}'
         '.gf-row{margin:0 0 14px}'
         '.gf-row .lbl{display:block;color:var(--muted);font-size:11px;'
         'margin-bottom:3px}'
@@ -4433,10 +4468,74 @@ def viewer_page(serial: str, user: dict, url: str,
         f'GeeLark&#39;s viewer again without closing the tab - for when it says '
         f'the connection timed out; that is the route from your network to '
         f'phone.geelark.com, not the phone">Reload viewer</button>'
-        f'{rows}</aside></div>'
+        f'{change_ip}{rows}</aside></div>'
         f'<script>{beat}</script>')
     return page(f"Phone {serial}", body, user=user, here="/", live="",
                 bare=True)
+
+
+#: The Live tab's Change IP, inside the beat's closure (it uses `serial`,
+#: `form`, `frame`, `word`, `base` and `show`). The press is the same POST
+#: the dashboard's button sends, plus `boot=1` and this page as `back`;
+#: the answer is the page Boot's tab waits on, read here instead of
+#: shown: while its title says "Changing", ask again in three seconds;
+#: a viewer in it is the new screen; "is off" means Boot is the way on.
+_CHANGE_IP_SCRIPT = (
+    "var ipb=document.getElementById('gf-ip'),"
+    " bootf=document.getElementById('gf-boot');"
+    "if(ipb){"
+    " var here='/phones/'+serial+'/live', asks=0;"
+    " function landed(doc,at){"
+    "  var view=doc.getElementById('gf-view');"
+    "  var h=doc.querySelector('h2'), p=doc.querySelector('p.muted');"
+    "  var title=h?h.textContent:'', note=p?p.textContent:'';"
+    "  if(view&&view.getAttribute('data-src')){"
+    "   base=view.getAttribute('data-src'); show();"
+    "   word.textContent='watching - on a new IP now; close this tab to "
+    "switch the phone off'; ipb.disabled=false; return; }"
+    "  if(title.indexOf('Changing')===0&&asks<40){"
+    "   asks++; setTimeout(function(){ ask(at); },3000); return; }"
+    "  ipb.disabled=false;"
+    "  if(title.indexOf(' is off')>0){"
+    "   word.textContent=title+' - '+note; if(bootf) bootf.hidden=false;"
+    "   return; }"
+    "  show();"
+    "  word.textContent=(title?title+' - ':'')+(note||'the IP was not "
+    "changed');"
+    " }"
+    " function ask(at){"
+    "  fetch(at,{credentials:'same-origin'})"
+    "  .then(function(r){ return r.text(); })"
+    "  .then(function(t){ landed(new DOMParser().parseFromString(t,"
+    "'text/html'),at); })"
+    "  .catch(function(){ show(); ipb.disabled=false;"
+    "   word.textContent='could not reach the farm - press Change IP "
+    "again'; });"
+    " }"
+    " ipb.addEventListener('click',function(){"
+    "  if(gone||ipb.disabled) return;"
+    "  ipb.disabled=true; asks=0;"
+    "  word.textContent='changing IP - the phone stops, moves to the next "
+    "free exit and starts again; about a minute';"
+    "  frame.setAttribute('src','about:blank');"
+    "  fetch('/phones/'+serial+'/proxy',{method:'POST',"
+    "   credentials:'same-origin',"
+    "   headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+    "   body:form+'&boot=1&back='+encodeURIComponent(here)})"
+    "  .then(function(r){"
+    "   var at=new URL(r.url,location.href);"
+    "   if(at.pathname!==here){ show(); ipb.disabled=false;"
+    "    word.textContent='not allowed - the phone is not yours, or you "
+    "may not change IPs'; return null; }"
+    "   return r.text().then(function(t){ landed(new DOMParser()"
+    ".parseFromString(t,'text/html'),at.href); });"
+    "  })"
+    "  .catch(function(){ show(); ipb.disabled=false;"
+    "   word.textContent='could not reach the farm - press Change IP "
+    "again'; });"
+    " });"
+    "}"
+)
 
 
 def _js(value: str) -> str:
