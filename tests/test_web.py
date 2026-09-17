@@ -5881,6 +5881,43 @@ def test_the_account_column_only_promises_an_account_a_phone_can_take():
     assert "a@x.com" in done
 
 
+def test_the_claude_card_stands_under_spotify_shut(web, monkeypatch):
+    """The rail already reads as the three products it will hold, but
+    the Claude card has no door and no number: its accounts arrive from
+    the bot, and a Manage that opened an empty sheet would promise a way
+    in that does not exist yet (the operator, 2026-09-17)."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    card = body[body.index('<section class="pool off"'):]
+    card = card[:card.index("</section>")]
+    assert "Claude accounts" in card and "not open yet" in card
+    assert 'aria-disabled="true"' in card
+    assert "<button" not in card, "no door"
+    assert 'data-sheet="claude"' not in body, "no sheet either"
+    # Under Spotify, in the right rail.
+    side = body[body.index('<aside class="side">'):]
+    assert side.index("Spotify accounts") < side.index("Claude accounts")
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_build_card_asks_for_an_account_not_a_gpt_account(web,
+                                                              monkeypatch):
+    """The same box is where a Spotify account will be chosen once its
+    login exists (the operator, 2026-09-17)."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    card = body[body.index("<h3>Build one now</h3>"):]
+    card = card[:card.index("</form>")]
+    assert "<span>Account</span>" in card
+    assert "GPT account</span>" not in card
+    # The dialog the box opens stands after the form, in the same panel.
+    assert "Choose an account" in body and "Choose a GPT account" not in body
+
+
 def test_the_status_says_which_account_the_phone_carries():
     """Three things in one cell - a product, a kind and an address - made
     the account column a paragraph to read on every row. What the phone

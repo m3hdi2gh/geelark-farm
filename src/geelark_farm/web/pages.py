@@ -673,6 +673,15 @@ p{{margin:0}}
 .desk>.side{{grid-area:side}}
 .rail{{grid-area:supply;display:flex;gap:16px;flex-wrap:wrap;
  align-items:flex-start}}
+/* A pool that is not open yet - the Claude accounts, which will arrive
+   from the bot: the card stands where it will live, dimmed, with no
+   door and no number, so the rail already reads as the three products
+   it is going to be (the operator, 2026-09-17). */
+.pool.off{{opacity:.6}}
+.pool.off>header b{{color:var(--dim)}}
+.pool.off>header .lock{{font-family:var(--mono);font-size:10.5px;
+ letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
+ border:1px solid var(--line2);border-radius:999px;padding:3px 9px}}
 .rail>.pool{{flex:1 1 280px;min-width:0}}
 .rail>.pool>header{{padding:11px 14px 9px}}
 .rail>.pool>header b{{font-size:22px}}
@@ -3686,7 +3695,29 @@ def _accounts_card(data: dict, user: dict, manual_login: bool = False,
     stock the keeper builds from stands above the table (the operator,
     2026-09-17).
     """
-    return _cards(("gpt", "spotify"), data, user, manual_login, alerts)
+    return (_cards(("gpt", "spotify"), data, user, manual_login, alerts)
+            + _claude_card())
+
+
+def _claude_card() -> str:
+    """The Claude pool's card, shut.
+
+    It stands under Spotify so the rail already reads as the three
+    products it is going to hold, but it is dimmed and has no door: the
+    Claude accounts will come in from the bot, not from a paste, and a
+    Manage button that opened an empty sheet would promise a way in that
+    does not exist yet (the operator, 2026-09-17). Not in `_POOL_KINDS`
+    on purpose - a kind there gets a sheet, a paste box and a route.
+    """
+    return ('<section class="pool off" aria-disabled="true" '
+            'title="not open yet - the Claude accounts will arrive from '
+            'the bot">'
+            '<header><b>&ndash;</b>'
+            '<span class="t">Claude accounts<i>not open yet</i></span>'
+            '<span class="lock">soon</span></header>'
+            '<p class="railnote">The accounts will arrive from the bot; '
+            'there is nothing to add here by hand.</p>'
+            '</section>')
 
 
 def _cards(kinds: tuple, data: dict, user: dict, manual_login: bool,
@@ -4335,7 +4366,11 @@ def _build_card(data: dict, user: dict) -> str:
                  f'<select name="gmail" data-new="gmail-new">{first}'
                  f'<option value="__new__">choose&hellip;</option>'
                  f'</select></label>')
-    account_box = ('<label class="field"><span>GPT account</span>'
+    # "Account", not "GPT account": the same box is where a Spotify
+    # account will be chosen once its login exists, and a field named
+    # for one product would have to be renamed the day the second one
+    # arrives (the operator, 2026-09-17).
+    account_box = ('<label class="field"><span>Account</span>'
                    '<select name="app_account" data-new="account-new">'
                    '<option value="">none &mdash; sign in later</option>'
                    '<option value="__new__">choose&hellip;</option>'
@@ -4358,7 +4393,7 @@ def _build_card(data: dict, user: dict) -> str:
             ("gmail_password", "Password", ""),
             ("gmail_secret", "Authenticator key",
              "empty = the account has none")], rows=gmails)
-        + _new_dialog("account-new", "Choose a GPT account", [
+        + _new_dialog("account-new", "Choose an account", [
             ("app_address", "Address", ""),
             ("app_password", "Password", ""),
             ("app_secret", "2FA secret", "optional")], rows=apps)
