@@ -6604,3 +6604,38 @@ def test_take_is_gone_and_boot_is_the_one_door_onto_a_free_phone(web,
     assert pages._state_forms(user, {"serial": "1500", "state": ""}) == []
     assert len(pages._state_forms(user, {"serial": "1500",
                                          "state": "taken"})) == 3
+
+
+def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
+    """The overlay is a child of `main`, so every swap replaced it with a
+    fresh copy and showed that again - and the sheet blinked out and back
+    under the operator's hand each time a builder wrote a row, every few
+    seconds while the farm was busy (the operator, 2026-09-17). Now the
+    nodes under the hand stay: the open sheet's rows are matched by key
+    and only the ones that moved are swapped, its chips recounted, the
+    closed sheets taken fresh, and the page behind it made inert again.
+    The listeners a sheet carries are bound once per node, and the sift
+    reads its rows live, so a kept sheet neither doubles up nor sifts
+    rows that are gone."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    script = body[body.index("function swapMain(doc)"):]
+    assert "var held = (kept && kept !== 'phone') ? ov() : null;" in script
+    assert "if (held) keepSheet(held, kept);" in script
+    assert "else if (held) behind(true);" in script
+    assert "else if (kept && kept !== 'send') show(kept, false);" in script
+    keep = body[body.index("function keepSheet(held, kind)"):]
+    assert "fresh.replaceWith(held);" in keep
+    assert "if (old) old.replaceWith(s); else held.appendChild(s);" in keep
+    assert "else if (same(old) !== same(tr)) old.replaceWith(tr);" in keep
+    assert "if (!old) body.insertBefore(tr, none);" in keep
+    assert "if (!want[k]) have[k].remove();" in keep
+    assert "name=\"press\"" in keep, "the one-time token is not a change"
+    # Bound once, read live.
+    bind = body[body.index("document.querySelectorAll('#poolov .sheet').forEach"):]
+    assert "if (!sheet.dataset.live) {" in bind
+    assert ("var body = function(){ return sheet.querySelectorAll("
+            "'tbody tr:not(.none)'); };") in bind
+    assert "var rows = body();" in bind

@@ -1975,7 +1975,10 @@ _DASH_SCRIPT = """
       var find = sheet.querySelector('.poolfind');
       var seller = sheet.querySelector('.sellerpick');
       var chips = sheet.querySelectorAll('.filters .pill[data-group]');
-      var body = sheet.querySelectorAll('tbody tr:not(.none)');
+      // Read when the sift runs, not when it was bound: a kept sheet
+      // (keepSheet) has its rows swapped under it while the listeners
+      // stay, and a list taken here once would sift rows that are gone.
+      var body = function(){ return sheet.querySelectorAll('tbody tr:not(.none)'); };
       var none = sheet.querySelector('tbody tr.none');
       var tally = sheet.querySelector('.tally');
       var sift = function(){
@@ -1985,7 +1988,8 @@ _DASH_SCRIPT = """
         chips.forEach(function(c){
           if (c.getAttribute('aria-pressed') === 'true') group = c.dataset.group;
         });
-        body.forEach(function(tr){
+        var rows = body();
+        rows.forEach(function(tr){
           // The row's own values, not its text: the text includes the
           // buttons, so "free" - the most natural word to type - kept
           // nearly every row, and "edit" or "remove" kept all of them
@@ -2010,9 +2014,9 @@ _DASH_SCRIPT = """
             ? 'Nothing here matches that - ' + where.join(', ') + '.'
             : 'Nothing matches that.';
         }
-        if (tally) tally.textContent = shown === body.length
+        if (tally) tally.textContent = shown === rows.length
           ? shown + (shown === 1 ? ' row' : ' rows')
-          : shown + ' of ' + body.length + ' shown';
+          : shown + ' of ' + rows.length + ' shown';
         // A door that answers one group belongs under that group: Free
         // all acts on the whole set-aside list, and a press while you
         // are looking at the working exits would be a surprise.
@@ -2020,16 +2024,22 @@ _DASH_SCRIPT = """
           el.hidden = el.dataset.forGroup !== group;
         });
       };
-      if (find) find.addEventListener('input', sift);
-      if (seller) seller.addEventListener('change', sift);
-      chips.forEach(function(c){
-        c.addEventListener('click', function(){
-          chips.forEach(function(o){
-            o.setAttribute('aria-pressed', String(o === c));
+      // Once per sheet node. `init` runs after every swap, and a sheet
+      // the swap kept (keepSheet) would otherwise gain another set of
+      // listeners each time - a sift per swap it had lived through.
+      if (!sheet.dataset.live) {
+        sheet.dataset.live = '1';
+        if (find) find.addEventListener('input', sift);
+        if (seller) seller.addEventListener('change', sift);
+        chips.forEach(function(c){
+          c.addEventListener('click', function(){
+            chips.forEach(function(o){
+              o.setAttribute('aria-pressed', String(o === c));
+            });
+            sift();
           });
-          sift();
         });
-      });
+      }
       sift();
     });
 
@@ -2603,18 +2613,74 @@ _DASH_SCRIPT = """
     }
     var kept = openKind, seen = viewNow(), place = placeNow();
     var typed = typedNow();
+    // The manager somebody is reading is kept, not rebuilt. The overlay
+    // is a child of `main`, so every swap replaced it with a fresh copy
+    // and showed that again - and the sheet blinked out and back under
+    // the operator's hand each time a builder wrote a row, every few
+    // seconds while the farm was busy (the operator, 2026-09-17). Now
+    // the nodes under the hand stay and only the rows that moved are
+    // swapped in (keepSheet). The drawer fetches its own page and is
+    // reopened as before.
+    var held = (kept && kept !== 'phone') ? ov() : null;
     var nodes = Array.prototype.slice.call(fresh.childNodes).filter(function(n){
       return !(n.nodeType === 1 && n.matches('script'));
     });
     var mini = document.querySelector('.mini'); if (mini) mini.remove();
     here.replaceChildren.apply(here, nodes);
+    if (held) keepSheet(held, kept);
     init();
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref, true);
+    else if (held) behind(true);
     else if (kept && kept !== 'send') show(kept, false);
     typedBack(typed);
     viewBack(seen);
     placeBack(place);
     swapMain.at = Date.now();
+  }
+
+  // The overlay the swap found open, put back in place of the copy the
+  // swap brought, with that copy's news carried over: the closed sheets
+  // are taken whole (they open current later), and the open one has its
+  // rows matched by key - changed ones replaced, gone ones removed, new
+  // ones added before the "nothing matches" line - and the counts on its
+  // chips copied. Its paste box, its editor, its scroll and the keyboard
+  // are never touched. Rows are compared without the one-time `press`
+  // token every render draws afresh, or every row would count as changed.
+  function keepSheet(held, kind){
+    var fresh = ov();
+    if (!fresh || fresh === held) return;
+    fresh.replaceWith(held);
+    var mine = held.querySelector('.sheet[data-sheet="' + kind + '"]');
+    var theirs = fresh.querySelector('.sheet[data-sheet="' + kind + '"]');
+    Array.prototype.slice.call(fresh.querySelectorAll('.sheet')).forEach(function(s){
+      if (s.dataset.sheet === kind) return;
+      var old = held.querySelector('.sheet[data-sheet="' + s.dataset.sheet + '"]');
+      if (old) old.replaceWith(s); else held.appendChild(s);
+    });
+    if (!mine || !theirs) return;
+    var body = mine.querySelector('tbody'), fb = theirs.querySelector('tbody');
+    if (body && fb) {
+      var same = function(tr){
+        return tr.outerHTML.replace(/name="press" value="[^"]*"/g, 'name="press"');
+      };
+      var have = {};
+      body.querySelectorAll('tr[data-key]').forEach(function(tr){
+        have[tr.dataset.key] = tr;
+      });
+      var none = body.querySelector('tr.none'), want = {};
+      Array.prototype.slice.call(fb.querySelectorAll('tr[data-key]')).forEach(function(tr){
+        want[tr.dataset.key] = true;
+        var old = have[tr.dataset.key];
+        if (!old) body.insertBefore(tr, none);
+        else if (same(old) !== same(tr)) old.replaceWith(tr);
+      });
+      Object.keys(have).forEach(function(k){ if (!want[k]) have[k].remove(); });
+    }
+    theirs.querySelectorAll('.filters .pill[data-group]').forEach(function(c){
+      var o = pickData(mine, '.filters .pill[data-group]', 'group', c.dataset.group);
+      var n = c.querySelector('b'), m = o && o.querySelector('b');
+      if (n && m) m.textContent = n.textContent;
+    });
   }
 
   // 3. One row changed, so one row is replaced - not the page under it.
