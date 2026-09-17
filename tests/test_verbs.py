@@ -1222,6 +1222,16 @@ def test_a_spotify_account_goes_only_on_the_phone_its_kind_wants():
          "app_account": normal.values["Address"]}, None)
     assert status == "refused" and "no Google account" in said
 
+    # A row a phone is behind is refused the same way, by the row itself
+    # - a Spotify row is never in `available`, which held every Send
+    # back as "not free" on the first live try (2026-09-17).
+    book.apps.claim_this(normal, "1500")
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "no_gmail": True, "app": "spotify",
+         "app_account": normal.values["Address"]}, None)
+    assert status == "refused" and "not free" in said
+
     # And a GPT account is still nobody's business on a bare phone.
     gpt = book.apps._rows[0]
     gpt.values["Product"] = ""

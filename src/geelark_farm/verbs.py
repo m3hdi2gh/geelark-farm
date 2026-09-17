@@ -177,8 +177,9 @@ def build_by_hand(book, ledger, settings, payload, client):
     # tick (the operator, 2026-09-07).
     for what, name, pool in (("Gmail", gmail, book.gmails),
                              ("exit", proxy_name, book.proxies),
-                             ("account", app_account if install_app else "",
-                              book.apps)):
+                             ("account",
+                              app_account if install_app and app != "spotify"
+                              else "", book.apps)):
         if not name:
             continue
         # The same question `builder._pick` asks a pass later, asked now:
@@ -305,6 +306,15 @@ def _spotify_fits(book, address: str, no_gmail: bool) -> str:
     category = _spotify_category(resource)
     if not category:
         return f"{address} is not a Spotify account"
+    # Free, asked of the row itself: a Spotify row is never in the pool's
+    # `available` - nothing serves the product, so the automatic claim
+    # holds every one back - and that list is what the loop below asks
+    # for the other pools. The builder claims it by name the same way
+    # (builder._pick_named_app).
+    if resource.error or (book.apps.status_of(resource)
+                          not in book.apps.available_statuses):
+        return (f"the account {address} is not free - it is already on a "
+                f"phone, set aside, or not there at all")
     if no_gmail and category != "normal":
         return (f"{address} is an {category} account - it wants a phone "
                 f"that has a Gmail, not a bare one")
