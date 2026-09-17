@@ -108,6 +108,42 @@ class Context:
     def has(self, *needles: str) -> bool:
         return any(n.casefold() in self.blob for n in needles)
 
+    def keep(self, name: str) -> list[str]:
+        """The page both ways: its hierarchy, and its picture.
+
+        A page a web view drew - a captcha in a browser, a service's own
+        error page - has almost nothing in the hierarchy, so the one
+        screen worth diagnosing is the one the XML says least about. The
+        picture costs a call on a path that has already failed, and it
+        is the only evidence such a page leaves (2026-09-17).
+        """
+        kept = [path for path in (self.save(name), self.shoot(name)) if path]
+        return kept
+
+    def shoot(self, name: str) -> str | None:
+        """A screenshot beside the XML. Never raises and never fails a
+        run: this is evidence, and a build that could not take a picture
+        of its problem still has the problem to report."""
+        if not self.artifact_dir or self.client is None:
+            return None
+        try:
+            import requests
+
+            from .. import phones
+
+            link = phones.screenshot(self.client, self.phone_id)
+            if not link:
+                return None
+            data = requests.get(link, timeout=60).content
+            path = self.artifact_dir / f"{time.strftime('%H%M%S')}-{name}.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("no screenshot of %s (%s)", name, exc)
+            return None
+        self.saved.append(str(path))
+        return str(path)
+
     def save(self, name: str) -> str | None:
         """Archive the current screen so an unrecognised page can become a
         registry entry rather than a mystery."""
@@ -320,11 +356,28 @@ def _drive(ctx: Context, screens: list[Screen], *,
             if unknown_streak < 3:
                 time.sleep(4)
                 continue
-            path = ctx.save("unknown-screen")
+            kept = ctx.keep("unknown-screen")
             labels = [e.label for e in ctx.elements if e.label][:12]
+            # Which app drew it, and every word on it, in the log - the
+            # reason and the note have room for twelve labels, and the
+            # page nobody has classified yet is the one worth the whole
+            # list a week later (the operator, 2026-09-17).
+            front = shell.foreground_package(ctx.client, ctx.phone_id)
+            mine = str(getattr(ctx, "package", "") or "")
+            out.warning("no screen matched: %s is in front, %d elements; "
+                        "every label: %s", front or "?", len(ctx.elements),
+                        [e.label for e in ctx.elements if e.label])
+            if front and mine and front != mine:
+                # The app handed the sign-in to something else - a
+                # browser, for a challenge it will not draw itself.
+                # Named, because "nothing matched" sends whoever reads it
+                # looking for a page in the wrong app (2026-09-17).
+                return Outcome("unknown", "left_the_app",
+                               f"{front} is in front, not {mine}; on "
+                               f"screen: {labels}", artifacts=kept)
             return Outcome("unknown", "unknown_screen",
                            f"nothing matched; on screen: {labels}",
-                           artifacts=[path] if path else [])
+                           artifacts=kept)
         unknown_streak = 0
 
         visits = ctx.seen.get(matched.name, 0) + 1
@@ -341,11 +394,11 @@ def _drive(ctx: Context, screens: list[Screen], *,
                 break
             streak += 1
         if streak > matched.max_visits or visits > 3 * matched.max_visits:
-            path = ctx.save(f"stuck-{matched.name}")
+            kept = ctx.keep(f"stuck-{matched.name}")
             return Outcome("unknown", f"stuck_on_{matched.name}",
                            f"handled {visits} times without progress"
                            f" ({streak} in a row)",
-                           artifacts=[path] if path else [])
+                           artifacts=kept)
 
         fresh = not ctx.trail or ctx.trail[-1] != matched.name
         ctx.trail.append(matched.name)

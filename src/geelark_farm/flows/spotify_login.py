@@ -79,8 +79,10 @@ PASSWORD_LINK = "Log in with a password"
 #: address page, which has the same title and the same one box.
 PASSWORD_PAGE_TEXTS = ("show password",)
 LOGIN_BUTTON = "Log in"
-#: Never tapped, whatever label happens to match.
-NEVER_TAPPED = ("google", "facebook", "sign up")
+#: Never tapped, whatever label happens to match. "Create account" is
+#: on the page for an address Spotify does not know: this flow signs
+#: accounts in and never makes one (2026-09-18).
+NEVER_TAPPED = ("google", "facebook", "sign up", "create account")
 
 #: The home screen (captured): the profile control and the tab strip.
 HOME_MARKERS = ("go to profile and settings", "home, tab 1 of 4")
@@ -92,6 +94,12 @@ HOME_MARKERS = ("go to profile and settings", "home, tab 1 of 4")
 #: exit's problem, not the account's.
 CONNECTION_ERROR_TEXTS = ("check your connection and try again",)
 TRY_AGAIN_LABEL = "Try Again"
+#: How many times Try Again is pressed before the exit is blamed rather
+#: than the app. Reloading fixes it about as often as it does not, and
+#: the other half is a proxy Spotify will not serve (the operator,
+#: 2026-09-18) - so this ends as an EXIT reason, which makes the builder
+#: swap the exit and try the same account again.
+TRY_AGAIN_TIMES = 3
 
 #: Anything containing one of these cannot proceed unattended.
 FATAL_TEXTS = {
@@ -101,6 +109,18 @@ FATAL_TEXTS = {
         "email and password combination is incorrect",
         "incorrect username or password", "incorrect password",
         "wrong password",
+    ),
+    # No account was ever made with this address (captured on 3480 with
+    # a made-up one, 2026-09-18): "This email isn't linked to Spotify /
+    # Looks like this address doesn't have a Spotify account yet." over
+    # "Create account" and "Go back". Nothing on a phone fixes it and no
+    # other password will either, so it is its own reason rather than a
+    # refused password. Fatal is what keeps the flow off "Create
+    # account", which would make an account nobody asked for.
+    "no_such_account": (
+        "is not linked to spotify", "isn't linked to spotify",
+        "does not have a spotify account", "doesn't have a spotify account",
+        "no account with that email", "could not find an account",
     ),
     "captcha_shown": (
         "verify you are human", "verify you're human", "i'm not a robot",
@@ -116,6 +136,12 @@ FATAL_ADVICE = {
     "wrong_password":
         "Spotify would not take the password; try it by hand before "
         "changing the row",
+    "no_such_account":
+        "Spotify says no account was made with this address - the row is "
+        "not an account yet, whatever its password says",
+    "service_unreachable":
+        "the app could not reach Spotify through this exit after "
+        "several tries; the exit is the thing to change",
     "captcha_shown":
         "Spotify is challenging this exit IP; a cleaner proxy is the fix "
         "and no code change helps",
@@ -166,6 +192,8 @@ class Context(router.Context):
     submitted_password: bool = False
     #: How many times the address was submitted from the login page.
     email_submissions: int = 0
+    #: How many times the app has said it could not reach Spotify.
+    reloads: int = 0
 
     @property
     def signed_something_in(self) -> bool:
@@ -225,12 +253,20 @@ def _tap_safely(ctx: Context, label: str) -> bool:
 
 def act_fatal(ctx: Context) -> Outcome:
     reason = _fatal_reason(ctx) or "unknown_fatal"
-    path = ctx.save(reason)
+    # Both ways: a refusal Spotify draws in a web view leaves a hierarchy
+    # with one line in it, and the picture is what a new wording is read
+    # off next week (2026-09-17).
+    kept = ctx.keep(reason)
+    # One line naming the account and the page, at WARNING: the reason
+    # reaches the row and the note, and this is what a week of these is
+    # read from on the logs page (the operator, 2026-09-18).
+    log.warning("Spotify refused %s: %s (%s)", ctx.creds.email, reason,
+                ", ".join(kept) or "no capture")
     return Outcome("fatal", reason,
                    FATAL_ADVICE.get(reason,
                                     "the screen says this cannot proceed "
                                     "unattended"),
-                   artifacts=[path] if path else [])
+                   artifacts=kept)
 
 
 def act_welcome(ctx: Context) -> Outcome | None:
@@ -250,6 +286,9 @@ def act_login_page(ctx: Context) -> Outcome | None:
     box = screen.find_input(ctx.elements)
     if box is None:
         return None
+    # Case-insensitively: the app's own box capitalised the first two
+    # letters of an address typed into it (zz... came back ZZ..., 3480
+    # 2026-09-18), and Spotify treats the address as one either way.
     typed = box.text.strip().casefold() == ctx.creds.email.casefold()
     if not typed:
         log.info("entering the Spotify account's email address")
@@ -306,7 +345,19 @@ def on_connection_error(ctx: Context) -> bool:
 
 
 def act_try_again(ctx: Context) -> Outcome | None:
-    log.info("the app could not reach Spotify; waiting and trying again")
+    """Reload, up to a point. Past it the exit is what to change, and
+    saying so is what makes the builder change it - the account is never
+    judged by this (2026-09-18)."""
+    ctx.reloads += 1
+    if ctx.reloads > TRY_AGAIN_TIMES:
+        kept = ctx.keep("service-unreachable")
+        return Outcome("fatal", "service_unreachable",
+                       f"the app said it could not reach Spotify "
+                       f"{ctx.reloads} times through this exit: "
+                       f"{FATAL_ADVICE['service_unreachable']}",
+                       artifacts=kept)
+    log.info("the app could not reach Spotify (%d of %d); waiting and "
+             "trying again", ctx.reloads, TRY_AGAIN_TIMES)
     time.sleep(6)
     _tap_safely(ctx, TRY_AGAIN_LABEL)
     time.sleep(6)
@@ -416,7 +467,7 @@ SCREENS: list[Screen] = [
            max_visits=1),
     Screen("loading", still_loading, act_wait, max_visits=25),
     Screen("connection_error", on_connection_error, act_try_again,
-           max_visits=5),
+           max_visits=TRY_AGAIN_TIMES + 2),
     Screen("code_page", on_code_page, act_code_page, max_visits=3),
     # The password page before the address page: both carry the title
     # and one box, and only this one carries the eye.

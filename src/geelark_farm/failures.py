@@ -484,6 +484,28 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "the app never came to the foreground",
         "The app never came to the foreground. Usually the install is "
         "damaged; delete the phone rather than spending accounts on it."),
+    # Every flow can report these two: the app handed the sign-in to
+    # another app, or the app could not reach its own service through
+    # this exit (2026-09-17).
+    "left_the_app": Verdict(
+        DEVICE, "{service} handed the sign-in to another app",
+        "The app opened something else - a browser, almost always for a "
+        "challenge it will not draw itself - and this tool drives the app, "
+        "not the browser. The screenshot beside the capture is the page: if "
+        "it is a captcha, Boot the phone and answer it by hand, and if it "
+        "keeps happening from one exit, change the exit. Nothing is known "
+        "against the account."),
+    "service_unreachable": Verdict(
+        EXIT, "the app could not reach {service} through this exit",
+        "The app showed its own connection error and reloading did not "
+        "clear it, so the exit is what to change - the build swaps it and "
+        "tries the same account again. An exit that does this repeatedly "
+        "is one to Free or replace. Nothing is known against the account."),
+    "no_such_account": Verdict(
+        CREDENTIAL, "{service} says no account was made with this address",
+        "The service does not know this address at all, so no password "
+        "would get in. The row is not an account yet: check it with the "
+        "seller, or remove it."),
     "app_not_installed": Verdict(
         DEVICE, "the app was not on the phone",
         "The package is not on the device, so there was nothing to "

@@ -4030,6 +4030,9 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
     session = SimpleNamespace(
         app_signed_in=False, attempted=0, reset_first=False, condemned=[],
         set_aside=[], suspect_reason="", refused_exits=[], exits=0,
+        # Which service judged each account: the app pool holds two
+        # products now, and its own `service` names one of them.
+        judged_by={}, judged={},
         # Nobody chose this phone's credentials: the pool did, as it does
         # for every phone the keeper builds on its own.
         want=None,

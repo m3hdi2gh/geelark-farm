@@ -680,6 +680,10 @@ class _Session:
     #: The APP_SUSPECTS reason the phone stopped on, if it did - read at
     #: release time so the account it happened with carries a strike.
     suspect_reason: str = ""
+    #: Which service judged each account this phone tried, by address -
+    #: the app pool holds two products now and its own `service` names
+    #: one of them (2026-09-17).
+    judged_by: dict = field(default_factory=dict)
     # Proxies tried and moved on from, with what was seen through each. Held
     # claimed for the rest of the run so a swap cannot hand one back.
     refused_exits: list[tuple[Resource, str]] = field(default_factory=list)
@@ -784,8 +788,10 @@ def _sign_into_app(session: _Session) -> Build | None:
                 _give_back_condemned(s)
                 if s.attempted or s.set_aside:
                     judged = "; ".join(
-                        f"{address} - "
-                        f"{failures.verdict(reason, s.book.apps.service).seen}"
+                        f"{address} - " + failures.verdict(
+                            reason,
+                            s.judged_by.get(address) or s.book.apps.service
+                        ).seen
                         for address, reason in s.judged.items())
                     return s.finish(
                         WARM_FOR_OPERATOR,
@@ -838,7 +844,8 @@ def _sign_into_app(session: _Session) -> Build | None:
             s.app_signed_in = True
             return None
         s.build.tried.append((s.app_row.credentials.email, outcome.reason,
-                              s.book.apps.service))
+                              _service_of(s.app_row)))
+        s.judged_by[s.app_row.credentials.email] = _service_of(s.app_row)
 
         if failures.verdict(outcome.reason).needs_a_new_exit:
             # Refused before the account was looked at, so it is the exit's
@@ -885,7 +892,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             # "app_app_would_not_start" helps nobody.
             named = (outcome.reason if outcome.reason.startswith("app")
                      else f"app_{outcome.reason}")
-            said = failures.verdict(outcome.reason, s.book.apps.service)
+            said = failures.verdict(outcome.reason, _service_of(s.app_row))
             if outcome.reason in APP_SUSPECTS:
                 # The phone keeps the blame, but the account was typed in -
                 # _session_holds counts a strike against it on the way out.
@@ -897,7 +904,7 @@ def _sign_into_app(session: _Session) -> Build | None:
         condemned = s.app_row.credentials.email
         s.book.apps.fail(s.app_row, outcome.reason,
                          note=failures.verdict(outcome.reason,
-                                              s.book.apps.service).advice)
+                                              _service_of(s.app_row)).advice)
         s.app_row = None
         s.condemned.append(condemned)
         s.judged[condemned] = outcome.reason
@@ -1333,6 +1340,18 @@ def _claim_panel(s):
     if not callable(claim):
         return None
     return claim(str(s.build.serial or ""))
+
+
+#: Which service judges an account of each product - the name that goes
+#: into the reason a person reads. The app pool's own `service` is
+#: OpenAI, which was every account's until a second product arrived
+#: (2026-09-17): a Spotify row refused for its password said "OpenAI
+#: would not take the password".
+SERVICES = {"chatgpt": "OpenAI", "claude": "Anthropic", "spotify": "Spotify"}
+
+
+def _service_of(app_row) -> str:
+    return SERVICES.get(_product_of(app_row), "OpenAI")
 
 
 def _product_of(app_row) -> str:

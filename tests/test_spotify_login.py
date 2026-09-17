@@ -70,6 +70,7 @@ def test_every_captured_screen_is_recognised_as_itself():
     assert matched(ctx_for("wrong-password")) == "fatal"
     assert matched(ctx_for("notifications")) == "dismissable"
     assert matched(ctx_for("connection-error")) == "connection_error"
+    assert matched(ctx_for("no-such-account")) == "fatal"
     # Home, before this run has typed a password, is a home this run did
     # not earn - and so are the pages under it, which carry the tab strip.
     assert matched(ctx_for("home")) == "logged_out_home"
@@ -127,6 +128,39 @@ def test_a_refused_password_is_fatal_and_named():
     ctx = ctx_for("wrong-password")
     out = sl.act_fatal(ctx)
     assert out.kind == "fatal" and out.reason == "wrong_password"
+
+
+def test_an_address_spotify_does_not_know_is_its_own_reason(phone):
+    """"This email isn't linked to Spotify" over a "Create account" the
+    flow must never press: this tool signs accounts in and never makes
+    one (captured on 3480, 2026-09-18)."""
+    ctx = ctx_for("no-such-account")
+    out = sl.act_fatal(ctx)
+    assert out.kind == "fatal" and out.reason == "no_such_account"
+    assert "no account was made" in out.detail
+
+    # And nothing on that page is tappable by the dismiss list.
+    assert sl.act_dismiss(ctx) is None
+    assert phone["tapped"] == []
+    assert not sl._tap_safely(ctx, "Create account")
+
+
+def test_a_connection_error_that_will_not_clear_blames_the_exit(phone):
+    """Reloading fixes it about half the time; the other half is an exit
+    Spotify will not serve, and saying so is what makes the builder swap
+    it (the operator, 2026-09-18)."""
+    ctx = ctx_for("connection-error")
+    for _ in range(sl.TRY_AGAIN_TIMES):
+        assert sl.act_try_again(ctx) is None
+    assert phone["tapped"] == ["Try Again"] * sl.TRY_AGAIN_TIMES
+    out = sl.act_try_again(ctx)
+    assert out is not None and out.reason == "service_unreachable"
+
+    from geelark_farm import failures
+
+    assert failures.verdict("service_unreachable", "Spotify").needs_a_new_exit
+    # And the account is not judged by it.
+    assert not failures.verdict("service_unreachable").costs_the_credential
 
 
 def test_the_notifications_prompt_is_declined_not_accepted(phone):
@@ -205,6 +239,46 @@ def test_a_walk_that_never_reaches_the_account_page_is_not_a_pass(
     ctx, _ = _walk(monkeypatch, ["home"])
     out = sl.verify_account(ctx)
     assert out is not None and out.reason == "session_unverified"
+
+
+def test_a_page_in_another_app_is_named_rather_than_unknown(monkeypatch):
+    """Spotify hands a challenge to the browser: the dump is Chrome's,
+    nothing matches, and "nothing matched" sends whoever reads it looking
+    for a page in the wrong app. The router names the app in front and
+    keeps a picture, because a web view leaves almost no hierarchy (the
+    operator, 2026-09-18)."""
+    from geelark_farm.flows import router
+
+    shot = {"taken": []}
+    ctx = sl.Context(client=object(), phone_id="P", creds=CREDS)
+    chrome = screen.parse(
+        '<hierarchy><node text="Verify you are human" class="x"'
+        ' bounds="[0,0][9,9]"/></hierarchy>')
+
+    def refresh(self):
+        self.elements = chrome
+        self.blob = screen.texts(chrome)
+
+    monkeypatch.setattr(sl.Context, "refresh", refresh)
+    monkeypatch.setattr(router.Context, "keep",
+                        lambda self, name: shot["taken"].append(name) or [])
+    monkeypatch.setattr(router.shell, "foreground_package",
+                        lambda c, p: "com.android.chrome")
+    monkeypatch.setattr(router.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(sl.time, "sleep", lambda *a: None)
+
+    # No screen of the flow's claims a browser page - `fatal` would, on
+    # the captcha words, so this asks the router with no screens at all.
+    out = router.drive(ctx, [], is_done=lambda: None, budget_seconds=30)
+    assert out.reason == "left_the_app"
+    assert "com.android.chrome" in out.detail and "spotify" in out.detail
+    assert shot["taken"] == ["unknown-screen"], "the page is kept, both ways"
+
+    from geelark_farm import failures
+
+    said = failures.verdict("left_the_app", "Spotify")
+    assert "Spotify handed the sign-in to another app" == said.seen
+    assert not said.costs_the_credential, "the account is not judged by it"
 
 
 def test_sign_in_refuses_a_phone_without_the_app(monkeypatch):
