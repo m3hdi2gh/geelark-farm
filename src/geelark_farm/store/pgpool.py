@@ -628,6 +628,10 @@ class PgAppPool(_PgPool, AppPool):
         # Where the row came from: `panel` is the one the keeper finishes
         # by itself under manual login (2026-09-16).
         "Source": "source",
+        # Spotify's two kinds: `normal` goes on a phone with no Google
+        # account, `error` on one that has a Gmail. Empty on every other
+        # row (2026-09-17).
+        "Category": "category",
     }
 
     def held_back(self) -> tuple[str, tuple]:

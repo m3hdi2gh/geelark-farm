@@ -28,7 +28,7 @@ import logging
 from .. import accounts as _accounts
 from ..config import Settings
 from ..store.db import Store
-from .read import IMPORTED, ROUTINE
+from .read import IMPORTED, NOT_SPOTIFY, ROUTINE
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +210,10 @@ _SCAN_PAGES = 20
 
 def _some(store, sandbox: bool, after, want: int) -> list[dict]:
     """One page of rows straight off the index, newest change first."""
-    where = ["r.kind = 'app'"]
+    # Not the Spotify rows: the contract's `product` knows chatgpt and
+    # claude, and a row of a product the panel has never been told
+    # about is not a row to hand it (2026-09-17).
+    where = ["r.kind = 'app'", NOT_SPOTIFY]
     params: list = []
     if after:
         where.append("(r.updated_at, r.id) < (%s, %s)")
@@ -326,7 +329,8 @@ def health(settings: Settings, *, sandbox: bool = False) -> dict:
     (2026-09-13)."""
     with Store(settings) as store:
         rows = store._rows(
-            "SELECT count(*) FILTER (WHERE kind = 'app') AS accounts,"
+            f"SELECT count(*) FILTER (WHERE kind = 'app' AND {NOT_SPOTIFY})"
+            " AS accounts,"
             " (SELECT value FROM service_state WHERE key = 'pass') AS pulse"
             f" FROM {table_for(sandbox)}")
     counts = dict(rows[0]) if rows else {"accounts": 0, "pulse": None}

@@ -1268,3 +1268,20 @@ def test_ready_puts_an_account_back_after_a_code_ended_the_attempt():
     assert "serial = CASE WHEN lower(status) = ANY(%s) THEN ''" in src
     assert "store_codes.REASONS" in src
     assert "code_timeout" in store_codes.REASONS
+
+
+def test_the_listing_leaves_the_spotify_rows_out():
+    """The contract's `product` knows chatgpt and claude; a Spotify row
+    handed to the panel would be a product it was never told about
+    (2026-09-17). Both the page and the count say so."""
+    from geelark_farm.web import read
+
+    class _Store:
+        sql = ""
+
+        def _rows(self, sql, params=()):
+            _Store.sql = sql
+            return []
+
+    read_mod._some(_Store(), False, None, 5)
+    assert read.NOT_SPOTIFY in _Store.sql

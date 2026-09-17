@@ -859,3 +859,11 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz;
 -- said outright, and the beat's silence is judged over minutes, not
 -- seconds.
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS tab_closed_at timestamptz;
+
+-- rev 33: which kind of Spotify account a row is. The two behave the same
+-- way on a phone and differ only in which phone they may go on: `normal`
+-- wants one with no Google account, `error` one that has a Gmail. Empty
+-- for every other pool (2026-09-17).
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS resources_spotify
+    ON resources (category) WHERE kind = 'app' AND product = 'spotify';

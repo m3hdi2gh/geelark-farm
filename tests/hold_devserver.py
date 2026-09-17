@@ -44,20 +44,179 @@ def _rows():
     return rows
 
 
+def _spotify_rows():
+    """The Spotify pool as it looks after a week: both categories, a few
+    already on phones, one set aside and some spent."""
+    free = [("nova.reyes@outlook.com", "normal"),
+            ("t.abernathy@yahoo.com", "error"),
+            ("mila.sund@hotmail.com", "normal"),
+            ("ryo.k1@proton.me", "error"),
+            ("jun.park88@naver.com", "normal"),
+            ("hedda.olsen@gmx.de", "normal"),
+            ("marco.vidal@libero.it", "error"),
+            ("aya.tanaka@outlook.jp", "normal")]
+    rows, i = [], 2300
+    for address, category in free:
+        i += 1
+        rows.append({"id": i, "address": address, "status": "", "serial": "",
+                     "note": "", "error": None, "state": "free",
+                     "category": category, "password": "Sp0t!" + address[:4],
+                     "secret": "", "second": ""})
+    for address, category, serial in (
+            ("nel.sz@outlook.com", "normal", "3244"),
+            ("k.duarte@mail.com", "error", "3242")):
+        i += 1
+        rows.append({"id": i, "address": address, "status": "in_use",
+                     "serial": serial, "note": f"On phone {serial}.",
+                     "error": None, "state": "on a phone",
+                     "category": category, "password": "Sp0t!" + address[:4],
+                     "secret": "", "second": ""})
+    i += 1
+    rows.append({"id": i, "address": "b.okafor@gmail.com",
+                 "status": "needs_human", "serial": "",
+                 "note": "The app would not take the password.",
+                 "error": None, "state": "set aside", "category": "error",
+                 "password": "Sp0t!bok", "secret": "", "second": ""})
+    for n in range(4):
+        i += 1
+        rows.append({"id": i, "address": f"handed{n}@outlook.com",
+                     "status": "delivered", "serial": str(3100 + n),
+                     "note": "Delivered.", "error": None, "state": "used",
+                     "category": "normal" if n % 2 else "error",
+                     "password": "Sp0t!old", "secret": "", "second": ""})
+    return rows
+
+
+def _proxies():
+    """Exits the way the vendor hands them over: most free, a few under
+    a phone, a couple dead."""
+    rows, i = [], 4100
+    for n in range(14):
+        i += 1
+        rows.append({"id": i, "address": f"US{25 + n}", "state": "free",
+                     "host": f"38.154.{n}.{110 + n}", "port": 6540 + n,
+                     "exit_ip": f"38.154.{n}.{110 + n}", "times_used": n,
+                     "serial": "", "note": ""})
+    for n, serial in enumerate(("3239", "3241", "3242", "3244")):
+        i += 1
+        rows.append({"id": i, "address": f"US{50 + n}", "state": "on a phone",
+                     "host": f"45.61.{n}.{12 + n}", "port": 6320 + n,
+                     "exit_ip": f"45.61.{n}.{12 + n}", "times_used": 3 + n,
+                     "serial": serial, "note": ""})
+    for n in range(2):
+        i += 1
+        rows.append({"id": i, "address": f"SX{n + 3}", "state": "dead",
+                     "host": f"104.239.{n}.{40 + n}", "port": 6712 + n,
+                     "exit_ip": "", "times_used": 11 + n, "serial": "",
+                     "note": "GeeLark could not reach it twice running."})
+    return rows
+
+
+def _gpt_rows():
+    """The GPT pool, so the card beside Spotify is not one line long."""
+    free = ["mehdifcb1331@gmail.com", "mhmdzare@gmail.com",
+            "sara.kh2201@gmail.com", "arash.nd@gmail.com",
+            "n.rostami87@gmail.com"]
+    rows, i = [], 900
+    for address in free:
+        i += 1
+        rows.append({"id": i, "address": address, "status": "", "serial": "",
+                     "note": "", "error": None, "state": "free",
+                     "password": "Gp7!" + address[:4], "secret":
+                     "A66OUCIDONRH2WL2EYN3P24MA3J47OKU",
+                     "second": "authenticator"})
+    for address, serial in (("k.mohseni@gmail.com", "3241"),
+                            ("h.salehi44@gmail.com", "3239")):
+        i += 1
+        rows.append({"id": i, "address": address, "status": "in_use",
+                     "serial": serial, "note": f"On phone {serial}.",
+                     "error": None, "state": "on a phone",
+                     "password": "Gp7!old", "secret": "", "second": ""})
+    i += 1
+    rows.append({"id": i, "address": "m.zand@gmail.com",
+                 "status": "needs_human", "serial": "",
+                 "note": "Set aside after three phones refused it.",
+                 "error": None, "state": "set aside", "password": "Gp7!zzz",
+                 "secret": "", "second": "authenticator"})
+    return rows
+
+
+def _phones():
+    """A shelf with both products on it, so the account column has
+    something to say."""
+    return [
+        {"serial": "3239", "status": "ready", "state": "taken",
+         "owner": "mehdi", "gmail": "dcivic034@gmail.com",
+         "app_account": "z@x.com", "app_product": "", "app_category": "",
+         "proxy_name": "US25", "updated_at": "2026-09-17 09:00:00+00"},
+        {"serial": "3241", "status": "ready", "state": "",
+         "gmail": "duffyetsys25@gmail.com", "app_account": "h@x.com",
+         "app_product": "", "app_category": "", "proxy_name": "US27",
+         "updated_at": "2026-09-17 09:20:00+00"},
+        {"serial": "3242", "status": "ready", "state": "",
+         "gmail": "dd6452502@gmail.com", "app_account": "k.duarte@mail.com",
+         "app_product": "spotify", "app_category": "error",
+         "proxy_name": "US28", "updated_at": "2026-09-17 10:05:00+00"},
+        {"serial": "3243", "status": "app_only", "state": "",
+         "gmail": "kalvin.b7@gmail.com", "app_account": "",
+         "app_product": "", "app_category": "", "proxy_name": "US30",
+         "updated_at": "2026-09-17 10:40:00+00"},
+        {"serial": "3244", "status": "ready", "state": "", "gmail": "",
+         "app_account": "nel.sz@outlook.com", "app_product": "spotify",
+         "app_category": "normal", "proxy_name": "US33",
+         "updated_at": "2026-09-17 11:10:00+00"},
+        {"serial": "3245", "status": "app_only", "state": "", "gmail": "",
+         "app_account": "", "app_product": "", "app_category": "",
+         "proxy_name": "US34", "updated_at": "2026-09-17 11:55:00+00"},
+        {"serial": "3250", "status": "building", "state": "", "gmail": "",
+         "app_account": "", "app_product": "", "app_category": "",
+         "proxy_name": "US31", "updated_at": "2026-09-17 12:30:00+00"},
+    ]
+
+
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_hold(web, monkeypatch):  # noqa: F811
     from geelark_farm.store import sessions as store_sessions
 
+    spotify = _spotify_rows()
     _dash(monkeypatch, pool_rows={
-        "gmail": _rows(), "gpt": [
-            {"id": 900, "address": "waiting@x.com", "status": "", "serial": "",
-             "note": "", "error": None, "state": "free",
-             "password": "pw", "secret": "", "second": ""}],
-        "proxy": [], "totals": {"gmail": {"live": 36, "spent": 40}}},
+        "gmail": _rows(), "gpt": _gpt_rows(),
+        "spotify": spotify,
+        "proxy": _proxies(), "totals": {"gmail": {"live": 36, "spent": 40}}},
+          # The headline numbers say what the lists under them hold.
+          stock={"gmail": {"free": 22, "on_phones": 5, "used": 9},
+                 "proxy": {"free": 14, "on_phones": 4, "dead": 2},
+                 "app": {"awaiting": 5, "panel": 2, "manual": 3}},
+          phones=_phones(),
+          spotify={"normal": sum(1 for r in spotify
+                                 if r["state"] == "free"
+                                 and r["category"] == "normal"),
+                   "error": sum(1 for r in spotify
+                                if r["state"] == "free"
+                                and r["category"] == "error")},
           choose={"gmails": [{"label": f"fresh{n:02d}@gmail.com"} for n in range(6)],
                   "proxies": [{"label": f"SX{n}"} for n in (1, 4, 5, 10)],
                   "apps": [{"label": "mehdifcb1331@gmail.com"},
                            {"label": "mhmdzare@gmail.com"}]})
+    # Nothing is connected: no queue, no cluster, no GeeLark. Every
+    # press is written down nowhere and answers "Queued", which is what
+    # the real console says when the keeper will do it on its next pass.
+    # Without this the store raises on the first write and the page a
+    # button lands on is "Something broke" (2026-09-17).
+    import geelark_farm.runner as runner_mod
+    import geelark_farm.store.actions as actions_mod
+    ticket = {"n": 9000}
+
+    def _enqueue(settings, **kw):
+        ticket["n"] += 1
+        print(f"  press: {kw.get('verb')} {kw.get('payload')}")
+        return ticket["n"]
+
+    monkeypatch.setattr(actions_mod, "enqueue", _enqueue)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda s, req: None)
+    monkeypatch.setattr(runner_mod, "run_now", lambda s, verb, payload: None)
+
     import geelark_farm.web.app as app_mod
     monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: ["LEO"])
@@ -68,7 +227,10 @@ def test_hold(web, monkeypatch):  # noqa: F811
     with open(os.environ["GF_DEVPORT_FILE"], "w") as f:
         f.write(str(client.port))
     stop = os.environ["GF_DEVSTOP_FILE"]
-    for _ in range(1200):
+    # How long to hold it up, in minutes: twenty by default, longer
+    # when somebody is testing by hand (GF_DEVMINUTES).
+    minutes = int(os.environ.get("GF_DEVMINUTES") or 20)
+    for _ in range(minutes * 60):
         if os.path.exists(stop):
             break
         time.sleep(1)

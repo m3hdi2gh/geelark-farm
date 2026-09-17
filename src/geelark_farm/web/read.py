@@ -56,8 +56,10 @@ def nav_counts(settings: Settings) -> dict:
             " count(*) FILTER (WHERE kind = 'proxy'"
             "   AND lower(status) IN ('', 'free', 'unused')"
             "   AND error IS NULL) AS proxy,"
+            # The GPT Pool badge: the Spotify rows share the table and
+            # have no page of their own, so they are not this number.
             " count(*) FILTER (WHERE kind = 'app' AND status = ''"
-            "   AND error IS NULL) AS app,"
+            f"   AND error IS NULL AND {NOT_SPOTIFY}) AS app,"
             " (SELECT count(*) FROM actions"
             "   WHERE status IN ('queued', 'running')) AS pending,"
             " (SELECT count(*) FROM resources"
@@ -214,9 +216,17 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
             " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
             " p.created_at, p.running, p.app, u.username AS owner,"
-            " bu.username AS built_by"
+            " bu.username AS built_by,"
+            # Which product the account on it belongs to, and for a
+            # Spotify one which category - read off the pool row rather
+            # than guessed from the app column, so the table can say
+            # what a phone carries (2026-09-17).
+            " coalesce(ra.product, '') AS app_product,"
+            " coalesce(ra.category, '') AS app_category"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " LEFT JOIN users bu ON bu.id = p.built_by"
+            " LEFT JOIN resources ra ON ra.kind = 'app'"
+            "   AND lower(ra.address) = lower(p.app_account)"
             " WHERE p.done_at IS NULL"
             " AND (%s::bigint IS NULL OR p.owner_id = %s)"
             " ORDER BY p.serial", (owner_id, owner_id))
@@ -233,6 +243,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " r.created_at FROM resources r"
             " LEFT JOIN users u ON u.id = r.added_by"
             " WHERE r.kind = 'app' AND r.status = '' AND r.error IS NULL"
+            f"   AND {NOT_SPOTIFY}"
             " ORDER BY r.created_at DESC, r.id DESC LIMIT 60")
         # The card's number, counted rather than measured off the list
         # above - which stops at sixty. Past that the card said sixty and
@@ -241,7 +252,14 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "SELECT count(*) AS all_of_them,"
             " count(*) FILTER (WHERE source = 'panel') AS panel"
             " FROM resources"
-            " WHERE kind = 'app' AND status = '' AND error IS NULL")
+            " WHERE kind = 'app' AND status = '' AND error IS NULL"
+            f"   AND {NOT_SPOTIFY}")
+        # The Spotify card's two numbers, by category.
+        spotify_free = store._rows(
+            "SELECT coalesce(category, '') AS category, count(*) AS c"
+            " FROM resources WHERE kind = 'app' AND status = ''"
+            f"   AND error IS NULL AND {IS_SPOTIFY}"
+            " GROUP BY 1")
         # What a person can choose from when they build one by hand. Capped:
         # this is a picker, not the pool page, and a select with four hundred
         # options is a worse way to find an address than the search box on
@@ -252,6 +270,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
                 "SELECT address AS label FROM resources"
                 " WHERE kind = %s AND status = '' AND error IS NULL"
                 "   AND address <> ''"
+                f"   AND {NOT_SPOTIFY}"
                 " ORDER BY sheet_row NULLS LAST, id LIMIT 60", (kind,))
         choose["proxies"] = store._rows(
             "SELECT proxy_name AS label FROM resources"
@@ -342,6 +361,8 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "live": live,
         "stock": folded,
         "pool_rows": pools_listed,
+        "spotify": {str(r["category"] or ""): int(r["c"] or 0)
+                    for r in spotify_free},
         "awaiting": awaiting,
         "stopped": stopped,
         "choose": choose,
@@ -518,6 +539,14 @@ _HELD = (" coalesce(password, '') AS password,"
 #: none: an exit goes back on the shelf.
 _SPENT = {"gmail": "used", "app": "delivered"}
 
+#: The app pool holds two products in one table: the GPT accounts and,
+#: since 2026-09-17, the Spotify ones. `product` is what tells them
+#: apart - the column the panel API already used - so every count and
+#: every list about one of them says which, or the GPT card counts the
+#: Spotify rows and the build card offers one to ChatGPT.
+IS_SPOTIFY = "coalesce(product, '') = 'spotify'"
+NOT_SPOTIFY = "coalesce(product, '') <> 'spotify'"
+
 
 def _pool_rows(store) -> dict:
     """Every row of the three pools, for the manager the dashboard opens.
@@ -540,12 +569,22 @@ def _pool_rows(store) -> dict:
     gpt = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
            f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
            " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
+           f"   AND {NOT_SPOTIFY}"
            " ORDER BY id DESC LIMIT %s")
+    spotify = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
+               " coalesce(category, '') AS category,"
+               f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
+               " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
+               f"   AND {IS_SPOTIFY}"
+               " ORDER BY id DESC LIMIT %s")
     rows = {
             "gmail": (store._rows(gmail.format(op="<>"), (POOL_LIMIT,))
                       + store._rows(gmail.format(op="="), (POOL_LIMIT,))),
             "gpt": (store._rows(gpt.format(op="<>"), (POOL_LIMIT,))
                     + store._rows(gpt.format(op="="), (POOL_LIMIT,))),
+            "spotify": (store._rows(spotify.format(op="<>"), (POOL_LIMIT,))
+                        + store._rows(spotify.format(op="="),
+                                      (POOL_LIMIT,))),
             "proxy": store._rows(
                 "SELECT id, coalesce(proxy_name, '') AS address, status,"
                 " coalesce(host, '') AS host, port,"
@@ -567,19 +606,24 @@ def _pool_rows(store) -> dict:
     # apart since each has its own cap. The cap was silent, so an address
     # that happened to be the 340th row answered "Nothing matches that" to
     # a search that had never looked at it (2026-09-07).
+    # The Spotify rows are counted as their own pool: they share the
+    # table with the GPT accounts but have their own sheet and cap.
     totals = store._rows(
-        "SELECT kind,"
+        f"SELECT CASE WHEN kind = 'app' AND {IS_SPOTIFY} THEN 'spotify'"
+        "   ELSE kind END AS kind,"
         " count(*) FILTER (WHERE NOT (kind = 'gmail' AND status = 'used')"
         "   AND NOT (kind = 'app' AND status = 'delivered')) AS live,"
         " count(*) FILTER (WHERE (kind = 'gmail' AND status = 'used')"
         "   OR (kind = 'app' AND status = 'delivered')) AS spent"
         " FROM resources WHERE kind IN ('gmail', 'app', 'proxy')"
-        " GROUP BY kind")
+        " GROUP BY 1")
     counted = {str(r["kind"]): {"live": int(r["live"] or 0),
                                 "spent": int(r["spent"] or 0)}
                for r in totals}
     rows["totals"] = {"gmail": counted.get("gmail", {"live": 0, "spent": 0}),
                       "gpt": counted.get("app", {"live": 0, "spent": 0}),
+                      "spotify": counted.get("spotify",
+                                             {"live": 0, "spent": 0}),
                       "proxy": counted.get("proxy", {"live": 0, "spent": 0})}
     for kind, listed in rows.items():
         if kind == "totals":
@@ -829,7 +873,7 @@ _APP_COLUMNS = ("r.id, r.address, r.status, r.serial, r.source, r.added_by,"
 #: CSV: a search word matches the address, the phone's serial or the note.
 #: Four parameters: the word itself (empty means everything), then the
 #: ILIKE pattern three times.
-_DELIVERED_MATCH = ("r.kind = 'app' AND r.status = 'delivered'"
+_DELIVERED_MATCH = (f"r.kind = 'app' AND r.status = 'delivered' AND {NOT_SPOTIFY}"
                     " AND (%s = '' OR r.address ILIKE %s OR r.serial ILIKE %s"
                     "   OR r.note ILIKE %s)")
 
@@ -888,7 +932,9 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
             " count(*) FILTER (WHERE error IS NULL AND NOT (status = ANY(%s))"
             "   AND status <> %s) AS needs_human,"
             " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
-            " FROM resources WHERE kind = 'app'",
+            # The GPT Pool page is the GPT accounts: the Spotify rows in
+            # the same table are the dashboard's Spotify sheet.
+            f" FROM resources WHERE kind = 'app' AND {NOT_SPOTIFY}",
             (sorted(ROUTINE["app"]), IMPORTED))[0]
         out = {"view": view, "counts": counts, "q": q, "page": page}
         if view == "delivered":
@@ -911,6 +957,7 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
                 " LEFT JOIN phones p"
                 "   ON p.serial = r.serial AND p.done_at IS NULL"
                 " WHERE r.kind = 'app' AND r.status IN ('in_use', 'ready')"
+                f"   AND {NOT_SPOTIFY}"
                 " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
                 (per_page + 1, skip))
             total = int(counts["on_phone"])
@@ -919,6 +966,7 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
                 f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
                 " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
                 " WHERE r.kind = 'app' AND r.error IS NULL"
+                f"   AND {NOT_SPOTIFY}"
                 " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
                 " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
                 (sorted(ROUTINE["app"]), IMPORTED, per_page + 1, skip))
@@ -928,13 +976,14 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
             # thing to decide about.
             out["broken"] = store._rows(
                 "SELECT id, address, error FROM resources"
-                " WHERE kind = 'app' AND error IS NOT NULL ORDER BY id")
+                f" WHERE kind = 'app' AND error IS NOT NULL AND {NOT_SPOTIFY}"
+                " ORDER BY id")
         else:
             rows = store._rows(
                 f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
                 " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
                 " WHERE r.kind = 'app' AND r.status = ''"
-                "   AND r.error IS NULL"
+                f"   AND r.error IS NULL AND {NOT_SPOTIFY}"
                 " ORDER BY r.sheet_row NULLS LAST, r.id LIMIT %s OFFSET %s",
                 (per_page + 1, skip))
             total = int(counts["waiting"])

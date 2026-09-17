@@ -231,6 +231,51 @@ def add_gpt(book, ledger, settings, payload, client):
                     _by(payload))
 
 
+#: The two kinds of Spotify account. They differ in one thing only -
+#: which phone they may be signed in on - and the words are the ones the
+#: operators already use (2026-09-17).
+SPOTIFY_CATEGORIES = ("normal", "error")
+
+
+def add_spotify(book, ledger, settings, payload, client):
+    """Paste Spotify accounts into the pool, one category at a time.
+
+    The same table and the same pool as the GPT accounts: what tells
+    them apart is `product`, which the panel API already knew about.
+    `credential_kind` is set so `accounts.held_back` leaves them where
+    they are - no flow signs Spotify in yet, and a row the keeper could
+    claim would go onto a phone and fail there.
+    """
+    from .store import validate
+
+    category = str(payload.get("category") or "").strip().lower()
+    if category not in SPOTIFY_CATEGORIES:
+        return ("refused",
+                f"{category or 'no category'} is not a Spotify category - "
+                f"it is normal (a phone with no Gmail) or error (a phone "
+                f"that has one)", None)
+    added, skipped, refused = [], [], []
+    for row in payload.get("rows") or []:
+        try:
+            checked = validate.app_row(address=row.get("address", ""),
+                                       password=row.get("password", ""))
+        except (validate.AccountError, validate.ProxyError) as exc:
+            refused.append(f"{row.get('address', '?')}: {exc}")
+            continue
+        if book.apps.find(checked["address"]) is not None:
+            skipped.append(checked["address"])
+            continue
+        book.apps.append(**{
+            "Address": checked["address"], "Password": checked["password"],
+            "2FA Secret": "", "Status": "", "Product": "spotify",
+            "Category": category, "Credential kind": "password",
+            "Note": (f"Added from the web by {_by(payload)} on {_stamp()} "
+                     f"as a {category} account.")})
+        added.append(checked["address"])
+    return _summary("spotify account", added, skipped, refused, settings,
+                    _by(payload))
+
+
 def _next_name(book) -> str:
     highest = 0
     for r in book.proxies._rows:
@@ -861,6 +906,14 @@ def edit_app(book, ledger, settings, payload, client):
     cells = {"Address": address,
              "Password": password,
              "2FA Secret": secret}
+    # The one field a Spotify row has that a GPT row does not, and the
+    # one a paste can get wrong: which phone the account may go on
+    # (2026-09-17). Only on its own rows - a GPT account has no category
+    # and a stray one would be a word nothing reads.
+    category = str(payload.get("category") or "").strip().lower()
+    if (category in SPOTIFY_CATEGORIES
+            and str(was.get("Product") or "") == "spotify"):
+        cells["Category"] = category
     problem = book.apps.edit_cells(resource, **cells)
     if problem:
         book.apps.edit_cells(resource, **{name: str(was.get(name, ""))
@@ -882,9 +935,11 @@ def remove_app(book, ledger, settings, payload, client):
     if refused:
         return refused
     address = str(resource.values.get("Address") or "")
+    # Product and category too, or Undo puts a Spotify row back as a
+    # GPT account (2026-09-17).
     kept = {name: str(resource.values.get(name) or "")
             for name in ("Address", "Password", "2FA Secret",
-                         book.apps.EMAIL_CODE_COLUMN)}
+                         book.apps.EMAIL_CODE_COLUMN, "Product", "Category")}
     book.apps.delete_row(resource, by=_by(payload))
     return ("done", f"{address} removed from the pool by {_by(payload)} - "
                     f"archived, not deleted", {"removed": kept})
@@ -1426,6 +1481,7 @@ VERBS = {
     "refund_gmail": refund_gmail,
     "free_app": free_app,
     "add_gpt": add_gpt,
+    "add_spotify": add_spotify,
     "add_panel_account": add_panel_account,
     "withdraw_panel_account": withdraw_panel_account,
     "add_proxies": add_proxies,

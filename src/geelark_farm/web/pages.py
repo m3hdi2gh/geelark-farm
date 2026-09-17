@@ -204,6 +204,31 @@ tr.acting td{{cursor:progress}}
 .addbox label{{display:block;font-size:11px;letter-spacing:.6px;
  text-transform:uppercase;color:var(--dim);margin-bottom:7px}}
 .addbox textarea{{width:100%}}
+/* Which kind of Spotify account a paste is: two tiles, not a dropdown.
+   The two go on different kinds of phone, so the rule for each is
+   written on the tile rather than hidden in an option list, and each
+   wears the mark its rows wear in the table (2026-09-17). */
+.kindpick{{display:flex;gap:10px}}
+.kindpick input{{position:absolute;width:1px;height:1px;opacity:0}}
+.addbox .kindpick label{{flex:1 1 0;min-width:0;display:block;margin:0;
+ padding:9px 11px;border:1px solid var(--line);border-radius:9px;
+ background:var(--bg);cursor:pointer;text-transform:none;letter-spacing:0;
+ font-size:12px}}
+.kindpick label b{{display:flex;align-items:center;gap:7px;
+ font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--muted)}}
+.kindpick label b::before{{content:"";width:8px;height:8px;
+ background:currentColor}}
+.kindpick label.normal b::before{{border-radius:50%}}
+.kindpick label.error b::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
+.kindpick label i{{display:block;font-style:normal;font-size:11px;
+ color:var(--dim);margin-top:4px}}
+.kindpick label:hover{{border-color:#3d4f6e}}
+.kindpick input:checked+label.normal{{border-color:#2a6b55;background:#0f2a22}}
+.kindpick input:checked+label.normal b{{color:#4fd1a5}}
+.kindpick input:checked+label.error{{border-color:#7a5320;background:#2b1f10}}
+.kindpick input:checked+label.error b{{color:#f2a35c}}
+.kindpick input:focus-visible+label{{outline:2px solid var(--blue);
+ outline-offset:2px}}
 .addbox .addrow{{display:flex;align-items:center;gap:10px;margin-top:9px;
  font-size:11.5px}}
 .filters{{display:flex;align-items:center;gap:7px;flex-wrap:wrap;
@@ -217,6 +242,22 @@ tr.acting td{{cursor:progress}}
  border-color:#2c4d80;color:#a8ccff}}
 .filters .pill b{{font-weight:600;margin-left:4px;font-variant-numeric:tabular-nums}}
 .filters .chips{{gap:5px;margin-right:4px}}
+/* The kind chips, Spotify only: their own two colours and their own two
+   marks, so a chip and the rows it shows read as the same thing. Set
+   off from the status chips by a rule - they are two questions, asked
+   side by side (2026-09-17). */
+.filters .chips.kinds{{margin-left:3px;padding-left:10px;
+ border-left:1px solid var(--line2)}}
+.filters .pill.kind::before{{content:"";display:inline-block;width:7px;
+ height:7px;background:currentColor;margin-right:6px}}
+.filters .pill.kind.normal{{color:#4fd1a5}}
+.filters .pill.kind.normal::before{{border-radius:50%}}
+.filters .pill.kind.error{{color:#f2a35c}}
+.filters .pill.kind.error::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
+.filters .pill.kind.normal[aria-pressed=true]{{background:#0f3a2c;
+ border-color:#2a6b55}}
+.filters .pill.kind.error[aria-pressed=true]{{background:#3d2a12;
+ border-color:#7a5320}}
 table.pooltable td{{vertical-align:middle}}
 table.pooltable .doors{{display:flex;gap:6px;justify-content:flex-end}}
 table.pooltable .doors form{{display:inline}}
@@ -287,6 +328,16 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .byhand details.newone input{{margin:0;width:200px}}
 .byhand input:disabled,.byhand select:disabled{{opacity:.45}}
 .maker{{display:block;font-size:11px;margin-top:3px;white-space:nowrap}}
+/* What is signed in on the phone, under the word for what the phone is:
+   a square for GPT, a circle for a normal Spotify account, a triangle
+   for an error one - the marks the pool wears (2026-09-17). */
+.carries{{display:block;font-family:var(--mono);font-size:11px;margin-top:3px;
+ white-space:nowrap;color:var(--dim)}}
+.carries::before{{content:"";display:inline-block;width:6px;height:6px;
+ background:currentColor;margin-right:5px}}
+.carries.normal{{color:#4fd1a5}} .carries.normal::before{{border-radius:50%}}
+.carries.error{{color:#f2a35c}}
+.carries.error::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
 .byhand label.field select{{min-width:230px;height:38px}}
 dialog.editor .or{{font-size:12.5px;color:var(--muted);padding-top:6px;
  border-top:1px solid var(--line2)}}
@@ -470,6 +521,18 @@ td .badge{{vertical-align:middle}}
 .badge.manual{{background:var(--violet-bg);color:var(--violet)}}
 .badge.attn{{background:#4b2a12;color:#f0a24a}}
 .badge.cancelled{{text-decoration:line-through;opacity:.8}}
+/* A Spotify account kind: its own two colours, and its own shape of
+   dot - a round one for the account that wants a bare phone, a
+   triangle for the one that wants a Gmail on it - so the two are told
+   apart at a glance and not only by reading (2026-09-17). */
+.cat{{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;
+ border-radius:9px;font-family:var(--mono);font-size:11px;font-weight:500;
+ white-space:nowrap}}
+.cat::before{{content:"";width:7px;height:7px;background:currentColor}}
+.cat.normal{{background:#0f3a2c;color:#4fd1a5}}
+.cat.normal::before{{border-radius:50%}}
+.cat.error{{background:#3d2a12;color:#f2a35c}}
+.cat.error::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
 /* ---- text helpers */
 .muted{{color:var(--muted)}} .dim{{color:var(--dim);font-size:12px}}
 .mono{{font-family:var(--mono)}}
@@ -596,9 +659,41 @@ p{{margin:0}}
    the single centred column. */
 .wide{{width:100%;max-width:1340px;margin:0 auto;display:flex;
  flex-direction:column;gap:20px}}
-.desk{{display:grid;grid-template-columns:minmax(0,1fr) 314px;gap:30px;
- align-items:start}}
-.deskmain{{display:flex;flex-direction:column;gap:20px;min-width:0}}
+/* Two rails, and what each is for. What the farm is BUILT FROM - the
+   Gmails and the exits - stands across the top of the table as a short
+   strip: stock is checked, not watched, and standing it there gives the
+   table the width the left rail used to take. What is SIGNED IN ON
+   PHONES - the accounts a person sends - keeps the right, where the
+   presses are (the operator, 2026-09-17). */
+.desk{{display:grid;grid-template-columns:minmax(0,1fr) 314px;
+ gap:20px 30px;align-items:start;
+ grid-template-areas:"supply side" "main side"}}
+.deskmain{{grid-area:main;display:flex;flex-direction:column;gap:20px;
+ min-width:0}}
+.desk>.side{{grid-area:side}}
+.rail{{grid-area:supply;display:flex;gap:16px;flex-wrap:wrap;
+ align-items:flex-start}}
+.rail>.pool{{flex:1 1 280px;min-width:0}}
+.rail>.pool>header{{padding:11px 14px 9px}}
+.rail>.pool>header b{{font-size:22px}}
+/* Two across rather than one down. The strip is as wide as the table
+   and a list one name wide was leaving half of it empty: eight names
+   where two were, for fifty pixels of height (2026-09-17). */
+.rail>.pool .queue{{max-height:122px;overflow:auto;display:grid;
+ grid-template-columns:1fr 1fr;border-top:0}}
+.rail>.pool .queue li{{border-top:1px solid var(--line2)}}
+.rail>.pool .queue li:nth-child(even){{border-left:1px solid var(--line2)}}
+/* The Spotify card split: how many of each kind are free, because
+   the two go on different phones (2026-09-17). */
+.split{{display:flex;gap:8px;align-items:center;margin:0;
+ padding:0 15px 10px;font-family:var(--mono);font-size:11.5px}}
+.split b{{color:var(--ink);font-weight:600;margin-right:4px}}
+.railcap{{width:100%;margin:0;font-family:var(--mono);font-size:10.5px;
+ letter-spacing:.09em;text-transform:uppercase;color:var(--dim);padding:0 2px}}
+@media (max-width:1100px){{
+ .desk{{grid-template-columns:minmax(0,1fr);
+  grid-template-areas:"supply" "main" "side"}}
+}}
 /* The table scrolls inside its own column rather than taking the page
    sideways with it - the rail has to stay where it was put. */
 .tscroll{{overflow-x:auto}}
@@ -1032,6 +1127,7 @@ _DASH_SAID = {
     "done": "Done - it is already in.",
     "removed-gmail": "Removed - the row is out of the Gmail pool.",
     "removed-gpt": "Removed - the row is out of the GPT pool.",
+    "removed-spotify": "Removed - the row is out of the Spotify pool.",
     "gone": "That cannot be undone any more - the request that removed it "
             "kept nothing to put back.",
     # It said "the next pass starts it within about thirty seconds",
@@ -1680,6 +1776,12 @@ def _phone_rows(data: dict, user: dict) -> str:
             continue
         # Asked for by hand: says so, and by whom, under the status - a
         # phone built for somebody is not the keeper's stock (2026-09-08).
+        # What is signed into it, under the word for what it is. The
+        # account column had grown three things in one cell - a product,
+        # a kind and an address - and a table you have to read twice is
+        # a crowded table (the operator, 2026-09-17). The column keeps
+        # the address; which product it is belongs with the status.
+        badge += _carries(r)
         maker = str(r.get("built_by") or "")
         if maker:
             badge += (f'<span class="dim maker" title="asked for on the '
@@ -1715,12 +1817,40 @@ def _account_cell(row: dict) -> str:
     """
     address = row.get("app_account")
     if not _no_address(address):
+        # The address alone. Which product it is, and for Spotify which
+        # kind, is said under the status pill by `_carries` - one column
+        # for what the phone is, one for the address on it.
         return _addr_cell(address, "")
     if (row.get("status") or "") != "ready":
         return '<span class="dim">waiting for one</span>'
     if _no_address(row.get("gmail")):
         return '<span class="dim">no Google account</span>'
     return '<span class="dim">none signed in</span>'
+
+
+def _carries(row: dict) -> str:
+    """Which product the phone carries, under its status pill.
+
+    A phone is a GPT phone or a Spotify one, and for Spotify which kind
+    of account it took - which is the rule about the phone it could go
+    on in the first place. It rides with the status because those are
+    one fact about the phone: what it is. The account column says which
+    address, and nothing else (the operator, 2026-09-17).
+
+    A shape as well as a colour, the same marks the pool wears: a square
+    for GPT, a circle for a normal Spotify account, a triangle for an
+    error one. Read at a glance, down a column, without reading a word.
+    """
+    if _no_address(row.get("app_account")):
+        return ""
+    if (row.get("app_product") or "").strip().lower() != "spotify":
+        return '<span class="carries" title="a ChatGPT account">GPT</span>'
+    word = str(row.get("app_category") or "").strip().lower()
+    if word not in ("normal", "error"):
+        return '<span class="carries" title="a Spotify account">Spotify</span>'
+    rule = dict(SPOTIFY_CATEGORIES).get(word, "")
+    return (f'<span class="carries {word}" title="a Spotify account of the '
+            f'{word} kind - it {esc(rule)}">Spotify {word}</span>')
 
 
 def _addr_cell(value, empty: str) -> str:
@@ -1975,6 +2105,9 @@ _DASH_SCRIPT = """
       var find = sheet.querySelector('.poolfind');
       var seller = sheet.querySelector('.sellerpick');
       var chips = sheet.querySelectorAll('.filters .pill[data-group]');
+      // The second question, where a pool has one: which kind of
+      // account. Its own set of chips, sifting with the first.
+      var cats = sheet.querySelectorAll('.filters .pill[data-cat]');
       // Read when the sift runs, not when it was bound: a kept sheet
       // (keepSheet) has its rows swapped under it while the listeners
       // stay, and a list taken here once would sift rows that are gone.
@@ -1984,9 +2117,12 @@ _DASH_SCRIPT = """
       var sift = function(){
         var q = (find ? find.value : '').trim().toLowerCase(), shown = 0;
         var who = seller ? seller.value : '';
-        var group = '', elsewhere = {};
+        var group = '', cat = '', elsewhere = {};
         chips.forEach(function(c){
           if (c.getAttribute('aria-pressed') === 'true') group = c.dataset.group;
+        });
+        cats.forEach(function(c){
+          if (c.getAttribute('aria-pressed') === 'true') cat = c.dataset.cat;
         });
         var rows = body();
         rows.forEach(function(tr){
@@ -1995,7 +2131,8 @@ _DASH_SCRIPT = """
           // nearly every row, and "edit" or "remove" kept all of them
           // (the operator, 2026-09-07).
           var near = (!q || (tr.dataset.find || '').indexOf(q) >= 0)
-                  && (!who || tr.dataset.seller === who);
+                  && (!who || tr.dataset.seller === who)
+                  && (!cat || tr.dataset.cat === cat);
           var hit = near && (!group || tr.dataset.group === group);
           tr.hidden = !hit;
           if (hit) shown++;
@@ -2031,12 +2168,14 @@ _DASH_SCRIPT = """
         sheet.dataset.live = '1';
         if (find) find.addEventListener('input', sift);
         if (seller) seller.addEventListener('change', sift);
-        chips.forEach(function(c){
-          c.addEventListener('click', function(){
-            chips.forEach(function(o){
-              o.setAttribute('aria-pressed', String(o === c));
+        [chips, cats].forEach(function(set){
+          set.forEach(function(c){
+            c.addEventListener('click', function(){
+              set.forEach(function(o){
+                o.setAttribute('aria-pressed', String(o === c));
+              });
+              sift();
             });
-            sift();
           });
         });
       }
@@ -2513,7 +2652,12 @@ _DASH_SCRIPT = """
   }
   function whichField(el){
     var form = el.form;
-    return (form ? (form.getAttribute('action') || '') : '') + '|' + el.name;
+    // A radio group shares its name with the other radios in it, so the
+    // value is part of which field this is - without it, "error picked"
+    // was put back onto the `normal` button and the choice was lost on
+    // the next tick (2026-09-17).
+    var one = el.type === 'radio' || el.type === 'checkbox' ? '=' + el.value : '';
+    return (form ? (form.getAttribute('action') || '') : '') + '|' + el.name + one;
   }
   function typedBack(kept){
     if (!kept || !kept.length) return;
@@ -2546,7 +2690,8 @@ _DASH_SCRIPT = """
     var seen = {};
     document.querySelectorAll('#poolov .sheet').forEach(function(sheet){
       var kind = sheet.dataset.sheet;
-      var on = sheet.querySelector('.filters .pill[aria-pressed="true"]');
+      var on = sheet.querySelector('.filters .pill[data-group][aria-pressed="true"]');
+      var onCat = sheet.querySelector('.filters .pill[data-cat][aria-pressed="true"]');
       var find = sheet.querySelector('.poolfind');
       var seller = sheet.querySelector('.sellerpick');
       // `.sheetbody` is the scrollport, not `.tscroll`: the CSS gives
@@ -2557,6 +2702,7 @@ _DASH_SCRIPT = """
       var scroll = sheet.querySelector('.sheetbody')
                 || sheet.querySelector('.tscroll');
       seen[kind] = {group: on ? on.dataset.group : null,
+                    cat: onCat ? onCat.dataset.cat : null,
                     find: find ? find.value : '',
                     seller: seller ? seller.value : '',
                     top: scroll ? scroll.scrollTop : 0};
@@ -2581,8 +2727,11 @@ _DASH_SCRIPT = """
       // false, this one true, and runs. Idempotent on the one already on.
       var chip = was.group === null ? null
         : pickData(sheet, '.filters .pill[data-group]', 'group', was.group);
+      var kept = was.cat === null || was.cat === undefined ? null
+        : pickData(sheet, '.filters .pill[data-cat]', 'cat', was.cat);
+      if (kept) kept.click();
       if (chip) chip.click();
-      else if (find) find.dispatchEvent(new Event('input'));
+      else if (!kept && find) find.dispatchEvent(new Event('input'));
       var scroll = sheet.querySelector('.sheetbody')
                 || sheet.querySelector('.tscroll');
       // After the chip's re-sift, which changes how tall the body is.
@@ -2704,10 +2853,11 @@ _DASH_SCRIPT = """
       });
       Object.keys(have).forEach(function(k){ if (!want[k]) have[k].remove(); });
     }
-    theirs.querySelectorAll('.filters .pill[data-group]').forEach(function(c){
-      var o = pickData(mine, '.filters .pill[data-group]', 'group', c.dataset.group);
-      var n = c.querySelector('b'), m = o && o.querySelector('b');
-      if (n && m) m.textContent = n.textContent;
+    // Both sets of chips, by position: the fresh sheet is the same
+    // pool drawn by the same code, so the nth chip is the nth chip.
+    var counts = theirs.querySelectorAll('.filters .pill b');
+    mine.querySelectorAll('.filters .pill b').forEach(function(b, i){
+      if (counts[i]) b.textContent = counts[i].textContent;
     });
   }
 
@@ -2736,15 +2886,19 @@ _DASH_SCRIPT = """
     // The counts on the chips are now a row out. Counted off the table
     // rather than read from the answer, so they cannot drift.
     if (sheet) {
-      var tally = {};
+      var tally = {group: {}, cat: {}}, all = 0;
       sheet.querySelectorAll('tbody tr:not(.none)').forEach(function(tr){
-        tally[tr.dataset.group] = (tally[tr.dataset.group] || 0) + 1;
+        all++;
+        ['group', 'cat'].forEach(function(k){
+          var v = tr.dataset[k];
+          if (v !== undefined) tally[k][v] = (tally[k][v] || 0) + 1;
+        });
       });
-      var all = 0;
-      Object.keys(tally).forEach(function(g){ all += tally[g]; });
-      sheet.querySelectorAll('.filters .pill[data-group]').forEach(function(c){
-        var n = c.querySelector('b'); if (!n) return;
-        n.textContent = c.dataset.group ? (tally[c.dataset.group] || 0) : all;
+      ['group', 'cat'].forEach(function(k){
+        sheet.querySelectorAll('.filters .pill[data-' + k + ']').forEach(function(c){
+          var n = c.querySelector('b'); if (!n) return;
+          n.textContent = c.dataset[k] ? (tally[k][c.dataset[k]] || 0) : all;
+        });
       });
     }
     init();
@@ -2793,8 +2947,12 @@ _DASH_SCRIPT = """
     f.address.value = address;
     f.new_address.value = address;
     f.password.value = tr.dataset.password || '';
-    f.secret.value = tr.dataset.secret || '';
-    f.clear_secret.checked = false;
+    // The Spotify editor has no key and no tick, and a category instead
+    // - opened with the row's own kind, or Save would quietly make every
+    // edited row `normal` (2026-09-17).
+    if (f.secret) f.secret.value = tr.dataset.secret || '';
+    if (f.clear_secret) f.clear_secret.checked = false;
+    if (f.category) f.category.value = tr.dataset.cat || 'normal';
     if (f.seller) f.seller.value = tr.dataset.sellername || '';
     dlg.querySelector('[data-who]').textContent = address;
     // Status: free, set aside, or the word the row has now. A row a
@@ -3132,6 +3290,19 @@ _POOL_KINDS = {
                 "line, tabs or commas between"),
         "columns": ("Address", "Status", "On phone"),
     },
+    "spotify": {
+        "name": "Spotify accounts", "under": "waiting for a phone",
+        "one": "account",
+        # The same tick as the GPT pool: it is the same table and the
+        # same job - keeping the account stock - and a second tick to
+        # hand out would only be one more thing to forget (2026-09-17).
+        "add": "may_add_gpt", "manage": "may_add_gpt",
+        "preview": "/pools/spotify/preview", "free": "/pools/spotify/free",
+        "edit": "/pools/spotify/edit", "remove": "/pools/spotify/remove",
+        "how": ("email, then the password - one account per line, tabs or "
+                "commas between"),
+        "columns": ("Address", "Status", "Category", "On phone"),
+    },
     "proxy": {
         "name": "Proxies", "under": "free IPs", "one": "IP",
         # Whoever may change a phone's exit may keep the exits: it was the
@@ -3221,6 +3392,44 @@ def _group_chips(kind: str, rows: list[dict]) -> str:
             + "</span>")
 
 
+def _kind_chips(kind: str, rows: list[dict]) -> str:
+    """Spotify's second row of chips: which kind of account.
+
+    The status chips answer "can this still be used". These answer the
+    other question, which for this pool is the first one: which kind is
+    it. The two categories are two stocks that go on two kinds of phone,
+    and one list with both in it is a list you read twice (the operator,
+    2026-09-17). They sift together, so `error / current` is one press
+    away from `error / spent`.
+    """
+    if kind != "spotify":
+        return ""
+    counts = {word: sum(1 for r in rows
+                        if str(r.get("category") or "") == word)
+              for word in ("normal", "error")}
+    chips = [("", "both", len(rows))]
+    chips += [(word, word, counts[word]) for word in ("normal", "error")]
+    return ('<span class="chips kinds" role="group" aria-label="Kind">'
+            + "".join(
+                f'<button type="button" class="pill{_kind_class(word)}" '
+                f'data-cat="{word}" '
+                f'aria-pressed="{"true" if not word else "false"}">'
+                f'{said}<b>{count}</b></button>'
+                for word, said, count in chips)
+            + "</span>")
+
+
+def _kind_class(word: str) -> str:
+    return f" kind {word}" if word else ""
+
+
+def _cat_attr(kind: str, row: dict) -> str:
+    """The row's Spotify kind, for the chips above to sift on."""
+    if kind != "spotify":
+        return ""
+    return f' data-cat="{esc(str(row.get("category") or ""))}"'
+
+
 def _proxy_note(row: dict) -> str:
     """The one line the tab's Note column carried, cut to what the state
     makes useful: why a dead exit is dead, how long a phone has had one,
@@ -3253,6 +3462,10 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
                 str(row.get("times_used") if row.get("times_used") is not None
                     else "-"),
                 str(row.get("serial") or "-")]
+    if kind == "spotify":
+        return [str(row.get("address") or ""), state,
+                str(row.get("category") or "-"),
+                str(row.get("serial") or "-")]
     if kind == "gpt":
         # No Note column: what it held rides on the status pill's hover,
         # and the room goes to the buttons (the contract, 2026-09-05).
@@ -3261,6 +3474,31 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
     return [str(row.get("address") or ""), state,
             str(row.get("second") or "-"),
             str(row.get("seller") or "-"), str(row.get("serial") or "-")]
+
+
+def _cell_html(kind: str, index: int, cell: str, note: str) -> str:
+    """One cell of a pool's table. The second column is always the row's
+    state, and Spotify's third is its category - both are pills; the
+    rest is text, escaped."""
+    if index == 1:
+        return _state_pill(cell, note)
+    if kind == "spotify" and index == 2:
+        return _category_pill(cell)
+    return esc(cell)
+
+
+def _category_pill(category: str) -> str:
+    """A Spotify account's kind, in a colour of its own.
+
+    Not one of the status badges: the category is not a state - it never
+    changes on its own, and the two are read together on the same row.
+    The words are the seller's, and what they mean is on the card and in
+    the sheet beside them (2026-09-17).
+    """
+    word = str(category or "").strip().lower()
+    if word not in ("normal", "error"):
+        return '<span class="dim">-</span>'
+    return f'<span class="cat {word}">{word}</span>'
 
 
 def _state_pill(state: str, note: str = "") -> str:
@@ -3328,9 +3566,13 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
     for row in free:
         label = str(row.get("address") or "?")
         tag = (str(row.get("seller") or "") if kind == "gmail" else
+               str(row.get("category") or "") if kind == "spotify" else
                f'{row.get("host") or ""}:{row.get("port") or ""}'
                if kind == "proxy" and row.get("host") else "")
+        # The Spotify kind in its own colour, the mark the split above
+        # and the sheet below both wear.
         aside = (_send_form(user, label) if send
+                 else _category_pill(tag) if kind == "spotify"
                  else f'<span class="tag">{esc(tag)}</span>')
         items.append(f'<li><span class="t" title="{esc(label)}">'
                      f'{esc(label)}</span>{aside}</li>')
@@ -3370,9 +3612,26 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<header><b style="color:var(--{colour})">{count}</b>'
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
-        f'{_pool_alerts(alerts or [])}{short}'
+        f'{_pool_alerts(alerts or [])}{short}{_category_split(kind, rows)}'
         f'{_pool_queue(kind, rows, user, manual_login, quiet=bool(alerts))}'
         f'</section>')
+
+
+def _category_split(kind: str, rows: list[dict]) -> str:
+    """The Spotify card's two numbers. One total answers nothing here:
+    the categories go on different phones, so a person reading the card
+    wants to know how many of each are free (2026-09-17)."""
+    if kind != "spotify":
+        return ""
+    free = [r for r in rows if (r.get("state") or "") == "free"]
+    tally = {word: sum(1 for r in free
+                       if (r.get("category") or "") == word)
+             for word in ("normal", "error")}
+    return ('<p class="split">'
+            + "".join(f'<span class="cat {word}">{word}</span>'
+                      f'<b>{tally[word]}</b>'
+                      for word in ("normal", "error"))
+            + '</p>')
 
 
 def _pool_alerts(alerts: list[dict]) -> str:
@@ -3411,6 +3670,25 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False,
     that leads nowhere is worse than no button, so the card says who owns
     it instead.
     """
+    return _cards(("gmail", "proxy"), data, user, manual_login, alerts)
+
+
+def _accounts_card(data: dict, user: dict, manual_login: bool = False,
+                   alerts: dict | None = None) -> str:
+    """The other rail: the accounts somebody signs in on a phone.
+
+    GPT and Spotify sit together because that is what they are - stock
+    waiting for a device - and the Claude pool joins them when its login
+    exists. They keep the right, where the Send presses are, while the
+    stock the keeper builds from stands above the table (the operator,
+    2026-09-17).
+    """
+    return _cards(("gpt", "spotify"), data, user, manual_login, alerts)
+
+
+def _cards(kinds: tuple, data: dict, user: dict, manual_login: bool,
+           alerts: dict | None) -> str:
+    """The cards of the named pools, in the order they are listed here."""
     stock = data.get("stock") or {}
     pulse = data.get("pulse") or {}
     target = int(pulse.get("target") or 0)
@@ -3435,6 +3713,18 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False,
          "why": (f"{awaiting - warm} of them have no phone to go to"
                  if awaiting > warm else "awaiting login")},
     ]
+    # Spotify's number is its free rows, and the line under it is the
+    # split a person acts on: the two categories go on different phones,
+    # so "twenty free" alone answers nothing (2026-09-17).
+    spotify = data.get("spotify") or {}
+    normal = int(spotify.get("normal") or 0)
+    errored = int(spotify.get("error") or 0)
+    both = normal + errored
+    rows.append(
+        {"kind": "spotify", "count": both,
+         "colour": "bright" if both else "dim",
+         "why": (f"{normal} normal, {errored} error" if both
+                 else "no Spotify account is waiting")})
     rows.append(
         {"kind": "proxy", "count": proxy,
          "colour": ("red" if not proxy else "amber" if proxy < target
@@ -3448,7 +3738,7 @@ def _supply_card(data: dict, user: dict, manual_login: bool = False,
         _pool_card(row["kind"], row["count"], listed.get(row["kind"]) or [],
                    row["colour"], row["why"], user, manual_login,
                    (alerts or {}).get(row["kind"]) or [])
-        for row in rows)
+        for row in rows if row["kind"] in kinds)
 
 
 def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
@@ -3465,12 +3755,53 @@ def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
     return (f'<form class="addbox" method="post" action="{meta["preview"]}">'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
             f'<label for="paste-{kind}">Add to the pool</label>'
+            f'{_category_field(kind)}'
             f'<textarea id="paste-{kind}" name="pasted" rows="3" '
             f'spellcheck="false" placeholder="{esc(meta["how"])}"></textarea>'
             f'<div class="addrow">{_seller_field(kind, rows or [])}'
             f'<button class="go">Preview</button>'
-            f'<span class="dim">nothing is written until you have seen '
-            f'what it read</span></div></form>')
+            f'<span class="dim">{_add_note(kind)}</span></div></form>')
+
+
+def _add_note(kind: str) -> str:
+    """The line beside Preview. Spotify says the one thing a paste can
+    get wrong that the box cannot catch: the kinds go on different
+    phones, and a line does not say which kind it is."""
+    seen = "nothing is written until you have seen what it read"
+    return f"one kind per paste &mdash; {seen}" if kind == "spotify" else seen
+
+
+#: What each Spotify category means, in the words beside the box. The
+#: seller's words are kept - the operators know them - and the rule they
+#: stand for is written out wherever they appear (the operator,
+#: 2026-09-17).
+SPOTIFY_CATEGORIES = (("normal", "goes on a phone with no Gmail"),
+                      ("error", "goes on a phone that has a Gmail"))
+
+
+def _category_field(kind: str) -> str:
+    """Which kind of Spotify account this paste is. One category per
+    paste: a line cannot say which it is, and a box that guesses would
+    put an account on a phone it cannot work on.
+
+    Two tiles, not a dropdown. The kind is the one thing about this pool
+    a person has to get right, and an option list hid both the choice
+    and the rule behind it until it was opened - beside a label, a hint
+    and a box, which made this pool look nothing like the other three
+    (the operator, 2026-09-17). Each tile wears the mark its rows wear
+    in the table, and says out loud which phone that kind goes on.
+    """
+    if kind != "spotify":
+        return ""
+    tiles = []
+    for index, (value, rule) in enumerate(SPOTIFY_CATEGORIES):
+        tiles.append(
+            f'<input type="radio" name="category" value="{value}" '
+            f'id="cat-{value}"{" checked" if not index else ""}>'
+            f'<label class="{value}" for="cat-{value}">'
+            f'<b>{value}</b><i>{esc(rule)}</i></label>')
+    return (f'<div class="kindpick" role="radiogroup" aria-label="Which kind '
+            f'of account">{"".join(tiles)}</div>')
 
 
 def _seller_field(kind: str, rows: list[dict]) -> str:
@@ -3611,17 +3942,29 @@ def _pool_editor(kind: str, user: dict, rows: list[dict]) -> str:
         f'<label class="field"><span>Password</span>'
         f'<input name="password" autocomplete="off" spellcheck="false">'
         f'</label>'
-        f'<label class="field"><span>'
-        + ("2FA secret or recovery address" if gmail else "2FA secret")
-        + '</span><input name="secret" autocomplete="off" spellcheck="false"'
-          ' placeholder="none"></label>'
-        # Blank leaves the secret as it was: the box shows it now, so an
-        # emptied box is more likely a slip than a decision, and a key
-        # somebody paid for was once deleted by a blank that meant
-        # "clear" (2026-09-07). The tick is how you mean it.
-        '<label class="tick"><input type="checkbox" name="clear_secret" '
-        'value="1"> no second factor &mdash; clear it</label>'
-        '<div class="two">'
+        # A Spotify row has no second factor to show - email and
+        # password are the whole credential - and has a category
+        # instead, which is the one thing a paste can get wrong and the
+        # only thing here worth changing afterwards (2026-09-17).
+        + ("" if kind == "spotify" else
+           '<label class="field"><span>'
+           + ("2FA secret or recovery address" if gmail else "2FA secret")
+           + '</span><input name="secret" autocomplete="off"'
+             ' spellcheck="false" placeholder="none"></label>'
+             # Blank leaves the secret as it was: the box shows it now,
+             # so an emptied box is more likely a slip than a decision,
+             # and a key somebody paid for was once deleted by a blank
+             # that meant "clear" (2026-09-07). The tick is how you
+             # mean it.
+             '<label class="tick"><input type="checkbox" '
+             'name="clear_secret" value="1"> no second factor &mdash; '
+             'clear it</label>')
+        + ('<label class="field"><span>Category</span>'
+           '<select name="category">'
+           + "".join(f'<option value="{v}">{esc(v)} - {esc(s)}</option>'
+                     for v, s in SPOTIFY_CATEGORIES)
+           + '</select></label>' if kind == "spotify" else "")
+        + '<div class="two">'
         + (f'<label class="field"><span>Seller</span>'
            f'<input name="seller" list="sellers-edit" autocomplete="off">'
            f'<datalist id="sellers-edit">{sellers}</datalist></label>'
@@ -3651,7 +3994,7 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
             # since-when ride on the pill's hover instead.
             note = _proxy_note(row) or note
         drawn = "".join(
-            f'<td>{_state_pill(cell, note) if i == 1 else esc(cell)}</td>'
+            f'<td>{_cell_html(kind, i, cell, note)}</td>'
             for i, cell in enumerate(cells))
         last = (f"<td>{_pool_row_doors(kind, row, user, manual_login)}</td>"
                 if doors else "")
@@ -3674,6 +4017,7 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
         lines.append(f'<tr data-state="{esc(state)}"'
                      f' data-key="{esc(key)}"'
                      f' data-group="{_row_group(kind, state)}"'
+                     f'{_cat_attr(kind, row)}'
                      f' data-find="{esc(findable)}"'
                      f' data-seller="{esc(_seller_key(row))}"{held}>'
                      f'{drawn}{last}</tr>')
@@ -3827,7 +4171,7 @@ def _pool_manager(data: dict, user: dict,
             f'<div class="sheetbody">'
             f'{_pool_add_box(kind, user, rows)}'
             f'<div class="filters">'
-            f'{_group_chips(kind, rows)}'
+            f'{_group_chips(kind, rows)}{_kind_chips(kind, rows)}'
             f'<input type="search" class="poolfind" autocomplete="off"'
             f' placeholder="search {_plural(len(rows), "row")}">'
             f'{_seller_filter(kind, rows)}'
@@ -4260,7 +4604,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     rows = (_wish_rows(data, user)
             + _phone_rows(dict(data, phones=on_the_shelf), user))
     table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
-             f'<th>gmail</th><th>gpt account</th><th>ip</th>'
+             f'<th>gmail</th><th>account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
              f'<tr class="none" id="nohits" hidden><td colspan="7">'
@@ -4322,7 +4666,8 @@ def dashboard(data: dict, user: dict, said: str = "",
     quiet = dict(user, nav=dict(user.get("nav") or {}, alerts=[]))
     strip = _alert_strip(dict(user, nav=dict(user.get("nav") or {},
                                              alerts=rest)))
-    side = _supply_card(data, user, manual_login, pooled)
+    supply = _supply_card(data, user, manual_login, pooled)
+    side = _accounts_card(data, user, manual_login, pooled)
 
     # An alert about a pool is said in that pool's card, one line, where
     # the number it is about already is - a page-wide strip for "the Gmail
@@ -4335,8 +4680,11 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'<span class="status">{_status_sentence(data)}'
             f'{_controls(data, user)}</span>'
             f'{_who_and_out(user)}</div>'
-            f'<div class="desk"><div class="deskmain">{main}</div>'
-            f'<aside class="side">{side}</aside></div>'
+            f'<div class="desk">'
+            f'<div class="rail"><p class="railcap">Built from</p>{supply}</div>'
+            f'<div class="deskmain">{main}</div>'
+            f'<aside class="side"><p class="railcap">Signed in on phones</p>'
+            f'{side}</aside></div>'
             f'</div>' + _pool_manager(data, user, manual_login)
             + _DASH_SCRIPT)
     # The page keeps itself current: every ten seconds while something is
@@ -6892,6 +7240,40 @@ def gmail_preview(rows: list[dict], seller: str, user: dict,
             f'<button class="quiet">Preview again</button></div>'
             f'</form></div>')
     return page("Gmail Pool — preview", body, user=user, here="/pools/gmail")
+
+
+def spotify_preview(rows: list[dict], user: dict, idem: str, *,
+                    category: str = "normal", pasted: str = "",
+                    back: str = "/") -> str:
+    """The Spotify paste, judged row by row, with the category it was
+    pasted under carried into the confirm.
+
+    One paste is one category - a line cannot say which kind it is - so
+    the button at the foot says which, and nobody adds twenty rows as
+    the wrong kind (2026-09-17).
+    """
+    good = _good(rows)
+    lines = "<tr><th>address</th><th>password</th><th>verdict</th></tr>" + \
+        "".join(
+            f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
+            f'<td class="muted">{_shown_password(r)}</td>'
+            f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
+    carried = "\n".join(f"{r['address']}\t{r['password']}" for r in good)
+    hidden = f'<input type="hidden" name="category" value="{esc(category)}">'
+    body = ('<div class="top"><h2>Spotify pool</h2><span class="status">'
+            'preview - nothing is added yet</span></div>'
+            + _preview_card("/pools/spotify/add", rows, good, user, idem,
+                            back, lines, carried, hidden=hidden,
+                            note=f"they go in as {esc(category)} accounts")
+            + '<div class="panel"><h3>Edit and preview again</h3>'
+            + f'<form method="post" action="/pools/spotify/preview" '
+              f'class="field">{_csrf(user)}{hidden}'
+              f'<input type="hidden" name="back" value="{esc(back)}">'
+              f'<textarea name="pasted">{esc(pasted)}</textarea>'
+              f'<div class="row"><span class="right"></span>'
+              f'<button class="quiet">Preview again</button></div>'
+              f'</form></div>')
+    return page("Spotify pool - preview", body, user=user, here="/")
 
 
 def gpt_preview(rows: list[dict], user: dict, idem: str, *,

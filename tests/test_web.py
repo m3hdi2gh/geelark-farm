@@ -3800,7 +3800,8 @@ def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
     client.login()
     _, _, body = client.request("GET", "/")
 
-    assert body.count('class="addbox"') == 3, "all three pools (2026-09-08)"
+    # Four pools now: the Spotify accounts joined the three (2026-09-17).
+    assert body.count('class="addbox"') == 4, "every pool (2026-09-08)"
     assert 'action="/pools/gmail/preview"' in body
     assert 'action="/pools/gpt/preview"' in body
     # The card carries the button and the manager carries the form, so a
@@ -3978,8 +3979,10 @@ def test_the_manager_reads_spent_rows_under_a_cap_of_their_own():
 
     body = inspect.getsource(read._pool_rows)
     assert "status {op} 'used'" in body and "status {op} 'delivered'" in body
-    assert body.count('format(op="<>")') == 2, "live rows, read apart"
-    assert body.count('format(op="=")') == 2, "spent rows, read apart"
+    # Three: the Gmails, the GPT accounts and the Spotify ones, which
+    # share the app table and are told apart by `product` (2026-09-17).
+    assert body.count('format(op="<>")') == 3, "live rows, read apart"
+    assert body.count('format(op="=")') == 3, "spent rows, read apart"
     assert "on_sheet" not in body, "the sheet flag is retired"
     assert "AS password" in read._HELD and "AS secret" in read._HELD, (
         "what the editor opens with")
@@ -4167,6 +4170,87 @@ def test_undo_puts_back_only_what_a_remove_kept(web, monkeypatch):
     status, headers, _ = client.request(
         "POST", "/pools/gmail/undo", _form(csrf=client.csrf(), req="41"))
     assert status == 303 and dict(headers)["Location"] == "/?said=gone"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_removed_spotify_row_comes_back_as_a_spotify_row(web, monkeypatch):
+    """The toast's Undo went through the GPT door, which re-added the row
+    with `add_gpt` - no product, no category - so a removed Spotify
+    account came back as a GPT one (2026-09-17). Its own word, its own
+    door, and the GPT door refuses what came out of the other pool."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 52)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/spotify/remove",
+        _form(csrf=client.csrf(), address="nova@x.com", sure="1", back="/"))
+    assert status == 303
+    assert dict(headers)["Location"].startswith("/?said=queued:52")
+    assert got[-1]["verb"] == "remove_app"
+
+    _, _, body = client.request("GET", "/?said=removed-spotify:52")
+    toast = body[body.index('class="said toast undo"'):]
+    toast = toast[:toast.index("</p>")]
+    assert "out of the Spotify pool" in toast
+    assert 'action="/pools/spotify/undo"' in toast
+
+    kept = {"Address": "nova@x.com", "Password": "pw", "2FA Secret": "",
+            "Email code": "FALSE", "Product": "spotify", "Category": "error"}
+    monkeypatch.setattr(actions_mod, "one", lambda s, i: {
+        "id": i, "verb": "remove_app", "status": "done", "result": "",
+        "requested_by": 7, "detail": {"removed": kept}})
+    status, headers, _ = client.request(
+        "POST", "/pools/spotify/undo", _form(csrf=client.csrf(), req="52"))
+    assert status == 303
+    assert got[-1]["verb"] == "add_spotify"
+    assert got[-1]["payload"]["category"] == "error"
+    assert got[-1]["payload"]["rows"] == [{"address": "nova@x.com",
+                                           "password": "pw"}]
+    assert got[-1]["idem_key"] == "undo-52"
+
+    # What came out of one pool goes back into that pool only.
+    status, headers, _ = client.request(
+        "POST", "/pools/gpt/undo", _form(csrf=client.csrf(), req="52"))
+    assert status == 303 and dict(headers)["Location"] == "/?said=gone"
+
+
+def test_the_gpt_pool_page_and_badge_leave_the_spotify_rows_out(monkeypatch):
+    """One table, two pools: every read the GPT Pool page and its badge
+    make says which product, or the page lists Spotify accounts as GPT
+    ones and the badge counts them (2026-09-17)."""
+    from geelark_farm.web import read
+
+    seen = []
+
+    class _Store:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            seen.append(sql)
+            return [{"waiting": 0, "on_phone": 0, "delivered": 0,
+                     "needs_human": 0, "broken": 0, "n": 0}]
+
+    monkeypatch.setattr(read, "Store", _Store)
+    for view in ("waiting", "on_phone", "needs_human", "delivered"):
+        read.gpt_pool(None, view=view)
+    about_apps = [s for s in seen if "kind = 'app'" in s]
+    assert about_apps, "the page reads the app pool"
+    assert all(read.NOT_SPOTIFY in s for s in about_apps)
+    assert "{NOT_SPOTIFY}" in inspect.getsource(read.nav_counts)
+    assert read.NOT_SPOTIFY in read._DELIVERED_MATCH
 
 
 def test_the_dashboard_keeps_itself_current_even_when_idle(web, monkeypatch):
@@ -5797,6 +5881,89 @@ def test_the_account_column_only_promises_an_account_a_phone_can_take():
     assert "a@x.com" in done
 
 
+def test_the_status_says_which_account_the_phone_carries():
+    """Three things in one cell - a product, a kind and an address - made
+    the account column a paragraph to read on every row. What the phone
+    is belongs with the word for what the phone is; the column keeps the
+    address and nothing else (the operator, 2026-09-17)."""
+    from geelark_farm.web import pages
+
+    gpt = {"status": "ready", "app_account": "a@x.com", "app_product": ""}
+    assert ">GPT<" in pages._carries(gpt)
+    assert "Spotify" not in pages._account_cell(gpt)
+
+    spot = {"status": "ready", "app_account": "k@x.com",
+            "app_product": "spotify", "app_category": "error"}
+    line = pages._carries(spot)
+    assert 'class="carries error"' in line and "Spotify error" in line
+    # The rule the word stands for, where a hover can reach it.
+    assert "goes on a phone that has a Gmail" in line
+    # And the column beside it is the address, as it is for every phone.
+    assert pages._account_cell(spot) == pages._addr_cell("k@x.com", "")
+
+    # Nothing signed in: nothing said.
+    assert pages._carries(dict(spot, app_account="✗")) == ""
+
+
+def test_the_spotify_paste_picks_its_kind_with_two_tiles():
+    """The kind was a dropdown standing between a label and a hint, which
+    made this pool look like nothing else in the console and hid the one
+    thing a paste can get wrong (the operator, 2026-09-17)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gpt": True, "may_add_gmail": True}
+    box = pages._pool_add_box("spotify", user, [])
+    assert '<select name="category"' not in box, "a list hides the rule"
+    assert box.count('type="radio" name="category"') == 2
+    assert 'value="normal" id="cat-normal" checked' in box
+    assert "goes on a phone with no Gmail" in box
+    assert "goes on a phone that has a Gmail" in box
+    # One kind per paste, said beside the press rather than above the box.
+    assert "one kind per paste" in box
+
+    # And the other pools keep the shape they had.
+    assert 'class="kindpick"' not in pages._pool_add_box("gmail", user, [])
+
+
+def test_the_spotify_sheet_sifts_by_kind():
+    """Two stocks that go on two kinds of phone, in one list, is a list
+    you have to read twice. The status chips answer whether a row can
+    still be used; these answer which kind it is, and they sift together
+    (the operator, 2026-09-17)."""
+    from geelark_farm.web import pages
+
+    rows = [{"address": "a@x.com", "state": "free", "category": "normal"},
+            {"address": "b@x.com", "state": "free", "category": "error"},
+            {"address": "c@x.com", "state": "used", "category": "error"}]
+    chips = pages._kind_chips("spotify", rows)
+    assert 'data-cat=""' in chips and "both<b>3</b>" in chips
+    assert 'data-cat="normal"' in chips and "normal<b>1</b>" in chips
+    assert 'data-cat="error"' in chips and "error<b>2</b>" in chips
+    assert pages._kind_chips("gpt", rows) == "", "one pool has two kinds"
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gpt": True}
+    assert 'data-cat="error"' in pages._pool_table("spotify", rows, user)
+    assert "data-cat=" not in pages._pool_table("gpt", rows, user)
+
+    script = pages._DASH_SCRIPT
+    assert ("var cats = sheet.querySelectorAll('.filters .pill[data-cat]');"
+            in script)
+    assert "&& (!cat || tr.dataset.cat === cat);" in script
+    # And the kind survives the swap the live layer makes under it.
+    assert "cat: onCat ? onCat.dataset.cat : null," in script
+    # The editor opens on the row's own kind, and does not reach for the
+    # key box this pool does not have.
+    assert "if (f.secret) f.secret.value = tr.dataset.secret || '';" in script
+    assert "if (f.category) f.category.value = tr.dataset.cat || 'normal';" \
+        in script
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gpt": True}
+    editor = pages._pool_editor("spotify", user, rows)
+    assert 'name="category"' in editor and 'name="secret"' not in editor
+
+
 def test_a_choice_put_back_by_the_dialog_re_gates_the_card():
     """Setting .value fires nothing, so Cancel on the Gmail dialog left
     the account box live over a bare build (2026-09-12)."""
@@ -5982,8 +6149,10 @@ def test_one_rows_press_replaces_one_row():
     assert "\x08" not in script
     assert "if (worked && isHere(got.url) && key && swapRow(doc, key)) {" in script
     assert "sayIt(doc);" in script, "the answer's own sentence is shown"
-    # The chip counts are recounted off the table, so they cannot drift.
-    assert "tally[tr.dataset.group]" in script
+    # The chip counts are recounted off the table, so they cannot drift
+    # - every set of chips the sheet has, not only the states.
+    assert ("if (v !== undefined) tally[k][v] = (tally[k][v] || 0) + 1;"
+            in script)
     # And the row carries the key that finds it.
     assert 'data-key="{esc(key)}"' in _source(pages._pool_table)
 

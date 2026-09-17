@@ -411,6 +411,23 @@ def test_removing_a_gpt_row_keeps_what_it_removed():
     assert detail["removed"]["Password"] == "pw"
 
 
+def test_removing_a_spotify_row_keeps_its_kind():
+    """Undo puts the row back through the pool's own add, and that add
+    needs the product and the category - without them a removed Spotify
+    account came back as a GPT one (2026-09-17)."""
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    a0.values["Product"] = "spotify"
+    a0.values["Category"] = "error"
+
+    _, _, detail = verbs.remove_app(
+        book, None, None, {"address": a0.values["Address"], "by": "mehdi"},
+        None)
+
+    assert detail["removed"]["Product"] == "spotify"
+    assert detail["removed"]["Category"] == "error"
+
+
 def test_removing_a_gmail_keeps_the_row_it_removed():
     book = make_book(gmails=1)
     g0 = book.gmails._rows[0]

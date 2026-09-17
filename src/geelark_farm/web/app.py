@@ -730,7 +730,9 @@ class _Handler(BaseHTTPRequestHandler):
         from ..store import actions as store_actions
 
         want = {"gmail": ("remove_gmail", "may_add_gmail", "add_gmails"),
-                "gpt": ("remove_app", "may_add_gpt", "add_gpt")}.get(kind)
+                "gpt": ("remove_app", "may_add_gpt", "add_gpt"),
+                "spotify": ("remove_app", "may_add_gpt", "add_spotify"),
+                }.get(kind)
         req = str(field.get("req") or "").strip()
         if want is None or not req.isdigit():
             return self._redirect("/?said=none")
@@ -746,8 +748,18 @@ class _Handler(BaseHTTPRequestHandler):
             return self._redirect("/?said=gone")
         if user.get("role") != "admin" and row.get("requested_by") != user["id"]:
             return self._redirect("/?said=refused")
+        # A remove keeps the product, so a Spotify row cannot come back
+        # through the GPT door as a GPT account, nor the other way round
+        # (2026-09-17).
+        product = str(kept.get("Product") or "").strip().lower()
+        if (product == "spotify") != (kind == "spotify"):
+            return self._redirect("/?said=gone")
         secret = str(kept.get("Secret") or kept.get("2FA Secret") or "").strip()
-        if kind == "gmail":
+        if kind == "spotify":
+            payload = {"rows": [{"address": kept["Address"],
+                                 "password": kept.get("Password") or ""}],
+                       "category": str(kept.get("Category") or "").strip()}
+        elif kind == "gmail":
             payload = {"rows": [{"address": kept["Address"],
                                  "password": kept.get("Password") or "",
                                  "secret": "" if "@" in secret else secret,
@@ -1039,6 +1051,91 @@ class _Handler(BaseHTTPRequestHandler):
                          idem=self._minute_key(user, "offer", address),
                          back="/needs")
 
+    def _spotify_post(self, user: dict, field: dict, path: str) -> None:
+        """The Spotify pool's four doors.
+
+        Its own handler because its rows carry one thing the GPT rows do
+        not - the category, which says which phone the account may go on
+        - and because it has no second factor to ask about. Everything
+        else is the app pool's: the same table, the same verbs for
+        editing, removing and freeing a row (2026-09-17).
+        """
+        from ..store import validate
+        from ..verbs import SPOTIFY_CATEGORIES
+        from . import paste
+
+        category = (field.get("category") or "").strip().lower()
+        # A kind the form did not name is not quietly `normal`: the add
+        # verb refuses it and the edit leaves the row's own kind alone.
+        # Only the preview, which writes nothing, shows the first.
+        known_kind = category in SPOTIFY_CATEGORIES
+        back = _add_back(field, "/")
+        if path == "/pools/spotify/preview":
+            known = read.known(self.settings, "app")
+            pasted = field.get("pasted") or ""
+            rows = paste.accounts(pasted)
+            for row in rows:
+                try:
+                    if row["secret"] or row["recovery"]:
+                        raise validate.AccountError(
+                            f"{row['address']}: three things on one line - a "
+                            f"Spotify account is an address and a password")
+                    validate.app_row(address=row["address"],
+                                     password=row["password"])
+                except (validate.AccountError, validate.ProxyError) as exc:
+                    log.debug("spotify paste row refused: %s", exc)
+                    row["error"] = str(exc)
+                here = row["address"].lower()
+                row["duplicate"] = here in known
+                row["dup_state"] = known.get(here, "")
+            self._mark_twice(rows)
+            return self._html(200, pages.spotify_preview(
+                rows, user, idem=secrets.token_urlsafe(12), pasted=pasted,
+                category=category if known_kind else SPOTIFY_CATEGORIES[0],
+                back=back))
+        if path == "/pools/spotify/add":
+            rows = [{"address": r["address"], "password": r["password"]}
+                    for r in paste.accounts(field.get("rows", ""))]
+            return self._act(
+                user, "may_add_gpt", "add_spotify",
+                {"rows": rows, "category": category},
+                idem=field.get("idem") or secrets.token_urlsafe(12),
+                back=back)
+        if path == "/pools/spotify/edit":
+            address = (field.get("address") or "").strip()
+            return self._act(
+                user, "may_add_gpt", "edit_app",
+                {"address": address,
+                 "new_address": (field.get("new_address") or "").strip(),
+                 "password": field.get("password") or "",
+                 "category": category if known_kind else "",
+                 "state": (field.get("state") or "").strip()},
+                idem=self._minute_key(user, "edit_app", address), back=back)
+        if path == "/pools/spotify/remove":
+            address = (field.get("address") or "").strip()
+            if field.get("sure") != "1":
+                return self._html(200, pages.confirm_page(
+                    user, title=f"Remove {address} from the pool?",
+                    text=("The row leaves the Spotify pool. Nothing else is "
+                          "touched, and the request keeps the row so it can "
+                          "be put back."),
+                    action="/pools/spotify/remove",
+                    fields={"address": address, "sure": "1", "back": back},
+                    button=f"Yes, remove {address}", back=back))
+            return self._act(user, "may_add_gpt", "remove_app",
+                             {"address": address},
+                             # Its own word, so the toast's Undo comes
+                             # back through the Spotify door and the row
+                             # returns as what it was (2026-09-17).
+                             said_word="removed-spotify",
+                             idem=self._minute_key(user, "remove_app",
+                                                   address),
+                             back=back)
+        if path == "/pools/spotify/undo":
+            return self._undo_remove(user, "spotify", field)
+        return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
+                                          user=user))
+
     def _pool_post(self, user: dict, field: dict) -> None:
         from . import paste
 
@@ -1132,7 +1229,8 @@ class _Handler(BaseHTTPRequestHandler):
                              back=_gmail_back(field))
         if path in ("/pools/gmail/undo", "/pools/gpt/undo"):
             return self._undo_remove(user, path.split("/")[2], field)
-        if path in ("/pools/gmail/free", "/pools/gpt/free"):
+        if path in ("/pools/gmail/free", "/pools/gpt/free",
+                    "/pools/spotify/free"):
             kind = path.split("/")[2]
             permission, verb = (("may_add_gmail", "free_gmail")
                                 if kind == "gmail" else
@@ -1248,6 +1346,8 @@ class _Handler(BaseHTTPRequestHandler):
                              idem=self._minute_key(
                                  user, "adopt", f"{held['host']}:{held['port']}"),
                              back=_proxy_back(field))
+        if path.startswith("/pools/spotify/"):
+            return self._spotify_post(user, field, path)
         if path == "/pools/gpt/preview":
             from ..store import validate
 
@@ -2079,6 +2179,11 @@ _OPERATOR_POSTS = (
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",
+    # The Spotify accounts are the same pool in the same table, kept by
+    # whoever keeps the GPT ones (2026-09-17).
+    "/pools/spotify/preview", "/pools/spotify/add",
+    "/pools/spotify/edit", "/pools/spotify/remove", "/pools/spotify/free",
+    "/pools/spotify/undo",
     # The one service control an operator is offered: the breaker means
     # builds keep failing, and fresh stock is the answer to it. The
     # permission on the other side is what decides; this only says the
