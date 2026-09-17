@@ -2626,8 +2626,24 @@ _DASH_SCRIPT = """
       return !(n.nodeType === 1 && n.matches('script'));
     });
     var mini = document.querySelector('.mini'); if (mini) mini.remove();
-    here.replaceChildren.apply(here, nodes);
-    if (held) keepSheet(held, kept);
+    if (held) {
+      // The overlay never leaves the DOM. Taken out and put back - which
+      // is what a whole-of-main replace does - its fade and the sheet's
+      // rise play again from the start, and that is the very blink being
+      // fixed. So everything around it is replaced, and it stays where
+      // it is; the copy the swap brought is read and dropped.
+      Array.prototype.slice.call(here.childNodes).forEach(function(n){
+        if (n !== held) here.removeChild(n);
+      });
+      var brought = null;
+      nodes.forEach(function(n){
+        if (n.nodeType === 1 && n.id === 'poolov') { brought = n; return; }
+        here.insertBefore(n, held);
+      });
+      keepSheet(held, kept, brought);
+    } else {
+      here.replaceChildren.apply(here, nodes);
+    }
     init();
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref, true);
     else if (held) behind(true);
@@ -2638,18 +2654,16 @@ _DASH_SCRIPT = """
     swapMain.at = Date.now();
   }
 
-  // The overlay the swap found open, put back in place of the copy the
-  // swap brought, with that copy's news carried over: the closed sheets
+  // The overlay the swap found open, still in place, with the news from
+  // the copy the swap brought carried over: the closed sheets
   // are taken whole (they open current later), and the open one has its
   // rows matched by key - changed ones replaced, gone ones removed, new
   // ones added before the "nothing matches" line - and the counts on its
   // chips copied. Its paste box, its editor, its scroll and the keyboard
   // are never touched. Rows are compared without the one-time `press`
   // token every render draws afresh, or every row would count as changed.
-  function keepSheet(held, kind){
-    var fresh = ov();
-    if (!fresh || fresh === held) return;
-    fresh.replaceWith(held);
+  function keepSheet(held, kind, fresh){
+    if (!fresh) return;
     var mine = held.querySelector('.sheet[data-sheet="' + kind + '"]');
     var theirs = fresh.querySelector('.sheet[data-sheet="' + kind + '"]');
     Array.prototype.slice.call(fresh.querySelectorAll('.sheet')).forEach(function(s){

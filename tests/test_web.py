@@ -6623,11 +6623,15 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     _, _, body = client.request("GET", "/")
     script = body[body.index("function swapMain(doc)"):]
     assert "var held = (kept && kept !== 'phone') ? ov() : null;" in script
-    assert "if (held) keepSheet(held, kept);" in script
+    # The overlay never leaves the DOM: its fade and the sheet's rise are
+    # CSS animations, and a node taken out and put back plays them again.
+    assert "if (n !== held) here.removeChild(n);" in script
+    assert "here.insertBefore(n, held);" in script
+    assert "keepSheet(held, kept, brought);" in script
     assert "else if (held) behind(true);" in script
     assert "else if (kept && kept !== 'send') show(kept, false);" in script
-    keep = body[body.index("function keepSheet(held, kind)"):]
-    assert "fresh.replaceWith(held);" in keep
+    keep = body[body.index("function keepSheet(held, kind, fresh)"):]
+    assert "fresh.replaceWith(held)" not in keep
     assert "if (old) old.replaceWith(s); else held.appendChild(s);" in keep
     assert "else if (same(old) !== same(tr)) old.replaceWith(tr);" in keep
     assert "if (!old) body.insertBefore(tr, none);" in keep
