@@ -679,9 +679,12 @@ p{{margin:0}}
 /* Two across rather than one down. The strip is as wide as the table
    and a list one name wide was leaving half of it empty: eight names
    where two were, for fifty pixels of height (2026-09-17). */
-.rail>.pool .queue{{max-height:122px;overflow:auto;display:grid;
- grid-template-columns:1fr 1fr;border-top:0}}
-.rail>.pool .queue li{{border-top:1px solid var(--line2)}}
+.rail>.pool .queue{{max-height:122px;overflow:hidden auto;display:grid;
+ grid-template-columns:minmax(0,1fr) minmax(0,1fr);border-top:0}}
+/* `minmax(0,...)` and min-width:0, or a long address plus its seller
+   widens the column past its track and the box scrolls sideways - the
+   name is clipped with an ellipsis instead (the operator, 2026-09-17). */
+.rail>.pool .queue li{{min-width:0;border-top:1px solid var(--line2)}}
 .rail>.pool .queue li:nth-child(even){{border-left:1px solid var(--line2)}}
 /* The Spotify card split: how many of each kind are free, because
    the two go on different phones (2026-09-17). */
