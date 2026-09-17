@@ -1170,6 +1170,90 @@ def test_a_bare_phone_is_asked_for_with_nothing_else():
     assert "bare phone" in said and "request 7" in said
 
 
+def _spotify_row(book, category: str, index: int = 0):
+    row = book.apps._rows[index]
+    row.values["Product"] = "spotify"
+    row.values["Category"] = category
+    return row
+
+
+def test_a_bare_phone_may_carry_a_normal_spotify_account():
+    """The one account a bare phone carries: a `normal` Spotify one wants
+    exactly that phone - no Google account on it - so Send on its row
+    asks for one to be built with the account named (2026-09-17)."""
+    book = make_book(gmails=1, apps=1)
+    row = _spotify_row(book, "normal")
+    asked = {}
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    with patch.object(wanted_mod, "ask",
+                      lambda s, **k: asked.update(k) or 9):
+        status, said, _ = verbs.build_by_hand(
+            book, None, None,
+            {"by": "mehdi", "no_gmail": True, "app": "spotify",
+             "app_account": row.values["Address"]}, None)
+
+    assert status == "done", said
+    assert asked["no_gmail"] is True and asked["gmail"] == ""
+    assert asked["app"] == "spotify" and asked["install_app"] is True
+    assert asked["app_account"] == row.values["Address"]
+    assert "signed into Spotify" in said and "bare phone" in said
+
+
+def test_a_spotify_account_goes_only_on_the_phone_its_kind_wants():
+    """`normal` wants no Google account; `error` wants a Gmail. Asked
+    for the other way round, the wish is refused in words rather than
+    built and failed on the phone."""
+    book = make_book(gmails=1, apps=2)
+    normal = _spotify_row(book, "normal", 0)
+    errored = _spotify_row(book, "error", 1)
+
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "no_gmail": True, "app": "spotify",
+         "app_account": errored.values["Address"]}, None)
+    assert status == "refused" and "wants a phone that has a Gmail" in said
+
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "gmail": "", "app": "spotify",
+         "app_account": normal.values["Address"]}, None)
+    assert status == "refused" and "no Google account" in said
+
+    # And a GPT account is still nobody's business on a bare phone.
+    gpt = book.apps._rows[0]
+    gpt.values["Product"] = ""
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "no_gmail": True, "app": "spotify",
+         "app_account": gpt.values["Address"]}, None)
+    assert status == "refused" and "not a Spotify account" in said
+
+
+def test_send_to_a_warm_phone_refuses_a_normal_spotify_account():
+    """A warm phone has a Gmail on it - the one phone a normal account
+    may not go on. The row says where to press instead."""
+    from unittest.mock import patch
+
+    from geelark_farm import builder
+
+    book = make_book(gmails=1, apps=1)
+    row = _spotify_row(book, "normal")
+    warm = [{"serial": "1500", "phone_id": "P1"}]
+    with patch.object(builder, "_unfinished", lambda c, b: (warm, [])):
+        status, said, detail = verbs.login_accounts(
+            book, None, None,
+            {"addresses": [row.values["Address"]], "by": "mehdi"},
+            object(), launch=lambda *a, **k: None)
+    # Nothing started, so the verb fails; the row's own sentence rides in
+    # the detail, where the Requests page reads it.
+    assert status == "failed" and "1 refused" in said
+    why = detail["refused"][0]
+    assert "no Google account" in why and "Send on its row" in why
+
+
 def test_claude_is_an_app_the_card_may_ask_for():
     book = make_book(gmails=1)
     asked = {}

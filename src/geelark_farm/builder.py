@@ -747,8 +747,7 @@ def _sign_into_app(session: _Session) -> Build | None:
         if s.app_row is None:
             if s.want is not None and s.want.app_account:
                 try:
-                    s.app_row = _pick(s.book.apps, s.want.app_account,
-                                      "GPT account")
+                    s.app_row = _pick_named_app(s.book, s.want.app_account)
                 except Aborted as refused:
                     _give_back_condemned(s)
                     return s.finish("chosen_app_unavailable", str(refused))
@@ -1343,10 +1342,15 @@ def _flow_for(settings: Settings, app_row):
     """The sign-in flow and the package for this account's product. One
     place, so a third product is one more line here and not a fourth copy
     of the sign-in loop (flows/claude_login.py, 2026-09-16)."""
-    if _product_of(app_row) == "claude":
+    product = _product_of(app_row)
+    if product == "claude":
         from .flows import claude_login
 
         return claude_login, CLAUDE_PACKAGE
+    if product == "spotify":
+        from .flows import spotify_login
+
+        return spotify_login, SPOTIFY_PACKAGE
     return chatgpt_login, settings.target_package
 
 
@@ -1543,6 +1547,32 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
     log.info("the Play Store is walked for %s", name)
     return play_install.install(client, phone_id, package,
                                 budget_seconds=budget, artifact_dir=artifacts)
+
+
+def _pick_named_app(book: Book, wanted: str):
+    """The app account somebody named, claimed by name.
+
+    A Spotify row is never in `available` - nothing serves the product,
+    so the pool holds it back from the automatic claim, which knows no
+    categories - and it is exactly the row a person's Send names. Named,
+    it is taken with `claim_this`, which asks only whether the row is
+    free (2026-09-17). Every other product goes through `_pick`.
+    """
+    want = wanted.strip().lower()
+    resource = next((r for r in book.apps._rows
+                     if (r.label or "").strip().lower() == want), None)
+    product = str((getattr(resource, "values", None) or {})
+                  .get("Product") or "").strip().lower()
+    if resource is None or product != "spotify":
+        return _pick(book.apps, wanted, "account")
+    if resource.error or (book.apps.status_of(resource)
+                          not in book.apps.available_statuses):
+        raise Aborted(f"the account {wanted} is not free - it is already on "
+                      f"a phone, set aside, or not there at all")
+    if not book.apps.claim_this(resource):
+        raise Aborted(f"the account {wanted} was taken while this was being "
+                      f"asked for")
+    return resource
 
 
 def _pick(pool, wanted: str, what: str):
@@ -2019,9 +2049,30 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                               ordered=ordered, remaining=remaining,
                               artifacts=artifacts, cancelled=cancelled,
                               play=False)
+            if not (want is not None and want.app_account):
+                return finish("ready", f"a bare phone - no Google account, "
+                                       f"as asked. On the phone: "
+                                       f"{_named(build.app)}", ok=True)
+            # A bare phone with an account named for it: a `normal`
+            # Spotify account, which wants exactly this phone - no Google
+            # account on it - and goes in now, through the same session
+            # a warm phone's account goes in through (2026-09-17).
+            if remaining() <= 0:
+                return finish("budget_exhausted",
+                              "built, but no time to sign the account in")
+            session = _Session(client=client, settings=settings, book=book,
+                               build=build, phone_id=phone_id,
+                               artifacts=artifacts, deadline=deadline,
+                               started=started, cancelled=cancelled,
+                               codes=codes_source or codes.NoSource(),
+                               proxy_row=proxy_row,
+                               refused_exits=refused_exits, want=want)
+            gave_up = _sign_into_app(session)
+            if gave_up is not None:
+                return gave_up
             return finish("ready", f"a bare phone - no Google account, as "
-                                   f"asked. On the phone: "
-                                   f"{_named(build.app)}", ok=True)
+                                   f"asked - with {build.app_account} "
+                                   f"signed into Spotify", ok=True)
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
         # Which app the account goes into, if any. The keeper's own

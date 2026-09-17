@@ -105,12 +105,22 @@ def build_by_hand(book, ledger, settings, payload, client):
         app = "chatgpt" if payload.get("install_app") else ""
     if app not in ("", "chatgpt", "spotify", "claude"):
         return "refused", f"{app!r} is not an app this farm installs", None
+    # The one account a bare phone may carry is a `normal` Spotify one -
+    # it wants exactly that phone (2026-09-17). Anything else named
+    # alongside "no Gmail" is the card's off boxes, and ignored.
+    named = (payload.get("app_account") or "").strip()
     if no_gmail:
-        gmail, app = "", ""
+        gmail = ""
+        if not (app == "spotify" and named):
+            app = ""
     install_app = bool(app)
-    # An account is only ever signed into ChatGPT.
-    app_account = ((payload.get("app_account") or "").strip()
-                   if app == "chatgpt" else "")
+    # An account is signed into ChatGPT or Spotify; Claude's come from
+    # the panel.
+    app_account = named if app in ("chatgpt", "spotify") else ""
+    if app == "spotify" and app_account:
+        refused = _spotify_fits(book, app_account, no_gmail)
+        if refused:
+            return "refused", refused, None
 
     def add_typed(pool, kind, address, password, secret=""):
         """Put a typed credential in its tab, unless it is already there."""
@@ -167,7 +177,7 @@ def build_by_hand(book, ledger, settings, payload, client):
     # tick (the operator, 2026-09-07).
     for what, name, pool in (("Gmail", gmail, book.gmails),
                              ("exit", proxy_name, book.proxies),
-                             ("GPT account", app_account if install_app else "",
+                             ("account", app_account if install_app else "",
                               book.apps)):
         if not name:
             continue
@@ -195,8 +205,10 @@ def build_by_hand(book, ledger, settings, payload, client):
     carrying = (f" and {app_account} signed into {named}" if app_account
                 else " with no account signed into anything")
     if no_gmail:
+        carried = (f"with {app_account} to be signed into Spotify"
+                   if app_account else "and nothing signed in")
         return "done", (f"asked for a bare phone{where} - no Google account "
-                        f"and nothing signed in, though it still carries the "
+                        f"{carried}, though it still carries the "
                         f"apps - request {asked}. It starts within seconds."
                         ), None
     who = gmail or "the next free Gmail"
@@ -274,6 +286,32 @@ def add_spotify(book, ledger, settings, payload, client):
         added.append(checked["address"])
     return _summary("spotify account", added, skipped, refused, settings,
                     _by(payload))
+
+
+def _spotify_category(resource) -> str:
+    values = getattr(resource, "values", None) or {}
+    if str(values.get("Product") or "").strip().lower() != "spotify":
+        return ""
+    return str(values.get("Category") or "").strip().lower() or "unlabelled"
+
+
+def _spotify_fits(book, address: str, no_gmail: bool) -> str:
+    """Why this Spotify account may not go on the phone being asked for,
+    or "" when it may. The category is the rule: `normal` wants a phone
+    with no Google account, `error` one that has a Gmail (2026-09-17)."""
+    resource = book.apps.find(address)
+    if resource is None:
+        return f"{address} is not in the Spotify pool"
+    category = _spotify_category(resource)
+    if not category:
+        return f"{address} is not a Spotify account"
+    if no_gmail and category != "normal":
+        return (f"{address} is an {category} account - it wants a phone "
+                f"that has a Gmail, not a bare one")
+    if not no_gmail and category != "error":
+        return (f"{address} is a {category} account - it wants a phone with "
+                f"no Google account; Send on its row builds one")
+    return ""
 
 
 def _next_name(book) -> str:
@@ -614,6 +652,13 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
         status = book.apps.status_of(resource)
         if resource.error or status not in book.apps.available_statuses:
             refused.append(f"{address}: {resource.error or status}")
+            continue
+        # A warm phone has a Gmail on it, which is the one phone a
+        # `normal` Spotify account may not go on (2026-09-17).
+        if _spotify_category(resource) == "normal":
+            refused.append(f"{address}: a normal Spotify account wants a "
+                           f"phone with no Google account - Send on its row "
+                           f"builds one")
             continue
         if not warm:
             unpaired.append(address)

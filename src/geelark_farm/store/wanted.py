@@ -39,7 +39,11 @@ def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
     if app is None:
         app = "chatgpt" if install_app else ""
     if no_gmail:
-        gmail, app, app_account = "", "", ""
+        # The one account a bare phone carries: a `normal` Spotify one,
+        # which wants exactly that phone (2026-09-17).
+        gmail = ""
+        if app != "spotify":
+            app, app_account = "", ""
     with Store(settings) as store:
         rows = store._write(
             "INSERT INTO wanted_builds"

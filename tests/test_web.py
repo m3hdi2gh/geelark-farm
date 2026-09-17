@@ -5918,6 +5918,50 @@ def test_the_build_card_asks_for_an_account_not_a_gpt_account(web,
     assert "Choose an account" in body and "Choose a GPT account" not in body
 
 
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_a_spotify_rows_send_goes_where_its_kind_wants(web, monkeypatch):
+    """`error` wants the warm phone the chooser offers - the GPT pool's
+    own Send. `normal` wants a phone with no Google account, and none is
+    kept warm, so its press asks for one to be built with the account
+    named (2026-09-17)."""
+    import geelark_farm.store.actions as actions_mod
+
+    rows = [{"id": 1, "address": "nova@x.com", "status": "", "serial": "",
+             "note": "", "error": None, "state": "free",
+             "category": "normal", "password": "p", "secret": "",
+             "second": ""},
+            {"id": 2, "address": "tab@x.com", "status": "", "serial": "",
+             "note": "", "error": None, "state": "free",
+             "category": "error", "password": "p", "secret": "",
+             "second": ""}]
+    base = _dash(monkeypatch)
+    _dash(monkeypatch, pool_rows=dict(base["pool_rows"], spotify=rows),
+          spotify={"normal": 1, "error": 1})
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 61)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    sheet = body[body.index('data-sheet="spotify"'):]
+    sheet = sheet[:sheet.index("</section>")]
+    normal = sheet[sheet.index("nova@x.com"):sheet.index("tab@x.com")]
+    assert 'action="/accounts/spotify/build"' in normal
+    assert "&rarr; new phone" in normal and "&rarr; phone</button>" not in normal
+    errored = sheet[sheet.index("tab@x.com"):]
+    assert 'action="/accounts/login"' in errored and "&rarr; phone" in errored
+    assert "/accounts/spotify/build" not in errored
+
+    status, headers, _ = client.request(
+        "POST", "/accounts/spotify/build",
+        _form(csrf=client.csrf(), address="nova@x.com", back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "build_by_hand"
+    payload = got[-1]["payload"]
+    assert payload["no_gmail"] is True and payload["app"] == "spotify"
+    assert payload["app_account"] == "nova@x.com"
+
+
 def test_the_status_says_which_account_the_phone_carries():
     """Three things in one cell - a product, a kind and an address - made
     the account column a paragraph to read on every row. What the phone

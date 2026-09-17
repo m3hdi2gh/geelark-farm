@@ -3553,6 +3553,33 @@ def _may_send(user: dict, manual_login: bool) -> bool:
     return bool(manual_login) and _may(user, "may_login_accounts")
 
 
+def _spotify_send_form(user: dict, row: dict, back: str = "/") -> str:
+    """Send, for a Spotify row - which door depends on its kind.
+
+    An `error` account wants a phone that has a Gmail and nothing signed
+    in, which is the warm phone the chooser already offers: the GPT
+    pool's own Send. A `normal` account wants a phone with no Google
+    account, and none is kept warm - the press asks for one to be built,
+    bare, with the account signed in as the build's last step
+    (2026-09-17). A row of neither kind gets no door: nothing knows which
+    phone it may go on.
+    """
+    address = str(row.get("address") or "")
+    category = str(row.get("category") or "").strip().lower()
+    if category == "error":
+        return _send_form(user, address, back)
+    if category != "normal":
+        return ""
+    return (f'<form method="post" class="inline" '
+            f'action="/accounts/spotify/build">{_csrf(user)}'
+            f'<input type="hidden" name="address" value="{esc(address)}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<button class="quiet send" data-busy="Asking&hellip;" '
+            f'title="build a bare phone - no Google account - and sign '
+            f'this account into Spotify on it">&rarr; new phone</button>'
+            f'</form>')
+
+
 def _pool_queue(kind: str, rows: list[dict], user: dict,
                 manual_login: bool, quiet: bool = False) -> str:
     """What is actually free, under the number that counts it.
@@ -3570,7 +3597,7 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
         return (f'<p class="railnote">Nothing free. '
                 f'{_plural(held, "row")} held or set aside.</p>' if held
                 else '<p class="railnote">The pool is empty.</p>')
-    send = kind == "gpt" and _may_send(user, manual_login)
+    send = kind in ("gpt", "spotify") and _may_send(user, manual_login)
     # Every free row, in a box that scrolls past the first few: the count
     # above says how many, and a list that stops at four made the fifth
     # look like it did not exist (the operator, 2026-09-05).
@@ -3582,10 +3609,13 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
                f'{row.get("host") or ""}:{row.get("port") or ""}'
                if kind == "proxy" and row.get("host") else "")
         # The Spotify kind in its own colour, the mark the split above
-        # and the sheet below both wear.
-        aside = (_send_form(user, label) if send
-                 else _category_pill(tag) if kind == "spotify"
-                 else f'<span class="tag">{esc(tag)}</span>')
+        # and the sheet below both wear - and its own Send beside it.
+        if kind == "spotify":
+            aside = _category_pill(tag) + (
+                _spotify_send_form(user, row) if send else "")
+        else:
+            aside = (_send_form(user, label) if send
+                     else f'<span class="tag">{esc(tag)}</span>')
         items.append(f'<li><span class="t" title="{esc(label)}">'
                      f'{esc(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
@@ -3871,9 +3901,10 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     # The proxy routes name a row by `name`; the account routes by
     # `address`. The cell is the same one either way.
     field = "name" if kind == "proxy" else "address"
-    if kind == "gpt" and state != "on a phone" \
+    if kind in ("gpt", "spotify") and state != "on a phone" \
             and _may_send(user, manual_login):
-        doors.append(_send_form(user, address))
+        doors.append(_send_form(user, address) if kind == "gpt"
+                     else _spotify_send_form(user, row))
     if kind == "proxy":
         # The exits, by state - the doors the Proxy tab's blank-the-cell
         # and delete-the-row gave, named (the operator, 2026-09-09).

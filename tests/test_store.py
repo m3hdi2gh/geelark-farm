@@ -1438,7 +1438,7 @@ def test_a_wish_may_be_bare_and_a_failed_one_is_dismissed_by_its_asker():
     from geelark_farm.store import wanted
 
     ask = inspect.getsource(wanted.ask)
-    assert "no_gmail" in ask and 'gmail, app, app_account = "", "", ""' in ask
+    assert "no_gmail" in ask and 'if app != "spotify":' in ask
     take = inspect.getsource(wanted.take)
     assert "requested_by, no_gmail" in take, "the builder reads it back"
     dismiss = inspect.getsource(wanted.dismiss)

@@ -52,6 +52,12 @@ SERVED = {"chatgpt": ("password_totp",),
           # Since 2026-09-16: flows/claude_login.py, the code answered by
           # the panel (store.codes).
           "claude": ("email_code_customer",),
+          # flows/spotify_login.py exists (2026-09-17), and still nothing
+          # is served here on purpose: which phone a Spotify row may go on
+          # is its category's business, and the automatic claim knows no
+          # categories. Send names the row, by hand, and the panel API
+          # keeps reporting the product `blocked` until its contract says
+          # otherwise.
           "spotify": ()}
 
 #: The kind whose code a person supplies through the panel: the account

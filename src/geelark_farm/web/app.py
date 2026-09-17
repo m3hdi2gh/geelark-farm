@@ -427,6 +427,23 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/wishes/") and \
                     self.path.endswith("/dismiss"):
                 return self._dismiss_wish(user)
+            if self.path == "/accounts/spotify/build":
+                # Send, for a `normal` Spotify account: the phone it wants
+                # does not exist until it is built - no Google account on
+                # it - so the press is a bare wish carrying the account,
+                # and the build signs it in (2026-09-17).
+                address = (field.get("address") or "").strip()
+                payload = {
+                    "gmail": "", "no_gmail": True, "gmail_typed": False,
+                    "gmail_password": "", "gmail_secret": "",
+                    "proxy_name": "", "app": "spotify", "install_app": True,
+                    "app_account": address, "app_typed": False,
+                    "app_password": "", "app_secret": "",
+                }
+                return self._act(
+                    user, "may_login_accounts", "build_by_hand", payload,
+                    idem=self._minute_key(user, "byhand", f"spotify:{address}"),
+                    back="/", said_word="asked")
             if self.path == "/accounts/login":
                 back = field.get("back") or "/"
                 return self._login_accounts(
@@ -2169,7 +2186,8 @@ def _operator_may_get(path: str) -> bool:
 #: is the permission that already decided who may put rows in; being able
 #: to add a row and not fix a typo in it was the odd half.
 _OPERATOR_POSTS = (
-    "/logout", "/password", "/accounts/login", "/phones/build",
+    "/logout", "/password", "/accounts/login", "/accounts/spotify/build",
+    "/phones/build",
     "/pools/gmail/preview", "/pools/gmail/add",
     "/pools/gmail/edit", "/pools/gmail/remove", "/pools/gmail/undo",
     "/pools/gmail/free", "/pools/gmail/refund",
