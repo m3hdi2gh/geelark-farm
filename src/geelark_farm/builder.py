@@ -401,6 +401,10 @@ class Build:
     #: Which app this phone carries: '' for none, 'chatgpt', 'spotify'.
     app: str = ""
     app_account: str = ""
+    #: Which product the account on it is for - what the good-build
+    #: sentence names, since 2026-09-17 a Spotify phone is not "signed
+    #: into ChatGPT". Empty when nothing is signed in.
+    app_product: str = ""
     detail: str = ""
     seconds: float = 0.0
     #: GeeLark requests this build sent, for the count that decides how
@@ -830,6 +834,7 @@ def _sign_into_app(session: _Session) -> Build | None:
         s.build.trails.append(("gpt", outcome.trail))
         if outcome.ok:
             s.build.app_account = s.app_row.credentials.email
+            s.build.app_product = _product_of(s.app_row)
             s.app_signed_in = True
             return None
         s.build.tried.append((s.app_row.credentials.email, outcome.reason,
@@ -2808,6 +2813,17 @@ def outcome_of(build: Build) -> str:
     everywhere else.
     """
     if build.ok:
+        # From the facts, not one sentence for every good build: a bare
+        # phone has no Google account, and a Spotify phone no ChatGPT
+        # account, and the one sentence said both of a bare Spotify phone
+        # (3517, 2026-09-17).
+        product = APPS.get(build.app_product or "chatgpt", "the app")
+        if not build.gmail:
+            return ("a bare phone - no Google account" + (
+                f", with {build.app_account} signed into {product}"
+                if build.app_account else ", nothing signed in"))
+        if build.app_account:
+            return f"signed into Google, and into {product} in the app"
         return "signed into Google, and into ChatGPT in the app"
     return build.detail or failures.situation(build.status)
 

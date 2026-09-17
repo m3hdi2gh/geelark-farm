@@ -1216,6 +1216,25 @@ def test_no_note_makes_the_reader_learn_a_reason_token(device, settings, drive):
         assert note.rstrip().endswith("."), f"{tab} note has no full stop: {note!r}"
 
 
+def test_a_good_builds_sentence_comes_from_its_facts():
+    """One sentence for every good build said "signed into Google, and
+    into ChatGPT" of a bare phone with a Spotify account on it (3517,
+    2026-09-17)."""
+    from geelark_farm.builder import Build, outcome_of
+
+    assert outcome_of(Build(index=1, ok=True, gmail="g@x.com", app_account="a@x.com",
+                            app_product="chatgpt")) == (
+        "signed into Google, and into ChatGPT in the app")
+    assert outcome_of(Build(index=1, ok=True, gmail="g@x.com", app_account="s@x.com",
+                            app_product="spotify")) == (
+        "signed into Google, and into Spotify in the app")
+    assert outcome_of(Build(index=1, ok=True, gmail="", app_account="s@x.com",
+                            app_product="spotify")) == (
+        "a bare phone - no Google account, with s@x.com signed into Spotify")
+    assert outcome_of(Build(index=1, ok=True, gmail="", app_account="")) == (
+        "a bare phone - no Google account, nothing signed in")
+
+
 def test_the_phone_note_says_what_happened_rather_than_listing_packages(
         device, settings, drive):
     """A ready phone used to be described by `pm list packages`, which answers
