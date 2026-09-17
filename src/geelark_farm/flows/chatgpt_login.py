@@ -432,6 +432,42 @@ PAYMENT_NAG_LABELS = ("There's a problem with your payment method",
 PLAY_SUBSCRIPTION_LABELS = ("Discover subscriptions",)
 
 
+#: How many times the settings page is scrolled while looking for the
+#: address. Three screenfuls is the whole of it on every capture so far.
+SETTINGS_SCROLLS = 3
+
+
+def _extent(elements: list[screen.Element]) -> tuple[int, int]:
+    """The screen's width and height, from the bounds of what is on it."""
+    right = bottom = 0
+    for element in elements:
+        nums = [int(n) for n in re.findall(r"-?\d+", element.bounds)]
+        if len(nums) == 4:
+            right, bottom = max(right, nums[2]), max(bottom, nums[3])
+    return right, bottom
+
+
+def _scroll_settings(ctx: Context) -> bool:
+    """Bring the foot of the settings list up. True if a swipe was sent.
+
+    The address sits under the `Email` heading and on a long list it is
+    below the fold: the page names it, the dump does not. Three phones
+    were spent on Nargesyarm@yahoo.com that way, whose settings page was
+    right there - signed in, "Narges" at the top, the Email heading on
+    it - and the account was set aside for it (2026-09-17).
+    """
+    width, height = _extent(ctx.elements)
+    if width < 200 or height < 200:
+        return False
+    try:
+        shell.swipe(ctx.client, ctx.phone_id, width // 2, int(height * 0.72),
+                    width // 2, int(height * 0.34))
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("the settings page would not scroll (%s)", exc)
+        return False
+    return True
+
+
 def _payment_nag(ctx: Context) -> Outcome | None:
     """The broken subscription as the account's own verdict, if it shows.
 
@@ -578,7 +614,8 @@ def verify_account(ctx: Context) -> Outcome | None:
         time.sleep(2)
 
     named = None
-    for _ in range(6):
+    scrolls = 0
+    for look in range(8):
         ctx.refresh()
         answered = _payment_nag(ctx)
         if answered is not None:
@@ -586,11 +623,21 @@ def verify_account(ctx: Context) -> Outcome | None:
         named = account_email_on(ctx.elements)
         if named is not None:
             break
+        # One look first, so a page still drawing is given its moment,
+        # then the list is scrolled: the address is below the fold on a
+        # tall settings page (2026-09-17).
+        if look >= 1 and scrolls < SETTINGS_SCROLLS and _scroll_settings(ctx):
+            scrolls += 1
+            continue
         time.sleep(3)
     if named is None:
         path = ctx.save("verify-no-address")
-        return Outcome("fatal", "session_unverified",
-                       "the settings page showed no address to read",
+        # Reaching the page and not reading it is this flow's problem,
+        # not the account's - a different reason, so no account is set
+        # aside for it (2026-09-17).
+        return Outcome("fatal", "address_not_shown",
+                       "the settings page showed no address to read, even "
+                       "after it was scrolled",
                        artifacts=[path] if path else [])
     if named.casefold() != ctx.creds.email.casefold():
         path = ctx.save("verify-wrong-account")

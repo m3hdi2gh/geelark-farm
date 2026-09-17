@@ -4659,13 +4659,16 @@ def test_a_press_inside_the_drawer_comes_back_to_the_drawer():
 
 def test_the_drawer_does_not_freeze_the_page_behind_it():
     """It holds no box to type in, so a page frozen behind it is a build
-    nobody can watch move."""
+    nobody can watch move. A manager does freeze it - that is the point of
+    `heldOpen` - and the drawer is the exception written into it."""
     from geelark_farm.web import pages
 
-    gate = pages._DASH_SCRIPT.split("function settled(){", 1)[1]
-    # To the next function, so a nested one does not cut it short.
+    # From the test itself to the next function, so a nested one does not
+    # cut it short: the rule lives in `heldOpen`, which `settled` asks.
+    gate = pages._DASH_SCRIPT.split("function heldOpen(){", 1)[1]
     gate = gate.split("function reloadWhenSettled", 1)[0]
     assert "openKind !== 'phone'" in gate
+    assert "if (heldOpen()) { settled.since = 0; return false; }" in gate
 
 
 def test_the_drawer_says_what_a_press_did_and_can_stop_a_build():
@@ -6643,3 +6646,25 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     assert ("var body = function(){ return sheet.querySelectorAll("
             "'tbody tr:not(.none)'); };") in bind
     assert "var rows = body();" in bind
+
+
+def test_the_page_holds_still_while_a_sheet_is_open(web, monkeypatch):
+    """A sheet somebody opened is a working surface, and the news behind
+    it can wait. The rule was written once and lost - it sat below an
+    unconditional `return` in `settled`, so it never ran, and the manager
+    blinked once per held-ceiling under the operator's hand (2026-09-17).
+    Held while it is open, with one refresh the moment it closes."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    held = body[body.index("function heldOpen()"):]
+    assert "return !!(o && !o.hidden && openKind && openKind !== 'phone');" in held
+    settled = body[body.index("function settled()"):]
+    assert "if (heldOpen()) { settled.since = 0; return false; }" in settled
+    # The dead line went with it: it sat after a `return` and named two
+    # variables that live in another function.
+    assert "return !(o && !o.hidden && openKind !== 'phone') && !typing;" \
+        not in body
+    shut = body[body.index("function shut()"):]
+    assert "lookAgain(300);" in shut[:shut.index("function behind(")]

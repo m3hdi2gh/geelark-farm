@@ -1243,7 +1243,9 @@ def test_a_settings_page_with_no_address_on_it_is_not_a_confirmed_login(
         app, tmp_path, monkeypatch):
     """The second verdict has to be able to fail. A settings page that shows
     no address proves nothing about whose session this is, and reporting
-    success off it is a phone handed over on an assumption."""
+    success off it is a phone handed over on an assumption. Its own reason
+    since 2026-09-17 - the page was reached, so the account is not what
+    failed - but just as fatal."""
     app(taps={"Menu", "Account settings"})
     # Both steps of the walk are reachable; only the address is missing.
     ctx = gpt_context(node("Menu"), node("Account settings"))
@@ -1253,7 +1255,7 @@ def test_a_settings_page_with_no_address_on_it_is_not_a_confirmed_login(
     out = chatgpt_login.verify_account(ctx)
 
     assert out is not None
-    assert out.reason == "session_unverified"
+    assert out.reason == "address_not_shown"
     assert out.artifacts
 
 
@@ -1485,3 +1487,76 @@ def test_a_password_page_that_came_back_is_submitted_with_enter():
     assert src.index("fill(ctx, field, ctx.creds.password)") < src.index(
         "shell.keyevent"), "typed first, then enter"
 
+
+
+def test_the_settings_page_is_scrolled_before_the_address_is_called_missing(
+        monkeypatch):
+    """The address sits under the Email heading, and on a tall settings
+    list it is below the fold - the page names it, the dump does not."""
+    phone = ScriptedPhone(monkeypatch, [
+        "chatgpt-chat-signed-in.xml", "chatgpt-account-menu.xml",
+        "chatgpt-account-settings-no-address.xml",
+        "chatgpt-account-settings.xml"])
+    swipes = []
+
+    def swipe(client, phone_id, x1, y1, x2, y2, **kw):
+        swipes.append((y1, y2))
+        if len(phone.screens) > 1:
+            phone.screens.pop(0)
+
+    monkeypatch.setattr(chatgpt_login.shell, "swipe", swipe)
+
+    assert chatgpt_login.verify_account(verify_ctx()) is None
+    assert swipes, "the list was never scrolled"
+    assert swipes[0][0] > swipes[0][1], "upwards, to bring the foot up"
+    assert len(swipes) == 1, "it was found on the first scroll"
+
+
+def test_a_settings_page_that_names_no_address_does_not_condemn_the_account(
+        monkeypatch):
+    """The real capture from phone 3366: the settings page is right there,
+    signed in, "Narges" at the top and the Email heading on it, and no
+    address anywhere in the dump. Reported as the same reason as "never
+    reached the page", it set aside a good account after three phones
+    (2026-09-17, Nargesyarm@yahoo.com). Its own reason now, and one the
+    consecutive-suspect rule does not count."""
+    from geelark_farm import builder, failures
+
+    ScriptedPhone(monkeypatch, ["chatgpt-chat-signed-in.xml",
+                                "chatgpt-account-menu.xml",
+                                "chatgpt-account-settings-no-address.xml"])
+    scrolled = []
+    monkeypatch.setattr(chatgpt_login.shell, "swipe",
+                        lambda *a, **k: scrolled.append(1))
+
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "address_not_shown"
+    assert "scrolled" in out.detail
+    assert len(scrolled) == chatgpt_login.SETTINGS_SCROLLS, "it tried"
+    assert failures.verdict("address_not_shown").blame == failures.DEVICE
+    assert "address_not_shown" not in builder.APP_SUSPECTS, \
+        "the account carries no strike for a page this flow could not read"
+    # The other half of the split still blames the account after three
+    # phones: never reaching the page is not the same thing.
+    assert "session_unverified" in builder.APP_SUSPECTS
+
+
+def test_a_phone_that_will_not_scroll_is_not_an_error(monkeypatch):
+    """The swipe is a way of looking harder, not a step of the walk."""
+    ScriptedPhone(monkeypatch, ["chatgpt-chat-signed-in.xml",
+                                "chatgpt-account-menu.xml",
+                                "chatgpt-account-settings-no-address.xml"])
+
+    def refuse(*a, **k):
+        raise RuntimeError("the shell said no")
+
+    monkeypatch.setattr(chatgpt_login.shell, "swipe", refuse)
+
+    out = chatgpt_login.verify_account(verify_ctx())
+
+    assert out is not None and out.reason == "address_not_shown"
+    # A screen with nothing on it has no extent to swipe inside.
+    ctx = verify_ctx()
+    ctx.elements = []
+    assert chatgpt_login._scroll_settings(ctx) is False

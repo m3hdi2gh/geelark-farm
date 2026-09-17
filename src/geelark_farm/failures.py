@@ -367,6 +367,20 @@ VERDICTS: dict[str, Verdict] = {
         "nobody in the app. The archived screen shows where the walk "
         "stopped; if OpenAI moved its menus, the walk in the ChatGPT login "
         "flow is what to update."),
+    #: The other half of the read-back, split off on 2026-09-17. Reaching
+    #: the page and not reading it is not the account's business: three
+    #: phones were spent on one whose settings page was right there,
+    #: signed in, with the address below the fold - and because the walk
+    #: reported the same reason as "never got there", the third phone set
+    #: the account aside.
+    "address_not_shown": Verdict(
+        DEVICE, "the app's settings page named no address to read",
+        "The walk reached the app's own settings and scrolled it, and no "
+        "address was on the page - so the session could not be read back "
+        "and the phone is not handed over. Nothing is known against the "
+        "account: it was signed in as far as this got. The archived page "
+        "shows what was on it; if OpenAI moved the Email line, the walk in "
+        "the ChatGPT login flow is what to update."),
     "phone_refuses_accounts": Verdict(
         DEVICE, "this phone turned down every account it was given",
         "Three app accounts in a row were refused on this phone and put back "

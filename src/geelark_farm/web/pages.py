@@ -2107,7 +2107,23 @@ _DASH_SCRIPT = """
   // quietly stopped. The ceiling is what keeps the promise: held while
   // you are busy, never held silently (2026-09-14).
   var HELD_CEILING = 20000;
+  // A sheet somebody opened is a working surface, and the news behind it
+  // can wait. The rule was written once and lost: it sat below an
+  // unconditional `return` in this function, so it never ran - and the
+  // manager blinked once per ceiling under the operator's hand
+  // (2026-09-17: "it still jumps, much less often"). The drawer is not
+  // one of these: it holds no box to type in and a build being watched
+  // should move.
+  function heldOpen(){
+    var o = ov();
+    return !!(o && !o.hidden && openKind && openKind !== 'phone');
+  }
   function settled(){
+    // Held for as long as it is open, and one refresh the moment it
+    // closes (`shut`). The ceiling below does not apply: it is for the
+    // gestures a person leaves standing without meaning to, and an open
+    // sheet is not one of those - it is where they are working.
+    if (heldOpen()) { settled.since = 0; return false; }
     if (mayRedraw()) { settled.since = 0; return true; }
     settled.since = settled.since || Date.now();
     if (Date.now() - settled.since > HELD_CEILING) {
@@ -2115,10 +2131,6 @@ _DASH_SCRIPT = """
       return true;
     }
     return false;
-    // The drawer holds no box to type in, so a page frozen behind it is
-    // a build nobody can watch move. A manager still holds the page: it
-    // has a paste box and an editor in it (2026-09-07).
-    return !(o && !o.hidden && openKind !== 'phone') && !typing;
   }
   // The farm's own tick. `/live` holds one connection open and sends a
   // number whenever anything a page draws has changed; the timer above
@@ -2192,6 +2204,8 @@ _DASH_SCRIPT = """
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
     o.querySelectorAll('.sheet').forEach(function(el){ el.hidden = true; });
+    // Everything the page held back while the sheet was open, now.
+    lookAgain(300);
   }
   function behind(off){
     // The dashboard is a sibling emitted before the overlay, so one flag
