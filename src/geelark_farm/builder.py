@@ -2153,16 +2153,18 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # is signed in after all only when a sign-in was ever started on
         # it: a phone stopped twelve seconds after it was created cannot
         # be, and asking it anyway answered "could not say" and kept it.
-        discarded = (phone_id and not gmail_signed_in and not bare
+        empty = bool(phone_id and not gmail_signed_in and not bare
                      and build.status not in KEPT_WHEN_EMPTY
                      and not (asked_google
-                              and _signed_in_after_all(client, build))
-                     and _discard(client, book, ledger, build))
+                              and _signed_in_after_all(client, build)))
+        discarded = empty and _discard(client, book, ledger, build)
         # By serial, not by the row number `start` handed back ten minutes ago.
         # Any sibling discarding its phone deletes a row, and every row below it
         # moves up - so that number can have come to mean a different phone.
         if log_row is not None:
             _write_row(book, build, drop=discarded)
+            if empty and not discarded:
+                _condemn(book, build)
         if phone_id and not discarded:
             try:
                 phones.stop(client, phone_id)
@@ -2943,6 +2945,33 @@ def _count_try(settings: Settings, book: Book, build: Build) -> None:
         build.detail = (f"{build.detail}. Tried {made} times and set aside - "
                         f"clear the {book.phones.TRIES_COLUMN} cell to offer "
                         f"it again").strip(". ")
+
+
+def _condemn(book: Book, build: Build) -> None:
+    """An empty phone GeeLark would not delete is marked `failed` on its
+    row, so the sync deletes it on a later pass - the same door the
+    console's Failed goes through.
+
+    The delete fails when the network does: phone 3237 was created,
+    GeeLark answered 502 to the sign-in's shell command and then to the
+    stop, and the phone was "recorded and left alone" - an empty
+    `incomplete` row on the shelf that an operator booted two hours
+    later and forgot (2026-09-16). Nothing ever tried the delete again.
+    Never fatal, like every row write in this `finally`.
+    """
+    note = (f"{_phone_note(build)} Nothing was signed into it and GeeLark "
+            f"would not delete it when asked; marked failed so the sync "
+            f"deletes it once GeeLark answers.")
+    try:
+        if not book.phones.write(build.serial, State="failed", Note=note):
+            log.warning("phone %s has no row left to mark failed", build.serial)
+            return
+    except Exception as exc:                                      # noqa: BLE001
+        log.error("could not mark phone %s failed for the sync (%s) - it "
+                  "stays on the shelf as incomplete", build.serial, exc)
+        return
+    log.info("phone %s: empty and not deleted; marked failed for the sync",
+             build.serial)
 
 
 def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:

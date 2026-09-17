@@ -5983,3 +5983,59 @@ def test_a_gmail_that_signs_in_under_another_name_is_renamed_to_it(
                                  "a@gmail.com", out) == "b@gmail.com"
     assert builder._signed_in_as(SimpleNamespace(gmails=object()), None,
                                  "a@gmail.com", SIGNED_IN) == "a@gmail.com"
+
+
+def test_an_empty_phone_the_network_would_not_let_go_is_marked_failed_for_the_sync(
+        device, settings, monkeypatch, drive, caplog):
+    """The delete fails when the network does (phone 3237, 2026-09-16:
+    502 on the stop), and nothing ever tried again - an empty
+    `incomplete` row sat on the shelf until an operator booted it. Now
+    the row is marked `failed`, which is the sync's cue to delete the
+    phone on a later pass, as the console's Failed is."""
+    caplog.set_level("INFO", logger="geelark_farm.builder")
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: [])
+
+    def refuse(client, pid):
+        raise RuntimeError("/v1/phone/stop: HTTP 502")
+
+    monkeypatch.setattr(builder.phones, "stop", refuse)
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    book = make_book(gmails=1)
+
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "wrong_password")])
+
+    assert not build.ok and deleted == []
+    row = next(r for r in book.phones.rows() if r["Serial"] == "622")
+    assert row["State"] == "failed", "the sync's cue"
+    assert row["Status"] == "incomplete"
+    assert "marked failed so the sync deletes it" in row["Note"]
+    assert row["Note"].startswith("Stopped short:")
+    assert any("marked failed for the sync" in r.getMessage()
+               for r in caplog.records)
+
+    # A phone that is signed in after all is kept as before - not
+    # condemned, whatever the delete would have said.
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda c, pid, strict=True: ["g0@example.com"])
+    book = make_book(gmails=1)
+    build = drive(book, settings,
+                  google=[Outcome("fatal", "stuck_on_sign_in_closed")])
+    row = next(r for r in book.phones.rows() if r["Serial"] == "622")
+    assert row["State"] != "failed"
+
+    # A row that will not take the mark costs the build nothing.
+    class Refuses:
+        def write(self, serial, **fields):
+            raise RuntimeError("no")
+
+    monkeypatch.setattr(builder, "_phone_note", lambda b: "Stopped short.")
+    builder._condemn(SimpleNamespace(phones=Refuses()),
+                     SimpleNamespace(serial="622", status="x", tried=[],
+                                     app_installed=False, ok=False,
+                                     detail="", gmail=""))
+    assert any("could not mark phone 622 failed" in r.getMessage()
+               for r in caplog.records)
