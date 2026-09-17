@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from tests.test_web import MUTATIONS_ON, FakeStore, _dash, web  # noqa: F401
+from tests.test_web import MANUAL_ON, FakeStore, _dash, web  # noqa: F401
 
 
 def _rows():
@@ -174,7 +174,9 @@ def _phones():
     ]
 
 
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+# Manual login on, as the server has it: without it no Send door is
+# drawn at all, and those are half of what there is to look at.
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
 def test_hold(web, monkeypatch):  # noqa: F811
     from geelark_farm.store import sessions as store_sessions
 

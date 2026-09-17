@@ -5947,9 +5947,27 @@ def test_a_spotify_rows_send_goes_where_its_kind_wants(web, monkeypatch):
     sheet = sheet[:sheet.index("</section>")]
     normal = sheet[sheet.index("nova@x.com"):sheet.index("tab@x.com")]
     assert 'action="/accounts/spotify/build"' in normal
-    assert "&rarr; new phone" in normal and "&rarr; phone</button>" not in normal
+    # `+` for the kind whose phone does not exist yet, `→` for the kind
+    # that goes onto one that does (2026-09-18).
+    assert "+ phone</button>" in normal and "&rarr; phone" not in normal
     errored = sheet[sheet.index("tab@x.com"):]
     assert 'action="/accounts/login"' in errored and "&rarr; phone" in errored
+
+    # On the card, where the row is 314px wide, the kind is its mark
+    # alone and the address is split so the name survives the clip - the
+    # pill and the words left an ellipsis where the name was (the
+    # operator, 2026-09-18). The sheet keeps the word: it has the room.
+    card = body[body.index("Spotify accounts"):]
+    card = card[:card.index("</section>")]
+    queue = card[card.index('<ul class="queue">'):]
+    assert 'class="cat dot normal"' in queue
+    assert 'class="cat normal"' not in queue, "no word beside the address"
+    assert "<b>nova</b><i>@x.com</i>" in queue
+    assert "+ phone</button>" in queue
+    # The line above the list still counts them by word, and so does the
+    # sheet: both have the room for it.
+    assert 'class="cat normal">normal</span><b>1</b>' in card
+    assert 'class="cat normal"' in sheet, "the sheet says the word"
     assert "/accounts/spotify/build" not in errored
 
     status, headers, _ = client.request(

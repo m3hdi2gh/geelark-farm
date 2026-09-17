@@ -142,7 +142,20 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .pool .queue li+li{{border-top:1px solid var(--line2)}}
 .pool .queue .t{{font-family:var(--mono);color:var(--muted);overflow:hidden;
  text-overflow:ellipsis;white-space:nowrap}}
-.pool .queue .t{{flex:1;min-width:0}}
+.pool .queue .t{{flex:1;min-width:0;display:flex;align-items:baseline}}
+/* The name first and whole, the domain after it and clipped: every row
+   in a 314px card ended in an ellipsis where the name should be, and
+   "jacknikolnasli" is what tells one account from another - not
+   "@gmail.com", which they all share (the operator, 2026-09-18). */
+.pool .queue .t b{{font-weight:500;max-width:70%;overflow:hidden;
+ text-overflow:ellipsis;flex:0 0 auto}}
+.pool .queue .t i{{font-style:normal;color:var(--dim);min-width:0;
+ overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}}
+/* The kind, as the mark alone. The word costs half the row and the
+   shape is the same one the split above and the sheet below wear: a
+   circle for normal, a triangle for error (2026-09-18). */
+.pool .queue .cat.dot{{background:none;padding:0;gap:0;border-radius:0;
+ flex-shrink:0}}
 .pool .queue .tag{{margin-left:auto;font-size:11px;color:var(--dim);
  white-space:nowrap}}
 .pool .queue form{{margin-left:auto;display:inline;flex-shrink:0}}
@@ -3570,13 +3583,16 @@ def _spotify_send_form(user: dict, row: dict, back: str = "/") -> str:
         return _send_form(user, address, back)
     if category != "normal":
         return ""
+    # `+`, not `→`: this press makes a phone that does not exist yet, and
+    # the difference from the other kind's door is the whole point. One
+    # word, because the row has an address to show (2026-09-18).
     return (f'<form method="post" class="inline" '
             f'action="/accounts/spotify/build">{_csrf(user)}'
             f'<input type="hidden" name="address" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<button class="quiet send" data-busy="Asking&hellip;" '
             f'title="build a bare phone - no Google account - and sign '
-            f'this account into Spotify on it">&rarr; new phone</button>'
+            f'this account into Spotify on it">+ phone</button>'
             f'</form>')
 
 
@@ -3608,17 +3624,39 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
                str(row.get("category") or "") if kind == "spotify" else
                f'{row.get("host") or ""}:{row.get("port") or ""}'
                if kind == "proxy" and row.get("host") else "")
-        # The Spotify kind in its own colour, the mark the split above
-        # and the sheet below both wear - and its own Send beside it.
+        # The Spotify kind as its mark alone, and a short door beside it:
+        # the pill and the words took the row and left the address in an
+        # ellipsis (the operator, 2026-09-18).
         if kind == "spotify":
-            aside = _category_pill(tag) + (
+            aside = _category_dot(tag) + (
                 _spotify_send_form(user, row) if send else "")
         else:
             aside = (_send_form(user, label) if send
                      else f'<span class="tag">{esc(tag)}</span>')
         items.append(f'<li><span class="t" title="{esc(label)}">'
-                     f'{esc(label)}</span>{aside}</li>')
+                     f'{_split_address(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
+
+
+def _split_address(label: str) -> str:
+    """An address as two pieces, so the half that identifies it survives
+    a narrow card: the name whole, the domain clipped after it. Anything
+    that is not an address - an exit is called `US25` - is itself."""
+    name, at, domain = str(label).partition("@")
+    if not at:
+        return f"<b>{esc(label)}</b>"
+    return f"<b>{esc(name)}</b><i>@{esc(domain)}</i>"
+
+
+def _category_dot(category: str) -> str:
+    """A Spotify kind with no word: the same circle and triangle the
+    pills wear, in the same two colours, hovering its own rule."""
+    word = str(category or "").strip().lower()
+    if word not in ("normal", "error"):
+        return ""
+    rule = dict(SPOTIFY_CATEGORIES).get(word, "")
+    return (f'<span class="cat dot {word}" '
+            f'title="{esc(word)} - it {esc(rule)}"></span>')
 
 
 def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
