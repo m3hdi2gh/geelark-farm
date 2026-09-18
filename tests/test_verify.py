@@ -260,9 +260,14 @@ def test_every_column_the_pools_read_is_required_or_optional_on_purpose():
     # `GmailPool.SELLERS` promise anything about a row, and a tab without the
     # column simply makes no promises - which is what every batch did before
     # the promise existed.
+    # `Product` and `Category` are the app pool's two Spotify columns,
+    # read by `AppPool.kind_of`. Optional on purpose: a tab without them
+    # has no Spotify rows on it, `kind_of` answers "" for every row, and
+    # the failed-phone rule it feeds simply does not fire (2026-09-19).
     optional = {"Host", "Port", "Username", "Name", "Last Exit IP",
                 "Claimed", "Times Used", "Last Used",
-                "Used Date", "App", "Email code", "Phone ID", "Seller"}
+                "Used Date", "App", "Email code", "Phone ID", "Seller",
+                "Product", "Category"}
 
     assert not (read - required - optional), (
         f"the pools read {sorted(read - required - optional)} and nothing "

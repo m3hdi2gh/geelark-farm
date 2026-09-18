@@ -61,9 +61,10 @@ INSTALLED = InstallOutcome("success", "installed")
 
 
 def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None,
-              phone_headers=None) -> Book:
+              phone_headers=None, app_headers=None) -> Book:
     proxy_headers = proxy_headers or PROXY_HEADERS
     phone_headers = phone_headers or PHONE_HEADERS
+    app_headers = app_headers or APP_HEADERS
     lock = threading.Lock()
     gmail_pool = GmailPool(
         FakeWorksheet(GMAIL_HEADERS,
@@ -75,10 +76,11 @@ def make_book(*, gmails=2, proxies=2, apps=1, proxy_headers=None,
                        for i in range(proxies)]),
         proxy_headers, lock)
     app_pool = AppPool(
-        FakeWorksheet(APP_HEADERS,
-                      [[f"a{i}@example.com", "pw", SECRET, "", "", ""]
+        FakeWorksheet(app_headers,
+                      [[f"a{i}@example.com", "pw", SECRET]
+                       + [""] * (len(app_headers) - 3)
                        for i in range(apps)]),
-        APP_HEADERS, lock)
+        app_headers, lock)
     phone_log = PhoneLog(FakeWorksheet(phone_headers, []), phone_headers, lock)
     book = Book(gmails=gmail_pool, proxies=proxy_pool, apps=app_pool,
                 phones=phone_log,
@@ -845,8 +847,8 @@ def _the_person_channel(monkeypatch):
     _TRIES.clear()
 
 
-def state_book(rows, *, apps=2):
-    book = make_book(apps=apps)
+def state_book(rows, *, apps=2, app_headers=None):
+    book = make_book(apps=apps, app_headers=app_headers)
     book.phones = FakePhoneLog(rows)
     _MARKS[:] = [dict(r) for r in rows
                  if (r.get("state") or "") in ("done", "failed")]
@@ -892,6 +894,106 @@ def test_a_phone_marked_failed_gives_its_app_account_back(monkeypatch):
 
     assert out["freed"] == ["a0@example.com"]
     assert [r.credentials.email for r in book.apps.available] == ["a0@example.com"]
+
+
+#: An app pool that keeps the two columns only the Spotify rows use.
+KIND_HEADERS = APP_HEADERS + ["Product", "Category"]
+
+
+def _spotify(book, kind, index=0):
+    row = book.apps._rows[index]
+    row.values["Product"] = "spotify"
+    row.values["Category"] = kind
+    return row
+
+
+def test_a_failed_phone_sends_its_spotify_account_back_as_an_error_one(
+        monkeypatch):
+    """The kinds say which phone a Spotify account wants: `normal` one
+    with no Google account, `error` one that has a Gmail. Marking the
+    phone failed is a person saying the phone this account had did not
+    work out - so it comes back asking for the other sort, and the next
+    build gives it one (the operator, 2026-09-19).
+
+    An account that was already `error` comes back `error`: the same
+    rule, and it reads as "try another Gmail phone".
+    """
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "651", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 7, "state": "failed",
+                        "serial": "651", "gmail": "",
+                        "app_account": "a0@example.com"}],
+                      apps=1, app_headers=KIND_HEADERS)
+    row = _spotify(book, "normal")
+    book.apps.spend(book.apps.claim(), serial="651")      # as a build left it
+
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
+
+    assert out["freed"] == ["a0@example.com"]
+    assert row.values["Category"] == "error", "it wants a Gmail phone now"
+    assert [r.credentials.email for r in book.apps.available] == [
+        "a0@example.com"]
+    assert "went out as a `normal` account" in row.values["Note"]
+
+    # Already the error kind: back as the error kind, and the note says
+    # what to do with it rather than repeating where it came from.
+    book = state_book([{"sheet_row": 8, "state": "failed",
+                        "serial": "652", "gmail": "",
+                        "app_account": "a0@example.com"}],
+                      apps=1, app_headers=KIND_HEADERS)
+    row = _spotify(book, "error")
+    book.apps.spend(book.apps.claim(), serial="652")
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P2", "serialNo": "652", "status": 2}])
+
+    builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
+
+    assert row.values["Category"] == "error"
+    assert "for another phone with a Gmail on it" in row.values["Note"]
+
+
+def test_a_failed_phone_leaves_a_gpt_accounts_row_with_no_kind_at_all(
+        monkeypatch):
+    """The kinds belong to Spotify. Every other product's row has none,
+    and a failed phone must not invent one - `error` on a GPT row would
+    put it in a pool view that is not about it."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "653", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 9, "state": "failed",
+                        "serial": "653", "gmail": "",
+                        "app_account": "a0@example.com"}],
+                      apps=1, app_headers=KIND_HEADERS)
+    row = book.apps._rows[0]
+    book.apps.spend(book.apps.claim(), serial="653")
+
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
+
+    assert out["freed"] == ["a0@example.com"]
+    assert row.values["Category"] == ""
+    assert "Free to try on another phone" in row.values["Note"]
+
+
+def test_a_done_phone_leaves_its_spotify_accounts_kind_alone(monkeypatch):
+    """Done is the phone being the product: the account went out with it
+    and is delivered. Nothing about which phone it would have wanted
+    next is true any more, so the kind is not touched."""
+    monkeypatch.setattr(builder.phones, "listing",
+                        lambda c: [{"id": "P1", "serialNo": "654", "status": 2}])
+    monkeypatch.setattr(builder.phones, "delete", lambda c, ids, ledger=None: None)
+    book = state_book([{"sheet_row": 10, "state": "done",
+                        "serial": "654", "gmail": "",
+                        "app_account": "a0@example.com"}],
+                      apps=1, app_headers=KIND_HEADERS)
+    row = _spotify(book, "normal")
+    book.apps.spend(book.apps.claim(), serial="654")
+
+    out = builder.apply_phone_states(None, book, FakeLedger(), MARK_SETTINGS)
+
+    assert out["delivered"] == ["a0@example.com"] and out["freed"] == []
+    assert row.values["Category"] == "normal"
+    assert row.values["Status"] == "delivered"
 
 
 def test_a_running_phone_is_reported_rather_than_deleted(monkeypatch):

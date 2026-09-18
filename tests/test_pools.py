@@ -2345,6 +2345,34 @@ def test_the_keeper_counts_a_taken_phone_as_warm_until_it_is_done_or_failed():
         "801", "802", "805"]
 
 
+def test_only_a_spotify_row_has_a_kind_and_only_two_words_are_kinds():
+    """The kind is about which phone the account wants - `normal` one
+    with no Google account, `error` one that has a Gmail - so it means
+    nothing on a row of any other product, and `kind_of` says so rather
+    than handing back whatever is in the cell (2026-09-19)."""
+    import pytest
+
+    headers = APP_HEADERS + ["Product", "Category"]
+    rows = [["a0@example.com", "pw", "", "", "", "", "spotify", "normal"],
+            ["a1@example.com", "pw", "", "", "", "", "chatgpt", ""],
+            # A cell nobody should have written: not a kind, so not read
+            # as one either.
+            ["a2@example.com", "pw", "", "", "", "", "spotify", "odd"]]
+    pool = AppPool(FakeWorksheet(headers, rows), headers, threading.Lock())
+    pool.load()
+    spotify, gpt, odd = pool._rows
+
+    assert pool.kind_of(spotify) == "normal"
+    assert pool.kind_of(gpt) == "", "no kind on a GPT row"
+    assert pool.kind_of(odd) == "", "`odd` is not one of the two"
+
+    pool.set_kind(spotify, "error")
+    assert spotify.values["Category"] == "error"
+    with pytest.raises(ValueError) as refused:
+        pool.set_kind(spotify, "broken")
+    assert "not one of" in str(refused.value)
+
+
 def test_a_phone_on_its_makers_shelf_is_nobodys_to_finish_or_to_send_to():
     """The build card's phone goes back on the shelf when its build ends -
     State blank, Owner still its maker's - so the row can offer Boot (the

@@ -975,6 +975,36 @@ class AppPool(Pool):
     EMAIL_CODE_COLUMN = "Email code"
     checkbox_columns = frozenset({EMAIL_CODE_COLUMN})
 
+    #: The Spotify rows' two kinds, and the only two words the column
+    #: takes. A kind is about which phone the account wants, not about
+    #: how good the account is: `normal` goes on a phone with no Google
+    #: account, `error` on one that has a Gmail. Every other product's
+    #: rows have no kind at all, and the cell stays empty on them.
+    KIND_COLUMN = "Category"
+    KINDS = ("normal", "error")
+
+    def kind_of(self, resource: Resource) -> str:
+        """The Spotify kind on a row, or "" for a row of any other
+        product - which is most of this pool."""
+        values = resource.values or {}
+        if str(values.get("Product") or "").strip().lower() != "spotify":
+            return ""
+        word = str(values.get(self.KIND_COLUMN) or "").strip().lower()
+        return word if word in self.KINDS else ""
+
+    def set_kind(self, resource: Resource, kind: str) -> None:
+        """Move a Spotify row from one kind to the other.
+
+        On its own, and never folded into `release`: which kind a row is
+        and whether it is free are two different facts, and the caller
+        writes the kind while the row is still claimed so that it is
+        never free for even one round trip reading the kind it has just
+        stopped being (2026-09-19).
+        """
+        if kind not in self.KINDS:
+            raise ValueError(f"{kind!r} is not one of {self.KINDS}")
+        self._set(resource, {self.KIND_COLUMN: kind})
+
     def set_aside(self, resource: Resource, *, reason: str = "",
                   note: str = "") -> None:
         self._set(resource, self._off_a_phone(reason or self.challenged_status,

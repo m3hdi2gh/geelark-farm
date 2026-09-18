@@ -3324,11 +3324,38 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
             if failed:
                 # It never got a fair phone. Back to the pool, so the next
                 # build can put it on one that works.
-                book.apps.release(
-                    account, phone_failed=True,
-                    note=f"Phone {serial} was marked failed and "
-                         f"deleted before this account got a fair "
-                         f"run. Free to try on another phone.")
+                #
+                # A Spotify row comes back as the `error` kind, whichever
+                # kind it went out as. The kinds say which phone the
+                # account wants - `normal` one with no Google account,
+                # `error` one that has a Gmail - and a phone marked
+                # failed is a person saying the phone this account had
+                # did not work out, so the next build gives it the other
+                # sort (the operator, 2026-09-19). A row that was already
+                # `error` asks for the same sort again, which is the same
+                # rule and needs no branch of its own.
+                kind = book.apps.kind_of(account)
+                if not kind:
+                    note = (f"Phone {serial} was marked failed and "
+                            f"deleted before this account got a fair "
+                            f"run. Free to try on another phone.")
+                elif kind == "error":
+                    note = (f"Phone {serial} was marked failed and "
+                            f"deleted. Back in the pool as an `error` "
+                            f"account, for another phone with a Gmail "
+                            f"on it.")
+                else:
+                    note = (f"Phone {serial} was marked failed and "
+                            f"deleted. It went out as a `{kind}` account "
+                            f"and comes back as an `error` one, so the "
+                            f"next build gives it a phone with a Gmail "
+                            f"on it.")
+                if kind:
+                    # Before the release, not after: the row is still
+                    # claimed here, so it is never on the shelf reading
+                    # the kind it has just stopped being.
+                    book.apps.set_kind(account, "error")
+                book.apps.release(account, phone_failed=True, note=note)
                 outcome["freed"].append(carried)
             else:
                 # `done` means the phone was the product and it has been
