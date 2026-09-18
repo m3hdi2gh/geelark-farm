@@ -1403,15 +1403,24 @@ class PhoneLog:
             # well as in `marked()` because this is the list a run picks from,
             # and a phone somebody is holding must not be on it.
             said = cell("State").strip().casefold()
+            # Whose it is, which stopped being the same question as
+            # whether it is `taken`: a hand-built phone goes back on its
+            # maker's shelf when the build ends - State blank, Owner
+            # still theirs - and a phone with a name on it is nobody
+            # else's to finish or to send an account to (2026-09-18).
+            # Release clears the Owner, and that is what gives it back.
+            owned = bool(cell("Owner").strip())
             if held_too:
                 if said in (self.DONE, self.FAILED):
                     continue
                 # A phone somebody built by hand and still holds is theirs,
                 # not the keeper's stock: the keeper keeps its own five
-                # beside it (the operator, 2026-09-08).
-                if said == "taken" and cell("Built by").strip():
+                # beside it (the operator, 2026-09-08). Holding it is two
+                # things now - in their hands, or on their shelf - and
+                # releasing it makes it stock again either way.
+                if (said == "taken" or owned) and cell("Built by").strip():
                     continue
-            elif said not in ("", self.UNUSED):
+            elif said not in ("", self.UNUSED) or owned:
                 continue
             if self.tries(cells) >= self.GIVE_UP_AFTER:
                 # Still in the tab, still readable, simply not offered again.
@@ -1505,11 +1514,16 @@ class PhoneLog:
         ready = waiting = taken = 0
         for _offset, cells in self._typed_rows("the Phones tab"):
             state = (cells.get("State") or "").strip().casefold()
-            if state == self.TAKEN:
+            if state in (self.DONE, self.FAILED):
+                continue                    # marked, about to be swept
+            # Out with somebody, or waiting on their shelf: either way it
+            # is not stock the keeper can offer, which is the whole
+            # question this number answers (2026-09-18).
+            if state == self.TAKEN or (cells.get("Owner") or "").strip():
                 taken += 1
                 continue
             if state not in ("", self.UNUSED):
-                continue                    # done or failed, about to be swept
+                continue                    # some older word; not the shelf
             if not (cells.get("Serial") or "").strip():
                 continue
             if cells.get("Status") == self.READY:

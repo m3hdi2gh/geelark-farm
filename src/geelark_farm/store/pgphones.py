@@ -49,6 +49,11 @@ def _cells(row: dict) -> dict[str, str]:
         "Note": row.get("note") or "",
         "Created": _when(row.get("created_at")),
         "Built by": str(row.get("built_by") or ""),
+        # Whose phone it is: set while somebody holds it, and set with a
+        # blank State for a hand-built phone waiting on their shelf. Read
+        # by `unfinished` and `stock`, which must not offer either
+        # (2026-09-18).
+        "Owner": str(row.get("owner_id") or ""),
     }
 
 

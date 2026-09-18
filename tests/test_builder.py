@@ -4547,6 +4547,46 @@ def test_an_account_named_on_the_card_that_is_refused_stays_set_aside(
         "a1@example.com"]
 
 
+def test_a_hand_built_phone_goes_back_on_its_makers_shelf_when_it_is_done():
+    """Taken while the build runs, on their shelf once it ends: State
+    blank so the row can offer Boot, Owner untouched so nobody else can
+    press it (the operator, 2026-09-18: "I want them released, so it can
+    be booted, but nobody except the maker can boot it").
+
+    The keeper's own phones are not touched: they were never taken, and
+    writing a blank State over one would be writing what is already
+    there - which is fine, and still not something this should do.
+    """
+    headers = list(PHONE_APP_HEADERS) + [
+        h for h in ("State", "Built by") if h not in PHONE_APP_HEADERS]
+    book = make_book(gmails=3, proxies=3, apps=3, phone_headers=headers)
+    tab = book.phones._ws
+
+    def state_of(serial):
+        for row in tab.rows:
+            if row[headers.index("Serial")] == serial:
+                return row[headers.index("State")]
+        raise AssertionError(f"no row for {serial}")
+
+    book.phones.start(Serial="1417", Proxy="SX1", State="taken",
+                      **{"Built by": "4"})
+    builder._record(book, builder.Build(
+        index=1, status="ready", ok=True, serial="1417", built_for=4,
+        gmail="g@example.com", app_account="a@example.com",
+        app_installed=True))
+    assert state_of("1417") == "", "the hold ends with the build"
+
+    # The keeper's own: nothing asked for it, so nothing is written.
+    book.phones.start(Serial="1418", Proxy="SX2")
+    builder._record(book, builder.Build(
+        index=2, status="ready", ok=True, serial="1418",
+        gmail="h@example.com", app_account="b@example.com",
+        app_installed=True))
+    assert state_of("1418") == book.phones.UNUSED, (
+        "the word `start` writes, left exactly as it was")
+    assert builder.Build(index=1).built_for is None
+
+
 def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
     """Taken and owned by whoever asked, and marked built by them; the
     keeper's own phones carry none of that (the operator, 2026-09-08)."""
@@ -4557,6 +4597,7 @@ def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
     assert '{"State": "taken", "Built by": str(want.requested_by),' in src
     assert '"Owner": str(want.requested_by)}' in src
     assert "if want is not None and want.requested_by else {})" in src
+    assert "build.built_for = int(want.requested_by)" in src
 
 
 def test_every_phone_carries_all_three_apps(device, settings, drive,

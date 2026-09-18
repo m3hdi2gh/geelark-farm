@@ -2345,6 +2345,40 @@ def test_the_keeper_counts_a_taken_phone_as_warm_until_it_is_done_or_failed():
         "801", "802", "805"]
 
 
+def test_a_phone_on_its_makers_shelf_is_nobodys_to_finish_or_to_send_to():
+    """The build card's phone goes back on the shelf when its build ends -
+    State blank, Owner still its maker's - so the row can offer Boot (the
+    operator, 2026-09-18). Blank State is what `unfinished` reads as "the
+    farm's", so the Owner cell is what has to keep the keeper off it: a
+    finish would sign a GPT account into somebody's phone, and a Send
+    would put an account on it.
+
+    Release clears the Owner, and that - not the build - is what gives
+    the phone back.
+    """
+    headers = list(PHONE_APP_HEADERS) + [
+        h for h in ("State", "Built by", "Owner")
+        if h not in PHONE_APP_HEADERS]
+
+    def row(serial, state, built_by="", owner=""):
+        line = phone_row(serial, headers=headers)
+        line[headers.index("State")] = state
+        line[headers.index("Built by")] = built_by
+        line[headers.index("Owner")] = owner
+        return line
+
+    log = phone_log([row("821", "", "4", "4"),      # kept for its maker
+                     row("822", "", "4"),           # released again
+                     row("823", "")], headers=headers)
+
+    assert [r["serial"] for r in log.unfinished()] == ["822", "823"]
+    assert [r["serial"] for r in log.unfinished(held_too=True)] == [
+        "822", "823"], "nor is it the keeper's own stock"
+    # And it is counted as out with somebody rather than on the shelf:
+    # the number means "what the keeper can offer".
+    assert log.counts() == {"ready": 0, "app_only": 2, "taken": 1}
+
+
 def test_a_hand_built_phone_its_builder_holds_is_not_the_keepers_stock():
     """The keeper keeps its own five beside it (the operator, 2026-09-08);
     released, it is stock like any other."""

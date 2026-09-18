@@ -6998,3 +6998,118 @@ def test_the_page_holds_still_while_a_sheet_is_open(web, monkeypatch):
         not in body
     shut = body[body.index("function shut()"):]
     assert "lookAgain(300);" in shut[:shut.index("function behind(")]
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_hand_built_phone_waits_on_its_makers_shelf_with_boot_on_the_row(
+        web, monkeypatch):
+    """The build card used to hand its phone over `taken`, and a taken row
+    has no Boot: looking at what you had just built meant pressing Release
+    and then Boot, which takes it again (the operator, 2026-09-18: "I want
+    them released, so it can be booted, but nobody except the maker can
+    boot it").
+
+    So the build puts it back on the shelf with its maker's name on it.
+    The pill is the plain status word, the line under it says whose shelf,
+    and the row offers the one press that was missing beside the two that
+    end it. Release and Change IP are on the phone's own page: a fourth
+    button is one more than this column fits.
+    """
+    _dash(monkeypatch, phones=[{"serial": "1502", "status": "ready",
+                                "state": "", "owner": "mehdi",
+                                "built_by": "mehdi",
+                                "app_account": "jack@gmail.com"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    start = body.index('href="/phones/1502"')
+    row = body[start:body.index("</tr>", start)]
+
+    assert 'action="/phones/1502/boot"' in row
+    for label in ("Boot", "Done", "Failed"):
+        assert f">{label}<" in row, label
+    for label in ("Release", "Change IP", "Take"):
+        assert f">{label}<" not in row, f"{label} is on the phone's own page"
+    # Not "With you": nobody is holding it, and the status word is the
+    # news. Whose shelf it is waiting on rides under it.
+    assert '<span class="badge ready">Ready</span>' in row
+    assert "With you" not in row
+    assert "kept for you" in row
+    assert body[body.rindex("<tr", 0, start):start].startswith(
+        '<tr data-view="mine"'), "theirs, so not under Free"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_nobody_else_boots_a_phone_kept_for_its_maker_not_even_an_admin(
+        web, monkeypatch):
+    """"Nobody except the maker can boot it" - and an admin is not an
+    exception, for the same reason they are not one on a taken phone:
+    ending somebody's hold is theirs, taking the phone over is not
+    (2026-09-15). The other two ways a phone comes back are still the
+    admin's, as they always were."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, phones=[{"serial": "1503", "status": "ready",
+                                "state": "", "owner": "ali",
+                                "built_by": "ali"}])
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 71)
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "", "owner": "ali",
+                                    "built_by": "ali"},
+        "timeline": []})
+
+    # Another operator: the row says whose it is and offers nothing.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True,
+                         "may_change_proxy": True})
+    sara = web()
+    sara.login(username="sara")
+    _, _, body = sara.request("GET", "/")
+    start = body.index('href="/phones/1503"')
+    row = body[start:body.index("</tr>", start)]
+    assert '<span class="age">built for ali</span>' in row
+    for label in ("Boot", "Release", "Done", "Failed", "Change IP"):
+        assert f">{label}<" not in row, label
+
+    # The admin: no Boot drawn, and the press refused if one is forged.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 7, "username": "mehdi", "role": "admin",
+                         "sees": "all"})
+    admin = web()
+    admin.login()
+    _, _, body = admin.request("GET", "/")
+    start = body.index('href="/phones/1503"')
+    row = body[start:body.index("</tr>", start)]
+    assert 'action="/phones/1503/boot"' not in row, "not theirs to start"
+    assert ">Done<" in row and ">Failed<" in row, "ending it still is"
+    status, headers, _ = admin.request(
+        "POST", "/phones/1503/boot", _form(csrf=admin.csrf()))
+    assert status == 303 and dict(headers)["Location"] == "/?said=refused"
+    assert got == {}, "nothing was queued against ali's phone"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_phones_own_page_is_where_a_kept_phone_is_given_back(
+        web, monkeypatch):
+    """Release is the door that turns a phone kept for its maker back into
+    the farm's: it clears the owner, and the keeper may finish it or send
+    it an account again. Rare, so the table leaves it to this page - which
+    also keeps Boot and Change IP."""
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "", "owner": "mehdi",
+                                    "built_by": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1504")
+
+    for door in ("boot", "state", "proxy"):
+        assert f'action="/phones/1504/{door}"' in body, door
+    for label in ("Boot", "Release", "Done", "Failed", "Change IP"):
+        assert f">{label}<" in body, label
+    assert "on the shelf, kept for mehdi" in body

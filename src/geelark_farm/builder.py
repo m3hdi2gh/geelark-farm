@@ -368,6 +368,12 @@ class Build:
     #: person who asked is watching a row on the dashboard, and this is what
     #: joins their row to what happened.
     wanted_id: int | None = None
+    #: Who the phone was opened for, by user id, when it was asked for by
+    #: hand. The row is `taken` by them while the build runs - that is
+    #: what "Building - yours" reads off - and goes back on their shelf
+    #: when it ends: off, still theirs, and bootable by them in one press
+    #: (the operator, 2026-09-18). None for the keeper's own phones.
+    built_for: int | None = None
     phone_id: str = ""
     serial: str = ""
     proxy: str = ""
@@ -1777,6 +1783,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         theirs = ({"State": "taken", "Built by": str(want.requested_by),
                    "Owner": str(want.requested_by)}
                   if want is not None and want.requested_by else {})
+        if theirs:
+            build.built_for = int(want.requested_by)
         log_row = book.phones.start(Serial=build.serial,
                                     Proxy=build.proxy_name or build.proxy,
                                     **theirs)
@@ -3110,12 +3118,20 @@ def _record(book: Book, build: Build) -> None:
                   # that has it, rather than "waiting for one".
                   "App name": build.app}
 
+    # A phone asked for on the build card is `taken` by whoever asked from
+    # the moment it exists - that is what keeps the keeper off it and what
+    # "Building - yours" reads - and the hold ends with the build. It goes
+    # back on their shelf: State blank, Owner still theirs, so the row
+    # offers Boot in one press and nobody else can press it (the operator,
+    # 2026-09-18). Written before `_condemn`, which is the one thing that
+    # may put `failed` here afterwards, and never on the keeper's own.
+    shelf = {"State": ""} if build.built_for else {}
     try:
         wrote = book.phones.write(
             build.serial,
             Proxy=build.proxy_name or build.proxy,
             Gmail=said(build.gmail), Note=note,
-            **{"GPT Account": said(build.app_account)}, **device,
+            **{"GPT Account": said(build.app_account)}, **device, **shelf,
         )
         if not wrote:
             log.error("phone %s has no row in the Phones tab to record on; "

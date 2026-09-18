@@ -165,6 +165,17 @@ def _phones():
          "app_account": "nel.sz@outlook.com", "app_product": "spotify",
          "app_category": "normal", "proxy_name": "US33",
          "updated_at": "2026-09-17 11:10:00+00"},
+        # On its maker's shelf: built by hand, released, and bootable by
+        # nobody else (2026-09-18).
+        {"serial": "3246", "status": "ready", "state": "", "owner": "mehdi",
+         "built_by": "mehdi", "gmail": "",
+         "app_account": "jacknikolnasli@gmail.com", "app_product": "spotify",
+         "app_category": "normal", "proxy_name": "US39",
+         "updated_at": "2026-09-17 11:30:00+00"},
+        {"serial": "3247", "status": "ready", "state": "", "owner": "ali",
+         "built_by": "ali", "gmail": "sam.pe22@gmail.com",
+         "app_account": "w@x.com", "app_product": "", "app_category": "",
+         "proxy_name": "US41", "updated_at": "2026-09-17 11:40:00+00"},
         {"serial": "3245", "status": "app_only", "state": "", "gmail": "",
          "app_account": "", "app_product": "", "app_category": "",
          "proxy_name": "US34", "updated_at": "2026-09-17 11:55:00+00"},

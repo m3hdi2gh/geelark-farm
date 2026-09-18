@@ -206,9 +206,14 @@ def build_by_hand(book, ledger, settings, payload, client):
     carrying = (f" and {app_account} signed into {named}" if app_account
                 else " with no account signed into anything")
     if no_gmail:
-        carried = (f"with {app_account} to be signed into Spotify"
-                   if app_account else "and nothing signed in")
-        return "done", (f"asked for a bare phone{where} - no Google account "
+        # The comma is load-bearing: "no Google account with jack@..."
+        # reads as "there is no Google account with that address", which
+        # is the opposite of what a bare phone carrying a Spotify account
+        # is. And the app is named from `named`, not typed: a bare phone
+        # may carry any of the three (2026-09-18).
+        carried = (f", with {app_account} to be signed into {named}"
+                   if app_account else " and nothing signed in")
+        return "done", (f"asked for a bare phone{where} - no Google account"
                         f"{carried}, though it still carries the "
                         f"apps - request {asked}. It starts within seconds."
                         ), None

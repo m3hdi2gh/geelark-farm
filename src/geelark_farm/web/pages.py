@@ -1659,28 +1659,62 @@ def _boot_form(user: dict, serial: str) -> str:
             f'</form>')
 
 
-def _state_forms(user: dict, row: dict, back: str = "/") -> list[str]:
+def _state_forms(user: dict, row: dict, back: str = "/", *,
+                 release: bool = True) -> list[str]:
     """The phone-state buttons a taken row offers: Release, Done and
     Failed. Empty for a phone nobody holds - Boot is how one is taken,
     since the Live tab's closing became how it is released and Take was
     the one door left with no way back (the operator, 2026-09-16) - and
-    while it is being built, and for someone who may not."""
+    while it is being built, and for someone who may not.
+
+    A phone on its maker's shelf is theirs too, so it offers the same
+    three. `release` is what the table leaves out: giving a hand-built
+    phone back to the farm is rare and would be a fourth button on a row
+    that already scrolls, so it lives on the phone's own page - the same
+    place the rest of the rare doors do (2026-09-18).
+    """
     if (row.get("status") or "") == "building" or \
-            not _may(user, "may_take_phones") or \
-            (row.get("state") or "") != "taken":
+            not _may(user, "may_take_phones") or not _holder(row):
         return []
     serial = str(row.get("serial") or "")
-    return [_state_form(user, serial, "unused", back),
-            _state_form(user, serial, "done", back),
-            _state_form(user, serial, "failed", back)]
+    forms = []
+    if release:
+        forms.append(_state_form(user, serial, "unused", back))
+    return forms + [_state_form(user, serial, "done", back),
+                    _state_form(user, serial, "failed", back)]
 
 
 def _holder(row: dict) -> str:
-    """Who is holding this phone - its owner's name while it is taken,
-    "somebody" for a taken phone with no name on it, "" otherwise."""
-    if (row.get("state") or "") != "taken":
+    """Whose phone this is - the name of whoever it belongs to, or "" for
+    one that belongs to the farm.
+
+    Two ways a phone is somebody's, and the difference matters to the
+    words on the row, not to who may act on it. It is in their hands -
+    `taken`, which is what Boot does - or it is on their shelf: a phone
+    asked for on the build card is put back the moment its build ends,
+    off and bootable, and stays its maker's until they release it (the
+    operator, 2026-09-18). `_kept_for` tells the two apart; everything
+    that guards a door asks this one.
+    """
+    state = str(row.get("state") or "")
+    if state in ("done", "failed"):
         return ""
-    return str(row.get("owner") or "") or "somebody"
+    if state == "taken":
+        return str(row.get("owner") or "") or "somebody"
+    return str(row.get("owner") or "")
+
+
+def _kept_for(row: dict) -> str:
+    """The name of whoever a phone on the shelf is being kept for - "" for
+    one in somebody's hands, and for one that is the farm's.
+
+    A hand-built phone is not held: it is off, on the shelf, and its
+    maker is the only person who may boot it. The row says so where a
+    taken row says "with ali".
+    """
+    if str(row.get("state") or "") == "taken":
+        return ""
+    return _holder(row)
 
 
 def _theirs(user: dict, row: dict) -> str:
@@ -1698,6 +1732,10 @@ def _theirs(user: dict, row: dict) -> str:
     anybody's phone. The row still says whose it is, and the request
     records that it was taken from under them. For everybody else the
     three ways a phone comes back belong to whoever is holding it.
+
+    Boot is not one of the three and never was: taking a phone over is
+    nobody's, an admin's included, and `_boot_form` asks `_holder`
+    rather than this (2026-09-15).
     """
     holder = _holder(row)
     if not holder or holder == str(user.get("username") or ""):
@@ -1705,6 +1743,12 @@ def _theirs(user: dict, row: dict) -> str:
     if user.get("role") == "admin":
         return ""
     return holder
+
+
+def _whose_word(row: dict, name: str) -> str:
+    """What the actions cell says on somebody else's phone: "with ali"
+    for one in their hands, "built for ali" for one on their shelf."""
+    return (f"built for {name}" if _kept_for(row) else f"with {name}")
 
 
 def _row_actions(user: dict, row: dict, back: str = "/") -> str:
@@ -1718,16 +1762,23 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
     nothing: a run is holding it.
 
     Boot is one of the two ways a phone becomes taken - it starts it and
-    takes it in one press - so it belongs to a phone nobody holds, and
-    goes as soon as one does. Offering it on a taken row is offering to
-    take a phone that is already taken, which is the row it is already
-    on. Its other half, opening the screen again, is on the phone's own
-    page, one click away on the serial, and that page keeps Boot for as
-    long as the phone is alive.
+    takes it in one press - so it belongs to a phone nobody is holding,
+    and goes as soon as somebody is. Offering it on a taken row is
+    offering to take a phone that is already taken, which is the row it
+    is already on. Its other half, opening the screen again, is on the
+    phone's own page, one click away on the serial, and that page keeps
+    Boot for as long as the phone is alive.
+
+    A phone on its maker's shelf is the case that has both: nobody is
+    holding it, so Boot is here and is theirs alone, and it is still
+    theirs, so Done and Failed are here too (the operator, 2026-09-18).
+    Release and Change IP stay off it - four buttons is one more than
+    this column fits, and both are on the phone's own page.
     """
     building = (row.get("status") or "") == "building"
     serial = str(row.get("serial") or "")
     taken = (row.get("state") or "") == "taken"
+    kept = bool(_kept_for(row))
     if (row.get("state") or "") in ("done", "failed"):
         # Decided: nothing more is done to a phone that is leaving.
         return '<span class="age">leaving</span>'
@@ -1736,17 +1787,22 @@ def _row_actions(user: dict, row: dict, back: str = "/") -> str:
         # Somebody else's. The three ways a phone comes back belong to the
         # person holding it; offering them here is offering to act on a
         # phone that is not yours (the contract, 2026-09-05).
-        return f'<span class="age">with {esc(held_by)}</span>'
+        return f'<span class="age">{esc(_whose_word(row, held_by))}</span>'
     actions = []
     if not building and _may(user, "may_take_phones"):
         # Not on a phone GeeLark already has on: Boot would start what
         # is started, and bill it again (2026-09-08). Such a phone - on
         # with nobody here holding it - is the keeper's to switch off
         # (forgotten.sweep), and the row offers nothing until it does.
-        if not taken and not row.get("running"):
+        # An admin reading somebody else's shelved phone gets neither:
+        # `_theirs` lets them end a hold, `_holder` says whose Boot it
+        # is, and this row is not theirs to start.
+        mine = _holder(row) in ("", str(user.get("username") or ""))
+        if not taken and mine and not row.get("running"):
             actions.append(_boot_form(user, serial))
-        actions += _state_forms(user, row, back)
-    if _may(user, "may_change_proxy") and not building and not taken:
+        actions += _state_forms(user, row, back, release=not kept)
+    if _may(user, "may_change_proxy") and not building and not taken \
+            and not kept:
         actions.append(_change_ip_form(user, serial, back))
     return " ".join(actions)
 
@@ -1777,12 +1833,14 @@ def _phone_rows(data: dict, user: dict) -> str:
         status = r.get("status") or ""
         badge = _phone_badge(r, me)
         # Which of the three views this row belongs to. `free` is what a
-        # person can take: not held, not still being built, and not a
+        # person can take: nobody's, not still being built, and not a
         # phone that stopped halfway - that one is a row to look at, not
-        # one to hand over.
-        taken = (r.get("state") or "") == "taken"
-        view = ("mine" if taken and str(r.get("owner") or "") == me else
-                "theirs" if taken else
+        # one to hand over. A phone kept on somebody's shelf is theirs,
+        # not free: it is the one row where nobody holds it and it is
+        # still not the farm's (2026-09-18).
+        whose = _holder(r)
+        view = ("mine" if whose and whose == me else
+                "theirs" if whose else
                 "free" if status in ("ready", "app_only") else status)
         if status == "building":
             # Two things to do to a build under way: watch it, and call
@@ -1812,7 +1870,15 @@ def _phone_rows(data: dict, user: dict) -> str:
         # the address; which product it is belongs with the status.
         badge += _carries(r)
         maker = str(r.get("built_by") or "")
-        if maker:
+        kept = _kept_for(r)
+        if kept:
+            # Off, on the shelf, and still its maker's: the one line that
+            # says both, since the status pill says only "Ready" and the
+            # buttons are the same three a taken row shows (2026-09-18).
+            badge += (f'<span class="dim maker" title="on the shelf and '
+                      f'switched off - only {esc(kept)} can boot it">kept '
+                      f'for {esc("you" if kept == me else kept)}</span>')
+        elif maker:
             badge += (f'<span class="dim maker" title="asked for on the '
                       f'build card">built by {esc(maker)}</span>')
         lines.append(
@@ -8077,6 +8143,9 @@ def _now_entry(phone: dict) -> str:
         head = f"gone — deleted {_day(phone['done_at'])}"
     elif (phone.get("state") or "") == "taken":
         head = f"out with {esc(str(phone.get('owner') or 'somebody'))}"
+    elif _kept_for(phone):
+        head = (f"{_NOW_WORDS.get(status, _phone_word(status))} — on the "
+                f"shelf, kept for {esc(_kept_for(phone))}")
     else:
         head = _NOW_WORDS.get(status, _phone_word(status))
     bits = []
@@ -8111,7 +8180,8 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
     # (2026-09-07).
     held_by = _theirs(user, phone) if phone else ""
     if held_by:
-        actions = [f'<span class="age">with {esc(held_by)}</span>']
+        actions = [f'<span class="age">'
+                   f'{esc(_whose_word(phone, held_by))}</span>']
     elif phone and not phone.get("done_at"):
         building = (phone.get("status") or "") == "building"
         # Boot starts the phone and takes it. Its holder reopens the

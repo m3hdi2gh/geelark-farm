@@ -651,6 +651,18 @@ def test_a_phone_row_still_speaks_the_tabs_words():
     assert cells["Proxy"] == "SX4" and cells["Tries"] == "2"
 
 
+def test_the_owner_cell_reaches_the_rules_that_read_it():
+    """`unfinished` and `counts` decide what the keeper may offer, and
+    since 2026-09-18 a phone on its maker's shelf - blank State, Owner
+    still set - is not offered. They read the tab's words, so the word
+    has to be there: without it every hand-built phone goes straight
+    back into the stock the moment its build ends."""
+    from geelark_farm.store.pgphones import _cells
+
+    assert _cells({"owner_id": 4})["Owner"] == "4"
+    assert _cells({"owner_id": None})["Owner"] == ""
+
+
 def test_nobody_looked_stays_nobody_looked():
     """Three-valued on purpose: NULL is "nobody looked", and it survived one
     demotion to False already (2026-08-30)."""

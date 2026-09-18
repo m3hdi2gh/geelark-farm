@@ -1200,6 +1200,11 @@ def test_a_bare_phone_may_carry_a_normal_spotify_account():
     assert asked["app"] == "spotify" and asked["install_app"] is True
     assert asked["app_account"] == row.values["Address"]
     assert "signed into Spotify" in said and "bare phone" in said
+    # The comma is the sentence. Without it "no Google account with
+    # jack@..." reads as "there is no Google account with that address",
+    # which is the opposite of what was asked for (2026-09-18).
+    assert "no Google account, with" in said
+    assert "no Google account with" not in said
 
 
 def test_a_spotify_account_goes_only_on_the_phone_its_kind_wants():
