@@ -289,11 +289,13 @@ class _Handler(BaseHTTPRequestHandler):
                 # Once the link is there the page frames GeeLark's viewer
                 # rather than sending the tab to it: the tab's closing is
                 # the phone's off switch (pages.viewer_page, 2026-09-16).
-                creds = None
+                creds = account = None
                 if row and row.get("status") == "done":
                     creds = self._gmail_for_the_holder(user, serial)
+                    account = self._account_for_the_holder(user, serial)
                 return self._html(200, pages.live_page(
-                    serial, user, said=said, row=row, creds=creds))
+                    serial, user, said=said, row=row, creds=creds,
+                    account=account))
             if path.startswith("/phones/") and "/screens/" in path:
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -916,6 +918,19 @@ class _Handler(BaseHTTPRequestHandler):
             return read.gmail_on_phone(self.settings, serial)
         except Exception as exc:                                  # noqa: BLE001
             log.debug("gmail for %s not read (%s)", serial, exc)
+            return None
+
+    def _account_for_the_holder(self, user: dict, serial: str) -> dict | None:
+        """The app account signed into the phone, for the same margin and
+        under the same rule as the Gmail above: the holder or an admin,
+        nobody else, and never fatal (2026-09-19)."""
+        try:
+            held, theirs = self._holder_of(user, serial)
+            if theirs:
+                return None
+            return read.account_on_phone(self.settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("account for %s not read (%s)", serial, exc)
             return None
 
     def _holder_of(self, user: dict, serial: str) -> tuple[str, str]:

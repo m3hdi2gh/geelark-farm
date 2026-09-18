@@ -4917,7 +4917,8 @@ def dashboard(data: dict, user: dict, said: str = "",
 
 def live_page(serial: str, user: dict, said: str = "",
               creds: dict | None = None,
-              row: dict | None = None) -> str:
+              row: dict | None = None,
+              account: dict | None = None) -> str:
     """The tab Boot opens.
 
     The live-view URL is the answer to a call only the pass makes, so
@@ -4931,7 +4932,7 @@ def live_page(serial: str, user: dict, said: str = "",
     detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
     url = str(detail.get("url") or "")
     if status == "done" and url:
-        return viewer_page(serial, user, url, creds=creds)
+        return viewer_page(serial, user, url, creds=creds, account=account)
     # The Live tab's Change IP waits on a change_proxy request the same
     # way Boot's tab waits on its boot - and reads these titles to know
     # whether to keep waiting, swap screens, or offer Boot (2026-09-16).
@@ -5002,7 +5003,8 @@ VIEWER_BOX = (VIEWER_WIDTH + 56, 2 * VIEWER_WIDTH + 32)
 
 
 def viewer_page(serial: str, user: dict, url: str,
-                creds: dict | None = None) -> str:
+                creds: dict | None = None,
+                account: dict | None = None) -> str:
     """The Live tab once the phone is up: GeeLark's viewer inside this
     page, and a beat every fifteen seconds that says the tab is open.
 
@@ -5010,7 +5012,13 @@ def viewer_page(serial: str, user: dict, url: str,
     authenticator key - drawn in the margin for whoever holds the phone,
     with the authenticator's current code computed in the page and
     counted down (the operator, 2026-09-16: "write the Gmail's details
-    cleanly beside the screen"). None draws no margin.
+    cleanly beside the screen"). None draws no Gmail box.
+
+    `account` is the app account signed into it, drawn under the Gmail
+    with the product it belongs to and, for Spotify, which kind: the
+    phone being handed over is the account on it as much as the Google
+    one, and half the phones the farm builds have no Gmail at all (the
+    operator, 2026-09-19). Neither one draws no margin at all.
 
     It used to send the tab to GeeLark's own page, whose closing nobody
     could see - so a phone booted from the console ran on after its tab
@@ -5089,7 +5097,10 @@ def viewer_page(serial: str, user: dict, url: str,
         " if(document.visibilityState==='visible') beat();});"
         "})();"
     )
-    rows = _gmail_margin(creds) if creds else ""
+    rows = (_gmail_margin(creds) if creds else "") + (
+        _account_margin(account) if account else "")
+    if rows:
+        rows += f'<script>{_TOTP_SCRIPT}</script>'
     ends = ""
     if _may(user, "may_take_phones"):
         # Done and Failed, as the dashboard's row offers them (the
@@ -5154,6 +5165,7 @@ def viewer_page(serial: str, user: dict, url: str,
         '.gf-bar{height:3px;background:var(--line);border-radius:2px;'
         'margin-top:6px;overflow:hidden}'
         '.gf-bar i{display:block;height:100%;background:var(--ok,#3c9)}'
+        '.gf-chip{margin:0 0 12px}'
         '@media (max-width:820px){#gf-wrap{flex-direction:column}'
         '#gf-side{width:auto;border-left:0;border-top:1px solid var(--line)}}'
         '</style>'
@@ -8303,72 +8315,103 @@ def store_down_page(retry: tuple | None = None) -> str:
 #: WebCrypto, the RFC 6238 truncation - so the code is right to the
 #: second and counts down, instead of riding on a beat that is fifteen
 #: seconds old. The page is served over TLS, which WebCrypto requires.
+#:
+#: Written for one box and now serving every one on the page: the margin
+#: shows the Gmail and the app account side by side, and either can
+#: carry an authenticator (2026-09-19). Each code element names its own
+#: countdown bar and each show button names its own password, so nothing
+#: here knows how many boxes there are.
+#:
+#: The old shape read one id and returned early when it was missing -
+#: which took the copy buttons and the show button with it, on every
+#: phone whose Gmail row had no key. Wiring each kind of control on its
+#: own is what fixes that.
 _TOTP_SCRIPT = (
     "(function(){"
-    "var el=document.getElementById('gf-totp'); if(!el) return;"
-    "var secret=el.getAttribute('data-secret');"
-    "var bar=document.getElementById('gf-totp-bar');"
     "function b32(s){s=s.replace(/[^A-Za-z2-7]/g,'').toUpperCase();"
     " var A='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',bits='',out=[];"
     " for(var i=0;i<s.length;i++){bits+=A.indexOf(s[i]).toString(2).padStart(5,'0');}"
     " for(var j=0;j+8<=bits.length;j+=8){out.push(parseInt(bits.slice(j,j+8),2));}"
     " return new Uint8Array(out);}"
-    "var keyP=crypto.subtle.importKey('raw',b32(secret),{name:'HMAC',hash:'SHA-1'},false,['sign']);"
-    "var last=-1;"
-    "function tick(){"
-    " var now=Math.floor(Date.now()/1000), step=Math.floor(now/30), left=30-(now%30);"
-    " if(bar) bar.style.width=(left/30*100)+'%';"
-    " if(step===last) return; last=step;"
-    " keyP.then(function(key){"
-    "  var msg=new Uint8Array(8), t=step;"
-    "  for(var i=7;i>=0;i--){msg[i]=t&255; t=Math.floor(t/256);}"
-    "  return crypto.subtle.sign('HMAC',key,msg);"
-    " }).then(function(sig){"
-    "  var h=new Uint8Array(sig), o=h[19]&15;"
-    "  var c=((h[o]&127)<<24|h[o+1]<<16|h[o+2]<<8|h[o+3])%1000000;"
-    "  el.textContent=String(c).padStart(6,'0');"
-    " }).catch(function(){el.textContent='------';});"
+    "function code(el){"
+    " var bar=document.getElementById(el.getAttribute('data-bar')||'');"
+    " var keyP=crypto.subtle.importKey('raw',"
+    "  b32(el.getAttribute('data-secret')),{name:'HMAC',hash:'SHA-1'},"
+    "  false,['sign']);"
+    " var last=-1;"
+    " function tick(){"
+    "  var now=Math.floor(Date.now()/1000), step=Math.floor(now/30),"
+    "      left=30-(now%30);"
+    "  if(bar) bar.style.width=(left/30*100)+'%';"
+    "  if(step===last) return; last=step;"
+    "  keyP.then(function(key){"
+    "   var msg=new Uint8Array(8), t=step;"
+    "   for(var i=7;i>=0;i--){msg[i]=t&255; t=Math.floor(t/256);}"
+    "   return crypto.subtle.sign('HMAC',key,msg);"
+    "  }).then(function(sig){"
+    "   var h=new Uint8Array(sig), o=h[19]&15;"
+    "   var c=((h[o]&127)<<24|h[o+1]<<16|h[o+2]<<8|h[o+3])%1000000;"
+    "   el.textContent=String(c).padStart(6,'0');"
+    "  }).catch(function(){el.textContent='------';});"
+    " }"
+    " tick(); setInterval(tick,1000);"
     "}"
-    "tick(); setInterval(tick,1000);"
+    "document.querySelectorAll('[data-secret]').forEach(code);"
     "document.querySelectorAll('[data-copy]').forEach(function(b){"
     " b.addEventListener('click',function(){"
     "  var t=document.getElementById(b.getAttribute('data-copy'));"
+    "  if(!t) return;"
     "  var text=t.getAttribute('data-value')||t.textContent;"
     "  navigator.clipboard.writeText(text).then(function(){"
     "   b.textContent='copied'; setTimeout(function(){b.textContent='copy';},1500);});"
     " });});"
-    "var pw=document.getElementById('gf-pw');"
-    "var show=document.getElementById('gf-pw-show');"
-    "if(pw&&show){show.addEventListener('click',function(){"
-    " var on=pw.textContent==='\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';"
-    " pw.textContent=on?pw.getAttribute('data-value'):'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';"
-    " show.textContent=on?'hide':'show';});}"
+    "document.querySelectorAll('[data-show]').forEach(function(b){"
+    " var pw=document.getElementById(b.getAttribute('data-show'));"
+    " if(!pw) return;"
+    " var dots='\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';"
+    " b.addEventListener('click',function(){"
+    "  var on=pw.textContent===dots;"
+    "  pw.textContent=on?pw.getAttribute('data-value'):dots;"
+    "  b.textContent=on?'hide':'show';});});"
     "})();"
 )
 
 
-def _gmail_margin(creds: dict) -> str:
-    """The Gmail's rows for the margin: address, password (hidden until
-    shown, copied without showing) and the authenticator's code as it
-    stands. Not the key it is made from: the code is what a person
+def _margin_rows(prefix: str, label: str, creds: dict, *,
+                 say_no_key: bool = True) -> str:
+    """One credential's rows for the margin: address, password (hidden
+    until shown, copied without showing) and the authenticator's code as
+    it stands. Not the key it is made from: the code is what a person
     types, and the key beside it was one more thing to read past (the
-    operator, 2026-09-16). It stays on the pool row."""
+    operator, 2026-09-16). It stays on the pool row.
+
+    `prefix` keys every id on this box, so the Gmail's and the app
+    account's can sit on one page without either one's show button
+    reaching into the other (2026-09-19).
+
+    `say_no_key` draws the authenticator row even when there is no key.
+    True for the Gmail, where a missing key is news - every Gmail the
+    farm buys has one. False for an app account, where most have none
+    and a row saying so is a line of margin spent on nothing.
+    """
     address = str(creds.get("address") or "")
     password = str(creds.get("password") or "")
     secret = str(creds.get("totp_secret") or "")
     dots = "\u2022" * 8
     rows = [
-        f'<div class="gf-row"><span class="lbl">Gmail</span>'
-        f'<div class="val"><code id="gf-mail">{esc(address)}</code>'
-        f'<button type="button" class="quiet" data-copy="gf-mail">copy'
+        f'<div class="gf-row"><span class="lbl">{esc(label)}</span>'
+        f'<div class="val"><code id="{prefix}-addr">{esc(address)}</code>'
+        f'<button type="button" class="quiet" data-copy="{prefix}-addr">copy'
         f'</button></div></div>']
     if password:
         rows.append(
             f'<div class="gf-row"><span class="lbl">Password</span>'
-            f'<div class="val"><code id="gf-pw" data-value="{esc(password)}">'
+            f'<div class="val">'
+            f'<code id="{prefix}-pw" data-value="{esc(password)}">'
             f'{dots}</code>'
-            f'<button type="button" class="quiet" id="gf-pw-show">show</button>'
-            f'<button type="button" class="quiet" data-copy="gf-pw">copy'
+            f'<button type="button" class="quiet" data-show="{prefix}-pw">'
+            f'show</button>'
+            f'<button type="button" class="quiet" data-copy="{prefix}-pw">copy'
             f'</button></div></div>')
     else:
         rows.append('<div class="gf-row"><span class="lbl">Password</span>'
@@ -8377,14 +8420,43 @@ def _gmail_margin(creds: dict) -> str:
     if secret:
         rows.append(
             f'<div class="gf-row"><span class="lbl">Authenticator code</span>'
-            f'<div class="val"><code id="gf-totp" class="gf-code" '
-            f'data-secret="{esc(secret)}">------</code>'
-            f'<button type="button" class="quiet" data-copy="gf-totp">copy'
-            f'</button></div>'
-            f'<div class="gf-bar"><i id="gf-totp-bar"></i></div></div>')
-    else:
+            f'<div class="val"><code id="{prefix}-totp" class="gf-code" '
+            f'data-secret="{esc(secret)}" data-bar="{prefix}-bar">------</code>'
+            f'<button type="button" class="quiet" data-copy="{prefix}-totp">'
+            f'copy</button></div>'
+            f'<div class="gf-bar"><i id="{prefix}-bar"></i></div></div>')
+    elif say_no_key:
         rows.append('<div class="gf-row"><span class="lbl">Authenticator'
                     '</span><div class="val"><code class="dim">none on the '
                     'row</code></div></div>')
-    return (f'<h3>On this phone</h3>{"".join(rows)}'
-            f'<script>{_TOTP_SCRIPT}</script>')
+    return "".join(rows)
+
+
+def _gmail_margin(creds: dict) -> str:
+    """The Gmail box: what is signed into Google on this phone."""
+    return f'<h3>On this phone</h3>{_margin_rows("gf", "Gmail", creds)}'
+
+
+def _account_margin(account: dict) -> str:
+    """The app account's box, under the Gmail's.
+
+    Which product it is for and - for Spotify - which kind, because that
+    is what the person handing the phone over is about to say out loud,
+    and then the same three rows the Gmail gets. A bare Spotify phone
+    has no Gmail at all, so before this the margin on it was empty
+    beside the one account the phone exists for (the operator,
+    2026-09-19).
+    """
+    product = str(account.get("product") or "").strip().lower()
+    kind = str(account.get("category") or "").strip().lower()
+    named = {"spotify": "Spotify", "claude": "Claude"}.get(product, "ChatGPT")
+    chip = _carries({"app_account": account.get("address"),
+                     "app_product": product, "app_category": kind})
+    code_only = bool(account.get("email_code_only"))
+    note = ('<div class="gf-row"><span class="lbl">Signing in</span>'
+            '<div class="val"><code class="dim">by a code emailed to it - '
+            'no password</code></div></div>' if code_only else "")
+    return (f'<h3>{esc(named)} account</h3>'
+            f'{f"<p class=gf-chip>{chip}</p>" if chip else ""}'
+            f'{_margin_rows("gf-acct", "Address", account, say_no_key=False)}'
+            f'{note}')

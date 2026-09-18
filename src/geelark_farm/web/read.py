@@ -1492,3 +1492,40 @@ def gmail_on_phone(settings: Settings, serial: str) -> dict | None:
             "   AND coalesce(p.gmail, '') <> ''"
             " ORDER BY r.id DESC LIMIT 1", (str(serial),))
     return rows[0] if rows else None
+
+
+def account_on_phone(settings: Settings, serial: str) -> dict | None:
+    """The app account signed into this phone, with what the operator
+    needs beside the screen: which product it is for, which kind of
+    Spotify account, the address, its password and its authenticator
+    key.
+
+    The Gmail was the only thing in the Live tab's margin, and half the
+    phones the farm builds carry no Gmail at all - a bare Spotify phone
+    is an account and nothing else, so the margin was empty on exactly
+    the phone whose account somebody is about to hand over (the
+    operator, 2026-09-19).
+
+    Same rule as the Gmail: read for the Live tab, handed only to the
+    person holding the phone (app.py). None when nothing is signed in,
+    or the pool no longer has the row - which is the case for a phone
+    whose account was delivered and archived.
+
+    The `app_account` cell holds a cross for a phone with no account;
+    no row has a cross for an address, so the join answers None without
+    this having to know the mark.
+    """
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT r.address, coalesce(r.password, '') AS password,"
+            " coalesce(r.totp_secret, '') AS totp_secret,"
+            " coalesce(r.product, '') AS product,"
+            " coalesce(r.category, '') AS category,"
+            " coalesce(r.email_code_only, false) AS email_code_only"
+            " FROM phones p JOIN resources r"
+            "   ON r.kind = 'app'"
+            "   AND lower(r.address) = lower(p.app_account)"
+            " WHERE p.serial = %s AND p.done_at IS NULL"
+            "   AND coalesce(p.app_account, '') <> ''"
+            " ORDER BY r.id DESC LIMIT 1", (str(serial),))
+    return rows[0] if rows else None

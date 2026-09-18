@@ -6692,6 +6692,7 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
              "totp_secret": "JBSWY3DPEHPK3PXP"}
     monkeypatch.setattr(read_mod, "gmail_on_phone",
                         lambda s, serial: dict(creds, asked=serial))
+    monkeypatch.setattr(read_mod, "account_on_phone", lambda s, serial: None)
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "app_only",
                                     "state": "taken", "owner": "mehdi"},
@@ -6700,7 +6701,7 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     client.login()
     _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
     assert '<aside id="gf-side">' in body and "<h3>On this phone</h3>" in body
-    assert '<code id="gf-mail">islandalaskans@gmail.com</code>' in body
+    assert '<code id="gf-addr">islandalaskans@gmail.com</code>' in body
     # The bar that ran across the top lives in the margin now, so the
     # stage is the window's whole height (the operator, 2026-09-16).
     assert '<div class="viewbar">' not in body
@@ -6712,9 +6713,11 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     # The code, not the key it is made from (the operator, 2026-09-16).
     assert "Authenticator key" not in body and 'id="gf-key"' not in body
     assert ">JBSWY3DPEHPK3PXP<" not in body
-    assert "crypto.subtle.importKey('raw',b32(secret)" in body
+    assert "b32(el.getAttribute('data-secret'))" in body
     assert "%1000000" in body and "setInterval(tick,1000)" in body
     assert "navigator.clipboard.writeText" in body
+    # No account on this one, so no second box.
+    assert "account</h3>" not in body
 
     # Somebody else's phone: the margin is not drawn, whatever the
     # store would say.
@@ -7113,3 +7116,94 @@ def test_the_phones_own_page_is_where_a_kept_phone_is_given_back(
     for label in ("Boot", "Release", "Done", "Failed", "Change IP"):
         assert f">{label}<" in body, label
     assert "on the shelf, kept for mehdi" in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_live_tab_writes_the_account_on_the_phone_beside_the_gmail(
+        web, monkeypatch):
+    """The Gmail was the whole margin, and a bare Spotify phone has no
+    Gmail - so the phone whose only reason to exist is the account on it
+    showed nothing at all beside the screen (the operator, 2026-09-19:
+    "show the kind of account and its details too").
+
+    Which product, which kind for a Spotify one, then the same three
+    rows the Gmail gets - on their own ids, so the two boxes' show
+    buttons do not reach into each other.
+    """
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import read as read_mod
+
+    row = {"id": 72, "verb": "boot_phone", "status": "done", "result": "ok",
+           "detail": {"state": "taken",
+                      "url": "https://phone.geelark.com/i?t=abc"},
+           "requested_by": 7}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(read_mod, "gmail_on_phone", lambda s, serial: None)
+    monkeypatch.setattr(read_mod, "account_on_phone", lambda s, serial: {
+        "address": "jack@spotifylovers.biz", "password": "Spot!fy@123",
+        "totp_secret": "", "product": "spotify", "category": "normal",
+        "email_code_only": False})
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "taken", "owner": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
+
+    assert "<h3>Spotify account</h3>" in body
+    assert "Spotify normal</span>" in body, "the kind, as the table says it"
+    assert '<code id="gf-acct-addr">jack@spotifylovers.biz</code>' in body
+    assert 'data-value="Spot!fy@123"' in body and "Spot!fy@123<" not in body
+    assert 'data-show="gf-acct-pw"' in body
+    # No Gmail on a bare phone, so no Gmail box - and the script is still
+    # there for the one box that is.
+    assert "<h3>On this phone</h3>" not in body
+    assert "data-copy" in body and "navigator.clipboard.writeText" in body
+
+    # Somebody else's phone: no margin at all, the same rule as the Gmail.
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "taken", "owner": "ali"},
+        "timeline": []})
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_take_phones": True})
+    other = web()
+    other.login(username="sara")
+    _, _, body = other.request("GET", "/phones/1500/live?said=queued:72")
+    # By the heading, not the words: the stylesheet every page carries
+    # has a comment with "Spotify account" in it.
+    assert "<h3>Spotify account</h3>" not in body
+    assert "Spot!fy@123" not in body and "gf-acct-addr" not in body
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_gpt_account_in_the_margin_is_named_for_its_own_product(
+        web, monkeypatch):
+    """A row with no product is a ChatGPT one - the pool's oldest
+    default - and it has no kind, so no chip is drawn over it."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import read as read_mod
+
+    row = {"id": 73, "verb": "boot_phone", "status": "done", "result": "ok",
+           "detail": {"url": "https://phone.geelark.com/i?t=abc"},
+           "requested_by": 7}
+    monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(read_mod, "gmail_on_phone", lambda s, serial: None)
+    monkeypatch.setattr(read_mod, "account_on_phone", lambda s, serial: {
+        "address": "buyer@example.com", "password": "", "totp_secret": "",
+        "product": "", "category": "", "email_code_only": True})
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": {"serial": serial, "status": "ready",
+                                    "state": "taken", "owner": "mehdi"},
+        "timeline": []})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1500/live?said=queued:73")
+
+    assert "<h3>ChatGPT account</h3>" in body
+    assert "GPT</span>" in body, "the same chip the phones table draws"
+    assert 'class="carries normal"' not in body, "no kind on a GPT row"
+    assert "none on the row" in body, "no password, said rather than empty"
+    assert "by a code emailed to it" in body
