@@ -281,6 +281,73 @@ def test_a_page_in_another_app_is_named_rather_than_unknown(monkeypatch):
     assert not said.costs_the_credential, "the account is not judged by it"
 
 
+def test_the_walk_presses_the_account_row_on_a_free_accounts_settings():
+    """The row was held back until "Log out" was on screen, to keep the
+    profile menu's own "Add account" from answering to the word. On a
+    free account's settings page Log out is below the fold, so four
+    phones stood on the page they wanted and never pressed the row
+    (3604, 2026-09-18). Which page it is on decides instead."""
+    from geelark_farm import screen
+
+    menu = ctx_for("profile-menu")
+    assert not menu.has(*sl.SETTINGS_PAGE_TEXTS)
+    assert menu.find(sl.SETTINGS_LABEL) is not None
+    # And the word that used to be pressed there is not the row.
+    assert menu.find(sl.ACCOUNT_LABEL).label == "Add account"
+
+    for page in ("settings", "settings-free"):
+        ctx = ctx_for(page)
+        assert ctx.has(*sl.SETTINGS_PAGE_TEXTS), page
+        assert ctx.find(sl.ACCOUNT_LABEL).label == "Account", page
+    # The free account's page is the one that has no Log out on it.
+    assert not ctx_for("settings-free").has("log out")
+    # Its home screen has five tabs, not four.
+    free_home = screen.texts(elements_of("settings-free"))
+    assert "home, tab 1 of 5" in free_home
+    assert sl.HOME_MARKERS[1] == "home, tab 1 of"
+
+
+def test_an_offer_over_the_page_is_cleared_before_the_walk_taps(monkeypatch):
+    """"Your trial of Premium features has ended" sits over the home
+    screen, takes every tap aimed at what is under it, and closes with a
+    control whose only name is the developer's own id (3605,
+    2026-09-18)."""
+    from geelark_farm import screen
+
+    offer = elements_of("trial-ended")
+    # The home screen is under it, which is why the walk kept tapping.
+    assert "go to profile and settings" in screen.texts(offer)
+    closer = screen.find_first(offer, sl.DISMISS_LABELS, clickable_only=False)
+    assert closer is not None and closer.label == "tertiaryCtaDismiss"
+    # And the offer beside it is never what gets pressed.
+    ctx = ctx_for("trial-ended")
+    assert not sl._tap_safely(ctx, "primaryCta")
+
+    ctx, tapped = _walk(monkeypatch, ["trial-ended", "profile-menu",
+                                      "settings-free", "account"])
+    assert sl.verify_account(ctx) is None
+    assert tapped == ["tertiaryCtaDismiss", "Settings and privacy",
+                      "Account"]
+
+
+def test_an_account_whose_plan_is_paused_stops_and_says_so(phone):
+    """Spotify fills the screen with PLAN PAUSED and one button, Update
+    payment. The farm never pays, and an account sold as Premium that is
+    not one is a row for a person (3607, 2026-09-18)."""
+    ctx = ctx_for("plan-paused")
+    assert matched(ctx) == "fatal"
+    out = sl.act_fatal(ctx)
+    assert out.reason == "plan_paused" and "never pays" in out.detail
+    # The one button on it is never pressed.
+    assert not sl._tap_safely(ctx, "Update payment")
+    assert sl.act_dismiss(ctx) is None and phone["tapped"] == []
+
+    from geelark_farm import failures
+
+    said = failures.verdict("plan_paused", "Spotify")
+    assert "plan is paused" in said.seen and said.costs_the_credential
+
+
 def test_sign_in_refuses_a_phone_without_the_app(monkeypatch):
     monkeypatch.setattr(sl.shell, "package_installed", lambda *a, **k: False)
     out = sl.sign_in(None, "P", CREDS)

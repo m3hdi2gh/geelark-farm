@@ -501,6 +501,13 @@ VERDICTS: dict[str, Verdict] = {
         "clear it, so the exit is what to change - the build swaps it and "
         "tries the same account again. An exit that does this repeatedly "
         "is one to Free or replace. Nothing is known against the account."),
+    "plan_paused": Verdict(
+        CREDENTIAL, "{service} says the account's plan is paused for an "
+        "unpaid bill",
+        "The account signed in and {service} then filled the screen with "
+        "PLAN PAUSED and an Update payment button. The farm never pays for "
+        "a subscription, so nothing here can clear it: check what this row "
+        "was sold as. The phone is reused."),
     "no_such_account": Verdict(
         CREDENTIAL, "{service} says no account was made with this address",
         "The service does not know this address at all, so no password "

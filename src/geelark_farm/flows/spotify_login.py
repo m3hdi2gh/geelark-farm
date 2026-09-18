@@ -81,11 +81,15 @@ PASSWORD_PAGE_TEXTS = ("show password",)
 LOGIN_BUTTON = "Log in"
 #: Never tapped, whatever label happens to match. "Create account" is
 #: on the page for an address Spotify does not know: this flow signs
-#: accounts in and never makes one (2026-09-18).
-NEVER_TAPPED = ("google", "facebook", "sign up", "create account")
+#: accounts in and never makes one (2026-09-18). The two CTAs are
+#: Spotify asking for money, and the farm never pays (2026-09-16).
+NEVER_TAPPED = ("google", "facebook", "sign up", "create account",
+                "update payment", "primarycta", "get premium")
 
 #: The home screen (captured): the profile control and the tab strip.
-HOME_MARKERS = ("go to profile and settings", "home, tab 1 of 4")
+#: "of 4" on a Premium account, "of 5" on a free one - which has a
+#: Premium tab of its own (3604, 2026-09-18).
+HOME_MARKERS = ("go to profile and settings", "home, tab 1 of")
 #: The page the app shows when its first request after a clear does not
 #: get through the exit (seen on 3480 right after `pm clear`, 2026-09-17):
 #: "Something went wrong" over "Check your connection and try again." and
@@ -122,6 +126,14 @@ FATAL_TEXTS = {
         "does not have a spotify account", "doesn't have a spotify account",
         "no account with that email", "could not find an account",
     ),
+    # An account whose Premium lapsed: Spotify puts a full-screen
+    # "PLAN PAUSED / Your last payment didn't work" over the app with
+    # one button, Update payment (3607, 2026-09-18). The farm never
+    # pays, and an account sold as Premium that is not one is a row for
+    # a person to decide about - so it stops here rather than being
+    # handed over looking fine.
+    "plan_paused": ("plan paused", "your last payment didn't work",
+                    "your last payment did not work"),
     "captcha_shown": (
         "verify you are human", "verify you're human", "i'm not a robot",
         "confirm you are human", "confirm you're human",
@@ -142,6 +154,10 @@ FATAL_ADVICE = {
     "service_unreachable":
         "the app could not reach Spotify through this exit after "
         "several tries; the exit is the thing to change",
+    "plan_paused":
+        "the account is signed in, but Spotify says its plan is paused "
+        "for an unpaid bill - the farm never pays, so a person decides "
+        "what this row is worth",
     "captcha_shown":
         "Spotify is challenging this exit IP; a cleaner proxy is the fix "
         "and no code change helps",
@@ -169,6 +185,12 @@ FATAL_ADVICE = {
 DISMISS_LABELS = (
     "Not now", "Skip", "Maybe later", "No thanks", "Later", "Dismiss",
     "Got it", "Continue", "Next", "Done",
+    # Spotify's own upsell sheets carry no words on their controls: the
+    # one that closes "Your trial of Premium features has ended" is
+    # described as `tertiaryCtaDismiss`, the developer's own id, and the
+    # one beside it - `primaryCta` - is the offer. Only the dismiss
+    # (3605, 2026-09-18).
+    "tertiaryCtaDismiss", "secondaryCtaDismiss",
 )
 
 #: The walk from home to the page that names the account (all captured).
@@ -176,6 +198,10 @@ PROFILE_DESC = "Go to profile and settings"
 SETTINGS_LABEL = "Settings and privacy"
 ACCOUNT_LABEL = "Account"
 ACCOUNT_PAGE_TEXTS = ("account details",)
+#: The settings page, by rows it has on every account - and the
+#: page where "Account" means the account page rather than the
+#: profile menu's "Add account".
+SETTINGS_PAGE_TEXTS = ("parental controls", "about and support")
 EMAIL_TEXT = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+", re.ASCII)
 #: How many screens the walk may take before it is called not a pass.
 WALK_STEPS = 8
@@ -438,27 +464,49 @@ def verify_account(ctx: Context) -> Outcome | None:
             if named and named.casefold() == ctx.creds.email.casefold():
                 log.info("the app's account page names %s", named)
                 return None
-            path = ctx.save("app-wrong-account")
+            kept = ctx.keep("app-wrong-account")
             return Outcome("fatal", "app_wrong_account",
                            f"the app names {named or 'nobody'}, not "
                            f"{ctx.creds.email}: "
                            f"{FATAL_ADVICE['app_wrong_account']}",
-                           artifacts=[path] if path else [])
-        # Deepest page first: the settings page also carries the profile
-        # control's tab strip, and the menu is what the profile opens.
-        for label in (ACCOUNT_LABEL, SETTINGS_LABEL, PROFILE_DESC):
-            element = ctx.find(label)
-            if element is not None and (label != ACCOUNT_LABEL
-                                        or ctx.has("log out")):
-                screen.tap_element(ctx.client, ctx.phone_id, element)
-                time.sleep(4)
-                break
+                           artifacts=kept)
+        # An offer over the page takes every tap aimed at what is under
+        # it, so it goes first: four phones walked to a settings page
+        # they never reached because "Your trial of Premium features has
+        # ended" was on top of the home screen, and the walk tapped the
+        # profile control behind it eight times (3605, 2026-09-18).
+        cleared = screen.tap_first_present(
+            ctx.client, ctx.phone_id, ctx.elements, DISMISS_LABELS,
+            clickable_only=False)
+        if cleared:
+            log.info("cleared %r on the way to the account page", cleared)
+            time.sleep(3)
+            continue
+        # Which page is under the hand decides what to tap. Asking for
+        # "Account" anywhere was the trap: the profile menu's own "Add
+        # account" answers to that word, so the tap had to be held back
+        # until the settings page - and the test for it was "Log out is
+        # on screen", which is below the fold on a free account's
+        # settings page. Four phones stood on the page they wanted and
+        # never pressed the row (3604, 2026-09-18).
+        if ctx.has(*SETTINGS_PAGE_TEXTS):
+            label = ACCOUNT_LABEL
+        elif ctx.find(SETTINGS_LABEL) is not None:
+            label = SETTINGS_LABEL
+        else:
+            label = PROFILE_DESC
+        element = ctx.find(label)
+        if element is not None:
+            log.info("walking to the account page by %r", label)
+            screen.tap_element(ctx.client, ctx.phone_id, element)
+            time.sleep(4)
         else:
             time.sleep(3)
-    path = ctx.save("session-unverified")
+    # Both ways: where a walk stopped is a page to read next week, and
+    # the hierarchy of an offer drawn over another page says little.
+    kept = ctx.keep("session-unverified")
     return Outcome("fatal", "session_unverified",
-                   FATAL_ADVICE["session_unverified"],
-                   artifacts=[path] if path else [])
+                   FATAL_ADVICE["session_unverified"], artifacts=kept)
 
 
 # Order matters: the first match wins.
