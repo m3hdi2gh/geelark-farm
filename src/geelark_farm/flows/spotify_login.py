@@ -90,12 +90,26 @@ NEVER_TAPPED = ("google", "facebook", "sign up", "create account",
 #: "of 4" on a Premium account, "of 5" on a free one - which has a
 #: Premium tab of its own (3604, 2026-09-18).
 HOME_MARKERS = ("go to profile and settings", "home, tab 1 of")
+#: An account whose Premium lapsed: Spotify fills the screen with
+#: "PLAN PAUSED / Your last payment didn't work" and one button, Update
+#: payment (3607, 2026-09-18). The system Back key puts the app back
+#: where it was, with the account signed in behind it and nothing paid,
+#: cancelled or pressed (3609, 2026-09-18) - so the login carries on and
+#: says out loud that this account is not the Premium one it was sold
+#: as. The link at the foot cancels the subscription; it is not taken,
+#: because Back costs the account nothing.
+PLAN_PAUSED_TEXTS = ("plan paused", "your last payment didn't work",
+                     "your last payment did not work")
+#: How many times Back is pressed at it before the page is called
+#: something this run cannot get past.
+PLAN_PAUSED_TRIES = 3
+BACK_KEY = 4
+
 #: The page the app shows when its first request after a clear does not
 #: get through the exit (seen on 3480 right after `pm clear`, 2026-09-17):
 #: "Something went wrong" over "Check your connection and try again." and
 #: a "Try Again". Pressed, with a pause for the exit to settle; a page
-#: that keeps coming back is `stuck_on_connection_error`, which is the
-#: exit's problem, not the account's.
+#: that keeps coming back is the exit's problem, not the account's.
 CONNECTION_ERROR_TEXTS = ("check your connection and try again",)
 TRY_AGAIN_LABEL = "Try Again"
 #: How many times Try Again is pressed before the exit is blamed rather
@@ -126,14 +140,6 @@ FATAL_TEXTS = {
         "does not have a spotify account", "doesn't have a spotify account",
         "no account with that email", "could not find an account",
     ),
-    # An account whose Premium lapsed: Spotify puts a full-screen
-    # "PLAN PAUSED / Your last payment didn't work" over the app with
-    # one button, Update payment (3607, 2026-09-18). The farm never
-    # pays, and an account sold as Premium that is not one is a row for
-    # a person to decide about - so it stops here rather than being
-    # handed over looking fine.
-    "plan_paused": ("plan paused", "your last payment didn't work",
-                    "your last payment did not work"),
     "captcha_shown": (
         "verify you are human", "verify you're human", "i'm not a robot",
         "confirm you are human", "confirm you're human",
@@ -220,6 +226,9 @@ class Context(router.Context):
     email_submissions: int = 0
     #: How many times the app has said it could not reach Spotify.
     reloads: int = 0
+    #: Whether this account's plan turned out to be paused - said once,
+    #: however many times the page comes back.
+    plan_paused: bool = False
 
     @property
     def signed_something_in(self) -> bool:
@@ -390,6 +399,39 @@ def act_try_again(ctx: Context) -> Outcome | None:
     return None
 
 
+def on_plan_paused(ctx: Context) -> bool:
+    return ctx.has(*PLAN_PAUSED_TEXTS)
+
+
+def act_plan_paused(ctx: Context) -> Outcome | None:
+    """Back out of Spotify's unpaid-bill page and carry on.
+
+    The account is signed in behind it; the page is a nag about the
+    subscription, not about the sign-in. Back was tried before the
+    link at its foot for the obvious reason: cancelling somebody's
+    subscription to get past a page is a large thing to do for a small
+    reason, and Back does it for nothing (3609, 2026-09-18).
+
+    Said at WARNING once, because a phone handed over with this account
+    on it is not the Premium account it was sold as, and the only place
+    that is written down is here.
+    """
+    if ctx.seen.get("plan_paused", 0) > PLAN_PAUSED_TRIES:
+        kept = ctx.keep("plan-paused")
+        return Outcome("fatal", "plan_paused", FATAL_ADVICE["plan_paused"],
+                       artifacts=kept)
+    if not ctx.plan_paused:
+        ctx.plan_paused = True
+        ctx.keep("plan-paused")
+        log.warning("%s: Spotify says this account's plan is paused for an "
+                    "unpaid bill. Backing out of the page - the account is "
+                    "signed in, and nothing is paid or cancelled",
+                    ctx.creds.email)
+    shell.keyevent(ctx.client, ctx.phone_id, BACK_KEY)
+    time.sleep(4)
+    return None
+
+
 def act_dismiss(ctx: Context) -> Outcome | None:
     tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
                                       DISMISS_LABELS, clickable_only=False)
@@ -516,6 +558,8 @@ SCREENS: list[Screen] = [
     Screen("loading", still_loading, act_wait, max_visits=25),
     Screen("connection_error", on_connection_error, act_try_again,
            max_visits=TRY_AGAIN_TIMES + 2),
+    Screen("plan_paused", on_plan_paused, act_plan_paused,
+           max_visits=PLAN_PAUSED_TRIES + 2),
     Screen("code_page", on_code_page, act_code_page, max_visits=3),
     # The password page before the address page: both carry the title
     # and one box, and only this one carries the eye.

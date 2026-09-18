@@ -330,17 +330,30 @@ def test_an_offer_over_the_page_is_cleared_before_the_walk_taps(monkeypatch):
                       "Account"]
 
 
-def test_an_account_whose_plan_is_paused_stops_and_says_so(phone):
+def test_an_account_whose_plan_is_paused_is_backed_out_of_not_paid(phone):
     """Spotify fills the screen with PLAN PAUSED and one button, Update
-    payment. The farm never pays, and an account sold as Premium that is
-    not one is a row for a person (3607, 2026-09-18)."""
+    payment. The account is signed in behind it, and the system Back key
+    puts the app back where it was - so the login carries on, nothing is
+    paid, and the subscription the link at the foot would cancel is left
+    alone (3607 and 3609, 2026-09-18)."""
     ctx = ctx_for("plan-paused")
-    assert matched(ctx) == "fatal"
-    out = sl.act_fatal(ctx)
-    assert out.reason == "plan_paused" and "never pays" in out.detail
-    # The one button on it is never pressed.
+    assert matched(ctx) == "plan_paused", "a page to get past, not a wall"
+    assert sl._fatal_reason(ctx) is None
+
+    ctx.seen["plan_paused"] = 1
+    assert sl.act_plan_paused(ctx) is None
+    assert phone["keys"] == [sl.BACK_KEY]
+    assert phone["tapped"] == [], "nothing on that page is pressed"
+    assert ctx.plan_paused, "and it is remembered, to be said once"
+
+    # Neither the button nor the link that cancels the subscription.
     assert not sl._tap_safely(ctx, "Update payment")
     assert sl.act_dismiss(ctx) is None and phone["tapped"] == []
+
+    # A page that will not go stops the run rather than being ignored.
+    ctx.seen["plan_paused"] = sl.PLAN_PAUSED_TRIES + 1
+    out = sl.act_plan_paused(ctx)
+    assert out is not None and out.reason == "plan_paused"
 
     from geelark_farm import failures
 

@@ -108,9 +108,9 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # The twenty-seventh is `code_entry`: the Claude flow's code page, which
     # comes straight back after every refused code (2026-09-16).
     assert "stuck_on_code_entry" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 30
-    # Thirty since 2026-09-17: the Spotify login adds code_page,
-    # connection_error and logged_out_home.
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 31
+    # Thirty-one: the Spotify login added code_page, connection_error
+    # and logged_out_home (2026-09-17), then plan_paused (2026-09-18).
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])
