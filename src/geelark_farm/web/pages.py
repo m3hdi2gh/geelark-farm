@@ -145,11 +145,15 @@ nav form button:hover{{color:#fff;background:#141c2b}}
 .pool .queue .t{{flex:1;min-width:0;display:flex;align-items:baseline}}
 /* The name first and whole, the domain after it and clipped: every row
    in a 314px card ended in an ellipsis where the name should be, and
-   "jacknikolnasli" is what tells one account from another - not
-   "@gmail.com", which they all share (the operator, 2026-09-18). */
-.pool .queue .t b{{font-weight:500;max-width:70%;overflow:hidden;
+   the name is what tells one account from another (the operator,
+   2026-09-18). The two halves are drawn alike on purpose - it is one
+   address, and the domains are not all the same one, so neither half
+   is decoration. The split decides only which end clips.
+   `inherit` and `normal`, not nothing: b and i are bold and italic to
+   a browser left to itself, and the point here is that they are not. */
+.pool .queue .t b{{font-weight:inherit;max-width:70%;overflow:hidden;
  text-overflow:ellipsis;flex:0 0 auto}}
-.pool .queue .t i{{font-style:normal;color:var(--dim);min-width:0;
+.pool .queue .t i{{font-style:normal;min-width:0;
  overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}}
 /* The kind, as the mark alone. The word costs half the row and the
    shape is the same one the split above and the sheet below wear: a
