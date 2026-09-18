@@ -5980,6 +5980,68 @@ def test_a_spotify_rows_send_goes_where_its_kind_wants(web, monkeypatch):
     assert payload["app_account"] == "nova@x.com"
 
 
+def test_a_sheet_showing_a_preview_is_not_a_list_to_update():
+    """The pool's rows were merged into the preview's own table, so the
+    whole pool appeared under the two rows being previewed - and the
+    list waiting behind it stayed as it was before the paste, which is
+    what Back, the x and the next Manage all showed. A pool five
+    accounts had just been added to read as empty until the page was
+    reloaded (the operator, 2026-09-18)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    # The guard comes before the row merge, or the merge has happened.
+    guard = script.index("var shown = mine.querySelector('.sheetbody.shown')")
+    merge = script.index("var body = mine.querySelector('tbody')")
+    assert guard < merge
+    assert "if (waiting) shown._was = waiting;" in script, (
+        "what the swap brought waits behind the preview")
+
+
+def test_a_paste_that_landed_leaves_the_box_and_the_preview():
+    """A box still holding what is now in the pool invites the same
+    paste twice, and the sheet stayed on the preview it had already
+    acted on (the operator, 2026-09-18)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "if (/[/]add$/.test(form.action) && !turned.test(got.url)) {" in script
+    assert "restoreSheet(sheet);" in script
+    assert "sheet.querySelectorAll('textarea[name=pasted]')" in script
+    # An add that was turned away keeps what was typed: that is the
+    # thing to correct.
+    assert ("var turned = /[?&]said=(no|refused|already|bad|none)(?:[:&]|$)/;"
+            in script)
+    # And a browser reload does not put it back either.
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gmail": True, "may_add_gpt": True}
+    for kind in ("gmail", "gpt", "spotify"):
+        box = pages._pool_add_box(kind, user, [])
+        assert 'name="pasted"' in box and 'autocomplete="off"' in box, kind
+
+
+def test_send_is_offered_only_on_a_row_that_is_free():
+    """Every row but one on a phone had a Send - including a delivered
+    account and one a run had set aside, both of which the verb refuses
+    because neither is claimable (2026-09-18)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gpt": True, "may_login_accounts": True}
+    for kind, extra in (("gpt", {}), ("spotify", {"category": "error"})):
+        free = dict({"address": "a@x.com", "state": "free"}, **extra)
+        assert "&rarr; phone" in pages._pool_row_doors(kind, free, user, True)
+        for state in ("used", "delivered", "set aside", "on a phone",
+                      "broken"):
+            row = dict(free, state=state)
+            doors = pages._pool_row_doors(kind, row, user, True)
+            assert "&rarr; phone" not in doors, f"{kind} {state}"
+    # The bare-phone door for a normal Spotify account follows the same
+    # rule - it spends the account just as surely.
+    normal = {"address": "n@x.com", "state": "used", "category": "normal"}
+    assert "+ phone" not in pages._pool_row_doors("spotify", normal, user, True)
+
+
 def test_the_status_says_which_account_the_phone_carries():
     """Three things in one cell - a product, a kind and an address - made
     the account column a paragraph to read on every row. What the phone

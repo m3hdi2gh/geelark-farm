@@ -2864,6 +2864,21 @@ _DASH_SCRIPT = """
       if (old) old.replaceWith(s); else held.appendChild(s);
     });
     if (!mine || !theirs) return;
+    // A sheet showing a page of its own - the preview of a paste, the
+    // "are you sure" of a remove - is not a list to update. Its table
+    // is that page's, and the pool's rows were being merged into it:
+    // the whole pool appeared under the two rows being previewed (the
+    // operator, 2026-09-18). What the swap brings goes to the list
+    // waiting behind it instead, so Back, the x and the next Manage
+    // come back to a current one rather than to the list as it stood
+    // before the paste - which is why a pool somebody had just added
+    // five accounts to read as empty until the page was reloaded.
+    var shown = mine.querySelector('.sheetbody.shown');
+    if (shown) {
+      var waiting = theirs.querySelector('.sheetbody');
+      if (waiting) shown._was = waiting;
+      return;
+    }
     var body = mine.querySelector('tbody'), fb = theirs.querySelector('tbody');
     if (body && fb) {
       var same = function(tr){
@@ -3226,6 +3241,19 @@ _DASH_SCRIPT = """
         // shortcut after all (2026-09-14).
         var nothing = /[?&]said=(queued|no|refused|already|twice|gone|off|none|bad|auto)(?:[:&]|$)/;
         var worked = !nothing.test(got.url);
+        // A paste that has been added is spent. The sheet comes out of
+        // its preview here, before the swap, so the swap updates the
+        // list rather than the stash behind it - and the box is
+        // emptied, because one still holding what is now in the pool
+        // invites the same paste twice (the operator, 2026-09-18). An
+        // add that was turned away keeps what was typed: that is the
+        // thing to correct.
+        var turned = /[?&]said=(no|refused|already|bad|none)(?:[:&]|$)/;
+        if (/[/]add$/.test(form.action) && !turned.test(got.url)) {
+          restoreSheet(sheet);
+          if (sheet) sheet.querySelectorAll('textarea[name=pasted]')
+            .forEach(function(box){ box.value = ''; });
+        }
         if (worked && isHere(got.url) && key && swapRow(doc, key)) {
           sayIt(doc);
           return;
@@ -3863,6 +3891,11 @@ def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
             f'<label for="paste-{kind}">Add to the pool</label>'
             f'{_category_field(kind)}'
             f'<textarea id="paste-{kind}" name="pasted" rows="3" '
+            # A browser puts back what a form held when the page is
+            # reloaded, so a paste that had already gone into the
+            # pool was still sitting in the box afterwards (the
+            # operator, 2026-09-18). The box is the server's to fill.
+            f'autocomplete="off" '
             f'spellcheck="false" placeholder="{esc(meta["how"])}"></textarea>'
             f'<div class="addrow">{_seller_field(kind, rows or [])}'
             f'<button class="go">Preview</button>'
@@ -3943,7 +3976,12 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
     # The proxy routes name a row by `name`; the account routes by
     # `address`. The cell is the same one either way.
     field = "name" if kind == "proxy" else "address"
-    if kind in ("gpt", "spotify") and state != "on a phone" \
+    # Only a row that is actually free. It was every row but one on a
+    # phone, so a delivered account and one a run had set aside both
+    # offered Send - and the verb refuses both, because neither is
+    # claimable. A door that leads nowhere is worse than no door
+    # (2026-09-18); Free is what a set-aside row is offered, below.
+    if kind in ("gpt", "spotify") and state == "free" \
             and _may_send(user, manual_login):
         doors.append(_send_form(user, address) if kind == "gpt"
                      else _spotify_send_form(user, row))
