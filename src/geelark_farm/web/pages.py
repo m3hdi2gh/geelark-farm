@@ -237,6 +237,12 @@ tr.acting td{{cursor:progress}}
  background:currentColor}}
 .kindpick label.normal b::before{{border-radius:50%}}
 .kindpick label.error b::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
+/* The two GPT tiles: a square for the kind this pool has always held,
+   the same square its rows wear in the phones table, and a ring for an
+   eco account - an address with a hole where the password was. */
+.kindpick label.plain b::before{{border-radius:2px}}
+.kindpick label.eco b::before{{border-radius:50%;background:none;
+ box-shadow:inset 0 0 0 2px currentColor}}
 .kindpick label i{{display:block;font-style:normal;font-size:11px;
  color:var(--dim);margin-top:4px}}
 .kindpick label:hover{{border-color:#3d4f6e}}
@@ -244,6 +250,10 @@ tr.acting td{{cursor:progress}}
 .kindpick input:checked+label.normal b{{color:#4fd1a5}}
 .kindpick input:checked+label.error{{border-color:#7a5320;background:#2b1f10}}
 .kindpick input:checked+label.error b{{color:#f2a35c}}
+.kindpick input:checked+label.plain{{border-color:#33507d;background:#101b2c}}
+.kindpick input:checked+label.plain b{{color:#8ab4f8}}
+.kindpick input:checked+label.eco{{border-color:#2a6b55;background:#0f2a22}}
+.kindpick input:checked+label.eco b{{color:#4fd1a5}}
 .kindpick input:focus-visible+label{{outline:2px solid var(--blue);
  outline-offset:2px}}
 .addbox .addrow{{display:flex;align-items:center;gap:10px;margin-top:9px;
@@ -1939,6 +1949,10 @@ def _carries(row: dict) -> str:
     if _no_address(row.get("app_account")):
         return ""
     if (row.get("app_product") or "").strip().lower() != "spotify":
+        if str(row.get("app_category") or "").strip().lower() == "eco":
+            return ('<span class="carries eco" title="an eco ChatGPT '
+                    'account - no password, a code is emailed to it">'
+                    'GPT eco</span>')
         return '<span class="carries" title="a ChatGPT account">GPT</span>'
     word = str(row.get("app_category") or "").strip().lower()
     if word not in ("normal", "error"):
@@ -3410,7 +3424,8 @@ _POOL_KINDS = {
         "preview": "/pools/gpt/preview", "free": "/pools/gpt/free",
         "edit": "/pools/gpt/edit", "remove": "/pools/gpt/remove",
         "how": ("address, password, then the 2fa secret - one account per "
-                "line, tabs or commas between"),
+                "line, tabs or commas between. An eco paste is addresses "
+                "and nothing else"),
         "columns": ("Address", "Status", "On phone"),
     },
     "spotify": {
@@ -3969,11 +3984,12 @@ def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
 
 
 def _add_note(kind: str) -> str:
-    """The line beside Preview. Spotify says the one thing a paste can
-    get wrong that the box cannot catch: the kinds go on different
-    phones, and a line does not say which kind it is."""
+    """The line beside Preview. A pool with kinds says the one thing a
+    paste can get wrong that the box cannot catch: a line does not say
+    which kind it is, so the whole paste is one kind."""
     seen = "nothing is written until you have seen what it read"
-    return f"one kind per paste &mdash; {seen}" if kind == "spotify" else seen
+    return (f"one kind per paste &mdash; {seen}" if kind in _KIND_TILES
+            else seen)
 
 
 #: What each Spotify category means, in the words beside the box. The
@@ -3983,28 +3999,44 @@ def _add_note(kind: str) -> str:
 SPOTIFY_CATEGORIES = (("normal", "goes on a phone with no Gmail"),
                       ("error", "goes on a phone that has a Gmail"))
 
+#: The GPT pool's two kinds, in the same shape plus the word on the
+#: tile. The ordinary kind has no word on the row - it is what this pool
+#: has always held - so its value is empty and the tile says what it is
+#: (the operator, 2026-09-19).
+GPT_CATEGORIES = (("", "address, password and a 2fa key", "standard"),
+                  ("eco", "an address only - a code is emailed to it", ""))
+
+#: Which pools offer kinds, and the tiles each draws: value, rule,
+#: label. An empty label means the value is the word on the tile, which
+#: is every Spotify tile and the eco one.
+_KIND_TILES = {
+    "spotify": tuple((value, rule, "") for value, rule in SPOTIFY_CATEGORIES),
+    "gpt": GPT_CATEGORIES,
+}
+
 
 def _category_field(kind: str) -> str:
-    """Which kind of Spotify account this paste is. One category per
-    paste: a line cannot say which it is, and a box that guesses would
-    put an account on a phone it cannot work on.
+    """Which kind of account this paste is. One kind per paste: a line
+    cannot say which it is, and a box that guesses would put an account
+    on a phone it cannot work on - or throw a password away.
 
-    Two tiles, not a dropdown. The kind is the one thing about this pool
-    a person has to get right, and an option list hid both the choice
-    and the rule behind it until it was opened - beside a label, a hint
-    and a box, which made this pool look nothing like the other three
-    (the operator, 2026-09-17). Each tile wears the mark its rows wear
-    in the table, and says out loud which phone that kind goes on.
+    Tiles, not a dropdown. The kind is the one thing about these pools a
+    person has to get right, and an option list hid both the choice and
+    the rule behind it until it was opened - beside a label, a hint and
+    a box, which made the pool look nothing like the other three (the
+    operator, 2026-09-17). Each tile wears the mark its rows wear in the
+    table, and says out loud what that kind is.
     """
-    if kind != "spotify":
-        return ""
     tiles = []
-    for index, (value, rule) in enumerate(SPOTIFY_CATEGORIES):
+    for index, (value, rule, label) in enumerate(_KIND_TILES.get(kind, ())):
+        tag, label = value or "plain", label or value
         tiles.append(
             f'<input type="radio" name="category" value="{value}" '
-            f'id="cat-{value}"{" checked" if not index else ""}>'
-            f'<label class="{value}" for="cat-{value}">'
-            f'<b>{value}</b><i>{esc(rule)}</i></label>')
+            f'id="cat-{kind}-{tag}"{" checked" if not index else ""}>'
+            f'<label class="{tag}" for="cat-{kind}-{tag}">'
+            f'<b>{esc(label)}</b><i>{esc(rule)}</i></label>')
+    if not tiles:
+        return ""
     return (f'<div class="kindpick" role="radiogroup" aria-label="Which kind '
             f'of account">{"".join(tiles)}</div>')
 
@@ -7504,28 +7536,43 @@ def spotify_preview(rows: list[dict], user: dict, idem: str, *,
 
 
 def gpt_preview(rows: list[dict], user: dict, idem: str, *,
-                pasted: str = "", back: str = "/pools/gpt") -> str:
+                pasted: str = "", back: str = "/pools/gpt",
+                category: str = "") -> str:
     """The Gpt Pool's paste, judged row by row the way the by-hand form
     judges one; the good rows ride into the confirm as the same
-    tab-separated text, and the paste stays in a box underneath."""
+    tab-separated text, and the paste stays in a box underneath.
+
+    `category` is the kind the paste was labelled with, carried into the
+    confirm beside the rows. An eco paste is addresses and nothing else,
+    so its table has no password or 2fa column to show (2026-09-19).
+    """
     good = _good(rows)
-    lines = "<tr><th>address</th><th>password</th><th>2fa</th><th>verdict" \
-            "</th></tr>" + "".join(
+    eco = category == "eco"
+    heads = ("<tr><th>address</th><th>verdict</th></tr>" if eco else
+             "<tr><th>address</th><th>password</th><th>2fa</th>"
+             "<th>verdict</th></tr>")
+    lines = heads + "".join(
         f"<tr><td>{esc(r.get('address') or r.get('line', ''))}</td>"
-        f"<td class=\"muted\">{_shown_password(r)}</td>"
-        f"<td class=\"muted\">{_second_factor(r)}</td>"
-        f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
+        + ("" if eco else
+           f"<td class=\"muted\">{_shown_password(r)}</td>"
+           f"<td class=\"muted\">{_second_factor(r)}</td>")
+        + f"<td>{_verdict_badge(r)}</td></tr>" for r in rows)
     carried = "\n".join(
+        r["address"] if eco else
         f"{r['address']}\t{r['password']}\t{r.get('secret') or ''}"
         for r in good)
+    hidden = (f'<input type="hidden" name="category" value="{esc(category)}">'
+              if category else "")
     body = ('<div class="top"><h2>Gpt Pool</h2><span class="status">'
             'preview — nothing is added yet</span></div>'
             + _preview_card("/pools/gpt/add", rows, good, user, idem, back,
-                            lines, carried,
-                            note="each waits for a phone to be sent to")
+                            lines, carried, hidden=hidden,
+                            note=("they go in as eco accounts - a code is "
+                                  "emailed to each" if eco else
+                                  "each waits for a phone to be sent to"))
             + f'<div class="panel"><h3>Edit and preview again</h3>'
             f'<form method="post" action="/pools/gpt/preview" class="field">'
-            f'{_csrf(user)}'
+            f'{_csrf(user)}{hidden}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<textarea name="pasted">{esc(pasted)}</textarea>'
             f'<div class="row"><span class="right"></span>'

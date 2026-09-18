@@ -6077,13 +6077,20 @@ def test_the_spotify_paste_picks_its_kind_with_two_tiles():
     box = pages._pool_add_box("spotify", user, [])
     assert '<select name="category"' not in box, "a list hides the rule"
     assert box.count('type="radio" name="category"') == 2
-    assert 'value="normal" id="cat-normal" checked' in box
+    assert 'value="normal" id="cat-spotify-normal" checked' in box
     assert "goes on a phone with no Gmail" in box
     assert "goes on a phone that has a Gmail" in box
     # One kind per paste, said beside the press rather than above the box.
     assert "one kind per paste" in box
 
-    # And the other pools keep the shape they had.
+    # The pool is in the id: both add boxes can be open on the dashboard
+    # at once, and two labels pointing at one id bind to the wrong input
+    # (2026-09-19).
+    gpt = pages._pool_add_box("gpt", user, [])
+    assert 'id="cat-gpt-plain"' in gpt and 'id="cat-gpt-eco"' in gpt
+    assert "cat-spotify" not in gpt
+
+    # And the pools with no kinds keep the shape they had.
     assert 'class="kindpick"' not in pages._pool_add_box("gmail", user, [])
 
 

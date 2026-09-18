@@ -222,31 +222,75 @@ def build_by_hand(book, ledger, settings, payload, client):
                     f"request {asked}. It starts within seconds."), None
 
 
+#: The kinds of GPT account a paste can be. The unnamed one is what this
+#: pool has always held - an address, a password and an authenticator
+#: key. `eco` is the operator's word for an account with none of that:
+#: only an address, and a fresh code emailed to it at every sign-in (the
+#: operator, 2026-09-19).
+GPT_CATEGORIES = ("", "eco")
+
+#: What goes in `credential_kind` for an `eco` row. Not in
+#: `accounts.SERVED` yet and deliberately so: nothing can read the
+#: mailbox these codes arrive in, so `accounts.held_back` keeps the
+#: keeper off them until something can. Adding the word to SERVED is
+#: what switches them on, and that is one line when the day comes.
+ECO_CREDENTIAL_KIND = "email_code_ours"
+
+
 def add_gpt(book, ledger, settings, payload, client):
+    """Paste GPT accounts into the pool, one kind at a time.
+
+    `eco` rows are address-only. A pasted password or key on one is
+    refused rather than dropped: it means the paste was labelled with
+    the wrong kind, and a credential thrown away without a word is the
+    bug this pool's reader was written to stop making.
+    """
     from .store import validate
 
+    category = str(payload.get("category") or "").strip().lower()
+    if category not in GPT_CATEGORIES:
+        return ("refused",
+                f"{category} is not a kind of GPT account - it is eco (an "
+                f"address a code is emailed to) or the ordinary kind (an "
+                f"address, a password and a 2fa key)", None)
+    eco = category == "eco"
     added, skipped, refused = [], [], []
     for row in payload.get("rows") or []:
+        address = str(row.get("address", "") or "")
+        if eco and (str(row.get("password", "") or "").strip()
+                    or str(row.get("secret", "") or "").strip()):
+            refused.append(f"{address or '?'}: an eco account is an address "
+                           f"and nothing else, and this line carries a "
+                           f"password or a key")
+            continue
         try:
             checked = validate.app_row(
-                address=row.get("address", ""),
-                password=row.get("password", ""),
-                secret=row.get("secret", ""),
-                email_code_only=bool(row.get("email_code_only")))
+                address=address,
+                password="" if eco else row.get("password", ""),
+                secret="" if eco else row.get("secret", ""),
+                email_code_only=eco or bool(row.get("email_code_only")))
         except (validate.AccountError, validate.ProxyError) as exc:
-            refused.append(f"{row.get('address', '?')}: {exc}")
+            refused.append(f"{address or '?'}: {exc}")
             continue
         if book.apps.find(checked["address"]) is not None:
             skipped.append(checked["address"])
             continue
+        # The kind, and the contract word that keeps the keeper off an
+        # eco row until a flow can read its inbox. An ordinary row is
+        # written exactly as it always was: neither cell is touched.
+        kinds = ({"Category": "eco",
+                  "Credential kind": ECO_CREDENTIAL_KIND} if eco else {})
         book.apps.append(**{
             "Address": checked["address"], "Password": checked["password"],
             "2FA Secret": checked["totp_secret"], "Status": "",
             "Email code": "TRUE" if checked["email_code_only"] else "FALSE",
-            "Note": f"Added from the web by {_by(payload)} on {_stamp()}."})
+            "Note": (f"Added from the web by {_by(payload)} on {_stamp()}"
+                     + (" as an eco account - a code is emailed to it."
+                        if eco else ".")),
+            **kinds})
         added.append(checked["address"])
-    return _summary("account", added, skipped, refused, settings,
-                    _by(payload))
+    return _summary("eco account" if eco else "account", added, skipped,
+                    refused, settings, _by(payload))
 
 
 #: The two kinds of Spotify account. They differ in one thing only -

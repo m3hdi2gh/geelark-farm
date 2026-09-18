@@ -13,6 +13,12 @@ from geelark_farm import serve as serve_mod
 from geelark_farm import verbs
 from geelark_farm.web import paste
 from tests.test_builder import SECRET, make_book
+from tests.test_pools import APP_HEADERS
+
+#: An app tab with the columns only some rows use: the product, the
+#: kind, the code box and the contract word.
+FULL_APP_HEADERS = APP_HEADERS + ["Product", "Category", "Email code",
+                                  "Credential kind"]
 
 
 # ------------------------------------------------------------- the paste
@@ -1614,3 +1620,77 @@ def test_change_proxy_from_the_live_tab_starts_the_phone_again(monkeypatch):
     status, said, detail = verbs.change_proxy(
         book, None, None, {"serial": "1500", "by": "sara"}, object())
     assert status == "failed" and detail is None
+
+
+def test_an_eco_gpt_account_is_an_address_and_nothing_else():
+    """The operator buys accounts with no password and no authenticator:
+    every sign-in is a code emailed to an address they own (2026-09-19).
+    The kind is picked when the paste is added, the row is written with
+    the code box ticked, and the keeper is kept off it until something
+    can read that inbox.
+    """
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+    status, said, _ = verbs.add_gpt(
+        book, None, None,
+        {"by": "mehdi", "category": "eco",
+         "rows": [{"address": "tired.viper.ksmo@masked.me"}]}, None)
+
+    assert status == "done", said
+    row = book.apps.find("tired.viper.ksmo@masked.me")
+    assert row is not None
+    assert row.values["Password"] == "" and row.values["2FA Secret"] == ""
+    assert row.values["Email code"] == "TRUE"
+    assert row.values["Category"] == "eco"
+    assert row.values["Credential kind"] == verbs.ECO_CREDENTIAL_KIND
+    assert "a code is emailed to it" in row.values["Note"]
+    # And the keeper may not take it: no flow can read that mailbox yet,
+    # so the row is held back exactly as a Spotify one is.
+    from geelark_farm import accounts as domain
+
+    assert domain.held_back("chatgpt", verbs.ECO_CREDENTIAL_KIND, False)
+
+
+def test_a_password_on_an_eco_line_is_refused_rather_than_dropped():
+    """A password on a line pasted as eco means the kind is wrong, not
+    that the password is spare. Dropping it silently is the bug this
+    pool's reader exists to stop making."""
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+    status, said, detail = verbs.add_gpt(
+        book, None, None,
+        {"by": "mehdi", "category": "eco",
+         "rows": [{"address": "a@b.com", "password": "hunter2"}]}, None)
+
+    assert book.apps.find("a@b.com") is None
+    assert said == "0 eco accounts added, 1 refused"
+    assert "an address and nothing else" in detail["refused"][0]
+
+
+def test_the_ordinary_gpt_paste_is_untouched_by_the_new_kind():
+    """The kind this pool has always held writes neither cell, so every
+    row added before today still reads the same."""
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+    status, said, _ = verbs.add_gpt(
+        book, None, None,
+        {"by": "mehdi", "category": "",
+         "rows": [{"address": "a@b.com", "password": "hunter2",
+                   "secret": "JBSWY3DPEHPK3PXP"}]}, None)
+
+    assert status == "done", said
+    row = book.apps.find("a@b.com")
+    assert row.values["Password"] == "hunter2"
+    assert row.values["Email code"] == "FALSE"
+    assert row.values.get("Category", "") == ""
+    assert row.values.get("Credential kind", "") == ""
+
+
+def test_a_kind_the_gpt_pool_does_not_know_is_refused_before_any_row():
+    """One paste is one kind, so a word nobody meant must not be read as
+    the default and written over twenty rows."""
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+    status, said, _ = verbs.add_gpt(
+        book, None, None,
+        {"by": "mehdi", "category": "cheap",
+         "rows": [{"address": "a@b.com", "password": "pw"}]}, None)
+
+    assert status == "refused" and "not a kind of GPT account" in said
+    assert book.apps.find("a@b.com") is None

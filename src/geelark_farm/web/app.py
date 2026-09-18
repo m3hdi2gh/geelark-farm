@@ -1382,9 +1382,14 @@ class _Handler(BaseHTTPRequestHandler):
             return self._spotify_post(user, field, path)
         if path == "/pools/gpt/preview":
             from ..store import validate
+            from ..verbs import GPT_CATEGORIES
 
             known = read.known(self.settings, "app")
             pasted = field.get("pasted") or ""
+            category = (field.get("category") or "").strip().lower()
+            if category not in GPT_CATEGORIES:
+                category = ""
+            eco = category == "eco"
             rows = paste.accounts(pasted)
             for row in rows:
                 try:
@@ -1392,9 +1397,16 @@ class _Handler(BaseHTTPRequestHandler):
                         raise validate.AccountError(
                             f"{row['address']}: two addresses on one line - "
                             f"an app account has no recovery address")
-                    validate.app_row(address=row["address"],
-                                     password=row["password"],
-                                     secret=row["secret"])
+                    if eco and (row["password"] or row["secret"]):
+                        raise validate.AccountError(
+                            f"{row['address']}: an eco account is an address "
+                            f"and nothing else, and this line carries a "
+                            f"password or a key")
+                    validate.app_row(
+                        address=row["address"],
+                        password="" if eco else row["password"],
+                        secret="" if eco else row["secret"],
+                        email_code_only=eco)
                 except (validate.AccountError, validate.ProxyError) as exc:
                     log.debug("gpt paste row refused: %s", exc)
                     row["error"] = str(exc)
@@ -1404,10 +1416,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._mark_twice(rows)
             return self._html(200, pages.gpt_preview(
                 rows, user, idem=secrets.token_urlsafe(12), pasted=pasted,
-                back=_add_back(field, "/pools/gpt")))
+                back=_add_back(field, "/pools/gpt"), category=category))
         if path == "/pools/gpt/add":
             from ..store import validate
 
+            from ..verbs import GPT_CATEGORIES
+
+            category = (field.get("category") or "").strip().lower()
+            if category not in GPT_CATEGORIES:
+                category = ""
             if "rows" in field:
                 # The confirm off the preview: the good rows, as the
                 # tab-separated text the preview showed.
@@ -1415,7 +1432,8 @@ class _Handler(BaseHTTPRequestHandler):
                          "secret": r["secret"], "email_code_only": False}
                         for r in paste.accounts(field.get("rows", ""))]
                 return self._act(
-                    user, "may_add_gpt", "add_gpt", {"rows": rows},
+                    user, "may_add_gpt", "add_gpt",
+                    {"rows": rows, "category": category},
                     idem=field.get("idem") or secrets.token_urlsafe(12),
                     back=_add_back(field, "/pools/gpt"))
             row = {"address": (field.get("address") or "").strip(),
@@ -1433,7 +1451,8 @@ class _Handler(BaseHTTPRequestHandler):
                     read.gpt_pool(self.settings), user, explain=_explain,
                     manual_login=self.settings.manual_login,
                     form=row, error=str(exc)))
-            return self._act(user, "may_add_gpt", "add_gpt", {"rows": [row]},
+            return self._act(user, "may_add_gpt", "add_gpt",
+                             {"rows": [row], "category": category},
                              idem=self._minute_key(user, "add_gpt",
                                                    row["address"].lower()),
                              back="/pools/gpt")

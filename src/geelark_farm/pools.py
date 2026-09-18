@@ -975,25 +975,56 @@ class AppPool(Pool):
     EMAIL_CODE_COLUMN = "Email code"
     checkbox_columns = frozenset({EMAIL_CODE_COLUMN})
 
-    #: The Spotify rows' two kinds, and the only two words the column
-    #: takes. A kind is about which phone the account wants, not about
-    #: how good the account is: `normal` goes on a phone with no Google
-    #: account, `error` on one that has a Gmail. Every other product's
-    #: rows have no kind at all, and the cell stays empty on them.
+    #: The kinds each product's rows come in, and the only words the
+    #: column takes. A kind is not a judgement about the account; what
+    #: it says differs by product:
+    #:
+    #: - Spotify's two say which phone the account may go on - `normal`
+    #:   one with no Google account, `error` one that has a Gmail;
+    #: - the GPT pool's `eco` says how the account signs in: no
+    #:   password and no authenticator, only an address a code is
+    #:   emailed to (the operator, 2026-09-19). A GPT row with no kind
+    #:   is what this pool has always held - address, password, key.
+    #:
+    #: A product not named here has no kinds, and its rows' cell stays
+    #: empty. A blank Product is `chatgpt`: the pool's oldest default,
+    #: and the same reading `accounts.held_back` makes.
     KIND_COLUMN = "Category"
-    KINDS = ("normal", "error")
+    KINDS = {"spotify": ("normal", "error"), "chatgpt": ("eco",)}
+
+    #: What a kind becomes when the phone carrying it was marked failed.
+    #: A Spotify `normal` asked for a phone with no Gmail and did not
+    #: get one that worked, so it comes back asking for the other sort,
+    #: and an `error` asks for the same sort again - one rule, one word
+    #: (the operator, 2026-09-19). The GPT pool has no such pair: `eco`
+    #: is about how the account signs in, and a failed phone says
+    #: nothing about that, so its rows are left as they are.
+    KIND_AFTER_A_FAILED_PHONE = {"spotify": "error"}
+
+    def product_of(self, resource: Resource) -> str:
+        """Which product a row is for. Blank reads as `chatgpt`."""
+        values = resource.values or {}
+        return str(values.get("Product") or "chatgpt").strip().lower()
+
+    def kinds_for(self, resource: Resource) -> tuple[str, ...]:
+        """The words this row's product allows in the kind column."""
+        return self.KINDS.get(self.product_of(resource), ())
 
     def kind_of(self, resource: Resource) -> str:
-        """The Spotify kind on a row, or "" for a row of any other
-        product - which is most of this pool."""
+        """The kind on a row, or "" for a row whose product has none -
+        and for a cell holding a word its product does not know."""
         values = resource.values or {}
-        if str(values.get("Product") or "").strip().lower() != "spotify":
-            return ""
         word = str(values.get(self.KIND_COLUMN) or "").strip().lower()
-        return word if word in self.KINDS else ""
+        return word if word in self.kinds_for(resource) else ""
+
+    def kind_after_a_failed_phone(self, resource: Resource) -> str:
+        """What this row's kind should become now that the phone
+        carrying it has been marked failed - "" to leave it alone."""
+        want = self.KIND_AFTER_A_FAILED_PHONE.get(self.product_of(resource))
+        return want if want and want in self.kinds_for(resource) else ""
 
     def set_kind(self, resource: Resource, kind: str) -> None:
-        """Move a Spotify row from one kind to the other.
+        """Write a row's kind, in its own product's vocabulary.
 
         On its own, and never folded into `release`: which kind a row is
         and whether it is free are two different facts, and the caller
@@ -1001,8 +1032,10 @@ class AppPool(Pool):
         never free for even one round trip reading the kind it has just
         stopped being (2026-09-19).
         """
-        if kind not in self.KINDS:
-            raise ValueError(f"{kind!r} is not one of {self.KINDS}")
+        allowed = self.kinds_for(resource)
+        if kind not in allowed:
+            raise ValueError(f"{kind!r} is not one of {allowed} for a "
+                             f"{self.product_of(resource)} row")
         self._set(resource, {self.KIND_COLUMN: kind})
 
     def set_aside(self, resource: Resource, *, reason: str = "",

@@ -3335,6 +3335,11 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
                 # `error` asks for the same sort again, which is the same
                 # rule and needs no branch of its own.
                 kind = book.apps.kind_of(account)
+                wants = book.apps.kind_after_a_failed_phone(account)
+                if not wants:
+                    # No pair of kinds to move between - a GPT row, or a
+                    # product whose kind says nothing about the phone.
+                    kind = ""
                 if not kind:
                     note = (f"Phone {serial} was marked failed and "
                             f"deleted before this account got a fair "
@@ -3354,7 +3359,7 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
                     # Before the release, not after: the row is still
                     # claimed here, so it is never on the shelf reading
                     # the kind it has just stopped being.
-                    book.apps.set_kind(account, "error")
+                    book.apps.set_kind(account, wants)
                 book.apps.release(account, phone_failed=True, note=note)
                 outcome["freed"].append(carried)
             else:

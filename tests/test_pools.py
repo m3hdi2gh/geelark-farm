@@ -2424,3 +2424,37 @@ def test_a_hand_built_phone_its_builder_holds_is_not_the_keepers_stock():
 
     assert [r["serial"] for r in log.unfinished(held_too=True)] == ["811", "813"]
     assert [r["serial"] for r in log.unfinished()] == ["813"]
+
+
+def test_each_product_keeps_its_own_kinds():
+    """The kind column is one column and two vocabularies: Spotify's say
+    which phone the account may go on, the GPT pool's `eco` says how it
+    signs in. A word from the wrong product is not a kind at all
+    (2026-09-19)."""
+    import pytest
+
+    headers = APP_HEADERS + ["Product", "Category"]
+    rows = [["s@x.com", "pw", "", "", "", "", "spotify", "normal"],
+            ["e@x.com", "", "", "", "", "", "chatgpt", "eco"],
+            ["p@x.com", "pw", "", "", "", "", "", ""],
+            # `error` means nothing on a GPT row, so it is not a kind.
+            ["w@x.com", "pw", "", "", "", "", "chatgpt", "error"]]
+    pool = AppPool(FakeWorksheet(headers, rows), headers, threading.Lock())
+    pool.load()
+    spot, eco, plain, wrong = pool._rows
+
+    assert pool.kind_of(spot) == "normal" and pool.kind_of(eco) == "eco"
+    assert pool.kind_of(plain) == "" and pool.kind_of(wrong) == ""
+    assert pool.product_of(plain) == "chatgpt", "a blank Product is chatgpt"
+
+    # Only Spotify has a pair of kinds to move between when a phone is
+    # marked failed; an eco row is left exactly as it is.
+    assert pool.kind_after_a_failed_phone(spot) == "error"
+    assert pool.kind_after_a_failed_phone(eco) == ""
+    assert pool.kind_after_a_failed_phone(plain) == ""
+
+    with pytest.raises(ValueError) as refused:
+        pool.set_kind(eco, "error")
+    assert "not one of" in str(refused.value)
+    pool.set_kind(spot, "error")
+    assert spot.values["Category"] == "error"
