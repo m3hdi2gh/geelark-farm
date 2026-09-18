@@ -281,6 +281,17 @@ tr.acting td{{cursor:progress}}
 .filters .pill.kind.normal::before{{border-radius:50%}}
 .filters .pill.kind.error{{color:#f2a35c}}
 .filters .pill.kind.error::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
+/* The two GPT chips, wearing the marks their tiles wear: a square for
+   the kind this pool has always held, a ring for an eco account. */
+.filters .pill.kind.standard{{color:#8ab4f8}}
+.filters .pill.kind.standard::before{{border-radius:2px}}
+.filters .pill.kind.eco{{color:#4fd1a5}}
+.filters .pill.kind.eco::before{{border-radius:50%;background:none;
+ box-shadow:inset 0 0 0 2px currentColor}}
+.filters .pill.kind.standard[aria-pressed=true]{{background:#16243a;
+ border-color:#33507d}}
+.filters .pill.kind.eco[aria-pressed=true]{{background:#0f3a2c;
+ border-color:#2a6b55}}
 .filters .pill.kind.normal[aria-pressed=true]{{background:#0f3a2c;
  border-color:#2a6b55}}
 .filters .pill.kind.error[aria-pressed=true]{{background:#3d2a12;
@@ -3530,23 +3541,49 @@ def _group_chips(kind: str, rows: list[dict]) -> str:
             + "</span>")
 
 
+#: The kinds each pool sifts by: the word on the chip, and the word the
+#: row's category cell holds. They are the same for Spotify. A standard
+#: GPT row has no kind written on it - it is what this pool has always
+#: held - so its chip needs a word of its own: the empty string is
+#: already taken by `both` (the operator, 2026-09-19).
+_SIFT_KINDS = {"spotify": ("normal", "error"),
+               "gpt": ("standard", "eco")}
+
+#: The one chip whose word is not what its rows carry in the cell.
+_SIFT_CELL = {"standard": ""}
+
+
+def _sift_word(kind: str, row: dict) -> str:
+    """Which of a pool's kind chips a row belongs under, or "" for a row
+    whose cell holds a word this pool does not sift by - which shows
+    under `both` and under neither chip, rather than being filed wrong.
+    """
+    cell = str(row.get("category") or "").strip().lower()
+    for word in _SIFT_KINDS.get(kind, ()):
+        if _SIFT_CELL.get(word, word) == cell:
+            return word
+    return ""
+
+
 def _kind_chips(kind: str, rows: list[dict]) -> str:
-    """Spotify's second row of chips: which kind of account.
+    """A pool's second row of chips: which kind of account.
 
     The status chips answer "can this still be used". These answer the
-    other question, which for this pool is the first one: which kind is
-    it. The two categories are two stocks that go on two kinds of phone,
-    and one list with both in it is a list you read twice (the operator,
-    2026-09-17). They sift together, so `error / current` is one press
-    away from `error / spent`.
+    other question, which for a pool with kinds is the first one: which
+    kind is it. Spotify's two are two stocks that go on two kinds of
+    phone; the GPT pool's two sign in two different ways. Either way,
+    one list with both in it is a list you read twice (the operator,
+    2026-09-17, and again for the GPT pool on 2026-09-19). They sift
+    together with the status chips, so `eco / current` is one press
+    away from `eco / spent`.
     """
-    if kind != "spotify":
+    words = list(_SIFT_KINDS.get(kind, ()))
+    if not words:
         return ""
-    counts = {word: sum(1 for r in rows
-                        if str(r.get("category") or "") == word)
-              for word in ("normal", "error")}
+    counts = {word: sum(1 for r in rows if _sift_word(kind, r) == word)
+              for word in words}
     chips = [("", "both", len(rows))]
-    chips += [(word, word, counts[word]) for word in ("normal", "error")]
+    chips += [(word, word, counts[word]) for word in words]
     return ('<span class="chips kinds" role="group" aria-label="Kind">'
             + "".join(
                 f'<button type="button" class="pill{_kind_class(word)}" '
@@ -3562,10 +3599,10 @@ def _kind_class(word: str) -> str:
 
 
 def _cat_attr(kind: str, row: dict) -> str:
-    """The row's Spotify kind, for the chips above to sift on."""
-    if kind != "spotify":
+    """The row's kind, for the chips above to sift on."""
+    if kind not in _SIFT_KINDS:
         return ""
-    return f' data-cat="{esc(str(row.get("category") or ""))}"'
+    return f' data-cat="{esc(_sift_word(kind, row))}"'
 
 
 def _proxy_note(row: dict) -> str:

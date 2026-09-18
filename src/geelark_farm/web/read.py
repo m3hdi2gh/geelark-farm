@@ -566,7 +566,11 @@ def _pool_rows(store) -> dict:
              f" coalesce(serial, '') AS serial,{_HELD}"
              " FROM resources WHERE kind = 'gmail' AND status {op} 'used'"
              " ORDER BY id DESC LIMIT %s")
+    # The kind rides with a GPT row too since 2026-09-19: `eco` accounts
+    # sign in by a code emailed to an address the farm owns, and the
+    # manager sifts them apart from the ones with a password.
     gpt = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
+           " coalesce(category, '') AS category,"
            f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
            " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
            f"   AND {NOT_SPOTIFY}"

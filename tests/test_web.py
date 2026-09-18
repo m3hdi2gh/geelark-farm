@@ -6108,12 +6108,13 @@ def test_the_spotify_sheet_sifts_by_kind():
     assert 'data-cat=""' in chips and "both<b>3</b>" in chips
     assert 'data-cat="normal"' in chips and "normal<b>1</b>" in chips
     assert 'data-cat="error"' in chips and "error<b>2</b>" in chips
-    assert pages._kind_chips("gpt", rows) == "", "one pool has two kinds"
+    assert "data-cat=" not in pages._kind_chips("gmail", rows), (
+        "a pool with no kinds sifts by none")
 
     user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
             "may_add_gpt": True}
     assert 'data-cat="error"' in pages._pool_table("spotify", rows, user)
-    assert "data-cat=" not in pages._pool_table("gpt", rows, user)
+    assert "data-cat=" not in pages._pool_table("gmail", rows, user)
 
     script = pages._DASH_SCRIPT
     assert ("var cats = sheet.querySelectorAll('.filters .pill[data-cat]');"
@@ -7214,3 +7215,32 @@ def test_a_gpt_account_in_the_margin_is_named_for_its_own_product(
     assert 'class="carries normal"' not in body, "no kind on a GPT row"
     assert "none on the row" in body, "no password, said rather than empty"
     assert "by a code emailed to it" in body
+
+
+def test_the_gpt_sheet_sifts_standard_from_eco():
+    """Two ways in, in one list, is a list you read twice: an eco
+    account has no password and signs in by a code emailed to it, and
+    knowing which a row is is the first thing anybody asks of this pool
+    (the operator, 2026-09-19).
+
+    The standard rows carry no word in the cell - they are what this
+    pool has always held - so the chip and the row agree on `standard`
+    rather than on the empty string, which is the `both` chip.
+    """
+    from geelark_farm.web import pages
+
+    rows = [{"address": "a@x.com", "state": "free", "category": ""},
+            {"address": "b@x.com", "state": "free", "category": "eco"},
+            {"address": "c@x.com", "state": "used", "category": "eco"}]
+    chips = pages._kind_chips("gpt", rows)
+    assert 'data-cat=""' in chips and "both<b>3</b>" in chips
+    assert 'data-cat="standard"' in chips and "standard<b>1</b>" in chips
+    assert 'data-cat="eco"' in chips and "eco<b>2</b>" in chips
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_add_gpt": True}
+    table = pages._pool_table("gpt", rows, user)
+    assert 'data-cat="standard"' in table and 'data-cat="eco"' in table
+    # The sifting is the script the Spotify sheet already uses; nothing
+    # about it is per pool, so the same press works here.
+    assert "&& (!cat || tr.dataset.cat === cat);" in pages._DASH_SCRIPT
