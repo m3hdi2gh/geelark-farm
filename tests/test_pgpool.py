@@ -1087,3 +1087,79 @@ def test_the_panel_only_claim_narrows_the_same_statement_to_panel_rows():
     pool.load()
     assert pool.panel_waiting() == 1
     assert [r.values["Source"] for r in pool.available] == ["sheet", "panel"]
+
+
+def stored_row(table):
+    """The one row the table holds, as the table holds it."""
+    return next(iter(table._rows.values()))
+
+
+# ------------------------------- one Secret cell, two columns, both writes
+def test_editing_a_recovery_row_does_not_copy_its_address_into_the_key():
+    """The `@` split ran on the insert and not on the update, so Secret
+    was mapped straight onto `totp_secret` and `recovery_email` was left
+    where it was: the row then held the address in both columns, and
+    `has_authenticator` - which asks only whether the column is filled -
+    answered True for an account that has no authenticator at all.
+
+    It did not take an edit of the secret to do it. The row editor
+    rewrites every cell it shows, so correcting a seller's name was
+    enough (2217060 and 2217061, 2026-09-19).
+    """
+    table = MemoryTable()
+    table.add("gmail", address="rec@x.com", password="pw", totp_secret="",
+              recovery_email="keeper@x.com", seller="egypt", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    row = pool.find("rec@x.com")
+    assert row.values["Secret"] == "keeper@x.com"
+
+    # An edit that is not about the secret at all, carrying the cell back
+    # exactly as the editor read it.
+    pool.edit_cells(row, Secret="keeper@x.com", Seller="somebody")
+
+    stored = stored_row(table)
+    assert stored["recovery_email"] == "keeper@x.com"
+    assert stored["totp_secret"] == "", (
+        "the address must not end up in the key's column")
+    assert not row.credentials.has_authenticator
+
+
+def test_an_edit_can_turn_a_key_row_into_a_recovery_row_and_back():
+    """Which the editor could not do at all: the update never cleared
+    the column the other kind lives in.
+
+    A seller of no particular promise - `usa` promises a key and the
+    pool refuses to read that row back as a recovery one, which is a
+    different guard and has its own test.
+    """
+    table = MemoryTable()
+    table.add("gmail", address="k@x.com", password="pw", totp_secret=SECRET,
+              recovery_email="", seller="", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    row = pool.find("k@x.com")
+
+    pool.edit_cells(row, Secret="now@recovery.com")
+    assert stored_row(table)["recovery_email"] == "now@recovery.com"
+    assert stored_row(table)["totp_secret"] == "", "the old key must go"
+    assert not row.credentials.has_authenticator
+
+    pool.edit_cells(row, Secret=SECRET)
+    assert stored_row(table)["totp_secret"] == SECRET
+    assert stored_row(table)["recovery_email"] == "", "the old address must go"
+    assert row.credentials.has_authenticator
+
+
+def test_an_edit_that_never_mentions_the_secret_leaves_both_columns_alone():
+    table = MemoryTable()
+    table.add("gmail", address="k@x.com", password="pw", totp_secret=SECRET,
+              recovery_email="", seller="usa", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    row = pool.find("k@x.com")
+
+    pool.edit_cells(row, Seller="somebody else")
+
+    assert stored_row(table)["totp_secret"] == SECRET
+    assert stored_row(table)["seller"] == "somebody else"

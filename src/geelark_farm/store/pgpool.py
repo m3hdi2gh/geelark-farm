@@ -341,9 +341,14 @@ class _PgPool(Pool):
                 continue
             payload[column] = _to_db(column, value)
             resource.values[name] = "" if value is None else str(value)
+        payload = self._split_secret(fields, payload)
         if payload and resource.store_id is not None:
             self._table.update(resource.store_id, payload)
         self._note_held(resource, fields)
+
+    def _split_secret(self, fields: dict, payload: dict) -> dict:
+        """Nothing here; the Gmail pool overrides it. See there."""
+        return payload
 
     def _note_held(self, resource: Resource, fields: dict[str, str]) -> None:
         if self.status_column not in fields:
@@ -460,10 +465,7 @@ class _PgPool(Pool):
             if column is None or column in ("secret",):
                 continue
             row[column] = _to_db(column, value)
-        if isinstance(self, GmailPool):
-            secret = (fields.get("Secret") or "").strip()
-            row["recovery_email"] = secret if "@" in secret else ""
-            row["totp_secret"] = "" if "@" in secret else secret
+        row = self._split_secret(fields, row)
         if isinstance(self, ProxyPool) and (fields.get("Proxy String") or "").strip():
             # The joined string, in whichever shape the vendor wrote it -
             # socks5://user:pass@host:port or host:port:user:pass - split
@@ -535,6 +537,31 @@ class PgGmailPool(_PgPool, GmailPool):
     kind = "gmail"
 
     HOST_COLUMN = "last_host"
+
+    def _split_secret(self, fields: dict, payload: dict) -> dict:
+        """One Secret cell in the sheet, two columns here - and `@` says
+        which, the same decisive test `GmailPool._interpret` uses.
+
+        On both writes, not only the insert. The update mapped Secret
+        straight onto `totp_secret` and never touched `recovery_email`,
+        so *any* edit of a row whose second factor is a recovery address
+        copied that address into the key's column and left the old one
+        where it was: the row then held the address twice, and
+        `has_authenticator` - which asks only whether the column is
+        non-empty - answered True for an account with no authenticator
+        at all. It did not take an edit of the secret to do it. The
+        editor rewrites every cell it shows, so correcting a seller's
+        name was enough, and the row died on the next code page as
+        `no_authenticator` (2217060 and 2217061, 2026-09-19).
+        """
+        if "Secret" not in fields:
+            return payload
+        secret = (fields.get("Secret") or "").strip()
+        payload = dict(payload)
+        payload.pop("secret", None)
+        payload["recovery_email"] = secret if "@" in secret else ""
+        payload["totp_secret"] = "" if "@" in secret else secret
+        return payload
 
     def _held_from(self) -> int | None:
         """Outside the good hours an address on its last try stays in the
