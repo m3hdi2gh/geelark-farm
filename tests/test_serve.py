@@ -967,16 +967,70 @@ def test_the_slots_are_asked_for_only_when_the_answer_changes_anything(
     assert serve_mod.needs_slots(**numbers) is wanted
 
 
-def test_a_pass_that_is_not_building_never_touches_the_plan(monkeypatch,
-                                                             make_settings,
-                                                             tmp_path):
-    """The common case: the stock is full and there is nothing to do."""
+def test_a_pass_that_is_not_building_still_keeps_the_plan_fresh(
+        monkeypatch, make_settings, tmp_path):
+    """It used to skip the read entirely when it had nothing to build.
+
+    That saved nothing - `Slots.look` holds its answer for
+    PLAN_EVERY_SECONDS and calls GeeLark at most once in that window
+    either way - and it cost the console its GeeLark card, which went
+    dark on a full stock and on an open breaker: the moment somebody is
+    looking at it to find out what is wrong (2026-09-20).
+    """
     settings = make_settings(state_dir=tmp_path, warm_stock=1)
     Recorder(warm=1, waiting=0).install(monkeypatch)
+    looked = []
     monkeypatch.setattr(serve_mod.Slots, "look",
-                        lambda *a: pytest.fail("read the plan for nothing"))
+                        lambda self, client, now: looked.append(now))
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert looked, "the plan is read so the console can show it"
+
+
+def test_what_decide_is_told_is_still_only_asked_for_when_it_matters(
+        monkeypatch, make_settings, tmp_path):
+    """Looking and being told are two things. The pass looks every time,
+    to keep the card fresh; `decide` is handed `None` unless the count
+    would change what it does, which is what it has always been."""
+    settings = make_settings(state_dir=tmp_path, warm_stock=1)
+    Recorder(warm=1, waiting=0).install(monkeypatch)
+    monkeypatch.setattr(serve_mod.Slots, "look", lambda self, c, n: 7)
+    told = {}
+    real = serve_mod.decide
+    monkeypatch.setattr(serve_mod, "decide",
+                        lambda **k: told.update(k) or real(**k))
+
+    serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
+
+    assert told["free_slots"] is None, "a full stock does not need the count"
+
+
+def test_the_plan_is_only_fetched_once_inside_its_window():
+    """`look` is what rate-limits, not the caller: the pass may ask every
+    time because asking is nearly always free."""
+    calls = []
+
+    class FakePhones:
+        @staticmethod
+        def plan(client):
+            calls.append(1)
+            return {"availableProfiles": 9}
+
+    slots = serve_mod.Slots()
+    import geelark_farm.serve as mod
+
+    was = mod.phones
+    try:
+        mod.phones = FakePhones
+        assert slots.look(object(), 1000.0) == 9
+        assert slots.look(object(), 1000.0 + 1) == 9
+        assert slots.look(object(), 1000.0 + serve_mod.PLAN_EVERY_SECONDS - 1) == 9
+        assert len(calls) == 1, "held for the whole window"
+        slots.look(object(), 1000.0 + serve_mod.PLAN_EVERY_SECONDS + 1)
+        assert len(calls) == 2
+    finally:
+        mod.phones = was
 
 
 def test_building_blind_is_refused_when_the_count_is_unknown():

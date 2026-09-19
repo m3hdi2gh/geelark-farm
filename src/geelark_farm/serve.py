@@ -1723,9 +1723,19 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     cap = settings.max_concurrent_phones or None
     if cap is not None:
         cap = max(0, cap - (coming + claimed))
-    # Asked only when the answer changes what happens, which is a pass with
-    # room to build. A full stock or an open breaker settle it without looking.
-    free = (slots.look(client, time.monotonic())
+    # Looked at every pass, and `look` decides for itself whether that
+    # means calling GeeLark - it holds the answer for PLAN_EVERY_SECONDS,
+    # so this is the same one call it always was.
+    #
+    # Unconditionally, though, because the console's GeeLark card reads
+    # what this leaves behind: written only when the pass wanted to
+    # build, the card went dark on a full stock and - worse - on an open
+    # breaker, which is the moment somebody is looking at it to find out
+    # what is wrong (2026-09-20).
+    looked = slots.look(client, time.monotonic())
+    # What `decide` is told, which is unchanged: the count matters only
+    # on a pass with room to build, and `None` is how it says "not asked".
+    free = (looked
             if needs_slots(tripped=tripped, warm=warm,
                            target=settings.warm_stock,
                            accounts_waiting=auto_waiting, cap=cap,
