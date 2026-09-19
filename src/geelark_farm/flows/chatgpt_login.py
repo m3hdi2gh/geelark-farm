@@ -165,6 +165,11 @@ FATAL_ADVICE = {
         "in the time allowed. The account was not judged and is untouched: "
         "check the mailbox is reachable and that the message is not held up, "
         "then retry. The phone is reused",
+    "mailbox_unreachable":
+        "the mailbox the codes arrive in would not answer - a refused app "
+        "password, or the server not responding. Nothing was judged about "
+        "the account, and no other account will get in either until the "
+        "mailbox is reachable again",
     "email_code_required":
         "this app account has no authenticator, so OpenAI emails a one-time "
         "code instead. The phone is fine: Google is signed in and the app is "
@@ -923,12 +928,29 @@ def act_email_code(ctx: Context) -> Outcome | None:
 
     since = ctx.code_since or time.time()
     ctx.code_since = since
-    code = ctx.codes.code_for(ctx.creds.email, since=since)
+    try:
+        code = ctx.codes.code_for(ctx.creds.email, since=since)
+    except Exception as exc:                                      # noqa: BLE001
+        # The mailbox itself, not the account: a refused app password
+        # or a server that stopped answering. Said as its own reason so
+        # nothing about the account is read into it (2026-09-19).
+        log.warning("the mailbox could not be read for %s (%s)",
+                    ctx.creds.email, exc)
+        path = ctx.save("mailbox_unreachable")
+        return Outcome("fatal", "mailbox_unreachable",
+                       FATAL_ADVICE["mailbox_unreachable"],
+                       artifacts=[path] if path else [])
     if code is None:
         reason = ("no_code_source" if isinstance(ctx.codes, codes_mod.NoSource)
                   else "email_code_never_arrived")
         path = ctx.save(reason)
-        return Outcome("fatal", reason, FATAL_ADVICE.get(reason, ""),
+        # The address, in the sentence: every one of these forwards
+        # from its own alias, and which alias stopped forwarding is the
+        # whole of what to go and check (the operator, 2026-09-19).
+        advice = FATAL_ADVICE.get(reason, "")
+        if reason == "email_code_never_arrived":
+            advice = f"{advice} - nothing arrived for {ctx.creds.email}"
+        return Outcome("fatal", reason, advice,
                        artifacts=[path] if path else [])
 
     log.info("entering the code emailed to %s", ctx.creds.email)

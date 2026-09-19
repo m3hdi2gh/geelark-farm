@@ -1560,3 +1560,38 @@ def test_a_phone_that_will_not_scroll_is_not_an_error(monkeypatch):
     ctx = verify_ctx()
     ctx.elements = []
     assert chatgpt_login._scroll_settings(ctx) is False
+
+
+def test_a_mailbox_that_will_not_answer_is_not_the_accounts_fault(monkeypatch):
+    """A refused app password stops every eco account, not this one, and
+    saying so as `email_code_never_arrived` would send somebody to
+    check a forward that is working (2026-09-19)."""
+    from geelark_farm import failures
+    from geelark_farm.flows import chatgpt_login
+
+    class Broken:
+        def code_for(self, address, *, since, timeout=120):
+            raise RuntimeError("[AUTHENTICATIONFAILED] Invalid credentials")
+
+    outcome = chatgpt_login.act_email_code(code_context(Broken()))
+
+    assert outcome is not None and outcome.reason == "mailbox_unreachable"
+    assert "would not answer" in outcome.detail
+    verdict = failures.verdict("mailbox_unreachable")
+    assert verdict.blame == failures.NOBODY
+    assert not verdict.costs_the_credential
+
+
+def test_the_address_is_named_when_no_code_came(monkeypatch):
+    """Every eco account forwards from its own alias, so which alias
+    stopped forwarding is the whole of what there is to go and check."""
+    from geelark_farm.flows import chatgpt_login
+
+    class Silent:
+        def code_for(self, address, *, since, timeout=120):
+            return None
+
+    outcome = chatgpt_login.act_email_code(code_context(Silent()))
+
+    assert outcome.reason == "email_code_never_arrived"
+    assert "a@b.com" in outcome.detail

@@ -6204,3 +6204,79 @@ def test_an_empty_phone_the_network_would_not_let_go_is_marked_failed_for_the_sy
                                      detail="", gmail=""))
     assert any("could not mark phone 622 failed" in r.getMessage()
                for r in caplog.records)
+
+
+def test_a_chatgpt_code_never_comes_from_the_customer():
+    """Three kinds of GPT account and not one of them asks a person:
+    the password ones need no code, the eco ones are emailed a code at
+    an address the farm owns, and the Google ones sign in through
+    Google (the operator, 2026-09-19). Claude is the one product whose
+    code is the customer's, so it - and only it - keeps the panel's
+    source.
+
+    Handing a ChatGPT flow the panel's source would open a request
+    nobody is ever asked to answer, and hold a phone for the whole of
+    CODE_WAIT_MINUTES waiting on it.
+    """
+    from types import SimpleNamespace
+
+    from geelark_farm import codes as codes_mod
+    from geelark_farm import mailbox as mailbox_mod
+
+    panel = object()                       # what the run was started with
+    no_box = SimpleNamespace(mail_imap_host="", mail_imap_user="",
+                             mail_imap_password="")
+    with_box = SimpleNamespace(mail_imap_host="imap.gmail.com",
+                               mail_imap_user="box@example.com",
+                               mail_imap_password="app-password")
+
+    def row(product):
+        return SimpleNamespace(values={"Product": product})
+
+    # No mailbox: the page is reported and the account set aside, which
+    # is what the farm did before any of this - never the panel.
+    assert isinstance(builder._codes_for(no_box, row("chatgpt"), panel),
+                      codes_mod.NoSource)
+    assert isinstance(builder._codes_for(no_box, row(""), panel),
+                      codes_mod.NoSource), "a blank product is chatgpt"
+    # With one: the farm's own mailbox.
+    assert isinstance(builder._codes_for(with_box, row("chatgpt"), panel),
+                      mailbox_mod.MailboxSource)
+    # Claude keeps the customer's.
+    assert builder._codes_for(with_box, row("claude"), panel) is panel
+    assert builder._codes_for(no_box, row("claude"), panel) is panel
+
+
+def test_send_can_name_a_row_the_keeper_is_not_allowed_to_take():
+    """An eco row is held back on purpose - the keeper must not take one
+    off the shelf by itself - and `available` is what the automatic
+    claim reads, so a held-back row is not in it. Send names the row,
+    and a named row is claimed by name (2026-09-19). The same door the
+    Spotify categories go through.
+    """
+    headers = APP_HEADERS + ["Product", "Category", "Credential kind",
+                             "Email code"]
+    book = make_book(apps=0, app_headers=headers)
+    book.apps.append(**{"Address": "eco@masked.me", "Password": "",
+                        "Status": "", "Product": "chatgpt",
+                        "Category": "eco", "Credential kind": "eco",
+                        "Email code": "TRUE"})
+    book.apps.append(**{"Address": "plain@example.com", "Password": "pw",
+                        "Status": ""})
+    book.apps.load()
+    # The rule the store's pool turns into SQL (PgAppPool.held_back):
+    # an eco row is not in `available`, so the automatic claim never
+    # sees it. This tab is the sheet-backed pool, which has no such
+    # filter - what is under test here is the door Send goes through.
+    from geelark_farm import accounts as domain
+
+    assert domain.held_back("chatgpt", "eco", False)
+    assert not domain.held_back("chatgpt", "", False), "an old row is not"
+
+    taken = builder._pick_named_app(book, "eco@masked.me")
+    assert taken is not None and taken.label == "eco@masked.me"
+    assert book.apps.status_of(taken) not in book.apps.available_statuses
+
+    # And an ordinary row still goes the way it always did.
+    ordinary = builder._pick_named_app(book, "plain@example.com")
+    assert ordinary.label == "plain@example.com"

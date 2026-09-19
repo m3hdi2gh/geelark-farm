@@ -419,6 +419,15 @@ VERDICTS: dict[str, Verdict] = {
         "place in the pool. Check the mailbox is reachable and the message is "
         "not held up, then press Free to try it again; the phone is "
         "reused, so a retry costs nothing but the attempt."),
+    "mailbox_unreachable": Verdict(
+        NOBODY,
+        "the mailbox the emailed codes arrive in would not answer",
+        "The farm could not read the mailbox an `eco` account's code is "
+        "emailed to - a refused app password, or an IMAP server that "
+        "stopped answering. Nothing was judged about the account, and it "
+        "keeps its place in the pool. No other eco account can sign in "
+        "either until the mailbox is reachable, so this is worth looking "
+        "at before sending more."),
     "account_deactivated": Verdict(
         CREDENTIAL, "OpenAI has deactivated the account",
         "OpenAI has deactivated the account."),

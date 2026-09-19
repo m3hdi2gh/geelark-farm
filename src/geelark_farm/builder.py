@@ -67,7 +67,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import apps, breaker, codes, failures, phones, shell
+from . import apps, breaker, codes, failures, mailbox, phones, shell
 from . import artifacts as archive
 from . import proxy as proxy_mod
 from .accounts import Account
@@ -818,6 +818,7 @@ def _sign_into_app(session: _Session) -> Build | None:
                 return s.finish("no_usable_gpt",
                                 "the Gpt Info tab has no unused account left")
         flow, package = _flow_for(s.settings, s.app_row)
+        source = _codes_for(s.settings, s.app_row, s.codes)
         log.info("signing into %s as %s", package,
                  s.app_row.credentials.email)
         outcome = flow.sign_in(
@@ -826,9 +827,11 @@ def _sign_into_app(session: _Session) -> Build | None:
             budget_seconds=min(s.settings.app_login_budget_seconds,
                                s.remaining()),
             artifact_dir=s.artifacts,
-            # Where a code OpenAI emails is answered from. Nothing by
-            # default, which reports the page exactly as it always did.
-            codes=s.codes,
+            # Where a code the service emails is answered from -
+            # this account's own source, not the run's (see
+            # `_codes_for`). Nothing by default, which reports the page
+            # exactly as it always did.
+            codes=source,
             # As above: a press on Cancel is felt at the next screen, not
             # at the end of this login.
             watch=s.check_cancelled,
@@ -1582,18 +1585,27 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
 def _pick_named_app(book: Book, wanted: str):
     """The app account somebody named, claimed by name.
 
-    A Spotify row is never in `available` - nothing serves the product,
-    so the pool holds it back from the automatic claim, which knows no
-    categories - and it is exactly the row a person's Send names. Named,
-    it is taken with `claim_this`, which asks only whether the row is
-    free (2026-09-17). Every other product goes through `_pick`.
+    A held-back row is never in `available`: the automatic claim leaves
+    it alone because no flow serves its kind, or because the kind is
+    one the pool must not hand out by itself. That is exactly the row a
+    person's Send names - a Spotify account, whose category decides
+    which phone it may go on (2026-09-17), and an `eco` GPT account,
+    which the keeper must not take off the shelf by itself
+    (2026-09-19). Named, it is taken with `claim_this`, which asks only
+    whether the row is free. Everything the claim would offer anyway
+    goes through `_pick`, whose refusals the console already words.
     """
+    from . import accounts as domain
+
     want = wanted.strip().lower()
     resource = next((r for r in book.apps._rows
                      if (r.label or "").strip().lower() == want), None)
-    product = str((getattr(resource, "values", None) or {})
-                  .get("Product") or "").strip().lower()
-    if resource is None or product != "spotify":
+    values = (getattr(resource, "values", None) or {})
+    held = resource is not None and domain.held_back(
+        str(values.get("Product") or "").strip() or "chatgpt",
+        str(values.get("Credential kind") or "").strip(),
+        str(values.get("Customer ready") or "").strip().upper() == "TRUE")
+    if resource is None or not held:
         return _pick(book.apps, wanted, "account")
     if resource.error or (book.apps.status_of(resource)
                           not in book.apps.available_statuses):
@@ -1603,6 +1615,29 @@ def _pick_named_app(book: Book, wanted: str):
         raise Aborted(f"the account {wanted} was taken while this was being "
                       f"asked for")
     return resource
+
+
+def _codes_for(settings: Settings, row, given):
+    """Where this account's emailed code comes from - by product, not
+    by kind.
+
+    A ChatGPT code is emailed to an address the farm owns and is read
+    out of the farm's own mailbox. **A customer is never asked for a
+    ChatGPT code** (the operator, 2026-09-19), so where no mailbox is
+    configured the answer is NoSource - the page is reported and the
+    account set aside, exactly as before. Handing this one the panel's
+    source would open a request nobody is ever asked to answer and sit
+    on a phone for the whole of CODE_WAIT_MINUTES.
+
+    Claude's code is the customer's own, read out of their inbox and
+    typed into the panel, which is `given` - the source the run was
+    started with.
+    """
+    product = str((getattr(row, "values", None) or {})
+                  .get("Product") or "chatgpt").strip().lower()
+    if product == "claude":
+        return given
+    return mailbox.from_settings(settings) or codes.NoSource()
 
 
 def _pick(pool, wanted: str, what: str):

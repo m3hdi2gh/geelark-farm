@@ -64,6 +64,13 @@ POLL_SECONDS = 5.0
 #: costs an account rather than a wait.
 SKEW_SECONDS = 90
 
+#: How long a flow standing on the code page waits. Measured on the
+#: live mailbox: three seconds from asking to the message being there.
+#: Two minutes is generous against a slow forward and still does not
+#: leave a phone sitting on a forward that is simply broken (the
+#: operator, 2026-09-19).
+WAIT_SECONDS = 120
+
 #: Six digits standing alone, the same shape `codes.code_in` looks for.
 SIX_DIGITS = re.compile(r"\b(\d{6})\b")
 
@@ -193,7 +200,7 @@ class MailboxSource:
 
     # ------------------------------------------------------------ the flow
     def code_for(self, address: str, *, since: float,
-                 timeout: float = 180.0) -> str | None:
+                 timeout: float = WAIT_SECONDS) -> str | None:
         """Wait for the code emailed to `address`, up to `timeout`.
 
         None means the wait ran out with nothing to read, which is a
