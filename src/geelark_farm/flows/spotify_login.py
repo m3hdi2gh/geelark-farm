@@ -167,6 +167,23 @@ CHALLENGE_TEXTS = ("make sure that you're a human",
                    "confirm you are human", "confirm you're human")
 ROBOT_LABEL = "not a robot"
 CHALLENGE_BUTTON = "Continue"
+#: How the page says reCAPTCHA is not satisfied - and the only thing on
+#: it that reports the widget's state at all.
+#:
+#: The tick box cannot be asked. Chrome renders reCAPTCHA's anchor as a
+#: CheckBox with `checkable="false"`, and its `checked` stays `false`
+#: however plainly the page draws a green tick - so a flow that waits
+#: for that attribute before submitting waits for ever. One did:
+#: thirteen visits on 3644, two grids answered correctly (NEXT, then
+#: VERIFY), and Continue never pressed once, until reCAPTCHA's own
+#: token went stale underneath it and the page came back reading
+#: "Verification expired. Check the checkbox again." (2026-09-19).
+#:
+#: So the tick is submitted rather than confirmed, and these words are
+#: what sends the flow back to tick again.
+NOT_SATISFIED_TEXTS = ("please check the box above",
+                       "verification expired",
+                       "check the checkbox again")
 #: The image grid reCAPTCHA falls back to when the tick alone will not
 #: do - which on 3644 it did, on the first tick ever sent to it
 #: (2026-09-19): "Select all images with crosswalks" over a VERIFY, the
@@ -185,13 +202,21 @@ GRIDS_PER_CHALLENGE = 5
 DRAW_WAIT = 3
 
 #: Visits the challenge page gets before the account goes back as
-#: `captcha_shown`. Most of them are waiting: reCAPTCHA leaves the box
-#: reading unticked for a few seconds while it decides, which is the
-#: lesson two Google builds paid for (phones 1787 and 1788, 2026-09-06).
-CHALLENGE_VISITS = 14
-#: Visits to leave the box alone after tapping it, for the same reason:
-#: a second tap unticks what the first ticked.
-TICK_AGAIN = 4
+#: `captcha_shown`. Room for three whole cycles - a tick, its settle and
+#: a Continue is four visits - plus the grids in between.
+CHALLENGE_VISITS = 20
+#: Visits to leave the page alone after touching it at all: a tick, a
+#: grid answered, a Continue pressed. reCAPTCHA takes a few seconds to
+#: decide and the page redraws while it does, so a second touch inside
+#: this window lands on a page that has not finished reacting to the
+#: first - and a second tap on the anchor unticks what the first ticked,
+#: which is what two Google builds spent their whole allowance doing
+#: (1787 and 1788, 2026-09-06).
+#:
+#: Two, not four: everything between a grid being answered and Continue
+#: being pressed is time reCAPTCHA's token is sitting unused, and it
+#: goes stale in about two minutes (3644, 2026-09-19).
+SETTLE_VISITS = 2
 #: How many times Continue is pressed on a page that keeps coming back.
 CONTINUE_TRIES = 3
 
@@ -307,11 +332,22 @@ class Context(router.Context):
     #: Whether this account's plan turned out to be paused - said once,
     #: however many times the page comes back.
     plan_paused: bool = False
-    #: The challenge visit the tick box was last tapped on, so the flow
-    #: waits for reCAPTCHA to decide instead of unticking its own tap.
-    ticked_on: int | None = None
-    #: How many times Continue has been pressed on the challenge page.
+    #: The challenge visit on which this flow last *did* anything to the
+    #: page - ticked the box, answered a grid, pressed Continue. One
+    #: clock for all three, because what it measures is the page being
+    #: given something to react to, and reacting takes the same few
+    #: seconds whichever it was.
+    acted_on: int | None = None
+    #: How many times the box has been ticked, and Continue pressed.
+    ticks: int = 0
     continues: int = 0
+    #: Whether reCAPTCHA has been given an answer - a tick, or a grid -
+    #: since the last Continue. The page's complaint cannot answer this:
+    #: "Please check the box above." is copy that stays in the tree
+    #: until the form is submitted again, so a flow that ticks whenever
+    #: it can see those words ticks for ever and never submits. One
+    #: complaint buys one answer, and then the answer is submitted.
+    answered_since_continue: bool = False
     #: The CapSolver key, when one is set. Empty is the whole of "no
     #: solver": a grid is then reported rather than answered, which is
     #: what this flow did before there was one.
@@ -694,51 +730,101 @@ def act_grid(ctx: Context, visit: int) -> Outcome | None:
         return None
     recaptcha.tap_answer(ctx, answer, tiles=tiles, rect=rect, size=size,
                          instruction=instruction)
+    # A grid answered is the page given something to react to, the same
+    # as a tick: the settle window starts again, so Continue is not
+    # pressed on top of a VERIFY reCAPTCHA has not finished reading -
+    # and it is an answer, so the next settled visit submits it rather
+    # than ticking the box underneath.
+    ctx.answered_since_continue = True
+    ctx.acted_on = visit
     return None
 
 
-def act_challenge(ctx: Context) -> Outcome | None:
-    """Answer Spotify's challenge the way the operator does: tick the box,
-    let reCAPTCHA decide, press Continue.
+def _grid_up(ctx: Context) -> bool:
+    """Whether reCAPTCHA's grid overlay is on the page.
 
-    Every way out of here that is not the tick passing ends as
+    Its heading, or - when the heading has not been laid out yet - the
+    footer only it has. Both, because the answer decides whether the
+    green Continue may be pressed, and that Continue is still in the
+    tree *underneath* the overlay at coordinates the grid now occupies:
+    pressed there it is a tap on a picture, not on a button (3644,
+    2026-09-19).
+    """
+    if ctx.has(*GRID_TEXTS):
+        return True
+    return recaptcha.challenge_button(ctx, below=0) is not None
+
+
+def act_challenge(ctx: Context) -> Outcome | None:
+    """Answer Spotify's challenge the way the operator does: tick the
+    box, let reCAPTCHA decide, press Continue - one of those per visit,
+    never two, and never two inside the settle window.
+
+    The page cannot be asked what it thinks. Its tick box reports
+    `checkable="false"` and never goes checked, and its complaint is
+    page copy that stays until the form is submitted again - so neither
+    can be read as "is it satisfied?". What the flow knows is only what
+    it has done: it has ticked, it has answered N grids, it has pressed
+    Continue N times, and the last of those was M visits ago. So it acts
+    on that and lets the page judge, which is what a person does.
+
+    Every way out that is not the challenge clearing ends on
     `captcha_shown` - the reason this page had before anything tried to
     answer it - so a phone is never worse off for the attempt.
     """
     visit = ctx.seen.get("challenge", 0)
-    if ctx.has(*GRID_TEXTS):
-        return act_grid(ctx, visit)
+    # Before every branch, so no page can outlive the budget by staying
+    # in one of them: a grid that cannot be placed used to loop here
+    # until the router called it `stuck_on_challenge`, which is a phrase
+    # about this tool rather than about Spotify.
     if visit >= CHALLENGE_VISITS - 1:
         kept = ctx.keep("captcha_shown")
         return Outcome("fatal", "captcha_shown",
                        f"the challenge was still up after "
                        f"{CHALLENGE_VISITS} looks: "
                        f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
+    if _grid_up(ctx):
+        return act_grid(ctx, visit)
+    # One touch per settle, whatever the last touch was.
+    since = None if ctx.acted_on is None else visit - ctx.acted_on
+    if since is not None and since < SETTLE_VISITS:
+        log.info("letting the challenge settle (%d of %d)",
+                 since, SETTLE_VISITS)
+        time.sleep(4)
+        return None
     box = _robot_box(ctx)
-    if box is not None and not box.checked:
-        if (ctx.ticked_on is not None
-                and visit - ctx.ticked_on < TICK_AGAIN):
-            # Still deciding. reCAPTCHA leaves the box reading unticked
-            # for a few seconds after a tap, and a second tap unticks
-            # what the first ticked - two Google builds spent their whole
-            # allowance doing exactly that (1787 and 1788, 2026-09-06).
-            log.info("waiting for reCAPTCHA to decide (%d of %d)",
-                     visit - ctx.ticked_on, TICK_AGAIN)
+    # The box first, until this run has ticked it once: a Continue under
+    # a widget nobody has answered is a press the page can only refuse.
+    complaining = ctx.has(*NOT_SATISFIED_TEXTS)
+    if ctx.ticks == 0 or (complaining and not ctx.answered_since_continue):
+        if box is None:
+            # The anchor arrives in the tree a moment after the page
+            # does. Waited for rather than worked around, because the
+            # alternative is pressing Continue instead.
             time.sleep(4)
             return None
-        if ctx.ticked_on is None:
+        if ctx.ticks == 0:
             # The page as it arrived, once: what the challenge looked
             # like before anything was pressed is the only picture worth
             # having when a week of these is read back.
             ctx.keep("captcha-page")
         log.info("%s: Spotify is challenging this phone; ticking "
-                 "\"I'm not a robot\"", ctx.creds.email)
+                 "\"I'm not a robot\"%s", ctx.creds.email,
+                 " again - the page says the last one did not take"
+                 if ctx.ticks else "")
         screen.tap_element(ctx.client, ctx.phone_id, box)
-        ctx.ticked_on = visit
+        ctx.ticks += 1
+        ctx.answered_since_continue = True
+        ctx.acted_on = visit
         time.sleep(5)
         return None
-    # Ticked, or gone from the page because reCAPTCHA has taken it away.
-    # Either way the button under it is what submits the challenge.
+    # Answered, and settled. Whether the widget is satisfied cannot be
+    # read off the page, so the answer is submitted and the page is let
+    # judge: a Continue it will not take comes back carrying "Please
+    # check the box above", which buys exactly one more tick above - and
+    # then this submits again. Tick, submit, tick, submit, bounded by
+    # CONTINUE_TRIES, rather than ticking at whatever the page is still
+    # saying about the last press.
     if ctx.continues >= CONTINUE_TRIES:
         kept = ctx.keep("captcha_shown")
         return Outcome("fatal", "captcha_shown",
@@ -747,7 +833,9 @@ def act_challenge(ctx: Context) -> Outcome | None:
                        f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
     if _tap_safely(ctx, CHALLENGE_BUTTON):
         ctx.continues += 1
-        log.info("the box is ticked; pressing Continue (%d of %d)",
+        ctx.answered_since_continue = False
+        ctx.acted_on = visit
+        log.info("submitting the challenge with Continue (%d of %d)",
                  ctx.continues, CONTINUE_TRIES)
         time.sleep(8)
         return None

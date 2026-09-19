@@ -437,32 +437,133 @@ def test_the_challenge_page_is_recognised_and_is_not_a_fatal_on_sight():
     assert box.bounds == "[132,526][181,575]"
 
 
-def test_the_tick_box_is_tapped_once_and_then_left_alone(phone):
-    ctx = ctx_for("challenge")
-    assert sl.act_challenge(ctx) is None
-    assert phone["tapped"] == ["I'm not a robot"]
-    assert ctx.ticked_on == 0
-    # reCAPTCHA reads unticked for a few seconds while it decides, and a
-    # second tap unticks what the first ticked (1787 and 1788).
-    for visit in range(1, sl.TICK_AGAIN):
-        ctx.seen["challenge"] = visit
-        assert sl.act_challenge(ctx) is None
-    assert phone["tapped"] == ["I'm not a robot"]
-    # Long enough, and it never took: tapped again, not waited on forever.
-    ctx.seen["challenge"] = sl.TICK_AGAIN
-    assert sl.act_challenge(ctx) is None
-    assert phone["tapped"] == ["I'm not a robot", "I'm not a robot"]
+def _at(ctx, visit):
+    """Put the context at a visit the way `router.drive` does - it
+    increments `seen` BEFORE calling the act, so the first call sees 1,
+    never 0. Tests that drove it from 0 measured a run that cannot
+    happen."""
+    ctx.seen["challenge"] = visit
+    return ctx
 
 
-def test_continue_is_pressed_once_the_box_is_ticked(phone):
+def test_one_touch_per_settle_however_the_page_behaves(phone):
+    """The whole rule, in one test: a tick, then nothing until the page
+    has had SETTLE_VISITS to react.
+
+    A second tap inside that window unticks what the first ticked, which
+    is what two Google builds spent their allowance doing (1787, 1788).
+    """
     ctx = ctx_for("challenge")
-    ctx.elements = [e if "not a robot" not in e.label.lower()
-                    else screen.Element(**{**e.__dict__, "checked": True})
-                    for e in ctx.elements]
-    ctx.blob = screen.texts(ctx.elements)
-    assert sl.act_challenge(ctx) is None
-    assert phone["tapped"] == ["Continue"]
+    assert sl.act_challenge(_at(ctx, 1)) is None
+    assert phone["tapped"] == ["I'm not a robot"]
+    assert ctx.acted_on == 1 and ctx.ticks == 1
+    for visit in range(2, 1 + sl.SETTLE_VISITS):
+        assert sl.act_challenge(_at(ctx, visit)) is None
+    assert phone["tapped"] == ["I'm not a robot"], "touched inside the window"
+
+
+def test_the_tick_is_submitted_rather_than_confirmed(phone):
+    """The box cannot be asked whether it took: Chrome renders the
+    anchor `checkable="false"` and `checked` never becomes true.
+
+    Waiting for it cost a whole run - thirteen visits on 3644, two grids
+    answered, Continue never pressed once, and reCAPTCHA's own token
+    expired underneath it (2026-09-19). So once the page has settled the
+    challenge is submitted and the page is let answer.
+    """
+    ctx = ctx_for("challenge")
+    box = sl._robot_box(ctx)
+    assert box is not None and not box.checked, (
+        "the captured anchor reports itself unchecked, which is the "
+        "whole point of this test")
+    sl.act_challenge(_at(ctx, 1))                       # tick
+    assert sl.act_challenge(_at(ctx, 1 + sl.SETTLE_VISITS)) is None
+    assert phone["tapped"] == ["I'm not a robot", "Continue"]
     assert ctx.continues == 1
+
+
+def test_continue_is_never_pressed_before_this_run_has_ticked(phone):
+    """Not even when the anchor is missing from the tree, which it is
+    for a moment while the reCAPTCHA iframe lays itself out. The press
+    would only be refused, and it spends one of three tries."""
+    ctx = ctx_for("challenge")
+    ctx.elements = [e for e in ctx.elements
+                    if "not a robot" not in e.label.lower()]
+    ctx.blob = screen.texts(ctx.elements)
+    assert sl._robot_box(ctx) is None
+    assert sl.act_challenge(_at(ctx, 1)) is None
+    assert phone["tapped"] == [], "pressed Continue with nothing ticked"
+    assert ctx.continues == 0
+
+
+def test_a_complaint_that_stays_on_the_page_ticks_once_not_every_visit(phone):
+    """"Please check the box above." is page copy, not an event: it sits
+    in the tree until the form is submitted again.
+
+    Read as an event it re-tapped the anchor on every visit - tick,
+    untick, tick - and Continue became unreachable, which is the same
+    livelock the `box.checked` gate caused, with a text gate instead.
+    """
+    ctx = ctx_for("challenge")
+    sl.act_challenge(_at(ctx, 1))                       # tick
+    sl.act_challenge(_at(ctx, 1 + sl.SETTLE_VISITS))    # Continue
+    assert phone["tapped"] == ["I'm not a robot", "Continue"]
+    # The page now complains, and keeps complaining.
+    ctx.blob = ctx.blob + " please check the box above."
+    at = 1 + sl.SETTLE_VISITS
+    for step in range(1, 3 * sl.SETTLE_VISITS):
+        assert sl.act_challenge(_at(ctx, at + step)) is None
+    ticks = phone["tapped"].count("I'm not a robot")
+    assert ticks == 2, f"ticked {ticks} times for one complaint"
+
+
+def test_continue_waits_out_a_settle_of_its_own(phone):
+    """Pressing it does not reset the clock, so a page that answers
+    nothing gets all three presses inside three visits - and a sign-in
+    that had *passed* gets two more presses on top of it while the
+    hand-back is still in flight, then dies as captcha_shown."""
+    ctx = ctx_for("challenge")
+    sl.act_challenge(_at(ctx, 1))
+    sl.act_challenge(_at(ctx, 1 + sl.SETTLE_VISITS))    # Continue #1
+    assert ctx.continues == 1
+    for step in range(1, sl.SETTLE_VISITS):
+        assert sl.act_challenge(_at(ctx, 1 + sl.SETTLE_VISITS + step)) is None
+    assert ctx.continues == 1, "pressed again inside its own settle window"
+
+
+def test_the_budget_fits_three_whole_cycles():
+    """A cycle is a tick, its settle and a Continue. The run used to be
+    given fourteen visits and spend four of them settling after each
+    touch, which could not fit what CONTINUE_TRIES promised."""
+    cycle = 1 + sl.SETTLE_VISITS + 1
+    assert sl.CHALLENGE_VISITS - 1 >= cycle * sl.CONTINUE_TRIES, (
+        f"{sl.CHALLENGE_VISITS} visits cannot fit {sl.CONTINUE_TRIES} "
+        f"cycles of {cycle}")
+
+
+def test_the_visit_cutoff_is_reached_even_while_a_grid_is_on_screen(
+        monkeypatch):
+    """The grid branch used to sit above it, so a grid that could not be
+    placed looped until the router called it `stuck_on_challenge` - a
+    phrase about this tool, not about Spotify."""
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    ctx = ctx_for("captcha-grid")
+    ctx.solver_key = "CAP-test"
+    out = sl.act_challenge(_at(ctx, sl.CHALLENGE_VISITS - 1))
+    assert out is not None and out.reason == "captcha_shown"
+
+
+def test_continue_is_not_pressed_through_the_grid_overlay(phone):
+    """Spotify's own Continue stays in the tree underneath the grid, at
+    coordinates the tiles now occupy - so "no grid heading" is not
+    enough to call the overlay gone."""
+    ctx = ctx_for("captcha-grid")
+    assert screen.find(ctx.elements, "Continue", clickable_only=True)
+    assert sl._grid_up(ctx)
+    # Even with the heading gone mid-redraw, the footer gives it away.
+    ctx.blob = ctx.blob.replace("select all squares", "").replace(
+        "select all images", "")
+    assert sl._grid_up(ctx)
 
 
 def test_a_challenge_that_will_not_clear_ends_where_it_did_before(
@@ -476,7 +577,9 @@ def test_a_challenge_that_will_not_clear_ends_where_it_did_before(
     # And pressing Continue at a page that keeps coming back is bounded.
     ctx = ctx_for("challenge")
     ctx.continues = sl.CONTINUE_TRIES
-    ctx.ticked_on = 0
+    ctx.ticks = 1
+    ctx.acted_on = 1
+    ctx.seen["challenge"] = 1 + sl.SETTLE_VISITS   # past the settle window
     ctx.elements = [e for e in ctx.elements
                     if "not a robot" not in e.label.lower()]
     ctx.blob = screen.texts(ctx.elements)
