@@ -2115,3 +2115,78 @@ def test_an_account_that_appears_under_another_name_is_signed_in(monkeypatch):
     google_login.sign_in(None, "P1", _account())
     out = driven["is_done"]()
     assert out is not None and out.ok and out.signed_in_as == ""
+
+
+# ------------------- a code box in front of a row that answers another way
+def test_a_recovery_row_asks_for_another_way_before_giving_up(phone,
+                                                              tmp_path):
+    """Three Gmails whose second factor is a recovery address died on the
+    code page with the answer in their hands: `act_totp` asked only
+    whether there was a key, and a row without one was the end of it
+    (2026-09-19).
+
+    Google has another way into such an account, and the button under
+    the box opens the list that offers it - where
+    `act_choose_authenticator` takes the recovery option.
+    """
+    done = phone(taps_that_work={"Try another way"})
+    account = Account(email="a@example.com", password="x", totp_secret="",
+                      recovery_email="keeper@example.com")
+    ctx = a_context(input_box(), account=account)
+    ctx.artifact_dir = tmp_path
+
+    out = login.act_totp(ctx)
+
+    assert out is None, "it did not give up"
+    assert done.tapped == ["Try another way"]
+
+
+def test_a_row_with_nothing_to_answer_with_still_gives_up_at_once(phone,
+                                                                  tmp_path):
+    """The counterweight. Pressing it with nothing behind it is how a
+    phone spends five minutes reaching a passkey dead end (2026-09-10)."""
+    done = phone(taps_that_work={"Try another way"})
+    account = Account(email="a@example.com", password="x", totp_secret="")
+    ctx = a_context(input_box(), account=account)
+    ctx.artifact_dir = tmp_path
+
+    out = login.act_totp(ctx)
+
+    assert out is not None and out.reason == "no_authenticator"
+    assert "Try another way" not in done.tried, "it was not even asked for"
+
+
+def test_a_page_with_no_such_button_is_the_end_of_it(phone, tmp_path):
+    """The press is offered, not assumed: a code page without the button
+    is still a page this row cannot answer."""
+    done = phone()                       # nothing taps successfully
+    account = Account(email="a@example.com", password="x", totp_secret="",
+                      recovery_email="keeper@example.com")
+    ctx = a_context(input_box(), account=account)
+    ctx.artifact_dir = tmp_path
+
+    out = login.act_totp(ctx)
+
+    assert out is not None and out.reason == "no_authenticator"
+    assert "Try another way" in done.tried, "it did try"
+
+
+def test_asking_for_another_way_is_bounded(phone, tmp_path):
+    """The press either opens the list or it does not; a third is the
+    same answer a third time."""
+    done = phone(taps_that_work={"Try another way"})
+    account = Account(email="a@example.com", password="x", totp_secret="",
+                      recovery_email="keeper@example.com")
+    ctx = a_context(input_box(), account=account)
+    ctx.artifact_dir = tmp_path
+
+    for visit in range(1, login.ANOTHER_WAY_TRIES + 1):
+        ctx.seen["2fa_code_entry"] = visit
+        assert login.act_totp(ctx) is None, visit
+    ctx.seen["2fa_code_entry"] = login.ANOTHER_WAY_TRIES + 1
+    out = login.act_totp(ctx)
+
+    assert out is not None and out.reason == "no_authenticator"
+    # And it says the row had an answer Google would not take, which is a
+    # different thing to fix from a row that has none.
+    assert "recovery address" in out.detail

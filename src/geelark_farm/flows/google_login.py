@@ -806,6 +806,11 @@ def act_password(ctx: Context) -> Outcome | None:
 #: A person opens the authenticator, reads six digits and comes back.
 CODE_LOOKUP_SECONDS = (5.0, 11.0)
 
+#: Visits to the code page on which a row with a recovery address may
+#: ask for another way. Two: the press either opens the list or it does
+#: not, and a third is the same answer a third time.
+ANOTHER_WAY_TRIES = 2
+
 
 def act_totp(ctx: Context) -> Outcome | None:
     """Type an authenticator code with enough life left to survive submission."""
@@ -814,13 +819,38 @@ def act_totp(ctx: Context) -> Outcome | None:
         return None
     shell.pause(*CODE_LOOKUP_SECONDS)
     if not ctx.account.has_authenticator:
+        # A code box in front of a row that has no key. Whether that is
+        # the end depends on what else the row carries.
+        #
+        # With a recovery address it is not: Google has another way into
+        # this account and the button under the box opens the list that
+        # offers it, where `act_choose_authenticator` takes the recovery
+        # option. Three rows whose second factor is an address died here
+        # with the answer in their hands, because this asked only
+        # whether there was a key (2026-09-19).
+        #
+        # The warning on `act_try_another_way` is about a different
+        # page: pressing it on a *method list* that already shows the
+        # authenticator tells Google we have nothing else. Here there is
+        # a box we genuinely cannot fill, which is what a person pressing
+        # it would be saying too.
+        if (ctx.account.recovery_email
+                and ctx.seen.get("2fa_code_entry", 0) <= ANOTHER_WAY_TRIES
+                and ctx.tap("Try another way")):
+            log.info("no authenticator key on the row, but a recovery "
+                     "address is; asking Google for another way")
+            time.sleep(4)
+            return None
         # Accounts sold without 2FA normally never reach this screen. When one
         # does, Google is asking for something the row cannot produce, and
         # saying so beats an AccountError escaping into the catch-all and
         # arriving in the sheet as "error".
         path = ctx.save("no_authenticator")
         return Outcome("fatal", "no_authenticator",
-                       FATAL_ADVICE["no_authenticator"],
+                       (f"{FATAL_ADVICE['no_authenticator']} This row has a "
+                        f"recovery address and Google would not offer it."
+                        if ctx.account.recovery_email
+                        else FATAL_ADVICE["no_authenticator"]),
                        artifacts=[path] if path else [])
     code = ctx.account.totp_now()
     log.info("entering a fresh authenticator code")
