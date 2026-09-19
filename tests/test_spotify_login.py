@@ -773,3 +773,23 @@ def test_the_stale_button_rule_does_not_move_googles_grid():
     ctx.blob = screen.texts(ctx.elements)
     assert rc._footer_row(ctx, below=198) == rc._button_row(ctx, below=198)
     assert rc.grid_rect(ctx) == (34, 198, 690, 898)
+
+
+def test_send_asks_as_the_person_pressing_it():
+    """The door has to know who is asking, or a kept phone is kept from
+    its keeper too. Phone 3644 was reserved, had to be un-reserved to be
+    sent to, and was taken and marked failed by another operator inside
+    that window (2026-09-19)."""
+    import inspect
+
+    from geelark_farm import builder, verbs
+
+    send = inspect.getsource(verbs.login_accounts)
+    assert 'for_owner=str(payload.get("by_id")' in send, (
+        "login_accounts must ask _unfinished as the person pressing it")
+    assert "for_owner" in inspect.signature(builder._unfinished).parameters
+    # And the console puts by_id on every payload it queues, which is
+    # what makes that lookup mean anything.
+    from geelark_farm.web import app as web_app
+
+    assert 'by_id=user["id"]' in inspect.getsource(web_app)

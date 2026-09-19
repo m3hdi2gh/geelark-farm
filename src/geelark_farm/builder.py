@@ -4337,12 +4337,15 @@ def check_proxies(client: Client, book: Book) -> tuple[list[Resource],
 
 def _unfinished(client: Client, book: Book,
                 listing: list[dict] | None = None,
-                held_too: bool = False) -> tuple[list[dict], list[dict]]:
+                held_too: bool = False,
+                for_owner: str = "") -> tuple[list[dict], list[dict]]:
     """Phones one step short, split into those that still exist and those that
     do not. GeeLark's own listing is what says which - handed in when the
     caller has already asked for it this pass, fetched otherwise. `held_too`
-    is the keeper's count, which keeps a taken phone (see PhoneLog.unfinished)."""
-    pending = book.phones.unfinished(held_too=held_too)
+    is the keeper's count, which keeps a taken phone (see PhoneLog.unfinished).
+    `for_owner` lets the person asking reach the phones on their own shelf,
+    which nobody else may have."""
+    pending = book.phones.unfinished(held_too=held_too, for_owner=for_owner)
     # Resolved here rather than stored in the tab. The id is a machine's
     # handle - twenty digits nobody reads - and the serial is what the panel,
     # the notes and the operator all call the phone by, so the sheet keeps the

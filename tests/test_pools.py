@@ -2458,3 +2458,55 @@ def test_each_product_keeps_its_own_kinds():
     assert "not one of" in str(refused.value)
     pool.set_kind(spot, "error")
     assert spot.values["Category"] == "error"
+
+
+# --------------------------------------- a kept phone is still its owner's
+def _shelf_log():
+    """Three phones: one on user 4's shelf, one on user 7's, one free."""
+    headers = list(PHONE_APP_HEADERS) + [
+        h for h in ("State", "Built by", "Owner")
+        if h not in PHONE_APP_HEADERS]
+
+    def row(serial, owner=""):
+        line = phone_row(serial, headers=headers)
+        line[headers.index("State")] = ""
+        line[headers.index("Owner")] = owner
+        return line
+
+    return phone_log([row("821", "4"), row("822", "7"), row("823")],
+                     headers=headers)
+
+
+def test_keeping_a_phone_and_using_it_are_not_the_same_door():
+    """A phone with a name on it is nobody else's - but its owner was shut
+    out with everybody else, so to send an account to one they had to let
+    go of it first. In that gap another operator took phone 3644 and
+    marked it failed, with the account still waiting for it (2026-09-19).
+    """
+    log = _shelf_log()
+
+    # Nobody in particular: the shelves are closed, as they always were.
+    assert [r["serial"] for r in log.unfinished()] == ["823"]
+    # User 4 asking: their own shelf opens, and only theirs.
+    assert [r["serial"] for r in log.unfinished(for_owner="4")] == [
+        "821", "823"]
+    assert [r["serial"] for r in log.unfinished(for_owner="7")] == [
+        "822", "823"]
+    # A stranger gets what anybody gets.
+    assert [r["serial"] for r in log.unfinished(for_owner="99")] == ["823"]
+
+
+def test_an_owner_id_is_matched_whole_and_not_by_its_digits():
+    """`for_owner` is compared as a string, so user 4 must not be let
+    into user 41's shelf."""
+    headers = list(PHONE_APP_HEADERS) + [
+        h for h in ("State", "Owner") if h not in PHONE_APP_HEADERS]
+    line = phone_row("821", headers=headers)
+    line[headers.index("Owner")] = "41"
+    log = phone_log([line], headers=headers)
+
+    assert log.unfinished(for_owner="4") == []
+    assert [r["serial"] for r in log.unfinished(for_owner="41")] == ["821"]
+    # Blank and whitespace mean "nobody is asking", not "match a blank owner".
+    assert log.unfinished(for_owner="") == []
+    assert log.unfinished(for_owner="  ") == []

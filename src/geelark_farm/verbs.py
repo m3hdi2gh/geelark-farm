@@ -733,7 +733,12 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
         return "refused", "no account was chosen", None
     if client is None or launch is None:
         return "failed", "this pass cannot start phone work", None
-    warm, _gone = builder._unfinished(client, book)
+    # Asked as the person pressing the button, so a phone they are
+    # keeping is theirs to send to. Without this, holding a phone and
+    # using it were the same door and could not both be open (3644,
+    # 2026-09-19).
+    warm, _gone = builder._unfinished(
+        client, book, for_owner=str(payload.get("by_id") or ""))
     # The console's chooser names the phone; the old tick-and-send did not.
     # Named, that phone is the only one offered - and a name that is not a
     # warm phone is a refusal in words, not the next phone in line.

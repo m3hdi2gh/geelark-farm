@@ -1430,7 +1430,8 @@ class PhoneLog:
                         what=f"{self.tab} row {sheet_row}")
         return sheet_row
 
-    def unfinished(self, held_too: bool = False) -> list[dict]:
+    def unfinished(self, held_too: bool = False,
+                   for_owner: str = "") -> list[dict]:
         """Phones that got a Gmail but never an app account.
 
         `held_too` counts a phone somebody has taken as well - the keeper
@@ -1438,6 +1439,15 @@ class PhoneLog:
         is warm stock until it is marked done or failed (the operator,
         2026-09-08). Left False, a taken phone is nobody's to offer, which
         is what a Send and a finish need.
+
+        `for_owner` is the id of the person asking, and it says that a
+        phone on *their* shelf is theirs to send to. A phone with a name
+        on it is nobody else's - that is the whole point of the name -
+        but the owner was shut out along with everybody else, so keeping
+        a phone and using it were the same door: to send an account to
+        one, its owner had to let go of it first, and in that gap
+        somebody else took it and marked it failed (3644, 2026-09-19).
+        Empty means what it always meant: no owned phone is offered.
 
         Read from the columns rather than from Status, because Status names why
         a build stopped and there are several ways to stop one step short -
@@ -1472,7 +1482,10 @@ class PhoneLog:
             # still theirs - and a phone with a name on it is nobody
             # else's to finish or to send an account to (2026-09-18).
             # Release clears the Owner, and that is what gives it back.
-            owned = bool(cell("Owner").strip())
+            # Owned by somebody who is not the person asking. Their own
+            # shelf is theirs to reach; everyone else's is not.
+            owner = cell("Owner").strip()
+            owned = bool(owner) and owner != str(for_owner or "").strip()
             if held_too:
                 if said in (self.DONE, self.FAILED):
                     continue
