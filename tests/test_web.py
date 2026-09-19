@@ -7412,23 +7412,41 @@ def test_the_gmail_editor_offers_the_key_not_the_address():
 def _glark(**found):
     from geelark_farm.web import pages
 
-    return pages._geelark_card(
+    return pages._geelark_line(
         {"geelark": found},
         {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
          "is_admin": True, "may_login_accounts": True})
 
 
-def test_the_geelark_card_shows_the_two_limits_the_api_really_gives():
+def test_the_geelark_line_shows_the_two_limits_the_api_really_gives():
     import time
 
-    card = _glark(plan={"profiles": 40, "availableProfiles": 32,
+    line = _glark(plan={"profiles": 40, "availableProfiles": 32,
                         "expirationTime": 1792110224},
                   at=time.time() - 300)
 
-    assert "Phone slots" in card and "8 of 40 used" in card
-    assert "32 free" in card
-    assert "Subscription" in card and "16 Oct 2026" in card
-    assert "read 5m ago" in card
+    assert "8/40 phone slots" in line
+    assert "plan ends 16 Oct (26d)" in line
+    assert "5m ago" in line
+
+
+def test_the_line_is_quiet_until_something_is_wrong():
+    """It sits at the foot of the page to be scrolled past, so nothing
+    on it is coloured while nothing is the matter (the operator,
+    2026-09-20)."""
+    import time
+
+    calm = _glark(plan={"profiles": 40, "availableProfiles": 32,
+                        "expirationTime": 1792110224}, at=time.time())
+
+    assert "var(--" not in calm, "nothing shouts when nothing is wrong"
+    # And it colours only the part that has gone wrong.
+    filling = _glark(plan={"profiles": 40, "availableProfiles": 6},
+                     at=time.time())
+    assert "var(--amber)" in filling
+    assert "var(--red)" in _glark(plan={"profiles": 40,
+                                        "availableProfiles": 1},
+                                  at=time.time())
 
 
 def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
@@ -7437,17 +7455,17 @@ def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
     nineteen builds were turned down (2026-09-19)."""
     import time
 
-    card = _glark(plan={"profiles": 40, "availableProfiles": 32},
+    line = _glark(plan={"profiles": 40, "availableProfiles": 32},
                   at=time.time(),
                   refusal="start failed [41001] balance not enough",
                   refused_at=time.time() - 60)
 
-    assert "Phones will not start" in card
-    assert "balance not enough" in card
-    assert "var(--red)" in card
-    # And the card says outright that the number everybody wants is not
-    # on offer, so nobody comes to trust its absence as good news.
-    assert "no balance in it" in card
+    assert "phones will not start" in line
+    assert "balance not enough" in line
+    assert "var(--red)" in line
+    # And it says outright that the number everybody wants is not on
+    # offer, so a quiet foot is not read as a full account.
+    assert "no balance in the API" in line
 
 
 def test_an_old_refusal_stops_being_news():
@@ -7455,19 +7473,27 @@ def test_an_old_refusal_stops_being_news():
 
     from geelark_farm.web import pages
 
-    card = _glark(plan={"profiles": 40, "availableProfiles": 40},
+    line = _glark(plan={"profiles": 40, "availableProfiles": 40},
                   at=time.time(),
                   refusal="start failed [41001] balance not enough",
                   refused_at=time.time() - pages.REFUSAL_SHOWN_FOR - 60)
 
-    assert "balance not enough" not in card
+    assert "balance not enough" not in line
 
 
-def test_the_slots_bar_turns_as_they_fill():
-    for free, colour in ((32, "green"), (6, "amber"), (1, "red")):
-        card = _glark(plan={"profiles": 40, "availableProfiles": free})
-        assert f"var(--{colour})" in card, free
-
-
-def test_the_card_says_nothing_when_the_keeper_has_not_read_the_plan_yet():
+def test_the_line_says_nothing_when_the_keeper_has_not_read_the_plan_yet():
     assert _glark() == ""
+
+
+def test_the_geelark_line_is_at_the_foot_and_not_in_the_rail():
+    """Asked for there: it is the ground the farm stands on, not
+    anybody's work, and it should cost no room until it is wanted."""
+    import inspect
+
+    from geelark_farm.web import pages
+
+    body = inspect.getsource(pages.dashboard)
+    rail = body.index('class="rail"')
+    foot = body.index("_geelark_line(data, user)")
+    assert foot > body.index("_pool_manager("), "it goes after the page"
+    assert "_geelark_line" not in body[rail:body.index('</div>', rail)]
