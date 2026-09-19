@@ -36,12 +36,32 @@ which is the standard `dumpsys account` sets for Google and what
 `verify_account` reads. The username above it is Spotify's generated one
 (`31u5nofnu...`), not the address, so it is the Email line that is read.
 
+## The challenge, which is not in the app
+
+On a phone Spotify does not trust, the password does not land on the
+home screen: the app hands the sign-in to the browser. Chrome opens a
+Custom Tab on `challenge.spotify.com` - "We need to make sure that
+you're a human" over a reCAPTCHA v2 tick box (`recaptcha-anchor`) and a
+green Continue - and the account is signed in only once that is
+answered. Captured on 3644, the first warm phone an `error` account was
+ever sent to (2026-09-19); the operator passes it by hand with two taps,
+and `act_challenge` does the same two taps.
+
+A phone that has never opened Chrome shows Chrome's own first-run page
+first: "Make Chrome your own" over the phone's Gmail, a "Continue as
+<first name>" and a "Use without an account". It has a screen of its
+own because the dismiss list's "Continue" matched "Continue as Risky"
+and signed the browser into the farm's Google account - the one thing
+this flow says it never does (3644, 2026-09-19).
+
 ## What this flow will not do
 
 **Continue with Google or Facebook.** A phone that has a Gmail on it
 would be signed in as that Gmail, which looks like success and is the
 wrong account; a bare phone has nothing there at all. Nothing matching
-"google" or "facebook" is ever tapped. **Sign up.** Never tapped either.
+"google" or "facebook" is ever tapped - and since 2026-09-19 that rule
+covers the dismiss list too, which used to reach a Google control by
+matching the first word of its label. **Sign up.** Never tapped either.
 **Take the emailed code.** The account is an address and a password;
 the code page is passed through to the password page every time.
 """
@@ -83,8 +103,13 @@ LOGIN_BUTTON = "Log in"
 #: on the page for an address Spotify does not know: this flow signs
 #: accounts in and never makes one (2026-09-18). The two CTAs are
 #: Spotify asking for money, and the farm never pays (2026-09-16).
+#: "continue as" is the browser's: Chrome's first-run page offers
+#: "Continue as <first name>" for the Gmail on the phone, and the
+#: dismiss list's "Continue" reached it by partial match and signed the
+#: browser in as the farm (3644, 2026-09-19).
 NEVER_TAPPED = ("google", "facebook", "sign up", "create account",
-                "update payment", "primarycta", "get premium")
+                "update payment", "primarycta", "get premium",
+                "continue as", "use another account")
 
 #: The home screen (captured): the profile control and the tab strip.
 #: "of 4" on a Premium account, "of 5" on a free one - which has a
@@ -119,6 +144,47 @@ TRY_AGAIN_LABEL = "Try Again"
 #: swap the exit and try the same account again.
 TRY_AGAIN_TIMES = 3
 
+#: The browser Spotify hands its challenge to. Named so a page drawn by
+#: it is recognised as somebody else's - the router's `left_the_app`
+#: already says as much, and this flow now has screens for the two pages
+#: of Chrome's it will meet.
+CHROME_PACKAGE = "com.android.chrome"
+
+#: Chrome's first-run page, on a phone that has never opened the browser:
+#: "Make Chrome your own" over the phone's Gmail, with "Continue as
+#: <first name>" above "Use without an account". Only the decline is ever
+#: pressed (3644, 2026-09-19).
+CHROME_SETUP_TEXTS = ("make chrome your own",)
+CHROME_DECLINE = "Use without an account"
+
+#: Spotify's challenge, as captured on 3644: the heading, the reCAPTCHA
+#: tick box by its own id, and the green button under it. The heading is
+#: matched loosely because the same page has been seen worded both ways
+#: on the web, and the tick box alone is enough to know the page.
+CHALLENGE_TEXTS = ("make sure that you're a human",
+                   "make sure that you are a human",
+                   "verify you are human", "verify you're human",
+                   "confirm you are human", "confirm you're human")
+ROBOT_LABEL = "not a robot"
+CHALLENGE_BUTTON = "Continue"
+#: The image grid reCAPTCHA falls back to when the tick alone will not
+#: do. Not answered here: the grid machinery lives in the Google flow,
+#: and a Spotify grid has never been seen. Reported by its own name so
+#: the first one is known for what it is rather than read as a tick that
+#: would not take.
+GRID_TEXTS = ("select all images", "select all squares")
+
+#: Visits the challenge page gets before the account goes back as
+#: `captcha_shown`. Most of them are waiting: reCAPTCHA leaves the box
+#: reading unticked for a few seconds while it decides, which is the
+#: lesson two Google builds paid for (phones 1787 and 1788, 2026-09-06).
+CHALLENGE_VISITS = 14
+#: Visits to leave the box alone after tapping it, for the same reason:
+#: a second tap unticks what the first ticked.
+TICK_AGAIN = 4
+#: How many times Continue is pressed on a page that keeps coming back.
+CONTINUE_TRIES = 3
+
 #: Anything containing one of these cannot proceed unattended.
 FATAL_TEXTS = {
     # The dialog a refused password brings up (captured with a wrong
@@ -139,10 +205,6 @@ FATAL_TEXTS = {
         "is not linked to spotify", "isn't linked to spotify",
         "does not have a spotify account", "doesn't have a spotify account",
         "no account with that email", "could not find an account",
-    ),
-    "captcha_shown": (
-        "verify you are human", "verify you're human", "i'm not a robot",
-        "confirm you are human", "confirm you're human",
     ),
     "rate_limited": ("too many attempts", "too many requests",
                      "try again later"),
@@ -165,8 +227,14 @@ FATAL_ADVICE = {
         "for an unpaid bill - the farm never pays, so a person decides "
         "what this row is worth",
     "captcha_shown":
-        "Spotify is challenging this exit IP; a cleaner proxy is the fix "
-        "and no code change helps",
+        "Spotify's challenge page did not clear - the tick box was "
+        "answered and reCAPTCHA was not satisfied, which is a verdict on "
+        "the exit and the device, not on the account; a cleaner proxy is "
+        "the fix",
+    "captcha_grid":
+        "reCAPTCHA would not take the tick and asked for pictures; only "
+        "the tick box is answered here, and a grid is the exit being "
+        "distrusted rather than the account",
     "rate_limited":
         "Spotify is rate-limiting sign-ins from this exit or for this "
         "address; wait, or use another exit",
@@ -229,6 +297,11 @@ class Context(router.Context):
     #: Whether this account's plan turned out to be paused - said once,
     #: however many times the page comes back.
     plan_paused: bool = False
+    #: The challenge visit the tick box was last tapped on, so the flow
+    #: waits for reCAPTCHA to decide instead of unticking its own tap.
+    ticked_on: int | None = None
+    #: How many times Continue has been pressed on the challenge page.
+    continues: int = 0
 
     @property
     def signed_something_in(self) -> bool:
@@ -432,12 +505,170 @@ def act_plan_paused(ctx: Context) -> Outcome | None:
     return None
 
 
+def _no_size(element) -> bool:
+    """Whether this element is laid out with no area, which makes its
+    centre a point on the screen that has nothing to do with it."""
+    nums = [int(n) for n in re.findall(r"-?\d+", element.bounds)]
+    if len(nums) != 4:
+        return True
+    return nums[2] <= nums[0] or nums[3] <= nums[1]
+
+
+def _dismissable(ctx: Context):
+    """The first dismiss control on the page that this flow is allowed to
+    touch, or None.
+
+    The allowlist is matched partially - "Continue" finds "Continue" in a
+    longer label - and that is what it is for, since the same button is
+    "Continue" on one rendering and "Continue to Spotify" on another. It
+    also means one word of the list can reach a control that does
+    something else entirely: on Chrome's first-run page "Continue" found
+    "Continue as Risky" and signed the browser into the phone's Gmail
+    (3644, 2026-09-19). So what the allowlist finds is put through the
+    same refusal every other tap in this flow goes through.
+    """
+    for label in DISMISS_LABELS:
+        element = screen.find(ctx.elements, label, clickable_only=False)
+        if element is None:
+            continue
+        if any(word in element.label.casefold() for word in NEVER_TAPPED):
+            log.warning("not dismissing with %r: it matched %r", label,
+                        element.label)
+            continue
+        if _no_size(element):
+            # A web page's "Skip to content" is a link laid out at
+            # [0,0][0,0], and the centre of that is the screen's own
+            # top-left corner - so dismissing with it is a tap on
+            # whatever is up there (3644, 2026-09-19).
+            log.warning("not dismissing with %r: %r has no size", label,
+                        element.label)
+            continue
+        return element
+    return None
+
+
 def act_dismiss(ctx: Context) -> Outcome | None:
-    tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
-                                      DISMISS_LABELS, clickable_only=False)
+    element = _dismissable(ctx)
+    tapped = element.label if element is not None and screen.tap_element(
+        ctx.client, ctx.phone_id, element) else None
     if tapped:
         log.info("dismissed %r", tapped)
         time.sleep(3)
+    return None
+
+
+# ------------------------------------------------- the browser's two pages
+def on_chrome_setup(ctx: Context) -> bool:
+    return ctx.has(*CHROME_SETUP_TEXTS)
+
+
+def act_chrome_setup(ctx: Context) -> Outcome | None:
+    """Decline Chrome's offer to sign in, and never take it.
+
+    The browser is here to draw one challenge page and close again. What
+    it must not do on the way is adopt the phone's Google account, which
+    is what the "Continue as <first name>" above the decline does - and
+    what this flow did once, by partial match, before this screen
+    existed (3644, 2026-09-19).
+    """
+    if _tap_safely(ctx, CHROME_DECLINE):
+        log.info("declined Chrome's sign-in; the browser stays signed out")
+        time.sleep(4)
+        return None
+    # Not the wording we captured. Kept rather than guessed at: the one
+    # thing worse than not getting past this page is getting past it by
+    # pressing something that signs the browser in.
+    kept = ctx.keep("chrome-setup")
+    return Outcome("unknown", "chrome_setup_unknown",
+                   f"Chrome is asking to be set up and {CHROME_DECLINE!r} "
+                   f"is not on the page; nothing else here is safe to "
+                   f"press", artifacts=kept)
+
+
+def _robot_box(ctx: Context):
+    """reCAPTCHA's own tick box, not the words beside it.
+
+    A CheckBox whose label says "not a robot": the page also carries the
+    same words as plain text, and tapping prose does nothing.
+    """
+    for element in ctx.elements:
+        if ("checkbox" in (element.cls or "").lower()
+                and ROBOT_LABEL in (element.label or "").lower()):
+            return element
+    return None
+
+
+def on_challenge(ctx: Context) -> bool:
+    return ctx.has(*CHALLENGE_TEXTS) or _robot_box(ctx) is not None
+
+
+def act_challenge(ctx: Context) -> Outcome | None:
+    """Answer Spotify's challenge the way the operator does: tick the box,
+    let reCAPTCHA decide, press Continue.
+
+    Every way out of here that is not the tick passing ends as
+    `captcha_shown` - the reason this page had before anything tried to
+    answer it - so a phone is never worse off for the attempt.
+    """
+    visit = ctx.seen.get("challenge", 0)
+    if ctx.has(*GRID_TEXTS):
+        # An image grid. The machinery for one exists in the Google flow
+        # and nothing here reaches it yet; a Spotify grid has never been
+        # seen, and the first one is worth knowing about by its own name
+        # rather than as a tick that would not take.
+        kept = ctx.keep("captcha-grid")
+        log.warning("%s: Spotify's challenge opened an image grid, which "
+                    "this flow cannot answer", ctx.creds.email)
+        return Outcome("fatal", "captcha_grid",
+                       "Spotify's challenge went to an image grid; only "
+                       "the tick box is answered here",
+                       artifacts=kept)
+    if visit >= CHALLENGE_VISITS - 1:
+        kept = ctx.keep("captcha_shown")
+        return Outcome("fatal", "captcha_shown",
+                       f"the challenge was still up after "
+                       f"{CHALLENGE_VISITS} looks: "
+                       f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
+    box = _robot_box(ctx)
+    if box is not None and not box.checked:
+        if (ctx.ticked_on is not None
+                and visit - ctx.ticked_on < TICK_AGAIN):
+            # Still deciding. reCAPTCHA leaves the box reading unticked
+            # for a few seconds after a tap, and a second tap unticks
+            # what the first ticked - two Google builds spent their whole
+            # allowance doing exactly that (1787 and 1788, 2026-09-06).
+            log.info("waiting for reCAPTCHA to decide (%d of %d)",
+                     visit - ctx.ticked_on, TICK_AGAIN)
+            time.sleep(4)
+            return None
+        if ctx.ticked_on is None:
+            # The page as it arrived, once: what the challenge looked
+            # like before anything was pressed is the only picture worth
+            # having when a week of these is read back.
+            ctx.keep("captcha-page")
+        log.info("%s: Spotify is challenging this phone; ticking "
+                 "\"I'm not a robot\"", ctx.creds.email)
+        screen.tap_element(ctx.client, ctx.phone_id, box)
+        ctx.ticked_on = visit
+        time.sleep(5)
+        return None
+    # Ticked, or gone from the page because reCAPTCHA has taken it away.
+    # Either way the button under it is what submits the challenge.
+    if ctx.continues >= CONTINUE_TRIES:
+        kept = ctx.keep("captcha_shown")
+        return Outcome("fatal", "captcha_shown",
+                       f"Continue was pressed {ctx.continues} times and "
+                       f"the challenge did not clear: "
+                       f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
+    if _tap_safely(ctx, CHALLENGE_BUTTON):
+        ctx.continues += 1
+        log.info("the box is ticked; pressing Continue (%d of %d)",
+                 ctx.continues, CONTINUE_TRIES)
+        time.sleep(8)
+        return None
+    # No button yet: the page redraws itself between the tick and the
+    # button becoming real. The visit allowance is what ends this.
+    time.sleep(4)
     return None
 
 
@@ -560,6 +791,12 @@ SCREENS: list[Screen] = [
            max_visits=TRY_AGAIN_TIMES + 2),
     Screen("plan_paused", on_plan_paused, act_plan_paused,
            max_visits=PLAN_PAUSED_TRIES + 2),
+    # The browser's two pages, ahead of everything the app draws and
+    # ahead of `dismissable` above all: both carry words the dismiss
+    # list answers to, and neither is a page of Spotify's to dismiss.
+    Screen("chrome_setup", on_chrome_setup, act_chrome_setup, max_visits=3),
+    Screen("challenge", on_challenge, act_challenge,
+           max_visits=CHALLENGE_VISITS),
     Screen("code_page", on_code_page, act_code_page, max_visits=3),
     # The password page before the address page: both carry the title
     # and one box, and only this one carries the eye.

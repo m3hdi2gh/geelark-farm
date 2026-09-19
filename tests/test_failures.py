@@ -108,9 +108,16 @@ def test_the_scan_sees_the_reasons_the_router_builds_from_a_screen_name():
     # The twenty-seventh is `code_entry`: the Claude flow's code page, which
     # comes straight back after every refused code (2026-09-16).
     assert "stuck_on_code_entry" in reported
-    assert len({r for r in reported if r.startswith("stuck_on_")}) == 31
+    # The twenty-eighth and twenty-ninth are the browser's, which the
+    # Spotify login learned about when an `error` account first went to a
+    # warm phone: Chrome's first-run page, and the challenge page it then
+    # draws (3644, 2026-09-19).
+    assert "stuck_on_chrome_setup" in reported
+    assert "stuck_on_challenge" in reported
+    assert len({r for r in reported if r.startswith("stuck_on_")}) == 33
     # Thirty-one: the Spotify login added code_page, connection_error
     # and logged_out_home (2026-09-17), then plan_paused (2026-09-18).
+    # Thirty-three: chrome_setup and challenge (2026-09-19).
 
 
 @pytest.mark.parametrize("screen", ["totp_entry", "2fa_method_list", "welcome"])

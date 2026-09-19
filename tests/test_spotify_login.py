@@ -390,3 +390,121 @@ def test_the_flow_is_wired_to_the_product_and_normal_stays_off_the_claim():
     # the row is free, never what the automatic claim holds back.
     assert "held_back" not in inspect.getsource(pgpool.PgAppPool.claim_this)
     assert "claim_this" in inspect.getsource(builder._pick_named_app)
+
+
+# ---------------------------------------------- the browser's two pages
+# Both captured on 3644, the first warm phone an `error` account was ever
+# sent to (2026-09-19). Spotify hands the sign-in to Chrome after the
+# password: Chrome's own first-run page, then challenge.spotify.com with
+# a reCAPTCHA tick box on it.
+def test_chromes_first_run_page_is_its_own_screen_not_a_thing_to_dismiss():
+    """The dismiss list's "Continue" found "Continue as Risky" on this
+    page and signed the browser into the phone's Gmail - the one thing
+    this flow says it never does (3644, 2026-09-19)."""
+    ctx = ctx_for("chrome-setup")
+    assert matched(ctx) == "chrome_setup"
+    # Both halves of the bug: the page is claimed before `dismissable`
+    # gets it, and what `dismissable` would have taken is now refused.
+    assert sl._dismissable(ctx) is None
+
+
+def test_chrome_is_declined_never_signed_in(phone):
+    ctx = ctx_for("chrome-setup")
+    assert sl.act_chrome_setup(ctx) is None
+    assert phone["tapped"] == ["Use without an account"]
+
+
+def test_a_chrome_setup_page_we_cannot_decline_stops_rather_than_guesses(
+        phone, monkeypatch):
+    ctx = ctx_for("chrome-setup")
+    ctx.elements = [e for e in ctx.elements
+                    if "without an account" not in e.label.lower()]
+    ctx.blob = screen.texts(ctx.elements)
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    out = sl.act_chrome_setup(ctx)
+    assert out is not None and out.reason == "chrome_setup_unknown"
+    assert phone["tapped"] == []
+
+
+def test_the_challenge_page_is_recognised_and_is_not_a_fatal_on_sight():
+    """It used to be: `captcha_shown` was in FATAL_TEXTS, so the flow gave
+    up on the page the operator passes with two taps."""
+    ctx = ctx_for("challenge")
+    assert matched(ctx) == "challenge"
+    assert sl._fatal_reason(ctx) is None
+    box = sl._robot_box(ctx)
+    assert box is not None and not box.checked
+    assert box.bounds == "[132,526][181,575]"
+
+
+def test_the_tick_box_is_tapped_once_and_then_left_alone(phone):
+    ctx = ctx_for("challenge")
+    assert sl.act_challenge(ctx) is None
+    assert phone["tapped"] == ["I'm not a robot"]
+    assert ctx.ticked_on == 0
+    # reCAPTCHA reads unticked for a few seconds while it decides, and a
+    # second tap unticks what the first ticked (1787 and 1788).
+    for visit in range(1, sl.TICK_AGAIN):
+        ctx.seen["challenge"] = visit
+        assert sl.act_challenge(ctx) is None
+    assert phone["tapped"] == ["I'm not a robot"]
+    # Long enough, and it never took: tapped again, not waited on forever.
+    ctx.seen["challenge"] = sl.TICK_AGAIN
+    assert sl.act_challenge(ctx) is None
+    assert phone["tapped"] == ["I'm not a robot", "I'm not a robot"]
+
+
+def test_continue_is_pressed_once_the_box_is_ticked(phone):
+    ctx = ctx_for("challenge")
+    ctx.elements = [e if "not a robot" not in e.label.lower()
+                    else screen.Element(**{**e.__dict__, "checked": True})
+                    for e in ctx.elements]
+    ctx.blob = screen.texts(ctx.elements)
+    assert sl.act_challenge(ctx) is None
+    assert phone["tapped"] == ["Continue"]
+    assert ctx.continues == 1
+
+
+def test_a_challenge_that_will_not_clear_ends_where_it_did_before(
+        phone, monkeypatch):
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    ctx = ctx_for("challenge")
+    ctx.seen["challenge"] = sl.CHALLENGE_VISITS - 1
+    out = sl.act_challenge(ctx)
+    assert out is not None and out.kind == "fatal"
+    assert out.reason == "captcha_shown"
+    # And pressing Continue at a page that keeps coming back is bounded.
+    ctx = ctx_for("challenge")
+    ctx.continues = sl.CONTINUE_TRIES
+    ctx.ticked_on = 0
+    ctx.elements = [e for e in ctx.elements
+                    if "not a robot" not in e.label.lower()]
+    ctx.blob = screen.texts(ctx.elements)
+    out = sl.act_challenge(ctx)
+    assert out is not None and out.reason == "captcha_shown"
+
+
+def test_an_image_grid_is_named_rather_than_read_as_a_tick_that_failed(
+        monkeypatch):
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    ctx = ctx_for("challenge")
+    ctx.blob = ctx.blob + " select all images with traffic lights"
+    out = sl.act_challenge(ctx)
+    assert out is not None and out.reason == "captcha_grid"
+
+    from geelark_farm import failures
+
+    said = failures.verdict("captcha_grid", "Spotify")
+    assert said.blame == failures.EXIT
+
+
+def test_a_dismiss_word_never_reaches_a_google_control_or_a_sizeless_link():
+    """Two stray taps from one run: "Continue" took "Continue as Risky",
+    and "Skip" took a web page's "Skip to content", which is laid out at
+    [0,0][0,0] - so its centre is the screen's top-left corner."""
+    ctx = ctx_for("challenge")
+    skip = screen.find(ctx.elements, "Skip to content", clickable_only=False)
+    assert skip is not None and skip.bounds == "[0,0][0,0]"
+    assert sl._no_size(skip)
+    found = sl._dismissable(ctx)
+    assert found is None or found.label != "Skip to content"

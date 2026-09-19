@@ -522,6 +522,22 @@ VERDICTS: dict[str, Verdict] = {
         "The service does not know this address at all, so no password "
         "would get in. The row is not an account yet: check it with the "
         "seller, or remove it."),
+    # Spotify's challenge, which is drawn in Chrome and not in the app.
+    # The tick box is answered; these two are the shapes that are not.
+    "captcha_grid": Verdict(
+        EXIT, "{service}'s challenge went to an image grid",
+        "The widget would not take the tick and asked for pictures "
+        "instead, which it does when it distrusts the exit rather than "
+        "the account. Only the tick box is answered here. Change the "
+        "exit and send the account again; nothing is known against it."),
+    "chrome_setup_unknown": Verdict(
+        DEVICE, "the browser asked to be set up in a way this flow does "
+        "not know",
+        "The browser {service} handed the challenge to came up on a "
+        "first-run page whose decline - \"Use without an account\" - was "
+        "not on it. Nothing else there is safe to press, because the "
+        "control beside it signs the browser into the phone's Google "
+        "account. The capture is the page: read it and add the wording."),
     "app_not_installed": Verdict(
         DEVICE, "the app was not on the phone",
         "The package is not on the device, so there was nothing to "
