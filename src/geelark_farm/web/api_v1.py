@@ -146,6 +146,47 @@ def _wrong(prefix: str) -> None:
         _failures.setdefault(prefix, []).append(time.time())
 
 
+def _right(prefix: str) -> None:
+    """Forget a prefix's wrong tries: this key is one of ours.
+
+    Without this, switching a key off on the console and on again locked
+    the real panel out for ten minutes - every poll while it was off
+    counted as a wrong key under its own prefix, five was enough, and the
+    lockout was checked before the key was ever looked up (the review,
+    2026-09-19). A correct key now never waits; a wrong one is still
+    braked exactly as before.
+    """
+    with _lock:
+        _failures.pop(prefix, None)
+
+
+def refusals() -> list[dict]:
+    """What this process has refused, newest first: the key prefix, when,
+    and how many tries are on it. For the API-clients page, which had no
+    way to show that anything had been refused at all - a panel pointed
+    at the wrong key looked to the admin exactly like a panel that had
+    not called yet (2026-09-19). Never the key itself."""
+    now = time.time()
+    with _lock:
+        out = [{"prefix": prefix,
+                "tries": len([t for t in tries if now - t < LOCKOUT_SECONDS]),
+                "last": max(tries) if tries else 0}
+               for prefix, tries in _failures.items() if tries]
+    out.sort(key=lambda r: r["last"], reverse=True)
+    return out
+
+
+def clear_refusals(prefix: str = "") -> int:
+    """Forget one prefix's wrong tries, or all of them. The Clear button
+    on the page, for when a lockout is in the way of a fix."""
+    with _lock:
+        if prefix:
+            return 1 if _failures.pop(prefix, None) else 0
+        gone = len(_failures)
+        _failures.clear()
+        return gone
+
+
 def _too_fast(client_id: int, limit: int) -> int:
     """Seconds to wait, or 0. One key's requests in the last minute.
 
@@ -219,6 +260,10 @@ def account_json(row: dict, *, sandbox: bool = False) -> dict:
         "ref": api_read.ref_of(row),
         "product": str(row.get("product") or "") or None,
         "credential_kind": str(row.get("credential_kind") or "") or None,
+        # Which phone a Spotify account may go on. Echoed for every
+        # product, null where it means nothing, so a client can send it
+        # back unchanged and see what the farm stored (2026-09-19).
+        "category": str(row.get("category") or "") or None,
         "state": state,
         "email": row.get("address"),
         "phone": str(row.get("serial") or "") or None,
@@ -333,14 +378,24 @@ def _serve(handler, settings, path: str) -> None:
     prefix = token[:PREFIX_LEN]
     if not token:
         return _error(handler, 401, "unauthorized", "a bearer key is needed")
-    locked = _locked(prefix)
-    if locked:
-        return _error(handler, 429, "rate_limited",
-                      "too many wrong keys; try later", retry_after=locked)
+    # The key is looked up BEFORE the lockout is consulted: a key that is
+    # ours must never be made to wait for the tries that were made while
+    # it was switched off (2026-09-19). One index read is the whole cost.
     client = client_for(settings, token)
     if client is None:
+        locked = _locked(prefix)
         _wrong(prefix)
+        # The prefix only, never the token. Without a line here a refused
+        # key left nothing an admin could look at: an unknown key and a
+        # switched-off one were indistinguishable, and both were silent.
+        log.warning("api: a key starting %s... was refused%s", prefix,
+                    " (that prefix is locked out)" if locked else "")
+        if locked:
+            return _error(handler, 429, "rate_limited",
+                          "too many wrong keys; try later",
+                          retry_after=locked)
         return _error(handler, 401, "unauthorized", "that key is not one of ours")
+    _right(prefix)
     wait = _too_fast(client["id"],
                      int(getattr(settings, "web_api_rate_per_minute", 600)))
     if wait:

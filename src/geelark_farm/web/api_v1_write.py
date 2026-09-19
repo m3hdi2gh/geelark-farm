@@ -50,10 +50,27 @@ class Refused(Exception):
 #: poll - which is the difference between "refused" and "stuck".
 _NEEDS = {
     "password_totp": ("email", "password"),
+    # A Spotify account, and anything else that signs in with an address
+    # and a password and no second factor.
+    "password": ("email", "password"),
     "google_backup_codes": ("email", "password", "backup_codes"),
+    # The same kind twice, under both its names - see KIND_ALIASES.
+    "eco": ("email",),
     "email_code_auto": ("email",),
     "email_code_customer": ("email",),
 }
+
+#: The kinds whose whole credential is the address: no password is asked
+#: for, and `validate.app_row` is told so or it refuses the row.
+_ADDRESS_ONLY = ("eco", "email_code_auto", "email_code_customer")
+
+#: What an unknown kind must bring. The owner's rule is that nothing sent
+#: is ever lost - a kind nobody has named yet is stored, reported
+#: `blocked`, and shown in the console as a kind we do not know, rather
+#: than refused with a 422 the panel has to discover (2026-09-19). An
+#: address is still required: a row with no address is not an account,
+#: and there would be nothing to show.
+_UNKNOWN_NEEDS = ("email",)
 
 
 def judge(body: dict) -> dict:
@@ -73,13 +90,24 @@ def judge(body: dict) -> dict:
     if product not in api_read.PRODUCTS:
         raise Refused(f"one of {', '.join(api_read.PRODUCTS)}", "product")
     kind = str(body.get("credential_kind") or "").strip()
-    if kind not in api_read.CREDENTIAL_KINDS:
-        raise Refused(f"one of {', '.join(api_read.CREDENTIAL_KINDS)}",
-                      "credential_kind")
+    if not kind:
+        raise Refused("a credential_kind", "credential_kind")
+    # One kind, one name: `eco` and `email_code_auto` are the same thing
+    # and are stored under one of them, so a row means the same whichever
+    # word the panel used (2026-09-19).
+    kind = api_read.KIND_ALIASES.get(kind, kind)
+    known = kind in _NEEDS
+    # Which phone a Spotify account may go on. Its own field because it
+    # is not a credential: `normal` wants a phone with no Google account,
+    # `error` one that has a Gmail, and without it the console can draw
+    # the row but not offer to send it anywhere.
+    category = str(body.get("category") or "").strip().lower()
+    if category and category not in api_read.CATEGORIES:
+        raise Refused(f"one of {', '.join(api_read.CATEGORIES)}", "category")
     creds = body.get("credentials")
     if not isinstance(creds, dict):
         raise Refused("an object", "credentials")
-    for field in _NEEDS[kind]:
+    for field in (_NEEDS[kind] if known else _UNKNOWN_NEEDS):
         if not creds.get(field):
             raise Refused(f"{kind} needs it", f"credentials.{field}")
     codes = creds.get("backup_codes") or []
@@ -89,17 +117,28 @@ def judge(body: dict) -> dict:
 
     # The address and the secret go through the sheet's own reader, so
     # this door and the paste box refuse exactly the same rows.
+    # A kind nobody has named yet is judged the way an address-only one
+    # is: the address must be an address, and whatever else came with it
+    # is kept as sent. Judging it against a password rule we invented
+    # would refuse an account the farm was told to keep.
     try:
         checked = validate.app_row(
             address=str(creds.get("email") or ""),
             password=str(creds.get("password") or ""),
             secret=str(creds.get("totp_secret") or ""),
-            email_code_only=kind in ("email_code_auto",
-                                     "email_code_customer"))
+            email_code_only=(kind in _ADDRESS_ONLY
+                             or (not known and not creds.get("password"))))
     except Exception as exc:                                      # noqa: BLE001
         raise Refused(str(exc), "credentials") from exc
 
+    # The Spotify kind, filled in where the panel left it out and the
+    # kind itself says what it is: an eco account is the `eco` category
+    # by definition, and the console's chips read that column.
+    if not category and kind == "email_code_auto":
+        category = "eco"
+
     return {"panel_ref": ref, "product": product, "credential_kind": kind,
+            "category": category, "known_kind": known,
             "address": checked["address"], "password": checked["password"],
             "totp_secret": checked["totp_secret"],
             "email_code_only": checked["email_code_only"],
@@ -131,11 +170,12 @@ def create(settings: Settings, row: dict, *, client_id: int,
         conn.execute(
             "INSERT INTO resources (kind, source, status, address, password,"
             " totp_secret, email_code_only, product, credential_kind,"
-            " panel_ref, client_id, backup_codes)"
-            " VALUES ('app', 'panel', '', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            " category, panel_ref, client_id, backup_codes)"
+            " VALUES ('app', 'panel', '', %s, %s, %s, %s, %s, %s, %s, %s,"
+            "         %s, %s)",
             (row["address"], row["password"], row["totp_secret"],
              row["email_code_only"], row["product"], row["credential_kind"],
-             row["panel_ref"], client_id,
+             row.get("category") or "", row["panel_ref"], client_id,
              json.dumps(row["backup_codes"]) if row["backup_codes"] else None))
         conn.commit()
     return api_read.account(settings, row["panel_ref"])
@@ -155,11 +195,11 @@ def _create_sandbox(settings: Settings, row: dict, *,
                 return "already_ref" if column == "panel_ref" else "already_address"
         conn.execute(
             "INSERT INTO api_sandbox (client_id, panel_ref, product,"
-            " credential_kind, address, customer_ready, note)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            " credential_kind, category, address, customer_ready, note)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (client_id, row["panel_ref"], row["product"],
-             row["credential_kind"], row["address"],
-             not row["email_code_only"],
+             row["credential_kind"], row.get("category") or "",
+             row["address"], not row["email_code_only"],
              "A sandbox account. No phone will ever be built for it."))
         conn.commit()
     return api_read.account(settings, row["panel_ref"], sandbox=True)

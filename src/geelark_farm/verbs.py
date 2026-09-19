@@ -345,6 +345,41 @@ def add_spotify(book, ledger, settings, payload, client):
                     _by(payload))
 
 
+#: The kinds a person may send by hand although the pool holds them back
+#: from the automatic claim. Being held back means two different things
+#: and only one of them is "the farm cannot do this": an `eco` ChatGPT
+#: account and a Spotify one are held back so the keeper does not take
+#: them off the shelf by itself, and a person pressing Send is exactly
+#: how they are meant to go out (2026-09-19).
+BY_HAND_KINDS = ("eco", "email_code_auto", "password")
+
+
+def _cannot_sign_in(resource) -> str:
+    """Why this account may not be sent to a phone at all, or "".
+
+    The pool's automatic claim reads `accounts.held_back`; this door did
+    not, so an account of a kind no flow exists for - a Google-login one,
+    or anything the panel sends before its flow is written - could be
+    pressed onto a warm phone, which would spend the phone and stop on a
+    screen nobody has ever captured.
+    """
+    from . import accounts as domain
+
+    values = getattr(resource, "values", None) or {}
+    product = str(values.get("Product") or "chatgpt").strip().lower()
+    kind = str(values.get("Credential kind") or "").strip()
+    ready = str(values.get("Customer ready") or "").strip().upper() == "TRUE"
+    if not kind or not domain.held_back(product, kind, ready):
+        return ""
+    if kind in BY_HAND_KINDS:
+        return ""
+    if kind == domain.ASKS_A_PERSON and not ready:
+        return (f"its customer has not said they are at their keyboard "
+                f"yet - the panel presses /ready")
+    return (f"no sign-in flow exists for a {product} account of kind "
+            f"`{kind}` yet, so a phone would be spent on it for nothing")
+
+
 def _spotify_category(resource) -> str:
     values = getattr(resource, "values", None) or {}
     if str(values.get("Product") or "").strip().lower() != "spotify":
@@ -725,6 +760,18 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
             refused.append(f"{address}: a normal Spotify account wants a "
                            f"phone with no Google account - Send on its row "
                            f"builds one")
+            continue
+        # An account whose kind no flow signs in yet. The pool's
+        # automatic claim has always left these alone; this door did
+        # not, so a panel account of a kind the farm cannot do was one
+        # press away from a phone that would spend seven minutes and
+        # stop on a screen nobody wrote (the review, 2026-09-19). A
+        # person may still send a kind that is held back only because
+        # the keeper must not take it by itself - eco and Spotify are
+        # exactly that, and `_by_hand_kinds` names them.
+        why = _cannot_sign_in(resource)
+        if why:
+            refused.append(f"{address}: {why}")
             continue
         if not warm:
             unpaired.append(address)

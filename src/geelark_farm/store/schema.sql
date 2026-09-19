@@ -737,6 +737,10 @@ CREATE TABLE IF NOT EXISTS api_sandbox (
     panel_ref        text NOT NULL,
     product          text NOT NULL DEFAULT '',
     credential_kind  text NOT NULL DEFAULT '',
+    -- Which phone a Spotify account may go on. Here as well as in the
+    -- rev-34 ALTER, so a fresh cluster has it from the first statement
+    -- and an older one gains it (2026-09-19).
+    category         text NOT NULL DEFAULT '',
     address          text NOT NULL DEFAULT '',
     -- The pool's own vocabulary, so `state_of` reads this row the way it
     -- reads a real one. Driven by POST /accounts/{ref}/simulate.
@@ -867,3 +871,14 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS tab_closed_at timestamptz;
 ALTER TABLE resources ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS resources_spotify
     ON resources (category) WHERE kind = 'app' AND product = 'spotify';
+
+-- rev 34: the practice room learns the kind too, so a panel author can
+-- send a Spotify account in the sandbox and see it come back with the
+-- same field a real one carries (2026-09-19).
+ALTER TABLE api_sandbox ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT '';
+
+-- rev 34: `deadline` was the column `until` replaced in rev 30 and was
+-- left NOT NULL with no default, so the first code request against a
+-- real cluster would have raised out of a sign-in flow. The insert now
+-- fills it; this makes an older row or a hand-written one safe too.
+ALTER TABLE code_requests ALTER COLUMN deadline DROP NOT NULL;

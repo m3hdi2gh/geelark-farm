@@ -164,13 +164,23 @@ class PgCodes:
                 " outcome = 'superseded'"
                 " WHERE lower(address) = lower(%s) AND closed_at IS NULL"
                 " RETURNING id", (address,))
+            # `deadline` is the column `until` replaced in rev 30, and it
+            # was left NOT NULL with no default - so an INSERT that names
+            # only the new one raises NotNullViolation on the very first
+            # real request, out of a flow standing on a phone with no
+            # try/except around it. The table was still empty when this
+            # was found (2026-09-19), which is how it survived: nothing
+            # had ever opened a request against a real cluster. Written
+            # with the same value as `until`, which needs no migration
+            # and leaves an old reader of the column telling the truth.
             rows = store._write(
                 "INSERT INTO code_requests (address, machine, until,"
-                " tries_left)"
-                " VALUES (%s, %s, now() + %s * interval '1 second', %s)"
+                " deadline, tries_left)"
+                " VALUES (%s, %s, now() + %s * interval '1 second',"
+                "         now() + %s * interval '1 second', %s)"
                 " RETURNING id",
                 (str(address).strip(), _config.machine(), int(wait),
-                 int(tries_left)))
+                 int(wait), int(tries_left)))
         return int(rows[0]["id"])
 
     def _answered(self, request_id: int) -> str | None:

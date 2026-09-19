@@ -163,7 +163,11 @@ def test_opening_a_request_supersedes_the_last_one_for_the_address(
     assert "outcome = 'superseded'" in first[0]
     assert "INSERT INTO code_requests" in second[0]
     assert "now() + %s * interval '1 second'" in second[0]
-    assert second[1][2:] == (600, 3)
+    # The wait twice - `until` and the `deadline` column it replaced,
+    # which is NOT NULL on a real cluster and would otherwise raise out
+    # of a sign-in flow standing on a phone (2026-09-19).
+    assert second[1][2:] == (600, 600, 3)
+    assert "deadline" in second[0]
 
 
 def test_a_wrong_code_is_counted_on_the_row_that_carried_it(fake_store,

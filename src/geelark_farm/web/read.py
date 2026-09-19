@@ -569,14 +569,24 @@ def _pool_rows(store) -> dict:
     # The kind rides with a GPT row too since 2026-09-19: `eco` accounts
     # sign in by a code emailed to an address the farm owns, and the
     # manager sifts them apart from the ones with a password.
+    # What kind of account each row is, not just its address. Until
+    # 2026-09-19 neither product nor credential_kind was selected, so a
+    # Claude account, an eco one and a password one were four columns of
+    # the same thing and the console could not tell them apart - on the
+    # day the panel starts sending all six kinds through one door.
+    _WHAT = (" coalesce(product, '') AS product,"
+             " coalesce(credential_kind, '') AS credential_kind,"
+             " coalesce(category, '') AS category,"
+             " coalesce(panel_ref, '') AS panel_ref,"
+             " coalesce(customer_ready, false) AS customer_ready,")
     gpt = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
-           " coalesce(category, '') AS category,"
+           f"{_WHAT}"
            f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
            " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
            f"   AND {NOT_SPOTIFY}"
            " ORDER BY id DESC LIMIT %s")
     spotify = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
-               " coalesce(category, '') AS category,"
+               f"{_WHAT}"
                f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
                " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
                f"   AND {IS_SPOTIFY}"
@@ -1034,11 +1044,23 @@ def api_clients(settings: Settings) -> dict:
     # Built before the early return: with no keys minted yet the page was
     # told there were no limits and that writing was off, on the one page
     # whose job is to say what the limits are (the review, 2026-09-12).
+    # What the door itself is doing, not only what the keys are: on the
+    # morning of an integration the first question is "is it open", and
+    # the page could not answer it (the review, 2026-09-19).
+    from ..web import api_v1
+
     out = {"rows": rows, "day": day,
            "cap": int(getattr(settings, "web_api_accounts_per_day", 100)),
            "per_minute": int(getattr(settings, "web_api_rate_per_minute",
                                      600)),
-           "writes": bool(getattr(settings, "web_api_writes", False))}
+           "open": bool(getattr(settings, "web_api", False)),
+           "writes": bool(getattr(settings, "web_api_writes", False)),
+           # Refused keys are this process's own memory, so they are read
+           # here rather than from the store: a prefix, how many tries are
+           # on it and when the last one was. Never a token.
+           "refused": api_v1.refusals(),
+           "locked_after": api_v1.LOCKOUT_AFTER,
+           "locked_for": api_v1.LOCKOUT_SECONDS}
     if not rows:
         return out
     ids = [int(r["id"]) for r in rows]
@@ -1062,6 +1084,14 @@ def api_clients(settings: Settings) -> dict:
     counted = {name: {int(r["id"]): int(r["c"] or 0) for r in source}
                for name, source in (("asked", asked), ("made", made),
                                     ("utc", today_utc))}
+    # Which prefixes are refused right now, so a row can say "this key is
+    # locked out" instead of the admin wondering why a correct-looking
+    # panel gets 429.
+    locked = {r["prefix"]: r for r in out["refused"]}
+    for row in rows:
+        row["refused_tries"] = int(
+            (locked.get(str(row.get("key_prefix") or "")) or {}).get(
+                "tries") or 0)
     for row in rows:
         ident = int(row["id"])
         row["requests_today"] = counted["asked"].get(ident, 0)

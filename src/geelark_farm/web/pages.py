@@ -376,6 +376,14 @@ input:focus,select:focus,textarea:focus{{outline:none;border-color:var(--blue);
 .carries.normal{{color:#4fd1a5}} .carries.normal::before{{border-radius:50%}}
 .carries.error{{color:#f2a35c}}
 .carries.error::before{{clip-path:polygon(50% 0,100% 100%,0 100%)}}
+/* The other two products a phone can carry: a ring for an eco account,
+   the same ring its tile and its chip wear, and one colour of its own
+   for Claude so it is never read as a ChatGPT phone. */
+.carries.eco{{color:#4fd1a5}}
+.carries.eco::before{{border-radius:50%;background:none;
+ box-shadow:inset 0 0 0 2px currentColor}}
+.carries.claude{{color:#c9905c}}
+.carries.claude::before{{border-radius:2px;transform:rotate(45deg)}}
 .byhand label.field select{{min-width:230px;height:38px}}
 dialog.editor .or{{font-size:12.5px;color:var(--muted);padding-top:6px;
  border-top:1px solid var(--line2)}}
@@ -1959,7 +1967,15 @@ def _carries(row: dict) -> str:
     """
     if _no_address(row.get("app_account")):
         return ""
-    if (row.get("app_product") or "").strip().lower() != "spotify":
+    product = str(row.get("app_product") or "").strip().lower()
+    if product != "spotify":
+        if product == "claude":
+            # It said GPT on every phone that was not a Spotify one, so
+            # a Claude phone was labelled as the wrong product on the
+            # one screen an operator hands a phone over from
+            # (2026-09-19).
+            return ('<span class="carries claude" title="a Claude '
+                    'account">Claude</span>')
         if str(row.get("app_category") or "").strip().lower() == "eco":
             return ('<span class="carries eco" title="an eco ChatGPT '
                     'account - no password, a code is emailed to it">'
@@ -6062,6 +6078,8 @@ _CLIENTS_SAID = {
            "401 until it is switched back on.",
     "on": "That key works again.",
     "webhook": "Saved. Nothing posts there yet: the sender is not built.",
+    "forgot": "The refused keys are forgotten. A key that is ours was "
+              "never held by them anyway.",
 }
 
 
@@ -6086,11 +6104,54 @@ def api_clients_page(data: dict, user: dict, said: str = "",
     note = _CLIENTS_SAID.get(said, "")
     if note:
         body += f'<p class="said">{esc(note)}</p>'
-    body += (f'<p class="hint">Writing is '
-             f'{"on" if data.get("writes") else "off"} for real accounts; '
-             f'a sandbox key writes either way. Each key may ask '
-             f'{per_minute or "any number of"} times a minute and hand over '
-             f'{cap or "any number of"} accounts a day (UTC).</p>')
+    # The door's own state, in the two words that decide whether a
+    # panel can do anything at all this morning. The page used to say
+    # only whether writing was on, and nothing at all about whether the
+    # door answered (the review, 2026-09-19).
+    shut = not data.get("open", True)
+    body += (
+        '<div class="panel apidoor"><div class="row">'
+        + (f'<span class="badge {"bad" if shut else "green"}">'
+           f'{"the API door is SHUT" if shut else "the API door is open"}'
+           f'</span>')
+        + (f'<span class="badge {"green" if data.get("writes") else "warn"}">'
+           f'writes {"on" if data.get("writes") else "off"}</span>')
+        + f'<span class="dim">{per_minute or "any number of"} requests a '
+          f'minute per key &middot; {cap or "any number of"} accounts a day '
+          f'per key (UTC)</span></div>'
+        + ('<p class="hint">With writes off, a <b>panel</b> key is read-only: '
+           'every POST and DELETE answers <code>405 not_allowed</code>. A '
+           '<b>sandbox</b> key writes either way, into a practice room where '
+           'no phone is ever built. Turning writes on is WEB_API_WRITES in '
+           'the server environment - one line and a restart of the web '
+           'container, seconds, not a release.</p>' if not data.get("writes")
+           else '<p class="hint">Writes are <b>on</b>: a panel key POSTing an '
+                'account is buying a phone, a Gmail and an exit. A sandbox '
+                'key still writes only into the practice room.</p>')
+        + '</div>')
+    refused = data.get("refused") or []
+    if refused:
+        after = int(data.get("locked_after") or 5)
+        mins = int(data.get("locked_for") or 600) // 60
+        rows_r = "".join(
+            f'<tr><td class="muted">{esc(str(r["prefix"]))}&hellip;</td>'
+            f'<td>{int(r["tries"])} wrong '
+            f'{"try" if int(r["tries"]) == 1 else "tries"}</td>'
+            f'<td class="muted">'
+            f'{_ago(r["last"]) if r.get("last") else "just now"}</td>'
+            f'<td>{"<span class=\"badge bad\">locked out</span>" if int(r["tries"]) >= after else ""}</td>'
+            f'</tr>' for r in refused[:8])
+        body += (
+            f'<div class="panel"><h3>Keys that were refused</h3>'
+            f'<p class="hint">This process&#x27;s own memory, since it '
+            f'started: a key we do not know, or one that was switched off '
+            f'when it called. {after} wrong tries lock a prefix out for '
+            f'{mins} minutes - a key that IS ours is never held by that, '
+            f'and using it clears the count. The token itself is never '
+            f'kept.</p><table>{rows_r}</table>'
+            f'<form method="post" action="/api-clients/forget" class="row">'
+            f'<input type="hidden" name="csrf" value="{csrf}">'
+            f'<button class="quiet">Forget them</button></form></div>')
     head = ("<tr><th>client</th><th>role</th><th>key</th><th>last seen</th>"
             "<th>today</th><th>webhook</th><th></th></tr>")
     lines = []
@@ -6108,6 +6169,11 @@ def api_clients_page(data: dict, user: dict, said: str = "",
         here = int(r.get("accounts_today") or 0)
         asked = int(r.get("requests_today") or 0)
         near = " warn" if cap and made >= cap else ""
+        if int(r.get("refused_tries") or 0):
+            tries = int(r["refused_tries"])
+            seen += (f' <span class="badge bad" title="wrong tries on this '
+                     f'prefix in the last ten minutes">{tries} refused'
+                     f'</span>')
         hook = ('<span class="badge green">set</span>'
                 if r.get("webhook_url") else '<span class="dim">none</span>')
         if r.get("webhook_url") and not r.get("has_secret"):
@@ -6198,7 +6264,11 @@ def new_key_page(name: str, token: str, user: dict, *, minted: bool) -> str:
             f'be opened again.</p>'
             f'<div class="row"><a class="btn quiet" href="/api-clients">Back '
             f'to API clients</a></div></div>')
-    return page("A new key", body, user=user, here="/api-clients")
+    # `live=""`: this page must not listen or swap. The live layer
+    # replaces <main> whenever the farm ticks, and it would replace the
+    # one screen in the console that shows something it cannot show
+    # again - a token, mid-copy (the review, 2026-09-19).
+    return page("A new key", body, user=user, here="/api-clients", live="")
 
 
 def password_page(user: dict, error: str = "") -> str:

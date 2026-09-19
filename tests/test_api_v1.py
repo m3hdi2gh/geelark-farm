@@ -8,6 +8,7 @@ seen the cluster.
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
@@ -241,6 +242,8 @@ def test_an_unknown_path_under_the_prefix_is_a_json_404(web, monkeypatch):  # no
 
 
 # --------------------------------------------------------------- writing
+SECRET = "JBSWY3DPEHPK3PXP"
+
 WRITE_ON = {"web_api": True, "web_api_writes": True}
 
 
@@ -321,7 +324,8 @@ def test_a_payload_is_judged_before_anything_is_written(web, monkeypatch):  # no
             ({**good, "ref": ""}, "ref"),
             ({**good, "ref": "x" * 65}, "ref"),
             ({**good, "product": "gemini"}, "product"),
-            ({**good, "credential_kind": "telepathy"}, "credential_kind"),
+            ({**good, "credential_kind": ""}, "credential_kind"),
+            ({**good, "category": "cheap"}, "category"),
             ({**good, "credentials": "not-an-object"}, "credentials"),
             ({**good, "credentials": {"email": "a@x.com"}},
              "credentials.password"),
@@ -1285,3 +1289,88 @@ def test_the_listing_leaves_the_spotify_rows_out():
 
     read_mod._some(_Store(), False, None, 5)
     assert read.NOT_SPOTIFY in _Store.sql
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_every_kind_the_owner_sends_is_taken_and_stored(web, monkeypatch):  # noqa: F811
+    """Six combinations go through this door (the operator, 2026-09-19):
+    chatgpt with a password and a key, chatgpt eco, chatgpt with a Google
+    account, spotify normal, spotify error, and claude. Flows exist for
+    two of them. All six must arrive, be stored whole, and be visible -
+    "even if we cannot use it" - so the only honest answer to the four
+    with no flow is 201 and `blocked`, never a 422 that loses the row.
+    """
+    import geelark_farm.web.api_v1_write as write_mod
+
+    made = []
+    _wrote(monkeypatch)
+    _client(monkeypatch)
+
+    def create(settings, row, *, client_id, sandbox=False):
+        made.append(row)
+        return _account(**{k: row[k] for k in
+                           ("panel_ref", "product", "credential_kind",
+                            "category", "address")})
+
+    monkeypatch.setattr(write_mod, "create", create)
+    client = web()
+    every = [
+        ("chatgpt", "password_totp", "",
+         {"email": "a1@x.com", "password": "pw", "totp_secret": SECRET}),
+        ("chatgpt", "eco", "", {"email": "a2@masked.me"}),
+        ("chatgpt", "email_code_auto", "", {"email": "a3@masked.me"}),
+        ("chatgpt", "google_backup_codes", "",
+         {"email": "a4@x.com", "password": "pw", "backup_codes": ["11111111"]}),
+        ("spotify", "password", "normal", {"email": "a5@x.com", "password": "pw"}),
+        ("spotify", "password", "error", {"email": "a6@x.com", "password": "pw"}),
+        ("claude", "email_code_customer", "", {"email": "a7@x.com"}),
+        # A kind nobody has named yet - tomorrow's Google-login word, or
+        # a typo. Kept, and said to be unknown, rather than dropped.
+        ("chatgpt", "whatever_comes_next", "", {"email": "a8@x.com"}),
+    ]
+    for n, (product, kind, category, creds) in enumerate(every):
+        body = {"ref": f"ord_{n}", "product": product,
+                "credential_kind": kind, "credentials": creds}
+        if category:
+            body["category"] = category
+        status, _, got = _post(client, "/api/v1/accounts", body)
+        assert status == 201, (kind, got)
+        assert got["ref"] == f"ord_{n}"
+        assert got["product"] == product
+        # An eco account is the eco category by its own kind, whether
+        # or not the panel said so; everything else keeps what was sent.
+        want = category or ("eco" if kind in ("eco", "email_code_auto")
+                            else None)
+        assert got["category"] == want, kind
+    # The two names for one kind are stored as one kind, so a row means
+    # the same thing whichever word the panel used.
+    assert [r["credential_kind"] for r in made[1:3]] == [
+        "email_code_auto", "email_code_auto"]
+    # And an eco row carries the category its own kind implies, so the
+    # console's chips and tiles recognise it as the pasted ones.
+    assert [r["category"] for r in made[1:3]] == ["eco", "eco"]
+    assert made[4]["category"] == "normal" and made[5]["category"] == "error"
+    assert made[7]["credential_kind"] == "whatever_comes_next"
+    assert made[7]["address"] == "a8@x.com", "the unknown kind is kept whole"
+
+
+@pytest.mark.parametrize("web", [WRITE_ON], indirect=True)
+def test_a_spotify_account_the_panel_sent_is_one_the_panel_can_read(
+        web, monkeypatch):  # noqa: F811
+    """The door accepted a Spotify POST and the list then hid it: 201,
+    readable by ref, and absent from GET /accounts - the one loop the
+    whole integration is built on. A client would send it, never see it,
+    and send it again (the review, 2026-09-19).
+
+    The farm's own Spotify rows stay out of the list, which is what the
+    filter was for; a row with a panel_ref is the panel's own.
+    """
+    import geelark_farm.web.api_v1_read as read_mod
+
+    assert "panel_ref IS NOT NULL" in read_mod.OURS_OR_NOT_SPOTIFY
+    src = inspect.getsource(read_mod._some)
+    assert "OURS_OR_NOT_SPOTIFY" in src, "the list uses it"
+    assert '", NOT_SPOTIFY]' not in src, "and not the blanket filter"
+    # /health counts the same rows the list shows, or the two disagree
+    # about how much stock there is.
+    assert "panel_ref IS NOT NULL" in inspect.getsource(read_mod.health)

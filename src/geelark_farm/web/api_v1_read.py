@@ -30,6 +30,19 @@ from ..config import Settings
 from ..store.db import Store
 from .read import IMPORTED, NOT_SPOTIFY, ROUTINE
 
+#: Which rows this door may show. The farm's own Spotify accounts are
+#: not the panel's business - they were here before there was a panel,
+#: and handing every client the whole pool as `farm_N` refs is what
+#: `NOT_SPOTIFY` was added to stop (2026-09-17).
+#:
+#: But a row the panel itself sent is the panel's, whatever product it
+#: is for. Hiding one meant a Spotify POST answered 201, could be read
+#: by ref, and was then absent from `GET /accounts` - the one loop the
+#: whole integration is built on - so a client would send it, never see
+#: it, and send it again (the review, 2026-09-19). A write whose result
+#: the read hides is the one combination that cannot be right.
+OURS_OR_NOT_SPOTIFY = f"({NOT_SPOTIFY} OR r.panel_ref IS NOT NULL)"
+
 log = logging.getLogger(__name__)
 
 #: Every state a client can be told, in the order an account travels. The
@@ -54,8 +67,24 @@ _DIRECT = {
 #: What the panel may send, and what the farm can actually carry out today.
 #: A kind outside `SERVED` is accepted, stored and reported `blocked` - the
 #: panel sees the truth rather than a queue that never moves.
-CREDENTIAL_KINDS = ("password_totp", "google_backup_codes",
-                    "email_code_auto", "email_code_customer")
+#:
+#: `eco` and `email_code_auto` are one kind under two names: the console
+#: and the operators say `eco`, the contract published `email_code_auto`
+#: before the console had a word for it, and refusing either would be
+#: refusing an account somebody meant to send (the operator, 2026-09-19).
+#: `password` is what a Spotify account is - an address and a password,
+#: no authenticator - and is the word the farm's own paste box writes.
+CREDENTIAL_KINDS = ("password_totp", "password", "google_backup_codes",
+                    "eco", "email_code_auto", "email_code_customer")
+
+#: The kinds that are the same kind. Stored under the name on the right,
+#: so one row means one thing however it was sent.
+KIND_ALIASES = {"eco": "email_code_auto"}
+
+#: The Spotify kinds, which say which phone an account may go on rather
+#: than how it signs in - so they are their own field, not a credential
+#: kind. Empty for every other product (2026-09-19).
+CATEGORIES = ("normal", "error", "eco")
 #: `spotify` is accepted since 2026-09-15 so the panel can send it from
 #: day one and see `blocked` rather than a 422; its sign-in flow does not
 #: exist yet, so it serves nothing (the operator, 2026-09-14).
@@ -83,7 +112,7 @@ _CODE_WAITING = ("FROM code_requests c WHERE lower(c.address) ="
 #: ambiguity that took the Gmail Pool down (2026-09-03).
 _ACCOUNT_COLUMNS = (
     "r.id, r.address, r.status, r.error, r.serial, r.note, r.source,"
-    " r.product, r.credential_kind, r.panel_ref, r.client_id,"
+    " r.product, r.credential_kind, r.category, r.panel_ref, r.client_id,"
     " r.attempts, r.failures, r.customer_ready, r.withdrawn_at,"
     " r.state_changed_at, r.delivered_at, r.created_at, r.updated_at,"
     f" (SELECT c.asked_at {_CODE_WAITING}) AS code_asked_at,"
@@ -210,10 +239,9 @@ _SCAN_PAGES = 20
 
 def _some(store, sandbox: bool, after, want: int) -> list[dict]:
     """One page of rows straight off the index, newest change first."""
-    # Not the Spotify rows: the contract's `product` knows chatgpt and
-    # claude, and a row of a product the panel has never been told
-    # about is not a row to hand it (2026-09-17).
-    where = ["r.kind = 'app'", NOT_SPOTIFY]
+    # The farm's own Spotify rows stay out; the panel's own come
+    # through, whatever product they are for - see OURS_OR_NOT_SPOTIFY.
+    where = ["r.kind = 'app'", OURS_OR_NOT_SPOTIFY]
     params: list = []
     if after:
         where.append("(r.updated_at, r.id) < (%s, %s)")
@@ -329,8 +357,8 @@ def health(settings: Settings, *, sandbox: bool = False) -> dict:
     (2026-09-13)."""
     with Store(settings) as store:
         rows = store._rows(
-            f"SELECT count(*) FILTER (WHERE kind = 'app' AND {NOT_SPOTIFY})"
-            " AS accounts,"
+            "SELECT count(*) FILTER (WHERE kind = 'app' AND"
+            f" ({NOT_SPOTIFY} OR panel_ref IS NOT NULL)) AS accounts,"
             " (SELECT value FROM service_state WHERE key = 'pass') AS pulse"
             f" FROM {table_for(sandbox)}")
     counts = dict(rows[0]) if rows else {"accounts": 0, "pulse": None}

@@ -536,6 +536,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._needs_post(user, field)
             if self.path == "/api-clients/new":
                 return self._api_clients_new(user, field)
+            if self.path == "/api-clients/forget":
+                return self._api_clients_forget(user)
             if self.path.startswith("/api-clients/"):
                 # Suffix first, then the bare id: the same order the
                 # /users routes below are written in.
@@ -1579,6 +1581,24 @@ class _Handler(BaseHTTPRequestHandler):
         log.info("api client %r had its key rotated by %s", name,
                  user["username"])
         self._html(200, pages.new_key_page(name, token, user, minted=False))
+
+    def _api_clients_forget(self, user: dict) -> None:
+        """Forget the wrong tries this process is holding.
+
+        The lockout is a brake on a key nobody recognises, and during an
+        integration the person being braked is usually the author of the
+        panel with a stale key in his config. A correct key is never
+        held by it (api_v1._right), so this is for clearing the noise
+        off the page rather than for letting anybody in (2026-09-19).
+        """
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from . import api_v1
+
+        gone = api_v1.clear_refusals()
+        log.info("api: %d refused key prefix(es) forgotten by %s", gone,
+                 user["username"])
+        self._redirect("/api-clients?said=forgot")
 
     def _api_clients_active(self, user: dict, field: dict) -> None:
         if user.get("role") != "admin":
