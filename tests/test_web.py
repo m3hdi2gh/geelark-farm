@@ -7377,3 +7377,32 @@ def test_the_account_box_always_has_an_option_worth_nothing():
     # chosen account survives a touch of the Gmail box.
     assert "if (kind === builtFor) return;" in script, (
         "changing the Gmail must not silently re-pick the account")
+
+
+def test_the_secret_cell_names_all_three_kinds_and_says_when_a_row_has_two():
+    """A Gmail answers with a key, with a recovery address, or with
+    neither. A row holding both used to be shown as a recovery row,
+    which is how a working key went unseen (2026-09-19)."""
+    from geelark_farm.web import pages
+
+    def word(**row):
+        cell = pages._secret_cell(row)
+        return cell.split('px">')[1].split("</span>")[0]
+
+    assert word(totp_secret="JBSWY3DPEHPK3PXP") == "authenticator"
+    assert word(recovery_email="keeper@x.com") == "recovery"
+    assert word() == "no second factor"
+    assert word(totp_secret="JBSWY3DPEHPK3PXP",
+                recovery_email="keeper@x.com") == "authenticator + recovery"
+
+
+def test_the_gmail_editor_offers_the_key_not_the_address():
+    """It rewrites every cell it shows, so a box filled with the address
+    of a row that also has a key saves the address over the key."""
+    from geelark_farm.web import pages
+
+    row = {"address": "both@x.com", "totp_secret": "JBSWY3DPEHPK3PXP",
+           "recovery_email": "keeper@x.com", "seller": "", "status": ""}
+    editor = pages._gmail_edit_row(
+        {"id": 1, "csrf": "c", "role": "admin"}, row, "active", 6)
+    assert "JBSWY3DPEHPK3PXP" in editor

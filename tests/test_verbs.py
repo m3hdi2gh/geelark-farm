@@ -332,17 +332,19 @@ def test_editing_a_gmail_writes_the_cells_and_is_judged_first(monkeypatch):
     assert status == "refused", said
     assert g0.values["Secret"] == "back@example.com", "the cell is untouched"
 
-    # And what only the tab knows - this seller promises a recovery
-    # address, so a key here reads back as broken - is written, refused
-    # and put straight back.
+    # And the seller no longer has an opinion about the kind. Until
+    # 2026-09-20 an `egypt` row carrying a key read back as broken and
+    # this edit was refused; sellers change what they ship, and which
+    # kind an account is is a fact about the account.
     status, said, _ = verbs.edit_gmail(
         book, None, None, {"address": "new@example.com",
                            "new_address": "new@example.com",
                            "password": "fresh", "secret": SECRET,
                            "seller": "egypt", "by": "mehdi"}, None)
-    assert status == "refused" and "Seller column" in said
-    assert g0.values["Secret"] == "back@example.com", "rolled back"
-    assert g0.credentials is not None, "and the row still reads"
+    assert status == "done", said
+    assert g0.values["Secret"] == SECRET
+    assert g0.credentials.has_authenticator
+    assert not g0.credentials.recovery_email, "the address it had is gone"
 
 
 def test_a_gmail_a_phone_is_behind_is_neither_edited_nor_removed():

@@ -634,8 +634,13 @@ class PgGmailPool(_PgPool, GmailPool):
     def _values_of(self, row: dict) -> dict[str, str]:
         values = super()._values_of(row)
         # One Secret cell in the sheet held either kind; two columns here.
-        values["Secret"] = row.get("recovery_email") or row.get(
-            "totp_secret") or ""
+        # The key goes in the cell when there is one, because a key is the
+        # factor that answers a code page and the address has a column of
+        # its own to be kept in. Preferring the address instead hid the key
+        # of every row that had both (sgiving962@gmail.com, 2026-09-19).
+        values["Secret"] = row.get("totp_secret") or row.get(
+            "recovery_email") or ""
+        values[GmailPool.RECOVERY_COLUMN] = row.get("recovery_email") or ""
         return values
 
 

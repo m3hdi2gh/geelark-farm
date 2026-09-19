@@ -41,7 +41,6 @@ def gmail_row(*, address: str, password: str, secret: str = "",
         recovery_email=recovery,
     )
     creds.validate(what="gmail")
-    _check_seller_promise(seller, creds)
     return dict(kind="gmail", address=creds.email, password=creds.password,
                 totp_secret=creds.totp_secret,
                 recovery_email=creds.recovery_email,
@@ -76,23 +75,3 @@ def proxy_row(*, raw: str, name: str = "", note: str = "") -> dict:
                 proxy_name=(name or "").strip(), note=note or "")
 
 
-def _check_seller_promise(seller: str, creds: Credentials) -> None:
-    """The Seller rule, exactly as GmailPool holds it: only a known seller
-    carries a promise, and only the WRONG kind is refused - never an empty
-    cell, which is how password-only accounts stay welcome."""
-    promised = SELLERS.get((seller or "").strip().lower())
-    if not promised:
-        return
-    carries = ("a recovery address" if creds.recovery_email
-               else "an authenticator key" if creds.totp_secret else "")
-    if carries and carries != promised:
-        raise AccountError(
-            f"gmail {creds.email}: seller {seller!r} accounts come with "
-            f"{promised}, but this one carries {carries} - the Secret cell "
-            f"and the Seller disagree, and one of them is a typo")
-
-
-#: Mirrors GmailPool.SELLERS. Imported here rather than from pools so the
-#: store never imports the sheet module - the vocabulary moves to a shared
-#: home when pools grows its store backend, and this line is the reminder.
-SELLERS = {"usa": "an authenticator key", "egypt": "a recovery address"}

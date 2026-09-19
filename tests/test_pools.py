@@ -1937,44 +1937,52 @@ def seller_pool(rows) -> GmailPool:
     return pool
 
 
-def test_a_usa_row_carrying_a_recovery_address_is_refused():
-    """The Seller says these answer with a code, and this one cannot. Caught
-    here rather than on a booted phone, which is where the cost is."""
-    pool = seller_pool([["USA", "a@b.com", "pw", "rec@e.com", "", "", ""]])
+def test_the_three_kinds_are_read_off_the_cell_and_nothing_else():
+    """A Gmail answers Google with an authenticator key, with a recovery
+    address, or with neither - and which it is is a fact about the
+    account, written in the Secret cell.
 
-    assert not pool.available
-    assert "authenticator key" in pool._rows[0].error
-
-
-def test_an_egypt_row_carrying_an_authenticator_key_is_refused():
-    pool = seller_pool([["Egypt", "a@b.com", "pw", SECRET, "", "", ""]])
-
-    assert not pool.available
-    assert "recovery address" in pool._rows[0].error
-
-
-def test_each_kind_is_usable_when_it_carries_what_it_promises():
+    The Seller used to carry a promise about this and a row that
+    disagreed with its seller was refused. It is gone (2026-09-20): the
+    seller says who sold it, not what it is.
+    """
     pool = seller_pool([
-        ["USA", "a@b.com", "pw", SECRET, "", "", ""],
-        ["Egypt", "c@d.com", "pw", "rec@e.com", "", "", ""],
+        ["USA", "key@b.com", "pw", SECRET, "", "", ""],
+        ["Egypt", "rec@d.com", "pw", "keeper@e.com", "", "", ""],
+        ["Hoavan", "bare@f.com", "pw", "", "", "", ""],
     ])
 
-    assert len(pool.available) == 2
+    assert len(pool.available) == 3, "every kind is usable"
+    by = {r.label: r.credentials for r in pool.available}
+    assert by["key@b.com"].totp_secret and not by["key@b.com"].recovery_email
+    assert by["rec@d.com"].recovery_email == "keeper@e.com"
+    assert not by["rec@d.com"].totp_secret
+    assert not by["bare@f.com"].totp_secret
+    assert not by["bare@f.com"].recovery_email
+    assert not by["bare@f.com"].has_authenticator
 
 
-def test_a_seller_nobody_has_categorised_is_left_alone():
-    """Only the two named ones promise anything. An older batch keeps working
-    and a new one is not forced into a category before anybody knows which it
-    is."""
-    pool = seller_pool([["Hoavan", "a@b.com", "pw", "", "", "", ""]])
+def test_the_seller_no_longer_refuses_a_row_for_its_kind():
+    """Both of these were refused until 2026-09-20, on the seller's word
+    alone. Sellers change what they ship and nobody edits a constant."""
+    pool = seller_pool([
+        ["USA", "a@b.com", "pw", "rec@e.com", "", "", ""],
+        ["Egypt", "c@d.com", "pw", SECRET, "", "", ""],
+        [" egypt ", "e@f.com", "pw", SECRET, "", "", ""],
+    ])
 
-    assert len(pool.available) == 1
+    assert len(pool.available) == 3
+    assert not any(r.error for r in pool._rows)
 
 
-def test_the_seller_name_is_matched_however_it_is_typed():
-    pool = seller_pool([[" egypt ", "a@b.com", "pw", SECRET, "", "", ""]])
+def test_a_cell_that_is_neither_a_key_nor_an_address_is_still_refused():
+    """What replaced the seller rule is not "anything goes": a cell that
+    holds neither kind is a broken row and is caught before a phone is
+    made for it."""
+    pool = seller_pool([["Hoavan", "a@b.com", "pw", "not a key!", "", "", ""]])
 
     assert not pool.available
+    assert pool._rows[0].error
 
 
 # ------------------------------- which phone a claimed row is being used for
@@ -2202,13 +2210,14 @@ def test_an_account_with_no_second_factor_at_all_is_usable():
         assert pool.available[0].credentials.recovery_email == ""
 
 
-def test_an_empty_cell_is_a_fact_and_a_wrong_one_is_a_mistake():
-    """The distinction the rule turns on."""
-    empty = seller_pool([["USA", "a@b.com", "pw", "", "", "", ""]])
-    wrong = seller_pool([["USA", "c@d.com", "pw", "rec@e.com", "", "", ""]])
+def test_an_empty_cell_is_a_fact_not_a_broken_row():
+    """The third kind: sold with no second factor at all, signing in on
+    password alone. A rule written one morning required a value and made
+    two such rows unusable the same day (2026-08-29)."""
+    pool = seller_pool([["USA", "a@b.com", "pw", "", "", "", ""]])
 
-    assert len(empty.available) == 1
-    assert not wrong.available
+    assert len(pool.available) == 1
+    assert not pool.available[0].credentials.has_authenticator
 
 
 # ------------------------- a tab made before a row was added must grow, not die

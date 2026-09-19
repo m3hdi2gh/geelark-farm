@@ -874,59 +874,44 @@ class GmailPool(Pool):
     #: be declared beside it.
     SECRET_COLUMN = "Secret"
 
-    #: What a `Seller` promises about how its accounts answer a challenge, and
-    #: the column that has to be filled for the promise to hold.
+    #: The address Google already holds, when the row carries one *beside*
+    #: an authenticator key. The sheet has one Secret cell and cannot say
+    #: two things, so it leaves this empty and the cell speaks for itself;
+    #: the store has a column for each and fills both.
     #:
-    #: The flow does not read this - it reads the cells, and picks whichever
-    #: option Google offers that the row can answer. This is here to catch the
-    #: row where the two disagree, before a phone is created for it. A recovery
-    #: address pasted into `2FA Secret` is refused for not being a base32 key,
-    #: which is true and unhelpful; a row that says `Egypt` with an empty
-    #: `Recovery Email` says exactly what is wrong with it.
-    #:
-    #: Only these two names carry a promise. Any other seller is unchecked, so
-    #: an older batch keeps working and a new one is not forced into a category
-    #: before anybody knows which it is.
-    SELLERS = {"usa": "an authenticator key", "egypt": "a recovery address"}
+    #: It exists because collapsing two into one loses whichever is not
+    #: preferred, and the reader preferred the address: a row holding a
+    #: working key and a recovery address was read as having no
+    #: authenticator, and died on a page asking for exactly that code
+    #: (sgiving962@gmail.com, 2026-09-19).
+    RECOVERY_COLUMN = "Recovery Email"
 
     def _interpret(self, resource: Resource) -> None:
         values = resource.values
         secret = values.get(self.SECRET_COLUMN, "").strip()
         # `@` is the whole test, and it is decisive: base32 has no `@` in it,
-        # and no address is without one.
+        # and no address is without one. Nothing else is consulted - not the
+        # seller, who used to carry a promise about this and no longer does
+        # (2026-09-20): which kind an account is is a fact about the account,
+        # and the cell is where that fact is written.
         recovery = secret if "@" in secret else ""
+        # A row may carry both. The sheet's one cell cannot say so and
+        # leaves this empty; the store keeps a column for each. Read as
+        # one, whichever was not preferred simply vanished - and a row
+        # holding a working key and a recovery address was read as having
+        # no authenticator at all (sgiving962@gmail.com, 2026-09-19).
+        beside = values.get(self.RECOVERY_COLUMN, "").strip()
         credentials = Credentials(
             email=values.get("Address", ""),
             password=values.get("Password", ""),
             totp_secret="" if recovery else normalize_totp_secret(secret),
-            recovery_email=recovery,
+            recovery_email=recovery or beside,
         )
         # Named, like the app account's. Without it a broken row here and a
         # broken row in `Gpt Info` read identically, and the reader is left
         # to guess which tab to open.
         credentials.validate(what="gmail:")
 
-        promised = self.SELLERS.get(values.get("Seller", "").strip().casefold())
-        # Only when the cell holds the *wrong kind*, never when it is empty.
-        #
-        # Requiring a value refused a whole third kind that nothing had
-        # accounted for: accounts sold with no second factor at all, which
-        # sign in on password alone and which this code has always handled -
-        # `validate` guards its secret check with `if self.totp_secret` and
-        # `has_authenticator` is simply False. Two such rows sat unusable
-        # under a rule written that morning (2026-08-29).
-        #
-        # An empty cell is a fact about the account. A cell holding the other
-        # seller's kind of value is a mistake, and that is what this catches.
-        if promised and secret:
-            carries = ("a recovery address" if recovery
-                       else "an authenticator key")
-            if carries != promised:
-                raise AccountError(
-                    f"gmail: {credentials.email}: the Seller column says "
-                    f"{values.get('Seller', '').strip()!r}, and those accounts "
-                    f"answer Google with {promised} - but the Secret column "
-                    f"carries {carries}. Fix the cell, or change the Seller.")
         resource.credentials = credentials
 
     def spend(self, resource: Resource, *, serial: str = "",

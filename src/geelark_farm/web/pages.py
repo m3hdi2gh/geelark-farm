@@ -6762,10 +6762,17 @@ def _secret_cell(r: dict) -> str:
     under it says the same thing in English, and is the loud half - a
     row with nothing to answer with is the one to notice.
     """
-    if r.get("recovery_email"):
-        value, word, colour = str(r["recovery_email"]), "recovery", "amber"
-    elif r.get("totp_secret"):
-        value, word, colour = str(r["totp_secret"]), "authenticator", "green"
+    key = str(r.get("totp_secret") or "")
+    address = str(r.get("recovery_email") or "")
+    if key and address:
+        # A row can hold both, and the word says so rather than naming
+        # whichever the reader happened to prefer - which is how a key
+        # went unseen for a fortnight (sgiving962@gmail.com, 2026-09-19).
+        value, word, colour = key, "authenticator + recovery", "green"
+    elif key:
+        value, word, colour = key, "authenticator", "green"
+    elif address:
+        value, word, colour = address, "recovery", "amber"
     else:
         value, word, colour = "", "no second factor", "red"
     shown = (f'<span class="hand">{_clip(value, 26)}</span>' if value
@@ -6806,7 +6813,10 @@ def _gmail_edit_row(user: dict, r: dict, view: str, columns: int) -> str:
     yet is a real thing, and a select cannot say one."""
     back = f"/pools/gmail?view={view}"
     address = str(r.get("address") or "")
-    secret = str(r.get("recovery_email") or r.get("totp_secret") or "")
+    # The key first, to match the cell the pool shows. Filled the other
+    # way round, saving a row that had both wrote the address over the
+    # key - the editor rewrites every cell it shows.
+    secret = str(r.get("totp_secret") or r.get("recovery_email") or "")
     return (f'<tr class="editrow"><td colspan="{columns}">'
             f'<form method="post" action="/pools/gmail/edit">{_csrf(user)}'
             f'<input type="hidden" name="address" value="{esc(address)}">'

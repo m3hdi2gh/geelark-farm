@@ -1163,3 +1163,40 @@ def test_an_edit_that_never_mentions_the_secret_leaves_both_columns_alone():
 
     assert stored_row(table)["totp_secret"] == SECRET
     assert stored_row(table)["seller"] == "somebody else"
+
+
+def test_a_row_with_both_factors_keeps_both():
+    """One Secret cell cannot say two things, and reading the two columns
+    through it lost whichever was not preferred - the address was, so a
+    row holding a working key and a recovery address was read as having
+    no authenticator and died on a page asking for exactly that code
+    (sgiving962@gmail.com, 2026-09-19).
+    """
+    table = MemoryTable()
+    table.add("gmail", address="both@x.com", password="pw",
+              totp_secret=SECRET, recovery_email="keeper@x.com",
+              seller="", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    row = pool.find("both@x.com")
+
+    creds = row.credentials
+    assert creds.totp_secret == SECRET, "the key must survive"
+    assert creds.recovery_email == "keeper@x.com", "and so must the address"
+    assert creds.has_authenticator
+    # The one cell the editor shows holds the key, because the address has
+    # a column of its own to be kept in.
+    assert row.values["Secret"] == SECRET
+    assert row.values[pgpool.GmailPool.RECOVERY_COLUMN] == "keeper@x.com"
+
+
+def test_a_recovery_only_row_still_reads_as_one():
+    table = MemoryTable()
+    table.add("gmail", address="rec@x.com", password="pw", totp_secret="",
+              recovery_email="keeper@x.com", seller="", sheet_row=2)
+    pool = PgGmailPool(table)
+    pool.load()
+    creds = pool.find("rec@x.com").credentials
+
+    assert not creds.totp_secret and not creds.has_authenticator
+    assert creds.recovery_email == "keeper@x.com"

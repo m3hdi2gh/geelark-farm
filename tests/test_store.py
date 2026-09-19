@@ -259,26 +259,33 @@ def test_the_secret_cell_splits_on_the_at_sign():
     assert with_key["recovery_email"] == ""
 
 
-def test_the_seller_promise_refuses_only_the_wrong_kind():
-    """Never an empty cell - that is how password-only accounts stay
-    welcome, and forgetting it refused two of them on 2026-08-30."""
+def test_the_seller_says_who_sold_it_and_nothing_about_its_kind():
+    """It used to promise one: a row whose Secret cell disagreed with a
+    known seller was refused. Gone on 2026-09-20 - sellers change what
+    they ship, and which kind an account is is a fact about the account.
+
+    All three kinds pass under any seller, and a cell that is neither
+    kind is still refused, which is the check that was doing the work.
+    """
     from geelark_farm.store import validate
 
-    # empty secret under a promising seller: fine
-    validate.gmail_row(address="a@b.com", password="pw", seller="usa")
-    # the wrong kind under a promising seller: refused
-    with pytest.raises(validate.AccountError, match="disagree"):
-        validate.gmail_row(address="a@b.com", password="pw",
-                           seller="usa", secret="rescue@mail.com")
+    for seller in ("usa", "egypt", "LEO 18SEP", ""):
+        validate.gmail_row(address="a@b.com", password="pw", seller=seller)
+        validate.gmail_row(address="a@b.com", password="pw", seller=seller,
+                           secret="rescue@mail.com")
+        validate.gmail_row(address="a@b.com", password="pw", seller=seller,
+                           secret="JBSWY3DPEHPK3PXP")
+    with pytest.raises(validate.AccountError):
+        validate.gmail_row(address="a@b.com", password="pw", seller="usa",
+                           secret="not a key at all!")
 
 
-def test_the_sellers_table_matches_the_sheets():
-    """Duplicated knowingly (store must not import the sheet module); this
-    is the pin that keeps the two copies one."""
+def test_nothing_anywhere_still_holds_a_table_of_seller_promises():
     from geelark_farm.pools import GmailPool
     from geelark_farm.store import validate
 
-    assert validate.SELLERS == GmailPool.SELLERS
+    assert not hasattr(validate, "SELLERS")
+    assert not hasattr(GmailPool, "SELLERS")
 
 
 def test_an_email_code_only_app_account_needs_no_password():
