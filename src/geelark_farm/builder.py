@@ -2237,6 +2237,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # that was deleted underneath the build, which is a different sentence
         # and points at a different culprit.
         vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
+        if not vanished:
+            _remember_refusal(settings, str(exc))
         return finish("phone_is_gone" if vanished else "phone_would_not_start",
                       str(exc))
     except Exception as exc:                                      # noqa: BLE001
@@ -2542,6 +2544,8 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # error nobody planned for" - and a GeeLark capacity refusal, which is
         # nobody's fault at all, counted against the breaker as one (2026-08-28).
         vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
+        if not vanished:
+            _remember_refusal(settings, str(exc))
         return finish("phone_is_gone" if vanished else "phone_would_not_start",
                       str(exc))
     except Exception as exc:                                      # noqa: BLE001
@@ -2618,6 +2622,33 @@ def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
             continue
         return resource
     return None
+
+
+def _remember_refusal(settings: Settings, said: str) -> None:
+    """Keep GeeLark's own words about a phone that would not start.
+
+    The open API has no balance in it - `/v1/pay/plan/info` gives the
+    slots and the expiry and nothing about money, and there is no other
+    endpoint (probed, 2026-09-20). So the only thing that says the
+    account has run out is a refusal, and until this it said it only in
+    a log line: nineteen builds were turned down for
+    `[41001] balance not enough` in six hours and the console showed a
+    tripped breaker with no hint why (2026-09-19).
+
+    Never fatal. It is a note for a page, written on a path that is
+    already reporting a failure.
+    """
+    if not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import db, state as store_state
+
+        with db.connect(settings) as conn:
+            store_state.put(conn, "geelark_refusal",
+                            {"said": said[:300], "at": time.time()})
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not keep why a phone would not start (%s)", exc)
 
 
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,

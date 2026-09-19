@@ -748,6 +748,16 @@ p{{margin:0}}
 .split b{{color:var(--ink);font-weight:600;margin-right:4px}}
 .railcap{{width:100%;margin:0;font-family:var(--mono);font-size:10.5px;
  letter-spacing:.09em;text-transform:uppercase;color:var(--dim);padding:0 2px}}
+.glark{{display:flex;flex-direction:column;gap:9px;margin-top:2px}}
+.glrow{{display:grid;grid-template-columns:1fr auto;gap:2px 8px;
+ align-items:baseline}}
+.gllabel{{font-size:12px;color:var(--dim)}}
+.glvalue{{font-size:12.5px;font-family:var(--mono);text-align:right;
+ overflow-wrap:anywhere}}
+.glnote{{grid-column:1/-1;font-size:11px;color:var(--dim)}}
+.glbar{{grid-column:1/-1;height:4px;border-radius:3px;
+ background:color-mix(in srgb,var(--dim) 25%,transparent);overflow:hidden}}
+.glbar i{{display:block;height:100%;border-radius:3px}}
 @media (max-width:1100px){{
  .desk{{grid-template-columns:minmax(0,1fr);
   grid-template-areas:"supply" "main" "side"}}
@@ -4891,6 +4901,92 @@ def _new_dialog(ident: str, title: str,
             f'</div></div></dialog>')
 
 
+#: How long a phone refusing to start stays on the page. GeeLark says
+#: nothing about the account's money until it refuses one, so the
+#: refusal IS the reading - and a reading an hour old is still the last
+#: thing known.
+REFUSAL_SHOWN_FOR = 3600.0
+
+#: When to start saying the subscription is nearly over.
+PLAN_WARN_DAYS = 10
+
+
+def _geelark_card(data: dict, user: dict) -> str:
+    """What GeeLark says about the account, so a limit is seen coming.
+
+    Three readings, and a plain word about the one that is missing.
+
+    The open API has **no balance**. `/v1/pay/plan/info` carries the
+    profile slots and the day the subscription ends, and nothing about
+    money; nothing else answers (probed, 2026-09-20). So an account that
+    is about to run out looks exactly like one that is not, until a
+    phone is refused - which is what the red line is, quoted in
+    GeeLark's own words. Saying so on the card is better than a number
+    somebody would come to trust: nineteen builds were turned down for
+    `balance not enough` in six hours and the console showed a tripped
+    breaker with no hint why (2026-09-19).
+    """
+    if not _may(user, "is_admin") and not _may(user, "may_login_accounts"):
+        return ""
+    found = data.get("geelark") or {}
+    plan = found.get("plan") or {}
+    if not plan and not found.get("refusal"):
+        return ""
+    rows = []
+
+    total = int(plan.get("profiles") or 0)
+    free = int(plan.get("availableProfiles") or 0)
+    if total:
+        used = max(0, total - free)
+        share = used / total
+        colour = "red" if share >= 0.95 else "amber" if share >= 0.8 else "green"
+        rows.append(_geelark_row(
+            "Phone slots", f"{used} of {total} used",
+            f"{free} free", colour,
+            width=int(round(share * 100))))
+
+    ends = plan.get("expirationTime")
+    if ends:
+        import datetime as dt
+
+        when = dt.datetime.fromtimestamp(int(ends), dt.timezone.utc)
+        days = (when - dt.datetime.now(dt.timezone.utc)).days
+        colour = ("red" if days <= 2 else
+                  "amber" if days <= PLAN_WARN_DAYS else "green")
+        rows.append(_geelark_row(
+            "Subscription", when.strftime("%d %b %Y"),
+            f"{days} days left" if days >= 0 else "expired", colour))
+
+    said = str(found.get("refusal") or "")
+    at = found.get("refused_at")
+    fresh = at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR
+    if said and fresh:
+        rows.append(_geelark_row(
+            "Phones will not start", esc(said), "GeeLark's own words", "red"))
+    elif not said:
+        rows.append(_geelark_row(
+            "Phones will not start", "nothing refused recently", "", "green"))
+
+    when_read = found.get("at")
+    age = f"read {_ago(when_read)}" if when_read else "not read yet"
+    return (f'<div class="panel"><h3>GeeLark</h3>'
+            f'<div class="glark">{"".join(rows)}</div>'
+            f'<p class="dim" style="margin:8px 0 0;font-size:11.5px">'
+            f'{age}. The API has no balance in it - only a phone being '
+            f'refused says the account has run out.</p></div>')
+
+
+def _geelark_row(label: str, value: str, note: str, colour: str,
+                 width: int | None = None) -> str:
+    bar = ""
+    if width is not None:
+        bar = (f'<div class="glbar"><i style="width:{max(2, min(100, width))}%;'
+               f'background:var(--{colour})"></i></div>')
+    return (f'<div class="glrow"><span class="gllabel">{esc(label)}</span>'
+            f'<span class="glvalue" style="color:var(--{colour})">{value}</span>'
+            f'<span class="glnote">{esc(note)}</span>{bar}</div>')
+
+
 def _stopped_card(data: dict, user: dict, explain=None) -> str:
     """The credentials a run judged and set aside, in the words it used.
 
@@ -5171,7 +5267,11 @@ def dashboard(data: dict, user: dict, said: str = "",
             f'{_controls(data, user)}</span>'
             f'{_who_and_out(user)}</div>'
             f'<div class="desk">'
-            f'<div class="rail"><p class="railcap">Built from</p>{supply}</div>'
+            f'<div class="rail"><p class="railcap">Built from</p>{supply}'
+            # What the farm is built ON, under what it is built FROM: a
+            # slot or a subscription running out stops every build, and
+            # the pools' own numbers say nothing about either.
+            f'{_geelark_card(data, user)}</div>'
             f'<div class="deskmain">{main}</div>'
             f'<aside class="side"><p class="railcap">Signed in on phones</p>'
             f'{side}</aside></div>'

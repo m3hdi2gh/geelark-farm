@@ -389,12 +389,37 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "awaiting": awaiting,
         "stopped": stopped,
         "choose": choose,
+        "geelark": _geelark(store),
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
         "asked": asked,
         "wishes": wishes,
         "pulse": (pulse[0]["value"] or {}) if pulse else {},
     }
+
+
+def _geelark(store) -> dict:
+    """What GeeLark says about the account, as the keeper last heard it.
+
+    Read from the store and never from the API: a page render that
+    reaches somebody else's network is a page that hangs, and the plan
+    endpoint allows one call a minute for the whole account. The keeper
+    calls it every few minutes anyway and leaves the answer here.
+
+    There is no balance in it. `/v1/pay/plan/info` carries the slots and
+    the expiry and nothing about money, and no other endpoint answers
+    (probed, 2026-09-20) - so the only thing that reports an empty
+    account is a phone being refused, which is `refusal`.
+    """
+    rows = store._rows(
+        "SELECT key, value FROM service_state"
+        " WHERE key IN ('geelark_plan', 'geelark_refusal')")
+    found = {r["key"]: r["value"] for r in rows}
+    kept = found.get("geelark_plan") or {}
+    refused = found.get("geelark_refusal") or {}
+    return {"plan": kept.get("plan") or {}, "at": kept.get("at"),
+            "refusal": refused.get("said") or "",
+            "refused_at": refused.get("at")}
 
 
 def _latest_lines(store, serials: list[str]) -> dict[str, dict]:

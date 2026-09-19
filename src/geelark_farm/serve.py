@@ -174,13 +174,20 @@ class Slots:
     #: what a failure waits.
     retry_after: float = 60.0
 
+    #: Written for the console, which must not call GeeLark itself: a page
+    #: render that reaches somebody else's network is a page that hangs,
+    #: and this endpoint allows one call a minute for the whole account.
+    settings: Settings | None = None
+
     def look(self, client: Client, now: float) -> int | None:
         """The count, reading it again only when it is old enough to."""
         if self.read_at is not None and (now - self.read_at) < self.every:
             return self.free
         try:
-            self.free = int(phones.plan(client).get("availableProfiles") or 0)
+            plan = phones.plan(client)
+            self.free = int(plan.get("availableProfiles") or 0)
             self.read_at = now
+            self._remember(plan)
         except Exception as exc:                                  # noqa: BLE001
             # Stamped as though the read happened `every - retry_after` ago, so
             # the next attempt is a minute out rather than five.
@@ -191,6 +198,26 @@ class Slots:
                         "the last answer" if self.free is not None
                         else "no answer at all")
         return self.free
+
+    def _remember(self, plan: dict) -> None:
+        """Keep the whole plan where the console can read it.
+
+        Only the free-slot count is used here; the rest - the slots in
+        all, when the subscription runs out - is what somebody watching
+        the farm wants to see before it bites. Never fatal: this is a
+        note for a page, not part of deciding what to build.
+        """
+        if not getattr(self.settings, "store_enabled", False):
+            return
+        try:
+            from .store import db, state as store_state
+
+            with db.connect(self.settings) as conn:
+                store_state.put(conn, "geelark_plan",
+                                {"plan": plan, "at": time.time()})
+                conn.commit()
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not keep the plan for the console (%s)", exc)
 
 
 def needs_slots(*, tripped: str, warm: int, target: int,
@@ -2323,7 +2350,7 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
     fuse = open_breaker(settings, settings.state_dir / BREAKER_FILE)
     # Kept across passes: the count stays true between them, and the
     # endpoint that gives it allows one call a minute.
-    slots = Slots()
+    slots = Slots(settings=settings)
     stop = stop or threading.Event()
     # Nothing acted on the healthcheck saying a pass had stopped coming back:
     # `restart: always` waits for an exit, and a hung process has not exited.
