@@ -4144,7 +4144,11 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
         build=builder.Build(index=1, serial="1523"),
         client=None, phone_id="P1", codes=None,
         settings=SimpleNamespace(target_package="com.openai.chatgpt",
-                                 app_login_budget_seconds=100),
+                                 app_login_budget_seconds=100,
+                                 # Handed to whichever flow is picked
+                                 # since 2026-09-19; the Spotify one
+                                 # answers a reCAPTCHA grid with it.
+                                 capsolver_key=""),
         artifacts=None, cancelled=None,
         check_cancelled=lambda: None,
         remaining=lambda: 999.0,

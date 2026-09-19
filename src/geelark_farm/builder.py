@@ -832,6 +832,12 @@ def _sign_into_app(session: _Session) -> Build | None:
             # `_codes_for`). Nothing by default, which reports the page
             # exactly as it always did.
             codes=source,
+            # The solver, for the one app flow that meets a captcha:
+            # Spotify hands its challenge to Chrome, and reCAPTCHA asks
+            # for pictures there rather than taking the tick - five
+            # exits running (3644, 2026-09-19). Taken and ignored by the
+            # other two flows, exactly as `codes` above is by Spotify's.
+            solver_key=s.settings.capsolver_key,
             # As above: a press on Cancel is felt at the next screen, not
             # at the end of this login.
             watch=s.check_cancelled,

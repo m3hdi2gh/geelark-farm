@@ -591,3 +591,36 @@ def test_a_challenge_that_keeps_asking_for_grids_blames_the_exit(monkeypatch):
     from geelark_farm import failures
 
     assert failures.verdict("captcha_grid", "Spotify").blame == failures.EXIT
+
+
+def test_the_builder_hands_the_solver_key_to_the_app_flow():
+    """It did not, and nothing noticed: the grid came up on a live phone,
+    `act_grid` found no key and reported `captcha_grid`, and the builder
+    swapped the exit and met the same grid again (3644, 2026-09-19). The
+    key reaching Google's flow is a separate call site, so a test on that
+    one says nothing about this one."""
+    import inspect
+
+    from geelark_farm import builder
+
+    source = inspect.getsource(builder._sign_into_app)
+    assert "solver_key=s.settings.capsolver_key" in source, (
+        "the app sign-in must hand the flow the CapSolver key, or a "
+        "Spotify challenge that opens a grid cannot be answered")
+    # And the flow must put it somewhere act_grid can read.
+    assert "solver_key=solver_key" in inspect.getsource(sl.sign_in)
+
+
+def test_every_app_flow_takes_the_same_call_the_builder_makes():
+    """One signature, three flows: the two that never meet a captcha take
+    the key and ignore it, the way this one takes `codes` and ignores it.
+    A flow that refused the argument would raise on a live phone and
+    nowhere else."""
+    import inspect
+
+    from geelark_farm.flows import chatgpt_login, claude_login
+
+    for flow in (sl, chatgpt_login, claude_login):
+        taken = inspect.signature(flow.sign_in).parameters
+        assert "solver_key" in taken, flow.__name__
+        assert "codes" in taken, flow.__name__
