@@ -139,6 +139,18 @@ DISMISS_LABELS = (
     "Agree", "I agree", "Accept", "Allow", "Next", "Done", "Get started",
 )
 
+#: Never tapped by the dismiss path, whatever label happens to match.
+#: The allowlist above is matched partially, which is what lets one of
+#: its words reach a control that does something else: on Chrome's
+#: first-run page "Continue" finds "Continue as <first name>" and signs
+#: the browser into the phone's own Gmail. The Spotify flow did exactly
+#: that (3644, 2026-09-19), and this flow runs on the same warm phones
+#: with the same word in its list. `GOOGLE_BUTTON` was guarded only at
+#: the taps that go looking for it, never here.
+NEVER_DISMISSED = ("google", "apple", "microsoft", "facebook",
+                   "continue as", "use another account",
+                   "sign up", "create account")
+
 #: The chat screen's composer placeholder (captured), plus the wordings
 #: Anthropic has used elsewhere, so a reword costs one entry, not a build.
 COMPOSER_PLACEHOLDERS = (
@@ -328,10 +340,11 @@ def act_code(ctx: Context) -> Outcome | None:
 
 
 def act_dismiss(ctx: Context) -> Outcome | None:
-    tapped = screen.tap_first_present(ctx.client, ctx.phone_id, ctx.elements,
-                                      DISMISS_LABELS, clickable_only=False)
-    if tapped:
-        log.info("dismissed %r", tapped)
+    element = screen.find_dismissable(ctx.elements, DISMISS_LABELS,
+                                      never=NEVER_DISMISSED)
+    if element is not None and screen.tap_element(ctx.client, ctx.phone_id,
+                                                  element):
+        log.info("dismissed %r", element.label)
         time.sleep(3)
     return None
 

@@ -524,12 +524,29 @@ VERDICTS: dict[str, Verdict] = {
         "seller, or remove it."),
     # Spotify's challenge, which is drawn in Chrome and not in the app.
     # The tick box is answered; these two are the shapes that are not.
+    # Measured, not assumed. Phone 3644 was challenged on six exits in
+    # a row and swapping the seventh would have changed nothing; the
+    # same account went onto 3653, 3655, 3658, 3660 and 3668 with no
+    # challenge at all, and passed on 3667 once the grid was answered.
+    # The challenge follows the phone. Filed as the exit's fault it sent
+    # the build round the proxy pool burning a claim a time, which is
+    # the one thing that never helped (2026-09-19).
     "captcha_grid": Verdict(
-        EXIT, "{service}'s challenge went to an image grid",
-        "The widget would not take the tick and asked for pictures "
-        "instead, which it does when it distrusts the exit rather than "
-        "the account. Only the tick box is answered here. Change the "
-        "exit and send the account again; nothing is known against it."),
+        DEVICE, "{service}'s challenge asked for pictures and they were "
+        "not accepted",
+        "The grid was answered and the challenge still did not clear, "
+        "which is this phone being distrusted rather than the account "
+        "or the exit: the same account signs in on another phone. The "
+        "phone is set aside and the account goes back to the pool "
+        "untouched."),
+    "captcha_unsolved": Verdict(
+        DEVICE, "{service}'s challenge never cleared",
+        "The tick was submitted and the page kept asking. It is a "
+        "verdict on the phone, not on the account: the same account "
+        "signs in on another one. Nothing is known against it, and it "
+        "goes back to the pool untouched - unlike the captcha Google's "
+        "own flow reports, which does mark the address it was refused "
+        "for. Send it to another phone."),
     "chrome_setup_unknown": Verdict(
         DEVICE, "the browser asked to be set up in a way this flow does "
         "not know",

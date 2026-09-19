@@ -259,6 +259,58 @@ def find_first(elements: list[Element], labels: tuple[str, ...] | list[str],
     return None
 
 
+def no_size(element: Element) -> bool:
+    """Whether this element is laid out with no area at all.
+
+    Its centre is then a point on the screen that has nothing to do with
+    it: a web page's "Skip to content" sits at [0,0][0,0], so tapping it
+    is a tap on whatever is in the screen's top-left corner (3644,
+    2026-09-19).
+    """
+    nums = [int(n) for n in re.findall(r"-?\d+", element.bounds)]
+    if len(nums) != 4:
+        return True
+    return nums[2] <= nums[0] or nums[3] <= nums[1]
+
+
+def find_dismissable(elements: list[Element],
+                     labels: tuple[str, ...] | list[str], *,
+                     never: tuple[str, ...] = (),
+                     clickable_only: bool = False) -> Element | None:
+    """The first of `labels` present that is safe to tap, or None.
+
+    An allowlist of interstitial buttons is matched partially on purpose
+    - the same control is "Continue" on one rendering and "Continue to
+    Spotify" on another - and that is exactly how one word of it reaches
+    a control that does something else entirely. "Continue" found
+    "Continue as Risky" on Chrome's first-run page and signed the
+    browser into the phone's own Gmail, which is the one thing all three
+    app flows say they never do (3644, 2026-09-19).
+
+    So what the allowlist finds goes through `never` - the flow's own
+    list of words it will not touch, matched inside the label the way
+    every other refusal in these flows is - and through a size check.
+    A refused match does not end the search: the next label is tried,
+    because the page usually carries a safe one too.
+    """
+    for label in labels:
+        element = find(elements, label, clickable_only=clickable_only)
+        if element is None:
+            continue
+        found = element.label.casefold()
+        blocked = next((w for w in never if w in found), "")
+        if blocked:
+            log.warning("not dismissing with %r: %r matches %r",
+                        label, element.label, blocked)
+            continue
+        if no_size(element):
+            log.warning("not dismissing with %r: %r has no size",
+                        label, element.label)
+            continue
+        return element
+    return None
+
+
 def find_input(elements: list[Element], *,
                password: bool | None = None) -> Element | None:
     """Find a text field. Google's code and password boxes carry no label, so

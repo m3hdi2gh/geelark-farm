@@ -202,8 +202,8 @@ GRIDS_PER_CHALLENGE = 5
 DRAW_WAIT = 3
 
 #: Visits the challenge page gets before the account goes back as
-#: `captcha_shown`. Room for three whole cycles - a tick, its settle and
-#: a Continue is four visits - plus the grids in between.
+#: `captcha_unsolved`. Room for three whole cycles - a tick, its
+#: settle and a Continue is four visits - plus the grids between.
 CHALLENGE_VISITS = 20
 #: Visits to leave the page alone after touching it at all: a tick, a
 #: grid answered, a Continue pressed. reCAPTCHA takes a few seconds to
@@ -261,11 +261,11 @@ FATAL_ADVICE = {
         "the account is signed in, but Spotify says its plan is paused "
         "for an unpaid bill - the farm never pays, so a person decides "
         "what this row is worth",
-    "captcha_shown":
-        "Spotify's challenge page did not clear - the tick box was "
-        "answered and reCAPTCHA was not satisfied, which is a verdict on "
-        "the exit and the device, not on the account; a cleaner proxy is "
-        "the fix",
+    "captcha_unsolved":
+        "Spotify's challenge page did not clear - the tick was submitted "
+        "and reCAPTCHA kept asking, which is a verdict on this phone "
+        "rather than on the account or the exit; another phone signs the "
+        "same account in",
     "captcha_grid":
         "reCAPTCHA would not take the tick and asked for pictures; only "
         "the tick box is answered here, and a grid is the exit being "
@@ -560,46 +560,12 @@ def act_plan_paused(ctx: Context) -> Outcome | None:
     return None
 
 
-def _no_size(element) -> bool:
-    """Whether this element is laid out with no area, which makes its
-    centre a point on the screen that has nothing to do with it."""
-    nums = [int(n) for n in re.findall(r"-?\d+", element.bounds)]
-    if len(nums) != 4:
-        return True
-    return nums[2] <= nums[0] or nums[3] <= nums[1]
-
-
 def _dismissable(ctx: Context):
-    """The first dismiss control on the page that this flow is allowed to
-    touch, or None.
-
-    The allowlist is matched partially - "Continue" finds "Continue" in a
-    longer label - and that is what it is for, since the same button is
-    "Continue" on one rendering and "Continue to Spotify" on another. It
-    also means one word of the list can reach a control that does
-    something else entirely: on Chrome's first-run page "Continue" found
-    "Continue as Risky" and signed the browser into the phone's Gmail
-    (3644, 2026-09-19). So what the allowlist finds is put through the
-    same refusal every other tap in this flow goes through.
-    """
-    for label in DISMISS_LABELS:
-        element = screen.find(ctx.elements, label, clickable_only=False)
-        if element is None:
-            continue
-        if any(word in element.label.casefold() for word in NEVER_TAPPED):
-            log.warning("not dismissing with %r: it matched %r", label,
-                        element.label)
-            continue
-        if _no_size(element):
-            # A web page's "Skip to content" is a link laid out at
-            # [0,0][0,0], and the centre of that is the screen's own
-            # top-left corner - so dismissing with it is a tap on
-            # whatever is up there (3644, 2026-09-19).
-            log.warning("not dismissing with %r: %r has no size", label,
-                        element.label)
-            continue
-        return element
-    return None
+    """The first dismiss control this flow is allowed to touch, or None.
+    The rule is `screen.find_dismissable`, shared with the other two app
+    flows; NEVER_TAPPED is what this one will not touch."""
+    return screen.find_dismissable(ctx.elements, DISMISS_LABELS,
+                                   never=NEVER_TAPPED)
 
 
 def act_dismiss(ctx: Context) -> Outcome | None:
@@ -769,8 +735,9 @@ def act_challenge(ctx: Context) -> Outcome | None:
     on that and lets the page judge, which is what a person does.
 
     Every way out that is not the challenge clearing ends on
-    `captcha_shown` - the reason this page had before anything tried to
-    answer it - so a phone is never worse off for the attempt.
+    `captcha_unsolved`, which blames this phone and leaves the account
+    untouched - so a phone is never worse off for the attempt, and an
+    account is never marked for a challenge it did not cause.
     """
     visit = ctx.seen.get("challenge", 0)
     # Before every branch, so no page can outlive the budget by staying
@@ -778,11 +745,11 @@ def act_challenge(ctx: Context) -> Outcome | None:
     # until the router called it `stuck_on_challenge`, which is a phrase
     # about this tool rather than about Spotify.
     if visit >= CHALLENGE_VISITS - 1:
-        kept = ctx.keep("captcha_shown")
-        return Outcome("fatal", "captcha_shown",
+        kept = ctx.keep("captcha_unsolved")
+        return Outcome("fatal", "captcha_unsolved",
                        f"the challenge was still up after "
                        f"{CHALLENGE_VISITS} looks: "
-                       f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
+                       f"{FATAL_ADVICE['captcha_unsolved']}", artifacts=kept)
     if _grid_up(ctx):
         return act_grid(ctx, visit)
     # One touch per settle, whatever the last touch was.
@@ -826,11 +793,11 @@ def act_challenge(ctx: Context) -> Outcome | None:
     # CONTINUE_TRIES, rather than ticking at whatever the page is still
     # saying about the last press.
     if ctx.continues >= CONTINUE_TRIES:
-        kept = ctx.keep("captcha_shown")
-        return Outcome("fatal", "captcha_shown",
+        kept = ctx.keep("captcha_unsolved")
+        return Outcome("fatal", "captcha_unsolved",
                        f"Continue was pressed {ctx.continues} times and "
                        f"the challenge did not clear: "
-                       f"{FATAL_ADVICE['captcha_shown']}", artifacts=kept)
+                       f"{FATAL_ADVICE['captcha_unsolved']}", artifacts=kept)
     if _tap_safely(ctx, CHALLENGE_BUTTON):
         ctx.continues += 1
         ctx.answered_since_continue = False

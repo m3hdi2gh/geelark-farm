@@ -550,7 +550,7 @@ def test_the_visit_cutoff_is_reached_even_while_a_grid_is_on_screen(
     ctx = ctx_for("captcha-grid")
     ctx.solver_key = "CAP-test"
     out = sl.act_challenge(_at(ctx, sl.CHALLENGE_VISITS - 1))
-    assert out is not None and out.reason == "captcha_shown"
+    assert out is not None and out.reason == "captcha_unsolved"
 
 
 def test_continue_is_not_pressed_through_the_grid_overlay(phone):
@@ -573,7 +573,7 @@ def test_a_challenge_that_will_not_clear_ends_where_it_did_before(
     ctx.seen["challenge"] = sl.CHALLENGE_VISITS - 1
     out = sl.act_challenge(ctx)
     assert out is not None and out.kind == "fatal"
-    assert out.reason == "captcha_shown"
+    assert out.reason == "captcha_unsolved"
     # And pressing Continue at a page that keeps coming back is bounded.
     ctx = ctx_for("challenge")
     ctx.continues = sl.CONTINUE_TRIES
@@ -584,7 +584,7 @@ def test_a_challenge_that_will_not_clear_ends_where_it_did_before(
                     if "not a robot" not in e.label.lower()]
     ctx.blob = screen.texts(ctx.elements)
     out = sl.act_challenge(ctx)
-    assert out is not None and out.reason == "captcha_shown"
+    assert out is not None and out.reason == "captcha_unsolved"
 
 
 def test_an_image_grid_is_named_rather_than_read_as_a_tick_that_failed(
@@ -598,7 +598,7 @@ def test_an_image_grid_is_named_rather_than_read_as_a_tick_that_failed(
     from geelark_farm import failures
 
     said = failures.verdict("captcha_grid", "Spotify")
-    assert said.blame == failures.EXIT
+    assert said.blame == failures.DEVICE
 
 
 def test_a_dismiss_word_never_reaches_a_google_control_or_a_sizeless_link():
@@ -608,7 +608,7 @@ def test_a_dismiss_word_never_reaches_a_google_control_or_a_sizeless_link():
     ctx = ctx_for("challenge")
     skip = screen.find(ctx.elements, "Skip to content", clickable_only=False)
     assert skip is not None and skip.bounds == "[0,0][0,0]"
-    assert sl._no_size(skip)
+    assert screen.no_size(skip)
     found = sl._dismissable(ctx)
     assert found is None or found.label != "Skip to content"
 
@@ -680,9 +680,14 @@ def test_no_solver_key_leaves_the_grid_exactly_where_it_was(monkeypatch):
     assert "no CapSolver key" in out.detail
 
 
-def test_a_challenge_that_keeps_asking_for_grids_blames_the_exit(monkeypatch):
+def test_a_challenge_that_keeps_asking_for_grids_blames_the_phone(monkeypatch):
     """Measured on Google: past three grids nothing has ever signed in, so
-    each further one spends a phone's billing to learn nothing."""
+    each further one spends a phone's billing to learn nothing.
+
+    And it is the *phone* that is blamed. Filed as the exit's fault, one
+    build went round six proxies on 3644 and every one was challenged,
+    while the same account signed in untouched on five other phones
+    (2026-09-19)."""
     monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
     ctx = ctx_for("captcha-grid")
     ctx.solver_key = "CAP-test"
@@ -693,7 +698,10 @@ def test_a_challenge_that_keeps_asking_for_grids_blames_the_exit(monkeypatch):
 
     from geelark_farm import failures
 
-    assert failures.verdict("captcha_grid", "Spotify").blame == failures.EXIT
+    said = failures.verdict("captcha_grid", "Spotify")
+    assert said.blame == failures.DEVICE
+    assert said.stops_the_phone and not said.needs_a_new_exit
+    assert not said.costs_the_credential, "the account did nothing wrong"
 
 
 def test_the_builder_hands_the_solver_key_to_the_app_flow():
@@ -793,3 +801,48 @@ def test_send_asks_as_the_person_pressing_it():
     from geelark_farm.web import app as web_app
 
     assert 'by_id=user["id"]' in inspect.getsource(web_app)
+
+
+def test_an_unclearable_challenge_does_not_mark_the_account():
+    """It used to. The Spotify flow reported Google's `captcha_shown`,
+    which is CREDENTIAL and sits in Google's distrust ladder - so an
+    account that met a challenge was marked spent. The same account then
+    signed in on two other phones without one (2026-09-19)."""
+    from geelark_farm import failures
+
+    ours = failures.verdict("captcha_unsolved", "Spotify")
+    assert ours.blame == failures.DEVICE
+    assert ours.stops_the_phone
+    assert not ours.costs_the_credential
+    assert "captcha_unsolved" not in failures.DISTRUST, (
+        "that ladder is Google's, and marks the address")
+    # Google's own reason is untouched, ladder and all.
+    theirs = failures.verdict("captcha_shown", "Google")
+    assert theirs.blame == failures.CREDENTIAL
+    assert "captcha_shown" in failures.DISTRUST
+
+
+def test_no_app_flow_can_dismiss_its_way_into_a_google_account():
+    """All three run on warm phones that have a Gmail, all three match
+    their dismiss list partially, and all three say they never touch a
+    Google control. Only one of them enforced it (3644, 2026-09-19)."""
+    from geelark_farm import screen as screen_mod
+    from geelark_farm.flows import chatgpt_login, claude_login
+
+    def button(text, top):
+        return screen_mod.Element(
+            cls="android.widget.Button", text=text, desc="",
+            resource_id="", bounds=f"[100,{top}][600,{top + 100}]",
+            clickable=True, enabled=True, focused=False, password=False)
+
+    trap, safe = button("Continue as Risky", 1100), button("Not now", 1300)
+
+    for flow in (sl, chatgpt_login, claude_login):
+        never = getattr(flow, "NEVER_TAPPED", None) or flow.NEVER_DISMISSED
+        found = screen.find_dismissable([trap], flow.DISMISS_LABELS,
+                                        never=never)
+        assert found is None, f"{flow.__name__} would tap {trap.label!r}"
+        # And it still finds a real dismiss on the same page.
+        found = screen.find_dismissable([trap, safe], flow.DISMISS_LABELS,
+                                        never=never)
+        assert found is safe, flow.__name__
