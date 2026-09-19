@@ -624,3 +624,49 @@ def test_every_app_flow_takes_the_same_call_the_builder_makes():
         taken = inspect.signature(flow.sign_in).parameters
         assert "solver_key" in taken, flow.__name__
         assert "codes" in taken, flow.__name__
+
+
+def test_the_grid_is_cropped_where_the_tiles_actually_are():
+    """The floor of the band is the challenge's own foot, not the first
+    button under the heading.
+
+    Spotify draws the grid over the tick-box page and that page keeps its
+    `Continue` in the tree, at y=725 with the tiles running to 968. Taken
+    as the floor it cut the band in half: the block found inside it was
+    387px square instead of 630, and every tap would have gone to the
+    wrong picture (3644, 2026-09-19).
+    """
+    from PIL import Image
+
+    from geelark_farm.flows import recaptcha as rc
+
+    ctx = ctx_for("captcha-grid")
+    stale = screen.find(ctx.elements, "Continue", clickable_only=True)
+    assert stale is not None and rc.box_of(stale)[1] == 725, (
+        "this fixture is meant to carry the stale Continue")
+    # The footer, by the challenge's own controls, is 264px lower down.
+    assert rc._footer_row(ctx, below=289) == [0, 989]
+    assert rc.grid_rect(ctx) == (34, 289, 690, 989)
+
+    shot = Image.open(
+        FIXTURES / "spotify-captcha-grid-screen.png").convert("RGB")
+    assert shot.width == rc._screen_width(ctx)          # no scaling here
+    block = rc._tiles_in(shot, rc.grid_rect(ctx))
+    assert block == (47, 338, 677, 968)
+    wide, high = block[2] - block[0], block[3] - block[1]
+    assert wide == high == 630, "a reCAPTCHA grid is square"
+
+
+def test_the_stale_button_rule_does_not_move_googles_grid():
+    """The same change, asked of the page it must not disturb: Google's
+    grid has no button between its heading and its tiles, so the footer
+    rule and the old first-button rule agree there."""
+    from geelark_farm.flows import recaptcha as rc
+
+    ctx = sl.Context(client=None, phone_id="P", creds=CREDS)
+    ctx.elements = screen.parse(
+        (FIXTURES / "google-captcha-grid-screen.xml").read_text(
+            encoding="utf-8"))
+    ctx.blob = screen.texts(ctx.elements)
+    assert rc._footer_row(ctx, below=198) == rc._button_row(ctx, below=198)
+    assert rc.grid_rect(ctx) == (34, 198, 690, 898)

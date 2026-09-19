@@ -288,16 +288,54 @@ def challenge_button(ctx: Context, *, below: int):
     return best
 
 
-def _button_row(ctx: Context, *, below: int) -> list[int]:
-    """The challenge's own button row - the first real button under the
-    heading - which is where the tiles stop.
+#: The challenge's own foot, by the controls only it has: the three icon
+#: buttons reCAPTCHA puts at the bottom of a grid. With GRID_VERIFY they
+#: name the row the tiles stop at, and they are asked for by name
+#: because the first *any* button under the heading is not always the
+#: challenge's - see `_button_row`.
+FOOTER_CONTROLS = ("get a new challenge", "get an audio challenge",
+                   "get a liveness challenge", "help")
 
-    Found by class and position rather than by wording. Reading it off a
-    label matched `Verify` against the page's `Verify it's you` heading,
-    which sits *above* the grid: the floor came out higher than the
-    ceiling, every grid was called unplaceable, and seven of them went by
-    untouched before the phone gave up (2026-09-05, phone 1793).
+
+def _footer_row(ctx: Context, *, below: int) -> list[int]:
+    """The reCAPTCHA footer, found by its own controls.
+
+    A clickable Button, so the wording cannot match a heading - which is
+    the trap the rule below was written to avoid. Empty when the page
+    does not carry one, and then that rule stands.
     """
+    wanted = {w.casefold() for w in FOOTER_CONTROLS}
+    wanted |= {w.casefold() for w in GRID_VERIFY}
+    tops = [box[1] for el in ctx.elements
+            if el.clickable and "button" in (el.cls or "").lower()
+            and (el.label or "").strip().casefold() in wanted
+            and (box := box_of(el)) and box[1] > below]
+    return [0, min(tops)] if tops else []
+
+
+def _button_row(ctx: Context, *, below: int) -> list[int]:
+    """The challenge's own button row - which is where the tiles stop.
+
+    The challenge's *own* foot first, by the controls only it has. The
+    rule underneath - the first real button under the heading - is right
+    whenever every button on the page belongs to the challenge, which on
+    Google's page it does. On Spotify's it does not: the tick-box page
+    the grid is drawn over keeps its `Continue` in the tree, at y=725
+    with the tiles running to 966, so the floor came out above half the
+    grid and the block found inside it was 387px square instead of 630.
+    Every tap would have gone to the wrong picture (3644, 2026-09-19).
+
+    The fallback is found by class and position rather than by wording,
+    and stays that way: reading it off a label matched `Verify` against
+    the page's `Verify it's you` heading, which sits *above* the grid -
+    the floor came out higher than the ceiling, every grid was called
+    unplaceable, and seven went by untouched before the phone gave up
+    (2026-09-05, phone 1793). What is new above is a *clickable Button*
+    carrying one of the challenge's own words, which no heading is.
+    """
+    own = _footer_row(ctx, below=below)
+    if own:
+        return own
     tops = [box[1] for el in ctx.elements
             if el.clickable and "button" in (el.cls or "").lower()
             and TILE_LABEL not in (el.label or "").lower()
