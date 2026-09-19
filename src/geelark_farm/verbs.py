@@ -229,12 +229,19 @@ def build_by_hand(book, ledger, settings, payload, client):
 #: operator, 2026-09-19).
 GPT_CATEGORIES = ("", "eco")
 
-#: What goes in `credential_kind` for an `eco` row. Not in
-#: `accounts.SERVED` yet and deliberately so: nothing can read the
-#: mailbox these codes arrive in, so `accounts.held_back` keeps the
+#: What goes in `credential_kind` for an `eco` row - the same word the
+#: console's tile and chip carry, and the same word the panel API will
+#: take when these accounts start arriving through it (the operator,
+#: 2026-09-19: one word, in both places). Its siblings -
+#: `password_totp`, `email_code_customer` - say how an account signs
+#: in; this one is the operator's name for the same thing, and one
+#: word fewer to get wrong is worth more here than the symmetry.
+#:
+#: Not in `accounts.SERVED` yet and deliberately so: nothing can read
+#: the mailbox these codes arrive in, so `accounts.held_back` keeps the
 #: keeper off them until something can. Adding the word to SERVED is
 #: what switches them on, and that is one line when the day comes.
-ECO_CREDENTIAL_KIND = "email_code_ours"
+ECO_CREDENTIAL_KIND = "eco"
 
 
 def add_gpt(book, ledger, settings, payload, client):
