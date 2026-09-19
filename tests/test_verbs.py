@@ -1694,3 +1694,116 @@ def test_a_kind_the_gpt_pool_does_not_know_is_refused_before_any_row():
 
     assert status == "refused" and "not a kind of GPT account" in said
     assert book.apps.find("a@b.com") is None
+
+
+# ------------------------------- the build card's kinds, end to end
+def _asked(book, payload):
+    """Run build_by_hand and hand back (status, said, what was wished)."""
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    asked = {}
+    with patch.object(wanted_mod, "ask",
+                      lambda s, **k: asked.update(k) or 5):
+        status, said, _ = verbs.build_by_hand(
+            book, None, None, {"by": "mehdi", **payload}, None)
+    return status, said, asked
+
+
+def test_an_eco_account_chosen_from_the_pool_can_actually_be_built_with():
+    """It could not. The free check asked `available`, and `available`
+    subtracts exactly the kinds the automatic claim holds back - every
+    Spotify row and every `eco` one, which are the kinds this card
+    exists to offer. Spotify had an exemption written in and eco did
+    not, so a free eco account the picker had just listed came back
+    "not free" and the kind was unbuildable (2026-09-19)."""
+    from geelark_farm import accounts as domain
+
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+    book.apps.append(**{"Address": "eco@example.com", "Password": "",
+                        "2FA Secret": "", "Status": "", "Product": "chatgpt",
+                        "Category": "eco", "Credential kind": "eco",
+                        "Email code": "TRUE", "Note": ""})
+    # The premise: the keeper is not allowed to take this row by itself.
+    assert domain.held_back("chatgpt", "eco", False)
+
+    status, said, asked = _asked(book, {
+        "gmail": "", "app": "chatgpt", "install_app": True,
+        "app_category": "eco", "app_account": "eco@example.com"})
+
+    assert status == "done", said
+    assert asked["app_account"] == "eco@example.com"
+
+
+def test_an_account_that_really_is_spent_is_still_refused():
+    """The check moved off `available` onto the row itself - it must not
+    have moved off being a check."""
+    book = make_book(gmails=1, apps=1, app_headers=FULL_APP_HEADERS)
+    address = book.apps._rows[0].values["Address"]
+    book.apps.claim()                          # now on a phone
+
+    status, said, _ = _asked(book, {
+        "gmail": "", "app": "chatgpt", "install_app": True,
+        "app_account": address})
+
+    assert status == "refused"
+    assert address in said and "not free" in said
+
+
+def test_a_typed_eco_account_is_an_address_and_nothing_else():
+    """`validate.app_row` was asked for a password, so the card refused
+    the one kind whose definition is having none - and the row it would
+    have written carried no `Email code`, which would have made the pool
+    re-read it as broken for ever (2026-09-19)."""
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+
+    status, said, asked = _asked(book, {
+        "gmail": "", "app": "chatgpt", "install_app": True,
+        "app_category": "eco", "app_typed": True,
+        "app_account": "fresh@example.com",
+        "app_password": "", "app_secret": ""})
+
+    assert status == "done", said
+    row = book.apps.find("fresh@example.com")
+    assert row is not None, "the typed account joined the pool"
+    assert row.values["Product"] == "chatgpt"
+    assert row.values["Category"] == "eco"
+    assert row.values["Credential kind"] == "eco"
+    assert row.values[book.apps.EMAIL_CODE_COLUMN] == "TRUE", (
+        "without this the pool re-reads the row as a broken one")
+    assert not row.error
+
+
+def test_a_typed_spotify_account_is_judged_before_it_is_written():
+    """The category rule ran after `add_typed`, so a refused account was
+    added to the pool anyway - a row nobody asked to create, and a
+    second press that could not succeed either (2026-09-19)."""
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+
+    # `normal` wants a bare phone; this build has a Gmail.
+    status, said, _ = _asked(book, {
+        "gmail": book.gmails._rows[0].values["Address"],
+        "app": "spotify", "install_app": True,
+        "app_category": "normal", "app_typed": True,
+        "app_account": "sp@example.com", "app_password": "pw"})
+
+    assert status == "refused"
+    assert "error Spotify account" in said or "takes a" in said
+    assert book.apps.find("sp@example.com") is None, (
+        "a refused account must not be left in the pool")
+
+
+def test_a_typed_spotify_account_of_the_right_kind_goes_in_labelled():
+    book = make_book(gmails=1, apps=0, app_headers=FULL_APP_HEADERS)
+
+    status, said, _ = _asked(book, {
+        "gmail": "", "no_gmail": True, "app": "spotify", "install_app": True,
+        "app_category": "normal", "app_typed": True,
+        "app_account": "sp@example.com", "app_password": "pw"})
+
+    assert status == "done", said
+    row = book.apps.find("sp@example.com")
+    assert row.values["Product"] == "spotify"
+    assert row.values["Category"] == "normal"
+    assert row.values["Credential kind"] == "password"

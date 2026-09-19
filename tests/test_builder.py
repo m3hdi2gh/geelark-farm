@@ -6284,3 +6284,67 @@ def test_send_can_name_a_row_the_keeper_is_not_allowed_to_take():
     # And an ordinary row still goes the way it always did.
     ordinary = builder._pick_named_app(book, "plain@example.com")
     assert ordinary.label == "plain@example.com"
+
+
+def _recorded(build):
+    """What `_record` would write to the Phones tab for this build."""
+    from geelark_farm import builder
+
+    written: dict = {}
+
+    class Phones:
+        YES = NO = INSTALLED = "x"
+        BUILDING = "building"
+
+        def write(self, serial, **fields):
+            written.update(fields)
+
+        def append(self, **fields):
+            written.update(fields)
+
+        def find(self, serial):
+            return object()
+
+    class Book:
+        phones = Phones()
+
+        def record_history(self, **fields):
+            pass
+
+    builder._record(Book(), build)
+    return written
+
+
+def test_a_finish_does_not_blank_which_apps_are_on_the_phone():
+    """`finish_one` sets `app_installed` and never `app`, so the record
+    wrote "App name": "" on every finish - and the row then said nothing
+    was on a phone carrying all three apps (3644, 2026-09-19).
+
+    The rule the two columns beside it already follow - a run that did
+    not look does not write - now applies to this one too.
+    """
+    import inspect
+
+    from geelark_farm import builder
+
+    # The premise: a finish really does leave `app` alone while setting
+    # `app_installed`, which is what put the group in play at all.
+    finish = inspect.getsource(builder.finish_one)
+    assert "build.app_installed = True" in finish
+    assert "build.app =" not in finish, (
+        "if a finish learns the app list, write it and drop this test")
+
+    build = builder.Build(index=1, phone_id="p", serial="991")
+    build.app_installed = True
+    build.app = ""                       # what a finish leaves behind
+    assert builder._phone_status(build) is not None, (
+        "a finish does reach the device, so Status and App are written")
+    written = _recorded(build)
+    assert "Status" in written and "App" in written
+    assert "App name" not in written, (
+        "a finish must not blank the column that says which apps are on "
+        "the phone")
+
+    # A build that does know writes it, exactly as before.
+    build.app = "chatgpt+spotify+claude"
+    assert _recorded(build)["App name"] == "chatgpt+spotify+claude"

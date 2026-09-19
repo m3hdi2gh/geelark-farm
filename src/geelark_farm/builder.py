@@ -3154,10 +3154,16 @@ def _record(book: Book, build: Build) -> None:
     device: dict[str, str] = {}
     if status is not None:
         device = {"Status": status,
-                  "App": book.phones.YES if build.app_installed else cross,
-                  # Which one, for the table: "Spotify" beside a phone
-                  # that has it, rather than "waiting for one".
-                  "App name": build.app}
+                  "App": book.phones.YES if build.app_installed else cross}
+        # Which one, for the table: "Spotify" beside a phone that has
+        # it, rather than "waiting for one". Written only by a run that
+        # knows - the same rule as the two above, applied per column
+        # rather than to the group. `finish_one` sets `app_installed`
+        # and never `app`, so every finish used to blank this: the row
+        # then said nothing was on a phone with all three apps on it,
+        # and the console's table said so too (3644, 2026-09-19).
+        if build.app:
+            device["App name"] = build.app
 
     # A phone asked for on the build card is `taken` by whoever asked from
     # the moment it exists - that is what keeps the keeper off it and what

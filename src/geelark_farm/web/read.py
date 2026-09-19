@@ -265,13 +265,36 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         # options is a worse way to find an address than the search box on
         # the tab it came from.
         choose = {}
-        for kind, key in (("gmail", "gmails"), ("app", "apps")):
-            choose[key] = store._rows(
-                "SELECT address AS label FROM resources"
-                " WHERE kind = %s AND status = '' AND error IS NULL"
-                "   AND address <> ''"
-                f"   AND {NOT_SPOTIFY}"
-                " ORDER BY sheet_row NULLS LAST, id LIMIT 60", (kind,))
+        choose["gmails"] = store._rows(
+            "SELECT address AS label FROM resources"
+            " WHERE kind = 'gmail' AND status = '' AND error IS NULL"
+            "   AND address <> ''"
+            " ORDER BY sheet_row NULLS LAST, id LIMIT 60")
+        # The app rows carry what kind of account they are, because the
+        # card asks that first now: a bare phone may take a `normal`
+        # Spotify account and nothing else, and a phone with a Gmail may
+        # take any of the rest. Spotify is no longer filtered out -
+        # `NOT_SPOTIFY` was here while no flow could sign one in.
+        #
+        # Capped per kind rather than over the lot. One window of sixty
+        # across four kinds is a window the oldest kind fills: the rows
+        # are ordered by the sheet row they came in on, every Spotify
+        # and `eco` row was added after every GPT one, and a pool with
+        # sixty free GPT accounts in it showed "none free" for both of
+        # the kinds this card was built for (2026-09-19).
+        choose["apps"] = store._rows(
+            "SELECT label, product, credential_kind, category FROM ("
+            "  SELECT address AS label, coalesce(product, '') AS product,"
+            "         coalesce(credential_kind, '') AS credential_kind,"
+            "         coalesce(category, '') AS category,"
+            "         row_number() OVER ("
+            "           PARTITION BY coalesce(product, ''),"
+            "                        coalesce(category, '')"
+            "           ORDER BY sheet_row NULLS LAST, id) AS seat"
+            "  FROM resources"
+            "  WHERE kind = 'app' AND status = '' AND error IS NULL"
+            "    AND address <> '') AS free"
+            " WHERE seat <= 60 ORDER BY product, category, seat")
         choose["proxies"] = store._rows(
             "SELECT proxy_name AS label FROM resources"
             " WHERE kind = 'proxy' AND error IS NULL"

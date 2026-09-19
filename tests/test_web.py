@@ -3582,7 +3582,8 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     status, headers, _ = client.request(
         "POST", "/phones/build",
         _form(csrf=client.csrf(), gmail="pick@example.com",
-              proxy_name="SX9", app_account="gpt@example.com"))
+              proxy_name="SX9", account_kind="chatgpt:",
+              app_account="gpt@example.com"))
 
     assert status == 303 and dict(headers)["Location"].startswith("/")
     assert got["verb"] == "build_by_hand"
@@ -3594,18 +3595,31 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert got["payload"]["app_account"] == "gpt@example.com"
 
     # No account: the phone comes up warm, with all three apps on it and
-    # nothing signed into any of them.
+    # nothing signed into any of them. The kind box is what says so now,
+    # and empty is its first option.
     client.request("POST", "/phones/build", _form(csrf=client.csrf()))
-    assert got["payload"]["app"] == "chatgpt"
+    assert got["payload"]["app"] == ""
+    assert got["payload"]["install_app"] is False
     assert got["payload"]["app_account"] == ""
 
-    # An app named in the form is ignored: the card has no such box any
-    # more, and a phone carries all three whatever anybody posts.
+    # An `app` named in the form is still ignored - the card has no such
+    # box, and a phone carries all three whatever anybody posts. What
+    # decides the account is the kind box, and without it there is no
+    # account to name.
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), app="spotify",
                          app_account="gpt@example.com"))
-    assert got["payload"]["app"] == "chatgpt"
-    assert got["payload"]["app_account"] == "gpt@example.com"
+    assert got["payload"]["app"] == ""
+    assert got["payload"]["app_account"] == ""
+
+    # Named properly, the same account goes on as a Spotify one.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         account_kind="spotify:error",
+                         app_account="s@example.com"))
+    assert got["payload"]["app"] == "spotify"
+    assert got["payload"]["app_category"] == "error"
+    assert got["payload"]["app_account"] == "s@example.com"
 
     # No Gmail: a bare phone, signed in nowhere, whatever the other boxes
     # carried. It still comes with the three apps - that is the builder's
@@ -3695,7 +3709,7 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     # none, or "choose...", which opens a dialog to type one or pick a
     # free one) and the account.
     card = body[body.index('class="byhand"'):body.index("Build</button>")]
-    for name in ("gmail", "app_account"):
+    for name in ("gmail", "account_kind", "app_account"):
         assert f'<select name="{name}"' in card, name
     assert '<select name="app"' not in card, "every phone carries all three"
     assert 'name="proxy_name"' not in card, "an exit is never chosen here"
@@ -3705,7 +3719,11 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert "type a new one" not in card
     assert '<option value="">auto &mdash; the next free one (1 free)</option>' in card
     assert '<option value="none">none &mdash; no Google account</option>' in card
-    assert '<option value="">none &mdash; sign in later</option>' in card
+    # "none" moved to the kind box, which is the question it answers.
+    assert 'data-bare="1" data-gmail="1">none &mdash; sign in later' in card
+    assert 'value="spotify:normal" data-bare="1">' in card, (
+        "the one kind a bare phone may carry, and only a bare one")
+    assert 'value="spotify:error"' in card and 'value="chatgpt:eco"' in card
     assert 'name="install_app"' not in card, "the tick is long gone"
     assert '<optgroup label="pick one">' not in card, (
         "the free rows moved into the dialog")
@@ -3724,8 +3742,10 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     for name in ("gmail_password", "gmail_secret", "app_password", "app_secret"):
         assert f'<input type="hidden" name="{name}" value="">' in body, name
     script = pages._DASH_SCRIPT
-    assert "gmailPick.value === 'none'" in script, "no Gmail: no account"
-    assert "acctPick.disabled = bare" in script
+    assert "gmailPick.value === 'none'" in script, "no Gmail: one kind only"
+    assert "(bare ? o.dataset.bare : o.dataset.gmail) === '1'" in script, (
+        "each kind is offered on the one phone it belongs on")
+    assert "acctPick.disabled = !kind" in script
     assert 'select[name="app"]' not in script, "there is no App box to gate"
     assert "function openNew(pick, was)" in script
     assert "' (from the pool)'" in script, "a picked row says where it came from"
@@ -3758,9 +3778,33 @@ def test_a_bare_phone_carries_no_account_however_the_boxes_were_left(
     # And with a Gmail, the account is exactly what was chosen.
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), gmail="a@example.com",
+                         account_kind="chatgpt:",
                          app_account="gpt@example.com"))
     assert got["payload"]["install_app"] is True
     assert got["payload"]["app_account"] == "gpt@example.com"
+
+    # The one account a bare phone may carry is a `normal` Spotify one:
+    # it wants a phone with no Google account, which is the only reason
+    # to ask for one with an account on it (2026-09-17).
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="none",
+                         account_kind="spotify:normal",
+                         app_account="s@example.com"))
+    assert got["payload"]["no_gmail"] is True
+    assert got["payload"]["app"] == "spotify"
+    assert got["payload"]["app_category"] == "normal"
+    assert got["payload"]["app_account"] == "s@example.com"
+
+    # Any other kind alongside "no Gmail" is refused rather than quietly
+    # dropped - the page does not offer it, and the route is not the
+    # page.
+    before = dict(got)
+    status, _, _ = client.request(
+        "POST", "/phones/build",
+        _form(csrf=client.csrf(), gmail="none", account_kind="chatgpt:eco",
+              app_account="e@example.com"))
+    assert status == 303
+    assert got == before, "nothing was asked for"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4602,7 +4646,8 @@ def test_the_gpt_box_stops_promising_none():
         {"id": 1, "role": "operator", "csrf": "c", "mutations": True,
          "may_login_accounts": True})
     assert '<select name="app_account"' in card
-    assert '<option value="">none &mdash; sign in later</option>' in card, (
+    assert '<select name="account_kind"' in card
+    assert 'none &mdash; sign in later' in card, (
         "an account only when one is chosen (2026-09-08)")
     assert pages.NEXT_FREE not in card
     assert 'name="app_secret"' in card, "a typed account needs its key"
@@ -7244,3 +7289,91 @@ def test_the_gpt_sheet_sifts_standard_from_eco():
     # The sifting is the script the Spotify sheet already uses; nothing
     # about it is per pool, so the same press works here.
     assert "&& (!cat || tr.dataset.cat === cat);" in pages._DASH_SCRIPT
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_route_will_not_take_a_kind_the_card_does_not_offer(
+        web, monkeypatch):
+    """The half after the colon becomes a pool row's Category. Unchecked,
+    anything posted there stranded the account under a word nothing
+    serves - and a kind the verb cannot act on was dropped in silence
+    rather than refused (2026-09-19)."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 91)
+    client = web()
+    client.login()
+
+    for kind in ("chatgpt:made_up", "spotify:", "nonsense", "claude:"):
+        got.clear()
+        status, _, _ = client.request(
+            "POST", "/phones/build",
+            _form(csrf=client.csrf(), gmail="a@example.com",
+                  account_kind=kind, app_account="x@example.com"))
+        assert status == 303
+        assert not got, f"{kind} reached the builder"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_each_spotify_kind_is_offered_on_the_one_phone_it_belongs_on(
+        web, monkeypatch):
+    """A `normal` account wants a phone with no Google account and an
+    `error` one wants a phone that has a Gmail, and the two do not
+    overlap. Offered on both, `normal` sat in the list on every ordinary
+    build and the server refused every press (2026-09-19)."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 92)
+    client = web()
+    client.login()
+
+    # normal on a phone with a Gmail: refused before it can be spent.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         account_kind="spotify:normal",
+                         app_account="s@example.com"))
+    assert not got, "a normal account must not be sent to a phone with a Gmail"
+
+    # error on a bare phone: the same, the other way round.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="none",
+                         account_kind="spotify:error",
+                         app_account="s@example.com"))
+    assert not got
+
+    # And each on the phone it wants.
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="none",
+                         account_kind="spotify:normal",
+                         app_account="s@example.com"))
+    assert got["payload"]["app"] == "spotify"
+    assert got["payload"]["app_category"] == "normal"
+    got.clear()
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="a@example.com",
+                         account_kind="spotify:error",
+                         app_account="s@example.com"))
+    assert got["payload"]["app_category"] == "error"
+
+
+def test_the_account_box_always_has_an_option_worth_nothing():
+    """Cancel puts a select back to a value it held. With no such option
+    the box landed on selectedIndex -1, posted nothing, and the form
+    built a phone with a kind named and no account on it - an exit and a
+    Gmail spent for a warm phone nobody asked for (2026-09-19)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "none.value = ''" in script, (
+        "the rebuilt list needs an option worth nothing to fall back to")
+    assert "acctPick.value = rows.length ? rows[0] : '';" in script
+    # And the list is not rebuilt when the kind did not change, so a
+    # chosen account survives a touch of the Gmail box.
+    assert "if (kind === builtFor) return;" in script, (
+        "changing the Gmail must not silently re-pick the account")

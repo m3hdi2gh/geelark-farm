@@ -396,16 +396,43 @@ class _Handler(BaseHTTPRequestHandler):
                 no_gmail = gmail.lower() == "none"
                 if no_gmail:
                     gmail = ""
-                # Which app is not the card's question any more: every
-                # phone carries ChatGPT, Spotify and Claude, so what is
-                # left to choose is whether an account signs into one -
-                # and the only accounts this farm holds are ChatGPT's
-                # (the operator, 2026-09-12). A bare phone signs in
-                # nowhere. The panel API still names an app of its own,
-                # and the verb still honours it.
-                which = "" if no_gmail else "chatgpt"
-                account = ("" if no_gmail
-                           else (field.get("app_account") or "").strip())
+                # Which app is not a question about the phone - every
+                # one carries ChatGPT, Spotify and Claude - but it is a
+                # question about the account, and the card now asks it:
+                # `account_kind` is `product:category`, exactly as the
+                # pool stores the two. Empty means no account at all.
+                #
+                # A bare phone is no longer "signs in nowhere": one kind
+                # belongs on it, a `normal` Spotify account, which wants
+                # a phone with no Google account (2026-09-17). The card
+                # offers only that one when Gmail is none; this refuses
+                # the rest again here, because a page is not a guard.
+                kind = (field.get("account_kind") or "").strip().lower()
+                # Checked against the card's own list, not merely split.
+                # The half after the colon becomes a pool row's Category,
+                # and a word nothing serves strands the account there.
+                if kind not in pages.ACCOUNT_KIND_VALUES:
+                    return self._refuse(
+                        user, "build_by_hand", {"account_kind": kind},
+                        f"{kind!r} is not a kind of account this card "
+                        f"offers")
+                allowed = {value for value, _w, bare, gmail
+                           in pages.ACCOUNT_KINDS
+                           if (bare if no_gmail else gmail)}
+                if kind not in allowed:
+                    return self._refuse(
+                        user, "build_by_hand",
+                        {"gmail": "" if no_gmail else gmail,
+                         "account_kind": kind},
+                        "a phone with no Google account can only carry a "
+                        "normal Spotify account"
+                        if no_gmail else
+                        "a normal Spotify account wants a phone with no "
+                        "Google account on it")
+                which, _, category = kind.partition(":")
+                account = (field.get("app_account") or "").strip()
+                if not which:
+                    account = ""
                 payload = {
                     "gmail": gmail,
                     "no_gmail": no_gmail,
@@ -416,6 +443,9 @@ class _Handler(BaseHTTPRequestHandler):
                     "app": which,
                     "install_app": bool(which),
                     "app_account": account,
+                    # Which kind the typed one is, so the row it becomes
+                    # says so. A picked row already knows.
+                    "app_category": category,
                     "app_typed": bool(account) and self._is_new("app", account),
                     "app_password": field.get("app_password") or "",
                     "app_secret": field.get("app_secret") or "",

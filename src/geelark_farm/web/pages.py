@@ -2204,23 +2204,123 @@ _DASH_SCRIPT = """
     var byhand = document.querySelector('.byhand');
     if (byhand) {
       var gmailPick = byhand.querySelector('select[name="gmail"]');
+      var kindPick = byhand.querySelector('select[name="account_kind"]');
       var acctPick = byhand.querySelector('select[name="app_account"]');
+      var acctWrap = byhand.querySelector('#acctwrap');
+      var dlg = document.getElementById('account-new');
+      var free = {};
+      try { free = JSON.parse(acctPick.dataset.rows || '{}'); } catch (e) {}
+      // A bare phone carries one kind of account and no other, so the
+      // rest leave the list rather than sitting in it to be refused.
       var gate = function(){
         var bare = !!gmailPick && gmailPick.value === 'none';
-        if (acctPick) {
-          acctPick.disabled = bare;
-          if (bare) acctPick.value = '';
+        if (!kindPick) return;
+        var lost = false;
+        Array.prototype.forEach.call(kindPick.options, function(o){
+          // A Spotify account says which phone it wants, and the two
+          // answers do not overlap: each kind is offered on the one it
+          // belongs on and nowhere else.
+          var ok = (bare ? o.dataset.bare : o.dataset.gmail) === '1';
+          o.hidden = !ok; o.disabled = !ok;
+          if (!ok && o.selected) lost = true;
+        });
+        if (lost) { kindPick.value = ''; }
+        kinded();
+      };
+      // Which accounts this kind can use, and which boxes the dialog
+      // needs: an eco account is an address alone, a Spotify one has no
+      // second factor, a standard GPT one has both.
+      // Which kind the list in the box was built for, so a redraw that
+      // did not change the kind leaves the choice alone: `gate()` runs
+      // on every Gmail change and used to rebuild the list each time,
+      // throwing away a deliberately chosen account - or a typed one -
+      // and silently substituting the first free row (2026-09-19).
+      var builtFor = null;
+      var kinded = function(){
+        var kind = kindPick ? kindPick.value : '';
+        if (acctWrap) acctWrap.hidden = !kind;
+        if (!acctPick) return;
+        acctPick.disabled = !kind;
+        if (kind === builtFor) return;
+        builtFor = kind;
+        var rows = free[kind] || [];
+        // Built, never written as markup: an address is somebody's
+        // typing and this script must not put typing into HTML.
+        while (acctPick.firstChild) acctPick.removeChild(acctPick.firstChild);
+        // An option worth nothing, first: Cancel puts the box back to
+        // one of its own options, and without this it landed on
+        // selectedIndex -1, posted nothing, and the form built a phone
+        // with a kind named and no account on it (2026-09-19).
+        var none = document.createElement('option');
+        none.value = ''; none.textContent = 'none — sign in later';
+        acctPick.appendChild(none);
+        rows.forEach(function(a){
+          var o = document.createElement('option');
+          o.value = a; o.textContent = a; acctPick.appendChild(o);
+        });
+        var other = document.createElement('option');
+        other.value = '__new__';
+        other.textContent = rows.length ? 'choose…'
+                                        : 'choose… (none free)';
+        acctPick.appendChild(other);
+        acctPick.value = rows.length ? rows[0] : '';
+        if (!dlg) return;
+        var wants = kind.indexOf('spotify:') === 0
+                  ? ['app_address', 'app_password']
+                  : (kind === 'chatgpt:eco' ? ['app_address']
+                                            : ['app_address', 'app_password',
+                                               'app_secret']);
+        dlg.querySelectorAll('[data-field]').forEach(function(box){
+          var on = wants.indexOf(box.dataset.field) >= 0;
+          box.closest('.field').hidden = !on;
+          box.value = '';
+        });
+        // And the hidden boxes it fills, which the card posts: a
+        // password typed for a GPT account must not ride along with a
+        // Spotify one chosen after it.
+        ['app_password', 'app_secret'].forEach(function(name){
+          var box = byhand.querySelector('input[name="' + name + '"]');
+          if (box) box.value = '';
+        });
+        // The dialog's own list of free rows follows the kind too.
+        var pick = dlg.querySelector('.pick');
+        if (pick) {
+          while (pick.firstChild) pick.removeChild(pick.firstChild);
+          if (!rows.length) {
+            var say = document.createElement('div');
+            say.className = 'none';
+            say.textContent = 'The pool has nothing free of this kind - ' +
+                              'type one above.';
+            pick.appendChild(say);
+          }
+          rows.forEach(function(a){
+            var l = document.createElement('label');
+            var r = document.createElement('input');
+            r.type = 'radio'; r.name = 'pick-account-new'; r.value = a;
+            l.appendChild(r);
+            l.appendChild(document.createTextNode(' ' + a));
+            pick.appendChild(l);
+          });
         }
       };
       [gmailPick].forEach(function(p){
         if (p) p.addEventListener('change', gate);
       });
+      if (kindPick) kindPick.addEventListener('change', kinded);
       gate();
       byhand.querySelectorAll('select[data-new]').forEach(function(pick){
         var was = pick.value === '__new__' ? '' : pick.value;
         pick.addEventListener('change', function(){
           if (pick.value !== '__new__') { was = pick.value; return; }
+          // What Cancel goes back to. Read now rather than kept from
+          // bind time: the account box is rebuilt whenever the kind
+          // changes, and a value remembered before that is an option
+          // the box no longer has.
           openNew(pick, was);
+        });
+        // The box is refilled by `kinded`, which fires no change event.
+        pick.addEventListener('focus', function(){
+          if (pick.value !== '__new__') was = pick.value;
         });
       });
       // A choice still on "type a new one" has nothing typed yet: open
@@ -2228,7 +2328,8 @@ _DASH_SCRIPT = """
       byhand.addEventListener('submit', function(e){
         var stuck = Array.prototype.filter.call(
           byhand.querySelectorAll('select[data-new]'),
-          function(p){ return !p.disabled && p.value === '__new__'; })[0];
+          function(p){ return !p.disabled && !p.closest('[hidden]')
+                          && p.value === '__new__'; })[0];
         if (!stuck) return;
         e.preventDefault(); e.stopImmediatePropagation();
         openNew(stuck, '');
@@ -4560,6 +4661,72 @@ def _free_picker(name: str, rows, blank: str) -> str:
             f'<datalist id="free-{name}">{options}</datalist>')
 
 
+#: What the build card's Account box offers: the value it sends, the
+#: word on the option, and whether a bare phone may carry it.
+#:
+#: The value is `product:category`, which is exactly what the pools
+#: already store - `spotify`/`normal`, `chatgpt`/`eco` - so nothing has
+#: to translate it on the way in or out. The empty value is "none".
+#:
+#: One kind is allowed on a bare phone: a `normal` Spotify account
+#: wants a phone with *no* Google account on it, which is the only
+#: reason to build one and put an account on it at all (2026-09-17).
+#: Everything else needs a Gmail beside it - an `error` Spotify account
+#: by its own rule, and every GPT account because the app signs in
+#: through Google's own machinery.
+#: Each row is the value, the word on the option, and the two phones it
+#: may go on: a bare one, and one with a Gmail.
+#:
+#: A Spotify account says which phone it wants and the two answers do
+#: not overlap - `normal` wants a phone with *no* Google account on it,
+#: `error` wants one that has a Gmail (2026-09-17). So each is offered
+#: on exactly one of them. Offered on both, `normal` sat in the list on
+#: every ordinary build and the server refused every press.
+ACCOUNT_KINDS: tuple[tuple[str, str, bool, bool], ...] = (
+    #  value             word                                   bare   gmail
+    ("", "none &mdash; sign in later", True, True),
+    ("spotify:normal", "Spotify &mdash; normal", True, False),
+    ("spotify:error", "Spotify &mdash; error", False, True),
+    ("chatgpt:", "ChatGPT &mdash; password and a 2fa key", False, True),
+    ("chatgpt:eco", "ChatGPT &mdash; eco, a code is emailed to it",
+     False, True),
+)
+
+#: The values the card may send, for the route to check what it is given
+#: against. A word off the wire becomes a pool row's Category, and an
+#: unchecked one strands the account under a category nothing serves.
+ACCOUNT_KIND_VALUES = frozenset(value for value, _w, _b, _g in ACCOUNT_KINDS)
+
+
+def _account_kind_of(row) -> str:
+    """The `product:category` a free pool row answers to.
+
+    A row with no product is ChatGPT's: that is what this pool held
+    before it held anything else, and the column was added around those
+    rows rather than under them.
+    """
+    product = str(row.get("product") or "").strip().lower() or "chatgpt"
+    category = str(row.get("category") or "").strip().lower()
+    return f"{product}:{category}"
+
+
+def _account_kinds(rows) -> dict[str, list[str]]:
+    """The free addresses of each kind, for the card's second box."""
+    by_kind: dict[str, list[str]] = {}
+    for row in rows or []:
+        label = str(row.get("label") or "").strip()
+        if label:
+            by_kind.setdefault(_account_kind_of(row), []).append(label)
+    return by_kind
+
+
+def _account_rows_json(rows) -> str:
+    """Those lists as JSON, for the attribute the script reads."""
+    import json
+
+    return json.dumps(_account_kinds(rows), separators=(",", ":"))
+
+
 def _build_card(data: dict, user: dict) -> str:
     """Build one phone with credentials somebody chose.
 
@@ -4609,6 +4776,7 @@ def _build_card(data: dict, user: dict) -> str:
                  "for here is still built.")
     gmails = _label_list(choose.get("gmails"))
     apps = _label_list(choose.get("apps"))
+    account_kinds = _account_kinds(choose.get("apps"))
     # Two boxes. The exit is not one of them: the build picks one and
     # swaps it whenever an install or a sign-in shows it is bad - a
     # choice made here was a choice the build had to undo (the operator,
@@ -4628,13 +4796,33 @@ def _build_card(data: dict, user: dict) -> str:
                  f'<select name="gmail" data-new="gmail-new">{first}'
                  f'<option value="__new__">choose&hellip;</option>'
                  f'</select></label>')
-    # "Account", not "GPT account": the same box is where a Spotify
-    # account will be chosen once its login exists, and a field named
-    # for one product would have to be renamed the day the second one
-    # arrives (the operator, 2026-09-17).
-    account_box = ('<label class="field"><span>Account</span>'
-                   '<select name="app_account" data-new="account-new">'
-                   '<option value="">none &mdash; sign in later</option>'
+    # "Account", not "GPT account": one box for every product, because a
+    # field named for one would have to be renamed the day the second
+    # arrives (the operator, 2026-09-17). Two boxes now, and the first
+    # decides the second: which kind of account, then which account.
+    #
+    # The kinds on offer follow the Gmail box. A bare phone can carry
+    # exactly one kind - a `normal` Spotify account, which wants a phone
+    # with no Google account on it - and everything else needs a Gmail
+    # to sit beside. The script hides the rest when "none" is chosen
+    # rather than this rendering two lists, so the one page serves both
+    # answers and the rule is written once, in ACCOUNT_KINDS.
+    kind_box = ('<label class="field"><span>Account</span>'
+                '<select name="account_kind" id="acctkind">'
+                + "".join(
+                    f'<option value="{esc(value)}"'
+                    + (' data-bare="1"' if bare else '')
+                    + (' data-gmail="1"' if gmail else '')
+                    + f'>{word}</option>'
+                    for value, word, bare, gmail in ACCOUNT_KINDS)
+                + '</select></label>')
+    # Which account of that kind. Filled by the script from the free
+    # rows, which carry their own product and category - so the list is
+    # always the rows this kind can actually use.
+    account_box = ('<label class="field" id="acctwrap" hidden>'
+                   '<span>Which one</span>'
+                   '<select name="app_account" data-new="account-new"'
+                   f' data-rows="{esc(_account_rows_json(choose.get("apps")))}">'
                    '<option value="__new__">choose&hellip;</option>'
                    '</select></label>')
     return (
@@ -4642,7 +4830,7 @@ def _build_card(data: dict, user: dict) -> str:
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        + gmail_box + account_box
+        + gmail_box + kind_box + account_box
         + '<button class="go">Build</button>'
         # What the two dialogs typed rides here; the address itself is the
         # choice's value.
@@ -4659,6 +4847,8 @@ def _build_card(data: dict, user: dict) -> str:
             ("app_address", "Address", ""),
             ("app_password", "Password", ""),
             ("app_secret", "2FA secret", "optional")], rows=apps)
+        # The dialog's rows are the free ones of the chosen kind, swapped
+        # in by the script; `rows=apps` above is what it starts with.
         + '</div>')
 
 

@@ -70,6 +70,36 @@ def add_gmails(book, ledger, settings, payload, client):
     return _summary("gmail", added, skipped, refused, settings, _by(payload))
 
 
+#: What a typed account's `Credential kind` is, by the kind the card
+#: was on. The pool's own words: an eco account is `eco`, a Spotify one
+#: is `password`, and a standard GPT one keeps the blank it has always
+#: had, which means password-and-2fa.
+def _account_is_free(book, address: str) -> str:
+    """Why this app account cannot be claimed by name, or "".
+
+    The row's own state, not the automatic claim's shortlist: a kind the
+    keeper is not allowed to take by itself is still a kind a person may
+    send by hand, which is the whole reason `_pick_named_app` exists.
+    """
+    resource = book.apps.find(address)
+    if resource is None:
+        return f"the account {address} is not in the accounts pool"
+    if resource.error or (book.apps.status_of(resource)
+                          not in book.apps.available_statuses):
+        return (f"the account {address} is not free - it is already on a "
+                f"phone, set aside, or not there at all")
+    return ""
+
+
+def _typed_kind(app: str, payload: dict) -> str:
+    category = str(payload.get("app_category") or "").strip().lower()
+    if category == "eco":
+        return ECO_CREDENTIAL_KIND
+    if app == "spotify":
+        return "password"
+    return ""
+
+
 def build_by_hand(book, ledger, settings, payload, client):
     """One phone, with the credentials a person chose.
 
@@ -117,10 +147,26 @@ def build_by_hand(book, ledger, settings, payload, client):
     # An account is signed into ChatGPT or Spotify; Claude's come from
     # the panel.
     app_account = named if app in ("chatgpt", "spotify") else ""
+    # Which phone this account may go on, judged before anything is
+    # written. A typed row is not in the pool yet, so the rule is asked
+    # of the category the card sent; a chosen row is asked of the pool.
+    # Asked after the write instead, a refused Spotify account was added
+    # to the pool and then turned down, leaving a row nobody asked to
+    # create and a second press that could not succeed either
+    # (2026-09-19).
     if app == "spotify" and app_account:
-        refused = _spotify_fits(book, app_account, no_gmail)
-        if refused:
-            return "refused", refused, None
+        if payload.get("app_typed"):
+            wanted = "normal" if no_gmail else "error"
+            given = str(payload.get("app_category") or "").strip().lower()
+            if given != wanted:
+                return ("refused",
+                        f"a phone {'with no Google account' if no_gmail else 'that has a Gmail'} "
+                        f"takes a {wanted} Spotify account, and this one "
+                        f"was typed as {given or 'unlabelled'}", None)
+        else:
+            refused = _spotify_fits(book, app_account, no_gmail)
+            if refused:
+                return "refused", refused, None
 
     def add_typed(pool, kind, address, password, secret=""):
         """Put a typed credential in its tab, unless it is already there."""
@@ -141,12 +187,29 @@ def build_by_hand(book, ledger, settings, payload, client):
                     "Note": f"Typed in by {who} on {_stamp()} to build a "
                             f"phone by hand."})
             else:
+                # An eco account IS an address with no password: asking
+                # `validate` for one refused the very kind the card had
+                # just offered ("no password"), and a row stored without
+                # the flag would be re-read as broken every pass.
+                eco = (str(payload.get("app_category") or "").strip().lower()
+                       == "eco")
                 checked = validate.app_row(address=address,
-                                           password=password, secret=secret)
+                                           password=password, secret=secret,
+                                           email_code_only=eco)
+                # Filed as the kind it was chosen as. A row typed here
+                # used to land with no product and no category, which
+                # made it a standard ChatGPT account whatever the card
+                # said - so a Spotify account typed onto a bare phone
+                # was a GPT account with a Spotify password in it
+                # (2026-09-19).
                 pool.append(**{
                     "Address": checked["address"],
                     "Password": checked["password"],
                     "2FA Secret": checked["totp_secret"], "Status": "",
+                    "Product": app or "chatgpt",
+                    "Category": str(payload.get("app_category") or "").strip(),
+                    "Credential kind": _typed_kind(app, payload),
+                    "Email code": "TRUE" if eco else "",
                     "Note": f"Typed in by {who} on {_stamp()} to build a "
                             f"phone by hand."})
         except (validate.AccountError, validate.ProxyError) as exc:
@@ -167,7 +230,7 @@ def build_by_hand(book, ledger, settings, payload, client):
             payload.get("app_secret") or "")
         if refused:
             return ("refused",
-                    f"that GPT account was not usable - {refused}", None)
+                    f"that account was not usable - {refused}", None)
         book.reload()
 
     # A blank box is not a refusal, it is the word the box itself shows:
@@ -176,10 +239,7 @@ def build_by_hand(book, ledger, settings, payload, client):
     # the dashboard's own main button do nothing at all, under a green
     # tick (the operator, 2026-09-07).
     for what, name, pool in (("Gmail", gmail, book.gmails),
-                             ("exit", proxy_name, book.proxies),
-                             ("account",
-                              app_account if install_app and app != "spotify"
-                              else "", book.apps)):
+                             ("exit", proxy_name, book.proxies)):
         if not name:
             continue
         # The same question `builder._pick` asks a pass later, asked now:
@@ -192,6 +252,20 @@ def build_by_hand(book, ledger, settings, payload, client):
             return ("refused",
                     f"the {what} {name} is not free - it is already on a "
                     f"phone, set aside, or not there at all", None)
+    # The account is asked of the row itself, never of `available`.
+    #
+    # `available` subtracts the kinds the automatic claim holds back -
+    # every Spotify row, and every `eco` one - and those are exactly the
+    # kinds this card now offers. Spotify had an exemption here and eco
+    # did not, so a free eco account the picker had just listed was
+    # refused as "not free" and the kind could never be built at all
+    # (2026-09-19). The wish is claimed by name a pass later
+    # (`builder._pick_named_app`), which asks only whether the row is
+    # free - so that is the question to ask here too.
+    if install_app and app_account:
+        refused = _account_is_free(book, app_account)
+        if refused:
+            return "refused", refused, None
 
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
