@@ -1141,8 +1141,13 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             artifact_dir: Path | None = None,
             fresh: bool = False,
             codes: codes_mod.CodeSource | None = None,
+            solver_key: str = "",
             watch: Callable[[], None] | None = None) -> Outcome:
     """Drive the app login to a named outcome.
+
+    `solver_key` is accepted for the builder's sake and unused: OpenAI
+    has never put a reCAPTCHA in front of this flow. The Spotify one
+    answers it.
 
     `fresh` clears the app first. A caller trying a second account on one phone
     must pass it: see reset().

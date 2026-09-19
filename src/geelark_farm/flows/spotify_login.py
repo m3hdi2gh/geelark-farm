@@ -78,7 +78,7 @@ from pathlib import Path
 from .. import phones, screen, shell
 from ..accounts import Credentials
 from ..api import Client
-from . import router
+from . import recaptcha, router
 from .router import Outcome, Screen, act_wait, fill, still_loading
 
 log = logging.getLogger(__name__)
@@ -168,11 +168,21 @@ CHALLENGE_TEXTS = ("make sure that you're a human",
 ROBOT_LABEL = "not a robot"
 CHALLENGE_BUTTON = "Continue"
 #: The image grid reCAPTCHA falls back to when the tick alone will not
-#: do. Not answered here: the grid machinery lives in the Google flow,
-#: and a Spotify grid has never been seen. Reported by its own name so
-#: the first one is known for what it is rather than read as a tick that
-#: would not take.
+#: do - which on 3644 it did, on the first tick ever sent to it
+#: (2026-09-19): "Select all images with crosswalks" over a VERIFY, the
+#: same 3x3 the Google flow has answered for a fortnight. Answered by
+#: the same code, which moved to `recaptcha.py` rather than being
+#: copied.
 GRID_TEXTS = ("select all images", "select all squares")
+#: Grids one sign-in sends to the solver before the exit is blamed
+#: instead. Measured on Google over a week: nothing that took more than
+#: three grids ever signed in, and each further one spent a phone's
+#: billing to find that out (GRIDS_PER_SIGN_IN, 2026-09-12). The same
+#: five, until Spotify gives its own number.
+GRIDS_PER_CHALLENGE = 5
+#: Visits to give a half-drawn grid to finish before it is answered from
+#: the picture anyway.
+DRAW_WAIT = 3
 
 #: Visits the challenge page gets before the account goes back as
 #: `captcha_shown`. Most of them are waiting: reCAPTCHA leaves the box
@@ -302,6 +312,15 @@ class Context(router.Context):
     ticked_on: int | None = None
     #: How many times Continue has been pressed on the challenge page.
     continues: int = 0
+    #: The CapSolver key, when one is set. Empty is the whole of "no
+    #: solver": a grid is then reported rather than answered, which is
+    #: what this flow did before there was one.
+    solver_key: str = ""
+    #: Grids sent to the solver in this sign-in, and the two counters
+    #: that keep one page from eating the budget.
+    grids: int = 0
+    grid_waits: int = 0
+    grid_unplaced: bool = False
 
     @property
     def signed_something_in(self) -> bool:
@@ -602,6 +621,82 @@ def on_challenge(ctx: Context) -> bool:
     return ctx.has(*CHALLENGE_TEXTS) or _robot_box(ctx) is not None
 
 
+def act_grid(ctx: Context, visit: int) -> Outcome | None:
+    """Send the image grid to CapSolver and tap what it names.
+
+    The same widget the Google flow answers, in the same shape - the
+    heading split across two nodes, "Click verify once there are none
+    left", a VERIFY under the tiles, and no tiles in the accessibility
+    tree at all, so the block is found in the picture (3644,
+    2026-09-19). So it is answered by the same code, which moved to
+    `recaptcha.py` to be shared rather than copied.
+
+    Every way this can fail ends where the page ended before there was a
+    solver: `captcha_grid`, which blames the exit and leaves the account
+    alone.
+    """
+    if not ctx.solver_key:
+        kept = ctx.keep("captcha-grid")
+        return Outcome("fatal", "captcha_grid",
+                       f"an image grid and no CapSolver key is set: "
+                       f"{FATAL_ADVICE['captcha_grid']}", artifacts=kept)
+    if ctx.grids >= GRIDS_PER_CHALLENGE:
+        kept = ctx.keep("captcha-grid")
+        return Outcome("fatal", "captcha_grid",
+                       f"{ctx.grids} grids answered and it is still "
+                       f"asking, which is the exit being refused rather "
+                       f"than a puzzle being got wrong", artifacts=kept)
+    instruction = recaptcha.instruction_on(ctx)
+    if not instruction:
+        # The heading is the question, and without it there is nothing to
+        # ask the solver. A page mid-draw; the visit allowance ends it.
+        time.sleep(4)
+        return None
+    tiles = recaptcha.tile_buttons(ctx)
+    if not tiles and recaptcha.half_drawn(ctx) and ctx.grid_waits < DRAW_WAIT:
+        # Some tiles, not all. A picture taken now holds whichever corner
+        # has arrived, and one came out 206 pixels across and was answered
+        # as though it were the whole grid (1836, 2026-09-06).
+        ctx.grid_waits += 1
+        time.sleep(4)
+        return None
+    ctx.grid_waits = 0
+    window = recaptcha.tiles_box(tiles) if tiles else recaptcha.grid_rect(ctx)
+    if window is None:
+        # A grid this cannot place. Never a tap on coordinates guessed
+        # from nothing - and the page is kept once, not once a visit.
+        if not ctx.grid_unplaced:
+            ctx.grid_unplaced = True
+            ctx.keep("captcha-grid-unplaced")
+        time.sleep(4)
+        return None
+    size = recaptcha.grid_size(instruction, tiles)
+    if ctx.grids == 0:
+        ctx.keep("captcha-grid")
+    got = recaptcha.grab_grid_b64(ctx, window, size, scan=not tiles)
+    if got is None:
+        return None
+    image, rect = got
+    ctx.grids += 1
+    try:
+        from .. import capsolver
+
+        answer, read = capsolver.solve_grid(ctx.solver_key, image,
+                                            instruction, watch=ctx.check)
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("captcha not solved (%s)", exc)
+        return None
+    if read and read != size:
+        # The solver read a different grid than the one it was sent, so
+        # its indices are about a picture nobody has. Left alone.
+        log.warning("sent a %dx%d grid and the answer is about a %dx%d one",
+                    size, size, read, read)
+        return None
+    recaptcha.tap_answer(ctx, answer, tiles=tiles, rect=rect, size=size,
+                         instruction=instruction)
+    return None
+
+
 def act_challenge(ctx: Context) -> Outcome | None:
     """Answer Spotify's challenge the way the operator does: tick the box,
     let reCAPTCHA decide, press Continue.
@@ -612,17 +707,7 @@ def act_challenge(ctx: Context) -> Outcome | None:
     """
     visit = ctx.seen.get("challenge", 0)
     if ctx.has(*GRID_TEXTS):
-        # An image grid. The machinery for one exists in the Google flow
-        # and nothing here reaches it yet; a Spotify grid has never been
-        # seen, and the first one is worth knowing about by its own name
-        # rather than as a tick that would not take.
-        kept = ctx.keep("captcha-grid")
-        log.warning("%s: Spotify's challenge opened an image grid, which "
-                    "this flow cannot answer", ctx.creds.email)
-        return Outcome("fatal", "captcha_grid",
-                       "Spotify's challenge went to an image grid; only "
-                       "the tick box is answered here",
-                       artifacts=kept)
+        return act_grid(ctx, visit)
     if visit >= CHALLENGE_VISITS - 1:
         kept = ctx.keep("captcha_shown")
         return Outcome("fatal", "captcha_shown",
@@ -823,11 +908,13 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             artifact_dir: Path | None = None,
             fresh: bool = False,
             codes=None,
+            solver_key: str = "",
             watch: Callable[[], None] | None = None) -> Outcome:
     """Drive the Spotify login to a named outcome. Returns rather than
     raises, like every flow: a batch records why and moves on. `codes`
     is accepted for the builder's sake and unused: nothing here is
-    answered by a code."""
+    answered by a code. `solver_key` is used - without one an image
+    grid is reported rather than answered."""
     if not shell.package_installed(client, phone_id, package):
         return Outcome("fatal", "app_not_installed",
                        f"{package} is not on this phone")
@@ -838,7 +925,8 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
                        f"{package} did not come to the front after "
                        f"{LAUNCH_ATTEMPTS} attempts")
     ctx = Context(client=client, phone_id=phone_id, creds=creds,
-                  package=package, artifact_dir=artifact_dir)
+                  package=package, artifact_dir=artifact_dir,
+                  solver_key=solver_key)
 
     def logged_in() -> Outcome | None:
         if ctx.elements and verified_on_device(ctx):

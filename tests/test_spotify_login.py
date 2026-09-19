@@ -508,3 +508,86 @@ def test_a_dismiss_word_never_reaches_a_google_control_or_a_sizeless_link():
     assert sl._no_size(skip)
     found = sl._dismissable(ctx)
     assert found is None or found.label != "Skip to content"
+
+
+# ------------------------------------------------- the grid behind the tick
+# The tick did not satisfy reCAPTCHA on the very first phone that met it:
+# what opened was "Select all images with crosswalks" over a VERIFY - the
+# same 3x3 the Google flow has been answering, in the same shape, drawn by
+# Chrome on challenge.spotify.com (3644, 2026-09-19).
+def test_the_grid_is_the_one_the_shared_machinery_already_reads():
+    from geelark_farm.flows import recaptcha as rc
+
+    ctx = ctx_for("captcha-grid")
+    assert matched(ctx) == "challenge"
+    # The question, assembled from the two nodes Google splits it across.
+    assert rc.instruction_on(ctx) == "Select all images with crosswalks"
+    # No tiles in the tree at all, so the block is found in the picture -
+    # which is the path the Google flow takes when they have not arrived.
+    assert rc.tile_buttons(ctx) == []
+    assert not rc.half_drawn(ctx)
+    window = rc.grid_rect(ctx)
+    assert window is not None
+    # Between the heading's last line and the button row, inside the card.
+    assert window[1] >= 289 and window[3] <= 992
+    assert rc.grid_size(rc.instruction_on(ctx), []) == 3
+    # And the button the answer is handed to is the challenge's own.
+    verify = rc.challenge_button(ctx, below=window[3])
+    assert verify is not None and verify.label == "VERIFY"
+
+
+def test_the_grid_goes_to_capsolver_and_the_tiles_it_names_are_tapped(
+        phone, monkeypatch):
+    from geelark_farm import capsolver
+    from geelark_farm.flows import recaptcha as rc
+
+    sent = {}
+
+    def solve_grid(key, image, question, **kwargs):
+        sent.update(key=key, question=question, image=image)
+        return [2, 5], 3
+
+    monkeypatch.setattr(capsolver, "solve_grid", solve_grid)
+    monkeypatch.setattr(rc, "grab_grid_b64",
+                        lambda ctx, window, size, scan=True:
+                        ("<jpeg>", (47, 247, 677, 877)))
+    tapped = []
+    monkeypatch.setattr(rc.shell, "tap",
+                        lambda c, p, x, y: tapped.append((x, y)))
+    monkeypatch.setattr(rc.shell, "pause", lambda *a: None)
+    monkeypatch.setattr(rc, "press_verify",
+                        lambda ctx, below: tapped.append(("VERIFY", below)))
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+
+    ctx = ctx_for("captcha-grid")
+    ctx.solver_key = "CAP-test"
+    assert sl.act_challenge(ctx) is None
+    assert sent["key"] == "CAP-test"
+    assert sent["question"] == "Select all images with crosswalks"
+    # Tiles 2 and 5 of a 3x3 at (47,247)-(677,877): top-right, middle-right.
+    assert tapped == [(572, 352), (572, 562), ("VERIFY", 877)]
+    assert ctx.grids == 1
+
+
+def test_no_solver_key_leaves_the_grid_exactly_where_it_was(monkeypatch):
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    ctx = ctx_for("captcha-grid")
+    out = sl.act_challenge(ctx)
+    assert out is not None and out.reason == "captcha_grid"
+    assert "no CapSolver key" in out.detail
+
+
+def test_a_challenge_that_keeps_asking_for_grids_blames_the_exit(monkeypatch):
+    """Measured on Google: past three grids nothing has ever signed in, so
+    each further one spends a phone's billing to learn nothing."""
+    monkeypatch.setattr(sl.Context, "keep", lambda self, name: [])
+    ctx = ctx_for("captcha-grid")
+    ctx.solver_key = "CAP-test"
+    ctx.grids = sl.GRIDS_PER_CHALLENGE
+    out = sl.act_challenge(ctx)
+    assert out is not None and out.reason == "captcha_grid"
+    assert "still" in out.detail
+
+    from geelark_farm import failures
+
+    assert failures.verdict("captcha_grid", "Spotify").blame == failures.EXIT

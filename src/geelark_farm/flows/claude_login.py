@@ -465,9 +465,13 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
             artifact_dir: Path | None = None,
             fresh: bool = False,
             codes: codes_mod.CodeSource | None = None,
+            solver_key: str = "",
             watch: Callable[[], None] | None = None) -> Outcome:
     """Drive the Claude login to a named outcome. Returns rather than
-    raises, like every flow: a batch records why and moves on."""
+    raises, like every flow: a batch records why and moves on.
+
+    `solver_key` is accepted for the builder's sake and unused, as
+    `codes` is by the Spotify flow: the builder calls one signature."""
     if not shell.package_installed(client, phone_id, package):
         return Outcome("fatal", "app_not_installed",
                        f"{package} is not on this phone")

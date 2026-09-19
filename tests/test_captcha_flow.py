@@ -10,6 +10,10 @@ import pytest
 from geelark_farm import screen
 from geelark_farm.accounts import Account
 from geelark_farm.flows import google_login as g
+# The pixel machinery moved to the shared module when Spotify's
+# challenge turned out to serve the same widget (2026-09-19); these
+# three read it directly, so they follow it there.
+from geelark_farm.flows import recaptcha as rc
 
 #: Where the tiles sit on the real screen beside these tests, in the view
 #: hierarchy's own numbers. Every test that fakes the cut uses it, so a tap
@@ -309,7 +313,7 @@ def test_the_tiles_are_found_on_a_phone_whose_screenshot_is_not_its_tree(
     device's own. Assuming the two numbers agree searches a band of the
     wrong part of the screen."""
     c, _ = _screen_ctx()
-    assert g._screen_width(c) == 720
+    assert rc._screen_width(c) == 720
     _real_screen(monkeypatch, at=2)
     got = g._grab_grid_b64(c, g._grid_rect(c), 4)
     assert got is not None
@@ -427,7 +431,7 @@ def test_the_window_is_the_challenges_card_and_not_the_whole_screen():
     c, _ = _screen_ctx()
     ask = next(g._box(e) for e in c.elements
                if "select all" in (e.label or "").lower())
-    assert g._card_around(c, ask) == [34, 39, 690, 986]
+    assert rc._card_around(c, ask) == [34, 39, 690, 986]
 
 
 def test_one_flat_column_of_tiles_does_not_move_the_grid(monkeypatch):
@@ -444,7 +448,7 @@ def test_one_flat_column_of_tiles_does_not_move_the_grid(monkeypatch):
         for y in range(247, 877):
             flat.putpixel((x, y), (200, 200, 200))
     c, _ = _screen_ctx()
-    assert g._tiles_in(flat, g._grid_rect(c)) == SENT_AT
+    assert rc._tiles_in(flat, g._grid_rect(c)) == SENT_AT
 
 
 def test_one_captcha_that_redraws_is_still_one_captcha():
