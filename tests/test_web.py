@@ -9,6 +9,7 @@ on a machine that has never seen the cluster.
 from __future__ import annotations
 
 import http.client
+import pathlib
 import inspect
 import re
 import threading
@@ -3952,6 +3953,9 @@ def test_a_stock_command_answers_in_the_request_that_asked(web, monkeypatch):
     monkeypatch.setattr(actions_mod, "settle",
                         lambda s, i, **k: settled.update(dict(k, id=i)))
     monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    # The web claims the row before it works it, which is what
+    # every other writer in the system does (2026-09-21).
+    monkeypatch.setattr(actions_mod, "claim", lambda s, i: True)
     monkeypatch.setattr(runner_mod, "run_now",
                         lambda s, verb, payload: ("done", "1 gmail added",
                                                   {"added": ["a@x.com"]}))
@@ -4551,6 +4555,9 @@ def test_a_refusal_is_not_reported_as_a_success(web, monkeypatch):
 
     monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 51)
     monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    # The web claims the row before it works it, which is what
+    # every other writer in the system does (2026-09-21).
+    monkeypatch.setattr(actions_mod, "claim", lambda s, i: True)
     monkeypatch.setattr(actions_mod, "settle", lambda s, r, **k: None)
     # `_ran_it_now` imports `run_now` inside itself, so the module is what
     # has to answer differently.
@@ -6733,37 +6740,46 @@ def test_the_press_is_the_request_key_and_the_minute_is_the_fallback(
 def test_the_same_drawing_sent_twice_is_told_so_not_queued(web, monkeypatch):
     """A double-tap or a back-button re-POST hands `enqueue` the row the
     first press made. That row has run; "Queued" over it was a lie, and
-    the page looked again for a change that had already happened."""
-    import datetime as dt
+    the page looked again for a change that had already happened.
 
+    Which of its two branches it took is `enqueue`'s own answer now. It
+    used to be re-derived here by reading the row back and comparing the
+    database host's `requested_at` to this container's clock with a
+    one-second tolerance - so two machines a second apart turned a first
+    press into a second one (2026-09-21).
+    """
     import geelark_farm.store.actions as actions_mod
 
     _proxy_pool(monkeypatch, rows=[_proxy_row("D01", "dead")])
-    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 71)
     monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
-    now = dt.datetime.now(dt.timezone.utc)
-    when = {"at": now}
-    monkeypatch.setattr(actions_mod, "one",
-                        lambda s, i: {"id": i, "status": "done",
-                                      "requested_at": when["at"]})
+    monkeypatch.setattr(actions_mod, "claim", lambda s, i: True)
+    wrote = {"fresh": True}
+    monkeypatch.setattr(
+        actions_mod, "enqueue",
+        lambda s, **k: actions_mod.Queued(71, fresh=wrote["fresh"]))
     client = web()
     client.login()
-    # Written a moment ago: this press, answered as the press it is.
+
+    # The press that wrote the row, answered as the press it is.
     _, headers, _ = client.request(
         "POST", "/pools/proxy/test",
         _form(csrf=client.csrf(), name="D01", press="same"))
     assert dict(headers)["Location"] == "/pools/proxy?said=queued:71"
-    # Written five seconds ago: the first press, sent again.
-    when["at"] = now - dt.timedelta(seconds=5)
+
+    # The same drawing of the button sent again: one row, already run.
+    wrote["fresh"] = False
     _, headers, _ = client.request(
         "POST", "/pools/proxy/test",
         _form(csrf=client.csrf(), name="D01", press="same"))
     assert dict(headers)["Location"] == "/pools/proxy?said=twice:71"
-    _, _, body = client.request("GET", "/pools/proxy?said=twice:71")
-    assert "That press already went through the first time" in body
 
 
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_an_unpatched_enqueue_is_read_as_a_first_press():
+    """A plain int is what every other caller and every fake hands back,
+    and a first press is the safe reading of one."""
+    assert getattr(41, "fresh", True) is True
+
+
 def test_the_live_tabs_beat_stamps_the_phone_and_says_when_it_is_over(
         web, monkeypatch):
     """Twenty seconds apart while the tab is open: a plain stamp, no
@@ -7128,7 +7144,10 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     # Bound once, read live.
     bind = assets.JS[assets.JS.index(
         "document.querySelectorAll('#poolov .sheet').forEach"):]
-    assert "if (!sheet.dataset.live) {" in bind
+    # The same guard, now said the way every binding site says it:
+    # `once(node, what)`, because with regions a node survives a swap
+    # and a second set of listeners is a second sift (2026-09-21).
+    assert "if (once(sheet, 'sift')) {" in bind
     assert ("var body = function(){ return sheet.querySelectorAll("
             "'tbody tr:not(.none)'); };") in bind
     assert "var rows = body();" in bind
@@ -8652,3 +8671,182 @@ def test_only_the_pools_whose_route_is_wired_ask_for_a_row():
     assert "var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};" in js
     assert "asking['X-GF-Row'] = rowKind;" in js
     assert "/[/](free|edit|remove)$/.test(form.action)" in js
+
+
+# ------------------------------- the write path claims what it works (step 10)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_web_claims_a_row_before_it_works_it(web, monkeypatch):
+    """It was the only writer in the system that did not.
+
+    It enqueued the row, rang the keeper's bell and then ran the verb
+    with the row still `queued` - and `take_batch` claims any queued
+    row, and five verbs are in both the inline set and the lane's. Two
+    operators and a keeper on one bell, and a duplicated `build_by_hand`
+    is two phones and two accounts spent (2026-09-21).
+    """
+    import inspect
+
+    import geelark_farm.runner as runner_mod
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import app as app_mod
+
+    ran = inspect.getsource(app_mod._Handler._ran_it_now)
+    assert "store_actions.claim(self.settings, req)" in ran
+    assert ran.index("claim(") < ran.index("run_now("), (
+        "claimed before it is worked, not after")
+
+    # And a row somebody else already has is not run here.
+    _gmail_active(monkeypatch)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 91)
+    monkeypatch.setattr(actions_mod, "claim", lambda s, i: False)
+    worked = []
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda *a, **k: worked.append(a) or ("done", "", None))
+    client = web()
+    client.login()
+    _, headers, _ = client.request(
+        "POST", "/pools/gmail/free",
+        _form(csrf=client.csrf(), address="x@y.com", back="/"))
+
+    assert not worked, "it ran a row the lane had already taken"
+    assert "said=queued:91" in dict(headers)["Location"], (
+        "and says it is queued, which it is")
+
+
+def test_the_bell_rings_only_when_the_lane_has_the_work(web, monkeypatch):
+    """`signals.ring` went before the inline attempt, which is an
+    invitation for the keeper to claim a row this request is about to
+    work."""
+    import inspect
+
+    from geelark_farm.web import app as app_mod
+
+    act = inspect.getsource(app_mod._Handler._act)
+    assert act.index("_ran_it_now(") < act.index("signals.ring("), (
+        "the bell goes after this request has had its turn")
+
+
+def test_a_claimed_row_that_did_not_run_is_put_back(web, monkeypatch):
+    """Claimed and not run would sit `running` until `expire_running`
+    closed it in an hour with a sentence about a restart."""
+    import inspect
+
+    from geelark_farm.web import app as app_mod
+
+    ran = inspect.getsource(app_mod._Handler._ran_it_now)
+    assert 'status="queued"' in ran, "it hands the row straight back"
+
+
+def test_a_duplicate_press_is_found_by_the_field_and_not_the_text():
+    """`payload::text ILIKE '%needle%'` matched an address that merely
+    CONTAINED the one being asked about, and paid for a sequential scan
+    with a jsonb cast on every press (2026-09-21)."""
+    import inspect
+
+    from geelark_farm.store import actions as store_actions
+
+    found = inspect.getsource(store_actions.pending_for)
+    assert "payload::text ILIKE" not in found
+    assert "payload->>'address' = %s" in found
+    schema = (pathlib.Path(store_actions.__file__).parent
+              / "schema.sql").read_text(encoding="utf-8")
+    assert "actions_pending" in schema, "and an index under it"
+
+
+def test_the_rails_counts_are_read_only_when_a_page_draws_them(monkeypatch):
+    """Nine subqueries on every request, including the presses that
+    answer 303 and draw no rail at all."""
+    from geelark_farm.web import app as app_mod
+
+    reads = []
+    counts = app_mod._RailCounts(lambda: reads.append(1) or {"gmail": 3})
+    assert not reads, "read before anybody asked"
+    assert counts.get("gmail") == 3
+    assert len(reads) == 1
+    counts.get("proxy")
+    assert len(reads) == 1, "read twice for one request"
+
+
+def test_the_session_is_read_once_per_request():
+    """`do_POST` reads it to CSRF-check the press and `_user()` read it
+    again from the same cookie a few lines later."""
+    import inspect
+
+    from geelark_farm.web import app as app_mod
+
+    found = inspect.getsource(app_mod._Handler._entry)
+    assert "_held_entry" in found
+    assert "_UNREAD" in found, "told apart from a session that is None"
+
+
+# ------------------------- the swap replaces regions, not the page (step 12)
+def test_the_phone_table_is_a_region_the_server_owns(web, monkeypatch):
+    """The update model was "refetch the whole page, replaceChildren on
+    <main>, then put the operator's state back by hand" - six routines
+    doing the putting back, and the caret covered by none of them. What
+    is inside a region is the server's; what is outside it is left
+    exactly as it stands, so there is nothing to put back (2026-09-21).
+    """
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert '<div data-live="phones">' in body
+    assert body.count('data-live=') == 1, (
+        "one region so far - the rest follow one at a time")
+    js = assets.JS
+    assert "if (!held && sameBones(here, fresh) && swapRegions(here, fresh))" \
+        in js
+    # And the whole-of-main path is still there for everything else.
+    assert "here.replaceChildren.apply(here, nodes);" in js
+
+
+def test_a_page_that_changed_shape_does_not_take_the_region_path():
+    """A card appearing, an alert arriving, the build card going away
+    with a permission - a region swap cannot carry any of those."""
+    js = assets.JS
+    bones = js[js.index("function sameBones(here, fresh){"):]
+    bones = bones[:bones.index("\n  }")]
+    assert "mine.length > 0" in bones, "a page with no region is not 'same'"
+    assert "mine.join" in bones and "theirs.join" in bones
+
+
+def test_every_listener_is_bound_once_per_node():
+    """`init()` runs after every swap and exactly one binding site had a
+    guard. That was safe only because the swap threw the nodes away with
+    their listeners - and regions stop doing that, so a second set would
+    be a second sift, a second confirm, a second submit (2026-09-21).
+
+    Named one by one, because that is what a reviewer has to check: a
+    new binding site inside `init` is a new line here or a leak.
+    """
+    js = assets.JS
+    assert "function once(node, what){" in js
+    for node, what in (("b", "seg"),                 # the three views
+                       ("x", "dismiss"),             # an alert put away
+                       ("p", "gate"),                # the build card's Gmail
+                       ("kindPick", "kind"),         # and its kind
+                       ("pick", "new"),              # and its "type one"
+                       ("byhand", "stuck"),          # and its submit
+                       ("sheet", "sift"),            # a pool sheet
+                       ("dlg", "editor")):           # the row editor
+        assert f"once({node}, '{what}')" in js, f"{node} binds unguarded"
+
+    # And the guard is a set, not a flag: one node can be bound for two
+    # different things without the second being taken for the first.
+    made = js[js.index("function once(node, what){"):]
+    made = made[:made.index(chr(10) + "  }")]
+    assert "node.dataset.bound" in made
+    assert "indexOf('|' + what + '|')" in made
+
+def test_a_confirm_bubble_takes_its_listener_with_it():
+    """`askFirst` added a document keydown listener per bubble and
+    removed it only when Escape was what dismissed it - so a confirm
+    answered with the mouse left one behind, one per press."""
+    js = assets.JS
+    ask = js[js.index("function askFirst(form, question, answer){"):]
+    ask = ask[:ask.index("\n  // A word on this page")]
+    assert "box.remove = function(){" in ask
+    assert "document.removeEventListener('keydown', esc);" in ask

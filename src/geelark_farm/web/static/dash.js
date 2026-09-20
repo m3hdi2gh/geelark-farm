@@ -16,6 +16,22 @@
   //: than with the whole page. A kind not here simply gets the redirect.
   var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};
 
+  // Bound once per node, whatever `init` does afterwards.
+  //
+  // `init()` runs after every swap and exactly one of its binding sites
+  // had a guard (the pool sheet's, which survives a swap by design).
+  // The rest were safe only because the swap threw their nodes away
+  // with their listeners - and step 12 stops doing that, so a second
+  // set would be a second sift, a second confirm, a second submit
+  // (2026-09-21).
+  function once(node, what){
+    if (!node) return false;
+    var had = node.dataset.bound || '';
+    if (had.indexOf('|' + what + '|') >= 0) return false;
+    node.dataset.bound = had + '|' + what + '|';
+    return true;
+  }
+
   function init(){
     // Not the "nothing matches" row: it lives in the same tbody and would
     // otherwise count itself as a phone.
@@ -53,6 +69,7 @@
       seg.hidden = false;
       seg.querySelectorAll('button').forEach(function(b){
         b.setAttribute('aria-pressed', String(b.dataset.show === want));
+        if (!once(b, 'seg')) return;
         b.addEventListener('click', function(){
           want = b.dataset.show;
           if (store) store.setItem('gf.view', want);
@@ -72,7 +89,7 @@
       var key = 'gf.alert.' + el.dataset.alert;
       if (store && store.getItem(key)) el.hidden = true;
       var x = el.querySelector('[data-dismiss]');
-      if (x) x.addEventListener('click', function(){
+      if (x && once(x, 'dismiss')) x.addEventListener('click', function(){
         el.hidden = true;
         if (store) store.setItem(key, '1');
       });
@@ -191,11 +208,12 @@
         }
       };
       [gmailPick].forEach(function(p){
-        if (p) p.addEventListener('change', gate);
+        if (once(p, 'gate')) p.addEventListener('change', gate);
       });
-      if (kindPick) kindPick.addEventListener('change', kinded);
+      if (once(kindPick, 'kind')) kindPick.addEventListener('change', kinded);
       gate();
       byhand.querySelectorAll('select[data-new]').forEach(function(pick){
+        if (!once(pick, 'new')) return;
         var was = pick.value === '__new__' ? '' : pick.value;
         pick.addEventListener('change', function(){
           if (pick.value !== '__new__') { was = pick.value; return; }
@@ -212,7 +230,7 @@
       });
       // A choice still on "type a new one" has nothing typed yet: open
       // the dialog rather than send the placeholder.
-      byhand.addEventListener('submit', function(e){
+      if (once(byhand, 'stuck')) byhand.addEventListener('submit', function(e){
         var stuck = Array.prototype.filter.call(
           byhand.querySelectorAll('select[data-new]'),
           function(p){ return !p.disabled && !p.closest('[hidden]')
@@ -292,8 +310,7 @@
       // Once per sheet node. `init` runs after every swap, and a sheet
       // the swap kept (keepSheet) would otherwise gain another set of
       // listeners each time - a sift per swap it had lived through.
-      if (!sheet.dataset.live) {
-        sheet.dataset.live = '1';
+      if (once(sheet, 'sift')) {
         if (find) find.addEventListener('input', sift);
         if (seller) seller.addEventListener('change', sift);
         [chips, cats].forEach(function(set){
@@ -313,8 +330,7 @@
     // The editor, once per dialog node. `init` runs after every swap
     // and a second set of listeners would ask the same question twice.
     document.querySelectorAll('dialog.editor').forEach(function(dlg){
-      if (dlg.dataset.live) return;
-      dlg.dataset.live = '1';
+      if (!once(dlg, 'editor')) return;
       dlg.addEventListener('input', function(){
         dlg.dataset.dirty = '1';
         keepDraft(dlg);
@@ -1049,6 +1065,23 @@
       return !(n.nodeType === 1 && n.matches('script'));
     });
     var mini = document.querySelector('.mini'); if (mini) mini.remove();
+    // The regions the server owns, replaced on their own. Everything
+    // around them is left exactly as it stands - so the caret, the
+    // selection, an open dialog and a scroll offset outside a region
+    // are not put back afterwards, they were never taken.
+    //
+    // Only when the page is otherwise the same page: a region swap
+    // cannot carry a card that has appeared or a banner that has gone.
+    // `sameBones` is that test, and when it fails the old
+    // whole-of-main path runs, with all six routines behind it.
+    if (!held && sameBones(here, fresh) && swapRegions(here, fresh)) {
+      init();
+      typedBack(typed);
+      viewBack(seen);
+      placeBack(place);
+      swapMain.at = Date.now();
+      return;
+    }
     if (held) {
       // The overlay never leaves the DOM. Taken out and put back - which
       // is what a whole-of-main replace does - its fade and the sheet's
@@ -1075,6 +1108,52 @@
     viewBack(seen);
     placeBack(place);
     swapMain.at = Date.now();
+  }
+
+  // Whether the two documents are the same page with different numbers
+  // in it, rather than a page that has gained or lost something. Read
+  // off the shape alone: the same children in the same order, and the
+  // same regions among them. A card appearing, an alert arriving, the
+  // build card going away with a permission - any of those and the
+  // region swap is the wrong tool and the whole-of-main path runs.
+  function sameBones(here, fresh){
+    var mine = shape(here), theirs = shape(fresh);
+    return mine.length > 0 && mine.join('\u0001') === theirs.join('\u0001');
+  }
+  function shape(root){
+    return Array.prototype.slice.call(root.children)
+      .filter(function(n){ return !n.matches('script'); })
+      .map(function(n){
+        return n.tagName + '.' + (n.className || '') + '#' + (n.id || '')
+             + '[' + (n.dataset.live || '') + ']';
+      });
+  }
+
+  // Each region's new contents in place of its old, and nothing else
+  // touched. False when the page has no region yet, which is every page
+  // but the dashboard for now.
+  function swapRegions(here, fresh){
+    var regions = fresh.querySelectorAll('[data-live]');
+    if (!regions.length) return false;
+    var done = 0;
+    Array.prototype.forEach.call(regions, function(bring){
+      var mine = pickData(here, '[data-live]', 'live', bring.dataset.live);
+      if (!mine) return;
+      // Nothing to do when the region has not changed: no reflow, no
+      // scrollport rebuilt at zero. `isEqualNode` rather than comparing
+      // the two as markup - this file may not build or read markup as
+      // a string, and the test that holds it to that reads the file,
+      // so the word does not belong in a comment either. Where the
+      // answer cannot be trusted the region is replaced, which is what
+      // it did before.
+      var same = typeof mine.isEqualNode === 'function'
+              && mine.isEqualNode(bring);
+      if (!same)
+        mine.replaceChildren.apply(
+          mine, Array.prototype.slice.call(bring.childNodes));
+      done++;
+    });
+    return done === regions.length;
   }
 
   // The overlay the swap found open, still in place, with the news from
@@ -1515,10 +1594,20 @@
       form.appendChild(sure);
       form.requestSubmit();
     });
-    document.addEventListener('keydown', function esc(ev){
+    // Taken off however the bubble goes, not only when Escape is what
+    // took it: a confirm answered with the mouse left its listener on
+    // the document for the life of the tab, one per press (2026-09-21).
+    function esc(ev){
       if (ev.key !== 'Escape') return;
-      box.remove(); document.removeEventListener('keydown', esc);
-    });
+      box.remove();
+    }
+    document.addEventListener('keydown', esc);
+    var drop = box.remove.bind(box);
+    box.remove = function(){
+      document.removeEventListener('keydown', esc);
+      window.removeEventListener('scroll', box.remove, {capture: true});
+      drop();
+    };
   }
 
   // A word on this page, for a few seconds.

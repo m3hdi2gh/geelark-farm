@@ -737,14 +737,12 @@ class _Handler(BaseHTTPRequestHandler):
                                     requested_by=user["id"], idem_key=idem)
         # The same drawing of the button, sent again: one row, and it was
         # carried out the first time. Said so, rather than "Queued" over a
-        # row that is already finished (2026-09-14).
-        if self._pressed_before(req):
+        # row that is already finished (2026-09-14). `enqueued` has known
+        # this all along - it is which branch it took - and the answer
+        # used to be re-derived by comparing the database host's clock to
+        # this container's with a one-second tolerance (2026-09-21).
+        if not getattr(req, "fresh", True):
             return self._redirect(_said_url(back, f"twice:{req}"))
-        # Ring, so the service looks now instead of at the top of its next
-        # pass. The row is already written and the pass would find it
-        # anyway; this only decides whether that is in a second or in
-        # thirty (2026-09-06).
-        signals.ring(signals.queued)
         # `said_word` is what the press was FOR, not what it did. The work
         # runs here now, so its own verdict is known before the redirect -
         # and it was thrown away: a refusal, a failure and a success all
@@ -752,6 +750,12 @@ class _Handler(BaseHTTPRequestHandler):
         # button was refused every time somebody left Gmail on "auto", and
         # said "Done - it is already in" (the operator, 2026-09-07).
         ran = self._ran_it_now(verb, payload, req)
+        if ran is None:
+            # Nothing ran here, so the lane has it. Ring only now: the
+            # bell used to go before the inline attempt, which is an
+            # invitation for the keeper to claim a row this request was
+            # about to work (2026-09-21).
+            signals.ring(signals.queued)
         if ran == "done":
             said = f"{said_word}:{req}"
         elif ran is not None:
@@ -835,8 +839,32 @@ class _Handler(BaseHTTPRequestHandler):
         from ..runner import run_now
         from ..store import actions as store_actions
 
+        # Claimed before it is worked, which every other writer in the
+        # system does and this one did not. `take_batch` claims any
+        # queued row, five verbs are in both sets, and a duplicated
+        # `build_by_hand` is two phones and two accounts spent.
+        #
+        # A row somebody else already has is not ours to run: answer
+        # None and let the redirect say it is queued, which it is.
+        try:
+            if not store_actions.claim(self.settings, req):
+                log.info("%s #%s was taken by the lane first", verb, req)
+                return None
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not claim %s #%s (%s); leaving it to the "
+                        "lane", verb, req, exc)
+            return None
+
         outcome = run_now(self.settings, verb, payload)
         if outcome is None:
+            # Claimed and not run: hand it straight back rather than
+            # leaving it `running` for `expire_running` to close in an
+            # hour with a sentence about a restart that never happened.
+            try:
+                store_actions.settle(self.settings, req, status="queued",
+                                     result="", detail=None)
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("could not put %s #%s back (%s)", verb, req, exc)
             return None
         status, said, detail = outcome
         try:
@@ -962,25 +990,6 @@ class _Handler(BaseHTTPRequestHandler):
         (the operator, 2026-09-14)."""
         press = getattr(self, "_press", "") or str(int(time.time()) // 60)
         return f"{verb}:{target}:{user['id']}:{press}"
-
-    def _pressed_before(self, req: int) -> bool:
-        """Whether `enqueue` handed back a row that already existed - the
-        same stamp, sent again. A row written a moment ago is this press;
-        one older than a second was the first press, and it has run."""
-        from ..store import actions as store_actions
-
-        try:
-            row = store_actions.one(self.settings, req) or {}
-            when = row.get("requested_at")
-        except Exception as exc:                                  # noqa: BLE001
-            log.debug("could not read request %s back (%s)", req, exc)
-            return False
-        if when is None:
-            return False
-        try:
-            return (time.time() - when.timestamp()) > 1.0
-        except (AttributeError, TypeError, ValueError):
-            return False
 
     def _proxy_state(self) -> tuple[list, list, dict]:
         """What the pass keeps about exits outside the rows: the ones
@@ -1916,10 +1925,20 @@ class _Handler(BaseHTTPRequestHandler):
         The user row comes back fresh on every request rather than frozen
         at login, so a permission taken away takes effect on the next
         click instead of waiting for the session to be ended by hand.
+
+        Once per request, not once per caller: `do_POST` reads it to
+        CSRF-check the press and `_user()` read it again from the same
+        cookie a few lines later - two lookups for one press
+        (2026-09-21). Held on the handler, which lives exactly as long
+        as the request does, so "fresh on every request" still holds.
         """
         from ..store import sessions as store_sessions
 
-        return store_sessions.find(self.settings, self._cookie())
+        held = getattr(self, "_held_entry", _UNREAD)
+        if held is not _UNREAD:
+            return held
+        self._held_entry = store_sessions.find(self.settings, self._cookie())
+        return self._held_entry
 
     def _user(self) -> dict | None:
         entry = self._entry()
@@ -1928,14 +1947,14 @@ class _Handler(BaseHTTPRequestHandler):
         # The csrf token rides in the user dict so every page's header
         # (the logout form) can carry it without a second parameter; so
         # do the flags the shell needs and the rail's counts.
-        try:
-            nav = read.nav_counts(self.settings)
-        except Exception as exc:                                  # noqa: BLE001
-            log.warning("the rail's counts did not load (%s)", exc)
-            nav = {}
+        #
+        # The counts are a nine-subquery statement and most presses end
+        # in a 303, where nothing ever draws them. Read when a page asks
+        # for them, which is the moment they are worth having.
         return dict(entry["user"], csrf=entry.get("csrf", ""),
                     user_admin=self.settings.web_user_admin,
-                    mutations=self.settings.web_mutations, nav=nav)
+                    mutations=self.settings.web_mutations,
+                    nav=_RailCounts(lambda: read.nav_counts(self.settings)))
 
     def _cookie(self) -> str:
         raw = self.headers.get("Cookie") or ""
@@ -2481,6 +2500,66 @@ def _add_back(field, default: str) -> str:
 #: story. Clicking a serial is the one place the design sends an operator
 #: off the dashboard.
 _OPERATOR_PAGES = ("/", "/password", "/live")
+
+
+#: Told apart from "the session is None", which is a cached answer too.
+_UNREAD = object()
+
+
+class _RailCounts(dict):
+    """The rail's badge counts, read the first time a page reads them.
+
+    `nav_counts` is nine subqueries and every request paid for it,
+    including the presses that answer 303 and draw no rail at all
+    (2026-09-21). A dict, because every reader already treats it as one
+    and none of them should have to know.
+    """
+
+    def __init__(self, load):
+        super().__init__()
+        self._load = load
+        self._read = False
+
+    def _fill(self):
+        if self._read:
+            return
+        self._read = True
+        try:
+            super().update(self._load())
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the rail's counts did not load (%s)", exc)
+
+    def __getitem__(self, key):
+        self._fill()
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self._fill()
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        self._fill()
+        return super().__contains__(key)
+
+    def __len__(self):
+        self._fill()
+        return super().__len__()
+
+    def __iter__(self):
+        self._fill()
+        return super().__iter__()
+
+    def items(self):
+        self._fill()
+        return super().items()
+
+    def keys(self):
+        self._fill()
+        return super().keys()
+
+    def values(self):
+        self._fill()
+        return super().values()
 
 
 def _operator_may_get(path: str) -> bool:

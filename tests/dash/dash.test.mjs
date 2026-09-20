@@ -178,3 +178,91 @@ test('the sheet is fetched once, however often the door is pressed',
   fire(door, 'click');
   assert.equal(win.__fetches.length, 1, 'it was fetched again once it was in');
 });
+
+// A page with one server-owned region and a form beside it, which is
+// what the dashboard is: the phone table moves on its own, the build
+// card is somebody's half-filled work. The swap is driven by a press
+// here rather than by the timer, because the timer's own path is what
+// `settled()` decides and that is a different test.
+function regioned(rows) {
+  return `
+  <div class="wide">
+    <form class="byhand" method="post" action="/phones/build">
+      <input name="note" value="">
+    </form>
+    <form method="post" action="/phones/3801/state" class="press">
+      <button>Done</button>
+    </form>
+    <div data-live="phones"><table id="phones"><tbody>${rows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+const ONE = '<tr data-view="free"><td>3801</td></tr>';
+const TWO = ONE + '<tr data-view="free"><td>3802</td></tr>';
+
+function answerPage(body) {
+  return '<html><head><meta name="gf-rev" content="test"></head>'
+       + '<body><main>' + body + '</main></body></html>';
+}
+
+test('a swap replaces the region and leaves the rest where it stands',
+     async () => {
+  const win = consoleIn(regioned(ONE), {
+    answer: () => ({status: 200, url: '/', body: answerPage(regioned(TWO))}),
+  });
+  const doc = win.document;
+
+  // Somebody has half filled the form beside the region.
+  const note = doc.querySelector('input[name=note]');
+  note.value = 'half a sentence';
+  const form = doc.querySelector('form.byhand');
+  const table = doc.querySelector('#phones');
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.equal(doc.querySelectorAll('#phones tbody tr').length, 2,
+               'the region did not take the news');
+  // The two claims that matter: the nodes outside the region are the
+  // ones that were there, so nothing had to be put back afterwards.
+  assert.equal(doc.querySelector('form.byhand'), form,
+               'the form was replaced, and it was nobody\'s to replace');
+  assert.equal(note.value, 'half a sentence');
+  assert.notEqual(doc.querySelector('#phones'), table,
+                  'the region itself is the server\'s; it should be new');
+});
+
+test('a page that has gained something falls back to the whole swap',
+     async () => {
+  // An alert has arrived. A region swap cannot carry that, and must
+  // not silently drop it.
+  const win = consoleIn(regioned(ONE), {
+    answer: () => ({status: 200, url: '/',
+                    body: answerPage('<p class="alert">the breaker is up</p>'
+                                     + regioned(TWO))}),
+  });
+  const doc = win.document;
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.ok(doc.querySelector('.alert'), 'the new alert was dropped');
+  assert.equal(doc.querySelectorAll('#phones tbody tr').length, 2,
+               'and the news with it');
+});
+
+test('listeners are bound once per node however often init runs', () => {
+  const win = consoleIn(
+    '<div id="seg" hidden><button data-show="free">Free</button></div>'
+    + '<table id="phones"><tbody><tr data-view="free"><td>1</td></tr>'
+    + '</tbody></table><span id="tally"></span>');
+  const button = win.document.querySelector('#seg button');
+  // Marked the first time, and the mark is what stops a second set of
+  // listeners when the node survives a swap - which, with regions, it
+  // now does.
+  assert.equal(button.dataset.bound, '|seg|');
+  assert.ok(win.document.querySelector('#phones'));
+});

@@ -882,3 +882,11 @@ ALTER TABLE api_sandbox ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 
 -- real cluster would have raised out of a sign-in flow. The insert now
 -- fills it; this makes an older row or a hand-written one safe too.
 ALTER TABLE code_requests ALTER COLUMN deadline DROP NOT NULL;
+
+-- rev 35: what a duplicate-press check actually asks. `pending_for`
+-- matched `payload::text ILIKE '%needle%'`, which is a sequential scan
+-- with a jsonb cast on every press - and it matched an address that
+-- merely contained the one being asked about. It reads the field now,
+-- and this is the index under it (2026-09-21).
+CREATE INDEX IF NOT EXISTS actions_pending
+    ON actions (verb, status) WHERE status IN ('queued', 'running');

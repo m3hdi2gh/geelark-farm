@@ -27,13 +27,34 @@ DRAIN_BATCH = 20
 NOTIFY_CHANNEL = "geelark_actions"
 
 
+class Queued(int):
+    """A command's row id, and whether this press is what wrote it.
+
+    An int, because that is what the id has always been and what every
+    caller does with it. `fresh` is the second thing `enqueue` has
+    always known - which of its two branches it took - and always threw
+    away, so the caller re-derived it by reading the row back and
+    comparing the DATABASE host's `requested_at` to the WEB container's
+    `time.time()` with a one-second tolerance. Two clocks a second
+    apart and a first press read as a second one (2026-09-21).
+    """
+
+    fresh = True
+
+    def __new__(cls, value, fresh=True):
+        made = super().__new__(cls, value)
+        made.fresh = bool(fresh)
+        return made
+
+
 def enqueue(settings: Settings, *, verb: str, payload: dict,
-            requested_by: int, idem_key: str) -> int:
+            requested_by: int, idem_key: str) -> Queued:
     """Insert one command; a duplicate idem_key returns the FIRST row's id.
 
     That makes a double-submit (double-tap, back-button re-POST, browser
     retry) indistinguishable from success, which is the design: the person
-    pressed the button once as far as they are concerned.
+    pressed the button once as far as they are concerned - and the answer
+    says which of the two it was, for the caller that has to tell them.
     """
     with connect(settings) as conn:
         try:
@@ -58,7 +79,7 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
                 raise
             log.debug("enqueue of %s hit idem_key %s (%s); answering row %s",
                       verb, idem_key, exc, row[0])
-            return row[0]
+            return Queued(row[0], fresh=False)
     # Asking is an event too (C8): the dashboard ticker and the Events
     # page say who asked for what, the moment they asked.
     from . import events
@@ -67,7 +88,7 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
                 serial=str(payload.get("serial") or ""),
                 detail=f"#{new_id} {verb}: asked by "
                        f"{payload.get('by') or requested_by}")
-    return new_id
+    return Queued(new_id, fresh=True)
 
 
 def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
@@ -78,12 +99,42 @@ def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
     if not needle:
         return None
     with Store(settings) as store:
+        # By the field the needle came from, not by the row's text. A
+        # substring of the whole payload matched an address that merely
+        # CONTAINED this one - `a@x.com` found `xa@x.com` - and every
+        # press paid for a sequential scan with a jsonb cast over a
+        # table nothing prunes (2026-09-21).
         rows = store._rows(
             "SELECT id FROM actions WHERE verb = %s"
             " AND status IN ('queued', 'running')"
-            " AND payload::text ILIKE %s ORDER BY id LIMIT 1",
-            (verb, f"%{needle}%"))
+            " AND (payload->>'address' = %s OR payload->>'serial' = %s"
+            "      OR payload->>'name' = %s) ORDER BY id LIMIT 1",
+            (verb, needle, needle, needle))
     return int(rows[0]["id"]) if rows else None
+
+
+def claim(settings: Settings, action_id: int) -> bool:
+    """Take one queued row for this process, or answer False.
+
+    The web was the only writer in the system that did not do this. It
+    enqueued the row, rang the keeper's bell and then ran the verb with
+    the row still `queued` - and `take_batch` claims any queued row, and
+    five verbs are in both the inline set and the lane's. Two operators
+    and a keeper on one bell, and a duplicated `build_by_hand` is two
+    phones and two accounts spent (2026-09-21).
+
+    It closes the settle-failure hole at the same time: a row left
+    `running` by a settle that raised is closed honestly by
+    `expire_running`, where one left `queued` would simply be run again.
+    """
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "UPDATE actions SET status = 'running', executed_at = now()"
+            " WHERE id = %s AND status = 'queued' RETURNING id",
+            (action_id,))
+        got = cur.fetchone()
+        conn.commit()
+    return got is not None
 
 
 def expire_running(conn, *, older_than: float,

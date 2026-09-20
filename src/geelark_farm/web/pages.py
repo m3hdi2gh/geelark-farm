@@ -3155,14 +3155,27 @@ def dashboard(data: dict, user: dict, said: str = "",
                     if (p.get("state") or "") not in ("done", "failed")]
     rows = (_wish_rows(data, user)
             + _phone_rows(dict(data, phones=on_the_shelf), user))
-    table = (f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
+    # `data-live`: a region the server owns, which a swap replaces on
+    # its own instead of replacing every child of <main> around it.
+    #
+    # The update model was "refetch the whole page, replaceChildren on
+    # <main>, then put the operator\'s state back by hand" - six
+    # routines doing the putting back, and the caret covered by none of
+    # them. What is inside a region is the server\'s; what is outside it
+    # is left exactly as it stands, so there is nothing to put back
+    # (2026-09-21). The phone table first; the rest follow one at a
+    # time, and each reconstruction routine goes when its last caller
+    # does.
+    table = (f'<div data-live="phones">'
+             f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
              f'<tr class="none" id="nohits" hidden><td colspan="7">'
-             f'Nothing here matches that.</td></tr></tbody></table>'
-             if rows else '<p class="empty">No phones yet - the keeper '
-                          'builds the shortfall on its next pass.</p>')
+             f'Nothing here matches that.</td></tr></tbody></table></div>'
+             if rows else '<div data-live="phones"><p class="empty">'
+                          'No phones yet - the keeper builds the '
+                          'shortfall on its next pass.</p></div>')
     hint = _need(user, "may_take_phones",
                  "taking, returning and closing phones")
 
