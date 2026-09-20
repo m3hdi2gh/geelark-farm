@@ -425,7 +425,8 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "awaiting": awaiting,
         "stopped": stopped,
         "choose": choose,
-        "geelark": _geelark(store),
+        "geelark": _geelark(store, (pulse[0]["value"] or {})
+                            if pulse else {}),
         "queue": queue[0] if queue else {"running": 0, "queued": 0},
         "recent": recent,
         "asked": asked,
@@ -446,37 +447,57 @@ REFUSAL_SHOWN_FOR = 3600.0
 PLAN_WARN_DAYS = 10
 
 
-def geelark_alerts(counts: dict) -> list[dict]:
-    """GeeLark itself being the thing that is wrong.
+def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
+    """Every way GeeLark itself is stopping the farm, judged once.
 
-    The foot of the page carries these numbers quietly, which is where
-    they belong while nothing is the matter. When one of them is what
-    stops the farm it belongs here instead, with everything else that
-    has gone wrong - a red line at the top of every page rather than
-    something to scroll to (the operator, 2026-09-20).
+    One list, two renderings: `short` goes on the line at the foot of
+    the page and `text` on the alert strip at the top. They come from
+    here together so the two cannot disagree - and the disagreement
+    that mattered was silence. The foot showed nothing but grey while
+    the account had no money in it, and anybody glancing at it came
+    away thinking GeeLark was fine (the operator, 2026-09-20).
+
+    `pulse` is read as well as the refusal, because a refusal is only
+    recorded when a build tries to start a phone - and once the breaker
+    has tripped, nothing tries. The state would go quiet exactly when
+    it had just become true.
     """
     found: list[dict] = []
-    kept = counts.get("geelark_plan") or {}
-    plan = kept.get("plan") or {}
-    refused = counts.get("geelark_refusal") or {}
+    plan = plan or {}
+    refused = refused or {}
+    pulse = pulse or {}
 
     said = str(refused.get("said") or "")
     at = refused.get("at")
-    if said and at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR:
-        found.append({"level": "bad", "href": "/events?kind=builds",
-                      "text": f"GeeLark will not start phones - "
-                              f"{said}. Nothing can be built or signed in "
-                              f"until the account is topped up; the API "
-                              f"does not report the balance, so this "
-                              f"refusal is the only warning there is."})
+    fresh = bool(said and at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR)
+    # The breaker tripped on reasons that are nobody's stock is the same
+    # news, arrived a different way, and it is the one that survives the
+    # hour: while it is up no build tries, so no fresher refusal can
+    # come.
+    stalled = _breaker_blames_geelark(pulse)
+    if fresh or stalled:
+        why = said if fresh else "GeeLark would not bring a phone up"
+        found.append({
+            "kind": "refused", "level": "bad",
+            "href": "/events?kind=builds",
+            "short": f"phones will not start &mdash; {esc_text(why)}",
+            "text": (f"GeeLark will not start phones - {why}. Nothing can "
+                     f"be built or signed in until the account is topped "
+                     f"up; the API does not report the balance, so this "
+                     f"refusal is the only warning there is.")})
 
     free = plan.get("availableProfiles")
     if free is not None and int(free) <= SLOTS_LOW:
         total = int(plan.get("profiles") or 0)
         found.append({
-            "level": "bad" if int(free) == 0 else "warn",
-            "href": "/phones",
-            "text": (f"GeeLark has {free} of {total} phone slots left. "
+            # The line already prints `used/total phone slots` and
+            # colours it, so it needs no second clause saying the same
+            # thing - only the alert strip, which has no such number.
+            "kind": "slots",
+            "level": "bad" if int(free) == 0 else "warn", "href": "/phones",
+            "short": "",
+            "text": (f"GeeLark has {free} of {total} phone "
+                     f"{'slot' if int(free) == 1 else 'slots'} left. "
                      f"Creating another fails with [44002]; delete phones "
                      f"that are done, or raise the plan.")})
 
@@ -486,15 +507,46 @@ def geelark_alerts(counts: dict) -> list[dict]:
                                                 datetime.timezone.utc)
                 - datetime.datetime.now(datetime.timezone.utc)).days
         if days <= PLAN_WARN_DAYS:
+            gone = "has expired" if days < 0 else f"ends in {days} day(s)"
             found.append({
+                # As above: the line prints `plan ends ...` and colours
+                # it when it is near.
+                "kind": "plan",
                 "level": "bad" if days <= 2 else "warn", "href": "/",
-                "text": (f"The GeeLark subscription "
-                         f"{'has expired' if days < 0 else f'ends in {days} day(s)'}"
-                         f". Every phone goes with it.")})
+                "short": "",
+                "text": (f"The GeeLark subscription {gone}. Every phone "
+                         f"goes with it.")})
     return found
 
 
-def _geelark(store) -> dict:
+def _breaker_blames_geelark(pulse: dict) -> bool:
+    """Whether building has stopped for reasons no pool can fix."""
+    from ..failures import CREDENTIAL, verdict
+
+    reasons = [str(r) for r in (pulse.get("breaker_reasons") or [])]
+    if not pulse.get("tripped") or not reasons:
+        return False
+    return all(verdict(r).blame != CREDENTIAL for r in reasons)
+
+
+def esc_text(value: str) -> str:
+    """The little of `html.escape` this module needs - it renders no
+    markup of its own, but `short` is dropped into some."""
+    from html import escape
+
+    return escape(str(value))
+
+
+def geelark_alerts(counts: dict) -> list[dict]:
+    """The trouble above, worded for the strip at the top of the page."""
+    kept = counts.get("geelark_plan") or {}
+    return [{"level": t["level"], "href": t["href"], "text": t["text"]}
+            for t in geelark_trouble(kept.get("plan") or {},
+                                     counts.get("geelark_refusal") or {},
+                                     counts.get("pulse") or {})]
+
+
+def _geelark(store, pulse: dict | None = None) -> dict:
     """What GeeLark says about the account, as the keeper last heard it.
 
     Read from the store and never from the API: a page render that
@@ -524,6 +576,10 @@ def _geelark(store) -> dict:
     return {"plan": kept.get("plan") or {}, "at": kept.get("at"),
             "refusal": refused.get("said") or "",
             "refused_at": refused.get("at"),
+            # Judged here, so the line at the foot says exactly what the
+            # strip at the top does.
+            "trouble": geelark_trouble(kept.get("plan") or {}, refused,
+                                       pulse),
             "phones_total": int(counted.get("total") or 0),
             "phones_running": int(counted.get("running") or 0)}
 

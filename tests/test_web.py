@@ -7508,18 +7508,20 @@ def test_the_line_is_quiet_until_something_is_wrong():
     2026-09-20)."""
     import time
 
-    calm = _glark(plan={"profiles": 40, "availableProfiles": 32,
-                        "expirationTime": 1792110224}, at=time.time(),
-                  phones_total=6, phones_running=2)
+    from geelark_farm.web import read
 
+    def line(plan):
+        return _glark(plan=plan, at=time.time(), phones_total=6,
+                      phones_running=2,
+                      trouble=read.geelark_trouble(plan, {}, {}))
+
+    calm = line({"profiles": 40, "availableProfiles": 32,
+                 "expirationTime": 1792110224})
     assert "var(--" not in calm, "nothing shouts when nothing is wrong"
-    # And it colours only the part that has gone wrong.
-    filling = _glark(plan={"profiles": 40, "availableProfiles": 6},
-                     at=time.time())
-    assert "var(--amber)" in filling
-    assert "var(--red)" in _glark(plan={"profiles": 40,
-                                        "availableProfiles": 1},
-                                  at=time.time())
+    # And it colours only the part that has gone wrong - by the same
+    # judgement the alert strip uses, so the two cannot disagree.
+    assert "var(--amber)" in line({"profiles": 40, "availableProfiles": 2})
+    assert "var(--red)" in line({"profiles": 40, "availableProfiles": 0})
 
 
 def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
@@ -7528,10 +7530,13 @@ def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
     nineteen builds were turned down (2026-09-19)."""
     import time
 
-    line = _glark(plan={"profiles": 40, "availableProfiles": 32},
-                  at=time.time(),
-                  refusal="start failed [41001] balance not enough",
-                  refused_at=time.time() - 60)
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 32}
+    refused = {"said": "start failed [41001] balance not enough",
+               "at": time.time() - 60}
+    line = _glark(plan=plan, at=time.time(),
+                  trouble=read.geelark_trouble(plan, refused, {}))
 
     assert "phones will not start" in line
     assert "balance not enough" in line
@@ -7594,3 +7599,53 @@ def test_the_breaker_does_not_send_you_to_a_pool_that_is_full():
     for said in (advice(), advice("wrong_password"),
                  advice("phone_would_not_start")):
         assert "Clear breaker" in said
+
+
+def test_the_foot_is_never_grey_while_the_top_is_red():
+    """The invariant the whole arrangement rests on. Somebody glancing
+    at the bottom of the console and seeing nothing but grey concluded
+    GeeLark was in its normal state, on a night the account had no
+    money in it (the operator, 2026-09-20).
+
+    Both are drawn from `read.geelark_trouble`, so this asks that the
+    rendering keeps the promise the shared source makes.
+    """
+    import re
+    import time
+
+    from geelark_farm.web import pages, read
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_login_accounts": True}
+    plan = {"profiles": 40, "availableProfiles": 32, "parallels": 0,
+            "expirationTime": 1792110224}
+    now = time.time()
+    states = {
+        "all well": (plan, {}, {}),
+        "refused just now": (plan, {"said": "balance not enough",
+                                    "at": now}, {}),
+        # The one that caught us: no refusal was ever recorded, because
+        # once the breaker is up nothing tries to start a phone.
+        "breaker, and no refusal on file": (
+            plan, {}, {"tripped": True,
+                       "breaker_reasons": ["phone_would_not_start"] * 5}),
+        "slots gone": (dict(plan, availableProfiles=0), {}, {}),
+        "slots nearly gone": (dict(plan, availableProfiles=2), {}, {}),
+        "plan about to end": (
+            dict(plan, expirationTime=int(now + 86400)), {}, {}),
+    }
+    for name, (p, refused, pulse) in states.items():
+        trouble = read.geelark_trouble(p, refused, pulse)
+        line = pages._geelark_line(
+            {"geelark": {"plan": p, "at": now, "phones_total": 6,
+                         "phones_running": 0, "trouble": trouble}}, user)
+        coloured = set(re.findall(r"var\(--(\w+)\)", line))
+        if not trouble:
+            assert not coloured, f"{name}: shouted about nothing"
+            continue
+        assert coloured, f"{name}: the top would be loud and the foot grey"
+        worst = "red" if any(t["level"] == "bad" for t in trouble) else "amber"
+        assert worst in coloured, f"{name}: the foot understated it"
+        # And the label carries it, so a glance at the corner is enough.
+        tag = re.search(r'class="gltag"[^>]*>', line).group(0)
+        assert "var(--" in tag, f"{name}: the label stayed grey"

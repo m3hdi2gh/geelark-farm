@@ -4927,6 +4927,10 @@ def _geelark_line(data: dict, user: dict) -> str:
     if not plan and not found.get("refusal"):
         return ""
     bits = []
+    # What is actually wrong, judged once in `read.geelark_trouble` and
+    # rendered twice: as colour on the items below, and as sentences on
+    # the alert strip at the top of the page.
+    trouble = found.get("trouble") or []
     data = dict(data, **{k: found.get(k) for k in
                          ("phones_running", "phones_total")
                          if found.get(k) is not None})
@@ -4935,9 +4939,11 @@ def _geelark_line(data: dict, user: dict) -> str:
     free = int(plan.get("availableProfiles") or 0)
     if total:
         used = max(0, total - free)
-        share = used / total
-        tone = "red" if share >= 0.95 else "amber" if share >= 0.8 else ""
-        bits.append(_gl_bit(f"{used}/{total} phone slots", tone))
+        # Coloured by the same judgement the alert strip uses, not by a
+        # share of its own: two thresholds asked one question and gave
+        # two answers, so the foot read red while the top read amber.
+        bits.append(_gl_bit(f"{used}/{total} phone slots",
+                            _gl_level(trouble, "slots")))
 
     # The pool is shared with browser profiles, which this API cannot
     # list. Naming the gap answers "why did a create fail while the tab
@@ -4962,7 +4968,7 @@ def _geelark_line(data: dict, user: dict) -> str:
         when = datetime.datetime.fromtimestamp(int(ends),
                                                datetime.timezone.utc)
         days = (when - datetime.datetime.now(datetime.timezone.utc)).days
-        tone = "red" if days <= 2 else "amber" if days <= PLAN_WARN_DAYS else ""
+        tone = _gl_level(trouble, "plan")
         # Not strftime's `%-d`: that flag is glibc's and the suite runs
         # on Windows too.
         word = (f"plan ends {when.day} {when.strftime('%b')}"
@@ -4978,17 +4984,32 @@ def _geelark_line(data: dict, user: dict) -> str:
     if included:
         bits.append(_gl_bit(f"{included} parallel", ""))
 
-    said = str(found.get("refusal") or "")
-    at = found.get("refused_at")
-    if said and at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR:
-        # The only reading of the balance there is.
-        bits.append(_gl_bit(f"phones will not start &mdash; {esc(said)}",
-                            "red"))
+    # Whatever is actually wrong, in the same type as the rest and
+    # coloured - the same list the alert strip at the top is drawn from,
+    # so the foot can never be all grey while the top is red. Somebody
+    # glancing down here and seeing nothing concluded GeeLark was fine
+    # on a night the account had no money in it (2026-09-20).
+    for item in trouble:
+        # Only what the line does not already carry: the slots and the
+        # expiry are printed above and take their colour there, so a
+        # clause repeating them would say everything twice.
+        if item.get("short"):
+            bits.append(_gl_bit(item["short"],
+                                "red" if item.get("level") == "bad"
+                                else "amber"))
 
     when_read = found.get("at")
     if when_read:
         bits.append(_gl_bit(_ago(when_read), ""))
-    return (f'<p class="glfoot"><span class="gltag">GeeLark</span>'
+    # The worst colour actually on the line, not a second opinion about
+    # the same numbers: the label read amber while the slots beside it
+    # read red, because two thresholds were being asked one question.
+    # Taken from what was drawn, it cannot disagree with it.
+    tones = {_gl_tone_of(bit) for bit in bits}
+    worst = "red" if "red" in tones else "amber" if "amber" in tones else ""
+    tag = (f'<span class="gltag" style="color:var(--{worst})">GeeLark</span>'
+           if worst else '<span class="gltag">GeeLark</span>')
+    return (f'<p class="glfoot">{tag}'
             + "".join(bits)
             + '<span class="glnone" title="/v1/pay/plan/info carries the '
               'slots, the expiry and the included parallels, and nothing '
@@ -5000,6 +5021,21 @@ def _geelark_line(data: dict, user: dict) -> str:
 def _gl_bit(word: str, tone: str) -> str:
     colour = f' style="color:var(--{tone})"' if tone else ""
     return f'<span{colour}>{word}</span>'
+
+
+def _gl_level(trouble: list, kind: str) -> str:
+    """The colour `read.geelark_trouble` gave this kind of trouble, or
+    "" when it raised none about it."""
+    for item in trouble:
+        if item.get("kind") == kind:
+            return "red" if item.get("level") == "bad" else "amber"
+    return ""
+
+
+def _gl_tone_of(bit: str) -> str:
+    """The colour a rendered item was given, or "" for none."""
+    found = re.search(r"var\(--(\w+)\)", bit)
+    return found.group(1) if found else ""
 
 
 def _stopped_card(data: dict, user: dict, explain=None) -> str:
