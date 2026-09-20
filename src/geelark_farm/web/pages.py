@@ -22,7 +22,8 @@ from urllib.parse import quote
 # takes judgements rather than data: when a number is worth a colour is
 # the same question whether it is being drawn at the foot of a page or
 # raised as an alert, and two copies of an answer drift.
-from .read import PLAN_WARN_DAYS, REFUSAL_SHOWN_FOR, SLOTS_LOW
+from .read import (PLAN_WARN_DAYS, READING_STALE_AFTER,
+                   REFUSAL_SHOWN_FOR, SLOTS_LOW)
 
 #: The console's shell - the "Direction A" the owner chose on the design
 #: canvas (2026-09-01): a dark ops console, a rail of links on the left with
@@ -754,13 +755,50 @@ p{{margin:0}}
 .split b{{color:var(--ink);font-weight:600;margin-right:4px}}
 .railcap{{width:100%;margin:0;font-family:var(--mono);font-size:10.5px;
  letter-spacing:.09em;text-transform:uppercase;color:var(--dim);padding:0 2px}}
-.glfoot{{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 13px;
- margin:26px 2px 4px;padding-top:11px;border-top:1px solid var(--line2);
- font-family:var(--mono);font-size:11px;color:var(--dim)}}
-.glfoot>span+span::before{{content:"·";margin-right:13px;opacity:.4}}
-.gltag{{letter-spacing:.09em;text-transform:uppercase;opacity:.75;
+/* What GeeLark says about the account, at the foot of the page: a
+   small spec block, not a sentence. The sentence version wrapped into
+   a ragged second row and read as clutter, and cutting it to fit
+   dropped readings that were wanted (the operator, 2026-09-20). A
+   grid holds more and reads as less.
+   Quiet by default and never quiet when it should not be: `bad` and
+   `warn` come from the same judgement the alert strip at the top uses,
+   and they carry the hairline, the dot, the wordmark and the reading
+   itself, so no glance at the bottom of the page can come away calm
+   while the top of it is red. */
+.glfoot{{width:100%;max-width:1340px;margin:34px auto 10px;
+ padding:14px 2px 6px;border-top:1px solid var(--line2);
+ font-family:var(--mono)}}
+.glfoot.warn{{border-top-color:#3c3115}}
+.glfoot.bad{{border-top-color:#4d2323;
+ background:linear-gradient(180deg,rgba(224,101,79,.06),transparent 64%)}}
+.glhead{{display:flex;align-items:center;flex-wrap:wrap;gap:3px 9px;
+ margin:0 0 13px;font-size:10.5px;letter-spacing:.09em;
+ text-transform:uppercase}}
+.gldot{{width:6px;height:6px;flex:none;border-radius:50%;
+ background:var(--green);box-shadow:0 0 0 3px rgba(88,214,141,.13)}}
+.glfoot.warn .gldot{{background:var(--amber);
+ box-shadow:0 0 0 3px rgba(240,192,100,.15)}}
+.glfoot.bad .gldot{{background:var(--red);
+ box-shadow:0 0 0 3px rgba(224,101,79,.18)}}
+.gltag{{color:var(--muted);cursor:help}}
+.glfoot.warn .gltag{{color:var(--amber)}}
+.glfoot.bad .gltag{{color:var(--red)}}
+.glage{{margin-left:auto;color:var(--dim);opacity:.65;letter-spacing:.06em;
  cursor:help}}
-.glage{{opacity:.55}}
+.glage.warn{{color:var(--amber);opacity:1}}
+.glstats{{display:grid;gap:14px 28px;margin:0;
+ grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}}
+.glcell{{min-width:0}}
+.glcell dt{{font-size:10px;letter-spacing:.085em;text-transform:uppercase;
+ color:var(--muted);opacity:.75}}
+.glcell dd{{margin:4px 0 0;font-size:13.5px;line-height:1.25;
+ color:var(--ink);font-variant-numeric:tabular-nums}}
+.glcell.quiet dd{{color:var(--dim)}}
+.glcell.warn dd{{color:var(--amber)}}
+.glcell.bad dd{{color:var(--red)}}
+.glnote{{display:block;margin-top:3px;font-size:10.5px;line-height:1.35;
+ color:var(--dim);opacity:.7}}
+.glcell.warn .glnote,.glcell.bad .glnote{{opacity:.92}}
 @media (max-width:1100px){{
  .desk{{grid-template-columns:minmax(0,1fr);
   grid-template-areas:"supply" "main" "side"}}
@@ -4907,19 +4945,29 @@ def _new_dialog(ident: str, title: str,
 def _geelark_line(data: dict, user: dict) -> str:
     """What GeeLark says about the account, along the foot of the page.
 
-    A line and not a card, and at the bottom, because none of it is
+    Outside any card and at the very bottom, because none of it is
     anybody's work: it is the ground the farm stands on, worth a glance
     when something is odd and worth no room at all the rest of the time
-    (the operator, 2026-09-20). Quiet enough to scroll past, and it
-    colours only the part that has gone wrong.
+    (the operator, 2026-09-20).
+
+    A small grid of captioned readings rather than a run of words.
+    Three goes at a sentence failed the same way: what is worth knowing
+    does not fit on one line, so the line either wrapped into a ragged
+    second row - "ugly, sloppy and cluttered" - or was trimmed until
+    the numbers somebody wanted had gone into title attributes nobody
+    hovers over. A grid carries more and reads as less, and nothing has
+    to be hidden to keep it quiet.
 
     The open API has **no balance**. `/v1/pay/plan/info` carries the
-    profile slots and the day the subscription ends, and nothing about
-    money; nothing else answers (probed, 2026-09-20). So an account
-    about to run out looks exactly like one that is not, until a phone
-    is refused - which is what the red clause is, in GeeLark's own
-    words. The line says so itself, so a quiet foot is not read as a
-    full account.
+    profile slots, the expiry, the fee and the included parallels, and
+    nothing about money; nothing else answers (probed, 2026-09-20). So
+    the Balance reading reports the only thing there is to report -
+    whether phones are being refused - and says so plainly while they
+    are not, rather than leaving a gap that reads as "fine".
+
+    Colour comes from `read.geelark_trouble`, the one judgement the
+    alert strip at the top is drawn from as well, so the foot can never
+    read calm while the top reads red.
     """
     if not _may(user, "is_admin") and not _may(user, "may_login_accounts"):
         return ""
@@ -4927,113 +4975,202 @@ def _geelark_line(data: dict, user: dict) -> str:
     plan = found.get("plan") or {}
     if not plan and not found.get("refusal"):
         return ""
-    bits = []
-    # What is actually wrong, judged once in `read.geelark_trouble` and
-    # rendered twice: as colour on the items below, and as sentences on
-    # the alert strip at the top of the page.
     trouble = found.get("trouble") or []
-    data = dict(data, **{k: found.get(k) for k in
-                         ("phones_running", "phones_total")
-                         if found.get(k) is not None})
 
-    total = int(plan.get("profiles") or 0)
-    free = int(plan.get("availableProfiles") or 0)
-    ours = int(data.get("phones_total") or 0)
-    running = int(data.get("phones_running") or 0)
-    if total:
-        used = max(0, total - free)
-        # The pool is shared with browser profiles this API cannot list,
-        # and `used - ours` is what they hold. That answers "why did a
-        # create fail while the tab looks half empty" - worth having,
-        # not worth a word of its own on the line, so it is the title.
-        elsewhere = max(0, used - ours)
-        # Coloured by the same judgement the alert strip uses, not by a
-        # share of its own: two thresholds asked one question and gave
-        # two answers, so the foot read red while the top read amber.
-        bits.append(_gl_bit(
-            f"{used}/{total} slots", _gl_level(trouble, "slots"),
-            title=(f"{ours} are this farm's phones; {elsewhere} are held "
-                   f"elsewhere - browser profiles share the pool")
-            if elsewhere else f"all {ours} are this farm's phones"))
-    if running:
-        # Billing is per minute while a phone is running, so this is the
-        # only number here costing money as it is read.
-        bits.append(_gl_bit(f"{running} running", ""))
-
-    ends = plan.get("expirationTime")
-    if ends:
-        when = datetime.datetime.fromtimestamp(int(ends),
-                                               datetime.timezone.utc)
-        days = (when - datetime.datetime.now(datetime.timezone.utc)).days
-        # Not strftime's `%-d`: that flag is glibc's and the suite runs
-        # on Windows too. The count of days only while it is near - on a
-        # date two months out it is arithmetic nobody asked for.
-        word = (f"ends {when.day} {when.strftime('%b')}" if days >= 0
-                else "plan expired")
-        if 0 <= days <= PLAN_WARN_DAYS:
-            word += f" ({days}d)"
-        bits.append(_gl_bit(word, _gl_level(trouble, "plan"),
-                            title="when the GeeLark subscription runs out"))
-
-    # Whatever is wrong that the numbers above do not already show, in
-    # three words - the sentence explaining it is on the alert strip at
-    # the top, which is where somebody goes to read. The foot can never
-    # be all grey while the top is red (2026-09-20), and it says so in
-    # as little room as that takes.
+    cells = [c for c in (_gl_balance(found, trouble),
+                         _gl_slots(plan, found, trouble),
+                         _gl_running(plan, found),
+                         _gl_subscription(plan, trouble)) if c]
+    # Anything `read.geelark_trouble` raised that no reading above
+    # speaks for gets a cell of its own. The promise this whole
+    # arrangement rests on is that the foot says whatever the top says;
+    # a kind added there and forgotten here would break it in silence.
+    spoken = {k for c in cells for k in c.get("kinds", ())}
     for item in trouble:
-        if item.get("short"):
-            bits.append(_gl_bit(
-                item["short"],
-                "red" if item.get("level") == "bad" else "amber",
-                title=str(item.get("text") or "")))
+        if item.get("kind") in spoken or not item.get("short"):
+            continue
+        cells.append({"cap": "Attention", "value": str(item["short"]),
+                      "kinds": (item.get("kind"),),
+                      "tone": str(item.get("level") or ""),
+                      "title": str(item.get("text") or "")})
 
-    when_read = found.get("at")
-    age = _ago(when_read) if when_read else "not read yet"
-    # The worst colour actually on the line, not a second opinion about
-    # the same numbers: the label read amber while the slots beside it
-    # read red, because two thresholds were being asked one question.
-    # Taken from what was drawn, it cannot disagree with it.
-    tones = {_gl_tone_of(bit) for bit in bits}
-    worst = "red" if "red" in tones else "amber" if "amber" in tones else ""
-    # The whole caveat lives here rather than on the line: the API has
-    # no balance in it, so a quiet foot is not proof of a full account.
-    # It was two more words of prose on a line that had too many
-    # already (the operator, 2026-09-20).
+    age, stale = _gl_age(found)
+    tones = {c.get("tone") for c in cells} | ({"warn"} if stale else set())
+    worst = "bad" if "bad" in tones else "warn" if "warn" in tones else ""
+
+    return (f'<footer class="glfoot{" " + worst if worst else ""}">'
+            f'<p class="glhead"><span class="gldot"></span>'
+            f'<span class="gltag" title="{esc(_gl_source(plan))}">'
+            f'GeeLark</span>'
+            f'<span class="glage{" warn" if stale else ""}"'
+            f' title="{esc(_gl_freshness(stale))}">{esc(age)}</span></p>'
+            f'<dl class="glstats">'
+            + "".join(_gl_cell(c) for c in cells) + '</dl></footer>')
+
+
+def _gl_cell(cell: dict) -> str:
+    """One reading: its caption, the reading, and the line under it that
+    would otherwise have had to be hovered for."""
+    tone = (str(cell.get("tone") or "")
+            or ("quiet" if cell.get("quiet") else ""))
+    hint = f' title="{esc(cell["title"])}"' if cell.get("title") else ""
+    note = (f'<span class="glnote">{esc(cell["note"])}</span>'
+            if cell.get("note") else "")
+    return (f'<div class="glcell{" " + tone if tone else ""}"{hint}>'
+            f'<dt>{esc(cell["cap"])}</dt>'
+            f'<dd>{esc(cell["value"])}{note}</dd></div>')
+
+
+def _gl_balance(found: dict, trouble: list) -> dict:
+    """What the account has in it, which GeeLark will not say.
+
+    Nine endpoints were probed for a figure and all nine answered 404
+    (2026-09-20). The only reading is a phone being refused, so that is
+    what this reports - and while none has been, it says the reading is
+    missing rather than implying the account is full. It is the first
+    cell because it is the one that stops the farm.
+    """
+    for item in trouble:
+        if item.get("kind") != "refused":
+            continue
+        return {"cap": "Balance", "value": "out of credit",
+                "tone": str(item.get("level") or "bad"),
+                "kinds": ("refused",),
+                "note": _gl_brief(item.get("detail")) or "a phone was refused",
+                "title": str(item.get("text") or "")}
+    return {"cap": "Balance", "value": "not reported", "quiet": True,
+            "kinds": ("refused",),
+            "note": "a refusal is the only sign",
+            "title": ("The open API carries no balance: /v1/pay/plan/info "
+                      "has the slots, the expiry and the fee and nothing "
+                      "about money, and no other endpoint answers. The "
+                      "first sign of an empty account is a phone being "
+                      "turned down, and that is what this reading "
+                      "watches for.")}
+
+
+def _gl_slots(plan: dict, found: dict, trouble: list) -> dict:
+    """How much of the profile pool is spoken for.
+
+    The pool is shared with browser profiles this API will not list, so
+    the note splits it: that is the answer to "why did a create fail
+    while the tab looks half empty".
+    """
+    total = int(plan.get("profiles") or 0)
+    if not total:
+        return {}
+    free = int(plan.get("availableProfiles") or 0)
+    used = max(0, total - free)
+    ours = int(found.get("phones_total") or 0)
+    elsewhere = max(0, used - ours)
+    if not used:
+        note = "none taken"
+    elif elsewhere:
+        note = f"{min(ours, used)} ours · {elsewhere} elsewhere"
+    else:
+        note = "all of them ours"
+    return {"cap": "Phone slots", "value": f"{used} / {total}",
+            "tone": _gl_level(trouble, "slots"), "kinds": ("slots",),
+            "note": note,
+            "title": (f"{free} of {total} free. Browser profiles share "
+                      f"this pool and the API will not list them; a "
+                      f"create past the last slot fails with [44002].")}
+
+
+def _gl_running(plan: dict, found: dict) -> dict:
+    """The phones that are switched on - the only number here that is
+    costing money as it is read."""
+    running = int(found.get("phones_running") or 0)
     included = int(plan.get("parallels") or 0)
-    tip = (f"GeeLark, as the keeper last read it. The plan includes "
-           f"{included} parallel phone(s), so anything past that is billed "
-           f"by the minute. /v1/pay/plan/info gives the slots, the expiry "
-           f"and that number - and nothing about money, nor does any "
-           f"other endpoint, so the only sign the balance has run out is "
-           f"a phone being refused.")
-    tag = (f'<span class="gltag" title="{esc(tip)}"'
-           + (f' style="color:var(--{worst})"' if worst else "")
-           + ">GeeLark</span>")
-    return (f'<p class="glfoot">{tag}' + "".join(bits)
-            + f'<span class="glage">{esc(age)}</span></p>')
+    if not included:
+        note = "billed by the minute"
+    elif running > included:
+        note = f"{included} included · {running - included} billed"
+    else:
+        note = f"{included} included in the plan"
+    return {"cap": "Running now", "quiet": not running,
+            "value": str(running) if running else "none",
+            "note": note,
+            "title": ("Phones switched on right now. Anything past the "
+                      "parallels the plan includes is billed by the "
+                      "minute, so a phone left on spends whether or not "
+                      "anybody is looking at it.")}
 
 
-def _gl_bit(word: str, tone: str, title: str = "") -> str:
-    """One item of the line: the word, a colour when it is wrong, and a
-    title for the detail that would clutter it."""
-    colour = f' style="color:var(--{tone})"' if tone else ""
-    hint = f' title="{esc(title)}"' if title else ""
-    return f"<span{hint}{colour}>{word}</span>"
+def _gl_subscription(plan: dict, trouble: list) -> dict:
+    """The day the plan runs out, and what it costs to keep."""
+    ends = plan.get("expirationTime")
+    if not ends:
+        return {}
+    when = datetime.datetime.fromtimestamp(int(ends), datetime.timezone.utc)
+    days = (when - datetime.datetime.now(datetime.timezone.utc)).days
+    left = ("expired" if days < -1 else "expired today" if days < 0
+            else "ends today" if days == 0
+            else "1 day left" if days == 1 else f"{days} days left")
+    fee = int(plan.get("monthlyFee") or 0)
+    note = " · ".join(x for x in (left, f"${fee}/mo" if fee else "")
+                           if x)
+    # Not strftime's `%-d`: that flag is glibc's and the suite runs on
+    # Windows too.
+    return {"cap": "Subscription", "kinds": ("plan",),
+            "value": f"{when.day} {when.strftime('%b %Y')}",
+            "tone": _gl_level(trouble, "plan"), "note": note,
+            "title": ("When the GeeLark subscription runs out. Every "
+                      "phone on the account goes with it.")}
+
+
+def _gl_age(found: dict) -> tuple[str, bool]:
+    """How old the keeper's reading is, and whether that is old enough
+    to say so. A stale foot is worse than no foot: the numbers look
+    like readings and are memories."""
+    when = found.get("at")
+    if not when:
+        return "not read yet", True
+    try:
+        old = time.time() - float(when)
+    except (TypeError, ValueError):
+        return "", False
+    return f"read {_ago(when)}", old > READING_STALE_AFTER
+
+
+def _gl_source(plan: dict) -> str:
+    """Where every number above came from, and the caveat under all of
+    them - carried on the one word that is always there."""
+    return (f"The GeeLark account as the keeper last read it. Plan "
+            f"{int(plan.get('plan') or 0)}: "
+            f"{int(plan.get('profiles') or 0)} profile slots, "
+            f"{int(plan.get('parallels') or 0)} parallel phone(s) "
+            f"included, ${int(plan.get('monthlyFee') or 0)} a month. "
+            f"/v1/pay/plan/info gives those and nothing about money, nor "
+            f"does any other endpoint, so the only sign the balance has "
+            f"run out is a phone being refused.")
+
+
+def _gl_freshness(stale: bool) -> str:
+    return ("The keeper reads the plan every few minutes and this one is "
+            "older than that, so it may have stopped - take the readings "
+            "above as the last thing known rather than as now."
+            if stale else
+            "The keeper reads the plan every few minutes and leaves the "
+            "answer here; the console never calls GeeLark itself.")
+
+
+def _gl_brief(said, limit: int = 46) -> str:
+    """GeeLark's own sentence, cut to something that sits under a
+    reading. The whole of it is on the alert strip at the top."""
+    said = " ".join(str(said or "").split())
+    return said if len(said) <= limit else said[:limit - 1].rstrip() + "…"
 
 
 def _gl_level(trouble: list, kind: str) -> str:
-    """The colour `read.geelark_trouble` gave this kind of trouble, or
-    "" when it raised none about it."""
+    """The level `read.geelark_trouble` gave this kind of trouble, or ""
+    when it raised none about it. The word is the class name, so the
+    foot cannot grade something differently from the strip at the top.
+    """
     for item in trouble:
         if item.get("kind") == kind:
-            return "red" if item.get("level") == "bad" else "amber"
+            return str(item.get("level") or "")
     return ""
-
-
-def _gl_tone_of(bit: str) -> str:
-    """The colour a rendered item was given, or "" for none."""
-    found = re.search(r"var\(--(\w+)\)", bit)
-    return found.group(1) if found else ""
 
 
 def _stopped_card(data: dict, user: dict, explain=None) -> str:

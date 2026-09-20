@@ -446,6 +446,12 @@ REFUSAL_SHOWN_FOR = 3600.0
 #: When to start saying the subscription is nearly over.
 PLAN_WARN_DAYS = 10
 
+#: How old the keeper's reading of the plan may be before the foot of
+#: the page says so. `serve.PLAN_EVERY_SECONDS` is five minutes; three
+#: of those missed means the keeper is not running, and then every
+#: number below it is a memory rather than a reading.
+READING_STALE_AFTER = 900.0
+
 
 def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
     """Every way GeeLark itself is stopping the farm, judged once.
@@ -476,11 +482,16 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
     # come.
     stalled = _breaker_blames_geelark(pulse)
     if fresh or stalled:
-        why = said if fresh else "GeeLark would not bring a phone up"
+        # Not "GeeLark would not bring a phone up": the sentence it
+        # goes into says that already, and it read twice over.
+        why = said if fresh else "every build that tried was turned down"
         found.append({
             "kind": "refused", "level": "bad",
             "href": "/events?kind=builds",
             "short": "phones will not start",
+            # GeeLark's own words, short enough to print under the
+            # reading they explain rather than only in the paragraph.
+            "detail": why,
             "text": (f"GeeLark will not start phones - {why}. Nothing can "
                      f"be built or signed in until the account is topped "
                      f"up; the API does not report the balance, so this "
@@ -490,12 +501,13 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
     if free is not None and int(free) <= SLOTS_LOW:
         total = int(plan.get("profiles") or 0)
         found.append({
-            # The line already prints `used/total phone slots` and
-            # colours it, so it needs no second clause saying the same
-            # thing - only the alert strip, which has no such number.
+            # The foot of the page has a reading of its own for this,
+            # and colours it from the level here; `short` is the wording
+            # it falls back on if that reading is ever dropped.
             "kind": "slots",
             "level": "bad" if int(free) == 0 else "warn", "href": "/phones",
-            "short": "",
+            "short": ("no phone slots left" if int(free) == 0
+                      else f"{free} phone slots left"),
             "text": (f"GeeLark has {free} of {total} phone "
                      f"{'slot' if int(free) == 1 else 'slots'} left. "
                      f"Creating another fails with [44002]; delete phones "
@@ -509,11 +521,11 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
         if days <= PLAN_WARN_DAYS:
             gone = "has expired" if days < 0 else f"ends in {days} day(s)"
             found.append({
-                # As above: the line prints `plan ends ...` and colours
-                # it when it is near.
+                # As above: the foot prints the date and colours it
+                # when it is near.
                 "kind": "plan",
                 "level": "bad" if days <= 2 else "warn", "href": "/",
-                "short": "",
+                "short": f"the subscription {gone}",
                 "text": (f"The GeeLark subscription {gone}. Every phone "
                          f"goes with it.")})
     return found

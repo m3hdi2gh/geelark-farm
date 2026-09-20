@@ -7418,55 +7418,74 @@ def _glark(**found):
          "is_admin": True, "may_login_accounts": True})
 
 
-def test_the_geelark_line_keeps_every_critical_number_within_reach():
-    """Short enough to scroll past, and nothing dropped: what will not
-    fit on the line is on the thing it belongs to (the operator,
-    2026-09-20 - "it became ugly and cluttered")."""
+def test_the_foot_keeps_every_critical_reading_in_sight():
+    """Every reading is on the page, not behind a hover.
+
+    A line could not hold them: trimmed to fit it dropped numbers
+    somebody wanted, and untrimmed it wrapped into a ragged second row
+    and read as clutter (the operator, 2026-09-20). The grid holds all
+    four with room under each for the thing that qualifies it, so
+    nothing that matters lives in a `title` any more.
+    """
+    import datetime
     import time
 
     from geelark_farm.web import read
 
-    plan = {"profiles": 40, "availableProfiles": 32, "parallels": 0,
-            "expirationTime": 1792110224}
+    ends = (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=25, hours=2))
+    plan = {"plan": 1, "profiles": 40, "availableProfiles": 32,
+            "parallels": 0, "monthlyFee": 26,
+            "expirationTime": int(ends.timestamp())}
     line = _glark(plan=plan, at=time.time() - 300, phones_total=6,
                   phones_running=3,
                   trouble=read.geelark_trouble(plan, {}, {}))
+    # Only what is drawn: attributes are struck out, so a reading that
+    # is merely in a title does not count as shown.
+    shown = re.sub(r"<[^>]*>", "\x00", line)
 
-    # On the line: the [44002] limit, what is costing money now, the
-    # deadline, and how old the reading is. Four things.
-    assert "8/40 slots" in line
-    assert "3 running" in line
-    assert "ends 16 Oct" in line
-    assert "5m ago" in line
-    assert len(re.findall(r"<span", line)) == 5, "the tag and four items"
+    for reading in (
+            "GeeLark", "read 5m ago",
+            # The money question, and the honest answer to it.
+            "Balance", "not reported", "a refusal is the only sign",
+            # The [44002] ceiling, and whose phones are under it.
+            "Phone slots", "8 / 40", "6 ours", "2 elsewhere",
+            # What is costing money as it is read.
+            "Running now", "billed by the minute",
+            # The deadline, the count and the fee.
+            "Subscription", f"{ends.day} {ends.strftime('%b %Y')}",
+            "25 days left", "$26/mo"):
+        assert reading in shown, f"{reading!r} is not on the page"
 
-    # Behind them: the share of the pool that is not ours, which
-    # answers "why did a create fail while the tab looks half empty".
-    assert "held elsewhere" in line
-    # And on the label, the caveat the whole thing rests on, with the
-    # plan's included parallels - the number that says why a running
-    # phone costs money at all.
+    # And on the one word that is always there, where all of it came
+    # from and the caveat under the whole thing.
     tag = re.search(r'class="gltag" title="([^"]*)"', line).group(1)
     assert "0 parallel" in tag
     assert "nothing about money" in tag
     assert "only sign the balance has run out" in tag
 
 
-def test_the_line_says_only_how_near_a_deadline_is_when_it_is_near():
-    """`ends 16 Oct (26d)` is arithmetic nobody asked for two months
-    out."""
+def test_the_subscription_reading_gives_the_date_the_count_and_the_cost():
+    """Three facts about one deadline, and no arithmetic left for the
+    reader: the old line printed `ends 16 Oct` and made them work out
+    the rest, or dropped the count entirely when it was far off."""
+    import datetime
     import time
 
-    from geelark_farm.web import read
+    def foot(days):
+        when = (datetime.datetime.now(datetime.timezone.utc)
+                + datetime.timedelta(days=days, hours=2))
+        plan = {"profiles": 40, "availableProfiles": 32, "monthlyFee": 26,
+                "expirationTime": int(when.timestamp())}
+        return _glark(plan=plan, at=time.time(), trouble=[]), when
 
-    def line(days):
-        plan = {"profiles": 40, "availableProfiles": 32,
-                "expirationTime": int(time.time() + days * 86400 + 3600)}
-        return _glark(plan=plan, at=time.time(),
-                      trouble=read.geelark_trouble(plan, {}, {}))
+    far, when = foot(60)
+    assert f"{when.day} {when.strftime('%b %Y')}" in far
+    assert "60 days left" in far, "the count is wanted whether or not it bites"
+    assert "$26/mo" in far
 
-    assert "(60d)" not in line(60)
-    assert "(4d)" in line(4)
+    near, _ = foot(1)
+    assert "1 day left" in near, "not `1 days left`"
 
 
 def test_geelark_shouts_on_the_alert_strip_when_it_is_the_thing_that_is_wrong():
@@ -7520,32 +7539,41 @@ def test_a_subscription_running_out_is_raised_before_it_does():
     assert days_out(1)[0]["level"] == "bad"
 
 
-def test_the_line_is_quiet_until_something_is_wrong():
+def test_the_foot_is_quiet_until_something_is_wrong():
     """It sits at the foot of the page to be scrolled past, so nothing
-    on it is coloured while nothing is the matter (the operator,
-    2026-09-20)."""
+    on it is coloured while nothing is the matter - and the whole of it
+    colours at once when something is (the operator, 2026-09-20)."""
     import time
 
     from geelark_farm.web import read
 
-    def line(plan):
+    def foot(plan):
         return _glark(plan=plan, at=time.time(), phones_total=6,
                       phones_running=2,
                       trouble=read.geelark_trouble(plan, {}, {}))
 
-    calm = line({"profiles": 40, "availableProfiles": 32,
+    calm = foot({"profiles": 40, "availableProfiles": 32,
                  "expirationTime": 1792110224})
-    assert "var(--" not in calm, "nothing shouts when nothing is wrong"
-    # And it colours only the part that has gone wrong - by the same
-    # judgement the alert strip uses, so the two cannot disagree.
-    assert "var(--amber)" in line({"profiles": 40, "availableProfiles": 2})
-    assert "var(--red)" in line({"profiles": 40, "availableProfiles": 0})
+    assert 'class="glfoot"' in calm, "no grade at all while all is well"
+    assert 'class="glcell bad"' not in calm
+    assert 'class="glcell warn"' not in calm
+
+    # And it grades by the same judgement the alert strip uses, so the
+    # two cannot disagree - on the block, which carries the hairline,
+    # the dot and the wordmark, and on the reading that is wrong.
+    nearly = foot({"profiles": 40, "availableProfiles": 2})
+    assert 'class="glfoot warn"' in nearly
+    assert 'class="glcell warn"' in nearly
+    gone = foot({"profiles": 40, "availableProfiles": 0})
+    assert 'class="glfoot bad"' in gone
+    assert 'class="glcell bad"' in gone
 
 
 def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
     """The API has no balance in it, so a refusal is the only reading
     there is - and it lived in a log line nobody was watching while
-    nineteen builds were turned down (2026-09-19)."""
+    nineteen builds were turned down (2026-09-19). It is the first
+    reading on the foot, because it is the one that stops the farm."""
     import time
 
     from geelark_farm.web import read
@@ -7555,27 +7583,67 @@ def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
                "at": time.time() - 60}
     line = _glark(plan=plan, at=time.time(),
                   trouble=read.geelark_trouble(plan, refused, {}))
+    shown = re.sub(r"<[^>]*>", "\x00", line)
 
-    assert "phones will not start" in line, "three words on the line"
-    assert "var(--red)" in line
-    # GeeLark's own sentence is the title, and the whole of it is on the
-    # alert strip at the top - which is where somebody goes to read.
-    assert "balance not enough" in line
-    assert ">phones will not start</span>" in line, (
-        "the words themselves stay short")
+    assert "out of credit" in shown
+    assert "balance not enough" in shown, "GeeLark's own words, on the page"
+    assert 'class="glfoot bad"' in line
+    assert line.index("Balance") < line.index("Phone slots"), (
+        "the reading that stops the farm comes first")
 
 
 def test_an_old_refusal_stops_being_news():
     import time
 
-    from geelark_farm.web import pages
+    from geelark_farm.web import pages, read
 
-    line = _glark(plan={"profiles": 40, "availableProfiles": 40},
-                  at=time.time(),
-                  refusal="start failed [41001] balance not enough",
-                  refused_at=time.time() - pages.REFUSAL_SHOWN_FOR - 60)
+    plan = {"profiles": 40, "availableProfiles": 40}
+    refused = {"said": "start failed [41001] balance not enough",
+               "at": time.time() - pages.REFUSAL_SHOWN_FOR - 60}
+    line = _glark(plan=plan, at=time.time(), refusal=refused["said"],
+                  refused_at=refused["at"],
+                  trouble=read.geelark_trouble(plan, refused, {}))
 
     assert "balance not enough" not in line
+    assert "not reported" in line, "and it says so rather than saying nothing"
+    assert 'class="glfoot bad"' not in line
+
+
+def test_a_reading_the_keeper_has_stopped_refreshing_says_so():
+    """Numbers that look like readings and are memories are worse than
+    no numbers. The plan is read every few minutes, so one an hour old
+    means nothing is reading it - and then the four above it are the
+    last thing known, not the state of the account."""
+    import time
+
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 32,
+            "expirationTime": 1792110224}
+    fresh = _glark(plan=plan, at=time.time(), trouble=[])
+    assert 'class="glage"' in fresh and 'class="glfoot"' in fresh
+
+    old = _glark(plan=plan, at=time.time() - read.READING_STALE_AFTER - 60,
+                 trouble=[])
+    assert 'class="glage warn"' in old
+    assert 'class="glfoot warn"' in old, "the whole block, not the stamp alone"
+
+
+def test_trouble_no_reading_speaks_for_still_reaches_the_foot():
+    """The promise the arrangement rests on is that the foot says
+    whatever the alert strip says. A kind added to
+    `read.geelark_trouble` and forgotten here would break it in
+    silence, so anything unspoken for gets a reading of its own."""
+    import time
+
+    line = _glark(plan={"profiles": 40, "availableProfiles": 32},
+                  at=time.time(),
+                  trouble=[{"kind": "weather", "level": "bad",
+                            "href": "/", "short": "the datacentre is down",
+                            "text": "Nobody can reach the phones."}])
+
+    assert "the datacentre is down" in line
+    assert 'class="glfoot bad"' in line
 
 
 def test_the_line_says_nothing_when_the_keeper_has_not_read_the_plan_yet():
@@ -7627,16 +7695,18 @@ def test_the_foot_is_never_grey_while_the_top_is_red():
     money in it (the operator, 2026-09-20).
 
     Both are drawn from `read.geelark_trouble`, so this asks that the
-    rendering keeps the promise the shared source makes.
+    rendering keeps the promise the shared source makes - and that it
+    keeps it on the block itself, which is what carries the hairline,
+    the dot and the wordmark that a glance actually lands on.
     """
-    import re
     import time
 
     from geelark_farm.web import pages, read
 
     user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
             "is_admin": True, "may_login_accounts": True}
-    plan = {"profiles": 40, "availableProfiles": 32, "parallels": 0,
+    plan = {"plan": 1, "profiles": 40, "availableProfiles": 32,
+            "parallels": 0, "monthlyFee": 26,
             "expirationTime": 1792110224}
     now = time.time()
     states = {
@@ -7658,13 +7728,18 @@ def test_the_foot_is_never_grey_while_the_top_is_red():
         line = pages._geelark_line(
             {"geelark": {"plan": p, "at": now, "phones_total": 6,
                          "phones_running": 0, "trouble": trouble}}, user)
-        coloured = set(re.findall(r"var\(--(\w+)\)", line))
+        loud = ("bad" if 'class="glfoot bad"' in line
+                else "warn" if 'class="glfoot warn"' in line else "")
         if not trouble:
-            assert not coloured, f"{name}: shouted about nothing"
+            assert not loud, f"{name}: shouted about nothing"
             continue
-        assert coloured, f"{name}: the top would be loud and the foot grey"
-        worst = "red" if any(t["level"] == "bad" for t in trouble) else "amber"
-        assert worst in coloured, f"{name}: the foot understated it"
-        # And the label carries it, so a glance at the corner is enough.
-        tag = re.search(r'class="gltag"[^>]*>', line).group(0)
-        assert "var(--" in tag, f"{name}: the label stayed grey"
+        worst = "bad" if any(t["level"] == "bad" for t in trouble) else "warn"
+        assert loud == worst, (
+            f"{name}: the top reads {worst} and the foot reads "
+            f"{loud or 'grey'}")
+        # The grade is on the block, so it reaches the dot and the
+        # wordmark as well as the reading that is wrong - a glance at
+        # the corner is enough.
+        assert '<span class="gldot"></span>' in line
+        assert f'class="glcell {worst}"' in line, (
+            f"{name}: nothing said which reading it was")
