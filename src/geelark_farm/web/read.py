@@ -484,7 +484,7 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
     if fresh or stalled:
         # Not "GeeLark would not bring a phone up": the sentence it
         # goes into says that already, and it read twice over.
-        why = said if fresh else "every build that tried was turned down"
+        why = said if fresh else "every build was turned down"
         found.append({
             "kind": "refused", "level": "bad",
             "href": "/events?kind=builds",
