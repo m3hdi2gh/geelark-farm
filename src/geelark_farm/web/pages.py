@@ -754,12 +754,13 @@ p{{margin:0}}
 .split b{{color:var(--ink);font-weight:600;margin-right:4px}}
 .railcap{{width:100%;margin:0;font-family:var(--mono);font-size:10.5px;
  letter-spacing:.09em;text-transform:uppercase;color:var(--dim);padding:0 2px}}
-.glfoot{{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;
- margin:26px 2px 4px;padding-top:12px;border-top:1px solid var(--line2);
+.glfoot{{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 13px;
+ margin:26px 2px 4px;padding-top:11px;border-top:1px solid var(--line2);
  font-family:var(--mono);font-size:11px;color:var(--dim)}}
-.glfoot>span+span::before{{content:"·";margin-right:14px;opacity:.45}}
-.gltag{{letter-spacing:.09em;text-transform:uppercase;opacity:.75}}
-.glnone{{margin-left:auto;opacity:.5;cursor:help}}
+.glfoot>span+span::before{{content:"·";margin-right:13px;opacity:.4}}
+.gltag{{letter-spacing:.09em;text-transform:uppercase;opacity:.75;
+ cursor:help}}
+.glage{{opacity:.55}}
 @media (max-width:1100px){{
  .desk{{grid-template-columns:minmax(0,1fr);
   grid-template-areas:"supply" "main" "side"}}
@@ -4937,30 +4938,26 @@ def _geelark_line(data: dict, user: dict) -> str:
 
     total = int(plan.get("profiles") or 0)
     free = int(plan.get("availableProfiles") or 0)
+    ours = int(data.get("phones_total") or 0)
+    running = int(data.get("phones_running") or 0)
     if total:
         used = max(0, total - free)
+        # The pool is shared with browser profiles this API cannot list,
+        # and `used - ours` is what they hold. That answers "why did a
+        # create fail while the tab looks half empty" - worth having,
+        # not worth a word of its own on the line, so it is the title.
+        elsewhere = max(0, used - ours)
         # Coloured by the same judgement the alert strip uses, not by a
         # share of its own: two thresholds asked one question and gave
         # two answers, so the foot read red while the top read amber.
-        bits.append(_gl_bit(f"{used}/{total} phone slots",
-                            _gl_level(trouble, "slots")))
-
-    # The pool is shared with browser profiles, which this API cannot
-    # list. Naming the gap answers "why did a create fail while the tab
-    # looks half empty" without a search (cli.cmd_plan has said so for
-    # a month).
-    running = int(data.get("phones_running") or 0)
-    if total:
-        ours = int(data.get("phones_total") or 0)
-        elsewhere = total - free - ours
-        if elsewhere > 0:
-            # Not a colour: it is an explanation, not a fault. The slot
-            # count beside it is what goes amber when the pool is
-            # filling, whoever is filling it.
-            bits.append(_gl_bit(f"{elsewhere} held elsewhere", ""))
+        bits.append(_gl_bit(
+            f"{used}/{total} slots", _gl_level(trouble, "slots"),
+            title=(f"{ours} are this farm's phones; {elsewhere} are held "
+                   f"elsewhere - browser profiles share the pool")
+            if elsewhere else f"all {ours} are this farm's phones"))
     if running:
         # Billing is per minute while a phone is running, so this is the
-        # only number on the line that is costing money as it is read.
+        # only number here costing money as it is read.
         bits.append(_gl_bit(f"{running} running", ""))
 
     ends = plan.get("expirationTime")
@@ -4968,59 +4965,60 @@ def _geelark_line(data: dict, user: dict) -> str:
         when = datetime.datetime.fromtimestamp(int(ends),
                                                datetime.timezone.utc)
         days = (when - datetime.datetime.now(datetime.timezone.utc)).days
-        tone = _gl_level(trouble, "plan")
         # Not strftime's `%-d`: that flag is glibc's and the suite runs
-        # on Windows too.
-        word = (f"plan ends {when.day} {when.strftime('%b')}"
-                if days >= 0 else "plan expired")
-        bits.append(_gl_bit(f"{word} ({days}d)" if days >= 0 else word, tone))
+        # on Windows too. The count of days only while it is near - on a
+        # date two months out it is arithmetic nobody asked for.
+        word = (f"ends {when.day} {when.strftime('%b')}" if days >= 0
+                else "plan expired")
+        if 0 <= days <= PLAN_WARN_DAYS:
+            word += f" ({days}d)"
+        bits.append(_gl_bit(word, _gl_level(trouble, "plan"),
+                            title="when the GeeLark subscription runs out"))
 
-    # `parallels` is what the plan *includes*, not what is left, so it
-    # is a limit worth showing only when there is one. This account's is
-    # zero, which means every running phone is billed by the minute from
-    # the balance - said in the note at the end rather than as an item,
-    # because it is a standing fact and not news.
-    included = int(plan.get("parallels") or 0)
-    if included:
-        bits.append(_gl_bit(f"{included} parallel", ""))
-
-    # Whatever is actually wrong, in the same type as the rest and
-    # coloured - the same list the alert strip at the top is drawn from,
-    # so the foot can never be all grey while the top is red. Somebody
-    # glancing down here and seeing nothing concluded GeeLark was fine
-    # on a night the account had no money in it (2026-09-20).
+    # Whatever is wrong that the numbers above do not already show, in
+    # three words - the sentence explaining it is on the alert strip at
+    # the top, which is where somebody goes to read. The foot can never
+    # be all grey while the top is red (2026-09-20), and it says so in
+    # as little room as that takes.
     for item in trouble:
-        # Only what the line does not already carry: the slots and the
-        # expiry are printed above and take their colour there, so a
-        # clause repeating them would say everything twice.
         if item.get("short"):
-            bits.append(_gl_bit(item["short"],
-                                "red" if item.get("level") == "bad"
-                                else "amber"))
+            bits.append(_gl_bit(
+                item["short"],
+                "red" if item.get("level") == "bad" else "amber",
+                title=str(item.get("text") or "")))
 
     when_read = found.get("at")
-    if when_read:
-        bits.append(_gl_bit(_ago(when_read), ""))
+    age = _ago(when_read) if when_read else "not read yet"
     # The worst colour actually on the line, not a second opinion about
     # the same numbers: the label read amber while the slots beside it
     # read red, because two thresholds were being asked one question.
     # Taken from what was drawn, it cannot disagree with it.
     tones = {_gl_tone_of(bit) for bit in bits}
     worst = "red" if "red" in tones else "amber" if "amber" in tones else ""
-    tag = (f'<span class="gltag" style="color:var(--{worst})">GeeLark</span>'
-           if worst else '<span class="gltag">GeeLark</span>')
-    return (f'<p class="glfoot">{tag}'
-            + "".join(bits)
-            + '<span class="glnone" title="/v1/pay/plan/info carries the '
-              'slots, the expiry and the included parallels, and nothing '
-              'about money; no other endpoint answers. A running phone is '
-              'billed by the minute from that balance.">'
-              'billed per minute &middot; no balance in the API</span></p>')
+    # The whole caveat lives here rather than on the line: the API has
+    # no balance in it, so a quiet foot is not proof of a full account.
+    # It was two more words of prose on a line that had too many
+    # already (the operator, 2026-09-20).
+    included = int(plan.get("parallels") or 0)
+    tip = (f"GeeLark, as the keeper last read it. The plan includes "
+           f"{included} parallel phone(s), so anything past that is billed "
+           f"by the minute. /v1/pay/plan/info gives the slots, the expiry "
+           f"and that number - and nothing about money, nor does any "
+           f"other endpoint, so the only sign the balance has run out is "
+           f"a phone being refused.")
+    tag = (f'<span class="gltag" title="{esc(tip)}"'
+           + (f' style="color:var(--{worst})"' if worst else "")
+           + ">GeeLark</span>")
+    return (f'<p class="glfoot">{tag}' + "".join(bits)
+            + f'<span class="glage">{esc(age)}</span></p>')
 
 
-def _gl_bit(word: str, tone: str) -> str:
+def _gl_bit(word: str, tone: str, title: str = "") -> str:
+    """One item of the line: the word, a colour when it is wrong, and a
+    title for the detail that would clutter it."""
     colour = f' style="color:var(--{tone})"' if tone else ""
-    return f'<span{colour}>{word}</span>'
+    hint = f' title="{esc(title)}"' if title else ""
+    return f"<span{hint}{colour}>{word}</span>"
 
 
 def _gl_level(trouble: list, kind: str) -> str:

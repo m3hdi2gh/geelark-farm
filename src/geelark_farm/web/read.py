@@ -480,7 +480,7 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
         found.append({
             "kind": "refused", "level": "bad",
             "href": "/events?kind=builds",
-            "short": f"phones will not start &mdash; {esc_text(why)}",
+            "short": "phones will not start",
             "text": (f"GeeLark will not start phones - {why}. Nothing can "
                      f"be built or signed in until the account is topped "
                      f"up; the API does not report the balance, so this "

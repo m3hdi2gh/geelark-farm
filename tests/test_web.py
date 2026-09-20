@@ -7418,37 +7418,55 @@ def _glark(**found):
          "is_admin": True, "may_login_accounts": True})
 
 
-def test_the_geelark_line_shows_everything_critical_the_api_gives():
-    """Everything from `/v1/pay/plan/info` that can stop the farm or
-    cost money, and the farm's own use of it."""
+def test_the_geelark_line_keeps_every_critical_number_within_reach():
+    """Short enough to scroll past, and nothing dropped: what will not
+    fit on the line is on the thing it belongs to (the operator,
+    2026-09-20 - "it became ugly and cluttered")."""
     import time
 
-    line = _glark(plan={"profiles": 40, "availableProfiles": 32,
-                        "parallels": 0, "expirationTime": 1792110224},
-                  at=time.time() - 300, phones_total=6, phones_running=2)
+    from geelark_farm.web import read
 
-    assert "8/40 phone slots" in line, "the [44002] limit"
-    assert "2 held elsewhere" in line, (
-        "the pool is shared with browser profiles this API cannot list, "
-        "which is what answers 'why did a create fail'")
-    assert "2 running" in line, "per-minute billing, costing money as it reads"
-    assert "plan ends 16 Oct (26d)" in line
-    assert "5m ago" in line
-    assert "billed per minute" in line and "no balance in the API" in line
-
-
-def test_a_plan_that_includes_parallels_says_so_and_one_that_does_not_stays_quiet():
-    """`parallels` is what the plan includes, not what is left, so it is
-    a limit only when there is one. Zero is this account's normal and is
-    covered by the note at the end."""
-    import time
-
-    base = {"profiles": 40, "availableProfiles": 32,
+    plan = {"profiles": 40, "availableProfiles": 32, "parallels": 0,
             "expirationTime": 1792110224}
-    assert "<span>2 parallel</span>" in _glark(plan=dict(base, parallels=2),
-                                               at=time.time())
-    none = _glark(plan=dict(base, parallels=0), at=time.time())
-    assert "parallel</span>" not in none, "no item for a limit there is not"
+    line = _glark(plan=plan, at=time.time() - 300, phones_total=6,
+                  phones_running=3,
+                  trouble=read.geelark_trouble(plan, {}, {}))
+
+    # On the line: the [44002] limit, what is costing money now, the
+    # deadline, and how old the reading is. Four things.
+    assert "8/40 slots" in line
+    assert "3 running" in line
+    assert "ends 16 Oct" in line
+    assert "5m ago" in line
+    assert len(re.findall(r"<span", line)) == 5, "the tag and four items"
+
+    # Behind them: the share of the pool that is not ours, which
+    # answers "why did a create fail while the tab looks half empty".
+    assert "held elsewhere" in line
+    # And on the label, the caveat the whole thing rests on, with the
+    # plan's included parallels - the number that says why a running
+    # phone costs money at all.
+    tag = re.search(r'class="gltag" title="([^"]*)"', line).group(1)
+    assert "0 parallel" in tag
+    assert "nothing about money" in tag
+    assert "only sign the balance has run out" in tag
+
+
+def test_the_line_says_only_how_near_a_deadline_is_when_it_is_near():
+    """`ends 16 Oct (26d)` is arithmetic nobody asked for two months
+    out."""
+    import time
+
+    from geelark_farm.web import read
+
+    def line(days):
+        plan = {"profiles": 40, "availableProfiles": 32,
+                "expirationTime": int(time.time() + days * 86400 + 3600)}
+        return _glark(plan=plan, at=time.time(),
+                      trouble=read.geelark_trouble(plan, {}, {}))
+
+    assert "(60d)" not in line(60)
+    assert "(4d)" in line(4)
 
 
 def test_geelark_shouts_on_the_alert_strip_when_it_is_the_thing_that_is_wrong():
@@ -7538,12 +7556,13 @@ def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
     line = _glark(plan=plan, at=time.time(),
                   trouble=read.geelark_trouble(plan, refused, {}))
 
-    assert "phones will not start" in line
-    assert "balance not enough" in line
+    assert "phones will not start" in line, "three words on the line"
     assert "var(--red)" in line
-    # And it says outright that the number everybody wants is not on
-    # offer, so a quiet foot is not read as a full account.
-    assert "no balance in the API" in line
+    # GeeLark's own sentence is the title, and the whole of it is on the
+    # alert strip at the top - which is where somebody goes to read.
+    assert "balance not enough" in line
+    assert ">phones will not start</span>" in line, (
+        "the words themselves stay short")
 
 
 def test_an_old_refusal_stops_being_news():
