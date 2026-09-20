@@ -1750,7 +1750,6 @@ def test_the_schema_carries_the_apis_practice_room():
     from geelark_farm.web import api_v1_read as api_read
 
     sql = schema_text()
-    assert db.SCHEMA_REV == "27"
     assert "CREATE TABLE IF NOT EXISTS api_sandbox" in sql
     for column in api_read._ACCOUNT_COLUMNS.replace("r.", "").split(","):
         name = column.strip()
@@ -1827,3 +1826,23 @@ def test_the_schema_carries_the_live_tabs_beat():
     assert "ALTER TABLE phones ADD COLUMN IF NOT EXISTS watched_at timestamptz" in sql
     assert ("ALTER TABLE phones ADD COLUMN IF NOT EXISTS tab_closed_at "
             "timestamptz") in sql
+
+
+def test_the_schema_revision_is_the_one_the_file_last_wrote():
+    """`SCHEMA_REV` is the one queryable fact about which code last
+    touched the schema, and it sat at 27 while the file itself had
+    written revs 28 to 34 - so the fact was eight revisions stale and
+    nothing said so (2026-09-21). Read off the file rather than pinned
+    to a number, so bumping one without the other is what fails.
+    """
+    import re
+
+    from geelark_farm.store import db
+
+    revs = [int(n) for n in re.findall(r"^-- rev (\d+):", schema_text(),
+                                       re.M)]
+    assert revs, "the file stopped numbering its own revisions"
+    assert db.SCHEMA_REV == str(max(revs)), (
+        f"schema.sql is at rev {max(revs)} and SCHEMA_REV says "
+        f"{db.SCHEMA_REV}")
+
