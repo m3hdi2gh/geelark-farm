@@ -12,6 +12,10 @@
   var store = null;
   try { store = window.sessionStorage; } catch (err) {}
 
+  //: The pools whose Free, Save and Remove answer with one row rather
+  //: than with the whole page. A kind not here simply gets the redirect.
+  var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};
+
   function init(){
     // Not the "nothing matches" row: it lives in the same tbody and would
     // otherwise count itself as a phone.
@@ -535,8 +539,45 @@
     var page = document.querySelector('.wide');
     if (page) page.inert = !!off;
   }
-  function show(kind, fresh){
+  // The sheet, fetched the first time its door is pressed and kept in
+  // the DOM afterwards - so `keepSheet`, which updates an open one in
+  // place across a swap, is untouched. All three used to be rendered
+  // shut inside every response, which is 925,488 of a megabyte for the
+  // 99 presses in 100 that never happen (2026-09-20).
+  var fetching = {};
+  function sheetIn(kind, then){
     var o = ov(); if (!o) return;
+    if (o.querySelector('.sheet[data-sheet="' + kind + '"]')) { then(); return; }
+    if (fetching[kind]) return;                // one press, one fetch
+    fetching[kind] = true;
+    fetch('/pools/' + kind + '/sheet', {credentials: 'same-origin'})
+      .then(function(r){ return answer(r, true) ? r.text() : null; })
+      .then(function(html){
+        fetching[kind] = false;
+        if (html === null) return;
+        var made = parse(html).querySelector('.sheet');
+        if (!made) { location.assign('/pools/' + kind); return; }
+        o.insertBefore(made, o.firstChild);
+        init();
+        then();
+      })
+      .catch(function(){
+        fetching[kind] = false;
+        // The drawer is a convenience over a page that still exists.
+        location.assign('/pools/' + kind);
+      });
+  }
+
+  function show(kind, fresh){
+    var o = ov();
+    // Not a bare return: with no overlay on the page the press would
+    // do nothing at all and say nothing about it. The pool has a page
+    // of its own and always has.
+    if (!o) { location.assign('/pools/' + kind); return; }
+    if (!o.querySelector('.sheet[data-sheet="' + kind + '"]')) {
+      sheetIn(kind, function(){ show(kind, fresh); });
+      return;
+    }
     o.querySelectorAll('.sheet').forEach(function(el){
       el.hidden = el.dataset.sheet !== kind;
     });
@@ -660,7 +701,8 @@
   // a swap rebuilds `#poolov` and this was called afresh each time
   // (2026-09-14).
   function openDrawer(href, again){
-    var o = ov(); if (!o) return;
+    var o = ov();
+    if (!o) { location.assign(href); return; }
     var sheet = o.querySelector('.sheet[data-sheet="phone"]');
     if (!sheet) { location.assign(href); return; }
     drawerHref = href;
@@ -1047,6 +1089,10 @@
     if (!fresh) return;
     var mine = held.querySelector('.sheet[data-sheet="' + kind + '"]');
     var theirs = fresh.querySelector('.sheet[data-sheet="' + kind + '"]');
+    // The sheets the swap brought: the send list and the phone drawer,
+    // which are drawn from the page's own data. The pool sheets are not
+    // among them - they are fetched - so one already open stays exactly
+    // as it is and is updated row by row below.
     Array.prototype.slice.call(fresh.querySelectorAll('.sheet')).forEach(function(s){
       if (s.dataset.sheet === kind) return;
       var old = held.querySelector('.sheet[data-sheet="' + s.dataset.sheet + '"]');
@@ -1102,7 +1148,11 @@
   // A one-row swap replaced the row and dropped everything else the
   // server had said about it.
   function sayIt(doc){
-    var said = doc.querySelector('main .said');
+    // `main .said` when the answer is a page; `.said` when it is the
+    // one-row fragment, which has no <main> around it - so the banner
+    // was found on every answer but the small one this exists for
+    // (2026-09-21, found by driving the real server).
+    var said = doc.querySelector('main .said') || doc.querySelector('.said');
     var here = document.querySelector('main');
     if (!said || !here) return;
     var old = here.querySelector('.said');
@@ -1113,12 +1163,17 @@
     dressToast(said);
   }
 
-  function swapRow(doc, key){
+  function swapRow(doc, key, gone){
     var mine = pickData(document, '#poolov tr[data-key]', 'key', key);
-    var theirs = pickData(doc, '#poolov tr[data-key]', 'key', key);
-    if (!mine || !theirs) return false;
+    var theirs = pickData(doc, 'tr[data-key]', 'key', key);
+    if (!mine) return false;
+    // A one-row answer with no row in it is a row that has left the
+    // pool - a Remove, or a Save that renamed it. `gone` is what says
+    // an empty answer means that rather than "nothing came back".
+    if (!theirs && !gone) return false;
     var sheet = mine.closest('.sheet');
-    mine.replaceWith(theirs);
+    if (!theirs) mine.remove();
+    else mine.replaceWith(theirs);
     // The counts on the chips are now a row out. Counted off the table
     // rather than read from the answer, so they cannot drift.
     if (sheet) {
@@ -1143,8 +1198,13 @@
     // row simply vanished, which is what "I could not tell whether it
     // worked" was made of (the operator, 2026-09-20). It stays for one
     // beat instead, wearing where it went, and the next redraw takes it.
-    moved(theirs, sheet);
+    if (theirs) moved(theirs, sheet);
     init();
+    // The floor between two redraws starts here too. Harmless while
+    // swapRow only ever matched rows under an open sheet, where
+    // `heldOpen` defers everything - and a 250ms redraw storm the
+    // moment it reaches a row anywhere else (2026-09-20).
+    swapMain.at = Date.now();
     return true;
   }
 
@@ -1526,11 +1586,22 @@
     acting.forEach(function(tr){ tr.classList.add('acting'); });
     var key = form.closest('tr') ? form.closest('tr').dataset.key : null;
     var sent = false;
+    // A press about one row, answered with that row: ~1KB, and nothing
+    // to parse a document out of. The header is what says the script is
+    // sending - without it the server redirects, which is what a browser
+    // with no script gets and has always got.
+    var rowKind = key ? key.split(':')[0] : '';
+    var asking = {};
+    if (rowKind && ROW_ANSWERS[rowKind]
+        && /[/](free|edit|remove)$/.test(form.action)) {
+      asking['X-GF-Row'] = rowKind;
+    }
     // As the browser would send it - urlencoded. FormData on its own goes
     // out multipart, which the server does not read, and every field
     // including the csrf token arrived as nothing: "Stale session"
     // inside the manager on the first real press (2026-09-05).
     fetch(form.action, {method: 'POST', body: new URLSearchParams(data),
+                        headers: asking,
                         credentials: 'same-origin', redirect: 'follow'})
       .then(function(r){
         // Past here the command has reached the server and been carried
@@ -1602,6 +1673,14 @@
           restoreSheet(sheet);
           if (sheet) sheet.querySelectorAll('textarea[name=pasted]')
             .forEach(function(box){ box.value = ''; });
+        }
+        // The one-row answer: a fragment carrying that row and the
+        // banner, and nothing else. It is not `isHere` - it is not a
+        // page at all - so it is recognised by what it is.
+        if (doc.querySelector('.rowanswer')) {
+          if (!swapRow(doc, key, true)) { swapMain(doc); return; }
+          sayIt(doc);
+          return;
         }
         if (worked && isHere(got.url) && key && swapRow(doc, key)) {
           sayIt(doc);

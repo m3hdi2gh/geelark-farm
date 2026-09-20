@@ -37,3 +37,8 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# The console script tooling. `npm install` restores it from
+# package.json; nothing the farm runs needs it.
+node_modules/
+package-lock.json

@@ -403,7 +403,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         # The manager's lists, read on the same connection the rest of
         # this page uses: the cards need the free rows anyway, and the
         # whole page is one response.
-        pools_listed = _pool_rows(store)
+        pools_listed = _card_rows(store)
     folded = {kind: dict.fromkeys(names, 0) for kind, names in _FOLD.items()}
     for row in stock:
         names = _FOLD.get(row["kind"])
@@ -838,6 +838,50 @@ GMAIL_VIEWS = {"queued": "queued", "on_phone": "on_phone", "used": "used",
 #: boundary is worse than one that says it stopped.
 POOL_LIMIT = 300
 
+#: What the three cards in the rail draw: one line per FREE row, and the
+#: count of everything else so the card can say "Nothing free. N rows
+#: held or set aside." No credential, no spent half, no row nobody is
+#: going to see - `_pool_queue` renders only the free ones, and the
+#: dashboard was reading and shipping fourteen hundred rows with their
+#: passwords to draw twenty-two list items (2026-09-20).
+def _card_rows(store) -> dict:
+    """The free rows of each pool, and how many are not free."""
+    free = store._rows(
+        "SELECT CASE WHEN kind = 'app' AND " + IS_SPOTIFY + " THEN 'spotify'"
+        "   WHEN kind = 'app' THEN 'gpt' ELSE kind END AS pool,"
+        " coalesce(nullif(address, ''), proxy_name, '') AS address,"
+        " coalesce(seller, '') AS seller,"
+        " coalesce(category, '') AS category,"
+        " coalesce(host, '') AS host, port"
+        " FROM resources"
+        " WHERE kind IN ('gmail', 'app', 'proxy')"
+        "   AND coalesce(status, '') IN ('', 'free', 'unused')"
+        "   AND error IS NULL AND coalesce(address, proxy_name, '') <> ''"
+        " ORDER BY id DESC LIMIT %s", (POOL_LIMIT * 2,))
+    held = store._rows(
+        "SELECT CASE WHEN kind = 'app' AND " + IS_SPOTIFY + " THEN 'spotify'"
+        "   WHEN kind = 'app' THEN 'gpt' ELSE kind END AS pool, count(*) AS n"
+        " FROM resources"
+        " WHERE kind IN ('gmail', 'app', 'proxy')"
+        "   AND NOT (kind = 'gmail' AND status = 'used')"
+        "   AND NOT (kind = 'app' AND status = 'delivered')"
+        "   AND NOT (coalesce(status, '') IN ('', 'free', 'unused')"
+        "            AND error IS NULL)"
+        " GROUP BY 1")
+    out = {k: [] for k in ("gmail", "gpt", "spotify", "proxy")}
+    for row in free:
+        pool = str(row.pop("pool"))
+        if pool in out:
+            out[pool].append(dict(row, state="free"))
+    # The held ones as placeholders, not as rows: `_pool_queue` only ever
+    # counts them, and a card that says "Nothing free. 40 rows held" must
+    # not be handed forty addresses to say it.
+    for row in held:
+        pool = str(row["pool"])
+        if pool in out:
+            out[pool] += [{"state": "on a phone"}] * int(row["n"] or 0)
+    return out
+
 
 def pool_rows(settings: Settings) -> dict:
     with Store(settings) as store:
@@ -869,7 +913,19 @@ IS_SPOTIFY = "coalesce(product, '') = 'spotify'"
 NOT_SPOTIFY = "coalesce(product, '') <> 'spotify'"
 
 
-def _pool_rows(store) -> dict:
+def pool_sheet(settings: Settings, kind: str) -> dict:
+    """One pool's rows, for the sheet the manager fetches when it opens.
+
+    The manager used to be rendered shut inside every dashboard - 925,488
+    of the page's 1,012,694 bytes, with ~500 passwords and TOTP secrets
+    in its data attributes, on the 99 responses in 100 where nobody
+    opened it (2026-09-20). It is a drawer; it is read when it is pulled.
+    """
+    with Store(settings) as store:
+        return _pool_rows(store, kinds=(kind,))
+
+
+def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
     """Every row of the three pools, for the manager the dashboard opens.
 
     The live rows - free, on a phone, set aside, and everything a run
@@ -912,14 +968,20 @@ def _pool_rows(store) -> dict:
                " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
                f"   AND {IS_SPOTIFY}"
                " ORDER BY id DESC LIMIT %s")
+    def asked(kind: str) -> bool:
+        return kinds is None or kind in kinds
+
     rows = {
             "gmail": (store._rows(gmail.format(op="<>"), (POOL_LIMIT,))
-                      + store._rows(gmail.format(op="="), (POOL_LIMIT,))),
+                      + store._rows(gmail.format(op="="), (POOL_LIMIT,)))
+                     if asked("gmail") else [],
             "gpt": (store._rows(gpt.format(op="<>"), (POOL_LIMIT,))
-                    + store._rows(gpt.format(op="="), (POOL_LIMIT,))),
+                    + store._rows(gpt.format(op="="), (POOL_LIMIT,)))
+                   if asked("gpt") else [],
             "spotify": (store._rows(spotify.format(op="<>"), (POOL_LIMIT,))
                         + store._rows(spotify.format(op="="),
-                                      (POOL_LIMIT,))),
+                                      (POOL_LIMIT,)))
+                       if asked("spotify") else [],
             "proxy": store._rows(
                 "SELECT id, coalesce(proxy_name, '') AS address, status,"
                 " coalesce(host, '') AS host, port,"
@@ -935,7 +997,7 @@ def _pool_rows(store) -> dict:
                 " ORDER BY nullif(regexp_replace(coalesce(proxy_name, ''),"
                 "                 '[^0-9]', '', 'g'), '')::bigint NULLS LAST,"
                 "          proxy_name, id LIMIT %s",
-                (POOL_LIMIT,)),
+                (POOL_LIMIT,)) if asked("proxy") else [],
     }
     # How many there are, against how many are drawn, live and spent
     # apart since each has its own cap. The cap was silent, so an address

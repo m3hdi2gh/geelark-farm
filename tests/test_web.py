@@ -1214,7 +1214,10 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
 
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
-def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
+def test_with_manual_login_on_the_dashboard_offers_the_buttons(web,
+                                                                monkeypatch):
+    # The sheet is fetched now, so the fixture has to answer that read.
+    _dash(monkeypatch)
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
@@ -1224,7 +1227,10 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web):
     # opens the chooser, which lists the one phone that can take an
     # account (1501: app only, nobody's). The tick-and-send list stood in
     # a panel of its own and went with it.
-    assert body.count("data-choose=") == 2
+    # One on the card in the rail, one on the row in the sheet - and
+    # the sheet is fetched now (2026-09-21).
+    assert body.count("data-choose=") == 1
+    assert _sheets(client, ("gpt",)).count("data-choose=") == 1
     assert body.count('name="serial" value="1501"') == 1
     assert "&rarr; phone" in body
     assert "Log in selected" not in body
@@ -2232,6 +2238,30 @@ def test_head_answers_like_get_without_a_body(web):
 
 
 # ------------------------------------- the dashboard, second pass (C9 audit)
+def _sheet_read(base):
+    """`read.pool_sheet` off whatever `pool_rows` the fixture holds."""
+    def one(settings, kind):
+        listed = base.get("pool_rows") or {}
+        return {kind: list(listed.get(kind) or []),
+                "totals": dict(listed.get("totals") or {})}
+    return one
+
+
+def _sheets(client, kinds=("gmail", "gpt", "spotify", "proxy")):
+    """What used to be `body[body.index('id="poolov"'):]`.
+
+    The three pool sheets left the dashboard on 2026-09-21 - they were
+    925,488 of its 1,012,694 bytes, drawn shut - and are fetched one at
+    a time from `/pools/<kind>/sheet` when a door is pressed.
+    """
+    out = []
+    for kind in kinds:
+        status, _, body = client.request("GET", f"/pools/{kind}/sheet")
+        assert status == 200, (kind, status)
+        out.append(body)
+    return "".join(out)
+
+
 def _dash(monkeypatch, **more):
     """The dashboard's read, with the fixture's rows and whatever a test
     wants changed on top."""
@@ -2239,6 +2269,10 @@ def _dash(monkeypatch, **more):
     base.update(more)
     monkeypatch.setattr(app_mod.read, "dashboard", lambda s, owner_id=None:
                         dict(base))
+    # The manager's sheets are fetched when the drawer is pulled rather
+    # than drawn shut into every dashboard, so the fixture has to answer
+    # that read as well (2026-09-21).
+    monkeypatch.setattr(app_mod.read, "pool_sheet", _sheet_read(base))
     return base
 
 
@@ -3432,7 +3466,8 @@ def test_an_operator_can_see_which_accounts_stopped(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     assert "Needs a decision" not in body
-    ov = body[body.index('id="poolov"'):]
+
+    ov = _sheets(client)
     assert "rhea@example.com" in ov and "hollis@example.com" in ov
     assert 'class="badge attn">phone_verification_required' in ov
     assert "1512" in ov, "and which phone it was on"
@@ -3479,7 +3514,13 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     # page's own csrf token, it is answered with 204 and nothing else,
     # and without it the console has no way at all to report a throw
     # (2026-09-20).
-    assert calls and all(c.strip() in ("'/clienterror'", "form.action",
+    # And `/pools/<kind>/sheet`, which is the manager's own drawer: it
+    # left the dashboard on 2026-09-21 and is fetched when a door is
+    # pressed. The door is still a form that goes to the pool's page
+    # without the script.
+    assert calls and all(c.strip() in ("'/clienterror'",
+                                       "'/pools/' + kind + '/sheet'",
+                                       "form.action",
                                        "location.pathname + location.search",
                                        "href")
                          for c in calls), calls
@@ -3864,9 +3905,12 @@ def test_adding_stock_opens_on_the_dashboard_and_comes_back_to_it(
     _, _, body = client.request("GET", "/")
 
     # Four pools now: the Spotify accounts joined the three (2026-09-17).
-    assert body.count('class="addbox"') == 4, "every pool (2026-09-08)"
-    assert 'action="/pools/gmail/preview"' in body
-    assert 'action="/pools/gpt/preview"' in body
+    # In the sheets, each fetched when its door is pressed - the paste
+    # box left the dashboard with the rest of the manager (2026-09-21).
+    sheets = _sheets(client)
+    assert sheets.count('class="addbox"') == 4, "every pool (2026-09-08)"
+    assert 'action="/pools/gmail/preview"' in sheets
+    assert 'action="/pools/gpt/preview"' in sheets
     # The card carries the button and the manager carries the form, so a
     # card whose button opens nothing is the one thing to refuse.
     assert 'data-pool="gmail">Manage</button>' in body
@@ -3887,10 +3931,10 @@ def test_the_add_door_needs_the_permission(web, monkeypatch):
                          "may_add_gpt": False})
     client = web()
     client.login(username="narrow")
-    _, _, body = client.request("GET", "/")
+    sheets = _sheets(client)
 
-    assert 'action="/pools/gmail/preview"' in body
-    assert 'action="/pools/gpt/preview"' not in body
+    assert 'action="/pools/gmail/preview"' in sheets
+    assert 'action="/pools/gpt/preview"' not in sheets
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -3968,14 +4012,18 @@ def test_each_pool_card_lists_what_its_number_counts(web, monkeypatch):
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_the_manager_holds_every_row_and_opens_shut(web, monkeypatch):
-    """All three sheets ride in the one response - the rows are read for
-    the cards anyway - so the manager cannot fail to open."""
+    """Each sheet is fetched when its door is pressed, and holds every
+    row of that pool - not only the free ones the card lists.
+
+    They used to ride in the response, all three, shut: 925,488 of the
+    dashboard's 1,012,694 bytes for the 99 presses in 100 that never
+    happen (2026-09-21)."""
     _dash(monkeypatch)
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
 
-    ov = body[body.index('<div class="ov" id="poolov"'):]
+    ov = _sheets(client)
     for kind in ("gmail", "gpt", "proxy"):
         assert f'data-sheet="{kind}" hidden' in ov, kind
     # The held row the card would not list is here, because this is the
@@ -3994,7 +4042,7 @@ def test_both_account_rows_carry_both_doors_and_a_proxy_row_carries_none(
     client.login()
     _, _, body = client.request("GET", "/")
 
-    ov = body[body.index('<div class="ov" id="poolov"'):]
+    ov = _sheets(client)
     gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
     assert 'action="/pools/gmail/edit"' in gmail
     assert 'action="/pools/gmail/remove"' in gmail
@@ -4086,7 +4134,7 @@ def test_the_editor_offers_the_rows_status(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
-    ov = body[body.index('id="poolov"'):]
+    ov = _sheets(client)
     gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
     assert gmail.count('<dialog class="editor"') == 1, "one per sheet"
     editor = gmail[gmail.index('<dialog class="editor"'):]
@@ -4369,7 +4417,7 @@ def test_a_set_aside_row_carries_free_and_a_free_one_does_not(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    ov = body[body.index('id="poolov"'):]
+    ov = _sheets(client)
 
     def doors(address):
         start = ov.index(f'<td>{address}</td>')
@@ -5005,7 +5053,7 @@ def test_the_pool_reads_in_three_views_with_current_pressed(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
-    ov = body[body.index('id="poolov"'):]
+    ov = _sheets(client)
     assert "spent and delivered rows are not listed" not in ov
     gmail = ov[ov.index('data-sheet="gmail"'):ov.index('data-sheet="gpt"')]
     assert 'data-group="current" aria-pressed="true">current<b>3</b>' in gmail
@@ -5347,7 +5395,7 @@ def test_the_proxy_pool_is_kept_by_whoever_may_change_an_exit(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     assert 'data-pool="proxy">Manage</button>' in body
-    sheet = body[body.index('data-sheet="proxy"'):]
+    sheet = _sheets(client, ("proxy",))
     assert 'action="/pools/proxy/preview"' in sheet, "a paste box"
     assert "socks5://user:pass@host:port" in sheet
 
@@ -5433,7 +5481,7 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    sheet = body[body.index('data-sheet="proxy"'):]
+    sheet = _sheets(client, ("proxy",))
     head = sheet[:sheet.index("<tbody")]
 
     # Two chips and `all`, each with its count: in play is free, on a
@@ -6014,7 +6062,7 @@ def test_a_spotify_rows_send_goes_where_its_kind_wants(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    sheet = body[body.index('data-sheet="spotify"'):]
+    sheet = _sheets(client, ("spotify",))
     sheet = sheet[:sheet.index("</section>")]
     normal = sheet[sheet.index("nova@x.com"):sheet.index("tab@x.com")]
     assert 'action="/accounts/spotify/build"' in normal
@@ -6372,7 +6420,7 @@ def test_one_rows_press_replaces_one_row():
     from geelark_farm.web import pages
 
     script = pages._DASH_SCRIPT
-    assert "function swapRow(doc, key)" in script
+    assert "function swapRow(doc, key, gone)" in script
     # A queued answer is the row BEFORE the press - the lane carries it
     # out a moment later - so it is never swapped in, and the page looks
     # again shortly instead (2026-09-14).
@@ -6393,8 +6441,13 @@ def test_one_rows_press_replaces_one_row():
     # - every set of chips the sheet has, not only the states.
     assert ("if (v !== undefined) tally[k][v] = (tally[k][v] || 0) + 1;"
             in script)
-    # And the row carries the key that finds it.
-    assert 'data-key="{esc(key)}"' in _source(pages._pool_table)
+    # And the row carries the key that finds it. The loop that draws it
+    # came out of `_pool_table` on 2026-09-21, so a press about one row
+    # can be answered with that row - drawn by the same code, or the two
+    # would come to differ.
+    assert 'data-key="{esc(key)}"' in _source(pages._pool_table_rows)
+    assert "_pool_table_rows(kind, rows, user, manual_login)" in _source(
+        pages._pool_table)
 
 
 def test_a_press_says_what_it_is_doing_and_to_what():
@@ -7919,9 +7972,11 @@ def test_every_word_a_press_can_answer_with_has_a_sentence():
     act = inspect.getsource(app._Handler._act)
     # What `_act` itself can answer with, read off its own source rather
     # than listed here: a list is a second place to remember.
-    # A plain word, or an f-string whose word is followed by the request
-    # id. `f"{said_word}:{req}"` is the caller's, and comes in below.
+    # The words `_act` settles on, whether it hands them straight to
+    # `_said_url` or names them first - it builds `said` and then either
+    # answers with one row or redirects (2026-09-21).
     words = set(re.findall(r'_said_url\(back, f?"([a-z][a-z-]*)(?::|")', act))
+    words |= set(re.findall(r'said = f?"([a-z][a-z-]*)(?::|")', act))
     words.add("done")                    # the default `said_word`
     # And the words a caller passes for a press that means something
     # more particular than "done".
@@ -8376,7 +8431,10 @@ def test_both_fetch_handlers_refuse_a_bad_answer_the_same_way():
     js = assets.JS
     assert js.count("function answer(r, say){") == 1
     assert js.count("answer(r, false)") == 1, "the background refresh"
-    assert js.count("answer(r, true)") == 1, "the press, which says so"
+    # The press and the sheet fetch: both say so when the server
+    # refuses, because both are somebody waiting on a click.
+    assert js.count("answer(r, true)") == 2
+    assert js.count("answer(r, false)") == 1, "the background refresh"
     assert r"if (r.redirected && /\/login(\?|$)/.test(r.url)) {" in js
 
 
@@ -8443,3 +8501,137 @@ def test_an_errored_gmail_can_be_edited_and_freed_where_it_is_listed():
                                    editing=41)
     assert 'class="editrow"' in opened
     assert 'action="/pools/gmail/edit"' in opened
+
+
+def test_the_script_is_tested_by_running_it(tmp_path):
+    """The suite reads this file's source and asserts substrings of it.
+    That is how `var typing` came to be computed in `mayRedraw` and
+    never read for a month, under a green test asserting
+    `"function mayRedraw()" in script` (2026-09-20).
+
+    `tests/dash/` runs it. Skipped where node and its one dependency
+    are not installed - `npm install` puts them there - because the farm
+    itself needs neither.
+    """
+    import pathlib
+    import shutil
+    import subprocess
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    node = shutil.which("node")
+    if not node or not (root / "node_modules" / "linkedom").exists():
+        pytest.skip("node/linkedom not installed; run `npm install`")
+    done = subprocess.run([node, "--test", "tests/dash/"], cwd=root,
+                          capture_output=True, text=True)
+    assert done.returncode == 0, (
+        "the console's script does not behave:\n"
+        + done.stdout[-4000:] + done.stderr[-2000:])
+
+
+# --------------------------- the drawer is fetched when it is pulled (step 7)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_pool_sheet_is_a_fragment_and_not_a_page(web, monkeypatch):
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/pools/gmail/sheet")
+
+    assert status == 200
+    assert body.startswith(
+        '<section class="sheet" data-sheet="gmail"'), body[:80]
+    assert "<html" not in body and "<main" not in body, (
+        "it is mounted inside the overlay the page already has")
+    # And it carries what the manager is for: the paste box, the chips,
+    # the table and the editor.
+    for part in ('class="addbox"', 'class="filters"', 'class="pooltable"',
+                 'class="editor"'):
+        assert part in body, part
+
+    status, _, _ = client.request("GET", "/pools/nonesuch/sheet")
+    assert status == 404
+
+
+def test_an_operator_can_still_open_the_manager(web, monkeypatch):
+    """They have never had the pool PAGES and have always had the
+    manager. The sheet leaving the dashboard must not quietly take it
+    from them (2026-09-21)."""
+    _dash(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "own", "may_add_gmail": True})
+    client = web()
+    client.login(username="narrow")
+
+    status, _, body = client.request("GET", "/pools/gmail/sheet")
+    assert status == 200 and 'data-sheet="gmail"' in body
+    # And the page it is a drawer over is still not theirs.
+    status, _, _ = client.request("GET", "/pools/gmail")
+    assert status in (302, 303)
+
+
+def test_the_dashboard_reads_only_the_free_rows_for_its_cards():
+    """`_pool_rows` read every live row of every pool with its password
+    and its second factor, twice - once for the cards and once for the
+    manager drawn shut inside the page. The cards list free rows and
+    count the rest (2026-09-21)."""
+    import inspect
+
+    from geelark_farm.web import read
+
+    source = inspect.getsource(read.dashboard)
+    assert "_card_rows(store)" in source
+    assert "_pool_rows(store)" not in source
+    narrow = inspect.getsource(read._card_rows)
+    assert "password" not in narrow and "totp_secret" not in narrow, (
+        "the cards do not need a credential and must not carry one")
+
+
+# ------------------------- one row's press is answered with one row (step 8)
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_one_row_press_is_answered_with_one_row(web, monkeypatch):
+    """It answered 303 to the dashboard, and the script then fetched and
+    DOMParsed the whole page to lift one `<tr>` out of it."""
+    import geelark_farm.runner as runner_mod
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda *a, **k: 41)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda *a, **k: {
+        "result": "held@gmail.com is back on the shelf"})
+    monkeypatch.setattr(runner_mod, "run_now", lambda *a, **k: (
+        "done", "held@gmail.com is back on the shelf", None))
+    client = web()
+    client.login()
+    _, _, page = client.request("GET", "/")
+    token = re.search(r'name="csrf" value="([^"]*)"', page).group(1)
+
+    status, _, body = client.request(
+        "POST", "/pools/gmail/free",
+        body=f"csrf={token}&address=held@gmail.com&back=/",
+        headers={"X-GF-Row": "gmail"})
+
+    assert status == 200, "a fragment, not a redirect"
+    assert len(body) < 4000, f"{len(body)} bytes for one row"
+    assert 'class="rowanswer"' in body
+    assert "is back on the shelf" in body, "the verb's own words"
+    assert "<html" not in body
+
+    # And without the header - a browser with no script - the redirect
+    # it has always answered with. That contract is what the whole live
+    # layer rests on.
+    status, head, _ = client.request(
+        "POST", "/pools/gmail/free",
+        body=f"csrf={token}&address=held@gmail.com&back=/")
+    assert status == 303
+    where = dict((k.lower(), v) for k, v in head)["location"]
+    assert where.startswith("/?said=")
+
+
+def test_only_the_pools_whose_route_is_wired_ask_for_a_row():
+    """A kind the server cannot draw must not be asked to."""
+    js = assets.JS
+    assert "var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};" in js
+    assert "asking['X-GF-Row'] = rowKind;" in js
+    assert "/[/](free|edit|remove)$/.test(form.action)" in js

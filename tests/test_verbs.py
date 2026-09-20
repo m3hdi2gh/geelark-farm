@@ -1809,3 +1809,43 @@ def test_a_typed_spotify_account_of_the_right_kind_goes_in_labelled():
     assert row.values["Product"] == "spotify"
     assert row.values["Category"] == "normal"
     assert row.values["Credential kind"] == "password"
+
+
+def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
+    """`runs_inline` reads the verb's own SOURCE and decides from it -
+    a regex over `inspect.getsource` for `client` and for the workbook
+    halves. That keeps a new verb closed by default, which is the right
+    default, but it also means a comment edited in the wrong place moves
+    a verb from one side to the other with nothing to notice.
+
+    Nine of nineteen were unpinned, `free_gmail` among them - and
+    `free_gmail` is the press the operator could not tell had worked
+    (2026-09-20). This is the whole list, so a move is a diff.
+    """
+    from geelark_farm import verbs
+
+    inline = {v for v in verbs.VERBS if verbs.runs_inline(v)}
+    assert inline == {
+        # Stock: rows in the store, and nothing else.
+        "add_gmails", "add_gpt", "add_spotify", "add_panel_account",
+        "edit_gmail", "remove_gmail", "edit_app", "remove_app",
+        "free_gmail", "free_app", "refund_gmail", "offer_again",
+        "withdraw_panel_account",
+        # Exits, where the answer needs no word from GeeLark.
+        "ignore_proxy", "remove_proxy",
+        # The buttons an operator presses all day.
+        "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
+    }, "a verb changed sides - say so on purpose or put it back"
+
+
+def test_a_verb_that_reaches_geelark_never_answers_in_the_request():
+    """The rule the derivation exists to keep: seconds to minutes of
+    somebody else's network, which a person waiting on a form must not
+    hold."""
+    from geelark_farm import verbs
+
+    for verb in ("boot_phone", "power_off_phone", "change_proxy",
+                 "test_proxy", "test_all_proxies", "adopt_proxy",
+                 "free_all_proxies", "login_accounts", "control",
+                 "mark_proxy_free", "add_proxies"):
+        assert not verbs.runs_inline(verb), verb

@@ -2132,12 +2132,16 @@ def _pool_editor(kind: str, user: dict, rows: list[dict]) -> str:
           '</form></dialog>')
 
 
-def _pool_table(kind: str, rows: list[dict], user: dict,
-                manual_login: bool = False) -> str:
+def _pool_table_rows(kind: str, rows: list[dict], user: dict,
+                     manual_login: bool = False) -> str:
+    """The `<tr>`s of a pool table, without the table around them.
+
+    Out here so a press about one address can be answered with that one
+    row - drawn by the code that draws it in the sheet, so the two
+    cannot come to differ (2026-09-21).
+    """
     meta = _POOL_KINDS[kind]
-    head = "".join(f"<th>{esc(c)}</th>" for c in meta["columns"])
     doors = bool(meta["manage"]) and _may(user, meta["manage"])
-    span = len(meta["columns"]) + (1 if doors else 0)
     lines = []
     for row in rows:
         cells = _pool_cells(kind, row)
@@ -2174,12 +2178,22 @@ def _pool_table(kind: str, rows: list[dict], user: dict,
                      f' data-find="{esc(findable)}"'
                      f' data-seller="{esc(_seller_key(row))}"{held}>'
                      f'{drawn}{last}</tr>')
+    return "".join(lines)
+
+
+def _pool_table(kind: str, rows: list[dict], user: dict,
+                manual_login: bool = False) -> str:
+    meta = _POOL_KINDS[kind]
+    head = "".join(f"<th>{esc(c)}</th>" for c in meta["columns"])
+    doors = bool(meta["manage"]) and _may(user, meta["manage"])
+    span = len(meta["columns"]) + (1 if doors else 0)
+    lines = _pool_table_rows(kind, rows, user, manual_login)
     if not lines:
         return ('<p class="empty">Nothing in this pool that anybody still '
                 'has a decision about.</p>')
     return (f'<table class="pooltable"><thead><tr>{head}'
             f'{"<th></th>" if doors else ""}</tr></thead>'
-            f'<tbody>{"".join(lines)}'
+            f'<tbody>{lines}'
             f'<tr class="none" hidden><td colspan="{span}">'
             f'Nothing matches that.</td></tr></tbody></table>')
 
@@ -2296,50 +2310,74 @@ def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
             f'Free all{f" · {aside}" if aside else ""}</button></form>')
 
 
+def row_answer(kind: str, row: dict | None, said: str, user: dict,
+               said_note: str = "", manual_login: bool = False) -> str:
+    """One row and the banner about it - the whole of what a press on one
+    address changes.
+
+    The press used to answer 303 to the dashboard, and the script then
+    fetched and DOMParsed a megabyte to lift this `<tr>` out of it. A
+    row gone from the pool answers with no row at all, which is what the
+    script removes.
+    """
+    drawn = (_pool_table_rows(kind, [row], user, manual_login) if row else "")
+    return (f'<div class="rowanswer" data-row-kind="{esc(kind)}">'
+            f'{_said(said, _DASH_SAID, user, said_note)}'
+            f'<table>{drawn}</table></div>')
+
+
+def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
+                manual_login: bool = False) -> str:
+    """One pool, as the manager shows it: the paste box, the chips, the
+    search, and the table under them.
+
+    Fetched when the drawer is pulled rather than rendered shut inside
+    every response - see `_pool_manager`.
+    """
+    meta = _POOL_KINDS[kind]
+    return (
+        f'<section class="sheet" data-sheet="{kind}" hidden>'
+        f'<header><h3>{esc(meta["name"])}</h3>'
+        f'<button type="button" class="x" data-shut="1" '
+        f'aria-label="Close">&times;</button></header>'
+        f'<div class="sheetbody">'
+        f'{_pool_add_box(kind, user, rows)}'
+        f'<div class="filters">'
+        f'{_group_chips(kind, rows)}{_kind_chips(kind, rows)}'
+        f'<input type="search" class="poolfind" autocomplete="off"'
+        f' placeholder="search {_plural(len(rows), "row")}">'
+        f'{_seller_filter(kind, rows)}'
+        f'{_test_all_door(kind, rows, user)}'
+        f'{_free_all_door(kind, rows, user)}'
+        # The script has always written "12 of 190 shown" into this,
+        # and the CSS has always reserved the space for it, and it was
+        # never rendered - so the count nobody could see is how you
+        # confirm a paste of forty landed (2026-09-07).
+        f'<span class="dim mono tally"></span>'
+        f'</div>'
+        f'{_capped(rows, (totals or {}).get(kind))}'
+        f'<div class="tscroll">'
+        f'{_pool_table(kind, rows, user, manual_login)}</div>'
+        f'</div>{_pool_editor(kind, user, rows)}</section>')
+
+
 def _pool_manager(data: dict, user: dict,
                   manual_login: bool = False) -> str:
-    """One pool, full size, without leaving the page.
+    """The drawer the pool doors open into: a mount, and the two sheets
+    that are about phones rather than stock.
 
-    Everything a person does to a pool is here: what is in it, a search
-    over all of it, the states as chips, the paste box, and the two doors
-    on each row. The pool tabs still exist and still hold the archive -
-    what left this page was the need to go there for the working list.
+    The three pool sheets used to be rendered here, shut, on every
+    response - 925,488 of the dashboard's 1,012,694 bytes, 651 rows and
+    ~500 passwords and TOTP secrets in `data-*` attributes, for the 99
+    responses in 100 where nobody opened them (2026-09-20). Each one is
+    now fetched from `/pools/<kind>/sheet` the first time its door is
+    pressed, and kept in the DOM after that, so everything the swap does
+    with an open sheet (`keepSheet`) is untouched.
 
-    Rendered shut, all three of them, rather than fetched: the rows are
-    already read for the cards, the whole page is one response, and a
-    manager that needs a second request is a manager that can fail to
-    open.
+    Without the script the doors are still forms that go to the pool's
+    own page, which is what they were before the manager existed.
     """
-    listed = data.get("pool_rows") or {}
-    if not listed:
-        return ""
     sheets = []
-    for kind, meta in _POOL_KINDS.items():
-        rows = listed.get(kind) or []
-        sheets.append(
-            f'<section class="sheet" data-sheet="{kind}" hidden>'
-            f'<header><h3>{esc(meta["name"])}</h3>'
-            f'<button type="button" class="x" data-shut="1" '
-            f'aria-label="Close">&times;</button></header>'
-            f'<div class="sheetbody">'
-            f'{_pool_add_box(kind, user, rows)}'
-            f'<div class="filters">'
-            f'{_group_chips(kind, rows)}{_kind_chips(kind, rows)}'
-            f'<input type="search" class="poolfind" autocomplete="off"'
-            f' placeholder="search {_plural(len(rows), "row")}">'
-            f'{_seller_filter(kind, rows)}'
-            f'{_test_all_door(kind, rows, user)}'
-            f'{_free_all_door(kind, rows, user)}'
-            # The script has always written "12 of 190 shown" into this,
-            # and the CSS has always reserved the space for it, and it was
-            # never rendered - so the count nobody could see is how you
-            # confirm a paste of forty landed (2026-09-07).
-            f'<span class="dim mono tally"></span>'
-            f'</div>'
-            f'{_capped(rows, (listed.get("totals") or {}).get(kind))}'
-            f'<div class="tscroll">'
-            f'{_pool_table(kind, rows, user, manual_login)}</div>'
-            f'</div>{_pool_editor(kind, user, rows)}</section>')
     if _may_send(user, manual_login):
         sheets.append(_send_sheet(data, user))
     sheets.append(
@@ -2349,7 +2387,6 @@ def _pool_manager(data: dict, user: dict,
         'aria-label="Close">&times;</button></header>'
         '<div class="sheetbody" data-drawer></div></section>')
     return f'<div class="ov" id="poolov" hidden>{"".join(sheets)}</div>'
-
 
 def _send_sheet(data: dict, user: dict) -> str:
     """Which phone an account goes to: the phones that can take one, each

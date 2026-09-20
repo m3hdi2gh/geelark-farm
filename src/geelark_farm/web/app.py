@@ -183,6 +183,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.needs_page(
                     read.needs(self.settings), user, _advice, said=said,
                     said_note=self._said_note(said)))
+            # One pool's sheet, for the drawer. Not a page: a
+            # fragment the script mounts inside the overlay it already
+            # has - see pages._pool_manager for why it is not in the
+            # dashboard any more.
+            if path.startswith("/pools/") and path.endswith("/sheet"):
+                return self._pool_sheet(user, path)
             if path == "/pools":
                 return self._redirect("/pools/gmail")
             # The three pool pages (C5): shared stock, so everyone signed
@@ -649,8 +655,45 @@ class _Handler(BaseHTTPRequestHandler):
                        f"{'queued' if isinstance(got, int) else got}")
 
     # -------------------------------------------------------------- pools
+    #: The header the script sets on a press it can answer with one row.
+    #:
+    #: Without it every press - a Free, a Save, a Remove on one address -
+    #: answered 303 to the dashboard, and the page the script then
+    #: fetched and DOMParsed to lift one `<tr>` out of was the whole
+    #: dashboard. A scriptless browser sends no such header and gets the
+    #: redirect it has always got, which is the contract the whole live
+    #: layer rests on (pages, "the one script").
+    ROW_ASKED = "X-GF-Row"
+
+    def _row_answer(self, kind: str, address: str, said: str,
+                    user: dict) -> bool:
+        """Answer a one-row press with that row and the banner.
+
+        False when this request did not ask for it, in which case the
+        caller redirects as it always has.
+        """
+        if self.headers.get(self.ROW_ASKED) != kind or not address:
+            return False
+        try:
+            listed = read.pool_sheet(self.settings, kind)
+        except Exception as exc:                              # noqa: BLE001
+            # The work is done; only drawing the answer failed. The
+            # redirect still tells the page where to look.
+            log.warning("could not read %s back after the press (%s)",
+                        address, exc)
+            return False
+        want = str(address).strip().casefold()
+        row = next((r for r in (listed.get(kind) or [])
+                    if str(r.get("address") or "").strip().casefold() == want),
+                   None)
+        self._html(200, pages.row_answer(
+            kind, row, said, user, self._said_note(said),
+            manual_login=self.settings.manual_login))
+        return True
+
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
-             *, idem: str, back: str, said_word: str = "done") -> None:
+             *, idem: str, back: str, said_word: str = "done",
+             row_of: str = "") -> None:
         """Queue one command, or record that it was refused.
 
         The person's name rides in the payload so the pass can write it
@@ -710,13 +753,21 @@ class _Handler(BaseHTTPRequestHandler):
         # said "Done - it is already in" (the operator, 2026-09-07).
         ran = self._ran_it_now(verb, payload, req)
         if ran == "done":
-            return self._redirect(_said_url(back, f"{said_word}:{req}"))
-        if ran is not None:
+            said = f"{said_word}:{req}"
+        elif ran is not None:
             # Deliberately not `refused`, which both banner tables already
             # use for "you do not have that tick" and would read as a
             # missing permission rather than an answer.
-            return self._redirect(_said_url(back, f"no:{req}"))
-        self._redirect(_said_url(back, f"queued:{req}"))
+            said = f"no:{req}"
+        else:
+            said = f"queued:{req}"
+        # One row, when the press was about one row and the page asked
+        # for it that way: ~1KB instead of the whole dashboard, and no
+        # document to parse at the other end.
+        if row_of and self._row_answer(row_of, str(payload.get("address")
+                                                   or ""), said, user):
+            return None
+        self._redirect(_said_url(back, said))
 
     @staticmethod
     def _mark_twice(rows: list[dict], key: str = "address") -> None:
@@ -1295,7 +1346,7 @@ class _Handler(BaseHTTPRequestHandler):
                  "purchased": (field.get("purchased") or "").strip(),
                  "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_gmail", address),
-                back=_gmail_back(field))
+                back=_gmail_back(field), row_of="gmail")
         if path == "/pools/gmail/remove":
             address = (field.get("address") or "").strip()
             back = _gmail_back(field)
@@ -1312,7 +1363,7 @@ class _Handler(BaseHTTPRequestHandler):
                              {"address": address}, said_word="removed-gmail",
                              idem=self._minute_key(user, "remove_gmail",
                                                    address),
-                             back=back)
+                             back=back, row_of="gmail")
         if path == "/pools/gmail/refund":
             address = (field.get("address") or "").strip()
             state = (field.get("state") or "").strip()
@@ -1332,7 +1383,8 @@ class _Handler(BaseHTTPRequestHandler):
             address = (field.get("address") or "").strip()
             return self._act(user, permission, verb, {"address": address},
                              idem=self._minute_key(user, verb, address),
-                             back=_add_back(field, f"/pools/{kind}"))
+                             back=_add_back(field, f"/pools/{kind}"),
+                             row_of=kind)
         if path == "/pools/proxy/preview":
             from ..store import validate
 
@@ -1964,6 +2016,22 @@ class _Handler(BaseHTTPRequestHandler):
              if field.get("stack") else ""))
         self._text(204, "")
 
+    def _pool_sheet(self, user: dict, path: str) -> None:
+        """The manager's drawer for one pool, read when it is pulled.
+
+        All three used to be rendered shut inside every dashboard -
+        925,488 of its 1,012,694 bytes, with ~500 passwords and TOTP
+        secrets in their data attributes, on the 99 responses in 100
+        where nobody opened them (2026-09-20).
+        """
+        kind = path[len("/pools/"):-len("/sheet")]
+        if kind not in pages._POOL_KINDS:
+            return self._text(404, "no such pool\n")
+        listed = read.pool_sheet(self.settings, kind)
+        self._html(200, pages._pool_sheet(
+            kind, listed.get(kind) or [], listed.get("totals") or {}, user,
+            manual_login=self.settings.manual_login))
+
     def _asset(self, path: str, *, private: bool) -> None:
         """One of the two files the page links to, under its own hash.
 
@@ -2403,6 +2471,14 @@ _OPERATOR_PAGES = ("/", "/password", "/live")
 
 def _operator_may_get(path: str) -> bool:
     if path in _OPERATOR_PAGES:
+        return True
+    # The manager's drawer, which is part of the dashboard and always
+    # has been - it just stopped riding inside the response on
+    # 2026-09-21. An operator has never had the pool PAGES and has
+    # always had the manager, and what they may DO in it is still each
+    # button's own permission. Without this the drawer answers a
+    # redirect to "/" and the sheet never opens for them.
+    if path.startswith("/pools/") and path.endswith("/sheet"):
         return True
     return path.startswith("/phones/") and path != "/phones"
 

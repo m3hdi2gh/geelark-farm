@@ -1,0 +1,15 @@
+{
+  "name": "geelark-farm-console",
+  "private": true,
+  "type": "module",
+  "description": "Only the console's one script, and the tools that read it. The farm itself is Python; this exists because 76KB of JavaScript lived inside a Python string until 2026-09-20, where no linter, no syntax check and no test could see it.",
+  "scripts": {
+    "test": "node --test tests/dash/",
+    "lint": "eslint",
+    "check": "node --check src/geelark_farm/web/static/dash.js"
+  },
+  "devDependencies": {
+    "eslint": "^9",
+    "linkedom": "^0.18"
+  }
+}
