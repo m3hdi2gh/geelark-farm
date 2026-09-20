@@ -223,6 +223,15 @@ form.busy button{{opacity:.45;filter:grayscale(1);pointer-events:none}}
    done (2026-09-14). */
 tr.acting{{opacity:.45;transition:opacity .12s}}
 tr.acting td{{cursor:progress}}
+/* A row a press moved out from under the chip being looked at. It is
+   kept for one sift wearing where it went, rather than vanishing on the
+   spot - which is what "I could not tell whether it worked" was made of
+   (the operator, 2026-09-20). */
+tr.moved{{background:var(--green-bg)}}
+.movedto{{display:inline-block;margin-left:8px;padding:1px 7px;
+ border-radius:999px;background:var(--green-bg);color:var(--green);
+ font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;
+ vertical-align:middle}}
 .addbox{{background:var(--panel2);border:1px solid var(--line);
  border-radius:9px;padding:12px;margin-bottom:14px}}
 .addbox label{{display:block;font-size:11px;letter-spacing:.6px;
@@ -327,6 +336,16 @@ dialog.editor .two{{display:grid;gap:10px;
 dialog.editor .tick{{display:flex;align-items:center;gap:8px;font-size:12.5px;
  color:var(--muted)}}
 dialog.editor .tick input{{accent-color:var(--accent);width:15px;height:15px}}
+/* What the editor was told, inside the editor. */
+.editsay{{margin:0;padding:9px 11px;border-radius:8px;font-size:12.5px;
+ background:var(--panel2);border:1px solid var(--line2);color:var(--muted)}}
+.editsay.bad{{background:#2a1512;border-color:#57241c;color:#f0a094}}
+/* And its own confirm, inside it too: a modal dialog is in the top
+   layer and its backdrop takes every click underneath, so a `.mini`
+   bubble hanging off the body would be drawn behind it and could not
+   be pressed. */
+dialog.editor .editask{{position:static;width:auto;margin:0 18px 16px;
+ box-shadow:none}}
 dialog.editor .row{{justify-content:flex-end;padding-top:4px}}
 dialog.editor .row button{{height:36px}}
 /* ---- polish, from the contract (2026-09-05): nothing here changes what a
@@ -2232,19 +2251,7 @@ _DASH_SCRIPT = """
 
     // What a press said: a toast for a few seconds, and gone from the
     // address so a refresh does not say it again.
-    var said = document.querySelector('.said.toast');
-    if (said) {
-      said.classList.add('up');
-      if (window.history && history.replaceState && /[?&]said=/.test(location.search)) {
-        var clean = location.search.replace(/([?&])said=[^&]*&?/, '$1')
-          .replace(/[?&]$/, '');
-        history.replaceState(null, '', location.pathname + clean + location.hash);
-      }
-      // One with a button in it - Undo - waits long enough to be pressed.
-      var stay = said.querySelector('form') ? 9000 : 3800;
-      setTimeout(function(){ said.classList.add('gone'); }, stay);
-      setTimeout(function(){ said.remove(); }, stay + 600);
-    }
+    dressToast(document.querySelector('.said.toast'));
 
     // Build one now: two choices. No Gmail means nothing is signed in,
     // so the account box goes off with it. Which app is not a choice any
@@ -2421,7 +2428,11 @@ _DASH_SCRIPT = """
           var near = (!q || (tr.dataset.find || '').indexOf(q) >= 0)
                   && (!who || tr.dataset.seller === who)
                   && (!cat || tr.dataset.cat === cat);
-          var hit = near && (!group || tr.dataset.group === group);
+          // A row the press just moved out of this group is kept for one
+          // sift, wearing where it went, and let go on the next.
+          var went = tr.classList.contains('moved');
+          if (went) tr.classList.remove('moved');
+          var hit = near && (!group || tr.dataset.group === group || went);
           tr.hidden = !hit;
           if (hit) shown++;
           // A match under another chip is counted, so "nothing" can say
@@ -2470,6 +2481,24 @@ _DASH_SCRIPT = """
       sift();
     });
 
+    // The editor, once per dialog node. `init` runs after every swap
+    // and a second set of listeners would ask the same question twice.
+    document.querySelectorAll('dialog.editor').forEach(function(dlg){
+      if (dlg.dataset.live) return;
+      dlg.dataset.live = '1';
+      dlg.addEventListener('input', function(){
+        dlg.dataset.dirty = '1';
+        keepDraft(dlg);
+      });
+      // Escape, which the document's own handler passes to the dialog
+      // on purpose. Easy to hit by accident with a form half filled.
+      dlg.addEventListener('cancel', function(ev){
+        if (!editorDirty(dlg)) return;
+        ev.preventDefault();
+        askToDrop(dlg);
+      });
+    });
+
     // The page refreshes itself while a phone builds. With the script
     // here, that is a quiet swap rather than a reload.
     var meta = document.querySelector('meta[name="gf-refresh"]');
@@ -2477,6 +2506,32 @@ _DASH_SCRIPT = """
       lookAgain((parseInt(meta.getAttribute('content'), 10) || 30) * 1000);
     }
     listen();
+  }
+
+  // A banner the server sent, made into the thing a person actually
+  // sees: `up` is the only rule that lifts it out of the page and over
+  // everything else (.said.toast.up is position:fixed, z-index 60), so a
+  // banner that never gets it is drawn as a static block at the top of
+  // `main` - and with the pool manager open, that is underneath its
+  // backdrop. Perfectly rendered and perfectly invisible.
+  //
+  // It lived inside `init()`, and `sayIt` runs AFTER `swapRow` has
+  // already called `init()` - so every one-row press put its answer on
+  // the page undressed. The operator pressed Free, the row was freed in
+  // milliseconds, and nothing on the screen said so (2026-09-20).
+  // Out here it is called by both, and the ordering cannot matter again.
+  function dressToast(said){
+    if (!said || said.classList.contains('up')) return;
+    said.classList.add('up');
+    if (window.history && history.replaceState && /[?&]said=/.test(location.search)) {
+      var clean = location.search.replace(/([?&])said=[^&]*&?/, '$1')
+        .replace(/[?&]$/, '');
+      history.replaceState(null, '', location.pathname + clean + location.hash);
+    }
+    // One with a button in it - Undo - waits long enough to be pressed.
+    var stay = said.querySelector('form') ? 9000 : 3800;
+    setTimeout(function(){ said.classList.add('gone'); }, stay);
+    setTimeout(function(){ said.remove(); }, stay + 600);
   }
 
   // Not while somebody is in the middle of something. A refresh that lands
@@ -2498,25 +2553,28 @@ _DASH_SCRIPT = """
   addEventListener('touchmove', scrolled, {capture: true, passive: true});
 
   function mayRedraw(){
-    var o = ov();
     // Anything the keyboard is on inside the page, not just a box to type
     // in: the swap replaces every child of `main`, so a redraw threw the
     // caret back to the top while somebody was tabbing through it.
     // `:focus-visible` is the keyboard test - a button left focused by a
     // mouse click would otherwise stall the refresh for good
     // (2026-09-07).
+    //
+    // The test below this was written and never made: `typing` was
+    // worked out and then nothing read it, so from September the guard
+    // this whole comment describes did not exist. Every page but the
+    // dashboard swapped under a typing hand on the four-second floor,
+    // which is what "the edit page popped out several times" was made
+    // of (the operator, 2026-09-20). A substring test cannot see an
+    // unused variable; step 5 of that day's list puts a linter on this
+    // file so it cannot happen again.
     var live = document.activeElement;
     var main = document.querySelector('main');
     var typing = !!live
       && (['INPUT', 'TEXTAREA', 'SELECT'].indexOf(live.tagName) >= 0
           || (!!main && main.contains(live)
               && live.matches(':focus-visible')));
-    // A question waiting for an answer. `askFirst` puts the bubble in
-    // `main`, so a swap deletes it mid-read and the press is lost - and
-    // with the live stream that is a few seconds, not thirty
-    // (2026-09-14).
-    if (document.querySelector('.mini')
-        || document.querySelector('dialog[open]')) return false;
+    if (typing) return false;
     // A hand on the wheel. The place is put back after a swap, but a
     // redraw in the middle of the gesture still stutters under it, and
     // nothing is so urgent that it cannot wait for the scroll to stop.
@@ -2545,12 +2603,22 @@ _DASH_SCRIPT = """
     var o = ov();
     return !!(o && !o.hidden && openKind && openKind !== 'phone');
   }
+  // A question waiting for an answer, and a dialog somebody opened.
+  // `askFirst` puts its bubble in the page and the editor holds typing
+  // nobody has sent, so a swap takes both - and these sat inside
+  // `mayRedraw`, under the ceiling, so twenty seconds was all either of
+  // them got. They are working surfaces, like an open sheet, and they
+  // are held for as long as they are up (2026-09-20).
+  function busyHere(){
+    return !!(document.querySelector('.mini')
+              || document.querySelector('dialog[open]'));
+  }
   function settled(){
     // Held for as long as it is open, and one refresh the moment it
     // closes (`shut`). The ceiling below does not apply: it is for the
     // gestures a person leaves standing without meaning to, and an open
     // sheet is not one of those - it is where they are working.
-    if (heldOpen()) { settled.since = 0; return false; }
+    if (heldOpen() || busyHere()) { settled.since = 0; return false; }
     if (mayRedraw()) { settled.since = 0; return true; }
     settled.since = settled.since || Date.now();
     if (Date.now() - settled.since > HELD_CEILING) {
@@ -2709,8 +2777,13 @@ _DASH_SCRIPT = """
     // they were (the operator, 2026-09-07).
     var row = e.target.closest('[data-close-edit]');
     if (row) { e.preventDefault(); closeEditor(row.closest('dialog')); return; }
-    // A click on the editor's backdrop reaches the dialog itself.
-    if (e.target.matches('dialog.editor')) { closeEditor(e.target); return; }
+    // A click on the editor's backdrop reaches the dialog itself -
+    // which with showModal() is the whole of the screen outside a
+    // 560px box. It closed the editor and threw away everything typed,
+    // with no question and no way back (the operator, 2026-09-20).
+    if (e.target.matches('dialog.editor')) {
+      askToDrop(e.target); return;
+    }
     if (e.target.closest('[data-shut]') || e.target === o) { shut(); return; }
     var edit = e.target.closest('[data-edit]');
     if (edit) { openEditor(edit); return; }
@@ -2920,6 +2993,17 @@ _DASH_SCRIPT = """
     var here = document.querySelector('main');
     if (!here) return [];
     var kept = [];
+    // Where the caret is, which nothing has ever put back: the values
+    // came back and the cursor went to the top of the page, so a swap
+    // mid-word read as the page throwing you out (2026-09-20).
+    var live = document.activeElement;
+    if (live && live.name && here.contains(live)) {
+      kept.at = {key: whichField(live)};
+      try {
+        kept.at.from = live.selectionStart;
+        kept.at.to = live.selectionEnd;
+      } catch (err) {}                 // a select has no selection
+    }
     here.querySelectorAll('input, textarea, select').forEach(function(el){
       if (!el.name || el.type === 'hidden' && !el.value) return;
       if (el.type === 'checkbox' || el.type === 'radio') {
@@ -2948,13 +3032,25 @@ _DASH_SCRIPT = """
     return (form ? (form.getAttribute('action') || '') : '') + '|' + el.name + one;
   }
   function typedBack(kept){
-    if (!kept || !kept.length) return;
+    if (!kept) return;
     var here = document.querySelector('main');
     if (!here) return;
     var by = {};
     here.querySelectorAll('input, textarea, select').forEach(function(el){
       if (el.name && !(whichField(el) in by)) by[whichField(el)] = el;
     });
+    // The caret first, so a handler woken by the values below cannot
+    // take the focus off it again.
+    if (kept.at && by[kept.at.key]) {
+      var box = by[kept.at.key];
+      try {
+        box.focus({preventScroll: true});
+        if (kept.at.from !== undefined && box.setSelectionRange)
+          box.setSelectionRange(kept.at.from, kept.at.to);
+      } catch (err) {}
+    }
+    if (!kept.length) return;
+    var told = [];
     kept.forEach(function(was){
       var el = by[was.key];
       if (!el) return;
@@ -2971,7 +3067,16 @@ _DASH_SCRIPT = """
         el.insertBefore(made, el.firstChild);
       }
       el.value = was.value;
+      if (el.tagName === 'SELECT') told.push(el);
     });
+    // Setting `.value` fires nothing, so the build card's own gate never
+    // heard that the Gmail was back and left the account box hidden and
+    // disabled - and Build then posted a kind with no account on it.
+    // `openNew` already does exactly this, at its own Cancel, with a
+    // comment about the same trap. In a second pass, so a handler that
+    // rebuilds a later box cannot undo a value this one has yet to put
+    // back.
+    told.forEach(function(el){ el.dispatchEvent(new Event('change')); });
   }
 
   function viewNow(){
@@ -3178,6 +3283,9 @@ _DASH_SCRIPT = """
     var old = here.querySelector('.said');
     if (old) old.replaceWith(said);
     else here.insertBefore(said, here.firstChild);
+    // Dressed here rather than left to the next `init()`: this is called
+    // after swapRow's, so there is no next one.
+    dressToast(said);
   }
 
   function swapRow(doc, key){
@@ -3204,8 +3312,32 @@ _DASH_SCRIPT = """
         });
       });
     }
+    // The press may have moved the row out from under the chip being
+    // looked at - Free takes an errored Gmail to `current` - and the
+    // sift at the end of `init()` would then hide it on the spot. The
+    // row simply vanished, which is what "I could not tell whether it
+    // worked" was made of (the operator, 2026-09-20). It stays for one
+    // beat instead, wearing where it went, and the next redraw takes it.
+    moved(theirs, sheet);
     init();
     return true;
+  }
+
+  // Held back from this sift only, by `sift` itself: the row is marked,
+  // not exempted, so the next press or the next tick files it away.
+  function moved(tr, sheet){
+    if (!sheet) return;
+    var chip = sheet.querySelector(
+      '.filters .pill[data-group][aria-pressed="true"]');
+    var want = chip ? chip.dataset.group : '';
+    if (!want || tr.dataset.group === want) return;
+    tr.classList.add('moved');
+    var cell = tr.querySelector('td');
+    if (!cell || cell.querySelector('.movedto')) return;
+    var tag = document.createElement('span');
+    tag.className = 'movedto';
+    tag.textContent = 'now under ' + tr.dataset.group;
+    cell.appendChild(tag);
   }
   function reload(){
     fetch(location.pathname + location.search, {credentials: 'same-origin'})
@@ -3271,6 +3403,28 @@ _DASH_SCRIPT = """
     f.state.disabled = state === 'on a phone';
     f.state.title = f.state.disabled
       ? 'a phone is behind this row - the phone decides' : '';
+    // What they had typed into this same row and not saved. Put back
+    // after everything above, because the status box's options are
+    // rebuilt there and a value set before that would be dropped.
+    dlg.dataset.dirty = '';
+    editorQuiet(dlg);
+    var draft = drafts[draftKey(dlg, address)];
+    if (draft) {
+      Object.keys(draft).forEach(function(name){
+        var el = f[name];
+        if (!el || el.disabled) return;
+        if (el.type === 'checkbox') { el.checked = draft[name]; return; }
+        if (el.tagName === 'SELECT'
+            && !Array.prototype.some.call(el.options, function(o){
+                 return o.value === draft[name]; })) return;
+        el.value = draft[name];
+      });
+      dlg.dataset.dirty = '1';
+      // Said out loud: boxes holding something other than what the row
+      // holds are a trap if nobody is told which is which.
+      editorSays(dlg, null, 'Put back what you had typed and not saved. '
+                          + 'Cancel goes back to the row as it is.', false);
+    }
     if (typeof dlg.showModal === 'function') dlg.showModal();
     else dlg.setAttribute('open', '');
   }
@@ -3278,6 +3432,87 @@ _DASH_SCRIPT = """
     if (!dlg) return;
     if (dlg.open && typeof dlg.close === 'function') dlg.close();
     else dlg.removeAttribute('open');
+  }
+
+  // Anything typed into the editor since it opened. `openEditor` fills
+  // every box by `.value`, which fires no input event, so this is true
+  // only because a person typed.
+  function editorDirty(dlg){ return !!dlg && dlg.dataset.dirty === '1'; }
+
+  // What was typed and not saved, kept for the life of the tab and put
+  // back when the same row is opened again. The dialog was a pure
+  // refill from the row's data attributes, so whatever closed it took
+  // the typing with it and there was no way back to it.
+  var drafts = {};
+  function draftKey(dlg, address){
+    return (dlg.dataset.editor || '') + '|' + address;
+  }
+  function keepDraft(dlg){
+    var form = dlg.querySelector('form');
+    if (!form || !form.elements.address) return;
+    var who = form.elements.address.value;
+    if (!who) return;
+    var kept = {};
+    Array.prototype.forEach.call(form.elements, function(el){
+      if (!el.name || el.type === 'hidden' || el.type === 'submit') return;
+      kept[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+    drafts[draftKey(dlg, who)] = kept;
+  }
+  // Closed because the work is done, or because they said throw it away:
+  // either way the draft goes with it. Every other way of closing -
+  // `shut`, a swap - keeps it, so nothing is lost by accident.
+  function dropEditor(dlg){
+    if (!dlg) return;
+    var form = dlg.querySelector('form');
+    if (form && form.elements.address)
+      delete drafts[draftKey(dlg, form.elements.address.value)];
+    dlg.dataset.dirty = '';
+    editorQuiet(dlg);
+    closeEditor(dlg);
+  }
+  function editorQuiet(dlg){
+    var slot = dlg.querySelector('.editsay');
+    if (slot) { slot.hidden = true; slot.classList.remove('bad'); }
+    var asked = dlg.querySelector('.editask'); if (asked) asked.remove();
+  }
+  function editorSays(dlg, doc, words, bad){
+    var slot = dlg.querySelector('.editsay');
+    if (!slot) return;
+    var said = doc && doc.querySelector('main .said');
+    slot.textContent = words || (said ? said.textContent.trim()
+                                      : 'That did not go through.');
+    slot.classList.toggle('bad', bad !== false);
+    slot.hidden = false;
+  }
+  // Closing on a hand that did not mean it. Nothing typed, nothing to
+  // ask about.
+  function askToDrop(dlg){
+    if (!editorDirty(dlg)) { closeEditor(dlg); return; }
+    var form = dlg.querySelector('form');
+    var who = form && form.elements.address ? form.elements.address.value : '';
+    askInEditor(dlg, 'Throw away the changes to ' + (who || 'this row') + '?',
+                'Throw away', function(){ dropEditor(dlg); });
+  }
+  // Its own confirm, built inside the dialog: a modal dialog is in the
+  // top layer and its backdrop takes every click underneath, so
+  // `askFirst`'s bubble - which hangs off document.body - would be
+  // drawn behind it and could not be pressed.
+  function askInEditor(dlg, question, answer, then){
+    var old = dlg.querySelector('.editask'); if (old) old.remove();
+    var box = document.createElement('div');
+    box.className = 'mini editask'; box.setAttribute('role', 'dialog');
+    var p = document.createElement('p'); p.textContent = question;
+    var row = document.createElement('div'); row.className = 'row';
+    var keep = document.createElement('button'); keep.type = 'button';
+    keep.className = 'quiet'; keep.textContent = 'Keep editing';
+    var yes = document.createElement('button'); yes.type = 'button';
+    yes.className = 'quiet bad'; yes.textContent = answer;
+    row.append(keep, yes); box.append(p, row);
+    dlg.appendChild(box);
+    yes.focus();
+    keep.addEventListener('click', function(){ box.remove(); });
+    yes.addEventListener('click', function(){ box.remove(); then(); });
   }
 
   // "type a new one" on the build card: the dialog `pick` names, filled
@@ -3429,6 +3664,8 @@ _DASH_SCRIPT = """
     var pressed = e.submitter;
     if (pressed && pressed.name) data.append(pressed.name, pressed.value);
     var sheet = form.closest('#poolov .sheet');
+    var asking = form.closest('dialog.editor');
+    if (asking) editorQuiet(asking);
     form.classList.add('busy');
     // `pointer-events:none` does not stop Enter on a focused submit, so
     // the same press went twice (2026-09-07).
@@ -3468,9 +3705,6 @@ _DASH_SCRIPT = """
         if (pressed && wasLabel !== null) pressed.textContent = wasLabel;
         acting.forEach(function(tr){ tr.classList.remove('acting'); });
         if (!got) return;
-        // The editor has said its piece: whatever the answer is, it
-        // shows in the sheet, not under a dialog that is still up.
-        closeEditor(form.closest('dialog.editor'));
         var doc = parse(got.html);
         // Queued is not done: the lane carries it out a moment later, so
         // look again shortly and the table shows what happened - a marked
@@ -3500,6 +3734,16 @@ _DASH_SCRIPT = """
         // shortcut after all (2026-09-14).
         var nothing = /[?&]said=(queued|no|refused|already|twice|gone|off|none|bad|auto)(?:[:&]|$)/;
         var worked = !nothing.test(got.url);
+        // The editor closes when the work went through and stays open
+        // with the reason in it when it did not. `closeEditor` used to
+        // run unconditionally twenty-nine lines above this, so a Save
+        // the verb refused discarded the typing and put its reason on
+        // the page behind the backdrop (the operator, 2026-09-20).
+        var dlg = form.closest('dialog.editor');
+        if (dlg) {
+          if (!worked) { editorSays(dlg, doc); return; }
+          dropEditor(dlg);
+        }
         // A paste that has been added is spent. The sheet comes out of
         // its preview here, before the swap, so the swap updates the
         // list rather than the stash behind it - and the box is
@@ -4329,7 +4573,8 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
-                f'<button class="quiet bad">Remove</button></form>')
+                f'<button class="quiet bad" data-busy="Removing&hellip;">'
+                f'Remove</button></form>')
         return f'<div class="doors">{"".join(doors)}</div>'
     # A row a run set aside gets Free: one press, back on the shelf, and
     # nothing else on the row touched (the operator, 2026-09-06).
@@ -4338,8 +4583,8 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
             f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
             f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
-            f'<button class="quiet ok" title="back on the shelf, as it is">'
-            f'Free</button></form>')
+            f'<button class="quiet ok" data-busy="Freeing&hellip;" '
+            f'title="back on the shelf, as it is">Free</button></form>')
     if meta["edit"]:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
@@ -4349,7 +4594,8 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
             f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
             f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
-            f'<button class="quiet bad">Remove</button></form>')
+            f'<button class="quiet bad" data-busy="Removing&hellip;">'
+            f'Remove</button></form>')
     return f'<div class="doors">{"".join(doors)}</div>'
 
 
@@ -4421,9 +4667,14 @@ def _pool_editor(kind: str, user: dict, rows: list[dict]) -> str:
           '<select name="state"><option value="free">free</option>'
           '<option value="set aside">set aside</option></select></label>'
           '</div>'
+          # Where a refusal lands. It went to the page behind the
+          # dialog, which with the manager open is under a backdrop, so
+          # a Save the verb turned down closed the editor and said why
+          # somewhere nobody could see (the operator, 2026-09-20).
+          '<p class="editsay" hidden></p>'
           '<div class="row"><button type="button" class="quiet" '
           'data-close-edit="1">Cancel</button>'
-          '<button class="go">Save</button></div>'
+          '<button class="go" data-busy="Saving&hellip;">Save</button></div>'
           '</form></dialog>')
 
 
@@ -5980,7 +6231,8 @@ def forbidden(user: dict) -> str:
 OFFER_PERMISSION = {"gmail": "may_add_gmail", "app": "may_add_gpt"}
 
 
-def needs_page(data: dict, user: dict, advice, said: str = "") -> str:
+def needs_page(data: dict, user: dict, advice, said: str = "",
+               said_note: str = "") -> str:
     """`advice` is failures.verdict, passed in rather than imported here:
     pages render, read decides, and the one module that may know the verdict
     table is the one assembling the data."""
@@ -5989,7 +6241,7 @@ def needs_page(data: dict, user: dict, advice, said: str = "") -> str:
             f'{total} waiting on a person</span></div>'
             f'<p class="sub">What the program refuses to decide on its own. '
             f'Each block says what it is and where the fix lives.</p>'
-            + _said(said, _POOL_SAID))
+            + _said(said, _POOL_SAID, user, said_note))
     if not total:
         body += ('<div class="panel ok"><p class="empty">Nothing is waiting '
                  'on anyone.</p></div>')
@@ -6837,6 +7089,16 @@ _POOL_SAID = {
     "auto": "Manual login is off: accounts log in on their own on the next "
             "pass, nothing to press.",
     "none": "Tick at least one account first.",
+    # `no` is what a verb that ran and refused answers with. It had no
+    # entry here at all, so `_said` returned "" and a refusal on a pool
+    # page drew no banner whatever - the press looked like it had done
+    # nothing. The sentence is a fallback: the verb's own words, read off
+    # the settled row, are what is normally shown (2026-09-20).
+    "no": "That did not go through - open Requests for the reason.",
+    "removed-gmail": "Removed - the row is out of the Gmail pool.",
+    "removed-gpt": "Removed - the row is out of the GPT pool.",
+    "removed-spotify": "Removed - the row is out of the Spotify pool.",
+    "removed-proxy": "Removed - the exit is out of the pool.",
 }
 
 
@@ -7174,7 +7436,8 @@ def _why(row: dict, advice) -> str:
 
 
 def gmail_pool_page(data: dict, user: dict, said: str = "", *,
-                    advice=None, editing: int = 0) -> str:
+                    advice=None, editing: int = 0,
+                    said_note: str = "") -> str:
     """One question per view, one table each.
 
     Queued is the front door: how much stock there is, and the box that
@@ -7201,7 +7464,7 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
             f'<div class="top"><h2>Gmail Pool</h2>'
             f'<span class="sub" style="margin:0">{_gmail_stock(counts)}</span>'
             f'<span class="status">{right}</span></div>'
-            + _said(said, _POOL_SAID))
+            + _said(said, _POOL_SAID, user, said_note))
     if view == "queued":
         body += _gmail_add(user, data.get("known_sellers") or [])
     body += _view_pills("/pools/gmail", GMAIL_VIEWS, view, counts)
@@ -7578,7 +7841,8 @@ def _proxy_sentence(view: str, counts: dict, data: dict, tested: str) -> str:
 
 
 def proxy_pool_page(data: dict, user: dict, said: str = "", *,
-                    q: str = "", show_ignored: bool = False) -> str:
+                    q: str = "", show_ignored: bool = False,
+                    said_note: str = "") -> str:
     """One question per view, one table each.
 
     Free is the front door: how many exits a build can take, when they
@@ -7621,7 +7885,7 @@ def proxy_pool_page(data: dict, user: dict, said: str = "", *,
             f'<span class="sub" style="margin:0">'
             f'{_proxy_sentence(view, counts, data, tested)}</span>'
             f'<span class="status">{right}</span></div>'
-            + _said(said, _POOL_SAID))
+            + _said(said, _POOL_SAID, user, said_note))
     if view == "free":
         body += _proxy_add(user)
     body += _view_pills("/pools/proxy", PROXY_VIEWS, view, counts)
@@ -7846,7 +8110,8 @@ def _gpt_sentence(view: str, counts: dict, data: dict, warm) -> str:
 
 def gpt_pool_page(data: dict, user: dict, said: str = "", *,
                   explain=None, manual_login: bool = False,
-                  form: dict | None = None, error: str = "") -> str:
+                  form: dict | None = None, error: str = "",
+                  said_note: str = "") -> str:
     """One question per view, one table each.
 
     Waiting is the front door: how many accounts have no phone yet,
@@ -7884,7 +8149,7 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
             f'<span class="sub" style="margin:0">'
             f'{_gpt_sentence(view, counts, data, warm)}</span>'
             f'<span class="status">{right}</span></div>'
-            + _said(said, _POOL_SAID))
+            + _said(said, _POOL_SAID, user, said_note))
     if view == "waiting":
         body += _gpt_add(user, form, error)
     body += _view_pills("/pools/gpt", GPT_VIEWS, view, counts)

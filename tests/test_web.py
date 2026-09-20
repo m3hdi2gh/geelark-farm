@@ -4622,8 +4622,15 @@ def test_the_editor_shows_what_the_row_holds_and_clears_only_on_purpose():
     script = pages._DASH_SCRIPT
     assert "f.password.value = tr.dataset.password || ''" in script
     assert "f.secret.value = tr.dataset.secret || ''" in script
-    assert "closeEditor(form.closest('dialog.editor'))" in script, (
-        "the answer shows in the sheet, not under the dialog")
+    # The answer decides. It used to close whatever came back - twenty-nine
+    # lines before the code that works out whether the save went through -
+    # so a refusal threw the typing away and put its reason on the page
+    # behind the overlay backdrop (the operator, 2026-09-20).
+    order = script.index("var worked = !nothing.test")
+    assert script.index("dropEditor(dlg);", order) > order, (
+        "the editor closes after the verdict is known, not before it")
+    assert "if (!worked) { editorSays(dlg, doc); return; }" in script, (
+        "a refusal keeps the editor open and says why inside it")
 
     table = pages._pool_table(
         "gmail", [dict(rows[0], password="p4ss", secret="JBSWY3DP",
@@ -4797,7 +4804,8 @@ def test_the_drawer_does_not_freeze_the_page_behind_it():
     gate = pages._DASH_SCRIPT.split("function heldOpen(){", 1)[1]
     gate = gate.split("function reloadWhenSettled", 1)[0]
     assert "openKind !== 'phone'" in gate
-    assert "if (heldOpen()) { settled.since = 0; return false; }" in gate
+    assert ("if (heldOpen() || busyHere())"
+            " { settled.since = 0; return false; }" in gate)
 
 
 def test_the_drawer_says_what_a_press_did_and_can_stop_a_build():
@@ -6506,8 +6514,19 @@ def test_a_question_waiting_for_an_answer_holds_the_page():
     from geelark_farm.web import pages
 
     script = pages._DASH_SCRIPT
+    # Both of these sat inside `mayRedraw`, which `settled` overrides
+    # after HELD_CEILING - so a question nobody had answered, and an
+    # editor holding unsent typing, each got twenty seconds and then the
+    # swap took them anyway. They are working surfaces, not gestures
+    # somebody left standing, so they hold for as long as they are up
+    # (the operator, 2026-09-20).
     assert "document.querySelector('.mini')" in script
-    assert "|| document.querySelector('dialog[open]')) return false;" in script
+    assert "document.querySelector('dialog[open]')" in script
+    gate = script[script.index("function busyHere()"):]
+    assert "return !!(document.querySelector('.mini')" in gate
+    assert ("if (heldOpen() || busyHere())"
+            " { settled.since = 0; return false; }" in script), (
+        "held while it is up, not until the ceiling")
 
 
 def test_the_page_is_never_held_silently_for_ever():
@@ -7047,7 +7066,8 @@ def test_the_page_holds_still_while_a_sheet_is_open(web, monkeypatch):
     held = body[body.index("function heldOpen()"):]
     assert "return !!(o && !o.hidden && openKind && openKind !== 'phone');" in held
     settled = body[body.index("function settled()"):]
-    assert "if (heldOpen()) { settled.since = 0; return false; }" in settled
+    assert ("if (heldOpen() || busyHere()) "
+            "{ settled.since = 0; return false; }" in settled)
     # The dead line went with it: it sat after a `return` and named two
     # variables that live in another function.
     assert "return !(o && !o.hidden && openKind !== 'phone') && !typing;" \
@@ -7850,3 +7870,242 @@ def test_the_foot_is_never_grey_while_the_top_is_red():
         assert '<span class="gldot"></span>' in line
         assert f'class="glcell {worst}"' in line, (
             f"{name}: nothing said which reading it was")
+
+
+# ---------------------------------------- a press says what it did (step 1)
+def test_every_word_a_press_can_answer_with_has_a_sentence():
+    """The one test that stops this whole class coming back.
+
+    `back` is the request's own field, so a press made in the pool
+    manager can land on the dashboard or on a pool page, and every table
+    a `back` can reach has to know every word `_act` can say. `no` was
+    missing from `_POOL_SAID`, so `_said` returned "" and a refusal on a
+    pool page drew no banner at all - the press looked like it had done
+    nothing (the operator, 2026-09-20).
+    """
+    import inspect
+    import re
+
+    from geelark_farm.web import app, pages
+
+    act = inspect.getsource(app._Handler._act)
+    # What `_act` itself can answer with, read off its own source rather
+    # than listed here: a list is a second place to remember.
+    # A plain word, or an f-string whose word is followed by the request
+    # id. `f"{said_word}:{req}"` is the caller's, and comes in below.
+    words = set(re.findall(r'_said_url\(back, f?"([a-z][a-z-]*)(?::|")', act))
+    words.add("done")                    # the default `said_word`
+    # And the words a caller passes for a press that means something
+    # more particular than "done".
+    words |= set(re.findall(r'said_word="([a-z-]+)"',
+                            inspect.getsource(app)))
+
+    assert {"refused", "no", "queued", "already", "twice"} <= words, (
+        "the reader above stopped finding what _act answers with")
+    missing = sorted(w for w in words if w not in pages._DASH_SAID)
+    assert not missing, f"no sentence on the dashboard for {missing}"
+    # A pool press posts its own `back`, so the pool tables must know
+    # everything `_act` can say. The two that are fixed to a phone page
+    # or to "/" are the exceptions, named so they cannot grow quietly.
+    lands_on_a_pool = words - {"asked", "cancelled", "dismissed"}
+    gaps = sorted(w for w in lands_on_a_pool if w not in pages._POOL_SAID)
+    assert not gaps, f"no sentence on the pool pages for {gaps}"
+
+
+def test_the_verbs_own_sentence_survives_a_press_that_worked():
+    """free_gmail settles "x@y is back on the shelf" and the operator was
+    shown "Done - it is already in." - a sentence about pasting stock -
+    because the note was read back only when the word was `no` (the
+    operator, 2026-09-20)."""
+    import inspect
+
+    from geelark_farm.web import app
+
+    said = inspect.getsource(app._Handler._said_note)
+    assert 'if word != "no" or not req.isdigit():' not in said, (
+        "a press that WORKED has a sentence worth reading too")
+    assert "if not req.isdigit():" in said, (
+        "a token with no request id has no row to read")
+
+
+def test_the_pool_pages_are_handed_the_sentence_and_the_reader():
+    """`_said` prefers the verb's own words and needs the reader to draw
+    an Undo. All four pool pages were called with neither."""
+    import inspect
+
+    from geelark_farm.web import app, pages
+
+    for name in ("gmail_pool_page", "gpt_pool_page", "proxy_pool_page",
+                 "needs_page"):
+        fn = getattr(pages, name)
+        assert "said_note" in inspect.signature(fn).parameters, name
+        body = inspect.getsource(fn)
+        assert "_said(said, _POOL_SAID, user, said_note)" in body, name
+
+    # Four pool pages, plus the dashboard, which has had it all along.
+    handler = inspect.getsource(app)
+    assert handler.count("said_note=self._said_note(") == 5, (
+        "every pool page is handed the settled row's own sentence")
+
+
+def test_a_banner_is_dressed_wherever_it_arrives():
+    """`up` is the only rule that lifts a banner out of the page and over
+    the manager's backdrop. It lived inside `init()`, and `sayIt` runs
+    after `swapRow` has already called `init()` - so a one-row press drew
+    its answer undressed, behind a 72%-black backdrop: rendered
+    perfectly, invisible perfectly (the operator, 2026-09-20)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "function dressToast(said){" in script
+    say = script[script.index("function sayIt(doc){"):]
+    say = say[:say.index("\n  }")]
+    assert "dressToast(said);" in say, "the one that has no next init()"
+    # And still from init, for a banner the server sent with the page.
+    assert "dressToast(document.querySelector('.said.toast'));" in script
+
+
+def test_a_row_the_press_moved_says_where_it_went():
+    """Free takes an errored Gmail to `current`, and the sift at the end
+    of `init()` hid it on the spot - the row simply vanished from under
+    the chip being looked at."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "moved(theirs, sheet);" in script
+    moved = script[script.index("function moved(tr, sheet){"):]
+    assert "tr.classList.add('moved');" in moved
+    assert "'now under '" in moved
+    # Kept for one sift, not exempted: the next one files it away.
+    assert "var went = tr.classList.contains('moved');" in script
+    assert "if (went) tr.classList.remove('moved');" in script
+
+
+def test_the_slow_looking_doors_say_what_they_are_doing():
+    """A Test all said nothing for sixteen calls and read as a hang; the
+    account pools' own doors had never been given the same treatment."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True, "may_add_gpt": True}
+    doors = pages._pool_row_doors(
+        "gmail", {"address": "x@y.com", "state": "set aside"}, user)
+    assert 'data-busy="Freeing&hellip;"' in doors
+    assert 'data-busy="Removing&hellip;"' in doors
+    assert 'data-busy="Saving&hellip;"' in pages._pool_editor(
+        "gmail", user, [{"address": "x@y.com", "seller": "LEO"}])
+
+
+# ------------------------------ the editor keeps what was typed (step 2)
+def test_a_click_on_the_dark_asks_before_it_throws_work_away():
+    """`showModal` puts the dialog in the top layer, so a click anywhere
+    in the ~85% of the screen outside a 560px box hit-tests to the
+    <dialog> itself - and that closed the editor and discarded minutes of
+    correction, with no question and no way back (the operator,
+    2026-09-20)."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert ("if (e.target.matches('dialog.editor')) {\n"
+            "      askToDrop" in script)
+    ask = script[script.index("function askToDrop(dlg){"):]
+    ask = ask[:ask.index("\n  }")]
+    assert "if (!editorDirty(dlg)) { closeEditor(dlg); return; }" in ask, (
+        "nothing typed, nothing to ask about")
+    assert "'Throw away the changes to '" in ask
+    # Escape is the same hand, one key over.
+    assert "dlg.addEventListener('cancel', function(ev){" in script
+    assert "ev.preventDefault();\n        askToDrop(dlg);" in script
+
+
+def test_the_editor_keeps_a_draft_of_what_was_not_saved():
+    """openEditor was a pure refill from the row's data attributes, so
+    whatever closed the dialog took the typing with it."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "var drafts = {};" in script
+    assert "keepDraft(dlg);" in script
+    assert "drafts[draftKey(dlg, address)]" in script, "offered back on reopen"
+    # Gone when the work went through, and when they said throw it away.
+    drop = script[script.index("function dropEditor(dlg){"):]
+    drop = drop[:drop.index("\n  }")]
+    assert "delete drafts[draftKey(" in drop
+    # A dialog the editor did not put the value in must not be told it
+    # was typed in: only a real input event sets dirty.
+    assert "dlg.addEventListener('input', function(){" in script
+
+
+def test_the_editor_is_told_why_a_save_was_refused():
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True}
+    editor = pages._pool_editor("gmail", user, [{"address": "x@y.com"}])
+    assert '<p class="editsay" hidden></p>' in editor, "a place for it inside"
+    says = pages._DASH_SCRIPT
+    assert "function editorSays(dlg, doc, words, bad){" in says
+    assert "slot.classList.toggle('bad', bad !== false);" in says
+
+
+# -------------------------------- the guards that were not there (step 3)
+def test_a_typing_hand_actually_holds_the_redraw():
+    """`var typing` was worked out and then nothing read it, so from
+    September the guard its own comment describes did not exist: every
+    page but the dashboard swapped under a typing hand on the
+    four-second floor (the operator, 2026-09-20)."""
+    from geelark_farm.web import pages
+
+    gate = pages._DASH_SCRIPT[
+        pages._DASH_SCRIPT.index("function mayRedraw(){"):]
+    gate = gate[:gate.index("\n  }")]
+    assert "var typing = !!live" in gate
+    assert "if (typing) return false;" in gate, (
+        "computed and dropped on the floor is how it shipped")
+    assert gate.index("var typing") < gate.index("if (typing)")
+    # And nothing else in there is worked out and never read.
+    assert "var o = ov();" not in gate
+
+
+def test_an_open_dialog_is_held_for_as_long_as_it_is_open():
+    """`.mini` and `dialog[open]` sat inside `mayRedraw`, which `settled`
+    overrides after HELD_CEILING - so an unanswered question and an
+    editor full of unsent typing each got twenty seconds."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    held = script[script.index("function settled(){"):]
+    held = held[:held.index("\n  }")]
+    assert "if (heldOpen() || busyHere())" in held
+    assert held.index("busyHere()") < held.index("HELD_CEILING"), (
+        "above the ceiling, not under it")
+
+
+def test_the_caret_comes_back_where_it_was():
+    """Six routines put the page back together after a swap and not one
+    of them ever kept the cursor: the values returned and the caret went
+    to the top, which reads as being thrown out mid-word."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    assert "kept.at = {key: whichField(live)};" in script
+    assert "kept.at.from = live.selectionStart;" in script
+    back = script[script.index("function typedBack(kept){"):]
+    assert "box.focus({preventScroll: true});" in back
+    assert "box.setSelectionRange(kept.at.from, kept.at.to);" in back
+    # Before the values, so a handler they wake cannot steal the focus.
+    assert back.index("box.focus(") < back.index("if (!kept.length) return;")
+
+
+def test_a_select_put_back_says_so():
+    """Setting `.value` fires nothing, so the build card's own gate never
+    heard the Gmail come back and left the account box hidden and
+    disabled - and Build then posted a kind with no account on it."""
+    from geelark_farm.web import pages
+
+    back = pages._DASH_SCRIPT[
+        pages._DASH_SCRIPT.index("function typedBack(kept){"):]
+    back = back[:back.index("\n  function ")]
+    assert "if (el.tagName === 'SELECT') told.push(el);" in back
+    assert ("told.forEach(function(el){"
+            " el.dispatchEvent(new Event('change')); });" in back)

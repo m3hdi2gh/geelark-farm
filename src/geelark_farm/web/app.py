@@ -166,9 +166,10 @@ class _Handler(BaseHTTPRequestHandler):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
                 query = parse_qs(self.path.partition("?")[2])
+                said = (query.get("said") or [""])[0]
                 return self._html(200, pages.needs_page(
-                    read.needs(self.settings), user, _advice,
-                    said=(query.get("said") or [""])[0]))
+                    read.needs(self.settings), user, _advice, said=said,
+                    said_note=self._said_note(said)))
             if path == "/pools":
                 return self._redirect("/pools/gmail")
             # The three pool pages (C5): shared stock, so everyone signed
@@ -189,7 +190,8 @@ class _Handler(BaseHTTPRequestHandler):
                                     seller=first.get("seller", ""),
                                     page=_page_number(first)),
                     user, said=first.get("said", ""), advice=_advice,
-                    editing=int(editing) if editing.isdigit() else 0))
+                    editing=int(editing) if editing.isdigit() else 0,
+                    said_note=self._said_note(first.get("said", ""))))
             if path == "/pools/proxy":
                 unlisted, ignored, tests = self._proxy_state()
                 data = read.proxy_pool(self.settings,
@@ -205,7 +207,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.proxy_pool_page(
                     data, user, said=first.get("said", ""),
                     q=first.get("q", ""),
-                    show_ignored=first.get("ignored") == "1"))
+                    show_ignored=first.get("ignored") == "1",
+                    said_note=self._said_note(first.get("said", ""))))
             if path == "/pools/gpt/delivered.csv":
                 # The delivered archive, whole, for whoever reconciles it
                 # against the customer panel: the page shows fifty at a
@@ -221,7 +224,8 @@ class _Handler(BaseHTTPRequestHandler):
                                   q=first.get("q", ""),
                                   page=_page_number(first)),
                     user, said=first.get("said", ""), explain=_explain,
-                    manual_login=self.settings.manual_login))
+                    manual_login=self.settings.manual_login,
+                    said_note=self._said_note(first.get("said", ""))))
             if path in ("/events", "/events.csv"):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -723,7 +727,15 @@ class _Handler(BaseHTTPRequestHandler):
         (2026-09-07).
         """
         word, _, req = (said or "").partition(":")
-        if word != "no" or not req.isdigit():
+        # Any token carrying a request id, not only `no`. The condition
+        # was `word != "no"`, so a press that WORKED had its sentence
+        # read off the row and thrown away: free_gmail settles
+        # "x@y is back on the shelf" and the operator was shown
+        # "Done - it is already in.", which is a sentence about pasting
+        # stock (the operator, 2026-09-20). `_said` prefers the note and
+        # falls back to the table, so the general word stays for the
+        # tokens that carry no id.
+        if not req.isdigit():
             return ""
         from ..store import actions as store_actions
 
