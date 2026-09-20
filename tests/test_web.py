@@ -8398,11 +8398,28 @@ def test_every_request_is_logged_with_what_it_cost(web, monkeypatch, caplog):
     client.login()
     with caplog.at_level(logging.INFO, logger="geelark_farm.web.app"):
         client.request("GET", "/phones")
-    lines = [r.getMessage() for r in caplog.records
-             if r.getMessage().startswith("web GET")]
+        # The line is written when the answer is out, not when it is
+        # begun - that is the only moment its size is known - so it
+        # lands on the server thread a beat after the client has its
+        # response. Waited for rather than assumed.
+        lines = []
+        for _ in range(100):
+            lines = [r.getMessage() for r in caplog.records
+                     if r.getMessage().startswith("web GET")]
+            if lines:
+                break
+            time.sleep(0.02)
     assert lines, "no request line at INFO"
     assert any("/phones" in x and "ms" in x and "bytes" in x for x in lines), (
         lines)
+    # With a real byte count on it: `send_response` calls `log_request`
+    # before a single header has gone out, so the line said `0 bytes`
+    # for every request on the day it was added (2026-09-21).
+    import re as _re
+
+    sizes = [int(m.group(1)) for x in lines
+             if (m := _re.search(r"(\d+) bytes", x))]
+    assert any(n > 100 for n in sizes), f"every answer weighed nothing: {lines}"
     # Not the stream: one connection held open for hours, whose line
     # would say nothing true about how long anything took.
     assert not any("/live" in x for x in lines)

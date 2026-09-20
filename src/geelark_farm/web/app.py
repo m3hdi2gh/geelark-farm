@@ -2155,7 +2155,9 @@ class _Handler(BaseHTTPRequestHandler):
     def handle_one_request(self) -> None:
         self._began = time.perf_counter()
         self._sent = 0
+        self._code = "-"
         super().handle_one_request()
+        self._say_request()
 
     def send_header(self, keyword: str, value: str) -> None:
         # What the answer weighs, for the line `log_request` writes. Not
@@ -2167,21 +2169,33 @@ class _Handler(BaseHTTPRequestHandler):
         super().send_header(keyword, value)
 
     def log_request(self, code="-", size="-") -> None:
+        """Kept, not written.
+
+        `send_response` calls this before a single header has gone out,
+        so at this moment the answer's size is not known - and the line
+        said `0 bytes` for every request on the day it was added
+        (2026-09-21). `_say_request` writes it when the answer is out.
+        """
+        self._code = code
+
+    def _say_request(self) -> None:
         """One line per request, at INFO, with what it cost.
 
         The capture starts at INFO (`logdb`) and request lines went to
-        DEBUG, so not one request has ever reached the log table - and
+        DEBUG, so not one request had ever reached the log table - and
         "the console feels slow" had no number anywhere to check it
         against (2026-09-20). `/live` is left out: it is one connection
         held open for hours, and its line would say nothing true about
         how long anything took.
         """
         path = getattr(self, "path", "") or ""
-        if path.split("?")[0] == "/live":
+        if not path or path.split("?")[0] == "/live":
             return
         spent = (time.perf_counter() - getattr(self, "_began", 0.0)) * 1000
-        log.info("web %s %s %s %.0fms %s bytes", self.command, path[:120],
-                 code, spent, getattr(self, "_sent", 0))
+        log.info("web %s %s %s %.0fms %s bytes",
+                 getattr(self, "command", "?"), path[:120],
+                 getattr(self, "_code", "-"), spent,
+                 getattr(self, "_sent", 0))
 
 
 #: Where "Log in selected" may send the person back: the two pages that
