@@ -122,6 +122,35 @@ def _why_it_tripped(pulse: dict) -> str:
     return "Mostly: " + "; ".join(parts) + "."
 
 
+def _what_to_do(pulse: dict) -> str:
+    """What to go and fix, decided by whose fault the failures were.
+
+    It used to say "Add fresh stock" whatever had happened. On the night
+    GeeLark's balance ran out that was six builds refused by somebody
+    else's billing, and the console's one red line sent the operator to
+    a pool that was perfectly full (2026-09-19).
+
+    The taxonomy already knows: `failures.verdict` blames the
+    credential, the exit or the device for every reason there is, and
+    the stock is only the answer to the first.
+    """
+    from ..failures import CREDENTIAL, verdict
+
+    reasons = [str(r) for r in (pulse.get("breaker_reasons") or [])]
+    clear = "then press Clear breaker beside the status line."
+    if not reasons:
+        return f"Find out why, {clear}"
+    blames = [verdict(r).blame for r in reasons]
+    if all(b == CREDENTIAL for b in blames):
+        return f"Add fresh stock, {clear}"
+    if any(b == CREDENTIAL for b in blames):
+        return (f"Some of that is the stock and some of it is not - read "
+                f"the builds before adding rows, {clear}")
+    # Nothing here is the pool's doing, so nothing in the pool fixes it.
+    return (f"None of that is the stock, so adding rows will not help: "
+            f"fix what the reasons name, {clear}")
+
+
 def alerts(pulse: dict, counts: dict) -> list[dict]:
     """What is wrong right now, as sentences with the page that fixes it.
     Read off the last pass's pulse, never recomputed; empty when the
@@ -146,9 +175,7 @@ def alerts(pulse: dict, counts: dict) -> list[dict]:
         found.append({"level": "bad", "href": "/events?kind=builds",
                       "text": f"Building has stopped - {n} builds in a row "
                               f"failed, and {limit} is the limit. "
-                              f"{_why_it_tripped(pulse)} Add fresh stock, "
-                              f"then press Clear breaker beside the status "
-                              f"line."})
+                              f"{_why_it_tripped(pulse)} {_what_to_do(pulse)}"})
     if pulse.get("paused"):
         found.append({"level": "warn", "href": "/",
                       "text": "Building is paused (Pause building is ticked)."})

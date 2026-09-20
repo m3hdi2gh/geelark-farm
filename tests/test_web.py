@@ -7570,3 +7570,27 @@ def test_the_geelark_line_is_at_the_foot_and_not_in_the_rail():
     foot = body.index("_geelark_line(data, user)")
     assert foot > body.index("_pool_manager("), "it goes after the page"
     assert "_geelark_line" not in body[rail:body.index('</div>', rail)]
+
+
+def test_the_breaker_does_not_send_you_to_a_pool_that_is_full():
+    """Its one red line said "Add fresh stock" whatever had happened. On
+    the night GeeLark's balance ran out that was six builds refused by
+    somebody else's billing, and it sent the operator to a pool that was
+    perfectly full (2026-09-19)."""
+    from geelark_farm.web import read
+
+    def advice(*reasons):
+        return read._what_to_do({"breaker_reasons": list(reasons)})
+
+    # Nothing the pool can fix.
+    said = advice("phone_would_not_start", "phone_would_not_start")
+    assert "will not help" in said and "Add fresh stock" not in said
+    # The case the old sentence was written for.
+    assert "Add fresh stock" in advice("wrong_password", "wrong_password")
+    # A mixture is not either one.
+    mixed = advice("wrong_password", "phone_would_not_start")
+    assert "some of it is not" in mixed
+    # And every one of them still says how to clear it.
+    for said in (advice(), advice("wrong_password"),
+                 advice("phone_would_not_start")):
+        assert "Clear breaker" in said
