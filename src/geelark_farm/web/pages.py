@@ -18,6 +18,12 @@ import time
 from html import escape as esc
 from urllib.parse import quote
 
+# The only thing this module takes from the rest of the package, and it
+# takes judgements rather than data: when a number is worth a colour is
+# the same question whether it is being drawn at the foot of a page or
+# raised as an alert, and two copies of an answer drift.
+from .read import PLAN_WARN_DAYS, REFUSAL_SHOWN_FOR, SLOTS_LOW
+
 #: The console's shell - the "Direction A" the owner chose on the design
 #: canvas (2026-09-01): a dark ops console, a rail of links on the left with
 #: live counts, panels on a deep blue ground, IBM Plex for both faces. One
@@ -4897,16 +4903,6 @@ def _new_dialog(ident: str, title: str,
             f'</div></div></dialog>')
 
 
-#: How long a phone refusing to start stays on the line. GeeLark says
-#: nothing about the account's money until it refuses one, so the
-#: refusal IS the reading - and a reading an hour old is still the last
-#: thing known.
-REFUSAL_SHOWN_FOR = 3600.0
-
-#: When to start saying the subscription is nearly over.
-PLAN_WARN_DAYS = 10
-
-
 def _geelark_line(data: dict, user: dict) -> str:
     """What GeeLark says about the account, along the foot of the page.
 
@@ -4931,6 +4927,9 @@ def _geelark_line(data: dict, user: dict) -> str:
     if not plan and not found.get("refusal"):
         return ""
     bits = []
+    data = dict(data, **{k: found.get(k) for k in
+                         ("phones_running", "phones_total")
+                         if found.get(k) is not None})
 
     total = int(plan.get("profiles") or 0)
     free = int(plan.get("availableProfiles") or 0)
@@ -4939,6 +4938,24 @@ def _geelark_line(data: dict, user: dict) -> str:
         share = used / total
         tone = "red" if share >= 0.95 else "amber" if share >= 0.8 else ""
         bits.append(_gl_bit(f"{used}/{total} phone slots", tone))
+
+    # The pool is shared with browser profiles, which this API cannot
+    # list. Naming the gap answers "why did a create fail while the tab
+    # looks half empty" without a search (cli.cmd_plan has said so for
+    # a month).
+    running = int(data.get("phones_running") or 0)
+    if total:
+        ours = int(data.get("phones_total") or 0)
+        elsewhere = total - free - ours
+        if elsewhere > 0:
+            # Not a colour: it is an explanation, not a fault. The slot
+            # count beside it is what goes amber when the pool is
+            # filling, whoever is filling it.
+            bits.append(_gl_bit(f"{elsewhere} held elsewhere", ""))
+    if running:
+        # Billing is per minute while a phone is running, so this is the
+        # only number on the line that is costing money as it is read.
+        bits.append(_gl_bit(f"{running} running", ""))
 
     ends = plan.get("expirationTime")
     if ends:
@@ -4951,6 +4968,15 @@ def _geelark_line(data: dict, user: dict) -> str:
         word = (f"plan ends {when.day} {when.strftime('%b')}"
                 if days >= 0 else "plan expired")
         bits.append(_gl_bit(f"{word} ({days}d)" if days >= 0 else word, tone))
+
+    # `parallels` is what the plan *includes*, not what is left, so it
+    # is a limit worth showing only when there is one. This account's is
+    # zero, which means every running phone is billed by the minute from
+    # the balance - said in the note at the end rather than as an item,
+    # because it is a standing fact and not news.
+    included = int(plan.get("parallels") or 0)
+    if included:
+        bits.append(_gl_bit(f"{included} parallel", ""))
 
     said = str(found.get("refusal") or "")
     at = found.get("refused_at")
@@ -4965,8 +4991,10 @@ def _geelark_line(data: dict, user: dict) -> str:
     return (f'<p class="glfoot"><span class="gltag">GeeLark</span>'
             + "".join(bits)
             + '<span class="glnone" title="/v1/pay/plan/info carries the '
-              'slots and the expiry and nothing about money; no other '
-              'endpoint answers">no balance in the API</span></p>')
+              'slots, the expiry and the included parallels, and nothing '
+              'about money; no other endpoint answers. A running phone is '
+              'billed by the minute from that balance.">'
+              'billed per minute &middot; no balance in the API</span></p>')
 
 
 def _gl_bit(word: str, tone: str) -> str:

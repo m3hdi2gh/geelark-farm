@@ -7418,16 +7418,88 @@ def _glark(**found):
          "is_admin": True, "may_login_accounts": True})
 
 
-def test_the_geelark_line_shows_the_two_limits_the_api_really_gives():
+def test_the_geelark_line_shows_everything_critical_the_api_gives():
+    """Everything from `/v1/pay/plan/info` that can stop the farm or
+    cost money, and the farm's own use of it."""
     import time
 
     line = _glark(plan={"profiles": 40, "availableProfiles": 32,
-                        "expirationTime": 1792110224},
-                  at=time.time() - 300)
+                        "parallels": 0, "expirationTime": 1792110224},
+                  at=time.time() - 300, phones_total=6, phones_running=2)
 
-    assert "8/40 phone slots" in line
+    assert "8/40 phone slots" in line, "the [44002] limit"
+    assert "2 held elsewhere" in line, (
+        "the pool is shared with browser profiles this API cannot list, "
+        "which is what answers 'why did a create fail'")
+    assert "2 running" in line, "per-minute billing, costing money as it reads"
     assert "plan ends 16 Oct (26d)" in line
     assert "5m ago" in line
+    assert "billed per minute" in line and "no balance in the API" in line
+
+
+def test_a_plan_that_includes_parallels_says_so_and_one_that_does_not_stays_quiet():
+    """`parallels` is what the plan includes, not what is left, so it is
+    a limit only when there is one. Zero is this account's normal and is
+    covered by the note at the end."""
+    import time
+
+    base = {"profiles": 40, "availableProfiles": 32,
+            "expirationTime": 1792110224}
+    assert "<span>2 parallel</span>" in _glark(plan=dict(base, parallels=2),
+                                               at=time.time())
+    none = _glark(plan=dict(base, parallels=0), at=time.time())
+    assert "parallel</span>" not in none, "no item for a limit there is not"
+
+
+def test_geelark_shouts_on_the_alert_strip_when_it_is_the_thing_that_is_wrong():
+    """The foot of the page is where these numbers belong while nothing
+    is the matter. When one of them is what stops the farm it belongs at
+    the top, with everything else that has gone wrong (the operator,
+    2026-09-20)."""
+    import time
+
+    from geelark_farm.web import read
+
+    well = {"geelark_plan": {"plan": {"profiles": 40,
+                                      "availableProfiles": 32,
+                                      "expirationTime": 1792110224}}}
+    assert read.geelark_alerts(well) == [], "quiet while all is well"
+
+    refused = dict(well, geelark_refusal={
+        "said": "start failed [41001] balance not enough",
+        "at": time.time() - 60})
+    raised = read.geelark_alerts(refused)
+    assert [a["level"] for a in raised] == ["bad"]
+    assert "will not start" in raised[0]["text"]
+    assert "does not report the balance" in raised[0]["text"], (
+        "it says why there was no earlier warning")
+
+    full = {"geelark_plan": {"plan": {"profiles": 40,
+                                      "availableProfiles": 0,
+                                      "expirationTime": 1792110224}}}
+    assert read.geelark_alerts(full)[0]["level"] == "bad"
+    nearly = {"geelark_plan": {"plan": {"profiles": 40,
+                                        "availableProfiles": 2,
+                                        "expirationTime": 1792110224}}}
+    assert read.geelark_alerts(nearly)[0]["level"] == "warn"
+
+
+def test_a_subscription_running_out_is_raised_before_it_does():
+    import datetime
+
+    from geelark_farm.web import read
+
+    def days_out(n):
+        when = (datetime.datetime.now(datetime.timezone.utc)
+                + datetime.timedelta(days=n, hours=1))
+        return read.geelark_alerts(
+            {"geelark_plan": {"plan": {"profiles": 40,
+                                       "availableProfiles": 32,
+                                       "expirationTime": int(when.timestamp())}}})
+
+    assert days_out(30) == [], "a month out is not news"
+    assert days_out(5)[0]["level"] == "warn"
+    assert days_out(1)[0]["level"] == "bad"
 
 
 def test_the_line_is_quiet_until_something_is_wrong():
@@ -7437,7 +7509,8 @@ def test_the_line_is_quiet_until_something_is_wrong():
     import time
 
     calm = _glark(plan={"profiles": 40, "availableProfiles": 32,
-                        "expirationTime": 1792110224}, at=time.time())
+                        "expirationTime": 1792110224}, at=time.time(),
+                  phones_total=6, phones_running=2)
 
     assert "var(--" not in calm, "nothing shouts when nothing is wrong"
     # And it colours only the part that has gone wrong.

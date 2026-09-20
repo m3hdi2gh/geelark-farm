@@ -14,7 +14,9 @@ narrowing lives HERE, beside the SQL, so a page cannot forget it.
 
 from __future__ import annotations
 
+import datetime
 import logging
+import time
 
 from ..config import Settings
 from ..store.db import Store
@@ -66,7 +68,13 @@ def nav_counts(settings: Settings) -> dict:
             "   WHERE error IS NOT NULL) AS broken,"
             " (SELECT count(*) FROM phones WHERE done_at IS NULL"
             "   AND tries >= 3) AS given_up,"
-            " (SELECT value FROM service_state WHERE key = 'pass') AS pulse"
+            " (SELECT value FROM service_state WHERE key = 'pass') AS pulse,"
+            " (SELECT value FROM service_state"
+            "   WHERE key = 'geelark_plan') AS geelark_plan,"
+            " (SELECT value FROM service_state"
+            "   WHERE key = 'geelark_refusal') AS geelark_refusal,"
+            " (SELECT count(*) FROM phones"
+            "   WHERE running AND done_at IS NULL) AS phones_running"
             " FROM resources")
     counts = dict(rows[0]) if rows else {"gmail": 0, "proxy": 0, "app": 0,
                                         "pending": 0, "broken": 0,
@@ -74,7 +82,8 @@ def nav_counts(settings: Settings) -> dict:
     counts["pulse"] = counts.get("pulse") or {}
     counts["needs"] = int(counts.get("broken") or 0) + int(
         counts.get("given_up") or 0)
-    counts["alerts"] = alerts(counts["pulse"], counts)
+    counts["alerts"] = (alerts(counts["pulse"], counts)
+                        + geelark_alerts(counts))
     return counts
 
 
@@ -398,6 +407,66 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
     }
 
 
+#: Slots left below which building is about to stop.
+SLOTS_LOW = 3
+
+#: How long a phone refusing to start stays news. GeeLark says nothing
+#: about the account's money until it refuses one, so the refusal IS the
+#: reading - and a reading an hour old is still the last thing known.
+REFUSAL_SHOWN_FOR = 3600.0
+
+#: When to start saying the subscription is nearly over.
+PLAN_WARN_DAYS = 10
+
+
+def geelark_alerts(counts: dict) -> list[dict]:
+    """GeeLark itself being the thing that is wrong.
+
+    The foot of the page carries these numbers quietly, which is where
+    they belong while nothing is the matter. When one of them is what
+    stops the farm it belongs here instead, with everything else that
+    has gone wrong - a red line at the top of every page rather than
+    something to scroll to (the operator, 2026-09-20).
+    """
+    found: list[dict] = []
+    kept = counts.get("geelark_plan") or {}
+    plan = kept.get("plan") or {}
+    refused = counts.get("geelark_refusal") or {}
+
+    said = str(refused.get("said") or "")
+    at = refused.get("at")
+    if said and at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR:
+        found.append({"level": "bad", "href": "/events?kind=builds",
+                      "text": f"GeeLark will not start phones - "
+                              f"{said}. Nothing can be built or signed in "
+                              f"until the account is topped up; the API "
+                              f"does not report the balance, so this "
+                              f"refusal is the only warning there is."})
+
+    free = plan.get("availableProfiles")
+    if free is not None and int(free) <= SLOTS_LOW:
+        total = int(plan.get("profiles") or 0)
+        found.append({
+            "level": "bad" if int(free) == 0 else "warn",
+            "href": "/phones",
+            "text": (f"GeeLark has {free} of {total} phone slots left. "
+                     f"Creating another fails with [44002]; delete phones "
+                     f"that are done, or raise the plan.")})
+
+    ends = plan.get("expirationTime")
+    if ends:
+        days = (datetime.datetime.fromtimestamp(int(ends),
+                                                datetime.timezone.utc)
+                - datetime.datetime.now(datetime.timezone.utc)).days
+        if days <= PLAN_WARN_DAYS:
+            found.append({
+                "level": "bad" if days <= 2 else "warn", "href": "/",
+                "text": (f"The GeeLark subscription "
+                         f"{'has expired' if days < 0 else f'ends in {days} day(s)'}"
+                         f". Every phone goes with it.")})
+    return found
+
+
 def _geelark(store) -> dict:
     """What GeeLark says about the account, as the keeper last heard it.
 
@@ -417,9 +486,19 @@ def _geelark(store) -> dict:
     found = {r["key"]: r["value"] for r in rows}
     kept = found.get("geelark_plan") or {}
     refused = found.get("geelark_refusal") or {}
+    # What the farm itself is using of the account, so the line can say
+    # how much of the slot pool is ours and how much is somebody's
+    # browser profiles - the question a full pool always raises.
+    mine = store._rows(
+        "SELECT count(*) AS total,"
+        " count(*) FILTER (WHERE running) AS running"
+        " FROM phones WHERE done_at IS NULL")
+    counted = dict(mine[0]) if mine else {"total": 0, "running": 0}
     return {"plan": kept.get("plan") or {}, "at": kept.get("at"),
             "refusal": refused.get("said") or "",
-            "refused_at": refused.get("at")}
+            "refused_at": refused.get("at"),
+            "phones_total": int(counted.get("total") or 0),
+            "phones_running": int(counted.get("running") or 0)}
 
 
 def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
