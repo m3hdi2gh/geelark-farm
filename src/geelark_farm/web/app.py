@@ -25,7 +25,7 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from .. import signals
 from ..config import Settings
@@ -93,11 +93,24 @@ class _Handler(BaseHTTPRequestHandler):
             # own auth, its own errors and its own 404-when-switched-off.
             if path.startswith("/api/"):
                 return api_v1.dispatch(self, path)
+            # The stylesheet, before the session gate: the sign-in page
+            # needs it and has no session yet. It is presentation, and
+            # its name is its own hash, so it is cacheable for ever by
+            # anything between here and the browser.
+            if path.startswith("/s/") and path.endswith(".css"):
+                return self._asset(path, private=False)
             if path == "/login":
                 return self._html(200, pages.login())
             user = self._user()
             if user is None:
                 return self._redirect("/login")
+            # The script, behind it: this is the console's behaviour -
+            # which endpoints exist, which fields they take, what each
+            # press does - and there is no reason to hand it to anybody
+            # who can reach the host. Cached `private`, which is all a
+            # one-browser cache needs.
+            if path.startswith("/s/") and path.endswith(".js"):
+                return self._asset(path, private=True)
             # A one-time password buys exactly one page: the one where the
             # person chooses their own. Everything else waits.
             if user.get("must_change_password") and path != "/password":
@@ -360,6 +373,11 @@ class _Handler(BaseHTTPRequestHandler):
             if origin and host and not origin.endswith("//" + host):
                 return self._html(403, pages.page("403", "<h2>Bad origin</h2>"))
             user = self._user()
+            # The console saying it broke. Answered with nothing at
+            # all: the page has already lost its footing and is not
+            # going to do anything with the reply.
+            if self.path == "/clienterror":
+                return self._client_error(entry["user"], field)
             if self.path == "/logout":
                 from ..store import sessions as store_sessions
 
@@ -1926,6 +1944,51 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             live.pulse.hold(-1)
 
+    def _client_error(self, user: dict, field: dict) -> None:
+        """A throw in the console's own script, into the log table.
+
+        Until this there was no channel at all by which the console
+        could report that it had broken for somebody: a throw leaves the
+        page looking perfectly ordinary with half its buttons dead, and
+        the only way anybody has ever found out is the operator saying
+        so (2026-09-20). WARNING, so it is above the INFO the capture
+        starts at and stands out in `/logs`.
+        """
+        log.warning(
+            "console broke for %s on %s: %s [build %s]%s",
+            user.get("username", "?"),
+            str(field.get("where") or "")[:200],
+            str(field.get("message") or "")[:500],
+            str(field.get("rev") or "")[:40],
+            ("\n" + str(field.get("stack") or "")[:2000]
+             if field.get("stack") else ""))
+        self._text(204, "")
+
+    def _asset(self, path: str, *, private: bool) -> None:
+        """One of the two files the page links to, under its own hash.
+
+        A name this build does not answer to is a 404 and not a redirect
+        to the current one: the only way to ask for a stale name is to
+        be a stale page, and a stale page has a stale script to go with
+        it - it should reload, which `gf-rev` makes it do.
+        """
+        from . import assets
+
+        found = assets.served(path)
+        if found is None:
+            return self._text(404, "no such build\n")
+        body, kind, _ = found
+        raw = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header(
+            "Cache-Control",
+            ("private" if private else "public")
+            + ", max-age=31536000, immutable")
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _html(self, code: int, body: str) -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -2021,6 +2084,37 @@ class _Handler(BaseHTTPRequestHandler):
         # file handler keeps DEBUG while the console shows INFO.
         log.debug("web: " + fmt, *args)
 
+    def handle_one_request(self) -> None:
+        self._began = time.perf_counter()
+        self._sent = 0
+        super().handle_one_request()
+
+    def send_header(self, keyword: str, value: str) -> None:
+        # What the answer weighs, for the line `log_request` writes. Not
+        # a try/except: there is nothing here worth surviving in silence,
+        # and a Content-Length that is not a number is not a thing this
+        # server sends.
+        if keyword.lower() == "content-length" and str(value).isdigit():
+            self._sent = int(value)
+        super().send_header(keyword, value)
+
+    def log_request(self, code="-", size="-") -> None:
+        """One line per request, at INFO, with what it cost.
+
+        The capture starts at INFO (`logdb`) and request lines went to
+        DEBUG, so not one request has ever reached the log table - and
+        "the console feels slow" had no number anywhere to check it
+        against (2026-09-20). `/live` is left out: it is one connection
+        held open for hours, and its line would say nothing true about
+        how long anything took.
+        """
+        path = getattr(self, "path", "") or ""
+        if path.split("?")[0] == "/live":
+            return
+        spent = (time.perf_counter() - getattr(self, "_began", 0.0)) * 1000
+        log.info("web %s %s %s %.0fms %s bytes", self.command, path[:120],
+                 code, spent, getattr(self, "_sent", 0))
+
 
 #: Where "Log in selected" may send the person back: the two pages that
 #: carry the ticks. Anything else in the form's `back` goes to the front.
@@ -2028,26 +2122,77 @@ LOGIN_BACKS = ("/", "/pools/gpt")
 
 #: Where a gmail button may send a person back to - the view it was
 #: pressed on, so the banner lands where the row is.
-GMAIL_BACKS = tuple(["/", "/pools/gmail"] + [f"/pools/gmail?view={v}"
-                                            for v in ("queued", "on_phone",
-                                                      "used", "errored")])
+#: Where a pool button may send a person back to, and what it may carry.
+#:
+#: Whole-string allowlists were the first shape and they could only hold
+#: the addresses somebody had thought to write down. Anything else was
+#: silently replaced by the default - so pressing Paid on a list
+#: filtered to one seller came back to the unfiltered queued view, and
+#: an Edit on page three of a hundred-row list came back to page one
+#: (2026-09-20). A rebuild is stricter than a match, not looser: the
+#: path must be one of these, and only these parameters survive, each
+#: checked for what it is allowed to be.
+_BACK_PATHS = {
+    "/": (),
+    "/pools/gmail": ("view", "seller", "page", "edit"),
+    "/pools/proxy": ("view", "q", "page", "ignored"),
+    "/pools/gpt": ("view", "q", "page"),
+    "/needs": (),
+    "/requests": (),
+}
+
+#: Which words each `view` may be. A view this page does not have is not
+#: an attack, it is a stale bookmark - and either way it is dropped.
+_BACK_VIEWS = {
+    "/pools/gmail": ("queued", "on_phone", "used", "errored"),
+    "/pools/proxy": ("free", "needs_hand", "on_phone", "all", "dead"),
+    "/pools/gpt": ("waiting", "on_phone", "delivered", "set_aside"),
+}
+
+
+def _back_to(field: dict, default: str) -> str:
+    """The address the form asked to return to, rebuilt from its parts.
+
+    Nothing of the request survives into the answer but a path this
+    module names and a handful of parameters it names too, each within
+    what it is allowed to be. What cannot be rebuilt is dropped, and
+    what is left is the default.
+    """
+    asked = str(field.get("back") or "").strip()
+    if not asked:
+        return default
+    path, _, query = asked.partition("?")
+    if path not in _BACK_PATHS:
+        return default
+    kept = []
+    seen = set()
+    for name, values in parse_qs(query, keep_blank_values=False).items():
+        if name not in _BACK_PATHS[path] or name in seen or not values:
+            continue
+        value = values[0].strip()
+        if not value or len(value) > 120:
+            continue
+        if name == "view" and value not in _BACK_VIEWS.get(path, ()):
+            continue
+        if name in ("page", "edit") and not value.isdigit():
+            continue
+        if name == "ignored" and value != "1":
+            continue
+        seen.add(name)
+        kept.append((name, value))
+    # In the order this module lists them, so the same request always
+    # rebuilds to the same address - which is what `_minute_key` and the
+    # browser's history both want.
+    kept.sort(key=lambda pair: _BACK_PATHS[path].index(pair[0]))
+    return path + ("?" + urlencode(kept) if kept else "")
 
 
 def _gmail_back(field: dict) -> str:
-    asked = (field.get("back") or "").strip()
-    return asked if asked in GMAIL_BACKS else "/pools/gmail"
-
-
-#: Where a proxy button may send a person back to. Somebody who pressed
-#: "Test again" on the work list wants the work list back, not the free
-#: shelf; anything not named here is the shelf.
-PROXY_BACKS = ("/", "/pools/proxy", "/pools/proxy?view=needs_hand",
-               "/pools/proxy?view=on_phone", "/pools/proxy?view=all")
+    return _back_to(field, "/pools/gmail")
 
 
 def _proxy_back(field: dict) -> str:
-    return (field.get("back") or "").strip() if (
-        field.get("back") or "").strip() in PROXY_BACKS else "/pools/proxy"
+    return _back_to(field, "/pools/proxy")
 
 
 def _said_url(back: str, said: str) -> str:
@@ -2236,12 +2381,10 @@ def _explain(status: str) -> tuple[str, str]:
 #: A whitelist rather than the field: `back` rides through a preview and a
 #: confirm in a hidden input, and an open redirect is what that shape is
 #: for if nobody checks it.
-_ADD_BACKS = ("/", "/pools/gmail", "/pools/gpt", "/pools/proxy")
 
 
 def _add_back(field, default: str) -> str:
-    want = (field.get("back") or "").strip()
-    return want if want in _ADD_BACKS else default
+    return _back_to(field, default)
 
 
 #: The pages an operator has, whatever they type in the bar.

@@ -45,6 +45,11 @@ geelark = "geelark_farm.cli:main"
 [tool.setuptools.package-data]
 # schema.sql rides inside the wheel; store.db reads it via importlib.resources.
 "geelark_farm.store" = ["*.sql"]
+# The console's stylesheet and its one script. They were literals inside
+# pages.py until 2026-09-20; out here they are linted, cached by the
+# browser, and 130KB lighter on every response - but they have to ride
+# in the wheel or the console renders as plain text with dead buttons.
+"geelark_farm.web" = ["static/*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

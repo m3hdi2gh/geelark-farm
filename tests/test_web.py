@@ -17,6 +17,7 @@ import time
 import pytest
 
 import geelark_farm.web.app as app_mod
+from geelark_farm.web import assets
 
 #: What `read.pool_rows` hands the manager: one free row and one held,
 #: per pool, which is enough for every question the sheet asks - a card
@@ -2173,8 +2174,7 @@ def test_the_stylesheet_never_breaks_a_quoted_string_across_lines(web):
     """A wrap that split `'IBM Plex Mono'` over two lines made the whole
     stylesheet unparseable and every page rendered as plain text
     (2026-09-03). CSS strings cannot contain a raw newline."""
-    _, _, body = web().request("GET", "/login")
-    style = body[body.index("<style>"):body.index("</style>")]
+    style = assets.CSS
     for line in style.splitlines():
         assert line.count("'") % 2 == 0 and line.count('"') % 2 == 0, line
     assert "'IBM Plex Mono'" in style and "'IBM Plex Sans'" in style
@@ -2185,8 +2185,7 @@ def test_a_pill_is_a_direct_child_or_its_count_becomes_one(web):
     pill itself, so every count wore the background, the padding and the
     divider of the pill around it - four boxes inside four boxes, which
     is what the row looked like (2026-09-04)."""
-    _, _, body = web().request("GET", "/login")
-    style = body[body.index("<style>"):body.index("</style>")]
+    style = assets.CSS
     # Comments out first: one of them names the selector this refuses.
     rules = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
     assert ".pills>a" in rules and ".pills>span" in rules
@@ -3467,7 +3466,7 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     client.login()
     _, _, body = client.request("GET", "/")
 
-    script = body[body.index("<script>"):body.index("</script>")]
+    script = assets.JS
     for forbidden in ("XMLHttpRequest", "innerHTML", "document.write",
                       "action ="):
         assert forbidden not in script, forbidden
@@ -3475,7 +3474,12 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     # the phone link a serial is - the drawer fetches what the link would
     # have opened.
     calls = re.findall(r"fetch\(([^,)]+)", script)
-    assert calls and all(c.strip() in ("form.action",
+    # `/clienterror` is the script saying it broke, and it is the one
+    # address here that no form on the page declares. It carries the
+    # page's own csrf token, it is answered with 204 and nothing else,
+    # and without it the console has no way at all to report a throw
+    # (2026-09-20).
+    assert calls and all(c.strip() in ("'/clienterror'", "form.action",
                                        "location.pathname + location.search",
                                        "href")
                          for c in calls), calls
@@ -3509,23 +3513,38 @@ def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
         "rows": [], "more": False, "today": 0, "loggers": []})
     client = web()
     client.login()
+    # The script is on every page a signed-in person sees - once, as a
+    # link under its own hash, rather than 76KB of source in the body.
     for path in ("/", "/pools/gmail", "/pools/proxy", "/pools/gpt",
                  "/phones", "/requests", "/events", "/logs"):
         status, _, body = client.request("GET", path)
         assert status == 200, path
-        assert body.count("function swapMain(doc)") == 1, path
-        assert '<meta name="gf-live" content="' in body, path
-    # Which stream: the Logs page is the one that draws log lines, so it
-    # is the one that hears them.
-    _, _, logs = client.request("GET", "/logs")
-    assert '<meta name="gf-live" content="logs">' in logs
-    _, _, events = client.request("GET", "/events")
-    assert '<meta name="gf-live" content="farm">' in events
+        assert body.count(f'<script src="{assets.JS_PATH}"') == 1, path
+        assert "function swapMain(doc)" not in body, path
+
+    # Listening is a different question, and the answer is no unless the
+    # page says otherwise. It used to be yes unless the page said
+    # otherwise, so a pool page redrew itself under a half-filled edit
+    # form because nobody had thought to turn it off there (the
+    # operator, 2026-09-20).
+    moves = {"/": "farm", "/requests": "farm", "/events": "farm",
+             "/logs": "logs"}
+    for path in ("/", "/pools/gmail", "/pools/proxy", "/pools/gpt",
+                 "/phones", "/requests", "/events", "/logs"):
+        _, _, body = client.request("GET", path)
+        want = moves.get(path)
+        if want:
+            assert f'<meta name="gf-live" content="{want}">' in body, path
+        else:
+            assert 'name="gf-live"' not in body, (
+                f"{path} moves under whoever is using it, for no reason")
     # And the dot means it now: Requests is live with nothing pending,
     # Events no longer claims a thirty-second refresh it never did.
     _, _, requests = client.request("GET", "/requests")
     assert 'class="live">live' in requests
+    _, _, events = client.request("GET", "/events")
     assert "refreshes every 30s" not in events
+    _, _, logs = client.request("GET", "/logs")
     assert 'class="live">live' in events and 'class="live">live' in logs
 
 
@@ -4123,7 +4142,7 @@ def test_the_browsers_own_refresh_lives_inside_noscript(web, monkeypatch):
     assert '<meta name="gf-refresh" content="10">' in head
     # Never a live one: the script cannot cancel it once it is parsed.
     assert head.count('http-equiv="refresh"') == 1
-    script = body[body.index("<script>"):body.index("</script>")]
+    script = assets.JS
     assert "meta[name=\"gf-refresh\"]" in script
     assert "reloadWhenSettled" in script
 
@@ -4308,7 +4327,11 @@ def test_the_dashboard_keeps_itself_current_even_when_idle(web, monkeypatch):
     assert '<meta name="gf-refresh" content="15">' in body
     # And which build drew it, so a deploy reaches an open tab by itself.
     assert 'name="gf-rev" content="' in body
-    assert 'meta[name="gf-rev"]' in body[body.index("<script>"):]
+    assert 'meta[name="gf-rev"]' in assets.JS
+    # And it is not the empty string any more: the image has no `.git`
+    # in it, so `revision()` answered "" and the reload-on-deploy check
+    # compared "" with "" for as long as it has existed (2026-09-20).
+    assert 'name="gf-rev" content=""' not in body
 
     _dash(monkeypatch, phones=[{"serial": "1503", "status": "building",
                                 "state": ""}])
@@ -4504,8 +4527,7 @@ def test_the_banner_for_a_refusal_is_not_green_and_says_which_one():
                          "the Gmail x@y is not free")
     assert 'class="said no toast"' in banner
     assert "the Gmail x@y is not free" in banner
-    assert ".said.no" in pages.page("t", "", user={"id": 1, "username": "a",
-                                                   "role": "operator"})
+    assert ".said.no" in assets.CSS
 
     plain = pages._said("done:1", pages._DASH_SAID, None)
     assert "said no" not in plain, "a success keeps the tick"
@@ -4907,7 +4929,7 @@ def test_the_page_starts_at_the_top_and_stays_there():
     who = {"id": 1, "username": "a", "role": "operator"}
     assert '<main class="full">' in pages.page("t", "body", user=who)
     assert '<main class="alone">' in pages.login(), "the sign-in card floats"
-    assert "main.full{padding:40px 20px}" in pages.page("t", "", user=who)
+    assert "main.full{padding:40px 20px}" in assets.CSS
 
 
 def test_the_overlay_takes_the_page_behind_it_out_of_the_tab_order():
@@ -4930,8 +4952,7 @@ def test_a_press_in_flight_cannot_be_fired_twice_by_the_keyboard():
     assert "pressed.disabled = true" in script
     assert script.count("pressed.disabled = false") == 2, (
         "cleared on the way through and on the way out")
-    assert "form.busy{cursor:progress}" in pages.page(
-        "t", "", user={"id": 1, "username": "a", "role": "operator"})
+    assert "form.busy{cursor:progress}" in assets.CSS
 
 
 def test_the_confirm_is_placed_in_the_window_and_does_not_outlive_a_scroll():
@@ -4944,8 +4965,7 @@ def test_the_confirm_is_placed_in_the_window_and_does_not_outlive_a_scroll():
     assert "window.innerHeight - size.height - 8" in script
     assert "window.innerWidth - size.width - 8" in script
     assert "{capture: true, once: true}" in script
-    assert ".mini{position:fixed" in pages.page(
-        "t", "", user={"id": 1, "username": "a", "role": "operator"})
+    assert ".mini{position:fixed" in assets.CSS
 
 
 def test_an_empty_view_says_what_is_empty_about_it():
@@ -5023,9 +5043,7 @@ def test_adding_stock_has_no_date_box_and_only_the_filter_row_sticks(web):
     assert 'type="date"' not in box and 'name="purchased"' not in box
     assert 'name="seller"' in box, "the seller stays"
 
-    _, _, body = web().request("GET", "/login")
-    style = body[body.index("<style>"):body.index("</style>")]
-    rules = re.sub(r"/\*.*?\*/", "", style, flags=re.S)
+    rules = re.sub(r"/\*.*?\*/", "", assets.CSS, flags=re.S)
     assert ".sheetbody .addbox,.sheetbody .filters{position:sticky" not in rules
     assert ".sheetbody .filters{position:sticky" in rules
     assert ".sheetbody.sub" not in rules and ".sheetbody.shown{" in rules
@@ -6387,7 +6405,8 @@ def test_a_press_says_what_it_is_doing_and_to_what():
     assert "function actOn(form, sheet)" in script
     assert "tr.classList.add('acting')" in script
     drawn = pages.page("x", "", user={"username": "a", "role": "admin"})
-    assert "tr.acting{opacity:.45" in drawn, "the dimmed rows are styled"
+    assert "tr.acting{opacity:.45" in assets.CSS, (
+        "the dimmed rows are styled")
 
 
 def _source(fn):
@@ -6573,7 +6592,15 @@ def test_a_background_refresh_that_failed_never_lands():
     from geelark_farm.web import pages
 
     script = pages._DASH_SCRIPT
-    assert "if (!r.ok || (r.redirected && !isHere(r.url))) return null;" in script
+    # One preamble for both handlers now: they had drifted, and the
+    # submit half had no `r.ok` test at all, so a 500 from a verb was
+    # parsed and installed inside the pool sheet (2026-09-20).
+    gate = script[script.index("function answer(r, say){"):]
+    gate = gate[:gate.index("\n  }")]
+    assert "if (!r.ok) {" in gate
+    assert "report('http ' + r.status" in gate
+    assert "if (!answer(r, false)) return null;" in script
+    assert "if (r.redirected && !isHere(r.url)) return null;" in script
     assert "if (html === null) { lookAgain(5000); return; }" in script
     # Asked again when the answer comes back, not only before it is sent.
     assert "if (!settled()) { lookAgain(5000); return; }" in script
@@ -7029,7 +7056,7 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    script = body[body.index("function swapMain(doc)"):]
+    script = assets.JS
     assert "var held = (kept && kept !== 'phone') ? ov() : null;" in script
     # The overlay never leaves the DOM: its fade and the sheet's rise are
     # CSS animations, and a node taken out and put back plays them again.
@@ -7038,7 +7065,7 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     assert "keepSheet(held, kept, brought);" in script
     assert "else if (held) behind(true);" in script
     assert "else if (kept && kept !== 'send') show(kept, false);" in script
-    keep = body[body.index("function keepSheet(held, kind, fresh)"):]
+    keep = assets.JS[assets.JS.index("function keepSheet(held, kind, fresh)"):]
     assert "fresh.replaceWith(held)" not in keep
     assert "if (old) old.replaceWith(s); else held.appendChild(s);" in keep
     assert "else if (same(old) !== same(tr)) old.replaceWith(tr);" in keep
@@ -7046,7 +7073,8 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     assert "if (!want[k]) have[k].remove();" in keep
     assert "name=\"press\"" in keep, "the one-time token is not a change"
     # Bound once, read live.
-    bind = body[body.index("document.querySelectorAll('#poolov .sheet').forEach"):]
+    bind = assets.JS[assets.JS.index(
+        "document.querySelectorAll('#poolov .sheet').forEach"):]
     assert "if (!sheet.dataset.live) {" in bind
     assert ("var body = function(){ return sheet.querySelectorAll("
             "'tbody tr:not(.none)'); };") in bind
@@ -7063,16 +7091,16 @@ def test_the_page_holds_still_while_a_sheet_is_open(web, monkeypatch):
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    held = body[body.index("function heldOpen()"):]
+    held = assets.JS[assets.JS.index("function heldOpen()"):]
     assert "return !!(o && !o.hidden && openKind && openKind !== 'phone');" in held
-    settled = body[body.index("function settled()"):]
+    settled = assets.JS[assets.JS.index("function settled()"):]
     assert ("if (heldOpen() || busyHere()) "
             "{ settled.since = 0; return false; }" in settled)
     # The dead line went with it: it sat after a `return` and named two
     # variables that live in another function.
     assert "return !(o && !o.hidden && openKind !== 'phone') && !typing;" \
         not in body
-    shut = body[body.index("function shut()"):]
+    shut = assets.JS[assets.JS.index("function shut()"):]
     assert "lookAgain(300);" in shut[:shut.index("function behind(")]
 
 
@@ -8109,3 +8137,309 @@ def test_a_select_put_back_says_so():
     assert "if (el.tagName === 'SELECT') told.push(el);" in back
     assert ("told.forEach(function(el){"
             " el.dispatchEvent(new Event('change')); });" in back)
+
+
+# ----------------------- the page links its assets rather than carrying them
+def test_the_page_links_the_assets_and_carries_neither(web, monkeypatch):
+    """130,569 bytes of stylesheet and script went out with every single
+    response, unchanged, uncacheable, on a page the browser re-fetches
+    every few seconds while the farm builds (2026-09-20)."""
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    assert f'<link rel="stylesheet" href="{assets.CSS_PATH}">' in body
+    assert f'<script src="{assets.JS_PATH}" defer></script>' in body
+    assert "<style>" not in body, "the stylesheet is not in the page"
+    assert "(function(){" not in body, "and neither is the script"
+    # Both names are the content's own hash, so a deploy invalidates the
+    # cache by construction.
+    assert assets.REV in assets.CSS_PATH and assets.REV in assets.JS_PATH
+
+
+def test_an_asset_is_served_exactly_and_only_under_this_builds_name(
+        web, monkeypatch):
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+
+    def cache(head):
+        return dict((k.lower(), v) for k, v in head).get("cache-control", "")
+
+    status, head, body = client.request("GET", assets.JS_PATH)
+    assert status == 200
+    assert body == assets.JS, "the served script is the file on disk"
+    assert "immutable" in cache(head)
+    assert "private" in cache(head), (
+        "the script is what each press does; it waits for a session")
+
+    status, head, body = client.request("GET", assets.CSS_PATH)
+    assert status == 200 and body == assets.CSS
+    assert "public" in cache(head), (
+        "the sign-in page needs the stylesheet and has no session yet")
+
+    # A name this build does not answer to is a 404, not a redirect to
+    # the current one: a page asking for a stale name is a stale page.
+    for wrong in ("/s/deadbeefcafe.js", "/s/deadbeefcafe.css",
+                  "/s/../pages.py.js"):
+        status, _, _ = client.request("GET", wrong)
+        assert status == 404, wrong
+
+
+def test_the_stylesheet_is_reachable_without_a_session(web):
+    """The sign-in page needs it before anybody has one."""
+    status, _, body = web().request("GET", assets.CSS_PATH)
+    assert status == 200 and body == assets.CSS
+    _, _, login = web().request("GET", "/login")
+    assert assets.CSS_PATH in login
+
+
+def test_the_script_is_not_handed_out_before_a_session(web):
+    status, _, _ = web().request("GET", assets.JS_PATH)
+    assert status in (302, 303), (
+        "which endpoints exist and what each press does is not public")
+
+
+def test_the_fold_arrows_are_arrows_and_not_a_control_character():
+    r"""`content:" \2304"` is a CSS escape for the fold arrow, and `\230`
+    is an OCTAL escape in a non-raw Python string - so for as long as
+    the stylesheet lived inside pages.py the browser was handed U+0098,
+    a control character, where the arrow belonged. Out in a .css file
+    there are no Python escapes to apply (2026-09-20).
+
+    Raw strings below, deliberately: writing this test any other way
+    reproduces the bug inside the test, which is how it was written the
+    first time.
+    """
+    assert r"\2304" in assets.CSS and r"\2303" in assets.CSS
+    assert "\x98" not in assets.CSS, "a Python escape ate a CSS one"
+
+
+def test_the_script_has_nothing_in_it_that_is_never_read():
+    """The check that would have caught it.
+
+    `var typing` was worked out in `mayRedraw` and then nothing read it,
+    so the guard that holds a redraw while somebody is typing was dead
+    from September to 2026-09-20 - under a green test asserting
+    `"function mayRedraw()" in script`. A substring cannot see an unused
+    variable.
+
+    Counting names over the whole file cannot see it either: there is a
+    second `typing` in the keydown handler, and between them the name
+    occurs plenty. So this counts inside the block the `var` is actually
+    in - which is where the language decides the question too.
+    """
+    import re
+
+    # Comments and string bodies out first: a name inside either is not
+    # a use of it.
+    bare = re.sub(r"/\*.*?\*/", lambda m: " " * len(m.group()), assets.JS,
+                  flags=re.S)
+    bare = re.sub(r"//[^\n]*", lambda m: " " * len(m.group()), bare)
+    bare = re.sub(r"'(?:[^'\\\n]|\\.)*'",
+                  lambda m: "'" + " " * (len(m.group()) - 2) + "'", bare)
+    bare = re.sub(r'"(?:[^"\\\n]|\\.)*"',
+                  lambda m: '"' + " " * (len(m.group()) - 2) + '"', bare)
+
+    # Where every brace's partner is, so a declaration can be asked what
+    # block it is in.
+    closes, stack = {}, []
+    for i, ch in enumerate(bare):
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}" and stack:
+            closes[stack.pop()] = i
+
+    opens = sorted(closes)
+    dead = []
+    for hit in re.finditer(r"\bvar\s+([A-Za-z_$][\w$]*)\s*=", bare):
+        name, at = hit.group(1), hit.start()
+        # The innermost block this declaration sits in.
+        block = None
+        for o in opens:
+            if o < at < closes[o] and (block is None or o > block):
+                block = o
+        span = bare[block:closes[block]] if block is not None else bare
+        if len(re.findall(rf"\b{re.escape(name)}\b", span)) == 1:
+            dead.append((name, bare[:at].count("\n") + 1))
+    assert not dead, (
+        "worked out and never read - and the console shipped a month "
+        f"like this once: {sorted(dead)}")
+
+def test_the_script_parses(tmp_path):
+    """One bad character in this file is a console with no working
+    buttons at all, drawn perfectly (the operator, 2026-09-14: "Manage
+    does nothing")."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the script is unchecked here")
+    path = tmp_path / "dash.js"
+    path.write_text(assets.JS, encoding="utf-8")
+    done = subprocess.run([node, "--check", str(path)],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr.strip()
+
+
+def test_the_assets_ride_in_the_wheel():
+    """An editable install reads them off the tree; a wheel has to carry
+    them or the console renders as plain text with dead buttons."""
+    import pathlib
+    import tomllib
+
+    here = pathlib.Path(assets.__file__).resolve()
+    conf = tomllib.loads(
+        (here.parents[3] / "pyproject.toml").read_text(encoding="utf-8"))
+    data = conf["tool"]["setuptools"]["package-data"]
+    assert "static/*" in data.get("geelark_farm.web", []), (
+        "the stylesheet and the script are not packaged")
+
+
+# ------------------------------- the console can say that it broke (step 6)
+def test_a_throw_in_the_console_reaches_the_log(web, monkeypatch, caplog):
+    """There was no channel at all by which the console could report
+    that it had broken: a throw leaves the page looking perfectly
+    ordinary with half its buttons dead, and the only way anybody has
+    ever found out is the operator saying so (2026-09-20)."""
+    import logging
+
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    token = re.search(r'name="csrf" value="([^"]*)"', body).group(1)
+
+    with caplog.at_level(logging.WARNING, logger="geelark_farm.web.app"):
+        status, _, _ = client.request(
+            "POST", "/clienterror",
+            body=f"csrf={token}&message=boom&where=/pools/gmail"
+                 f"&rev=abc123&stack=at+swapMain")
+    assert status == 204, "the page has lost its footing; do not answer it"
+    said = "\n".join(r.getMessage() for r in caplog.records)
+    assert "console broke for mehdi on /pools/gmail: boom" in said
+    assert "abc123" in said and "at swapMain" in said
+
+
+def test_a_report_without_the_pages_token_is_refused(web, monkeypatch):
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    status, _, _ = client.request("POST", "/clienterror",
+                                  body="message=boom&csrf=wrong")
+    assert status == 403
+
+
+def test_every_request_is_logged_with_what_it_cost(web, monkeypatch, caplog):
+    """The capture starts at INFO and request lines went to DEBUG, so
+    not one request has ever reached the log table - and "the console
+    feels slow" had no number anywhere to check it against."""
+    import logging
+
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    with caplog.at_level(logging.INFO, logger="geelark_farm.web.app"):
+        client.request("GET", "/phones")
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("web GET")]
+    assert lines, "no request line at INFO"
+    assert any("/phones" in x and "ms" in x and "bytes" in x for x in lines), (
+        lines)
+    # Not the stream: one connection held open for hours, whose line
+    # would say nothing true about how long anything took.
+    assert not any("/live" in x for x in lines)
+
+
+def test_a_throw_after_the_write_does_not_send_the_form_again():
+    """The submit chain's `catch` covered the whole response handler and
+    its recovery is a second, native POST - so a throw in `swapMain`
+    AFTER the write had gone through sent the same command twice and
+    navigated the page away (2026-09-20)."""
+    js = assets.JS
+    assert "var sent = false;" in js
+    assert "sent = true;" in js
+    tail = js[js.index(".catch(function(err){"):]
+    tail = tail[:tail.index("\n      });")]
+    assert "if (sent) {" in tail
+    assert tail.index("if (sent) {") < tail.index("form.submit();"), (
+        "only the request failing is a reason to send it again")
+    assert "report(" in tail and "toast(" in tail
+
+
+def test_both_fetch_handlers_refuse_a_bad_answer_the_same_way():
+    """They had drifted: `reload` refused a non-OK answer and the submit
+    handler did not, so a 500 from a verb had its error page parsed and
+    installed inside the pool sheet."""
+    js = assets.JS
+    assert js.count("function answer(r, say){") == 1
+    assert js.count("answer(r, false)") == 1, "the background refresh"
+    assert js.count("answer(r, true)") == 1, "the press, which says so"
+    assert r"if (r.redirected && /\/login(\?|$)/.test(r.url)) {" in js
+
+
+# --------------------------------- where a press comes back to (step 9)
+def test_a_back_is_rebuilt_from_its_parts_not_matched_whole():
+    """A whole-string allowlist can only hold the addresses somebody
+    thought to write down; everything else was silently replaced by the
+    default. Press Paid on a list filtered to one seller and you landed
+    on the unfiltered queued view (2026-09-20)."""
+    from geelark_farm.web import app as app_mod
+
+    def back(asked, default="/pools/gmail"):
+        return app_mod._back_to({"back": asked}, default)
+
+    # What the allowlist could not hold, and now survives.
+    assert back("/pools/gmail?view=errored&seller=LEO%2018SEP") == (
+        "/pools/gmail?view=errored&seller=LEO+18SEP")
+    assert back("/pools/gmail?view=queued&page=3") == (
+        "/pools/gmail?view=queued&page=3")
+    assert back("/pools/proxy?view=needs_hand&q=US25") == (
+        "/pools/proxy?view=needs_hand&q=US25")
+
+    # And what it must still refuse. A rebuild is stricter than a match,
+    # not looser: an unknown path, an unknown parameter, a view this
+    # page does not have, a page number that is not a number.
+    assert back("https://elsewhere.example/x") == "/pools/gmail"
+    assert back("/pools/gmail?view=queued&evil=1") == (
+        "/pools/gmail?view=queued")
+    assert back("/pools/gmail?view=nonesuch") == "/pools/gmail"
+    assert back("/pools/gmail?page=notanumber") == "/pools/gmail"
+    assert back("//evil.example") == "/pools/gmail"
+    assert back("/pools/gmail?edit=3&edit=9") == "/pools/gmail?edit=3"
+    assert back("") == "/pools/gmail"
+    # The same request always rebuilds to the same address, whatever
+    # order it arrived in - which is what the idempotency key wants.
+    assert back("/pools/gmail?page=2&view=used") == back(
+        "/pools/gmail?view=used&page=2")
+
+
+def test_an_errored_gmail_can_be_edited_and_freed_where_it_is_listed():
+    """A row Google refused is exactly the row somebody wants to
+    correct, and the only place to do it was the dashboard's overlay -
+    where a click on the dark area threw the correction away (the
+    operator, 2026-09-20)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True, "sees": "all",
+            "username": "mehdi", "nav": {}}
+    row = {"id": 41, "address": "torn@gmail.com", "status": "no_authenticator",
+           "updated_at": "2026-09-19 10:00:00+00", "seller": "LEO",
+           "totp_secret": "", "recovery_email": "", "password": "p"}
+    data = {"rows": [row], "view": "errored", "counts": {}, "seller": "LEO",
+            "page": 2, "pages": 3, "known_sellers": ["LEO"]}
+
+    drawn = pages.gmail_pool_page(data, user, advice=lambda s: None)
+    assert "Free</button>" in drawn, "it can go back on the shelf"
+    assert ">Edit</a>" in drawn, "and it can be corrected first"
+    # Carrying where the person is, so the press comes back to it.
+    assert "/pools/gmail?view=errored&amp;seller=LEO&amp;page=2" in drawn
+
+    # And Edit on this page opens the row on this page.
+    opened = pages.gmail_pool_page(data, user, advice=lambda s: None,
+                                   editing=41)
+    assert 'class="editrow"' in opened
+    assert 'action="/pools/gmail/edit"' in opened
