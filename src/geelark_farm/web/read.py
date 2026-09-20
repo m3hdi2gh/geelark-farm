@@ -246,6 +246,8 @@ _FOLD = {
 
 
 def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
+    from ..store import stops as store_stops
+
     """Everything the dashboard shows, in one connection: the phones (with
     who took them and, for one being built, its last captured log line),
     the three stock cards, the accounts awaiting login, the last pass's
@@ -400,6 +402,14 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             " ORDER BY w.id DESC LIMIT 12")
         pulse = store._rows(
             "SELECT value FROM service_state WHERE key = 'pass'")
+        # Which builds somebody has pressed Cancel on. The press was
+        # written and the row went on saying Building until the build
+        # actually died - minutes later, with nothing on the page to
+        # show the press had landed, so it was pressed again (the
+        # operator, 2026-09-21). Read on this connection: it is one row.
+        asked_stops = store._rows(
+            "SELECT value FROM service_state WHERE key = %s",
+            (store_stops.KEY,))
         # The manager's lists, read on the same connection the rest of
         # this page uses: the cards need the free rows anyway, and the
         # whole page is one response.
@@ -422,6 +432,8 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "phones": phone_rows,
         "progress": progress,
         "live": live,
+        "stops_asked": sorted(store_stops.live(
+            asked_stops[0]["value"] if asked_stops else {})),
         "stock": folded,
         "pool_rows": pools_listed,
         "spotify": {str(r["category"] or ""): int(r["c"] or 0)

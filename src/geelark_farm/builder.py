@@ -558,7 +558,7 @@ STOP_BY_HAND: set[str] = set()
 #: How often a build asks the store whether somebody pressed Stop on it:
 #: every step, but a store read at most this often. The set above is the
 #: same process's own presses and is read every time.
-STOP_POLL_SECONDS = 5.0
+STOP_POLL_SECONDS = 2.0
 _STOP_SEEN: dict = {"at": 0.0, "serials": frozenset()}
 
 
@@ -596,6 +596,36 @@ def _stop_asked(settings: Settings | None, serial: str) -> bool:
         log.warning("stop on %s heard but could not be taken out of the "
                     "store (%s); it ages out", serial, exc)
     return True
+
+def _hand_stop_wired(settings: Settings | None, build,
+                     cancelled: Callable[[], bool] | None,
+                     ) -> Callable[[], bool]:
+    """One callable that hears both ways a build can be stopped.
+
+    `cancelled` was the service's shutdown flag and nothing else - and it
+    is what every wait underneath a build takes: the boot, the settle,
+    the install, the exit swap. `check_cancelled` heard the console's
+    Cancel, but only where `check_cancelled` was called, which is between
+    steps; inside a step the flag alone was asked. So a Cancel pressed
+    while the phone booted or the app installed - most of a build's
+    minutes - went unheard until the sign-in began (the operator,
+    2026-09-21: "the cancel button does not work instantly").
+
+    Raised rather than returned for the console's stop, so the word on
+    the row is the right one: the waits answer a True with their own
+    PhoneError, which build_one files as a phone that would not start -
+    and records as a GeeLark refusal. A person pressing Cancel is
+    neither. The service's flag still answers True, the way every wait
+    already expects.
+    """
+    def stop_wanted() -> bool:
+        if cancelled and cancelled():
+            return True
+        if _stop_asked(settings, getattr(build, "serial", "")):
+            raise Aborted("stopped_by_hand")
+        return False
+    return stop_wanted
+
 
 #: The aborts that are a person stopping the work rather than a verdict on
 #: the phone. `Aborted` carries both kinds - `no_usable_proxy` and
@@ -1710,6 +1740,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     def remaining() -> float:
         return deadline - time.monotonic()
 
+    # From here on, `cancelled` is the wired one: it is what every wait
+    # underneath takes, and the console's Cancel has to reach those too.
+    cancelled = _hand_stop_wired(settings, build, cancelled)
+
     def check_cancelled() -> None:
         """Both ways this build can be stopped: the service going down, and
         a person pressing Stop this one on its row.
@@ -2404,6 +2438,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
 
     phone_id = build.phone_id
     _serial.set(build.serial or NO_BUILD)
+    # As in build_one: the console's Cancel rides in the one callable
+    # every wait underneath takes.
+    cancelled = _hand_stop_wired(settings, build, cancelled)
     try:
         if on_phone:
             on_phone(phone_id)

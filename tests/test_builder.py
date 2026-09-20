@@ -6398,3 +6398,63 @@ def test_a_refusal_never_stops_the_build_that_is_reporting_one(monkeypatch):
 
     monkeypatch.setattr(db, "connect", explode)
     builder._remember_refusal(SimpleNamespace(store_enabled=True), "anything")
+
+
+def test_a_hand_stop_is_heard_by_every_wait_a_build_makes(
+        make_settings, tmp_path, monkeypatch):
+    """`cancelled` was the service's shutdown flag and nothing else, and
+    it is what the boot wait, the install wait and the exit swap take. So
+    a Cancel pressed while the phone booted or the app installed - most
+    of a build's minutes - went unheard until the sign-in began (the
+    operator, 2026-09-21: "the cancel button does not work instantly").
+    """
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.store import stops as store_stops
+
+    settings = make_settings(state_dir=tmp_path, store_enabled=True)
+    monkeypatch.setattr(builder_mod, "_STOP_SEEN",
+                        {"at": 0.0, "serials": frozenset()})
+    monkeypatch.setattr(store_stops, "asked", lambda s: {"2241"})
+    monkeypatch.setattr(store_stops, "honoured", lambda s, serial: None)
+
+    # The console's press, raised as the word the row should carry -
+    # not returned as a True the boot wait would file as a phone that
+    # would not start.
+    stop = builder_mod._hand_stop_wired(
+        settings, SimpleNamespace(serial="2241"), None)
+    with pytest.raises(builder_mod.Aborted, match="stopped_by_hand"):
+        stop()
+
+    # The service's own flag still answers the way every wait expects.
+    stop = builder_mod._hand_stop_wired(
+        settings, SimpleNamespace(serial="2240"), lambda: True)
+    assert stop() is True
+    stop = builder_mod._hand_stop_wired(
+        settings, SimpleNamespace(serial="2240"), lambda: False)
+    assert stop() is False
+
+
+def test_both_ways_of_building_hand_the_wired_stop_down():
+    """Rebinding the parameter is the whole trick: every `cancelled=` that
+    build_one and finish_one pass underneath then carries the console's
+    press without a line of them changing."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+
+    for fn in (builder_mod.build_one, builder_mod.finish_one):
+        src = inspect.getsource(fn)
+        assert ("cancelled = _hand_stop_wired(settings, build, cancelled)"
+                in src), fn.__name__
+        assert src.index("_hand_stop_wired(") < src.index("try:"), (
+            f"{fn.__name__} wires it before any wait can begin")
+
+
+def test_a_stop_is_asked_for_often_enough_to_feel_like_a_press():
+    """One row of service_state every couple of seconds per builder is
+    nothing; five seconds on top of the step it lands in was the part of
+    the wait a person could feel."""
+    from geelark_farm import builder as builder_mod
+
+    assert builder_mod.STOP_POLL_SECONDS <= 2.0
+

@@ -45,6 +45,13 @@ def ask(settings: Settings, serial: str) -> None:
         conn.commit()
 
 
+def live(value, now: float | None = None) -> set[str]:
+    """The serials still asked for, off a value already read - for a page
+    that has the row in hand and should not open a second connection to
+    ask what it says."""
+    return set(_pruned(value or {}, now if now is not None else time.time()))
+
+
 def asked(settings: Settings) -> set[str]:
     """Every serial with a live request."""
     now = time.time()

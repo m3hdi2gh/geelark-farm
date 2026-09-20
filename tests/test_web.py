@@ -8850,3 +8850,30 @@ def test_a_confirm_bubble_takes_its_listener_with_it():
     ask = ask[:ask.index("\n  // A word on this page")]
     assert "box.remove = function(){" in ask
     assert "document.removeEventListener('keydown', esc);" in ask
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_build_asked_to_stop_says_so_on_its_row(web, monkeypatch):
+    """The press was written and the row went on saying Building until
+    the build actually died - minutes later, with nothing on the page to
+    show it had landed, so it was pressed again (the operator,
+    2026-09-21)."""
+    _dash(monkeypatch,
+          phones=[{"serial": "1503", "status": "building", "state": ""},
+                  {"serial": "1504", "status": "building", "state": ""}],
+          stops_asked=["1503"])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    row = body[body.index('href="/phones/1503"'):]
+    row = row[:row.index("</tr>")]
+    assert ">Stopping<" in row, "the row says the press landed"
+    assert 'action="/phones/1503/stop"' not in row, "and is not offered twice"
+    assert "disabled" in row and "Stopping&hellip;" in row
+
+    # The one nobody pressed Cancel on still has its door.
+    other = body[body.index('href="/phones/1504"'):]
+    other = other[:other.index("</tr>")]
+    assert 'action="/phones/1504/stop"' in other and ">Building<" in other
+

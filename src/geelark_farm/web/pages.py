@@ -774,12 +774,21 @@ def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
             f'<button class="quiet">Change IP</button></form>')
 
 
-def _cancel_form(user: dict, serial: str, back: str = "/") -> str:
+def _cancel_form(user: dict, serial: str, back: str = "/",
+                 asked: bool = False) -> str:
     """"Cancel": the build on this phone gives up at its next step and puts
     back what it held - the Gmail, the exit. The same door "Stop this one"
-    on Requests always was; here it sits on the row it is about."""
+    on Requests always was; here it sits on the row it is about.
+
+    `asked` is a press that has landed and not yet been honoured: the
+    door is shown pressed rather than offered again, so a second press
+    is not what the wait tempts anybody into (2026-09-21)."""
     if not _may(user, "may_login_accounts"):
         return ""
+    if asked:
+        return ('<button class="quiet" disabled title="Cancel was pressed; '
+                'the build gives up at its next step and puts back what it '
+                'held">Stopping&hellip;</button>')
     return (f'<form method="post" class="inline" '
             f'action="/phones/{esc(serial)}/stop">{_csrf(user)}'
             f'<input type="hidden" name="back" value="{esc(back)}">'
@@ -1009,6 +1018,14 @@ def _phone_rows(data: dict, user: dict) -> str:
             # one GeeLark answered the start with, off the builder's own
             # log line (the operator, 2026-09-10).
             url = str((data.get("live") or {}).get(serial) or "")
+            # A press that has landed says so on the row, in the place
+            # the word Building was - not only in a toast that is gone
+            # in four seconds.
+            stopping = serial in (data.get("stops_asked") or ())
+            if stopping:
+                badge = ('<span class="badge manual" title="Cancel was '
+                         'pressed; the build gives up at its next step and '
+                         'puts back what it held">Stopping</span>')
             watch = (f'<a class="btn quiet live" target="_blank" '
                      f'rel="noopener" href="{esc(url)}" title="its '
                      f'screen, in a new tab">Watch live</a> '
@@ -1018,7 +1035,8 @@ def _phone_rows(data: dict, user: dict) -> str:
                 f'<td>{badge}</td>'
                 f'<td colspan="4" class="progress">'
                 f'{_progress(progress.get(serial))}</td>'
-                f'<td class="act">{watch}{_cancel_form(user, serial)}</td>'
+                f'<td class="act">{watch}'
+                f'{_cancel_form(user, serial, asked=stopping)}</td>'
                 f'</tr>')
             continue
         # Asked for by hand: says so, and by whom, under the status - a
