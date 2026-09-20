@@ -4978,6 +4978,9 @@ def _geelark_line(data: dict, user: dict) -> str:
     trouble = found.get("trouble") or []
 
     cells = [c for c in (_gl_balance(found, trouble),
+                         # Only there when GeeLark has turned something
+                         # down for a reason that is not the money.
+                         _gl_blocked(found, trouble),
                          _gl_slots(plan, found, trouble),
                          _gl_running(plan, found),
                          _gl_subscription(plan, trouble)) if c]
@@ -5047,6 +5050,41 @@ def _gl_balance(found: dict, trouble: list) -> dict:
                       "first sign of an empty account is a phone being "
                       "turned down, and that is what this reading "
                       "watches for.")}
+
+
+def _gl_blocked(found: dict, trouble: list) -> dict:
+    """GeeLark turning a phone down for something that is not the money.
+
+    Every refusal used to be read as an empty account, so the console
+    said `out of credit`, in red, on a day forty-seven phones were
+    built and the one thing GeeLark had refused was a proxy it could
+    not check (the operator, 2026-09-20). It is a reading of its own
+    now, and amber rather than red: one build turned down among many is
+    worth seeing and is not a stop. It turns red only when the breaker
+    is up, which is when nothing is being built at all.
+
+    Absent while nothing has been refused, which is most of the time -
+    so the foot is four readings wide unless there is a fifth thing to
+    say.
+    """
+    for item in trouble:
+        if item.get("kind") != "blocked":
+            continue
+        told = str(item.get("detail") or "")
+        if item.get("stalled"):
+            return {"cap": "Building", "value": "stopped", "tone": "bad",
+                    "kinds": ("blocked",), "note": _gl_brief(told),
+                    "title": str(item.get("text") or "")}
+        when = found.get("refused_at")
+        code = item.get("code")
+        aside = [f"[{int(code)}]" if code else "", _ago(when) if when else ""]
+        return {"cap": "Last refusal", "kinds": ("blocked",),
+                "tone": str(item.get("level") or "warn"),
+                "value": _gl_brief(item.get("msg") or told, 28)
+                         or "turned down",
+                "note": " \u00b7 ".join(x for x in aside if x),
+                "title": str(item.get("text") or "")}
+    return {}
 
 
 def _gl_slots(plan: dict, found: dict, trouble: list) -> dict:

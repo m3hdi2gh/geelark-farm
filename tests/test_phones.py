@@ -1038,3 +1038,43 @@ def test_create_hands_the_model_to_the_build():
 
     assert Entry(phone_id="p", created_at=0.0).model == ""
 
+
+def test_a_refusal_is_read_down_to_a_code_and_a_sentence():
+    """GeeLark turns a phone down in two shapes and both were going on
+    the console whole: the alert strip read `creation failed: {
+    "totalAmount": 1, "successAmount": 0, ...` and the reader had to
+    hunt for `"code": 45004` inside it (the operator, 2026-09-20)."""
+    # /phone/addNew answers 200 with the failure inside `details`.
+    body = phones.read_refusal(
+        'creation failed:\n{\n  "totalAmount": 1,\n  "successAmount": 0,\n'
+        '  "failAmount": 1,\n  "details": [\n    {\n      "index": 0,\n'
+        '      "code": 45004,\n      "msg": "check proxy failed",\n'
+        '      "id": ""\n    }\n  ]\n}')
+    assert body == {"code": 45004, "msg": "check proxy failed",
+                    "said": "creation failed [45004] check proxy failed"}
+
+    # Everything else raises ApiError, whose text starts with the code.
+    started = phones.read_refusal(
+        "start failed [41001] balance not enough (/v1/phone/start)\n"
+        "  -> the account has no money in it\n  traceId abc123")
+    assert started["code"] == 41001
+    assert started["msg"] == "balance not enough"
+    assert started["said"] == "start failed [41001] balance not enough"
+
+
+def test_a_refusal_in_a_shape_nobody_has_seen_is_still_printable():
+    """No code to find is not a reason to put nothing on the page."""
+    odd = phones.read_refusal("the gateway went away   mid-sentence")
+    assert odd["code"] is None
+    assert odd["said"] == "the gateway went away mid-sentence"
+    assert phones.read_refusal("")["said"] == ""
+
+
+def test_the_envelopes_own_success_code_is_not_the_refusal():
+    """`"code": 0` is the body saying it answered, not a reason."""
+    said = phones.read_refusal(
+        'creation failed:\n{"code": 0, "msg": "success", "details": '
+        '[{"code": 44002, "msg": "profile limit reached"}]}')
+    assert said["code"] == 44002
+    assert said["msg"] == "profile limit reached"
+

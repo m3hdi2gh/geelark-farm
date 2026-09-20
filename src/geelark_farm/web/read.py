@@ -74,7 +74,11 @@ def nav_counts(settings: Settings) -> dict:
             " (SELECT value FROM service_state"
             "   WHERE key = 'geelark_refusal') AS geelark_refusal,"
             " (SELECT count(*) FROM phones"
-            "   WHERE running AND done_at IS NULL) AS phones_running"
+            "   WHERE running AND done_at IS NULL) AS phones_running,"
+            # What retires a refusal. Delivered phones count: the
+            # question is whether GeeLark made one, not whether we
+            # still hold it.
+            " (SELECT max(created_at) FROM phones) AS phone_built_at"
             " FROM resources")
     counts = dict(rows[0]) if rows else {"gmail": 0, "proxy": 0, "app": 0,
                                         "pending": 0, "broken": 0,
@@ -438,10 +442,71 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
 #: Slots left below which building is about to stop.
 SLOTS_LOW = 3
 
-#: How long a phone refusing to start stays news. GeeLark says nothing
-#: about the account's money until it refuses one, so the refusal IS the
-#: reading - and a reading an hour old is still the last thing known.
+#: How long a refusal that is nobody's emergency stays worth a word.
+#:
+#: Only that kind is on a clock. Whether a refusal is still TRUE is not
+#: a question about time at all: a refusal is the last word on creating
+#: phones until a phone is created, and nothing else retires it. An
+#: hour was both too short and too long on the same day - it dropped an
+#: empty account that was still empty, and it went on saying `out of
+#: credit` three minutes after forty-seven phones had been built
+#: (2026-09-20).
 REFUSAL_SHOWN_FOR = 3600.0
+
+#: What GeeLark says when the account has run out of money.
+#:
+#: Everything else it turns a phone down for wears exactly the same
+#: shape and is a different problem: [45004] is a proxy it could not
+#: check, [44002] is the last profile slot. Reading them all as "no
+#: money" is what put `out of credit` on the console, in red, while the
+#: farm was building normally (the operator, 2026-09-20).
+NO_MONEY_CODES = frozenset({41001})
+NO_MONEY_WORDS = ("balance not enough", "not enough balance",
+                  "insufficient balance", "insufficient funds")
+
+
+def _is_about_money(refused: dict) -> bool:
+    """Whether GeeLark's own words say the account has run out.
+
+    The words as well as the code, because rows written before the code
+    was kept apart have only the sentence.
+    """
+    if int(refused.get("code") or 0) in NO_MONEY_CODES:
+        return True
+    said = " ".join((f"{refused.get('said') or ''} "
+                     f"{refused.get('msg') or ''} "
+                     f"{refused.get('raw') or ''}").split()).casefold()
+    return (any(word in said for word in NO_MONEY_WORDS)
+            or any(f"[{code}]" in said for code in NO_MONEY_CODES))
+
+
+def _refusal_words(refused: dict) -> str:
+    """GeeLark's reason, as short as it comes: `[45004] check proxy
+    failed`. The whole payload is in the log, and on rows written
+    before it was cut up, in `said`."""
+    code, msg = refused.get("code"), str(refused.get("msg") or "").strip()
+    if code and msg:
+        return f"[{int(code)}] {msg}"
+    return " ".join(str(refused.get("said") or "").split())[:60]
+
+
+def _nothing_built_since(at, built_at) -> bool:
+    """Whether no phone has been created since that moment - the one
+    thing that retires a refusal."""
+    if built_at is None:
+        return True
+    try:
+        when = float(at)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(built_at, (int, float)):
+        return float(built_at) <= when
+    if isinstance(built_at, datetime.datetime):
+        made = built_at
+        if made.tzinfo is None:
+            made = made.replace(tzinfo=datetime.timezone.utc)
+        return made.timestamp() <= when
+    return True
 
 #: When to start saying the subscription is nearly over.
 PLAN_WARN_DAYS = 10
@@ -453,7 +518,8 @@ PLAN_WARN_DAYS = 10
 READING_STALE_AFTER = 900.0
 
 
-def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
+def geelark_trouble(plan: dict, refused: dict, pulse: dict,
+                    built_at=None) -> list[dict]:
     """Every way GeeLark itself is stopping the farm, judged once.
 
     One list, two renderings: `short` goes on the line at the foot of
@@ -467,6 +533,12 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
     recorded when a build tries to start a phone - and once the breaker
     has tripped, nothing tries. The state would go quiet exactly when
     it had just become true.
+
+    `built_at` is when a phone was last created, and it is what retires
+    a refusal: GeeLark turning one down is the last word on creating
+    phones until a phone is created. Only a refusal GeeLark's own words
+    call a money one is `out of credit`; the rest are a problem of
+    their own and say which.
     """
     found: list[dict] = []
     plan = plan or {}
@@ -475,16 +547,18 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
 
     said = str(refused.get("said") or "")
     at = refused.get("at")
-    fresh = bool(said and at and (time.time() - float(at)) < REFUSAL_SHOWN_FOR)
+    # Live, not fresh: the refusal is still the last word about creating
+    # phones because no phone has been created since it.
+    live = bool(said and at and _nothing_built_since(at, built_at))
+    fresh = bool(live and (time.time() - float(at)) < REFUSAL_SHOWN_FOR)
+    money = live and _is_about_money(refused)
     # The breaker tripped on reasons that are nobody's stock is the same
-    # news, arrived a different way, and it is the one that survives the
-    # hour: while it is up no build tries, so no fresher refusal can
-    # come.
+    # news arrived a different way: while it is up no build tries, so no
+    # fresher refusal can come.
     stalled = _breaker_blames_geelark(pulse)
-    if fresh or stalled:
-        # Not "GeeLark would not bring a phone up": the sentence it
-        # goes into says that already, and it read twice over.
-        why = said if fresh else "every build was turned down"
+    why = _refusal_words(refused) if live else ""
+
+    if money:
         found.append({
             "kind": "refused", "level": "bad",
             "href": "/events?kind=builds",
@@ -496,6 +570,27 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict) -> list[dict]:
                      f"be built or signed in until the account is topped "
                      f"up; the API does not report the balance, so this "
                      f"refusal is the only warning there is.")})
+    elif stalled or fresh:
+        # A refusal that is not about money. On its own it is one build
+        # among many and worth a word, not a colour that means stop -
+        # unless the breaker is up, in which case nothing is being built
+        # at all and it is the reason why.
+        told = why or "no reason on file"
+        found.append({
+            "kind": "blocked", "level": "bad" if stalled else "warn",
+            "href": "/events?kind=builds", "stalled": stalled,
+            "short": ("building has stopped" if stalled
+                      else "a phone was refused"),
+            "detail": told, "msg": str(refused.get("msg") or ""),
+            "code": refused.get("code"),
+            "text": ((f"Building has stopped: the breaker is up on "
+                      f"refusals no pool can fix, and the last thing "
+                      f"GeeLark said was {told}. Deal with that, then "
+                      f"clear the breaker.") if stalled else
+                     (f"GeeLark turned a phone down - {told}. Nothing "
+                      f"has been created since, so this is still the "
+                      f"last word on it; the next phone that comes up "
+                      f"clears it."))})
 
     free = plan.get("availableProfiles")
     if free is not None and int(free) <= SLOTS_LOW:
@@ -555,7 +650,8 @@ def geelark_alerts(counts: dict) -> list[dict]:
     return [{"level": t["level"], "href": t["href"], "text": t["text"]}
             for t in geelark_trouble(kept.get("plan") or {},
                                      counts.get("geelark_refusal") or {},
-                                     counts.get("pulse") or {})]
+                                     counts.get("pulse") or {},
+                                     counts.get("phone_built_at"))]
 
 
 def _geelark(store, pulse: dict | None = None) -> dict:
@@ -582,7 +678,10 @@ def _geelark(store, pulse: dict | None = None) -> dict:
     # browser profiles - the question a full pool always raises.
     mine = store._rows(
         "SELECT count(*) AS total,"
-        " count(*) FILTER (WHERE running) AS running"
+        " count(*) FILTER (WHERE running) AS running,"
+        # Over every phone, not just the ones still held: a refusal is
+        # retired by GeeLark making a phone, whoever has it now.
+        " (SELECT max(created_at) FROM phones) AS built_at"
         " FROM phones WHERE done_at IS NULL")
     counted = dict(mine[0]) if mine else {"total": 0, "running": 0}
     return {"plan": kept.get("plan") or {}, "at": kept.get("at"),
@@ -591,7 +690,7 @@ def _geelark(store, pulse: dict | None = None) -> dict:
             # Judged here, so the line at the foot says exactly what the
             # strip at the top does.
             "trouble": geelark_trouble(kept.get("plan") or {}, refused,
-                                       pulse),
+                                       pulse, counted.get("built_at")),
             "phones_total": int(counted.get("total") or 0),
             "phones_running": int(counted.get("running") or 0)}
 

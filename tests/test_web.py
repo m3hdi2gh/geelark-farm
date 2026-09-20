@@ -7592,21 +7592,128 @@ def test_a_phone_refused_for_an_empty_account_is_said_in_geelarks_own_words():
         "the reading that stops the farm comes first")
 
 
-def test_an_old_refusal_stops_being_news():
+def test_a_refusal_stops_being_news_when_a_phone_comes_up():
+    """A clock was the wrong test for whether a refusal is still true.
+
+    It was an hour, and an hour was wrong in both directions on the
+    same day: it dropped an empty account that was still empty, and it
+    went on saying `out of credit` three minutes after forty-seven
+    phones had been built (the operator, 2026-09-20). A phone being
+    created is the one thing that retires a refusal, because a refusal
+    is the last word on creating phones until one is created.
+    """
+    import time
+
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 40}
+    now = time.time()
+    refused = {"said": "start failed [41001] balance not enough",
+               "code": 41001, "msg": "balance not enough", "at": now - 90}
+
+    def foot(built_at):
+        return _glark(plan=plan, at=now, refusal=refused["said"],
+                      refused_at=refused["at"],
+                      trouble=read.geelark_trouble(plan, refused, {},
+                                                   built_at))
+
+    # A phone that came up after it: whatever was wrong is over.
+    cleared = foot(now - 30)
+    assert "balance not enough" not in cleared
+    assert "not reported" in cleared, "and it says so rather than nothing"
+    assert 'class="glfoot bad"' not in cleared
+
+    # One that came up before it says nothing about it either way.
+    assert "balance not enough" in foot(now - 600)
+    assert "balance not enough" in foot(None), "no phone ever built"
+
+
+def test_a_money_refusal_outlives_the_clock():
+    """An account that was empty two hours ago is empty now: nothing has
+    been built since to say otherwise. The hour-long window dropped it
+    and the foot went grey while the farm was stopped dead."""
     import time
 
     from geelark_farm.web import pages, read
 
     plan = {"profiles": 40, "availableProfiles": 40}
+    old = time.time() - pages.REFUSAL_SHOWN_FOR - 7200
     refused = {"said": "start failed [41001] balance not enough",
-               "at": time.time() - pages.REFUSAL_SHOWN_FOR - 60}
+               "code": 41001, "msg": "balance not enough", "at": old}
     line = _glark(plan=plan, at=time.time(), refusal=refused["said"],
-                  refused_at=refused["at"],
+                  refused_at=old,
                   trouble=read.geelark_trouble(plan, refused, {}))
 
-    assert "balance not enough" not in line
-    assert "not reported" in line, "and it says so rather than saying nothing"
+    assert "out of credit" in line
+    assert 'class="glfoot bad"' in line
+
+
+def test_only_geelarks_own_words_make_it_the_money():
+    """`out of credit` in red while forty-seven phones were being built,
+    on a day whose one refusal was a proxy GeeLark could not check
+    (the operator, 2026-09-20). Every refusal wears the same shape;
+    only the code says which problem it is."""
+    import time
+
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 32}
+    now = time.time()
+    proxy = {"said": "creation failed [45004] check proxy failed",
+             "code": 45004, "msg": "check proxy failed", "at": now - 300}
+    line = _glark(plan=plan, at=now, refusal=proxy["said"],
+                  refused_at=proxy["at"], phones_total=11,
+                  trouble=read.geelark_trouble(plan, proxy, {}))
+
+    assert "out of credit" not in line, "the account was never asked about"
+    assert "not reported" in line, "the balance reading is still unread"
+    # It gets a reading of its own, and amber: one build turned down
+    # among many is worth seeing and is not a stop.
+    assert "Last refusal" in line
+    assert "check proxy failed" in line
+    assert "[45004]" in line
+    assert 'class="glfoot warn"' in line
     assert 'class="glfoot bad"' not in line
+
+    # And the sentence at the top does not prescribe a top-up for it.
+    told = read.geelark_alerts({"geelark_plan": {"plan": plan},
+                                "geelark_refusal": proxy, "pulse": {}})
+    assert "topped up" not in told[0]["text"]
+    assert "check proxy failed" in told[0]["text"]
+
+
+def test_a_row_written_before_the_code_was_kept_apart_still_reads():
+    """Rows already in `service_state` have the whole payload in `said`
+    and no code beside it."""
+    import time
+
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 32}
+    legacy = {"said": "start failed [41001] balance not enough",
+              "at": time.time() - 120}
+    assert read._is_about_money(legacy)
+    assert not read._is_about_money(
+        {"said": "creation failed [45004] check proxy failed"})
+
+
+def test_building_having_stopped_is_a_reading_of_its_own():
+    """The breaker up on refusals no pool can fix is not a fact about
+    the money - but it is a stop, so it is red and it says so."""
+    import time
+
+    from geelark_farm.web import read
+
+    plan = {"profiles": 40, "availableProfiles": 32}
+    line = _glark(plan=plan, at=time.time(), phones_total=11,
+                  trouble=read.geelark_trouble(
+                      plan, {}, {"tripped": True,
+                                 "breaker_reasons":
+                                     ["phone_would_not_start"] * 5}))
+
+    assert "Building" in line and "stopped" in line
+    assert 'class="glfoot bad"' in line
+    assert "out of credit" not in line, "nothing said the account is empty"
 
 
 def test_a_reading_the_keeper_has_stopped_refreshing_says_so():

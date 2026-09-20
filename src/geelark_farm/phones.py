@@ -164,6 +164,58 @@ def set_proxy(client: Client, phone_id: str, proxy: Proxy) -> None:
 NAME_SEPARATOR = " - "
 
 
+#: GeeLark refuses a phone in two shapes. `/phone/addNew` answers 200
+#: with the failure inside `details`, so `PhoneError` carries the whole
+#: JSON body; everything else raises `ApiError`, whose text starts
+#: `[41001] balance not enough (/v1/phone/start)`. Both are one code and
+#: one sentence.
+_REFUSAL_PAIR = re.compile(r'"code"\s*:\s*(\d+)\s*,\s*"msg"\s*:\s*"([^"]*)"')
+_REFUSAL_CODE = re.compile(r'"code"\s*:\s*(\d+)')
+_REFUSAL_MSG = re.compile(r'"msg"\s*:\s*"([^"]*)"')
+_REFUSAL_BRACKET = re.compile(r"\[(\d+)\]\s*([^(\n]*)")
+
+
+def read_refusal(said: str) -> dict:
+    """GeeLark's reason for turning a phone down, in two fields.
+
+    Two hundred characters of braces were going straight onto the
+    console, where somebody looks to find out what is wrong: the alert
+    strip read `creation failed: { "totalAmount": 1, "successAmount":
+    0, ...` and the reader had to hunt for `"code": 45004` inside it
+    (the operator, 2026-09-20). One code and one sentence is the whole
+    of what it said.
+
+    Returns `code` (None when there is none to find), `msg`, and
+    `said` - a line short enough to print, keeping whatever the caller
+    put in front of the payload: `creation failed [45004] check proxy
+    failed`.
+    """
+    text = str(said or "")
+    head = " ".join(text.split("{", 1)[0].split("[", 1)[0]
+                    .replace(":", " ").split())
+    code, msg = None, ""
+    # A pair first, so a body that lists several details cannot take the
+    # code from one and the sentence from another. Zero is success: the
+    # envelope around a failed item says `"code": 0` of itself.
+    for found, spoken in _REFUSAL_PAIR.findall(text):
+        if int(found):
+            code, msg = int(found), spoken
+            break
+    if code is None:
+        numbers = [int(c) for c in _REFUSAL_CODE.findall(text) if int(c)]
+        spoken = [m for m in _REFUSAL_MSG.findall(text) if m.strip()]
+        if numbers:
+            code, msg = numbers[0], (spoken[0] if spoken else "")
+        else:
+            hit = _REFUSAL_BRACKET.search(text)
+            if hit:
+                code, msg = int(hit.group(1)), hit.group(2).strip()
+    said_short = " ".join(
+        x for x in (head, f"[{code}] {msg}".strip() if code else "") if x)
+    return {"code": code, "msg": " ".join(msg.split()),
+            "said": said_short or " ".join(text.split())[:120]}
+
+
 def display_name(serial: str | int = "", account: str = "") -> str:
     """`832 - MerylQuinn162935`, from whichever halves are known.
 

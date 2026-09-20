@@ -6348,3 +6348,53 @@ def test_a_finish_does_not_blank_which_apps_are_on_the_phone():
     # A build that does know writes it, exactly as before.
     build.app = "chatgpt+spotify+claude"
     assert _recorded(build)["App name"] == "chatgpt+spotify+claude"
+
+
+def test_a_refusal_is_kept_as_a_code_and_a_sentence(monkeypatch):
+    """What goes into `service_state` is what the console reads, so the
+    console can only be as good as this. It was the whole JSON body
+    under one key called `said`, and the page had no way to tell a
+    proxy GeeLark could not check from an account with no money in it
+    (the operator, 2026-09-20).
+    """
+    from contextlib import contextmanager
+
+    from geelark_farm import builder
+    from geelark_farm.store import db, state as store_state
+
+    kept = {}
+
+    @contextmanager
+    def fake_connect(settings):
+        yield SimpleNamespace(commit=lambda: None)
+
+    monkeypatch.setattr(db, "connect", fake_connect)
+    monkeypatch.setattr(store_state, "put",
+                        lambda conn, key, value: kept.update({key: value}))
+
+    settings = SimpleNamespace(store_enabled=True)
+    builder._remember_refusal(
+        settings,
+        'creation failed:\n{"details": [{"code": 45004, '
+        '"msg": "check proxy failed"}]}')
+
+    note = kept["geelark_refusal"]
+    assert note["code"] == 45004
+    assert note["msg"] == "check proxy failed"
+    assert note["said"] == "creation failed [45004] check proxy failed"
+    # And a line of the original, for a shape the reader has not seen.
+    assert '"code": 45004' in note["raw"]
+    assert "\n" not in note["raw"], "one line, not a page of braces"
+
+
+def test_a_refusal_never_stops_the_build_that_is_reporting_one(monkeypatch):
+    """It is a note for a page, written on a path that is already
+    reporting a failure."""
+    from geelark_farm import builder
+    from geelark_farm.store import db
+
+    def explode(settings):
+        raise RuntimeError("the store is down")
+
+    monkeypatch.setattr(db, "connect", explode)
+    builder._remember_refusal(SimpleNamespace(store_enabled=True), "anything")

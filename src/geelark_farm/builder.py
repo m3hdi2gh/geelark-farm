@@ -2635,6 +2635,14 @@ def _remember_refusal(settings: Settings, said: str) -> None:
     `[41001] balance not enough` in six hours and the console showed a
     tripped breaker with no hint why (2026-09-19).
 
+    The code and the sentence are kept apart from each other, because
+    only GeeLark can say whether a refusal is about money and only the
+    code says it: reading every refusal as an empty account put `out of
+    credit` on the console while forty-seven phones were being built,
+    on a day whose one refusal was a proxy it could not check
+    (2026-09-20). A line of the original goes with them for a shape
+    `read_refusal` has never seen.
+
     Never fatal. It is a note for a page, written on a path that is
     already reporting a failure.
     """
@@ -2643,9 +2651,12 @@ def _remember_refusal(settings: Settings, said: str) -> None:
     try:
         from .store import db, state as store_state
 
+        note = phones.read_refusal(said)
         with db.connect(settings) as conn:
             store_state.put(conn, "geelark_refusal",
-                            {"said": said[:300], "at": time.time()})
+                            {"said": note["said"], "code": note["code"],
+                             "msg": note["msg"], "at": time.time(),
+                             "raw": " ".join(str(said).split())[:200]})
             conn.commit()
     except Exception as exc:                                      # noqa: BLE001
         log.debug("could not keep why a phone would not start (%s)", exc)
