@@ -177,6 +177,9 @@ class Context(router.Context):
     captcha_met: int = 0
     #: Visits spent waiting for a grid to finish drawing itself.
     captcha_waited: int = 0
+    #: Times this sign-in has asked Google to widen the list of ways in.
+    #: See WIDEN_BUDGET.
+    widened: int = 0
 
 
 # --------------------------------------------------------------- primitives
@@ -811,6 +814,55 @@ CODE_LOOKUP_SECONDS = (5.0, 11.0)
 #: not, and a third is the same answer a third time.
 ANOTHER_WAY_TRIES = 2
 
+#: How many times ONE sign-in may ask Google to widen the list of ways in.
+#:
+#: Every press of "Try another way" is this tool telling Google "that is
+#: not something I have". The first is a fair question. Google answers the
+#: second with "You didn't provide enough info" and blocks the account for
+#: a while - `verification_blocked`, which the advice on it calls a thing
+#: no code fix reaches.
+#:
+#: The budget is the whole sign-in's, not a page's, because the two presses
+#: that did this were on two different pages: "Verify your phone number"
+#: pressed it, and `act_choose_authenticator` pressed it again on the list
+#: that press had opened - each one the first press of its own page, and
+#: the pair invisible to either guard. Sixteen of eighteen
+#: `verification_blocked` attempts in eight days went exactly that way, on
+#: rows whose authenticator key was good (2026-09-21, found by audit).
+WIDEN_BUDGET = 1
+
+
+def may_widen(ctx: Context) -> bool:
+    """Whether this sign-in still has a press of "Try another way" left.
+
+    Asked apart from the press because the two answers mean opposite
+    things: a spent budget is a verdict about the account - Google has
+    shown us everything it will - while a press that simply did not land
+    is a button this look did not find, and the next look may.
+    """
+    if getattr(ctx, "widened", 0) < WIDEN_BUDGET:
+        return True
+    log.warning("Google has already widened the list once for this sign-in; "
+                "pressing Try another way again is what it answers by "
+                "blocking the account")
+    return False
+
+
+def ask_to_widen(ctx: Context) -> bool:
+    """Ask Google for another way in, if this sign-in still may.
+
+    Every caller that presses "Try another way" comes through here, so the
+    budget above is counted once for the sign-in however many pages ask.
+    """
+    if not may_widen(ctx):
+        return False
+    if not ctx.tap("Try another way"):
+        return False
+    ctx.widened = getattr(ctx, "widened", 0) + 1
+    log.info("asked Google for another way in")
+    time.sleep(4)
+    return True
+
 
 def act_totp(ctx: Context) -> Outcome | None:
     """Type an authenticator code with enough life left to survive submission."""
@@ -836,10 +888,9 @@ def act_totp(ctx: Context) -> Outcome | None:
         # it would be saying too.
         if (ctx.account.recovery_email
                 and ctx.seen.get("2fa_code_entry", 0) <= ANOTHER_WAY_TRIES
-                and ctx.tap("Try another way")):
+                and ask_to_widen(ctx)):
             log.info("no authenticator key on the row, but a recovery "
-                     "address is; asking Google for another way")
-            time.sleep(4)
+                     "address is; asked Google for another way")
             return None
         # Accounts sold without 2FA normally never reach this screen. When one
         # does, Google is asking for something the row cannot produce, and
@@ -898,7 +949,27 @@ def act_choose_authenticator(ctx: Context) -> Outcome | None:
                 log.info("chose the recovery email option")
                 time.sleep(5)
                 return None
-    elif recovery_offered(ctx):
+
+    # The first list Google shows after "Verify your phone number" can be
+    # the SMS row and a Try another way, nothing else - the authenticator
+    # is one more press away, behind that button (2026-09-09, phones 2082,
+    # 2086 and 2090: three Gmails that sign in by hand were called SMS-only
+    # here). One press per sign-in, counted by `ask_to_widen`, which is
+    # also what stops the pair of presses that blocks the account.
+    #
+    # ABOVE the two verdicts below, not under them. `no_recovery_email`
+    # used to be returned here the moment the list showed "Confirm your
+    # recovery email" and the row had no address - so a row carrying a
+    # good authenticator key was condemned with the authenticator one
+    # press away and never asked for. Three rows went that way, two of
+    # which the operator had already pointed at (2026-09-21, found by
+    # audit). A verdict is what is left when there is nothing to try.
+    if ctx.has("try another way") and has_second_factor(ctx):
+        log.info("the list offers no authenticator; asking for another way")
+        if ask_to_widen(ctx):
+            return None
+
+    if not ctx.account.recovery_email and recovery_offered(ctx):
         # The one way through is on screen and the row cannot take it. Said as
         # its own reason rather than `no_authenticator_option`, because the
         # fix is a cell somebody can fill rather than an account to replace.
@@ -906,20 +977,6 @@ def act_choose_authenticator(ctx: Context) -> Outcome | None:
         return Outcome("fatal", "no_recovery_email",
                        FATAL_ADVICE["no_recovery_email"],
                        artifacts=[path] if path else [])
-
-    # The first list Google shows after "Verify your phone number" can be
-    # the SMS row and a Try another way, nothing else - the authenticator
-    # is one more press away, behind that button (2026-09-09, phones 2082,
-    # 2086 and 2090: three Gmails that sign in by hand were called SMS-only
-    # here). Pressed once, on the first list only: a second list with no
-    # authenticator on it is the answer, and the guard on `act_try_another
-    # _way` still stands - this is only reached with none visible.
-    if (ctx.has("try another way") and has_second_factor(ctx)
-            and ctx.seen.get("2fa_method_list", 0) <= 1):
-        log.info("the list offers no authenticator; asking for another way")
-        if ctx.tap("Try another way"):
-            time.sleep(4)
-            return None
 
     path = ctx.save("no-authenticator-option")
     return Outcome("fatal", "no_authenticator_option",
@@ -967,7 +1024,16 @@ def act_verify_phone(ctx: Context) -> Outcome | None:
                        "Try another way brought the phone-number page back; "
                        + FATAL_ADVICE["phone_verification_required"],
                        artifacts=[path] if path else [])
-    return act_try_another_way(ctx)
+    if not may_widen(ctx):
+        # The sign-in has spent its one press. This page is then what it
+        # says it is, and saying so costs the account nothing - pressing
+        # again is what earns it a block.
+        path = ctx.save("phone_verification_required")
+        return Outcome("fatal", "phone_verification_required",
+                       FATAL_ADVICE["phone_verification_required"],
+                       artifacts=[path] if path else [])
+    ask_to_widen(ctx)
+    return None
 
 
 def act_push_to_other_device(ctx: Context) -> Outcome | None:
@@ -994,10 +1060,21 @@ def act_try_another_way(ctx: Context) -> Outcome | None:
     Google reads it as "I have nothing else" and refuses the sign-in outright
     with "You didn't provide enough info" (measured 2026-07-30, twice). Hence
     the guard, and hence this screen ranking below the method list.
+
+    A page still offering nothing after the sign-in has spent its one press
+    is the answer, not a page to stand on: returning None here would leave
+    the router revisiting until `max_visits` and reporting `stuck_on_...`,
+    which blames the device and leaves the Gmail free for the next phone to
+    take (the loop `act_push_to_other_device` was written against).
     """
-    log.info("no authenticator option visible; asking for another way")
-    if ctx.tap("Try another way"):
-        time.sleep(4)
+    if not may_widen(ctx):
+        path = ctx.save("no-authenticator-option")
+        return Outcome("fatal", "no_authenticator_option",
+                       "Google was asked once to widen the list and this "
+                       "page still offers nothing the row can answer",
+                       artifacts=[path] if path else [])
+    # A press that does not land is not a verdict: the router looks again.
+    ask_to_widen(ctx)
     return None
 
 

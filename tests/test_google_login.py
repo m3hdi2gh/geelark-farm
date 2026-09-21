@@ -2172,21 +2172,104 @@ def test_a_page_with_no_such_button_is_the_end_of_it(phone, tmp_path):
 
 
 def test_asking_for_another_way_is_bounded(phone, tmp_path):
-    """The press either opens the list or it does not; a third is the
-    same answer a third time."""
+    """One press, for the whole sign-in. It used to be one per page, and
+    the second press is what Google answers with "You didn't provide
+    enough info" - see WIDEN_BUDGET."""
     done = phone(taps_that_work={"Try another way"})
     account = Account(email="a@example.com", password="x", totp_secret="",
                       recovery_email="keeper@example.com")
     ctx = a_context(input_box(), account=account)
     ctx.artifact_dir = tmp_path
 
-    for visit in range(1, login.ANOTHER_WAY_TRIES + 1):
-        ctx.seen["2fa_code_entry"] = visit
-        assert login.act_totp(ctx) is None, visit
-    ctx.seen["2fa_code_entry"] = login.ANOTHER_WAY_TRIES + 1
+    ctx.seen["2fa_code_entry"] = 1
+    assert login.act_totp(ctx) is None
+    assert done.tapped == ["Try another way"]
+
+    ctx.seen["2fa_code_entry"] = 2
     out = login.act_totp(ctx)
+    assert done.tapped == ["Try another way"], "asked once, not twice"
 
     assert out is not None and out.reason == "no_authenticator"
     # And it says the row had an answer Google would not take, which is a
     # different thing to fix from a row that has none.
     assert "recovery address" in out.detail
+
+
+# ------------------------- one press of Try another way (2026-09-21 audit)
+def _show(ctx, fixture):
+    """Put another screen in front of the same sign-in."""
+    xml = (FIXTURES / fixture).read_text(encoding="utf-8")
+    ctx.elements = screen.parse(xml)
+    ctx.blob = screen.texts(ctx.elements)
+    return ctx
+
+
+def test_a_row_with_an_authenticator_asks_before_it_is_called_recovery_less(
+        phone, tmp_path):
+    """Google's list showed `Confirm your recovery email` and a `Try another
+    way`, the row had no recovery address - and the verdict was returned
+    there and then, above the press that widens the list. So three rows
+    carrying a good authenticator key were condemned with the authenticator
+    one press away and never asked for; two of them the operator had already
+    pointed at (2026-09-21, found by audit: balttho680, was.captain16,
+    hbsjshbsjs, all with a 32-character secret)."""
+    device = phone(taps_that_work={"Try another way"})
+    keyed = Account(email="k@gmail.com", password="x",
+                    totp_secret="A66OUCIDONRH2WL2EYN3P24MA3J47OKU")
+    ctx = context_for("google-verify-chooser.xml", keyed)
+    ctx.artifact_dir = tmp_path
+
+    assert login.recovery_offered(ctx) and not login.authenticator_offered(ctx)
+    assert login.act_choose_authenticator(ctx) is None, (
+        "a verdict while there was still something to try")
+    assert device.tapped == ["Try another way"]
+
+    # And when the press has been spent, the verdict is the one it always
+    # was - a cell somebody can fill.
+    out = login.act_choose_authenticator(ctx)
+    assert out is not None and out.reason == "no_recovery_email"
+    assert device.tapped == ["Try another way"], "asked once"
+
+
+def test_the_second_try_another_way_of_a_sign_in_is_never_pressed(
+        phone, tmp_path):
+    """The pair that blocks an account, on two pages so neither page's own
+    guard could see it: "Verify your phone number" presses Try another way,
+    and `act_choose_authenticator` presses it again on the list that press
+    opened. Google answers the second with "You didn't provide enough info"
+    and blocks the account - sixteen of eighteen `verification_blocked`
+    attempts in eight days went exactly this way, on rows whose key was good
+    (2026-09-21, found by audit)."""
+    device = phone(taps_that_work={"Try another way"})
+    ctx = context_from("google-verify-phone-try-another-way.xml")
+    ctx.artifact_dir = tmp_path
+    ctx.seen["2fa_verify_phone"] = 1
+
+    assert login.act_verify_phone(ctx) is None
+    assert device.tapped == ["Try another way"], "the first press is fair"
+    assert ctx.widened == 1
+
+    # The list that press opened, with no authenticator on it.
+    _show(ctx, "google-method-list-sms-only.xml")
+    ctx.seen["2fa_method_list"] = 1
+    out = login.act_choose_authenticator(ctx)
+
+    assert device.tapped == ["Try another way"], (
+        "the second press is the one Google blocks the account for")
+    assert out is not None and out.kind == "fatal"
+    assert out.reason != "verification_blocked"
+
+
+def test_a_press_that_did_not_land_is_not_a_verdict(tmp_path):
+    """A spent budget says Google has shown us everything it will; a tap
+    that simply did not find its button says only that this look did not,
+    and the router looks again. Answering them alike would file the row
+    against a button we failed to press."""
+    ctx = context_from("google-verify-phone-try-another-way.xml")
+    ctx.artifact_dir = tmp_path
+    ctx.tap = lambda label: False
+
+    assert login.may_widen(ctx)
+    assert login.act_verify_phone(ctx) is None, "nothing was pressed and "\
+        "nothing is concluded"
+    assert ctx.widened == 0, "an unlanded press costs no budget"
