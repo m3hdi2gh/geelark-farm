@@ -392,6 +392,51 @@ ACTION_VERBS.update(verbs.VERBS)
 #: `test_all_proxies` checks every exit, eight at a time.
 QUICK_COMMAND_SECONDS = 600.0
 
+#: How long the control lane waits after its bell before it turns, so a
+#: burst of presses is one turn and not one turn each - the pass has
+#: WOKEN_PASS_FLOOR for the same reason, and the lane copied its bell
+#: without its floor: every ring ran a full reload of the three pools,
+#: even a ring for a verb the lane never takes (2026-09-21, found by
+#: audit). Shorter than the pass's, because the lane's work is seconds.
+LANE_FLOOR = 2.0
+
+
+def _jobs_still_on(settings: Settings) -> str:
+    """What the builders still hold while the keeper is stopped, for the
+    banner that used to say nothing was being built while a replica
+    built on (2026-09-21). Empty when there is no queue, or it cannot be
+    read - the banner is not the place to fail."""
+    if not (getattr(settings, "store_enabled", False)
+            and getattr(settings, "build_queue", False)):
+        return ""
+    try:
+        from .store import jobs as store_jobs
+
+        builds, finishes = store_jobs.counts(settings)
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("could not count the builders' jobs (%s)", exc)
+        return ""
+    if not (builds or finishes):
+        return ""
+    return (f"; the builders still hold {builds} build(s) and {finishes} "
+            f"finish(es) - running ones end on their own, queued ones wait")
+
+
+def _asked_of(book) -> frozenset[str]:
+    """The Service tab's standing controls, read off the board a process
+    already holds. Empty for a book with no board, and empty when the
+    board cannot be read: a control that cannot be read must not stop the
+    loop that would otherwise be working - the same rule the board's own
+    `asked` keeps."""
+    board = getattr(book, "service", None)
+    if board is None:
+        return frozenset()
+    try:
+        return frozenset(board.asked())
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not read the controls (%s); carrying on", exc)
+        return frozenset()
+
 
 #: What the control lane may take. Read from the verb table rather than
 #: listed twice: a verb says for itself whether it is quick enough and holds
@@ -471,10 +516,17 @@ class ControlLane:
         wanted = lane_verbs()
         log.info("control lane open for: %s", ", ".join(wanted))
         while not self.stop.is_set():
-            signals.queued.wait(timeout=self.settings.serve_interval_seconds)
-            signals.queued.clear()
+            woken = signals.lane.wait(
+                timeout=self.settings.serve_interval_seconds)
+            signals.lane.clear()
             if self.stop.is_set():
                 break
+            if woken:
+                # The floor: presses that land during it are this turn's.
+                self.stop.wait(LANE_FLOOR)
+                signals.lane.clear()
+                if self.stop.is_set():
+                    break
             try:
                 self.tick(wanted)
             except Exception:                                     # noqa: BLE001
@@ -490,13 +542,26 @@ class ControlLane:
         if not wanted:
             return 0
         book, ledger = self.boards(), self.ledger()
+        # The standing controls were read by the pass alone. This lane -
+        # on by default on the farm - went on deleting phones, starting
+        # hand-built builds and running GeeLark verbs under a ticked
+        # "Stop everything", while the Service tab said nothing was being
+        # built or finished (2026-09-21, found by audit).
+        asked = _asked_of(book)
+        if "Stop everything" in asked:
+            # Only the control verb itself, so the untick can arrive.
+            did = _drain_actions(self.settings, book, ledger,
+                                 controls_only=True, client=self.client)
+            log.warning("control lane: stopped from the console; %d "
+                        "control(s) carried out and nothing else", did)
+            return did
         did = _drain_actions(self.settings, book, ledger,
                              controls_only=False, client=self.client,
                              only=wanted,
                              launch=self.launch if self.can_launch else None)
         if did:
             log.info("control lane ran %d command(s)", did)
-        if self.can_launch:
+        if self.can_launch and "Pause building" not in asked:
             self.wishes(book, ledger)
         self.marks(book, ledger)
         return did
@@ -1629,7 +1694,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         # stopped it.
         decision = Decision(warning=(
             "stopped from the sheet. Nothing is being synced, built or "
-            "finished. Untick `Stop everything` to start again."))
+            f"finished{_jobs_still_on(settings)}. Untick `Stop everything` "
+            "to start again."))
         _show(book, settings, decision, warm=0, waiting=0, free=None,
               tripped="", failed=_failing(settings), needs="", held=True)
         _put_state(settings, "pass", {
@@ -2086,7 +2152,8 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="job")
     running: dict[int, dict] = {}
     lock = threading.Lock()
-    take = take or (lambda n: store_jobs.take(settings, worker, limit=n))
+    take = take or (lambda n, kinds=None: store_jobs.take(
+        settings, worker, limit=n, kinds=kinds))
     carry = carry or (lambda job: _carry_out(settings, client, book, ledger,
                                              job, stop))
 
@@ -2111,6 +2178,7 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
 
     log.info("building for the queue as %s, %d at a time (ROLE=builder)",
              worker, workers)
+    held = False
     while not stop.is_set():
         try:
             (settings.state_dir / BUILDER_HEARTBEAT_FILE).write_text(
@@ -2123,7 +2191,25 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
         if free > 0:
             try:
                 book.reload()
-                taken = take(free)
+                # The keeper's pass read "Stop everything" and "Pause
+                # building"; a replica draining the same queue read
+                # neither, and built through both (2026-09-21, found by
+                # audit). Read here, after the reload, off the board the
+                # book already holds. Pause still lets a finish through -
+                # a customer's account onto a phone that is waiting for
+                # it - which is what Pause was written to mean.
+                asked = _asked_of(book)
+                if "Stop everything" in asked:
+                    if not held:
+                        log.warning("stopped from the console; taking no "
+                                    "jobs until Stop everything is unticked")
+                    held = True
+                elif "Pause building" in asked:
+                    held = False
+                    taken = take(free, kinds=("finish",))
+                else:
+                    held = False
+                    taken = take(free)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("could not take from the queue (%s)", exc)
         for job in taken:

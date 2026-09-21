@@ -3062,3 +3062,168 @@ def test_the_sweep_measures_an_inline_claim_against_a_quick_clock():
     drain = inspect.getsource(serve_mod._drain_actions)
     assert "quick=quick_verbs()," in drain
     assert "quick=lane_verbs()" not in drain
+
+
+# ---------------------- the controls reach every process (2026-09-21 audit)
+def _board(*asked):
+    return SimpleNamespace(service=SimpleNamespace(asked=lambda: list(asked)))
+
+
+def test_a_ring_for_the_queue_is_heard_by_both_drainers():
+    """One Event had two waiters and both cleared it, so whichever woke
+    first took the ring and the other slept its full interval - for every
+    verb the lane does not take, the pass was the one left sleeping."""
+    from geelark_farm import signals
+
+    signals.queued.clear()
+    signals.lane.clear()
+    signals.ring(signals.queued)
+    assert signals.queued.is_set() and signals.lane.is_set()
+    signals.queued.clear()
+    signals.lane.clear()
+    signals.ring(signals.jobs)
+    assert not signals.lane.is_set(), "a job is not a command"
+    signals.jobs.clear()
+
+
+def test_the_lane_waits_out_a_burst_before_it_turns(monkeypatch,
+                                                    make_settings):
+    """The lane copied the pass's bell without its floor: every ring ran a
+    full reload of the three pools, even one for a verb it never takes."""
+    from geelark_farm import signals
+
+    stop = threading.Event()
+    lane = serve_mod.ControlLane(make_settings(serve_interval_seconds=0),
+                                 client=None, stop=stop)
+    floors = []
+    stop.wait = lambda timeout=None: floors.append(timeout) or False
+    turns = []
+    monkeypatch.setattr(lane, "tick",
+                        lambda wanted: turns.append(1) or stop.set())
+
+    signals.lane.set()
+    lane.watch()
+    assert floors == [serve_mod.LANE_FLOOR] and turns == [1]
+    assert not signals.lane.is_set(), "the ring is taken"
+
+    # Not woken - the interval ran out - so no floor.
+    stop.clear()
+    floors.clear()
+    turns.clear()
+    signals.lane.clear()
+    lane.watch()
+    assert floors == [] and turns == [1]
+
+
+def test_the_controls_are_read_off_the_board_and_never_stop_the_loop():
+    assert serve_mod._asked_of(SimpleNamespace()) == frozenset()
+    assert serve_mod._asked_of(_board("Pause building")) == {"Pause building"}
+    broken = SimpleNamespace(service=SimpleNamespace(
+        asked=lambda: (_ for _ in ()).throw(RuntimeError("down"))))
+    assert serve_mod._asked_of(broken) == frozenset()
+
+
+def test_stop_everything_reaches_the_lane(monkeypatch, make_settings):
+    """The standing controls were read by the pass alone: this lane - on
+    by default on the farm - went on deleting phones, starting hand-built
+    builds and running GeeLark verbs under a ticked Stop everything, while
+    the Service tab said nothing was being built or finished."""
+    from geelark_farm import builder
+    from geelark_farm.store import wanted as store_wanted
+
+    lane = _lane(make_settings, monkeypatch)
+    monkeypatch.setattr(lane, "boards", lambda: _board("Stop everything"))
+    asked = []
+    monkeypatch.setattr(serve_mod, "_drain_actions",
+                        lambda settings, book, ledger, **k: asked.append(k) or 1)
+    monkeypatch.setattr(store_wanted, "take", lambda settings: (
+        _ for _ in ()).throw(AssertionError("a wish started under Stop")))
+    monkeypatch.setattr(builder, "apply_phone_states", lambda *a, **k: (
+        _ for _ in ()).throw(AssertionError("a mark carried out under Stop")))
+
+    assert lane.tick(("boot_phone", "control")) == 1
+    assert asked == [{"controls_only": True, "client": lane.client}], (
+        "only the control verb, so the untick can arrive")
+
+
+def test_pause_building_reaches_the_lane_but_lets_the_marks_through(
+        monkeypatch, make_settings):
+    from geelark_farm import builder
+    from geelark_farm.store import wanted as store_wanted
+
+    lane = _lane(make_settings, monkeypatch)
+    monkeypatch.setattr(lane, "boards", lambda: _board("Pause building"))
+    asked = []
+    monkeypatch.setattr(serve_mod, "_drain_actions",
+                        lambda settings, book, ledger, **k: asked.append(k) or 0)
+    monkeypatch.setattr(store_wanted, "take", lambda settings: (
+        _ for _ in ()).throw(AssertionError("a build started under Pause")))
+    marks = []
+    monkeypatch.setattr(builder, "apply_phone_states",
+                        lambda client, book, ledger, settings:
+                        marks.append(1) or {})
+
+    lane.tick(("boot_phone", "login_accounts"))
+
+    assert asked[0]["only"] == ("boot_phone", "login_accounts")
+    assert marks == [1], "Done and Failed are still carried out"
+
+
+def test_stop_everything_and_pause_reach_the_builders(make_settings, tmp_path,
+                                                      monkeypatch):
+    """A replica draining the same queue read neither control and built
+    through both. Stopped it takes nothing; paused it takes finishes -
+    a customer's account onto a phone waiting for it - and leaves builds
+    queued."""
+    from geelark_farm import signals
+
+    stop = threading.Event()
+    asked = ["Stop everything"]
+    book = SimpleNamespace(reload=lambda: None,
+                           service=SimpleNamespace(asked=lambda: list(asked)))
+    takes = []
+
+    def take(n, kinds=None):
+        takes.append(kinds)
+        return []
+
+    turns = {"n": 0}
+
+    def between(timeout=None):
+        turns["n"] += 1
+        if turns["n"] == 1:
+            asked[:] = ["Pause building"]
+        elif turns["n"] == 2:
+            asked[:] = []
+        else:
+            stop.set()
+        return False
+
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(serve_mod.Book, "open", classmethod(lambda cls, s: book))
+    monkeypatch.setattr(serve_mod.Ledger, "shared",
+                        classmethod(lambda cls, d, stale_after=None: object()))
+    monkeypatch.setattr(serve_mod.Listener, "start", lambda self: None)
+    monkeypatch.setattr(signals.jobs, "wait", between)
+    settings = make_settings(state_dir=tmp_path, role="builder",
+                             builder_workers=1)
+
+    serve_mod.serve_builder(settings, stop=stop, take=take,
+                            carry=lambda job: None)
+
+    assert takes == [("finish",), None], (
+        "stopped: nothing taken; paused: finishes only; then everything")
+
+
+def test_the_stopped_banner_says_what_the_builders_still_hold(monkeypatch,
+                                                              make_settings):
+    from geelark_farm.store import jobs as store_jobs
+
+    monkeypatch.setattr(store_jobs, "counts", lambda s: (2, 1))
+    said = serve_mod._jobs_still_on(make_settings(store_enabled=True,
+                                                  build_queue=True))
+    assert "2 build(s) and 1 finish(es)" in said
+    assert serve_mod._jobs_still_on(make_settings(store_enabled=False)) == ""
+    monkeypatch.setattr(store_jobs, "counts", lambda s: (0, 0))
+    assert serve_mod._jobs_still_on(make_settings(store_enabled=True,
+                                                  build_queue=True)) == ""

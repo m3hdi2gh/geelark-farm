@@ -52,19 +52,27 @@ def queue(settings: Settings, kind: str, payload: dict | None = None, *,
     return new_id
 
 
-def take(settings: Settings, worker: str, limit: int = 1) -> list[dict]:
+def take(settings: Settings, worker: str, limit: int = 1,
+         kinds: tuple[str, ...] | None = None) -> list[dict]:
     """Up to `limit` queued jobs, now this worker's. SKIP LOCKED is what
     keeps two builders off one row: each takes what the other has not
-    locked, and a row is `running` from the moment it is handed out."""
+    locked, and a row is `running` from the moment it is handed out.
+
+    `kinds` narrows what is taken: a builder under "Pause building" takes
+    finishes and leaves builds queued (2026-09-21)."""
     if limit < 1:
         return []
+    narrowed = " AND kind = ANY(%s)" if kinds else ""
+    params: tuple = ((worker, list(kinds), limit) if kinds
+                     else (worker, limit))
     with connect(settings) as conn:
         cur = conn.execute(
             "UPDATE jobs SET status = 'running', claimed_by = %s,"
             " claimed_at = now(), heartbeat_at = now()"
             " WHERE id IN (SELECT id FROM jobs WHERE status = 'queued'"
+            f"{narrowed}"
             "              ORDER BY id FOR UPDATE SKIP LOCKED LIMIT %s)"
-            f" RETURNING {_COLUMNS}", (worker, limit))
+            f" RETURNING {_COLUMNS}", params)
         rows = [_row(_COLUMNS, r) for r in cur.fetchall()]
         conn.commit()
     return rows

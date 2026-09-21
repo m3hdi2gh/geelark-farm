@@ -26,6 +26,14 @@ import threading
 #: is looked at in about a second instead of at the top of the next pass.
 queued = threading.Event()
 
+#: The same press, heard by the control lane. `queued` had two waiters
+#: and both cleared it, so whichever woke first took the ring and the
+#: other slept its full interval - and for every verb the lane does not
+#: take, the pass was the one left sleeping thirty seconds behind a bell
+#: rung for it (2026-09-21, found by audit). One Event per waiter, rung
+#: together by `ring`.
+lane = threading.Event()
+
 #: Somebody queued a job for the builders (phase 4). A builder's wait
 #: sits on this; the keeper never touches it.
 jobs = threading.Event()
@@ -44,3 +52,7 @@ def ring(event: threading.Event) -> None:
     is worse than nothing, because the next reader would believe in it.
     """
     event.set()
+    # A command is for both drainers, and each has a bell of its own so
+    # that one taking its ring cannot take the other's.
+    if event is queued:
+        lane.set()

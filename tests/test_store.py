@@ -1846,3 +1846,17 @@ def test_the_schema_revision_is_the_one_the_file_last_wrote():
         f"schema.sql is at rev {max(revs)} and SCHEMA_REV says "
         f"{db.SCHEMA_REV}")
 
+
+def test_a_paused_builder_takes_finishes_and_leaves_builds_queued(
+        monkeypatch, make_settings):
+    from geelark_farm.store import jobs as store_jobs
+
+    conn = _ScriptedConn([[]])
+    monkeypatch.setattr("geelark_farm.store.jobs.connect", lambda s: conn)
+    store_jobs.take(make_settings(), "w1", limit=2, kinds=("finish",))
+    assert "kind = ANY(%s)" in conn.sql[0]
+
+    conn = _ScriptedConn([[]])
+    monkeypatch.setattr("geelark_farm.store.jobs.connect", lambda s: conn)
+    store_jobs.take(make_settings(), "w1", limit=2)
+    assert "kind = ANY" not in conn.sql[0], "unpaused, everything is taken"
