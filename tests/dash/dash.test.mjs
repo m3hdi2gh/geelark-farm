@@ -509,3 +509,81 @@ test("the editor holds its boxes until the row's credentials land",
   assert.equal(pw.disabled, false, 'released once they landed');
   assert.equal(dlg.querySelector('button.go').disabled, false);
 });
+
+test("a press on a pool page's own table takes that page's row and pills",
+     async () => {
+  // The dedicated pool pages' rows carried no key, so every Free, Edit
+  // and Remove there was a redirect and a whole page re-read; the
+  // answer is now that page's own row, under its fresh pills.
+  const win = consoleIn(
+    '<div class="pills"><span>Errored<span class="n">3</span></span></div>'
+    + '<table><tr data-key="gmail:a@x.com" data-page-view="errored">'
+    + '<td>a@x.com</td><td><form method="post" action="/pools/gmail/free">'
+    + '<button>Free</button></form></td></tr>'
+    + '<tr data-key="gmail:b@x.com" data-page-view="errored"><td>b@x.com</td></tr>'
+    + '</table>',
+    {answer: () => ({status: 200, url: '/pools/gmail?view=errored&said=done:9',
+                     body: '<div class="rowanswer" data-row-kind="gmail" '
+                         + 'data-row-view="errored"><p class="said toast">'
+                         + 'a@x.com is back on the shelf</p>'
+                         + '<div class="pills"><span>Errored<span class="n">2'
+                         + '</span></span></div><table></table></div>'})});
+  const doc = win.document;
+  const form = doc.querySelector('form[action="/pools/gmail/free"]');
+  fire(form, 'submit', {submitter: form.querySelector('button')});
+  await settle();
+
+  const sent = win.__fetches[0];
+  assert.equal(sent.init.headers['X-GF-Row'], 'gmail');
+  assert.equal(sent.init.headers['X-GF-View'], 'errored',
+               'the page did not say which view drew the row');
+  assert.equal(doc.querySelector('tr[data-key="gmail:a@x.com"]'), null,
+               'a row that left the view stays on screen');
+  assert.ok(doc.querySelector('tr[data-key="gmail:b@x.com"]'),
+            'the row beside it went too');
+  assert.equal(doc.querySelector('main .pills .n').textContent, '2',
+               'the count did not move with the row');
+  assert.ok(doc.querySelector('main .said'), 'the press said nothing');
+});
+
+test('a redraw waits for a press in flight', async () => {
+  // A queued press arms a re-look at 2.5s; a second press made just
+  // before it fired had its busy button and dimmed row swapped out
+  // from under it, and its answer landed on detached nodes.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const win = consoleIn(regioned(ONE), {
+    answer: (call) => /3801\/state$/.test(call.url)
+      ? {status: 200, url: '/?said=queued:71', body: answerPage(regioned(ONE))}
+      : /3802\/state$/.test(call.url)
+      ? {status: 200, url: '/?said=done:72', body: answerPage(regioned(ONE)),
+         after: held}
+      : {status: 200, url: '/', body: answerPage(regioned(TWO))},
+  });
+  const doc = win.document;
+  // The first press: queued, so a re-look is armed.
+  const first = doc.querySelector('form.press');
+  fire(first, 'submit', {submitter: first.querySelector('button')});
+  await settle();
+  assert.equal(win.__timers.filter((t) => t.fn && t.ms === 2500).length, 1);
+
+  // The second, still in flight when the re-look fires.
+  const second = doc.createElement('form');
+  second.method = 'post'; second.action = '/phones/3802/state';
+  second.className = 'press';
+  second.innerHTML = '<button>Done</button>';
+  doc.querySelector('.wide').appendChild(second);
+  fire(second, 'submit', {submitter: second.querySelector('button')});
+  await settle();
+  assert.ok(second.classList.contains('busy'), 'the press is in flight');
+
+  win.__runTimers();
+  await settle();
+  assert.equal(win.__fetches.filter((f) => f.url === '/').length, 0,
+               'the page was redrawn under a press in flight');
+  assert.ok(doc.contains(second), 'the form was swapped out under the press');
+
+  release();
+  await settle(); await settle(); await settle();
+  assert.equal(second.classList.contains('busy'), false, 'released after');
+});

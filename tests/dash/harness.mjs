@@ -113,6 +113,8 @@ export function consoleIn(html, opts = {}) {
     const answer = opts.answer ? opts.answer(call) : null;
     if (!answer) return Promise.resolve(reply({status: 204, body: ''}));
     if (answer instanceof Error) return Promise.reject(answer);
+    // `after`: a promise the answer waits for - a press held in flight.
+    if (answer.after) return answer.after.then(() => reply(answer));
     return Promise.resolve(reply(answer));
   };
   function reply({status = 200, body = '', url = '', textThrows = false,

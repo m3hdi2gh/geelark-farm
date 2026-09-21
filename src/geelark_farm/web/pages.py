@@ -2387,6 +2387,45 @@ def row_answer(kind: str, row: dict | None, said: str, user: dict,
             f'<table>{drawn}</table></div>')
 
 
+#: The dedicated pool pages that answer a press with one of their own
+#: rows, and the base their pills link to.
+PAGE_ROW_KINDS = {"gmail": "/pools/gmail", "gpt": "/pools/gpt",
+                  "proxy": "/pools/proxy"}
+
+
+def page_row_answer(kind: str, view: str, row: dict | None, said: str,
+                    user: dict, here: str, counts: dict, *,
+                    said_note: str = "", advice=None, explain=None,
+                    tests: dict | None = None,
+                    manual_login: bool = False) -> str:
+    """One row of a dedicated pool page and the banner about it - and
+    the pills, because the press that moved the row moved a count.
+
+    The dashboard's `row_answer` draws the sheet's columns; these pages
+    draw their own per view, so a press on them was answered with a
+    redirect and a whole page read (2026-09-22, found by audit). A row
+    that has left the view - Free on the errored list - answers with no
+    row, which the script removes.
+    """
+    views = {"gmail": GMAIL_VIEWS, "gpt": GPT_VIEWS,
+             "proxy": PROXY_VIEWS}[kind]
+    if row is None:
+        drawn = ""
+    elif kind == "gmail":
+        drawn = _gmail_view_row(view, row, user, here, advice=advice)
+    elif kind == "gpt":
+        can_login = manual_login and _may(user, "may_login_accounts")
+        drawn = _gpt_view_row(view, row, user, here, explain=explain,
+                              can_login=can_login)
+    else:
+        drawn = _proxy_view_row(view, row, user, here, tests or {})
+    return (f'<div class="rowanswer" data-row-kind="{esc(kind)}"'
+            f' data-row-view="{esc(view)}">'
+            f'{_said(said, _POOL_SAID, user, said_note)}'
+            f'{_view_pills(PAGE_ROW_KINDS[kind], views, view, counts)}'
+            f'<table>{drawn}</table></div>')
+
+
 def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
                 manual_login: bool = False,
                 pending: dict | None = None) -> str:
@@ -5035,7 +5074,8 @@ def _gmail_edit_row(user: dict, r: dict, view: str, columns: int,
     # way round, saving a row that had both wrote the address over the
     # key - the editor rewrites every cell it shows.
     secret = str(r.get("totp_secret") or r.get("recovery_email") or "")
-    return (f'<tr class="editrow"><td colspan="{columns}">'
+    return (f'<tr class="editrow"{_row_key("gmail", address, view)}>'
+            f'<td colspan="{columns}">'
             f'<form method="post" action="/pools/gmail/edit">{_csrf(user)}'
             f'<input type="hidden" name="address" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
@@ -5053,6 +5093,55 @@ def _gmail_edit_row(user: dict, r: dict, view: str, columns: int,
             f'<button class="quiet ok">Save</button>'
             f'<a class="btn quiet" href="{back}">Cancel</a>'
             f'</form></td></tr>')
+
+
+def _row_key(kind: str, name: str, view: str) -> str:
+    """The attributes that make one row of a dedicated pool page
+    addressable: which row, and which view drew it. The script answers
+    a press on it with that row alone (`page_row_answer`), the way the
+    dashboard's sheet has since step 8 - a page whose rows carried no
+    key paid a full redirect and a whole page re-read for every Free,
+    Edit and Remove (2026-09-22, found by audit)."""
+    # `data-view` is the phone table's chip word (dash.js `sift`), so
+    # the pool pages' view is its own attribute.
+    return (f' data-key="{esc(kind)}:{esc(str(name or ""))}"'
+            f' data-page-view="{esc(view)}"')
+
+
+def _gmail_view_row(view: str, r: dict, user: dict, here: str, *,
+                    advice=None, editing: int = 0) -> str:
+    """One row of the Gmail page, as `view` draws it."""
+    acts = _may(user, "may_add_gmail")
+    key = _row_key("gmail", r.get("address"), view)
+    if view == "errored":
+        if editing and int(r.get("id") or 0) == editing:
+            return _gmail_edit_row(user, r, view, 5 + (1 if acts else 0), here)
+        return (f'<tr{key}><td>{esc(r["address"])}</td>'
+                f'<td>{_reason_words(str(r["status"]))}</td>'
+                f'<td class="muted">{_why(r, advice)}</td>'
+                f'<td class="muted">{_when(r["updated_at"])}</td>'
+                f'<td class="act">{_refund_cell(r, user, here)}</td>'
+                + (f'<td class="act">{_errored_actions(user, r, here)}</td>'
+                   if acts else "") + "</tr>")
+    if view == "used":
+        return (f'<tr{key}><td>{esc(r["address"])}</td>'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td class="muted">{_when(r.get("used_at") or r["updated_at"])}'
+                f'</td><td class="muted">{esc(r.get("seller") or "")}</td></tr>')
+    if view == "on_phone":
+        return (f'<tr{key}><td>{esc(r["address"])}</td>'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td>{_on_phone_badge(r)}</td>'
+                f'<td class="muted">{_when(r["updated_at"])}</td></tr>')
+    if editing and int(r.get("id") or 0) == editing:
+        return _gmail_edit_row(user, r, view, 5 + (1 if acts else 0), here)
+    return (f'<tr{key}><td><span class="hand">{esc(r["address"])}</span></td>'
+            f'<td class="muted">{esc(r.get("seller") or "")}</td>'
+            f'<td>{_secret_cell(r)}</td>'
+            f'<td class="muted">{_pass_cell(r)}</td>'
+            f'<td class="muted">{esc(r.get("purchased_on") or "")}</td>'
+            + (f'<td class="act">{_gmail_actions(user, r, view, here)}</td>'
+               if acts else "") + "</tr>")
 
 
 def _reason_words(status: str) -> str:
@@ -5128,56 +5217,26 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
         acts = "<th></th>" if _may(user, "may_add_gmail") else ""
         head = ("<tr><th>address</th><th>reason</th><th>what happened</th>"
                 f"<th>failed</th><th>where it stands</th>{acts}</tr>")
-        columns = 5 + (1 if acts else 0)
-        lines = "".join(
-            _gmail_edit_row(user, r, view, columns, here)
-            if editing and int(r.get("id") or 0) == editing else
-            (f'<tr><td>{esc(r["address"])}</td>'
-             f'<td>{_reason_words(str(r["status"]))}</td>'
-             f'<td class="muted">{_why(r, advice)}</td>'
-             f'<td class="muted">{_when(r["updated_at"])}</td>'
-             f'<td class="act">{_refund_cell(r, user, here)}</td>'
-             + (f'<td class="act">{_errored_actions(user, r, here)}</td>'
-                if acts else "") + "</tr>")
-            for r in rows)
+        lines = "".join(_gmail_view_row(view, r, user, here, advice=advice,
+                                        editing=editing) for r in rows)
         empty = ("nothing has failed for this seller" if seller else
                  "nothing has been refused by Google")
     elif view == "used":
         head = ("<tr><th>address</th><th>phone</th><th>used</th>"
                 "<th>seller</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(r["address"])}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td class="muted">{_when(r.get("used_at") or r["updated_at"])}'
-            f'</td><td class="muted">{esc(r.get("seller") or "")}</td></tr>'
-            for r in rows)
+        lines = "".join(_gmail_view_row(view, r, user, here) for r in rows)
         empty = "nothing has been retired yet"
     elif view == "on_phone":
         head = ("<tr><th>address</th><th>phone</th><th>state</th>"
                 "<th>since</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(r["address"])}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td>{_on_phone_badge(r)}</td>'
-            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
-            for r in rows)
+        lines = "".join(_gmail_view_row(view, r, user, here) for r in rows)
         empty = "no address is signed in on a phone right now"
     else:
         acts = "<th></th>" if _may(user, "may_add_gmail") else ""
         head = (f"<tr><th>address</th><th>seller</th><th>secret</th>"
                 f"<th>password</th><th>purchased</th>{acts}</tr>")
-        columns = 5 + (1 if acts else 0)
-        lines = "".join(
-            _gmail_edit_row(user, r, view, columns, here)
-            if editing and int(r.get("id") or 0) == editing else
-            (f'<tr><td><span class="hand">{esc(r["address"])}</span></td>'
-             f'<td class="muted">{esc(r.get("seller") or "")}</td>'
-             f'<td>{_secret_cell(r)}</td>'
-             f'<td class="muted">{_pass_cell(r)}</td>'
-             f'<td class="muted">{esc(r.get("purchased_on") or "")}</td>'
-             + (f'<td class="act">{_gmail_actions(user, r, view, here)}</td>'
-                if acts else "") + "</tr>")
-            for r in rows)
+        lines = "".join(_gmail_view_row(view, r, user, here,
+                                        editing=editing) for r in rows)
         empty = ("the pool is empty - paste a seller's sheet above and "
                  "nothing else has to happen")
     table = (f'<table>{head}{lines}</table>' if lines else
@@ -5450,10 +5509,44 @@ def _trouble_row(user: dict, r: dict, tests: dict, back: str) -> str:
                                 "IP changed — free it", "warn", back=back)
     phone = (f' <span class="dim">on</span> {_serial_link(r.get("serial"))}'
              if r.get("serial") else "")
-    return (f'<tr><td>{esc(name)}<br>{_proxy_word(r)}</td>'
+    return (f'<tr{_row_key("proxy", name, "needs_hand")}>'
+            f'<td>{esc(name)}<br>{_proxy_word(r)}</td>'
             f'<td class="muted">{esc(where)}{phone}</td>'
             f'<td>{_clip(seen, 90)}<br><span class="dim">{esc(advice)}</span>'
             f'</td><td class="right">{buttons}</td></tr>')
+
+
+def _proxy_view_row(view: str, r: dict, user: dict, here: str,
+                    tests: dict) -> str:
+    """One row of the Proxy page, as `view` draws it."""
+    if view == "needs_hand":
+        return _trouble_row(user, r, tests, here)
+    name = str(r.get("name") or "")
+    key = _row_key("proxy", name, view)
+    where = (f'<td class="muted">{esc(str(r.get("host") or ""))}:'
+             f'{esc(str(r.get("port") or ""))}</td>')
+    if view == "on_phone":
+        return (f'<tr{key}><td>{esc(name)}</td>{where}'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td>{_proxy_word(r)}</td>'
+                f'<td class="muted">{_when(r.get("updated_at"))}</td></tr>')
+    if view == "all":
+        return (f'<tr{key}><td>{esc(name)}</td>{where}'
+                f'<td>{_proxy_word(r)}</td>'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
+                f'</td><td>{_test_words(tests, name)}</td></tr>')
+    return (f'<tr{key}><td>{esc(name)}</td>{where}'
+            f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
+            f'</td><td class="muted num">{esc(str(r.get("times_used") or 0))}'
+            f'</td><td>{_test_words(tests, name)}</td>'
+            f'<td class="right">'
+            + _proxy_button(user, "/pools/proxy/test", name, "Test",
+                            back=here)
+            + " "
+            + _proxy_button(user, "/pools/proxy/remove", name, "Remove",
+                            "bad", back=here)
+            + "</td></tr>")
 
 
 def _stray_row(user: dict, u: dict, back: str) -> str:
@@ -5576,46 +5669,20 @@ def proxy_pool_page(data: dict, user: dict, said: str = "", *,
     elif view == "on_phone":
         head = ("<tr><th>name</th><th>host</th><th>phone</th><th>state</th>"
                 "<th>since</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
-            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
-            f'{esc(str(r.get("port") or ""))}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td>{_proxy_word(r)}</td>'
-            f'<td class="muted">{_when(r.get("updated_at"))}</td></tr>'
-            for r in rows)
+        lines = "".join(_proxy_view_row(view, r, user, here, tests)
+                        for r in rows)
         empty = "no exit is on a phone right now"
     elif view == "all":
         head = ("<tr><th>name</th><th>host</th><th>state</th><th>phone</th>"
                 "<th>exit ip</th><th>last test</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
-            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
-            f'{esc(str(r.get("port") or ""))}</td>'
-            f'<td>{_proxy_word(r)}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
-            f'</td><td>{_test_words(tests, str(r.get("name") or ""))}</td>'
-            f'</tr>' for r in rows)
+        lines = "".join(_proxy_view_row(view, r, user, here, tests)
+                        for r in rows)
         empty = (f'nothing matches "{q}"' if q else "the pool is empty")
     else:
         head = ("<tr><th>name</th><th>host</th><th>exit ip</th><th>uses</th>"
                 "<th>last test</th><th></th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(str(r.get("name") or ""))}</td>'
-            f'<td class="muted">{esc(str(r.get("host") or ""))}:'
-            f'{esc(str(r.get("port") or ""))}</td>'
-            f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
-            f'</td><td class="muted num">{esc(str(r.get("times_used") or 0))}'
-            f'</td><td>{_test_words(tests, str(r.get("name") or ""))}</td>'
-            f'<td class="right">'
-            + _proxy_button(user, "/pools/proxy/test",
-                            str(r.get("name") or ""), "Test", back=here)
-            + " "
-            + _proxy_button(user, "/pools/proxy/remove",
-                            str(r.get("name") or ""), "Remove", "bad",
-                            back=here)
-            + "</td></tr>" for r in rows)
+        lines = "".join(_proxy_view_row(view, r, user, here, tests)
+                        for r in rows)
         empty = ("no exit is free - every one is on a phone, or waiting for "
                  "you under Needs a hand")
 
@@ -5704,6 +5771,42 @@ GPT_VIEWS = {
                          "note; the export is everything that matches, not "
                          "this page"},
 }
+
+
+def _gpt_view_row(view: str, r: dict, user: dict, here: str, *,
+                  explain=None, can_login: bool = False) -> str:
+    """One row of the Gpt page, as `view` draws it."""
+    key = _row_key("gpt", r.get("address"), view)
+    if view == "delivered":
+        return (f'<tr{key}><td>{esc(r["address"])}</td>'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td class="muted">{_when(r["updated_at"])}</td>'
+                f'<td>{_source_badge(r)}</td></tr>')
+    if view == "on_phone":
+        return (f'<tr{key}><td>{esc(r["address"])}</td>'
+                f'<td>{_serial_link(r.get("serial"))}</td>'
+                f'<td>{_on_phone_badge(r)}</td>'
+                f'<td class="muted">{_when(r["updated_at"])}</td></tr>')
+    if view == "needs_human":
+        offer = _may(user, "may_add_gpt")
+        return (f'<tr{key}><td>{esc(r["address"])} {_source_badge(r)}</td>'
+                f'<td>{_reason_words(str(r["status"]))}</td>'
+                f'<td class="muted">{_gpt_happened(r, explain)}</td>'
+                f'<td class="right">' + (
+                    f'<form method="post" action="/pools/gpt/offer" '
+                    f'class="inline">{_csrf(user)}<input type="hidden" '
+                    f'name="address" value="{esc(r["address"])}">'
+                    f'<input type="hidden" name="back" value="{esc(here)}">'
+                    f'<button class="quiet warn" data-busy="Offering&hellip;">'
+                    f'Offer again</button></form>'
+                    if offer else "") + "</td></tr>")
+    return (f"<tr{key}>" + (f'<td><input type="checkbox" name="addresses" '
+                            f'value="{esc(str(r["address"]))}"></td>'
+                            if can_login else "")
+            + f'<td>{esc(r["address"])}</td>'
+              f'<td>{_source_badge(r)}</td>'
+              f'<td>{_kind_2fa_word(r)}</td>'
+              f'<td class="muted">{_when(r.get("created_at"))}</td></tr>')
 
 
 def _gpt_here(view: str, q: str, page_no: int) -> str:
@@ -5837,56 +5940,25 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
         body += _gpt_add(user, form, error)
     body += _view_pills("/pools/gpt", GPT_VIEWS, view, counts)
 
+    lines = "".join(_gpt_view_row(view, r, user, here, explain=explain,
+                                  can_login=can_login) for r in rows)
     if view == "delivered":
         head = ("<tr><th>address</th><th>phone</th><th>delivered</th>"
                 "<th>where from</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(r["address"])}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td class="muted">{_when(r["updated_at"])}</td>'
-            f'<td>{_source_badge(r)}</td></tr>' for r in rows)
         empty = (f'nothing delivered matches "{q}"' if q else
                  "nothing has been delivered yet")
     elif view == "on_phone":
         head = ("<tr><th>address</th><th>phone</th><th>state</th>"
                 "<th>since</th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(r["address"])}</td>'
-            f'<td>{_serial_link(r.get("serial"))}</td>'
-            f'<td>{_on_phone_badge(r)}</td>'
-            f'<td class="muted">{_when(r["updated_at"])}</td></tr>'
-            for r in rows)
         empty = "no account is signing in or waiting to go out"
     elif view == "needs_human":
-        offer = _may(user, "may_add_gpt")
         head = ("<tr><th>address</th><th>reason</th><th>what happened</th>"
                 "<th></th></tr>")
-        lines = "".join(
-            f'<tr><td>{esc(r["address"])} {_source_badge(r)}</td>'
-            f'<td>{_reason_words(str(r["status"]))}</td>'
-            f'<td class="muted">{_gpt_happened(r, explain)}</td>'
-            f'<td class="right">' + (
-                f'<form method="post" action="/pools/gpt/offer" '
-                f'class="inline">{_csrf(user)}<input type="hidden" '
-                f'name="address" value="{esc(r["address"])}">'
-                f'<input type="hidden" name="back" value="{esc(here)}">'
-                f'<button class="quiet warn" data-busy="Offering&hellip;">'
-                f'Offer again</button></form>'
-                if offer else "") + "</td></tr>" for r in rows)
         empty = "nothing has been set aside for a person"
     else:
         th = "<th></th>" if can_login else ""
         head = (f"<tr>{th}<th>address</th><th>where from</th><th>2fa</th>"
                 f"<th>added</th></tr>")
-        lines = "".join(
-            "<tr>" + (f'<td><input type="checkbox" name="addresses" '
-                      f'value="{esc(str(r["address"]))}"></td>'
-                      if can_login else "")
-            + f'<td>{esc(r["address"])}</td>'
-              f'<td>{_source_badge(r)}</td>'
-              f'<td>{_kind_2fa_word(r)}</td>'
-              f'<td class="muted">{_when(r.get("created_at"))}</td></tr>'
-            for r in rows)
         empty = ("nothing is waiting - paste the accounts you bought above, "
                  "or wait for the panel to send its next one")
 

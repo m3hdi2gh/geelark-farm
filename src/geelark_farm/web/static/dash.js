@@ -14,7 +14,7 @@
 
   //: The pools whose Free, Save and Remove answer with one row rather
   //: than with the whole page. A kind not here simply gets the redirect.
-  var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};
+  var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1, proxy: 1};
 
   // Bound once per node, whatever `init` does afterwards.
   //
@@ -465,8 +465,14 @@
   // `mayRedraw`, under the ceiling, so twenty seconds was all either of
   // them got. They are working surfaces, like an open sheet, and they
   // are held for as long as they are up (2026-09-20).
+  // Presses in flight. A queued press arms a re-look at 2.5s; a second
+  // press made just before it fired had its busy button, dimmed row and
+  // label swapped out from under it by that redraw, and the answer
+  // then landed on detached nodes - the operator saw nothing happen
+  // (2026-09-21, found by audit). A redraw waits for the answer.
+  var pressing = 0;
   function busyHere(){
-    return !!(document.querySelector('.mini')
+    return !!(pressing > 0 || document.querySelector('.mini')
               || document.querySelector('dialog[open]'));
   }
   function settled(){
@@ -1353,8 +1359,17 @@
     dressToast(said);
   }
 
+  // A dedicated pool page's answer carries its pills, because the press
+  // that moved the row moved a count.
+  function swapPills(doc){
+    var fresh = doc.querySelector('.rowanswer .pills');
+    var mine = document.querySelector('main .pills');
+    if (fresh && mine) mine.replaceWith(fresh);
+  }
   function swapRow(doc, key, gone){
-    var mine = pickData(document, '#poolov tr[data-key]', 'key', key);
+    // Under an open sheet, or in a dedicated pool page's own table.
+    var mine = pickData(document, '#poolov tr[data-key], main tr[data-key]',
+                        'key', key);
     var theirs = pickData(doc, 'tr[data-key]', 'key', key);
     if (!mine) return false;
     // A one-row answer with no row in it is a row that has left the
@@ -1388,7 +1403,7 @@
     // row simply vanished, which is what "I could not tell whether it
     // worked" was made of (the operator, 2026-09-20). It stays for one
     // beat instead, wearing where it went, and the next redraw takes it.
-    if (theirs) moved(theirs, sheet);
+    if (theirs && sheet) moved(theirs, sheet);
     init();
     // The floor between two redraws starts here too. Harmless while
     // swapRow only ever matched rows under an open sheet, where
@@ -1801,6 +1816,7 @@
     var asking = form.closest('dialog.editor');
     if (asking) editorQuiet(asking);
     form.classList.add('busy');
+    pressing++;
     // `pointer-events:none` does not stop Enter on a focused submit, so
     // the same press went twice (2026-09-07).
     if (pressed) pressed.disabled = true;
@@ -1822,10 +1838,14 @@
     // sending - without it the server redirects, which is what a browser
     // with no script gets and has always got.
     var rowKind = key ? key.split(':')[0] : '';
+    var rowView = form.closest('tr') ? form.closest('tr').dataset.pageView : '';
     var asking = {};
     if (rowKind && ROW_ANSWERS[rowKind]
-        && /[/](free|edit|remove)$/.test(form.action)) {
+        && /[/](free|edit|remove|refund|offer|test)$/.test(form.action)) {
       asking['X-GF-Row'] = rowKind;
+      // A row of a dedicated pool page says which view drew it, and the
+      // answer is that page's own row, under fresh pills (2026-09-22).
+      if (rowView) asking['X-GF-View'] = rowView;
     }
     // As the browser would send it - urlencoded. FormData on its own goes
     // out multipart, which the server does not read, and every field
@@ -1839,6 +1859,7 @@
         // out; anything that goes wrong now is the page's, not the
         // request's.
         sent = true;
+        pressing--;
         if (!answer(r, true)) return null;
         return r.text().then(function(html){ return {url: r.url, html: html}; });
       })
@@ -1916,6 +1937,7 @@
         // page at all - so it is recognised by what it is.
         if (doc.querySelector('.rowanswer')) {
           if (!swapRow(doc, key, true)) { swapMain(doc); return; }
+          swapPills(doc);
           sayIt(doc);
           return;
         }
@@ -1940,6 +1962,7 @@
         else swapMain(doc);
       })
       .catch(function(err){
+        if (!sent) pressing--;
         form.classList.remove('busy');
         if (pressed) pressed.disabled = false;
         acting.forEach(function(tr){ tr.classList.remove('acting'); });

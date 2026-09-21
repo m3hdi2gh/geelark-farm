@@ -1215,19 +1215,7 @@ def gmail_pool(settings: Settings, view: str = "queued",
     page = max(1, int(page or 1))
     per_page = max(1, int(per_page or 1))
     with Store(settings) as store:
-        counts = store._rows(
-            "SELECT"
-            " count(*) FILTER (WHERE status = ''"
-            "   AND error IS NULL) AS queued,"
-            " count(*) FILTER (WHERE status IN ('in_use', 'ready')) AS on_phone,"
-            " count(*) FILTER (WHERE status = 'used') AS used,"
-            " count(*) FILTER (WHERE error IS NULL"
-            "   AND NOT (status = ANY(%s)) AND status <> %s) AS errored,"
-            " count(*) FILTER (WHERE refund_state = 'to_claim') AS owed,"
-            " count(*) FILTER (WHERE refund_state = 'claimed') AS refunded,"
-            " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
-            " FROM resources WHERE kind = 'gmail'",
-            (sorted(ROUTINE["gmail"]), IMPORTED))[0]
+        counts = _gmail_counts(store)
         sellers = store._rows(
             "SELECT lower(seller) AS seller, count(*) c FROM resources"
             " WHERE kind = 'gmail' AND error IS NULL"
@@ -1238,31 +1226,10 @@ def gmail_pool(settings: Settings, view: str = "queued",
         out = {"view": view, "counts": counts, "sellers": sellers,
                "known_sellers": known, "seller": seller, "page": page}
         skip = (page - 1) * per_page
-        if view == "queued":
-            rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-                " WHERE r.kind = 'gmail' AND r.status = ''"
-                "   AND r.error IS NULL"
-                " ORDER BY r.sheet_row NULLS LAST, r.id"
-                " LIMIT %s OFFSET %s", (per_page + 1, skip))
-            total = counts["queued"]
-        elif view == "on_phone":
-            rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS}, p.status AS phone_status"
-                " FROM resources r LEFT JOIN phones p"
-                "   ON p.serial = r.serial AND p.done_at IS NULL"
-                " WHERE r.kind = 'gmail' AND r.status IN ('in_use', 'ready')"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (per_page + 1, skip))
-            total = counts["on_phone"]
-        elif view == "used":
-            rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-                " WHERE r.kind = 'gmail' AND r.status = 'used'"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (per_page + 1, skip))
-            total = counts["used"]
-        else:
+        sql, order, params = _gmail_view(view, seller)
+        rows = store._rows(f"{sql}{order} LIMIT %s OFFSET %s",
+                           (*params, per_page + 1, skip))
+        if view == "errored":
             wanted = seller.lower()
             out["reasons"] = store._rows(
                 "SELECT status, count(*) c FROM resources"
@@ -1271,14 +1238,6 @@ def gmail_pool(settings: Settings, view: str = "queued",
                 " AND (%s = '' OR lower(seller) = %s)"
                 " GROUP BY status ORDER BY c DESC, status",
                 (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted))
-            rows = store._rows(
-                f"SELECT {_GMAIL_COLUMNS} FROM resources r"
-                " WHERE r.kind = 'gmail' AND r.error IS NULL"
-                " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
-                " AND (%s = '' OR lower(r.seller) = %s)"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted,
-                 per_page + 1, skip))
             total = sum(int(r["c"]) for r in out["reasons"])
             # The rows validation refused live here too: they are not
             # stock, nobody can use them, and the seller hears about
@@ -1286,9 +1245,136 @@ def gmail_pool(settings: Settings, view: str = "queued",
             out["broken"] = store._rows(
                 "SELECT id, address, error FROM resources"
                 " WHERE kind = 'gmail' AND error IS NOT NULL ORDER BY id")
+        else:
+            total = counts[view]
     out.update(rows=rows[:per_page], more=len(rows) > per_page, total=total,
                pages=_pages(total, per_page))
     return out
+
+
+def _gmail_counts(store) -> dict:
+    """The Gmail page's seven numbers: the four view pills and the
+    refund list's own three."""
+    return store._rows(
+        "SELECT"
+        " count(*) FILTER (WHERE status = ''"
+        "   AND error IS NULL) AS queued,"
+        " count(*) FILTER (WHERE status IN ('in_use', 'ready')) AS on_phone,"
+        " count(*) FILTER (WHERE status = 'used') AS used,"
+        " count(*) FILTER (WHERE error IS NULL"
+        "   AND NOT (status = ANY(%s)) AND status <> %s) AS errored,"
+        " count(*) FILTER (WHERE refund_state = 'to_claim') AS owed,"
+        " count(*) FILTER (WHERE refund_state = 'claimed') AS refunded,"
+        " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
+        " FROM resources WHERE kind = 'gmail'",
+        (sorted(ROUTINE["gmail"]), IMPORTED))[0]
+
+
+def _gmail_view(view: str, seller: str = "") -> tuple[str, str, tuple]:
+    """One Gmail view: its SELECT up to and including the WHERE, its
+    ORDER BY, and the parameters the WHERE takes.
+
+    Shared by the page and the one-row answer (`page_row`), so the row
+    a press answers with is drawn from exactly the list it was pressed
+    on - the dashboard's `pool_row` reads the sheet's columns, which is
+    why the dedicated pages had no one-row answer at all (2026-09-22).
+    """
+    if view == "on_phone":
+        return (f"SELECT {_GMAIL_COLUMNS}, p.status AS phone_status"
+                " FROM resources r LEFT JOIN phones p"
+                "   ON p.serial = r.serial AND p.done_at IS NULL"
+                " WHERE r.kind = 'gmail' AND r.status IN ('in_use', 'ready')",
+                " ORDER BY r.updated_at DESC", ())
+    if view == "used":
+        return (f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+                " WHERE r.kind = 'gmail' AND r.status = 'used'",
+                " ORDER BY r.updated_at DESC", ())
+    if view == "errored":
+        wanted = seller.lower()
+        return (f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+                " WHERE r.kind = 'gmail' AND r.error IS NULL"
+                " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
+                " AND (%s = '' OR lower(r.seller) = %s)",
+                " ORDER BY r.updated_at DESC",
+                (sorted(ROUTINE["gmail"]), IMPORTED, wanted, wanted))
+    return (f"SELECT {_GMAIL_COLUMNS} FROM resources r"
+            " WHERE r.kind = 'gmail' AND r.status = ''"
+            "   AND r.error IS NULL",
+            " ORDER BY r.sheet_row NULLS LAST, r.id", ())
+
+
+def page_row(settings: Settings, kind: str, view: str, address: str, *,
+             seller: str = "", q: str = "", strays: int = 0) -> dict:
+    """One row of a dedicated pool page, read the way that page's view
+    reads its list, narrowed to one address (or one proxy name) - and
+    the page's counts, so the pills over the list move with the row.
+
+    `row` is None when the row is no longer under this view: a Free on
+    the errored list moves the address to Queued, and the answer says
+    so by carrying nothing. `view` comes back as the page understood
+    it, so an unknown word lands on the view the page would have shown.
+    """
+    address = (address or "").strip()
+    with Store(settings) as store:
+        if kind == "gmail":
+            view = GMAIL_VIEWS.get(view, "queued")
+            sql, order, params = _gmail_view(view, seller)
+            rows = store._rows(
+                f"{sql} AND lower(r.address) = lower(%s){order} LIMIT 1",
+                (*params, address))
+            counts = _gmail_counts(store)
+        elif kind == "gpt":
+            view = GPT_VIEWS.get(view, "waiting")
+            sql, order, params = _gpt_view(view, q)
+            rows = store._rows(
+                f"{sql} AND lower(r.address) = lower(%s){order} LIMIT 1",
+                (*params, address))
+            counts = _gpt_counts(store)
+        elif kind == "proxy":
+            view = PROXY_VIEWS.get(view, "free")
+            rows = store._rows(
+                f"{_PROXY_SELECT} AND lower(r.proxy_name) = lower(%s)"
+                " LIMIT 1", (address,))
+            for r in rows:
+                r["bucket"] = proxy_bucket(r["status"])
+            rows = [r for r in rows if _in_proxy_view(view, r, q)]
+            counts = _proxy_counts(store, strays)
+        else:
+            raise ValueError(f"no such pool page: {kind}")
+        return {"view": view, "row": rows[0] if rows else None,
+                "counts": counts, "pending": _pending(store)}
+
+
+def _in_proxy_view(view: str, r: dict, q: str = "") -> bool:
+    """Whether one proxy row belongs on this view of the page - the
+    same cut `proxy_pool` makes over the whole table."""
+    bucket = str(r.get("bucket") or "")
+    if view == "needs_hand":
+        return bucket in ("needs_new_ip", "dead")
+    if view == "all":
+        needle = q.strip().lower()
+        return not needle or needle in (
+            f"{r.get('name') or ''} {r.get('host') or ''} "
+            f"{r.get('serial') or ''}".lower())
+    return bucket == view
+
+
+def _proxy_counts(store, strays: int = 0) -> dict:
+    """The Proxy page's pills, counted in one grouped query rather than
+    by reading every row."""
+    buckets: dict[str, int] = {}
+    for r in store._rows(
+            "SELECT status, count(*) AS c FROM resources"
+            " WHERE kind = 'proxy' GROUP BY status"):
+        word = proxy_bucket(r["status"])
+        buckets[word] = buckets.get(word, 0) + int(r["c"])
+    trouble = buckets.get("needs_new_ip", 0) + buckets.get("dead", 0)
+    return {"free": buckets.get("free", 0),
+            "on_phone": buckets.get("on_phone", 0),
+            "needs_new_ip": buckets.get("needs_new_ip", 0),
+            "dead": buckets.get("dead", 0), "strays": int(strays),
+            "needs_hand": trouble + int(strays),
+            "all": sum(buckets.values())}
 
 
 def errored_addresses(settings: Settings, seller: str = "") -> list[str]:
@@ -1317,6 +1403,14 @@ def errored_addresses(settings: Settings, seller: str = "") -> list[str]:
 #: The Proxy Pool's four views, and the count each pill shows.
 PROXY_VIEWS = {"free": "free", "on_phone": "on_phone",
                "needs_hand": "needs_hand", "all": "all"}
+
+
+#: The proxy page's columns, up to and including the WHERE - shared by
+#: the page and its one-row answer (`page_row`).
+_PROXY_SELECT = ("SELECT r.id, r.proxy_name AS name, r.host, r.port,"
+                 " r.username, r.status, r.serial, r.last_exit_ip,"
+                 " r.times_used, r.note, r.updated_at, r.error"
+                 " FROM resources r WHERE r.kind = 'proxy'")
 
 
 def proxy_bucket(status) -> str:
@@ -1358,11 +1452,7 @@ def proxy_pool(settings: Settings, view: str = "free", q: str = "",
     strays = list(unlisted or [])
     with Store(settings) as store:
         rows = store._rows(
-            "SELECT r.id, r.proxy_name AS name, r.host, r.port, r.username,"
-            " r.status, r.serial, r.last_exit_ip, r.times_used, r.note,"
-            " r.updated_at, r.error"
-            " FROM resources r WHERE r.kind = 'proxy'"
-            " ORDER BY r.sheet_row NULLS LAST, r.id")
+            f"{_PROXY_SELECT} ORDER BY r.sheet_row NULLS LAST, r.id")
     buckets: dict[str, list] = {}
     for r in rows:
         r["bucket"] = proxy_bucket(r["status"])
@@ -1457,55 +1547,20 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
     per_page = max(1, int(per_page or 1))
     skip = (page - 1) * per_page
     with Store(settings) as store:
-        counts = store._rows(
-            "SELECT"
-            " count(*) FILTER (WHERE status = ''"
-            "   AND error IS NULL) AS waiting,"
-            " count(*) FILTER (WHERE status IN ('in_use', 'ready'))"
-            "   AS on_phone,"
-            " count(*) FILTER (WHERE status = 'delivered') AS delivered,"
-            " count(*) FILTER (WHERE error IS NULL AND NOT (status = ANY(%s))"
-            "   AND status <> %s) AS needs_human,"
-            " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
-            # The GPT Pool page is the GPT accounts: the Spotify rows in
-            # the same table are the dashboard's Spotify sheet.
-            f" FROM resources WHERE kind = 'app' AND {NOT_SPOTIFY}",
-            (sorted(ROUTINE["app"]), IMPORTED))[0]
+        counts = _gpt_counts(store)
         out = {"view": view, "counts": counts, "q": q, "page": page}
+        sql, order, params = _gpt_view(view, q)
+        rows = store._rows(f"{sql}{order} LIMIT %s OFFSET %s",
+                           (*params, per_page + 1, skip))
         if view == "delivered":
             like = f"%{q.strip()}%"
-            rows = store._rows(
-                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
-                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-                f" WHERE {_DELIVERED_MATCH}"
-                " ORDER BY r.updated_at DESC, r.id DESC LIMIT %s OFFSET %s",
-                (q.strip(), like, like, like, per_page + 1, skip))
             found = store._rows(
                 "SELECT count(*) AS n FROM resources r"
                 f" WHERE {_DELIVERED_MATCH}", (q.strip(), like, like, like))
             total = int(found[0]["n"]) if found else 0
-        elif view == "on_phone":
-            rows = store._rows(
-                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name,"
-                " p.status AS phone_status"
-                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-                " LEFT JOIN phones p"
-                "   ON p.serial = r.serial AND p.done_at IS NULL"
-                " WHERE r.kind = 'app' AND r.status IN ('in_use', 'ready')"
-                f"   AND {NOT_SPOTIFY}"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (per_page + 1, skip))
-            total = int(counts["on_phone"])
-        elif view == "needs_human":
-            rows = store._rows(
-                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
-                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-                " WHERE r.kind = 'app' AND r.error IS NULL"
-                f"   AND {NOT_SPOTIFY}"
-                " AND NOT (r.status = ANY(%s)) AND r.status <> %s"
-                " ORDER BY r.updated_at DESC LIMIT %s OFFSET %s",
-                (sorted(ROUTINE["app"]), IMPORTED, per_page + 1, skip))
-            total = int(counts["needs_human"])
+        else:
+            total = int(counts[view])
+        if view == "needs_human":
             # The rows validation refused ride with them: they are not
             # stock, nobody can use them, and they are the same kind of
             # thing to decide about.
@@ -1513,18 +1568,63 @@ def gpt_pool(settings: Settings, view: str = "waiting", q: str = "",
                 "SELECT id, address, error FROM resources"
                 f" WHERE kind = 'app' AND error IS NOT NULL AND {NOT_SPOTIFY}"
                 " ORDER BY id")
-        else:
-            rows = store._rows(
-                f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
-                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
-                " WHERE r.kind = 'app' AND r.status = ''"
-                f"   AND r.error IS NULL AND {NOT_SPOTIFY}"
-                " ORDER BY r.sheet_row NULLS LAST, r.id LIMIT %s OFFSET %s",
-                (per_page + 1, skip))
-            total = int(counts["waiting"])
     out.update(rows=rows[:per_page], more=len(rows) > per_page, total=total,
                pages=_pages(total, per_page))
     return out
+
+
+def _gpt_counts(store) -> dict:
+    """The Gpt page's five numbers: the four view pills and the broken
+    rows under Needs a human."""
+    return store._rows(
+        "SELECT"
+        " count(*) FILTER (WHERE status = ''"
+        "   AND error IS NULL) AS waiting,"
+        " count(*) FILTER (WHERE status IN ('in_use', 'ready'))"
+        "   AS on_phone,"
+        " count(*) FILTER (WHERE status = 'delivered') AS delivered,"
+        " count(*) FILTER (WHERE error IS NULL AND NOT (status = ANY(%s))"
+        "   AND status <> %s) AS needs_human,"
+        " count(*) FILTER (WHERE error IS NOT NULL) AS broken"
+        # The GPT Pool page is the GPT accounts: the Spotify rows in
+        # the same table are the dashboard's Spotify sheet.
+        f" FROM resources WHERE kind = 'app' AND {NOT_SPOTIFY}",
+        (sorted(ROUTINE["app"]), IMPORTED))[0]
+
+
+def _gpt_view(view: str, q: str = "") -> tuple[str, str, tuple]:
+    """One Gpt view: its SELECT up to and including the WHERE, its
+    ORDER BY, and the parameters - shared by the page and the one-row
+    answer (`page_row`), like `_gmail_view`."""
+    if view == "delivered":
+        like = f"%{q.strip()}%"
+        return (f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                f" WHERE {_DELIVERED_MATCH}",
+                " ORDER BY r.updated_at DESC, r.id DESC",
+                (q.strip(), like, like, like))
+    if view == "on_phone":
+        return (f"SELECT {_APP_COLUMNS}, u.username AS added_by_name,"
+                " p.status AS phone_status"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                " LEFT JOIN phones p"
+                "   ON p.serial = r.serial AND p.done_at IS NULL"
+                " WHERE r.kind = 'app' AND r.status IN ('in_use', 'ready')"
+                f"   AND {NOT_SPOTIFY}",
+                " ORDER BY r.updated_at DESC", ())
+    if view == "needs_human":
+        return (f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
+                " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+                " WHERE r.kind = 'app' AND r.error IS NULL"
+                f"   AND {NOT_SPOTIFY}"
+                " AND NOT (r.status = ANY(%s)) AND r.status <> %s",
+                " ORDER BY r.updated_at DESC",
+                (sorted(ROUTINE["app"]), IMPORTED))
+    return (f"SELECT {_APP_COLUMNS}, u.username AS added_by_name"
+            " FROM resources r LEFT JOIN users u ON u.id = r.added_by"
+            " WHERE r.kind = 'app' AND r.status = ''"
+            f"   AND r.error IS NULL AND {NOT_SPOTIFY}",
+            " ORDER BY r.sheet_row NULLS LAST, r.id", ())
 
 
 def logins(settings: Settings, days: int = 7) -> dict:

@@ -672,9 +672,13 @@ class _Handler(BaseHTTPRequestHandler):
     #: redirect it has always got, which is the contract the whole live
     #: layer rests on (pages, "the one script").
     ROW_ASKED = "X-GF-Row"
+    #: The view the row was drawn under, when the press came from a
+    #: dedicated pool page rather than the dashboard's sheet: the
+    #: answer is then that page's own row (`pages.page_row_answer`).
+    VIEW_ASKED = "X-GF-View"
 
     def _row_answer(self, kind: str, address: str, said: str,
-                    user: dict) -> bool:
+                    user: dict, back: str = "/") -> bool:
         """Answer a one-row press with that row and the banner.
 
         False when this request did not ask for it, in which case the
@@ -682,7 +686,11 @@ class _Handler(BaseHTTPRequestHandler):
         """
         if self.headers.get(self.ROW_ASKED) != kind or not address:
             return False
+        view = (self.headers.get(self.VIEW_ASKED) or "").strip()
         try:
+            if view:
+                return self._page_row_answer(kind, view, address, said,
+                                             user, back)
             found = read.pool_row(self.settings, kind, address)
         except Exception as exc:                              # noqa: BLE001
             # The work is done; only drawing the answer failed. The
@@ -694,6 +702,31 @@ class _Handler(BaseHTTPRequestHandler):
             kind, found.get("row"), said, user, self._said_note(said),
             manual_login=self.settings.manual_login,
             pending=found.get("pending") or {}))
+        return True
+
+    def _page_row_answer(self, kind: str, view: str, address: str,
+                         said: str, user: dict, back: str) -> bool:
+        """The one-row answer for a dedicated pool page: the row as that
+        page's view draws it, under fresh pills. `back` is where the
+        press came from, rebuilt - its seller and search are what the
+        view's list was cut by."""
+        if kind not in pages.PAGE_ROW_KINDS:
+            return False
+        asked = {k: v[0] for k, v in
+                 parse_qs(back.partition("?")[2]).items()}
+        strays = 0
+        tests: dict = {}
+        if kind == "proxy":
+            unlisted, _, tests = self._proxy_state()
+            strays = len(unlisted)
+        found = read.page_row(self.settings, kind, view, address,
+                              seller=asked.get("seller", ""),
+                              q=asked.get("q", ""), strays=strays)
+        self._html(200, pages.page_row_answer(
+            kind, found["view"], found.get("row"), said, user, back,
+            found.get("counts") or {}, said_note=self._said_note(said),
+            advice=_advice, explain=_explain, tests=tests,
+            manual_login=self.settings.manual_login))
         return True
 
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
@@ -782,8 +815,9 @@ class _Handler(BaseHTTPRequestHandler):
         # One row, when the press was about one row and the page asked
         # for it that way: ~1KB instead of the whole dashboard, and no
         # document to parse at the other end.
-        if row_of and self._row_answer(row_of, str(payload.get("address")
-                                                   or ""), said, user):
+        if row_of and self._row_answer(
+                row_of, str(payload.get("address") or payload.get("name")
+                            or ""), said, user, back):
             return None
         self._redirect(_said_url(back, said))
 
@@ -1300,7 +1334,11 @@ class _Handler(BaseHTTPRequestHandler):
                  "password": field.get("password") or "",
                  "category": category if known_kind else "",
                  "state": (field.get("state") or "").strip()},
-                idem=self._minute_key(user, "edit_app", address), back=back)
+                idem=self._minute_key(user, "edit_app", address), back=back,
+                # The Gmail Save answered with its row and these two
+                # did not (2026-09-22): a Save in the drawer left the
+                # row as it was, like the removes once did.
+                row_of="spotify")
         if path == "/pools/spotify/remove":
             address = (field.get("address") or "").strip()
             if field.get("sure") != "1":
@@ -1416,7 +1454,7 @@ class _Handler(BaseHTTPRequestHandler):
                              {"address": address, "state": state},
                              idem=self._minute_key(user, "refund_gmail",
                                                    f"{address}:{state}"),
-                             back=_gmail_back(field))
+                             back=_gmail_back(field), row_of="gmail")
         if path in ("/pools/gmail/undo", "/pools/gpt/undo"):
             return self._undo_remove(user, path.split("/")[2], field)
         if path in ("/pools/gmail/free", "/pools/gpt/free",
@@ -1483,7 +1521,7 @@ class _Handler(BaseHTTPRequestHandler):
             # was the admin's alone (2026-09-08).
             return self._act(user, "may_change_proxy", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
-                             back=back)
+                             back=back, row_of="proxy")
         if path == "/pools/proxy/test-all":
             return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
@@ -1628,7 +1666,7 @@ class _Handler(BaseHTTPRequestHandler):
                  "clear_secret": (field.get("clear_secret") or "").strip(),
                  "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_app", address),
-                back=_add_back(field, "/pools/gpt"))
+                back=_add_back(field, "/pools/gpt"), row_of="gpt")
         if path == "/pools/gpt/remove":
             address = (field.get("address") or "").strip()
             back = _add_back(field, "/pools/gpt")
@@ -1655,7 +1693,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_add_gpt", "offer_again",
                              {"address": address},
                              idem=self._minute_key(user, "offer", address),
-                             back=_add_back(field, "/pools/gpt"))
+                             back=_add_back(field, "/pools/gpt"),
+                             row_of="gpt")
         self._html(404, pages.page("404", "<h2>Nothing here</h2>", user=user))
 
     # -------------------------------------------------------------- users

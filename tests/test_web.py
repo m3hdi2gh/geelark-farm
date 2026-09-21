@@ -829,7 +829,7 @@ def test_the_queued_row_shows_its_secret_and_password_and_can_be_edited(
 
     # Edit draws that one row as a form, over every column
     _, _, body = client.request("GET", "/pools/gmail?view=queued&edit=12")
-    assert '<tr class="editrow">' in body and 'colspan="6"' in body
+    assert '<tr class="editrow" data-key="gmail:' in body and 'colspan="6"' in body
     assert 'name="new_address" value="rec@x.com"' in body
     assert 'name="password" value="pw-two"' in body
     assert 'name="secret" value="backup@x.com"' in body
@@ -6648,7 +6648,8 @@ def test_a_question_waiting_for_an_answer_holds_the_page():
     assert "document.querySelector('.mini')" in script
     assert "document.querySelector('dialog[open]')" in script
     gate = script[script.index("function busyHere()"):]
-    assert "return !!(document.querySelector('.mini')" in gate
+    # ...and a press in flight (2026-09-22, band 6): see `pressing`.
+    assert "return !!(pressing > 0 || document.querySelector('.mini')" in gate
     assert ("if (heldOpen() || busyHere())"
             " { settled.since = 0; return false; }" in script), (
         "held while it is up, not until the ceiling")
@@ -8116,9 +8117,10 @@ def test_the_pool_pages_are_handed_the_sentence_and_the_reader():
         body = inspect.getsource(fn)
         assert "_said(said, _POOL_SAID, user, said_note)" in body, name
 
-    # Four pool pages, plus the dashboard, which has had it all along.
+    # Four pool pages, plus the dashboard, which has had it all along -
+    # and the pool pages' one-row answer (2026-09-22).
     handler = inspect.getsource(app)
-    assert handler.count("said_note=self._said_note(") == 5, (
+    assert handler.count("said_note=self._said_note(") == 6, (
         "every pool page is handed the settled row's own sentence")
 
 
@@ -8748,9 +8750,15 @@ def test_a_one_row_press_is_answered_with_one_row(web, monkeypatch):
 def test_only_the_pools_whose_route_is_wired_ask_for_a_row():
     """A kind the server cannot draw must not be asked to."""
     js = assets.JS
-    assert "var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1};" in js
+    # The proxy pool joined on 2026-09-22, with its own page's Free,
+    # Test and Remove (read.pool_row has read a proxy by name since
+    # band 4); refund and offer are the Gmail and Gpt pages' doors.
+    assert "var ROW_ANSWERS = {gmail: 1, gpt: 1, spotify: 1, proxy: 1};" in js
     assert "asking['X-GF-Row'] = rowKind;" in js
-    assert "/[/](free|edit|remove)$/.test(form.action)" in js
+    assert "/[/](free|edit|remove|refund|offer|test)$/.test(form.action)" in js
+    assert "if (rowView) asking['X-GF-View'] = rowView;" in js
+    assert "form.closest('tr').dataset.pageView" in js, (
+        "not data-view, which is the phone table's chip word")
 
 
 # ------------------------------- the write path claims what it works (step 10)
@@ -9372,3 +9380,243 @@ def test_log_in_selected_comes_back_with_the_search_and_the_page(
             "POST", "/accounts/login",
             _form(csrf=client.csrf(), back=elsewhere) + "&addresses=a%40x.com")
         assert dict(headers)["Location"] == "/?said=queued:94", elsewhere
+
+
+# ------------------------------- the pool pages answer with their own row
+def test_each_pool_page_view_is_one_query_shared_with_its_one_row_read(
+        monkeypatch):
+    """The dashboard's `pool_row` reads the sheet's columns, which is
+    why the dedicated pages had no one-row answer: their rows are
+    drawn per view. Now each view is one SELECT that the page and
+    `page_row` both use, narrowed to one address for the answer
+    (2026-09-22, found by audit)."""
+    from geelark_farm.web import read
+
+    for view in ("queued", "on_phone", "used", "errored"):
+        sql, order, params = read._gmail_view(view, "LEO")
+        assert sql.startswith("SELECT ") and " WHERE r.kind = 'gmail'" in sql
+        assert order.startswith(" ORDER BY ")
+    assert read._gmail_view("errored", "LEO")[2][-1] == "leo"
+    for view in ("waiting", "on_phone", "needs_human", "delivered"):
+        sql, order, params = read._gpt_view(view, "abc")
+        assert sql.startswith("SELECT ") and " WHERE r.kind = 'app'" in sql
+    assert "_gmail_view(view, seller)" in inspect.getsource(read.gmail_pool)
+    assert "_gpt_view(view, q)" in inspect.getsource(read.gpt_pool)
+    assert "_PROXY_SELECT" in inspect.getsource(read.proxy_pool)
+
+    asked = []
+
+    class _S:
+        def __init__(self, settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append((sql, params))
+            if "status IN ('queued', 'running')" in sql:
+                return []
+            if "count(*) FILTER" in sql:
+                return [{"queued": 4, "errored": 2, "on_phone": 0, "used": 1,
+                         "waiting": 3, "needs_human": 1, "delivered": 9}]
+            if "GROUP BY status" in sql:
+                return [{"status": "free", "c": 3}, {"status": "dead", "c": 1}]
+            if "proxy_name) = lower(%s)" in sql:
+                return [{"id": 3, "name": "SX1", "host": "h", "serial": "",
+                         "status": "free"}]
+            if "= lower(%s)" in sql:
+                return [{"id": 1, "address": "a@x.com",
+                         "status": "wrong_password"}]
+            return []
+
+    monkeypatch.setattr(read, "Store", _S)
+    got = read.page_row(None, "gmail", "errored", "A@x.com", seller="LEO")
+    assert got["view"] == "errored" and got["row"]["address"] == "a@x.com"
+    assert got["counts"]["errored"] == 2 and "pending" in got
+    sql, params = asked[0]
+    assert " AND lower(r.address) = lower(%s) ORDER BY " in sql
+    assert sql.endswith(" LIMIT 1") and params[-1] == "A@x.com"
+    assert params[-2] == "leo", "the seller the list was cut by"
+    # An unknown view lands where the page would have.
+    assert read.page_row(None, "gpt", "nonesuch", "a@x.com")["view"] == \
+        "waiting"
+    # A proxy: read by name, then judged against the view like the page
+    # cuts its buckets; a `free` row is not on `needs_hand`.
+    got = read.page_row(None, "proxy", "free", "sx1")
+    assert got["row"]["name"] == "SX1" and got["counts"] == {
+        "free": 3, "on_phone": 0, "needs_new_ip": 0, "dead": 1, "strays": 0,
+        "needs_hand": 1, "all": 4}
+    assert read.page_row(None, "proxy", "needs_hand", "sx1")["row"] is None
+    assert read.page_row(None, "proxy", "all", "sx1", q="zzz")["row"] is None
+
+
+def test_every_row_of_the_pool_pages_says_which_row_and_view_drew_it():
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True, "may_add_gpt": True,
+            "may_change_proxy": True, "may_login_accounts": True,
+            "sees": "all", "username": "mehdi", "nav": {}}
+    row = {"id": 41, "address": "torn@gmail.com", "status": "no_authenticator",
+           "updated_at": "2026-09-19 10:00:00+00", "seller": "LEO",
+           "totp_secret": "", "recovery_email": "", "password": "p",
+           "purchased_on": "2026-09-01"}
+    for view in ("queued", "errored", "used", "on_phone"):
+        data = {"rows": [row], "view": view, "counts": {}, "seller": "",
+                "page": 1, "pages": 1, "known_sellers": []}
+        drawn = pages.gmail_pool_page(data, user, advice=lambda s: None)
+        assert (f'<tr data-key="gmail:torn@gmail.com" data-page-view="{view}">'
+                in drawn), view
+    # The row drawn as a form keeps its key, so a Save's answer lands on it.
+    data = {"rows": [row], "view": "queued", "counts": {}, "seller": "",
+            "page": 1, "pages": 1, "known_sellers": []}
+    edited = pages.gmail_pool_page(data, user, advice=lambda s: None,
+                                   editing=41)
+    assert ('<tr class="editrow" data-key="gmail:torn@gmail.com"'
+            ' data-page-view="queued">' in edited)
+
+    app_row = {"id": 7, "address": "set@x.com", "status": "no_code",
+               "serial": "", "note": "", "source": "web", "has_totp": True,
+               "email_code_only": False,
+               "updated_at": "2026-09-19 10:00:00+00",
+               "created_at": "2026-09-19 09:00:00+00"}
+    for view in ("waiting", "needs_human", "on_phone", "delivered"):
+        data = {"rows": [app_row], "view": view, "counts": {}, "q": "",
+                "page": 1, "pages": 1}
+        drawn = pages.gpt_pool_page(data, user, manual_login=True)
+        assert (f'<tr data-key="gpt:set@x.com" data-page-view="{view}">'
+                in drawn), view
+
+    proxy = {"id": 3, "name": "SX1", "host": "10.0.0.1", "port": 1080,
+             "status": "free", "serial": "", "last_exit_ip": "",
+             "times_used": 0, "note": "",
+             "updated_at": "2026-09-19 10:00:00+00", "bucket": "free"}
+    for view, status, bucket in (("free", "free", "free"),
+                                 ("on_phone", "on a phone", "on_phone"),
+                                 ("all", "free", "free"),
+                                 ("needs_hand", "dead", "dead")):
+        data = {"rows": [dict(proxy, status=status, bucket=bucket)],
+                "view": view, "counts": {}, "q": "", "page": 1, "pages": 1,
+                "tests": {}, "strays": []}
+        drawn = pages.proxy_pool_page(data, user)
+        assert f'<tr data-key="proxy:SX1" data-page-view="{view}">' in drawn, \
+            view
+
+    # And the phone table's own chip word is untouched by it.
+    assert 'data-view="' not in pages._row_key("gmail", "a@x.com", "queued")
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_press_on_a_pool_page_is_answered_with_that_pages_own_row(
+        web, monkeypatch):
+    """Under fresh pills, and with no row when the press moved it out of
+    the view - a Free on the errored list - which the script removes."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm import runner as runner_mod
+    from geelark_farm.web import read
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda *a, **k: 77)
+    monkeypatch.setattr(actions_mod, "claim", lambda *a, **k: True)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda *a, **k: {"result": "ok"})
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda *a, **k: ("done", "back on the shelf", None))
+    monkeypatch.setattr(app_mod._Handler, "_proxy_state",
+                        lambda self: ([{"host": "9.9.9.9"}], [], {}))
+    asked = []
+    answers = {"gmail": {"id": 2, "address": "owed@gmail.com",
+                         "status": "wrong_password", "seller": "ali",
+                         "updated_at": "2026-09-19 10:00:00+00",
+                         "refund_state": "to_claim"},
+               "proxy": None}
+
+    def page_row(settings, kind, view, address, *, seller="", q="",
+                 strays=0):
+        asked.append((kind, view, address, seller, q, strays))
+        return {"view": view, "row": answers[kind], "pending": {},
+                "counts": {"errored": 2, "queued": 5, "free": 3,
+                           "needs_hand": 1}}
+
+    monkeypatch.setattr(read, "page_row", page_row)
+    client = web()
+    client.login()
+
+    status, _, body = client.request(
+        "POST", "/pools/gmail/refund",
+        body=f"csrf={client.csrf()}&address=owed%40gmail.com&state=claimed"
+             "&back=/pools/gmail%3Fview%3Derrored%26seller%3Dali%26page%3D3",
+        headers={"X-GF-Row": "gmail", "X-GF-View": "errored"})
+    assert status == 200, body[:300]
+    assert ('class="rowanswer" data-row-kind="gmail" data-row-view="errored"'
+            in body)
+    pills = body[body.index('<div class="pills">'):body.index("<table>")]
+    assert ">Errored<span" in pills and ">2</span>" in pills, pills
+    assert ('<tr data-key="gmail:owed@gmail.com" data-page-view="errored">'
+            in body), "the row, as the errored view draws it"
+    assert ('name="back" value="/pools/gmail?view=errored&amp;seller=ali'
+            '&amp;page=3"' in body)
+    assert asked == [("gmail", "errored", "owed@gmail.com", "ali", "", 0)], (
+        "the list was cut by the seller the page was on")
+
+    # A proxy door: the row is named, not addressed; the strays GeeLark
+    # holds count on the Needs a hand pill.
+    status, _, body = client.request(
+        "POST", "/pools/proxy/free",
+        body=f"csrf={client.csrf()}&name=SX1"
+             "&back=/pools/proxy%3Fview%3Dneeds_hand",
+        headers={"X-GF-Row": "proxy", "X-GF-View": "needs_hand"})
+    assert status == 200, body[:300]
+    assert 'data-row-kind="proxy" data-row-view="needs_hand"' in body
+    assert "<table></table>" in body, "gone from this view: no row"
+    assert asked[-1] == ("proxy", "needs_hand", "SX1", "", "", 1)
+
+    # Without the view header the dashboard's sheet answer stands.
+    src = inspect.getsource(app_mod._Handler._row_answer)
+    assert "self.headers.get(self.VIEW_ASKED)" in src
+    assert "read.pool_row(self.settings, kind, address)" in src
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_save_in_the_gpt_and_spotify_drawers_answers_with_the_row(
+        web, monkeypatch):
+    """The Gmail Save answered with its row and these two did not
+    (2026-09-22) - and the first cut of this fix put `row_of` inside
+    `_add_back(...)`, which a substring pin read as done."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm import runner as runner_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda *a, **k: 78)
+    monkeypatch.setattr(actions_mod, "claim", lambda *a, **k: True)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda *a, **k: {"result": "saved"})
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda *a, **k: ("done", "saved", None))
+    client = web()
+    client.login()
+    for kind in ("gpt", "spotify"):
+        status, _, body = client.request(
+            "POST", f"/pools/{kind}/edit",
+            body=f"csrf={client.csrf()}&address=x%40y.com&new_address=x%40y.com"
+                 f"&password=pw&back=/",
+            headers={"X-GF-Row": kind})
+        assert status == 200, (kind, status, body[:200])
+        assert 'class="rowanswer"' in body and f'data-row-kind="{kind}"' in body
+
+
+def test_the_pool_page_doors_ask_for_a_row():
+    src = inspect.getsource(app_mod)
+    assert src.count('row_of="gmail"') == 3, "edit, remove, refund"
+    assert src.count('row_of="gpt"') == 3, "edit, remove, offer"
+    assert src.count('row_of="spotify"') == 2, "edit, remove"
+    assert src.count("row_of=kind)") == 1, "the shared Free door"
+    assert src.count('row_of="proxy"') == 1, "free, test, remove share one"
+    assert 'payload.get("address") or payload.get("name")' in \
+        inspect.getsource(app_mod._Handler._act)
