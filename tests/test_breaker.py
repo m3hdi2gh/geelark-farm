@@ -238,3 +238,26 @@ def test_a_distrusted_phone_is_googles_verdict_not_the_machines():
     assert not breaker_mod.counts_against(build)
     assert not breaker_mod.shows_it_works(build)
 
+
+# ------------------------------------ band 1 of the 2026-09-21 audit
+def test_a_person_stopping_the_work_is_not_the_machine_failing():
+    """Five Cancels in a quiet stretch counted five failures in a row,
+    opened the breaker and painted GeeLark red on the console; a routine
+    `docker compose up -d builder` with eight jobs running was eight
+    `builder_lost` in a row (2026-09-21, found by audit)."""
+    for status in ("stopped_by_hand", "interrupted", "builder_lost"):
+        assert not counts_against(build(False, status)), status
+        assert not shows_it_works(build(False, status)), status
+    # A builder whose own loop raised is a fault, and still counts.
+    assert counts_against(build(False, "builder_crashed"))
+
+
+def test_the_builder_reads_the_breakers_word_for_a_person():
+    """One set. builder.py had its own copy, and the breaker - the one
+    place that has to know these are not failures - had never heard of
+    it."""
+    from geelark_farm import builder
+
+    assert builder.STOPPED_BY_A_PERSON is breaker_mod.STOPPED_BY_A_PERSON
+    assert breaker_mod.STOPPED_BY_A_PERSON <= breaker_mod.NOTHING_HAPPENED
+    assert breaker_mod.BUILDER_GONE <= breaker_mod.NOTHING_HAPPENED

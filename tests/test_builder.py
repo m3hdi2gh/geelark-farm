@@ -3672,7 +3672,7 @@ def test_a_batch_is_polled_so_a_signal_can_land(device, settings, monkeypatch):
 
     assert seen and all(t is not None for t in seen), (
         "the wait has to have a timeout, or the signal never lands")
-    assert seen[0] == builder.STOP_POLL_SECONDS
+    assert seen[0] == builder.PASS_TICK_SECONDS
 
 
 def test_the_workers_are_told_to_stop_before_the_pool_is_drained(
@@ -4461,8 +4461,15 @@ def test_a_stop_pressed_on_the_console_reaches_a_build_in_another_container(
     """STOP_BY_HAND was a set in the keeper's memory, and the builds run in
     a builder container: Cancel on a building row did nothing (the
     operator, 2026-09-10). The store carries the press now; a build asks
-    it every step, reading at most every few seconds, and takes the
-    request out the moment it is heard."""
+    it every step, reading at most every few seconds.
+
+    Heard once per build, and taken out of the store when the build
+    ENDS - not when it is heard. It used to come out the moment it was
+    heard, so the press lived on only as an exception in flight: one
+    `except Aborted` in the way and it was gone with nothing left to
+    hear it, and the row's Stopping badge - drawn from the store - went
+    back to Building over a teardown still making three GeeLark calls
+    (2026-09-21, found by audit)."""
     from geelark_farm import builder as builder_mod
     from geelark_farm.store import stops as store_stops
 
@@ -4476,16 +4483,26 @@ def test_a_stop_pressed_on_the_console_reaches_a_build_in_another_container(
                         lambda s, serial: gone.append(serial))
     monkeypatch.setattr(builder_mod, "_STOP_SEEN",
                         {"at": 0.0, "serials": frozenset()})
+    monkeypatch.setattr(builder_mod, "_STOP_HEARD", set())
 
     assert builder_mod._stop_asked(settings, "2240") is False
     assert builder_mod._stop_asked(settings, "2241") is True
-    assert gone == ["2241"], "taken out where it was written"
-    assert builder_mod._stop_asked(settings, "2241") is False, "heard once"
+    assert gone == [], "still in the store: the row goes on saying Stopping"
+    assert builder_mod._stop_asked(settings, "2241") is False, (
+        "heard once - the teardown's own waits are not told again")
     assert len(reads) == 1, "one store read for the three asks - throttled"
+    # The build ends: only now the request comes out, and only for a
+    # press this process heard.
+    builder_mod._stop_honoured(settings, "2240")
+    assert gone == [], "nothing heard for 2240, nothing written"
+    builder_mod._stop_honoured(settings, "2241")
+    assert gone == ["2241"], "taken out where it was written, at the end"
+    assert "2241" not in builder_mod._STOP_HEARD
     # The same process's own press is heard without the store.
     builder_mod.STOP_BY_HAND.add("2242")
     assert builder_mod._stop_asked(settings, "2242") is True
     assert "2242" not in builder_mod.STOP_BY_HAND
+    builder_mod._STOP_HEARD.discard("2242")
     # No store, no serial: nothing to hear.
     off = make_settings(state_dir=tmp_path, store_enabled=False)
     assert builder_mod._stop_asked(off, "2241") is False
@@ -5710,8 +5727,8 @@ def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
                    "_align_clock(client, settings, phone_id, proxy_row)",
                    "shell.pause(*SIGN_IN_STAGGER_SECONDS)"):
         assert needle in src, needle
-    assert "_align_clock(client, settings, phone_id, replacement)" in \
-        inspect.getsource(builder._new_exit)
+    assert "_align_clock(client, settings, phone_id, exit_row)" in \
+        inspect.getsource(builder._exit_up)
     monkeypatch.setattr(builder.shell, "_touch_ready", {"P": (1.0, 1.0), "Q": None})
     assert builder._touch_method("P") == "kernel"
     assert builder._touch_method("Q") == "input"
@@ -6414,6 +6431,7 @@ def test_a_hand_stop_is_heard_by_every_wait_a_build_makes(
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
     monkeypatch.setattr(builder_mod, "_STOP_SEEN",
                         {"at": 0.0, "serials": frozenset()})
+    monkeypatch.setattr(builder_mod, "_STOP_HEARD", set())
     monkeypatch.setattr(store_stops, "asked", lambda s: {"2241"})
     monkeypatch.setattr(store_stops, "honoured", lambda s, serial: None)
 
@@ -6458,3 +6476,123 @@ def test_a_stop_is_asked_for_often_enough_to_feel_like_a_press():
 
     assert builder_mod.STOP_POLL_SECONDS <= 2.0
 
+
+# ------------------------------------ band 1 of the 2026-09-21 audit
+def test_a_persons_stop_is_never_read_as_a_verdict_on_the_exit_pool():
+    """Three `except Aborted` handlers around `_new_exit` read every abort
+    as "no other exit to try": logged it, booted the phone the person had
+    just asked to stop, and carried on to the end of the budget
+    (2026-09-21, found by audit). Each one now re-raises a person's stop
+    before it does anything else - and `_new_exit` itself no longer
+    holds a wait a stop could come out of."""
+    import inspect
+    import re
+
+    from geelark_farm import builder as builder_mod
+
+    src = inspect.getsource(builder_mod)
+    handlers = [m.start() for m in re.finditer(r"except Aborted as exc:", src)]
+    around_a_swap = [at for at in handlers
+                     if "_new_exit(" in src[max(0, at - 700):at]]
+    assert len(around_a_swap) == 3, "the three swap handlers"
+    for at in around_a_swap:
+        after = src[at:at + 400]
+        assert "if str(exc) in STOPPED_BY_A_PERSON:" in after, src[at:at + 120]
+        assert after.index("STOPPED_BY_A_PERSON") < after.index("log.warning")
+    # The boot is the caller's, after the row is written down.
+    new_exit = inspect.getsource(builder_mod._new_exit)
+    assert "ensure_running" not in new_exit and "cancelled" not in new_exit
+    up = inspect.getsource(builder_mod._exit_up)
+    assert "ensure_running" in up and "cancelled=cancelled" in up
+    # And every swap writes the row before it boots.
+    for fn in (builder_mod.build_one, builder_mod._install_by_recipe,
+               builder_mod._sign_into_app):
+        body = inspect.getsource(fn)
+        for m in re.finditer(r"_exit_up\(", body):
+            before = body[max(0, m.start() - 900):m.start()]
+            assert "refused_exits.append(" in before, fn.__name__
+
+
+def test_the_exit_a_raise_interrupted_is_the_one_the_release_sees():
+    """`_new_exit` claimed the replacement, set it on the phone and only
+    then booted - so a raise out of the boot left the caller holding the
+    exit before, the phone standing on the new one, and the new one
+    `in_use` for good. The recipe hands its swaps back on a raise the
+    same way (2026-09-21, found by audit)."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+
+    recipe = inspect.getsource(builder_mod._install_by_recipe)
+    assert "hold.append(proxy_row)" in recipe
+    assert recipe.index("hold.append(proxy_row)") < recipe.index("_exit_up(")
+    build = inspect.getsource(builder_mod.build_one)
+    assert "hold=swapped_to," in build
+    assert "proxy_row = swapped_to[-1]" in build
+    assert build.index("except BaseException:") < build.index(
+        "proxy_row = swapped_to[-1]")
+
+
+def test_refused_exits_are_released_when_the_build_never_reached_the_app_phase():
+    """Only the session released them, and a build that ended in its Gmail
+    phase after a swap - stopped, refused, or finished with no app
+    account asked for - had no session yet: every exit it had moved on
+    from stayed `in_use` (2026-09-21, found by audit)."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.pools import Resource
+
+    build = inspect.getsource(builder_mod.build_one)
+    tail = build[build.index("    finally:"):]
+    branch = tail[tail.index("if session is None:"):tail.index("else:")]
+    assert "_refused_holds(book, refused_exits)" in branch
+    assert "_refused_holds(book, session.refused_exits)" in inspect.getsource(
+        builder_mod._session_holds), "one list, both callers"
+
+    class Proxies:
+        pass
+
+    book = SimpleNamespace(proxies=Proxies())
+    a, b = Resource(sheet_row=1, values={}), Resource(sheet_row=2, values={})
+    held = builder_mod._refused_holds(book, [(a, "captcha_shown"),
+                                             (b, "request_rejected")])
+    assert [(h[0], h[1], h[2], h[4]) for h in held] == [
+        (book.proxies, a, builder_mod.SET_ASIDE, "captcha_shown"),
+        (book.proxies, b, builder_mod.SET_ASIDE, "request_rejected")]
+    assert all("exit address" in h[3] for h in held)
+
+
+def test_the_stop_request_outlives_the_teardown_in_both_ways_of_building():
+    """The row says Stopping until there is nothing left to stop: the
+    request is taken out of the store as the last thing each finally does,
+    after the phone is stopped and the ledger released."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+
+    for fn in (builder_mod.build_one, builder_mod.finish_one):
+        src = inspect.getsource(fn)
+        tail = src[src.rindex("    finally:"):]
+        assert "_stop_honoured(settings, build.serial)" in tail, fn.__name__
+        assert tail.rindex("ledger.release(phone_id, note=build.status)") \
+            < tail.index("_stop_honoured(settings, build.serial)"), fn.__name__
+
+
+def test_the_pass_tick_and_the_stop_poll_are_two_names():
+    """`STOP_POLL_SECONDS` was defined twice, five hundred lines apart, and
+    the second won: the tick the pass loop waits on so `docker stop` is
+    heard read 1.0 in its comment and ran at 5.0, then 2.0 (2026-09-21,
+    found by audit)."""
+    import inspect
+    import re
+
+    from geelark_farm import builder as builder_mod
+
+    src = inspect.getsource(builder_mod)
+    assert len(re.findall(r"^STOP_POLL_SECONDS = ", src, re.M)) == 1
+    assert len(re.findall(r"^PASS_TICK_SECONDS = ", src, re.M)) == 1
+    assert builder_mod.PASS_TICK_SECONDS == 1.0
+    assert "wait(futures, timeout=PASS_TICK_SECONDS)" in src, (
+        "the pass loop's wait is the tick's one caller")
+    assert "timeout=STOP_POLL_SECONDS" not in src

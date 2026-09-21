@@ -3043,3 +3043,22 @@ def test_with_manual_login_on_the_pass_finishes_the_panels_accounts(
         raise RuntimeError("store down")
     assert serve_mod._panel_waiting(SimpleNamespace(
         apps=SimpleNamespace(panel_waiting=down))) == 0
+
+
+# ------------------------------------ band 1 of the 2026-09-21 audit
+def test_the_sweep_measures_an_inline_claim_against_a_quick_clock():
+    """The web claims a row before it works it, and a web container
+    recreated under an inline press leaves that row `running` with
+    nobody to settle it. Measured against a build's clock - two hours -
+    every later press of that verb on that address was answered
+    "already asked" for the whole two hours (2026-09-21, found by
+    audit)."""
+    import inspect
+
+    quick = serve_mod.quick_verbs()
+    assert "free_gmail" in quick and "edit_gmail" in quick, "the web's"
+    assert "boot_phone" in quick and "control" in quick, "and the lane's"
+    assert "login_accounts" in quick
+    drain = inspect.getsource(serve_mod._drain_actions)
+    assert "quick=quick_verbs()," in drain
+    assert "quick=lane_verbs()" not in drain

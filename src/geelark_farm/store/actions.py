@@ -144,20 +144,29 @@ def expire_running(conn, *, older_than: float,
     own stories say what became of the work; the row says why it is
     not still spinning on the Requests page.
 
-    `quick` is the verbs that are over in seconds - the control lane's -
-    and they get `quick_after` instead. Measured against a build's clock,
-    a boot that a restart orphaned sat on the Requests page spinning for
-    two hours, which is a lie about a command that could not have taken
-    more than a minute (2026-09-06).
+    `quick` is the verbs that are over in seconds - the control lane's,
+    and the web's inline ones - and they get `quick_after` instead.
+    Measured against a build's clock, a boot that a restart orphaned sat
+    on the Requests page spinning for two hours, which is a lie about a
+    command that could not have taken more than a minute (2026-09-06).
+
+    A quick row gets its own sentence too. "See the phones' stories" is
+    right for a build; for a Free the web was recreated under, the true
+    thing to say is that it never finished and can be pressed again
+    (2026-09-21, found by audit).
     """
     cur = conn.execute(
         "UPDATE actions SET status = 'failed', finished_at = now(),"
-        " result = 'the service restarted while this ran - see the"
-        " phones'' stories'"
+        " result = CASE WHEN verb = ANY(%s)"
+        "     THEN 'the service restarted before this finished - press it"
+        " again if it is still wanted'"
+        "     ELSE 'the service restarted while this ran - see the"
+        " phones'' stories' END"
         " WHERE status = 'running'"
         " AND executed_at < now() - make_interval(secs => CASE"
         "     WHEN verb = ANY(%s) THEN %s ELSE %s END)",
-        (list(quick), float(quick_after or older_than), float(older_than)))
+        (list(quick), list(quick), float(quick_after or older_than),
+         float(older_than)))
     closed = getattr(cur, "rowcount", 0) or 0
     conn.commit()
     return closed

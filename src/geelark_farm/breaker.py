@@ -73,10 +73,24 @@ WORKED = frozenset({"no_usable_gpt", "app_not_asked_for",
 #: same address every time - opened the breaker in two and a half minutes
 #: and stopped the farm for three hours over a shortage of exits
 #: (2026-09-13). What it means is read on the Proxy tab, not here.
+#: A person stopping the work: the console's Cancel on a row, and the
+#: run's own shutdown. Neither is evidence about the machine, and both
+#: were counted as a failure - five Cancels in a quiet stretch opened the
+#: breaker and painted GeeLark red on the console (2026-09-21, found by
+#: audit). Named here and read by builder.py, which imports this module;
+#: a copy there is how the two came to disagree.
+STOPPED_BY_A_PERSON = frozenset({"interrupted", "stopped_by_hand"})
+#: A builder that stopped answering under its job - a deploy, a restart,
+#: the host killing it. `docker compose up -d builder` with eight jobs
+#: running was eight of these in a row, and the farm stopped five
+#: minutes after a routine deploy quoting GeeLark for it. The phone it
+#: left is the sweep's; nothing was judged (2026-09-21, found by audit).
+BUILDER_GONE = frozenset({"builder_lost"})
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
                               "no_working_proxy", "no_other_exit",
                               "no_capacity", "in_use_by_hand",
-                              "given_up_on", "phone_distrusted"})
+                              "given_up_on", "phone_distrusted"}
+                             ) | STOPPED_BY_A_PERSON | BUILDER_GONE
 
 
 def counts_against(build) -> bool:

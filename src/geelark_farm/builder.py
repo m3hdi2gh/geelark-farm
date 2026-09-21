@@ -88,7 +88,12 @@ log = logging.getLogger(__name__)
 #: which meant `docker stop` was not acted on until the whole batch had
 #: finished - longer than `stop_grace_period`, so SIGKILL arrived first and the
 #: phones stayed up billing (2026-08-29).
-STOP_POLL_SECONDS = 1.0
+#:
+#: Its own name. It was `STOP_POLL_SECONDS`, and so was the store poll
+#: five hundred lines down - the second definition won, so this tick was
+#: 5 s and then 2 s and never the 1 s written here (2026-09-21, found by
+#: audit).
+PASS_TICK_SECONDS = 1.0
 
 #: The batch a thread's work belongs to, and the job within that batch.
 #:
@@ -560,6 +565,12 @@ STOP_BY_HAND: set[str] = set()
 #: same process's own presses and is read every time.
 STOP_POLL_SECONDS = 2.0
 _STOP_SEEN: dict = {"at": 0.0, "serials": frozenset()}
+#: Serials this process has already raised a stop for. The build is
+#: unwinding; the waits its teardown makes must not be told again, and
+#: the request stays in the store until `_stop_honoured` takes it out at
+#: the end - so the row says Stopping for the whole of the teardown and
+#: not for the one tick before the request was deleted.
+_STOP_HEARD: set[str] = set()
 
 
 def _stop_asked(settings: Settings | None, serial: str) -> bool:
@@ -573,7 +584,12 @@ def _stop_asked(settings: Settings | None, serial: str) -> bool:
         return False
     if serial in STOP_BY_HAND:
         STOP_BY_HAND.discard(serial)
+        _STOP_HEARD.add(serial)
         return True
+    # Heard already: the build is on its way out, and a wait its teardown
+    # makes must not be handed the same stop a second time.
+    if serial in _STOP_HEARD:
+        return False
     if settings is None or not getattr(settings, "store_enabled", False):
         return False
     from .store import stops as store_stops
@@ -589,13 +605,37 @@ def _stop_asked(settings: Settings | None, serial: str) -> bool:
         _STOP_SEEN["at"] = now
     if serial not in _STOP_SEEN["serials"]:
         return False
+    # Latched, not consumed. It came out of the store the moment it was
+    # heard, so the press lived on only as an exception in flight: one
+    # `except Aborted` in the way and it was gone, with nothing left for
+    # the next wait to hear - and the Stopping badge, drawn from the
+    # store, went back to Building over a teardown still making three
+    # GeeLark calls (2026-09-21, found by audit).
+    _STOP_HEARD.add(serial)
+    return True
+
+
+def _stop_honoured(settings: Settings | None, serial: str) -> None:
+    """The build is over: the request comes out of the store, and the row
+    stops saying Stopping. Only for a press this process heard - every
+    other build's end writes nothing. Never raises: it runs in a finally,
+    and a store that will not answer leaves a request that ages out."""
+    serial = str(serial or "").strip()
+    if serial not in _STOP_HEARD:
+        return
+    _STOP_HEARD.discard(serial)
+    # And out of the cached reading, so a wait in the next few seconds
+    # cannot hear a press the store no longer holds.
     _STOP_SEEN["serials"] = _STOP_SEEN["serials"] - {serial}
+    if settings is None or not getattr(settings, "store_enabled", False):
+        return
+    from .store import stops as store_stops
+
     try:
         store_stops.honoured(settings, serial)
     except Exception as exc:                                      # noqa: BLE001
-        log.warning("stop on %s heard but could not be taken out of the "
+        log.warning("stop on %s honoured but could not be taken out of the "
                     "store (%s); it ages out", serial, exc)
-    return True
 
 def _hand_stop_wired(settings: Settings | None, build,
                      cancelled: Callable[[], bool] | None,
@@ -643,7 +683,12 @@ def _hand_stop_wired(settings: Settings | None, build,
 #: deletes a phone nothing was signed into, exactly as a fault would; the
 #: phone worth keeping without an account is the one a wish asked for
 #: that way. See KEPT_WHEN_EMPTY.
-STOPPED_BY_A_PERSON = frozenset({"interrupted", "stopped_by_hand"})
+#:
+#: The breaker's, not a second copy: it is the breaker that has to know
+#: these are not the machine failing. Five Cancels in a quiet stretch
+#: counted five failures in a row and opened it (2026-09-21, found by
+#: audit) - and this module imports that one, not the other way round.
+STOPPED_BY_A_PERSON = breaker.STOPPED_BY_A_PERSON
 
 #: The one stop that still keeps a phone nothing was signed into: the
 #: run's own shutdown. The process is going down, and a delete that
@@ -906,8 +951,7 @@ def _sign_into_app(session: _Session) -> Build | None:
             s.proxy_row = _new_exit(s.client, s.settings, s.book, s.build,
                                     s.phone_id, s.proxy_row, outcome.reason,
                                     s.remaining(), swaps=s.exits,
-                                    avoid=s.exits_seen(),
-                                    cancelled=s.cancelled)
+                                    avoid=s.exits_seen())
             taken = s.proxy_row
             if taken is not None and taken.proxy:
                 where = f"{taken.proxy.host}:{taken.proxy.port}"
@@ -919,6 +963,9 @@ def _sign_into_app(session: _Session) -> Build | None:
                 # Held, not freed - see _new_exit. Released at the end.
                 s.refused_exits.append((previous, outcome.reason))
             s.exits += 1
+            # Written down above; only now the wait that can raise.
+            _exit_up(s.client, s.settings, s.phone_id, taken, s.remaining(),
+                     s.cancelled)
             continue
         if failures.verdict(outcome.reason).sets_aside:
             # The service asked for something no unattended run can give - a
@@ -1482,11 +1529,16 @@ def _reset_play(client: Client, phone_id: str) -> None:
 def _install_by_recipe(client: Client, settings: Settings, book: Book,
                        build: Build, phone_id: str, package: str, *,
                        name: str, ordered: bool, remaining, artifacts,
-                       cancelled, proxy_row, refused_exits: list
+                       cancelled, proxy_row, refused_exits: list,
+                       hold: list | None = None
                        ) -> tuple[play_install.Outcome, object]:
     """`_install`, and the operator's recipe around it when Play will not
     give the app - see PLAY_RETRY_REASONS. Returns the outcome and the
-    exit the phone ends up on."""
+    exit the phone ends up on.
+
+    `hold` is the caller's way of learning that exit when this raises
+    instead of returning: every swap appends the row the phone is now on,
+    and the caller takes the last one before it releases anything."""
     installed = _install(client, phone_id, package, name=name,
                          ordered=ordered,
                          budget=min(settings.install_budget_seconds,
@@ -1517,8 +1569,14 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
                     f"{name}: the Play Store offered no install "
                     f"({installed.reason}) - exit {swaps + 1} of "
                     f"{PLAY_RECIPE_EXITS}",
-                    remaining(), swaps=swaps, avoid=seen, cancelled=cancelled)
+                    remaining(), swaps=swaps, avoid=seen)
             except Aborted as exc:
+                # A person's stop is not a verdict on the exit pool, and
+                # this handler read it as one: logged it, booted the
+                # phone the person had just asked to stop, and carried
+                # on (2026-09-21, found by audit).
+                if str(exc) in STOPPED_BY_A_PERSON:
+                    raise
                 log.warning("no other exit to try the Play Store from (%s)",
                             exc)
                 phones.ensure_running(
@@ -1529,6 +1587,11 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
             if previous is not None and previous is not proxy_row:
                 refused_exits.append((previous, installed.reason))
             swaps += 1
+            # The caller reads this back on a raise - see build_one.
+            if hold is not None:
+                hold.append(proxy_row)
+            _exit_up(client, settings, phone_id, proxy_row, remaining(),
+                     cancelled)
             cleared = False
             _reset_play(client, phone_id)
         installed = _install(client, phone_id, package, name=name,
@@ -2018,9 +2081,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                     proxy_row = _new_exit(
                         client, settings, book, build, phone_id, proxy_row,
                         "reCAPTCHA offered only text or audio on this exit",
-                        remaining(), swaps=exit_swaps, avoid=seen,
-                        cancelled=cancelled)
+                        remaining(), swaps=exit_swaps, avoid=seen)
                 except Aborted as exc:
+                    # Not a person's stop - see the Play recipe's handler.
+                    if str(exc) in STOPPED_BY_A_PERSON:
+                        raise
                     log.warning("the exit could not be changed (%s); the "
                                 "same address goes again on it", exc)
                     phones.ensure_running(
@@ -2031,6 +2096,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                     if previous is not None and previous is not proxy_row:
                         refused_exits.append((previous, outcome.reason))
                     exit_swaps += 1
+                    _exit_up(client, settings, phone_id, proxy_row,
+                             remaining(), cancelled)
                 continue
             if outcome.ok:
                 signed_as = _signed_in_as(book, gmail_row, account.email,
@@ -2120,9 +2187,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                     proxy_row = _new_exit(
                         client, settings, book, build, phone_id, proxy_row,
                         f"{captchas_here} Gmails met a captcha on this exit",
-                        remaining(), swaps=exit_swaps, avoid=seen,
-                        cancelled=cancelled)
+                        remaining(), swaps=exit_swaps, avoid=seen)
                 except Aborted as exc:
+                    # Not a person's stop - see the Play recipe's handler.
+                    if str(exc) in STOPPED_BY_A_PERSON:
+                        raise
                     log.warning("the exit could not be changed (%s); the "
                                 "next Gmail goes on the same one", exc)
                     # _new_exit stops the phone before it looks for an
@@ -2137,6 +2206,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                         # end, marked with why.
                         refused_exits.append((previous, "captcha_shown"))
                     exit_swaps += 1
+                    _exit_up(client, settings, phone_id, proxy_row,
+                             remaining(), cancelled)
                 captchas_here = 0
 
         # ----------------------------------------------------- the install
@@ -2201,13 +2272,23 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("ready", f"signed into Google; no app account was "
                                    f"asked for. On the phone: "
                                    f"{_named(build.app)}", ok=True)
-        installed, proxy_row = _install_by_recipe(
-            client, settings, book, build, phone_id,
-            _package_for(settings, app), name=APPS[app],
-            ordered=bool(ordered.get(app)),
-            remaining=remaining, artifacts=artifacts, cancelled=cancelled,
-            proxy_row=proxy_row, refused_exits=refused_exits,
-        )
+        # The exit the recipe put the phone on, read back if the recipe
+        # raises rather than returns: the tuple below never lands then,
+        # and the release in the finally would spend the exit before.
+        swapped_to: list = []
+        try:
+            installed, proxy_row = _install_by_recipe(
+                client, settings, book, build, phone_id,
+                _package_for(settings, app), name=APPS[app],
+                ordered=bool(ordered.get(app)),
+                remaining=remaining, artifacts=artifacts, cancelled=cancelled,
+                proxy_row=proxy_row, refused_exits=refused_exits,
+                hold=swapped_to,
+            )
+        except BaseException:
+            if swapped_to:
+                proxy_row = swapped_to[-1]
+            raise
         build.trails.append(("install", installed.trail))
         if not installed.ok:
             return finish("install_failed",
@@ -2296,6 +2377,12 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if session is None:
             held.append((book.proxies, proxy_row,
                          SPEND if phone_id else RELEASE, "", ""))
+            # The exits swapped away from before the app phase began. A
+            # session releases its own; with none yet, nobody did, and a
+            # build that ended in its Gmail phase after a swap - stopped,
+            # refused, or finished without an app account - left them
+            # `in_use` for good (2026-09-21, found by audit).
+            held += _refused_holds(book, refused_exits)
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held, suspect_hosts=_struck_hosts(settings))
@@ -2334,6 +2421,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
                           phone_id, exc)
             ledger.release(phone_id, note=build.status)
+        # Last, so the row says Stopping until there is nothing left to
+        # stop.
+        _stop_honoured(settings, build.serial)
 
 
 def _signed_in_after_all(client: Client, build: Build) -> bool:
@@ -2627,6 +2717,8 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
                       phone_id, exc)
         ledger.release(phone_id, note=build.status)
+        # As in build_one: the request outlives the teardown, not the hear.
+        _stop_honoured(settings, build.serial)
 
 
 def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
@@ -2701,9 +2793,18 @@ def _remember_refusal(settings: Settings, said: str) -> None:
 
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
-              swaps: int = 0, avoid: set[str] | None = None,
-              cancelled: Callable[[], bool] | None = None) -> Resource | None:
+              swaps: int = 0, avoid: set[str] | None = None) -> Resource:
     """Get the phone onto a different exit address: another proxy.
+
+    Claimed and set, and handed back - the phone is left stopped, and
+    `_exit_up` brings it up once the caller holds the row. The boot used
+    to be this function's last act, so a raise out of its wait - a Cancel
+    pressed on the row, a phone that would not start - meant the caller
+    never got the row: its `proxy_row` still named the exit before, the
+    phone stood on the new one, and the end-of-build release spent the
+    wrong row while the one the phone was on stayed `in_use` for good
+    (2026-09-21, found by audit). Nothing below can now raise once the
+    exit is ours and on the phone.
 
     There used to be a cheaper branch first - sx.org can hand a proxy a new
     address while keeping its host, port and credentials, so nothing on the
@@ -2780,12 +2881,24 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     # the bound. The caller collects these and releases them all at the end.
     build.proxy = str(replacement.proxy)
     build.proxy_name = replacement.name
+    return replacement
+
+
+def _exit_up(client: Client, settings: Settings, phone_id: str, exit_row,
+             budget: float, cancelled: Callable[[], bool] | None) -> None:
+    """Bring the phone back up on the exit `_new_exit` just put it on.
+
+    Called after the caller has written the row down - into `proxy_row`,
+    and the one before it into `refused_exits` - so that whatever this
+    wait raises, the release at the end of the build sees the exit the
+    phone is actually standing on. See `_new_exit` for what happened
+    when the two were one function.
+    """
     time.sleep(5)
     phones.ensure_running(client, phone_id,
                           timeout=min(phones.BOOT_SECONDS, budget),
                           cancelled=cancelled)
-    _align_clock(client, settings, phone_id, replacement)
-    return replacement
+    _align_clock(client, settings, phone_id, exit_row)
 
 
 def _suspected(book: Book, session: _Session) -> tuple:
@@ -2825,6 +2938,21 @@ def _suspected(book: Book, session: _Session) -> tuple:
             f"different phones keep ending there this row is set aside.", "")
 
 
+def _refused_holds(book: Book, refused: list[tuple]) -> list[tuple]:
+    """Exits a service refused this phone through, and what each becomes:
+    held back rather than freed. The proxy is not condemned - a refusal is
+    per-session, which is measured - but its *address* has just been
+    turned down, and nothing here can change one: the address is the
+    vendor's to rotate, not ours. Freeing it hands the next build the
+    same address to be refused through again."""
+    today = failures.today()
+    return [(book.proxies, resource, SET_ASIDE,
+             f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
+             f"the exit address is the thing that was turned down. Change it "
+             f"in the vendor's panel, then set this cell to `free`.", why)
+            for resource, why in refused]
+
+
 def _session_holds(book: Book, session: _Session | None, *,
                    proxy_spent: bool) -> list[tuple]:
     """Everything the app phase is still holding, and what each should become.
@@ -2855,11 +2983,7 @@ def _session_holds(book: Book, session: _Session | None, *,
     # but its *address* has just been turned down, and nothing here can change
     # one: the address is the vendor's to rotate, not ours. Freeing it hands
     # the next build the same address to be refused through again.
-    held += [(book.proxies, resource, SET_ASIDE,
-              f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
-              f"the exit address is the thing that was turned down. Change it "
-              f"in the vendor's panel, then set this cell to `free`.", why)
-             for resource, why in session.refused_exits]
+    held += _refused_holds(book, session.refused_exits)
     # Accounts the service asked something of rather than judged. Its own verb,
     # because neither of the other two is true: it was not spent, and releasing
     # it put it back blank - indistinguishable from a row nobody had tried, so
@@ -4717,7 +4841,7 @@ def _drive_jobs(client, settings, jobs, *, work, workers, started, ledger,
             # because leaving the `with` shuts the pool down and waits for all
             # of them. It read as a policy the code does not have.
             while True:
-                _done, pending = wait(futures, timeout=STOP_POLL_SECONDS)
+                _done, pending = wait(futures, timeout=PASS_TICK_SECONDS)
                 if not pending:
                     break
         except KeyboardInterrupt:

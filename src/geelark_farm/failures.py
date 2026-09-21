@@ -709,6 +709,23 @@ VERDICTS: dict[str, Verdict] = {
         "its Google account already on it stays listed and can be finished; "
         "one nothing was signed into yet is deleted, since there is nothing "
         "on it worth keeping."),
+    # The two words the job queue writes itself, when a builder does not
+    # get to write one. They reached the console as "something happened
+    # that this tool has no name for" (2026-09-21, found by audit).
+    "builder_lost": Verdict(
+        NOBODY, "the builder running this went away",
+        "The builder container that had this job stopped sending its "
+        "heartbeat before the job finished - a deploy, a restart, or the "
+        "host killing it. Nothing was judged: the phone it left behind is "
+        "settled by the keeper's sweep, and the rows it held go back to "
+        "their pools with the run."),
+    "builder_crashed": Verdict(
+        DEVICE, "the builder crashed on this job",
+        "An exception reached the top of the builder's own loop, outside "
+        "the build. The traceback is in the builder's log for this day - "
+        "that is the only place it exists, and it is what a fix is written "
+        "from. The phone, if one was made, is settled by the keeper's "
+        "sweep."),
 }
 
 #: The reasons nothing is to blame for. Derived, so it cannot disagree with the

@@ -402,6 +402,24 @@ def lane_verbs() -> tuple[str, ...]:
                         if getattr(verb, "lane_safe", False)))
 
 
+def quick_verbs() -> tuple[str, ...]:
+    """The verbs that are over in seconds, for the sweep that closes rows
+    a restart orphaned: the lane's, and the ones the web runs inside the
+    request that asked for them.
+
+    The web claims a row before it works it (2026-09-21), and a web
+    container recreated under an inline press leaves that row `running`
+    with nobody to settle it. Measured against a build's clock - two
+    hours - every later press of that verb on that address was answered
+    "already asked" by `pending_for` for the whole two hours: a Free that
+    did nothing, with a confident sentence over it (2026-09-21, found by
+    audit). Derived, as `lane_verbs` is, so a verb that becomes inline
+    is quick without anybody remembering to say so.
+    """
+    inline = {name for name in verbs.VERBS if verbs.runs_inline(name)}
+    return tuple(sorted(set(lane_verbs()) | inline))
+
+
 class ControlLane:
     """A second drainer, for the commands that are over in seconds.
 
@@ -709,7 +727,7 @@ def _drain_actions(settings: Settings, book: Book, ledger,
                 try:
                     store_actions.expire_running(
                         conn, older_than=2 * settings.build_budget_seconds,
-                        quick=lane_verbs(),
+                        quick=quick_verbs(),
                         quick_after=QUICK_COMMAND_SECONDS)
                 except Exception as exc:                          # noqa: BLE001
                     # A statement that fails leaves the transaction

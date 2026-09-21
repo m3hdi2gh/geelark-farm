@@ -266,3 +266,136 @@ test('listeners are bound once per node however often init runs', () => {
   assert.equal(button.dataset.bound, '|seg|');
   assert.ok(win.document.querySelector('#phones'));
 });
+
+// The dashboard as it is drawn now: every block the server owns is a
+// region of its own, and the chips sit outside the phone table's.
+function dashboard(rows, status) {
+  return `
+  <div class="wide">
+    <div class="top" data-live="top"><span class="status">${status}</span></div>
+    <div class="row"><span id="tally" data-live="tally">?</span>
+      <span class="seg" id="seg" hidden>
+        <button type="button" data-show="" aria-pressed="true">All</button>
+        <button type="button" data-show="free" aria-pressed="false">Free</button>
+      </span></div>
+    <form class="byhand" method="post" action="/phones/build">
+      <input name="note" value="">
+    </form>
+    <form method="post" action="/phones/3801/state" class="press">
+      <button>Done</button>
+    </form>
+    <div data-live="phones"><table id="phones"><tbody>${rows}
+      <tr class="none" id="nohits" hidden><td>Nothing here matches that.</td></tr>
+    </tbody></table></div>
+  </div>`;
+}
+
+test('every block the server owns moves with the swap, not only the table',
+     async () => {
+  // For a day the table was the only region, and the swap - finding it
+  // - returned before touching anything else: the status line stood
+  // still from the moment the tab was opened until it was reloaded.
+  const win = consoleIn(dashboard(ONE, '3 building'), {
+    answer: () => ({status: 200, url: '/',
+                    body: answerPage(dashboard(TWO, '2 building'))}),
+  });
+  const doc = win.document;
+  const note = doc.querySelector('input[name=note]');
+  note.value = 'half a sentence';
+  const form = doc.querySelector('form.byhand');
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.equal(doc.querySelector('.status').textContent, '2 building',
+               'the status line is the server\'s and did not move');
+  assert.equal(doc.querySelectorAll('#phones tbody tr:not(#nohits)').length, 2);
+  assert.equal(doc.querySelector('form.byhand'), form, 'the form is nobody\'s to replace');
+  assert.equal(note.value, 'half a sentence');
+  assert.equal(win.__went.length, 0, 'and nothing reloaded');
+});
+
+test('a chip pressed after a swap filters the rows that are there now',
+     async () => {
+  // The click handler closed over the <tr> nodes of the page as first
+  // drawn; after the region swap replaced them a press moved the
+  // counter and not the table.
+  const MIXED = ONE + '<tr data-view="mine"><td>3802</td></tr>';
+  const win = consoleIn(dashboard(ONE, 'quiet'), {
+    answer: () => ({status: 200, url: '/', body: answerPage(dashboard(MIXED, 'quiet'))}),
+  });
+  const doc = win.document;
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+  const rows = doc.querySelectorAll('#phones tbody tr:not(#nohits)');
+  assert.equal(rows.length, 2, 'the swap brought the second row');
+
+  fire(doc.querySelector('#seg button[data-show=free]'), 'click');
+
+  assert.equal(rows[0].hidden, false, 'the free one stays');
+  assert.equal(rows[1].hidden, true, 'the one with somebody is filtered out');
+  assert.equal(doc.getElementById('tally').textContent, '1 of 2 shown');
+});
+
+test('the toast a press left is not part of the page\'s shape', async () => {
+  // `sayIt` puts the banner at the top of <main>, where the server never
+  // draws one - so for as long as it was up the shapes differed, and the
+  // seconds after every press took the whole-of-main path, which threw
+  // the toast (and its Undo) away early.
+  const win = consoleIn(dashboard(ONE, 'quiet'), {
+    answer: () => ({status: 200, url: '/', body: answerPage(dashboard(TWO, 'quiet'))}),
+  });
+  const doc = win.document;
+  const said = doc.createElement('p');
+  said.className = 'said toast up';
+  said.textContent = 'x@y is back on the shelf';
+  const main = doc.querySelector('main');
+  main.insertBefore(said, main.firstChild);
+  const form = doc.querySelector('form.byhand');
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.equal(doc.querySelector('.said'), said, 'the toast was thrown away');
+  assert.equal(doc.querySelector('form.byhand'), form,
+               'and the whole-of-main path ran under it');
+  assert.equal(doc.querySelectorAll('#phones tbody tr:not(#nohits)').length, 2);
+});
+
+test('a region that differs only by the marks init left and the press token is not rebuilt',
+     async () => {
+  // `once` stamps data-bound on every node it binds, and every form is
+  // drawn with a fresh one-time `press` token; the server never draws
+  // the first and never draws the second twice - so a region with a
+  // form in it was never equal to its fresh copy and was rebuilt on
+  // every tick, for nothing.
+  let draw = 0;
+  const strip = (text) => `
+    <div class="wide">
+      <div class="alerts" data-live="alerts">
+        <div class="alert" data-alert="late">${text}<button data-dismiss>x</button>
+          <form method="post" action="/service/pause">
+            <input type="hidden" name="press" value="tok${++draw}"><button>Pause</button>
+          </form></div>
+      </div>
+      <form method="post" action="/phones/3801/state" class="press"><button>Done</button></form>
+      <div data-live="phones"><table id="phones"><tbody>${ONE}</tbody></table></div>
+    </div>`;
+  const win = consoleIn(strip('the pass is late'), {
+    answer: () => ({status: 200, url: '/', body: answerPage(strip('the pass is late'))}),
+  });
+  const doc = win.document;
+  const alert = doc.querySelector('.alert');
+  assert.ok(alert.querySelector('[data-dismiss]').dataset.bound, 'init bound it');
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.equal(doc.querySelector('.alert'), alert, 'rebuilt for no change');
+});
+

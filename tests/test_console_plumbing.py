@@ -366,6 +366,11 @@ def test_a_quick_command_is_not_measured_against_a_builds_clock():
                                quick_after=600)
     sql = conn.sql[0]
     assert "CASE WHEN verb = ANY(%s) THEN %s ELSE %s END" in sql
+    # And a quick row gets a sentence that is true of it: "see the
+    # phones' stories" was written over a Free the web had been
+    # recreated under (2026-09-21, found by audit).
+    assert "press it again if it is still wanted" in sql
+    assert "see the phones'' stories" in sql
 
 
 def test_the_sweep_still_has_one_clock_when_nothing_is_named_quick():

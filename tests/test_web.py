@@ -6023,7 +6023,7 @@ def test_the_claude_card_stands_under_spotify_shut(web, monkeypatch):
     assert "<button" not in card, "no door"
     assert 'data-sheet="claude"' not in body, "no sheet either"
     # Under Spotify, in the right rail.
-    side = body[body.index('<aside class="side">'):]
+    side = body[body.index('<aside class="side" data-live="side">'):]
     assert side.index("Spotify accounts") < side.index("Claude accounts")
 
 
@@ -8794,8 +8794,24 @@ def test_the_phone_table_is_a_region_the_server_owns(web, monkeypatch):
     _, _, body = client.request("GET", "/")
 
     assert '<div data-live="phones">' in body
-    assert body.count('data-live=') == 1, (
-        "one region so far - the rest follow one at a time")
+    # Every block the server draws, by name. The table was the only
+    # region for a day, and the swap - finding it - returned before
+    # touching anything else: the status line, the alert strip, the
+    # counts, the accounts card, the build card and the GeeLark foot
+    # stood still from the moment the tab was opened until it was
+    # reloaded (2026-09-21, found by audit the same evening). A block
+    # added to <main> has to declare itself here or it never moves.
+    regions = re.findall(r'data-live="([a-z]+)"', body)
+    assert sorted(regions) == sorted(
+        ["alerts", "top", "rail", "tally", "phones", "build", "side",
+         "foot"]), regions
+    assert len(regions) == len(set(regions)), "a region is one node"
+    # And none of them inside another: `swapRegions` replaces each
+    # region's children, and a region under a region would be replaced
+    # twice - once with its own copy, once as part of its parent's.
+    for name in regions:
+        at = body.index(f'data-live="{name}"')
+        assert body.rfind("<main", 0, at) >= 0
     js = assets.JS
     assert "if (!held && sameBones(here, fresh) && swapRegions(here, fresh))" \
         in js

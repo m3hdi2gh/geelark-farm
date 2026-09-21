@@ -32,54 +32,65 @@
     return true;
   }
 
-  function init(){
+  // Which of the three views is on, and the rows it is applied to -
+  // read off the page each time. Both lived inside `init()`, so the
+  // chip's click handler, bound once per button and the buttons being
+  // outside the phone region, closed over the `<tr>` nodes of the page
+  // as first drawn: after the region swap replaced them a press moved
+  // the counter and not the table, and the filter landed by itself
+  // whenever the next tick happened to run `init` again - up to thirty
+  // seconds later (2026-09-21, found by audit).
+  var viewWant = null;
+  function sift(){
+    if (viewWant === null) viewWant = (store && store.getItem('gf.view')) || '';
+    var want = viewWant;
     // Not the "nothing matches" row: it lives in the same tbody and would
     // otherwise count itself as a phone.
     var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
     var tally = document.getElementById('tally');
-    var seg = document.getElementById('seg');
     var none = document.getElementById('nohits');
-    var want = (store && store.getItem('gf.view')) || '';
-    function sift(){
-      var shown = 0;
-      rows.forEach(function(tr){
-        var hit = !want || tr.dataset.view === want;
-        tr.hidden = !hit;
-        if (hit) shown++;
-      });
-      if (none) {
-        // What "nothing" means here. It was one fixed sentence about a
-        // search, shown after pressing "With me" on a quiet morning -
-        // and there is no search on this table (2026-09-07).
-        var cell = none.firstElementChild;
-        if (cell) cell.textContent =
-          want === 'mine'
-            ? 'You are not holding any phone - press Free to see what you '
-              + 'can take.'
-          : want === 'free'
-            ? 'Nothing is free right now - the keeper is building.'
-            : 'Nothing here matches that.';
-        none.hidden = shown > 0;
-      }
-      if (tally) tally.textContent = want
-        ? shown + ' of ' + rows.length + ' shown'
-        : rows.length + (rows.length === 1 ? ' phone' : ' phones');
+    var shown = 0;
+    rows.forEach(function(tr){
+      var hit = !want || tr.dataset.view === want;
+      tr.hidden = !hit;
+      if (hit) shown++;
+    });
+    if (none) {
+      // What "nothing" means here. It was one fixed sentence about a
+      // search, shown after pressing "With me" on a quiet morning -
+      // and there is no search on this table (2026-09-07).
+      var cell = none.firstElementChild;
+      if (cell) cell.textContent =
+        want === 'mine'
+          ? 'You are not holding any phone - press Free to see what you '
+            + 'can take.'
+        : want === 'free'
+          ? 'Nothing is free right now - the keeper is building.'
+          : 'Nothing here matches that.';
+      none.hidden = shown > 0;
     }
+    if (tally) tally.textContent = want
+      ? shown + ' of ' + rows.length + ' shown'
+      : rows.length + (rows.length === 1 ? ' phone' : ' phones');
+  }
+
+  function init(){
+    var seg = document.getElementById('seg');
     if (seg) {
       seg.hidden = false;
+      sift();
       seg.querySelectorAll('button').forEach(function(b){
-        b.setAttribute('aria-pressed', String(b.dataset.show === want));
+        b.setAttribute('aria-pressed', String(b.dataset.show === viewWant));
         if (!once(b, 'seg')) return;
         b.addEventListener('click', function(){
-          want = b.dataset.show;
-          if (store) store.setItem('gf.view', want);
+          viewWant = b.dataset.show;
+          if (store) store.setItem('gf.view', viewWant);
           seg.querySelectorAll('button').forEach(function(o){
             o.setAttribute('aria-pressed', String(o === b));
           });
           sift();
         });
       });
-      sift();
     }
 
     // An alert, put away for this tab. It comes back in a new one: the
@@ -1121,12 +1132,36 @@
     return mine.length > 0 && mine.join('\u0001') === theirs.join('\u0001');
   }
   function shape(root){
+    // Not the toast: `sayIt` puts it at the top of <main>, the server
+    // never draws one there, and for as long as it was up the shapes
+    // differed - so the seconds after every press, the very ones the
+    // region swap exists for, took the whole-of-main path and killed the
+    // toast early (2026-09-21, found by audit).
     return Array.prototype.slice.call(root.children)
-      .filter(function(n){ return !n.matches('script'); })
+      .filter(function(n){ return !n.matches('script, .said'); })
       .map(function(n){
         return n.tagName + '.' + (n.className || '') + '#' + (n.id || '')
              + '[' + (n.dataset.live || '') + ']';
       });
+  }
+
+  // What a region is compared as: without the two things that differ
+  // between any two drawings of the same page. The marks `once` leaves
+  // on the nodes it has bound, which the server never draws; and the
+  // one-time `press` token every form is drawn with afresh - the same
+  // token keepSheet leaves out when it compares rows. With either in,
+  // no region that held a form was ever "the same", and every one of
+  // them was rebuilt on every tick: the build card under a hand
+  // reaching for its select, the foot's breathing dot restarted
+  // (2026-09-21, seen on the devserver).
+  function comparable(node){
+    var copy = node.cloneNode(true);
+    copy.removeAttribute('data-bound');
+    Array.prototype.forEach.call(copy.querySelectorAll('[data-bound]'),
+      function(n){ n.removeAttribute('data-bound'); });
+    Array.prototype.forEach.call(copy.querySelectorAll('input[name="press"]'),
+      function(n){ n.setAttribute('value', ''); });
+    return copy;
   }
 
   // Each region's new contents in place of its old, and nothing else
@@ -1147,7 +1182,7 @@
       // answer cannot be trusted the region is replaced, which is what
       // it did before.
       var same = typeof mine.isEqualNode === 'function'
-              && mine.isEqualNode(bring);
+              && comparable(mine).isEqualNode(comparable(bring));
       if (!same)
         mine.replaceChildren.apply(
           mine, Array.prototype.slice.call(bring.childNodes));

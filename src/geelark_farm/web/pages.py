@@ -3181,9 +3181,19 @@ def dashboard(data: dict, user: dict, said: str = "",
     # routines doing the putting back, and the caret covered by none of
     # them. What is inside a region is the server\'s; what is outside it
     # is left exactly as it stands, so there is nothing to put back
-    # (2026-09-21). The phone table first; the rest follow one at a
-    # time, and each reconstruction routine goes when its last caller
-    # does.
+    # (2026-09-21).
+    #
+    # Every block the server draws is one. The table was the first and
+    # for a day the only region - and the swap, finding it, returned
+    # before touching anything else, so the status line, the alert
+    # strip, the stock counts, the accounts card, the build card and the
+    # GeeLark foot stood still from the moment the tab was opened until
+    # it was reloaded (2026-09-21, found by audit the same evening). A
+    # block outside every region is a block that never moves; the test
+    # that names these regions is what stops the next block being
+    # forgotten. The pool manager's mount is the one thing left out on
+    # purpose: the sheets under it are fetched, and replacing its
+    # children would throw them away every tick.
     table = (f'<div data-live="phones">'
              f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>account</th><th>ip</th>'
@@ -3213,7 +3223,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     # `hidden` until the script says otherwise: three buttons that do
     # nothing are worse than none, and the page must still read without it.
     tools = (f'<div class="row"><h3>Phones</h3>'
-             f'<span class="dim mono" id="tally">'
+             f'<span class="dim mono" id="tally" data-live="tally">'
              f'{_plural(len(on_the_shelf), "phone")}</span>'
              f'<span class="seg" id="seg" role="group" aria-label="Show" hidden>'
              f'<button type="button" data-show="" aria-pressed="true">All'
@@ -3227,7 +3237,7 @@ def dashboard(data: dict, user: dict, said: str = "",
     main = (_said(said, _DASH_SAID, user, said_note) + warning + tools
             + f'<div class="slab"><div class="tscroll">{table}</div>'
               f'</div>{hint}'
-            + _build_card(data, user))
+            + f'<div data-live="build">{_build_card(data, user)}</div>')
     # The pools and the one form. Two panels went (2026-09-05, the
     # operator: "we still see attention here"), because the manager each
     # card opens is where both of them already lived:
@@ -3258,20 +3268,25 @@ def dashboard(data: dict, user: dict, said: str = "",
     # (the operator, 2026-09-05). What is left for the strip is what has
     # no card: the breaker, a late pass, an error in the log. `page()` is
     # told nothing is left for it to add.
-    body = (f'<div class="wide">{strip}'
-            f'<div class="top"><h2>Instance manager</h2>'
+    # The wrappers around the strip and the foot are there even when
+    # either is empty: a region has to exist on both sides of a swap to
+    # be swapped, and a block that comes and goes changes the page's
+    # shape, which is the whole-of-main path.
+    body = (f'<div class="wide"><div data-live="alerts">{strip}</div>'
+            f'<div class="top" data-live="top"><h2>Instance manager</h2>'
             f'<span class="status">{_status_sentence(data)}'
             f'{_controls(data, user)}</span>'
             f'{_who_and_out(user)}</div>'
             f'<div class="desk">'
-            f'<div class="rail"><p class="railcap">Built from</p>{supply}</div>'
+            f'<div class="rail" data-live="rail"><p class="railcap">Built '
+            f'from</p>{supply}</div>'
             f'<div class="deskmain">{main}</div>'
-            f'<aside class="side"><p class="railcap">Signed in on phones</p>'
-            f'{side}</aside></div>'
+            f'<aside class="side" data-live="side"><p class="railcap">Signed '
+            f'in on phones</p>{side}</aside></div>'
             f'</div>' + _pool_manager(data, user, manual_login)
             # The ground the farm stands on, at the bottom, where it is
             # scrolled to rather than looked at.
-            + _geelark_line(data, user)
+            + f'<div data-live="foot">{_geelark_line(data, user)}</div>'
             )
     # The page keeps itself current: every ten seconds while something is
     # being built, every thirty otherwise - so a build that starts after
