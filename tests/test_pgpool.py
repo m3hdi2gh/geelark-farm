@@ -123,6 +123,13 @@ class MemoryTable:
             and (hold_tries_from is None
                  or int(r.get("tries") or 0) < hold_tries_from))
 
+    def leave_refund_list(self, row_id):
+        r = self._rows[row_id]
+        if r.get("refund_state"):
+            r["refund_state"] = ""
+            r["refund_at"] = None
+            self.updates.append((row_id, {"refund_state": ""}))
+
     def touch_state(self, row_id):
         self._rows[row_id]["state_changed_at"] = _now()
 
@@ -1261,3 +1268,30 @@ def test_a_pool_loads_its_rows_the_first_time_they_are_read_after_unload():
     src = inspect.getsource(Book.pools_only)
     assert "pool.unload()" in src and "book.reload()" in src
     assert "lazy=True" in inspect.getsource(runner.run_now)
+
+
+def test_a_person_freeing_a_gmail_takes_it_off_the_refund_list():
+    """`release` wrote status='' and left `refund_state` where the
+    refusal put it, and every claim filters that column out - so a
+    corrected row counted as queued everywhere the console counts and
+    was never handed to a build; a week of corrections and the queued
+    count drifted above what the builders could take (2026-09-21,
+    found by audit)."""
+    import inspect
+
+    table, pool = gmails(n=1)
+    row = pool._rows[0]
+    table.update(row.store_id, {"status": "wrong_password",
+                                "refund_state": "to_claim"})
+    row.values["Status"] = "wrong_password"
+    assert table.free_count("gmail", free=("",)) == 0
+
+    pool.release(row, note="Put back on the shelf by mehdi.")
+
+    assert table.row(row.store_id)["status"] == ""
+    assert table.row(row.store_id)["refund_state"] == "", "off the list"
+    assert table.free_count("gmail", free=("",)) == 1, "stock again"
+    # The real table clears both columns, and only where there was one.
+    src = inspect.getsource(pgpool.ResourceTable.leave_refund_list)
+    assert "refund_state = ''" in src and "refund_at = NULL" in src
+    assert "coalesce(refund_state, '') <> ''" in src

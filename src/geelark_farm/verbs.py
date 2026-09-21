@@ -60,12 +60,22 @@ def add_gmails(book, ledger, settings, payload, client):
         if book.gmails.find(checked["address"]) is not None:
             skipped.append(checked["address"])
             continue
-        book.gmails.append(**{
-            "Purchase Date": bought, "Seller": seller,
-            "Address": checked["address"], "Password": checked["password"],
-            "Secret": checked["recovery_email"] or checked["totp_secret"],
-            "Status": "",
-            "Note": f"Added from the web by {_by(payload)} on {_stamp()}."})
+        try:
+            book.gmails.append(**{
+                "Purchase Date": bought, "Seller": seller,
+                "Address": checked["address"],
+                "Password": checked["password"],
+                "Secret": checked["recovery_email"] or checked["totp_secret"],
+                "Status": "",
+                "Note": f"Added from the web by {_by(payload)} on {_stamp()}."})
+        except ValueError:
+            # In the table under a row `find` cannot see - one whose
+            # cells never parsed, or a spent one. The paste used to die
+            # here mid-loop, rows after it never added and never
+            # reported, under a banner that said "Queued" (2026-09-21,
+            # found by audit).
+            skipped.append(checked["address"])
+            continue
         added.append(checked["address"])
     return _summary("gmail", added, skipped, refused, settings, _by(payload))
 
@@ -361,14 +371,19 @@ def add_gpt(book, ledger, settings, payload, client):
         # written exactly as it always was: neither cell is touched.
         kinds = ({"Category": "eco",
                   "Credential kind": ECO_CREDENTIAL_KIND} if eco else {})
-        book.apps.append(**{
-            "Address": checked["address"], "Password": checked["password"],
-            "2FA Secret": checked["totp_secret"], "Status": "",
-            "Email code": "TRUE" if checked["email_code_only"] else "FALSE",
-            "Note": (f"Added from the web by {_by(payload)} on {_stamp()}"
-                     + (" as an eco account - a code is emailed to it."
-                        if eco else ".")),
-            **kinds})
+        try:
+            book.apps.append(**{
+                "Address": checked["address"],
+                "Password": checked["password"],
+                "2FA Secret": checked["totp_secret"], "Status": "",
+                "Email code": "TRUE" if checked["email_code_only"] else "FALSE",
+                "Note": (f"Added from the web by {_by(payload)} on {_stamp()}"
+                         + (" as an eco account - a code is emailed to it."
+                            if eco else ".")),
+                **kinds})
+        except ValueError:                 # see add_gmails
+            skipped.append(checked["address"])
+            continue
         added.append(checked["address"])
     return _summary("eco account" if eco else "account", added, skipped,
                     refused, settings, _by(payload))
@@ -408,12 +423,17 @@ def add_spotify(book, ledger, settings, payload, client):
         if book.apps.find(checked["address"]) is not None:
             skipped.append(checked["address"])
             continue
-        book.apps.append(**{
-            "Address": checked["address"], "Password": checked["password"],
-            "2FA Secret": "", "Status": "", "Product": "spotify",
-            "Category": category, "Credential kind": "password",
-            "Note": (f"Added from the web by {_by(payload)} on {_stamp()} "
-                     f"as a {category} account.")})
+        try:
+            book.apps.append(**{
+                "Address": checked["address"],
+                "Password": checked["password"],
+                "2FA Secret": "", "Status": "", "Product": "spotify",
+                "Category": category, "Credential kind": "password",
+                "Note": (f"Added from the web by {_by(payload)} on {_stamp()} "
+                         f"as a {category} account.")})
+        except ValueError:                 # see add_gmails
+            skipped.append(checked["address"])
+            continue
         added.append(checked["address"])
     return _summary("spotify account", added, skipped, refused, settings,
                     _by(payload))
@@ -526,9 +546,13 @@ def add_proxies(book, ledger, settings, payload, client):
                 log.info("%s did not answer on arrival: %s", name, exc)
                 status = book.proxies.dead_status
                 note = f"Added from the web, but it did not answer: {exc}"
-        book.proxies.append(**{
-            "Name": name, "Proxy String": raw, "Status": status,
-            "Note": note, "Last Exit IP": exit_ip, "Times Used": "0"})
+        try:
+            book.proxies.append(**{
+                "Name": name, "Proxy String": raw, "Status": status,
+                "Note": note, "Last Exit IP": exit_ip, "Times Used": "0"})
+        except ValueError:                 # see add_gmails
+            skipped.append(f"{checked['host']}:{checked['port']}")
+            continue
         added.append(name)
     return _summary("proxy", added, skipped, refused, settings, _by(payload))
 
@@ -660,6 +684,18 @@ def mark_proxy_free(book, ledger, settings, payload, client):
     resource, refused = _named(book, payload)
     if refused:
         return refused
+    # The guard the button promises ("only if the build that took it is
+    # gone"), the one `remove_proxy` has: a row a build claimed seconds
+    # ago is drawn as `starting` with a Free door on it, and Free tested
+    # the exit (it answers - it is in use, not broken) and put it back
+    # on the shelf under the build, so the next build took the same
+    # exit and two phones sat behind one address (2026-09-21, found by
+    # audit).
+    status = book.proxies.status_of(resource)
+    if status in (book.proxies.spent_status, book.proxies.claimed_status):
+        return ("refused", f"{resource.name} is {status} - a phone is behind "
+                           f"it; it can be freed once that build is gone",
+                None)
     ok, exit_ip, why = _test(book, client, resource, tries=3)
     if not ok:
         book.proxies.fail(resource, book.proxies.dead_status, note=(

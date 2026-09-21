@@ -988,6 +988,60 @@ def test_free_refuses_a_row_a_phone_is_behind():
     assert status == "refused" and "a phone is behind it" in said
 
 
+def test_free_refuses_a_proxy_a_phone_is_behind(monkeypatch, make_settings):
+    """The button's own words are "only if the build that took it is
+    gone", and the verb had no such guard: a row a build claimed seconds
+    ago is drawn as `starting` with a Free door, Free tested the exit -
+    it answers, it is in use - and put it back on the shelf under the
+    build, so the next build took the same exit and two phones sat
+    behind one address (2026-09-21, found by audit)."""
+    settings = make_settings(store_enabled=True)
+    tested = []
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda c, p: tested.append(p) or {"outboundIP": "1.1.1.1"})
+    for taken in ("claimed", "on a phone"):
+        book, row, said = _exit(status=taken)
+        status, msg, _ = verbs.mark_proxy_free(
+            book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
+        assert status == "refused" and "a phone is behind it" in msg, taken
+        assert row.values["Status"] == taken and said == [], "untouched"
+    assert tested == [], "refused before the test, not after it"
+
+
+def test_a_paste_survives_a_row_the_table_holds_and_find_cannot_see():
+    """`find` matches on parsed credentials, so a row whose cells never
+    parsed (or a spent one) is invisible to the duplicate check and
+    visible to the table's unique index: `append` raised out of the
+    loop, the rows after it were never added and never reported, and
+    the banner said "Queued" (2026-09-21, found by audit)."""
+    book = make_book(gmails=0)
+    real = book.gmails.append
+
+    def append(**fields):
+        if fields["Address"] == "broken@x.com":
+            raise ValueError("already in the pool")
+        return real(**fields)
+
+    book.gmails.append = append
+    status, said, detail = verbs.add_gmails(book, None, None, {
+        "by": "mehdi", "seller": "usa",
+        "rows": [{"address": "first@x.com", "password": "pw",
+                  "secret": SECRET, "recovery": ""},
+                 {"address": "broken@x.com", "password": "pw",
+                  "secret": SECRET, "recovery": ""},
+                 {"address": "after@x.com", "password": "pw",
+                  "secret": SECRET, "recovery": ""}]}, None)
+    assert status == "done"
+    assert said == "2 gmails added, 1 already in the pool"
+    assert book.gmails.find("after@x.com") is not None, "the loop went on"
+    assert detail["skipped"] == ["broken@x.com"]
+    # All four add verbs, the same way.
+    import inspect
+    for verb in (verbs.add_gmails, verbs.add_gpt, verbs.add_spotify,
+                 verbs.add_proxies):
+        assert "except ValueError:" in inspect.getsource(verb), verb.__name__
+
+
 def test_a_paste_can_say_when_the_stock_was_bought():
     """`purchased_on` is the column the "how old is this stock" question is
     answered from, and the add stamped today whatever the person meant - so
@@ -1348,6 +1402,8 @@ def _exit(name="SX1", host="10.0.0.9", status="suspect"):
 
     class Proxies:
         dead_status = "dead"
+        claimed_status = "claimed"
+        spent_status = "on a phone"
         available_statuses = frozenset({"", "free", "unused"})
 
         def find_by_name(self, n):

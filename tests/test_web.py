@@ -5785,19 +5785,20 @@ def test_a_refund_row_offers_the_two_words_to_whoever_may_add_gmails():
     admin = {"username": "mehdi", "role": "admin", "mutations": True,
              "csrf": "t"}
 
-    cell = pages._refund_cell(owed, admin, "errored", "hoavan1")
+    # The cell is handed where the person is, page and all (2026-09-21).
+    here = "/pools/gmail?view=errored&seller=hoavan1&page=2"
+    cell = pages._refund_cell(owed, admin, here)
     assert "To claim back" in cell
     assert cell.count('action="/pools/gmail/refund"') == 2
     assert 'value="claimed"' in cell and 'value="refused"' in cell
-    assert "seller=hoavan1" in cell, "it comes back to the list it was on"
+    assert "seller=hoavan1&amp;page=2" in cell, "it comes back to the list it was on"
 
-    assert "back in the queue" in pages._refund_cell(waiting, admin,
-                                                     "errored", "")
+    assert "back in the queue" in pages._refund_cell(waiting, admin, here)
     assert pages._refund_cell(
-        dict(owed, refund_state="claimed"), admin, "errored", "") == (
+        dict(owed, refund_state="claimed"), admin, here) == (
         '<span class="badge green">Paid back</span>'), "settled, no buttons"
     looker = {"username": "ali", "role": "operator", "mutations": False}
-    assert "action=" not in pages._refund_cell(owed, looker, "errored", "")
+    assert "action=" not in pages._refund_cell(owed, looker, here)
 
 
 
@@ -9259,3 +9260,115 @@ def test_pool_row_is_the_sheets_own_query_narrowed_to_one_address(monkeypatch):
     asked.clear()
     read.credentials(None, "gmail", "a@x.com")
     assert "password" in asked[0][0] and "LIMIT 1" in asked[0][0]
+
+
+# ------------------------------------ the back-URL rebuild, finished
+def test_the_refund_buttons_come_back_to_the_page_they_were_pressed_on():
+    """`_refund_cell` rebuilt its own back from the view and the seller
+    and forgot the page, so Paid on page three of a seller's list - the
+    two presses made over and over while working a refund list - came
+    back to page one (2026-09-21, found by audit)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True, "sees": "all",
+            "username": "mehdi", "nav": {}}
+    row = {"id": 214, "address": "owed@gmail.com", "status": "wrong_password",
+           "updated_at": "2026-09-19 10:00:00+00", "seller": "ali",
+           "refund_state": "to_claim", "totp_secret": "", "recovery_email": "",
+           "password": "p"}
+    data = {"rows": [row], "view": "errored", "counts": {}, "seller": "ali",
+            "page": 3, "pages": 3, "known_sellers": ["ali"]}
+    drawn = pages.gmail_pool_page(data, user, advice=lambda s: None)
+    here = "/pools/gmail?view=errored&amp;seller=ali&amp;page=3"
+    refund = drawn[drawn.index('action="/pools/gmail/refund"'):]
+    assert f'name="back" value="{here}"' in refund[:600], "Paid carries the page"
+    # Paid, Not paid - and the Free door after them carries it too.
+    assert refund.count(f'name="back" value="{here}"') == 3, "and Not paid"
+    # And the server keeps it: page is among what the rebuild allows.
+    assert app_mod._back_to({"back": "/pools/gmail?view=errored&seller=ali&page=3"},
+                            "/pools/gmail") == \
+        "/pools/gmail?view=errored&seller=ali&page=3"
+
+
+def test_offer_again_comes_back_to_the_set_aside_list_it_was_pressed_on():
+    """The Offer again form carried no back and its route named the bare
+    path - the Waiting view - so a press on page two of the set-aside
+    list drew the Waiting list under an address bar that still said
+    otherwise. And `_BACK_VIEWS` for the GPT pool listed a `set_aside`
+    the page never had and lacked the `needs_human` it has, so no door
+    could have come back to it anyway (2026-09-21, found by audit)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gpt": True, "may_login_accounts": True,
+            "sees": "all", "username": "mehdi", "nav": {}}
+    row = {"id": 7, "address": "set@x.com", "status": "no_code", "serial": "",
+           "note": "", "source": "web", "updated_at": "2026-09-19 10:00:00+00"}
+    data = {"rows": [row], "view": "needs_human", "counts": {}, "q": "",
+            "page": 2, "pages": 2}
+    drawn = pages.gpt_pool_page(data, user, manual_login=True)
+    assert 'action="/pools/gpt/offer"' in drawn
+    assert 'name="back" value="/pools/gpt?view=needs_human&amp;page=2"' in drawn
+    assert tuple(pages.GPT_VIEWS) == app_mod._BACK_VIEWS["/pools/gpt"], (
+        "the rebuild allows exactly the views the page has")
+    assert app_mod._back_to({"back": "/pools/gpt?view=needs_human&page=2"},
+                            "/pools/gpt") == "/pools/gpt?view=needs_human&page=2"
+    # The Waiting view's first page is the bare path, as it always was.
+    assert pages._gpt_here("waiting", "", 1) == "/pools/gpt"
+    assert pages._gpt_here("delivered", "a b", 3) == \
+        "/pools/gpt?view=delivered&q=a%20b&page=3"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_offer_door_returns_where_the_form_said(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm import runner as runner_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda *a, **k: 73)
+    monkeypatch.setattr(actions_mod, "claim", lambda *a, **k: True)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda *a, **k: {"result": "ok"})
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda *a, **k: ("done", "offered", None))
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/gpt/offer",
+        _form(csrf=client.csrf(), address="set@x.com",
+              back="/pools/gpt?view=needs_human&page=2"))
+    assert status == 303
+    assert dict(headers)["Location"] == \
+        "/pools/gpt?view=needs_human&page=2&said=done:73"
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_log_in_selected_comes_back_with_the_search_and_the_page(
+        web, monkeypatch):
+    """The login door matched its back whole against two bare paths, so
+    ticks on page two of a search came back to page one of the plain
+    list (2026-09-21, found by audit). Rebuilt like every other door,
+    and still only to the two pages with ticks on them."""
+    import geelark_farm.store.actions as actions_mod
+
+    _gpt_active(monkeypatch, waiting=[_app_row("a@x.com")], on_phone=[])
+    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 94)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
+    client = web()
+    client.login()
+    _, headers, _ = client.request(
+        "POST", "/accounts/login",
+        _form(csrf=client.csrf(), back="/pools/gpt?q=abc&page=2")
+        + "&addresses=a%40x.com")
+    assert dict(headers)["Location"] == "/pools/gpt?q=abc&page=2&said=queued:94"
+    _, headers, _ = client.request(
+        "POST", "/accounts/login",
+        _form(csrf=client.csrf(), back="/pools/gpt?q=abc&page=2"))
+    assert dict(headers)["Location"] == "/pools/gpt?q=abc&page=2&said=none"
+    for elsewhere in ("/pools/gmail?view=queued", "/evil", "/requests"):
+        _, headers, _ = client.request(
+            "POST", "/accounts/login",
+            _form(csrf=client.csrf(), back=elsewhere) + "&addresses=a%40x.com")
+        assert dict(headers)["Location"] == "/?said=queued:94", elsewhere

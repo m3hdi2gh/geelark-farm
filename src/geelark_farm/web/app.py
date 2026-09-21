@@ -510,10 +510,9 @@ class _Handler(BaseHTTPRequestHandler):
                     idem=self._minute_key(user, "byhand", f"spotify:{address}"),
                     back="/", said_word="asked")
             if self.path == "/accounts/login":
-                back = field.get("back") or "/"
                 return self._login_accounts(
                     user, form.get("addresses") or [],
-                    back=back if back in LOGIN_BACKS else "/",
+                    back=_login_back(field),
                     serial=(field.get("serial") or "").strip())
             if self.path.startswith("/requests/") and \
                     self.path.endswith("/retry"):
@@ -962,7 +961,7 @@ class _Handler(BaseHTTPRequestHandler):
         manual login on: off, the pass logs accounts in by itself and
         the button would race it for the same rows."""
         if not self.settings.manual_login:
-            return self._redirect(f"{back}?said=auto")
+            return self._redirect(_said_url(back, "auto"))
         chosen = [a.strip() for a in addresses if a and a.strip()]
         if not chosen:
             return self._redirect(_said_url(back, "none"))
@@ -1656,7 +1655,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_add_gpt", "offer_again",
                              {"address": address},
                              idem=self._minute_key(user, "offer", address),
-                             back="/pools/gpt")
+                             back=_add_back(field, "/pools/gpt"))
         self._html(404, pages.page("404", "<h2>Nothing here</h2>", user=user))
 
     # -------------------------------------------------------------- users
@@ -2302,6 +2301,15 @@ class _Handler(BaseHTTPRequestHandler):
 #: carry the ticks. Anything else in the form's `back` goes to the front.
 LOGIN_BACKS = ("/", "/pools/gpt")
 
+
+def _login_back(field: dict) -> str:
+    """Where "Log in selected" comes back to: one of the two pages with
+    ticks on it, rebuilt with its view, search and page (`_back_to`).
+    It was matched whole, so ticks on page two of a search came back to
+    page one of the plain list (2026-09-21, found by audit)."""
+    back = _back_to(field, "/")
+    return back if back.partition("?")[0] in LOGIN_BACKS else "/"
+
 #: Where a gmail button may send a person back to - the view it was
 #: pressed on, so the banner lands where the row is.
 #: Where a pool button may send a person back to, and what it may carry.
@@ -2328,7 +2336,11 @@ _BACK_PATHS = {
 _BACK_VIEWS = {
     "/pools/gmail": ("queued", "on_phone", "used", "errored"),
     "/pools/proxy": ("free", "needs_hand", "on_phone", "all", "dead"),
-    "/pools/gpt": ("waiting", "on_phone", "delivered", "set_aside"),
+    # The page's own views (pages.GPT_VIEWS): this list once carried a
+    # `set_aside` the page never had and lacked the `needs_human` it
+    # has, so no door could come back to the set-aside list
+    # (2026-09-21, found by audit).
+    "/pools/gpt": ("waiting", "on_phone", "needs_human", "delivered"),
 }
 
 

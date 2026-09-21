@@ -5120,7 +5120,7 @@ def gmail_pool_page(data: dict, user: dict, said: str = "", *,
              f'<td>{_reason_words(str(r["status"]))}</td>'
              f'<td class="muted">{_why(r, advice)}</td>'
              f'<td class="muted">{_when(r["updated_at"])}</td>'
-             f'<td class="act">{_refund_cell(r, user, view, seller)}</td>'
+             f'<td class="act">{_refund_cell(r, user, here)}</td>'
              + (f'<td class="act">{_errored_actions(user, r, here)}</td>'
                 if acts else "") + "</tr>")
             for r in rows)
@@ -5198,12 +5198,17 @@ _REFUND_WORDS = {"to_claim": ("To claim back", "red"),
                  "refused": ("Seller refused", "manual")}
 
 
-def _refund_cell(row: dict, user: dict, view: str, seller: str) -> str:
+def _refund_cell(row: dict, user: dict, back: str) -> str:
     """Where one errored address stands: coming back on its own, or money.
 
     The two piles used to read the same, so a captcha - which signs in two
     times in three on its next try - sat in front of a seller beside a
     password that was never right (the operator, 2026-09-12).
+
+    `back` is where the person is, page and all. It was rebuilt here
+    from the view and the seller, so Paid on page three of a seller's
+    list - the two presses made over and over while working a refund
+    list - came back to page one (2026-09-21, found by audit).
     """
     state = str(row.get("refund_state") or "")
     if not state:
@@ -5218,8 +5223,6 @@ def _refund_cell(row: dict, user: dict, view: str, seller: str) -> str:
     pill = f'<span class="badge {tone}">{esc(word)}</span>'
     if state != "to_claim" or not _may(user, "may_add_gmail"):
         return pill
-    back = "/pools/gmail?view=errored" + (f"&seller={_q(seller)}"
-                                          if seller else "")
     buttons = "".join(
         f'<form method="post" class="inline" action="/pools/gmail/refund">'
         f'{_csrf(user)}<input type="hidden" name="address" '
@@ -5687,6 +5690,20 @@ GPT_VIEWS = {
 }
 
 
+def _gpt_here(view: str, q: str, page_no: int) -> str:
+    """The Gpt pool address a door comes back to: the bare path for the
+    Waiting view's first page, the parts that differ from it otherwise -
+    the same order `app._back_to` rebuilds them in."""
+    parts = []
+    if view != "waiting":
+        parts.append(f"view={view}")
+    if q:
+        parts.append(f"q={_q(q)}")
+    if page_no > 1:
+        parts.append(f"page={page_no}")
+    return "/pools/gpt" + ("?" + "&".join(parts) if parts else "")
+
+
 def _last_sentence(text) -> str:
     """The sentence a verdict ends on. Every one of them is written as an
     instruction - "Fix the payment ... then blank this status to offer it
@@ -5779,6 +5796,12 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
     pulse = (user.get("nav") or {}).get("pulse") or {}
     warm = None if pulse.get("warm") is None else int(pulse["warm"])
     can_login = manual_login and _may(user, "may_login_accounts")
+    # Where the person is - view, search and page - for every door on
+    # the page to come back to. Offer again carried nothing and its
+    # route named the bare path, so a press on page two of the set-aside
+    # list drew the Waiting list under a bar that still said otherwise
+    # (2026-09-21, found by audit). The bare path is the Waiting view.
+    here = _gpt_here(view, q, int(data.get("page") or 1))
 
     right = ""
     if view == "delivered":
@@ -5830,7 +5853,9 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
                 f'<form method="post" action="/pools/gpt/offer" '
                 f'class="inline">{_csrf(user)}<input type="hidden" '
                 f'name="address" value="{esc(r["address"])}">'
-                f'<button class="quiet warn">Offer again</button></form>'
+                f'<input type="hidden" name="back" value="{esc(here)}">'
+                f'<button class="quiet warn" data-busy="Offering&hellip;">'
+                f'Offer again</button></form>'
                 if offer else "") + "</td></tr>" for r in rows)
         empty = "nothing has been set aside for a person"
     else:
@@ -5875,7 +5900,7 @@ def gpt_pool_page(data: dict, user: dict, said: str = "", *,
     panel = f'<div class="panel wrap">{table}{foot}{pager}</div>'
     if view == "waiting" and can_login:
         panel = (f'<form method="post" action="/accounts/login">{_csrf(user)}'
-                 f'<input type="hidden" name="back" value="/pools/gpt">'
+                 f'<input type="hidden" name="back" value="{esc(here)}">'
                  f'{panel}</form>')
     body += panel
 

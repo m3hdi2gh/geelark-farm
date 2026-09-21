@@ -129,6 +129,21 @@ class ResourceTable:
                 f" WHERE id = %s", [*fields.values(), row_id])
             conn.commit()
 
+    def leave_refund_list(self, row_id: int) -> None:
+        """A person put this row back on the shelf: it is stock again,
+        not a claim on a seller. `release` wrote status='' and left
+        `refund_state` as it was, and every claim filters that column
+        out - so a corrected row counted as queued everywhere the
+        console counts and was never handed to a build (2026-09-21,
+        found by audit)."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE resources SET refund_state = '', refund_at = NULL,"
+                " updated_at = now()"
+                " WHERE id = %s AND coalesce(refund_state, '') <> ''",
+                (int(row_id),))
+            conn.commit()
+
     def free_count(self, kind: str, *, free: tuple[str, ...],
                    hold_tries_from: int | None = None,
                    held_back: tuple[str, tuple] = ("", ())) -> int:
@@ -641,6 +656,14 @@ class PgGmailPool(_PgPool, GmailPool):
         # on, so the build that claims it next can pick another one.
         "Last Host": "last_host",
     }
+
+    def release(self, resource: Resource, *, note: str = "",
+                phone_failed: bool = False) -> None:
+        """Back on the shelf - and off the refund list, which `release`
+        alone left it on (ResourceTable.leave_refund_list)."""
+        super().release(resource, note=note, phone_failed=phone_failed)
+        if resource.store_id is not None:
+            self._table.leave_refund_list(resource.store_id)
 
     def _values_of(self, row: dict) -> dict[str, str]:
         values = super()._values_of(row)
