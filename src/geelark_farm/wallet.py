@@ -13,7 +13,6 @@ import time
 from decimal import Decimal, InvalidOperation
 
 from .api import build_client
-from .store import state
 
 log = logging.getLogger(__name__)
 INTERVAL = 300.0
@@ -46,6 +45,11 @@ def reading(data) -> dict:
 
 def refresh(settings, *, now=None, client=None) -> bool:
     """Reserve a poll in a short transaction; do HTTP after releasing its lock."""
+    # Inside the function, like every other store import outside the
+    # store: `start` runs only with the store on, and the module must
+    # import without it (tests/test_store.py's guard).
+    from .store import state
+
     stamp = time.time() if now is None else now
     claimed = False
 

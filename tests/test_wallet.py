@@ -20,7 +20,11 @@ def cache(monkeypatch):
         kept[key] = fn(copy.deepcopy(kept.get(key, default)))
         return kept[key]
 
-    monkeypatch.setattr(wallet.state, "update", update)
+    # The store module itself: wallet imports it inside `refresh`, behind
+    # the flag, like every store import outside the store.
+    from geelark_farm.store import state
+
+    monkeypatch.setattr(state, "update", update)
     return kept
 
 
