@@ -2886,25 +2886,18 @@ def test_the_stores_breaker_counts_like_the_files_and_imports_it_once(
     from types import SimpleNamespace
 
     from geelark_farm import breaker as breaker_mod
-    from geelark_farm.store import db
     from geelark_farm.store import state as store_state
 
     kept = {}
     monkeypatch.setattr(store_state, "get",
                         lambda s, key, default=None: kept.get(key, default))
-    monkeypatch.setattr(store_state, "put",
-                        lambda conn, key, value: kept.__setitem__(key, value))
 
-    class Conn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def commit(self):
-            pass
-    monkeypatch.setattr(db, "connect", lambda s: Conn())
+    # Every edit - the one-time import of the file included - goes
+    # through `update`, under the row's lock (2026-09-21).
+    def update(s, key, fn, default=None):
+        kept[key] = fn(kept.get(key, default))
+        return kept[key]
+    monkeypatch.setattr(store_state, "update", update)
 
     path = tmp_path / "breaker.json"
     path.write_text('{"consecutive": 2, "reasons": ["a", "b"]}',
