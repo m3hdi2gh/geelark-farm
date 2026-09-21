@@ -1200,3 +1200,64 @@ def test_a_recovery_only_row_still_reads_as_one():
 
     assert not creds.totp_secret and not creds.has_authenticator
     assert creds.recovery_email == "keeper@x.com"
+
+
+# ------------------------------------------- band 4: bytes and milliseconds
+def test_append_reads_its_own_row_back_and_not_the_whole_kind():
+    """A twenty-line paste was twenty whole-table scans: each append read
+    every row of the kind to find the one it had just inserted
+    (2026-09-21, found by audit)."""
+    class Counting(MemoryTable):
+        def __init__(self):
+            super().__init__()
+            self.scans = 0
+
+        def rows(self, kind):
+            self.scans += 1
+            return super().rows(kind)
+
+    table = Counting()
+    _, pool = gmails(table, n=1)
+    before = table.scans
+    made = pool.append(**{"Address": "new@x.com", "Password": "pw",
+                          "Secret": SECRET, "Seller": "usa"})
+    assert made.store_id is not None
+    assert table.scans == before, "the new row is read by its id"
+    assert pool.find("new@x.com") is made
+
+
+def test_a_pool_loads_its_rows_the_first_time_they_are_read_after_unload():
+    """`run_now` built all three pools for every inline press - 140ms on
+    the farm - for verbs that touch one pool or none. Lazy at the one
+    place every read goes through, so a verb that reaches a pool by any
+    path at all gets a loaded one (2026-09-21)."""
+    import inspect
+
+    from geelark_farm import runner
+    from geelark_farm.pools import Book
+
+    class Counting(MemoryTable):
+        def __init__(self):
+            super().__init__()
+            self.loads = []
+
+        def rows(self, kind):
+            self.loads.append(kind)
+            return super().rows(kind)
+
+    table = Counting()
+    table.add("gmail", address="g@x.com", password="pw", totp_secret=SECRET,
+              sheet_row=2, seller="usa")
+    pool = PgGmailPool(table)
+    pool.load()
+    assert table.loads == ["gmail"]
+    pool.unload()
+    assert table.loads == ["gmail"], "unloading reads nothing"
+    assert pool.find("g@x.com") is not None, "the first read loads"
+    assert table.loads == ["gmail", "gmail"]
+    assert pool.find("g@x.com") is not None
+    assert table.loads == ["gmail", "gmail"], "and only once"
+
+    src = inspect.getsource(Book.pools_only)
+    assert "pool.unload()" in src and "book.reload()" in src
+    assert "lazy=True" in inspect.getsource(runner.run_now)

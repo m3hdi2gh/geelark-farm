@@ -130,3 +130,26 @@ def test_the_page_holds_at_twice_the_pool():
     assert (two - one) < extra_rows * 220, (
         f"{two - one:,} more bytes for {extra_rows} more free rows - "
         f"something other than the list is growing with the pool")
+
+
+def test_the_sheet_carries_no_credential_and_fits_its_budget():
+    """The three sheets left the dashboard on 2026-09-20 with ~500
+    passwords and TOTP secrets still in their rows; the budget test
+    asserted only that the dashboard was clean, which is exactly how the
+    dashboard reached a megabyte (2026-09-21, found by audit)."""
+    farm = big_farm()
+    rows = farm["pool_rows"]
+    for kind in ("gmail", "gpt", "spotify", "proxy"):
+        body = pages._pool_sheet(kind, rows[kind], {}, USER)
+        for leak in ("data-password", "data-secret", "Hienluong102@",
+                     "A66OUCIDONRH2WL2EYN3P24MA3J47OKU"):
+            assert leak not in body, f"{leak} is in the {kind} sheet"
+    # 406,453 bytes at 512 rows on the day this was written, ~800 per
+    # row - of which the two forms every row carries are about half. That
+    # cost was looked at and kept: one form per door is what keeps the
+    # one-row answer, the resubmit and the press token working. The
+    # budget is set above today and below where it hurt.
+    gmail = pages._pool_sheet("gmail", rows["gmail"], {}, USER)
+    assert len(gmail) < 450_000, (
+        f"the Gmail sheet is {len(gmail):,} bytes at production volume")
+    assert len(gmail) / max(1, len(rows["gmail"])) < 900, "per row"

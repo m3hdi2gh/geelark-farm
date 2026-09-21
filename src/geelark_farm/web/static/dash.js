@@ -1474,11 +1474,14 @@
     var address = button.dataset.edit;
     f.address.value = address;
     f.new_address.value = address;
-    f.password.value = tr.dataset.password || '';
+    // The password and the key are read for this one row when the door
+    // is pressed - they no longer ride in every row of the sheet. Until
+    // they land the boxes are held, or a Save would write blanks.
+    f.password.value = '';
+    if (f.secret) f.secret.value = '';
     // The Spotify editor has no key and no tick, and a category instead
     // - opened with the row's own kind, or Save would quietly make every
     // edited row `normal` (2026-09-17).
-    if (f.secret) f.secret.value = tr.dataset.secret || '';
     if (f.clear_secret) f.clear_secret.checked = false;
     if (f.category) f.category.value = tr.dataset.cat || 'normal';
     if (f.seller) f.seller.value = tr.dataset.sellername || '';
@@ -1496,30 +1499,58 @@
     f.state.disabled = state === 'on a phone';
     f.state.title = f.state.disabled
       ? 'a phone is behind this row - the phone decides' : '';
-    // What they had typed into this same row and not saved. Put back
-    // after everything above, because the status box's options are
-    // rebuilt there and a value set before that would be dropped.
     dlg.dataset.dirty = '';
     editorQuiet(dlg);
-    var draft = drafts[draftKey(dlg, address)];
-    if (draft) {
-      Object.keys(draft).forEach(function(name){
-        var el = f[name];
-        if (!el || el.disabled) return;
-        if (el.type === 'checkbox') { el.checked = draft[name]; return; }
-        if (el.tagName === 'SELECT'
-            && !Array.prototype.some.call(el.options, function(o){
-                 return o.value === draft[name]; })) return;
-        el.value = draft[name];
-      });
-      dlg.dataset.dirty = '1';
-      // Said out loud: boxes holding something other than what the row
-      // holds are a trap if nobody is told which is which.
-      editorSays(dlg, null, 'Put back what you had typed and not saved. '
-                          + 'Cancel goes back to the row as it is.', false);
-    }
     if (typeof dlg.showModal === 'function') dlg.showModal();
     else dlg.setAttribute('open', '');
+    fillCredentials(dlg, f, sheet.dataset.sheet || button.dataset.pool,
+                    address);
+  }
+  // The one row's password and key, fetched when its Edit is pressed.
+  // The boxes and Save are held until they land; a draft is put back
+  // only after, or the answer would overwrite what was typed.
+  function fillCredentials(dlg, f, kind, address){
+    var held = [f.password, f.secret, dlg.querySelector('button.go')]
+      .filter(Boolean);
+    held.forEach(function(el){ el.disabled = true; });
+    var door = '/pools/' + kind + '/credentials?address='
+             + encodeURIComponent(address);
+    fetch(door, {credentials: 'same-origin'})
+      .then(function(r){ return answer(r, true) ? r.json() : null; })
+      .then(function(creds){
+        if (creds === null) throw new Error('no credentials');
+        if (f.address.value !== address) return;    // another row since
+        f.password.value = creds.password || '';
+        if (f.secret) f.secret.value = creds.secret || '';
+        held.forEach(function(el){ el.disabled = false; });
+        restoreDraft(dlg, f, address);
+      })
+      .catch(function(){
+        editorSays(dlg, null, 'The password and key could not be read; '
+                   + 'saving now would write blanks, so Save is held. '
+                   + 'Close and open the row again.', true);
+      });
+  }
+  // What they had typed into this same row and not saved. Put back
+  // after everything else, because the status box's options are
+  // rebuilt in openEditor and a value set before that would be dropped.
+  function restoreDraft(dlg, f, address){
+    var draft = drafts[draftKey(dlg, address)];
+    if (!draft) return;
+    Object.keys(draft).forEach(function(name){
+      var el = f[name];
+      if (!el || el.disabled) return;
+      if (el.type === 'checkbox') { el.checked = draft[name]; return; }
+      if (el.tagName === 'SELECT'
+          && !Array.prototype.some.call(el.options, function(o){
+               return o.value === draft[name]; })) return;
+      el.value = draft[name];
+    });
+    dlg.dataset.dirty = '1';
+    // Said out loud: boxes holding something other than what the row
+    // holds are a trap if nobody is told which is which.
+    editorSays(dlg, null, 'Put back what you had typed and not saved. '
+                        + 'Cancel goes back to the row as it is.', false);
   }
   function closeEditor(dlg){
     if (!dlg) return;

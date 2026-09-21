@@ -926,17 +926,24 @@ def pool_rows(settings: Settings) -> dict:
         return _pool_rows(store)
 
 
+#: Which kind of second factor a row carries, as a word, for the column.
+_SECOND = (" CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
+           "      WHEN coalesce(recovery_email, '') <> '' THEN 'recovery'"
+           "      ELSE '' END AS second")
+
 #: The columns the manager's editor opens with. The password and the
 #: second factor in clear: an editor that hides what it holds is a form
 #: for retyping, not for correcting, and the operator asked to *see* the
 #: key so they can tell a wrong one from a right one (2026-09-08). The
 #: preview already shows both, to the same people.
-_HELD = (" coalesce(password, '') AS password,"
-         " coalesce(nullif(totp_secret, ''), recovery_email, '') AS secret,"
-         # And which kind it is, as a word, for the column.
-         " CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
-         "      WHEN coalesce(recovery_email, '') <> '' THEN 'recovery'"
-         "      ELSE '' END AS second")
+#:
+#: Read for ONE row, when its Edit is pressed - not for every row of the
+#: sheet. They rode in every `<tr>`'s data attributes: moved off the
+#: dashboard on 2026-09-20, they were still ~500 passwords and TOTP
+#: secrets in every drawer fetched, for the one row in a hundred that
+#: anybody opened (2026-09-21, found by audit).
+_CREDS = (" coalesce(password, '') AS password,"
+          " coalesce(nullif(totp_secret, ''), recovery_email, '') AS secret")
 
 #: The status that means a row is finished with, per pool. Proxies have
 #: none: an exit goes back on the shelf.
@@ -949,6 +956,110 @@ _SPENT = {"gmail": "used", "app": "delivered"}
 #: Spotify rows and the build card offers one to ChatGPT.
 IS_SPOTIFY = "coalesce(product, '') = 'spotify'"
 NOT_SPOTIFY = "coalesce(product, '') <> 'spotify'"
+
+
+#: The queries the manager's rows are read with - one per pool, with the
+#: status test (`{op}`: `<>` for the live rows, `=` for the spent) and a
+#: slot (`{more}`) for the one address a one-row answer is about. The
+#: sheet and the single row are read by the same text, so the two cannot
+#: come to differ.
+_WHAT = (" coalesce(product, '') AS product,"
+         " coalesce(credential_kind, '') AS credential_kind,"
+         " coalesce(category, '') AS category,"
+         " coalesce(panel_ref, '') AS panel_ref,"
+         " coalesce(customer_ready, false) AS customer_ready,")
+_GMAIL_Q = ("SELECT id, address, status, coalesce(seller, '') AS seller,"
+            " coalesce(note, '') AS note, error, updated_at,"
+            f" coalesce(serial, '') AS serial,{_SECOND}"
+            " FROM resources WHERE kind = 'gmail' AND status {op} 'used'{more}"
+            " ORDER BY id DESC LIMIT %s")
+# The kind rides with a GPT row too since 2026-09-19: `eco` accounts
+# sign in by a code emailed to an address the farm owns, and the
+# manager sifts them apart from the ones with a password.
+_GPT_Q = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
+          f"{_WHAT}"
+          f" coalesce(note, '') AS note, error, updated_at,{_SECOND}"
+          " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
+          f"   AND {NOT_SPOTIFY}{{more}}"
+          " ORDER BY id DESC LIMIT %s")
+_SPOTIFY_Q = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
+              f"{_WHAT}"
+              f" coalesce(note, '') AS note, error, updated_at,{_SECOND}"
+              " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
+              f"   AND {IS_SPOTIFY}{{more}}"
+              " ORDER BY id DESC LIMIT %s")
+_PROXY_Q = ("SELECT id, coalesce(proxy_name, '') AS address, status,"
+            " coalesce(host, '') AS host, port,"
+            " coalesce(last_exit_ip, '') AS exit_ip, times_used,"
+            " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
+            " error, updated_at, claimed_at"
+            " FROM resources WHERE kind = 'proxy'{more}"
+            # By the number in the name, which is the order the
+            # vendor's own panel lists them in and the order a person
+            # works down when they are changing addresses. It was by
+            # `times_used`, the builder's order, which shuffled the
+            # list under the hand using it (the operator, 2026-09-14).
+            " ORDER BY nullif(regexp_replace(coalesce(proxy_name, ''),"
+            "                 '[^0-9]', '', 'g'), '')::bigint NULLS LAST,"
+            "          proxy_name, id LIMIT %s")
+_ONE_ROW = {"gmail": _GMAIL_Q, "gpt": _GPT_Q, "spotify": _SPOTIFY_Q}
+
+
+def pool_row(settings: Settings, kind: str, address: str) -> dict:
+    """One row of one pool, drawn by the sheet's own query, for the
+    answer to a press about that row - with what is pending, since the
+    row's doors depend on it. The answer used to read the whole pool,
+    passwords and all, to find one address (2026-09-21, found by audit).
+    """
+    want = str(address or "").strip()
+    with Store(settings) as store:
+        if kind == "proxy":
+            rows = store._rows(
+                _PROXY_Q.format(more=" AND lower(proxy_name) = lower(%s)"),
+                (want, 1))
+        elif kind in _ONE_ROW:
+            rows = []
+            for op in ("<>", "="):                 # live first, then spent
+                rows = store._rows(
+                    _ONE_ROW[kind].format(
+                        op=op, more=" AND lower(address) = lower(%s)"),
+                    (want, 1))
+                if rows:
+                    break
+        else:
+            rows = []
+        return {"row": rows[0] if rows else None, "pending": _pending(store)}
+
+
+def credentials(settings: Settings, kind: str, address: str) -> dict | None:
+    """The password and the second factor of one row, for the editor
+    the moment its Edit is pressed - see _CREDS."""
+    want = str(address or "").strip()
+    if kind not in _ONE_ROW or not want:
+        return None
+    table_kind = "gmail" if kind == "gmail" else "app"
+    with Store(settings) as store:
+        rows = store._rows(
+            f"SELECT{_CREDS} FROM resources"
+            " WHERE kind = %s AND lower(address) = lower(%s)"
+            " ORDER BY id DESC LIMIT 1", (table_kind, want))
+    return dict(rows[0]) if rows else None
+
+
+def phone_holder(settings: Settings, serial: str) -> dict | None:
+    """The one phone row, for the doors that ask who holds it. Every
+    phone press read the phone's whole story for this - its events, its
+    requests by an unindexed ILIKE over the actions table, its archived
+    screens - to answer two columns, three times on the Live page
+    (2026-09-21, found by audit)."""
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT p.serial, p.status, p.state, p.gmail, p.app_account,"
+            " p.proxy_name, p.tries, p.note, p.created_at, p.updated_at,"
+            " p.done_at, u.username AS owner"
+            " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
+            " WHERE p.serial = %s ORDER BY p.id DESC LIMIT 1", (serial,))
+    return dict(rows[0]) if rows else None
 
 
 def pool_sheet(settings: Settings, kind: str) -> dict:
@@ -997,11 +1108,7 @@ def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
     Newest first in both: the cap cuts the tail, and the tail must not be
     what somebody just added (2026-09-07).
     """
-    gmail = ("SELECT id, address, status, coalesce(seller, '') AS seller,"
-             " coalesce(note, '') AS note, error, updated_at,"
-             f" coalesce(serial, '') AS serial,{_HELD}"
-             " FROM resources WHERE kind = 'gmail' AND status {op} 'used'"
-             " ORDER BY id DESC LIMIT %s")
+    gmail = _GMAIL_Q
     # The kind rides with a GPT row too since 2026-09-19: `eco` accounts
     # sign in by a code emailed to an address the farm owns, and the
     # manager sifts them apart from the ones with a password.
@@ -1010,53 +1117,26 @@ def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
     # Claude account, an eco one and a password one were four columns of
     # the same thing and the console could not tell them apart - on the
     # day the panel starts sending all six kinds through one door.
-    _WHAT = (" coalesce(product, '') AS product,"
-             " coalesce(credential_kind, '') AS credential_kind,"
-             " coalesce(category, '') AS category,"
-             " coalesce(panel_ref, '') AS panel_ref,"
-             " coalesce(customer_ready, false) AS customer_ready,")
-    gpt = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
-           f"{_WHAT}"
-           f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
-           " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
-           f"   AND {NOT_SPOTIFY}"
-           " ORDER BY id DESC LIMIT %s")
-    spotify = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
-               f"{_WHAT}"
-               f" coalesce(note, '') AS note, error, updated_at,{_HELD}"
-               " FROM resources WHERE kind = 'app' AND status {op} 'delivered'"
-               f"   AND {IS_SPOTIFY}"
-               " ORDER BY id DESC LIMIT %s")
+    gpt, spotify = _GPT_Q, _SPOTIFY_Q
+
     def asked(kind: str) -> bool:
         return kinds is None or kind in kinds
 
     rows = {
-            "gmail": (store._rows(gmail.format(op="<>"), (POOL_LIMIT,))
-                      + store._rows(gmail.format(op="="), (POOL_LIMIT,)))
+            "gmail": (store._rows(gmail.format(op="<>", more=""), (POOL_LIMIT,))
+                      + store._rows(gmail.format(op="=", more=""),
+                                    (POOL_LIMIT,)))
                      if asked("gmail") else [],
-            "gpt": (store._rows(gpt.format(op="<>"), (POOL_LIMIT,))
-                    + store._rows(gpt.format(op="="), (POOL_LIMIT,)))
+            "gpt": (store._rows(gpt.format(op="<>", more=""), (POOL_LIMIT,))
+                    + store._rows(gpt.format(op="=", more=""), (POOL_LIMIT,)))
                    if asked("gpt") else [],
-            "spotify": (store._rows(spotify.format(op="<>"), (POOL_LIMIT,))
-                        + store._rows(spotify.format(op="="),
+            "spotify": (store._rows(spotify.format(op="<>", more=""),
+                                    (POOL_LIMIT,))
+                        + store._rows(spotify.format(op="=", more=""),
                                       (POOL_LIMIT,)))
                        if asked("spotify") else [],
-            "proxy": store._rows(
-                "SELECT id, coalesce(proxy_name, '') AS address, status,"
-                " coalesce(host, '') AS host, port,"
-                " coalesce(last_exit_ip, '') AS exit_ip, times_used,"
-                " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
-                " error, updated_at, claimed_at"
-                " FROM resources WHERE kind = 'proxy'"
-                # By the number in the name, which is the order the
-                # vendor's own panel lists them in and the order a person
-                # works down when they are changing addresses. It was by
-                # `times_used`, the builder's order, which shuffled the
-                # list under the hand using it (the operator, 2026-09-14).
-                " ORDER BY nullif(regexp_replace(coalesce(proxy_name, ''),"
-                "                 '[^0-9]', '', 'g'), '')::bigint NULLS LAST,"
-                "          proxy_name, id LIMIT %s",
-                (POOL_LIMIT,)) if asked("proxy") else [],
+            "proxy": store._rows(_PROXY_Q.format(more=""),
+                                 (POOL_LIMIT,)) if asked("proxy") else [],
     }
     # How many there are, against how many are drawn, live and spent
     # apart since each has its own cap. The cap was silent, so an address

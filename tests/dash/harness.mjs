@@ -131,6 +131,9 @@ export function consoleIn(html, opts = {}) {
       text: () => textThrows
         ? Promise.reject(new Error('the answer could not be read'))
         : Promise.resolve(body),
+      json: () => textThrows
+        ? Promise.reject(new Error('the answer could not be read'))
+        : Promise.resolve(JSON.parse(body)),
     };
   }
   window.__fetches = fetches;

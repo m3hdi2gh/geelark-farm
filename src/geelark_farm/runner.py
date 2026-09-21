@@ -41,7 +41,9 @@ def run_now(settings: Settings, verb: str, payload: dict) -> tuple | None:
         from .ledger import Ledger
         from .pools import Book
 
-        book = Book.pools_only(settings)
+        # Lazy: only the pools this verb reaches for are loaded, by any
+        # path - 140ms of three pools for a Cancel that touches none.
+        book = Book.pools_only(settings, lazy=True)
         # `client` is None on purpose: a verb that reaches for GeeLark is
         # one `runs_inline` should have refused, and the AttributeError
         # that follows is a great deal louder than a phone being driven

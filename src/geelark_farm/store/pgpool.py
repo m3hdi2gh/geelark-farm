@@ -107,6 +107,18 @@ class ResourceTable:
             conn.rollback()
             return out
 
+    def row(self, row_id: int) -> dict | None:
+        """One row by id - what `append` reads its own insert back by.
+        It read the whole kind for it, so a twenty-line paste was twenty
+        whole-table scans (2026-09-21, found by audit)."""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("SELECT * FROM resources WHERE id = %s",
+                               (row_id,))
+            names = [d.name for d in cur.description]
+            got = cur.fetchone()
+            conn.rollback()
+        return dict(zip(names, got, strict=True)) if got else None
+
     def update(self, row_id: int, fields: dict) -> None:
         if not fields:
             return
@@ -479,8 +491,7 @@ class _PgPool(Pool):
         new_id = self._table.insert(row)
         if new_id is None:
             raise ValueError("already in the pool")
-        fresh = next((r for r in self._table.rows(self.kind)
-                      if r["id"] == new_id), None)
+        fresh = self._table.row(new_id)
         resource = Resource(sheet_row=0, values=self._values_of(fresh or row),
                             store_id=new_id)
         try:

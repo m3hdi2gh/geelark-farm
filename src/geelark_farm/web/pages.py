@@ -2219,12 +2219,12 @@ def _pool_table_rows(kind: str, rows: list[dict], user: dict,
         # what somebody types when they want to see what wants them.
         findable = " ".join(str(c) for c in cells if c).lower()
         state = str(row.get("state") or "")
-        # What the editor opens with, on the row itself - the one dialog
-        # per sheet is filled from here. Never in `data-find`: a search
-        # for a password would be a strange thing to answer.
-        held = (f' data-password="{esc(str(row.get("password") or ""))}"'
-                f' data-secret="{esc(str(row.get("secret") or ""))}"'
-                f' data-sellername="{esc(str(row.get("seller") or "").strip())}"'
+        # What the editor opens with, on the row itself - the seller. The
+        # password and the key used to ride here too, in every row of
+        # every sheet fetched, for the one row in a hundred anybody
+        # opened; the editor reads those for its one row when Edit is
+        # pressed (2026-09-21).
+        held = (f' data-sellername="{esc(str(row.get("seller") or "").strip())}"'
                 if doors else "")
         # What a single-row answer is put back by, so a Test or a Free
         # replaces its own row instead of the page under it (2026-09-14).

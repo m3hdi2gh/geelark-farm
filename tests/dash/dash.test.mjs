@@ -21,7 +21,7 @@ const SHEET = `
         </div>
         <table class="pooltable"><tbody>
           <tr data-key="gmail:a@x.com" data-group="" data-state="set aside"
-              data-password="old" data-secret="" data-find="a@x.com">
+              data-find="a@x.com">
             <td>a@x.com</td>
             <td><form method="post" action="/pools/gmail/free">
               <input type="hidden" name="address" value="a@x.com">
@@ -45,28 +45,40 @@ const SHEET = `
     </section>
   </div>`;
 
-function openEditor(win) {
+// The row's password and key arrive by their own fetch when Edit is
+// pressed (2026-09-21); an answer for that door, beside whatever the
+// test's own answer is.
+const CREDS = {status: 200, body: JSON.stringify({password: 'old', secret: ''})};
+function withCreds(answer) {
+  return (call) => /\/credentials\?/.test(call.url) ? CREDS : answer(call);
+}
+
+async function openEditor(win) {
   const doc = win.document;
   const dlg = doc.querySelector('dialog.editor');
   const tr = doc.querySelector('tr[data-key]');
   // What `openEditor` is given: a button carrying the address.
   const press = doc.createElement('button');
   press.setAttribute('data-edit', 'a@x.com');
+  press.setAttribute('data-pool', 'gmail');
   tr.appendChild(press);
   fire(press, 'click');
+  await settle();                      // the credentials land
   return dlg;
 }
 
 test('a refused Save keeps the editor open, with what was typed in it',
      async () => {
   const win = consoleIn(SHEET, {
-    answer: () => ({status: 200, url: '/?said=no:41',
+    answer: withCreds(() => ({status: 200, url: '/?said=no:41',
                     body: '<main><p class="said no toast">the Gmail '
-                        + 'a@x.com is not free</p></main>'}),
+                        + 'a@x.com is not free</p></main>'})),
   });
   const doc = win.document;
-  const dlg = openEditor(win);
+  const dlg = await openEditor(win);
   assert.equal(dlg.open, true, 'the editor opened');
+  assert.equal(dlg.querySelector('input[name=password]').value, 'old',
+               'filled from its own fetch, not from the row');
 
   const box = dlg.querySelector('input[name=password]');
   box.value = 'a-correction-I-spent-minutes-on';
@@ -84,8 +96,8 @@ test('a refused Save keeps the editor open, with what was typed in it',
 });
 
 test('a click on the dark asks before it throws work away', async () => {
-  const win = consoleIn(SHEET);
-  const dlg = openEditor(win);
+  const win = consoleIn(SHEET, {answer: withCreds(() => null)});
+  const dlg = await openEditor(win);
   const box = dlg.querySelector('input[name=password]');
   box.value = 'typed';
   fire(box, 'input');
@@ -465,4 +477,35 @@ test('a queued answer is looked for again more than once', async () => {
   await settle();
   const second = win.__timers.filter((t) => t.fn && t.ms === 5000);
   assert.ok(second.length >= 1, 'the second rung was not armed');
+});
+
+
+test("the editor holds its boxes until the row's credentials land",
+     async () => {
+  // They rode in every row of the sheet; now the one row's are fetched
+  // when its Edit is pressed, and until they land a Save would write
+  // blanks - so the boxes and Save are held.
+  const win = consoleIn(SHEET, {answer: (call) =>
+    /\/credentials\?/.test(call.url)
+      ? {status: 200, body: JSON.stringify({password: 'from-the-row', secret: 'K'})}
+      : null});
+  const doc = win.document;
+  const dlg = doc.querySelector('dialog.editor');
+  const press = doc.createElement('button');
+  press.setAttribute('data-edit', 'a@x.com');
+  press.setAttribute('data-pool', 'gmail');
+  doc.querySelector('tr[data-key]').appendChild(press);
+
+  fire(press, 'click');
+  const pw = dlg.querySelector('input[name=password]');
+  assert.equal(dlg.open, true);
+  assert.equal(pw.disabled, true, 'a Save now would write blanks');
+  assert.equal(dlg.querySelector('button.go').disabled, true);
+  assert.match(win.__fetches[0].url, /\/pools\/gmail\/credentials\?address=a%40x\.com/);
+
+  await settle();
+  assert.equal(pw.value, 'from-the-row');
+  assert.equal(dlg.querySelector('input[name=secret]').value, 'K');
+  assert.equal(pw.disabled, false, 'released once they landed');
+  assert.equal(dlg.querySelector('button.go').disabled, false);
 });

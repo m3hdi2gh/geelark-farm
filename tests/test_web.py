@@ -1481,6 +1481,8 @@ def _c8_reads(monkeypatch):
                   "build": "1", "serial": "1533", "msg": "signing in"}],
         "more": True, "today": 31204, "asked": k,
         "loggers": ["geelark_farm.builder", "geelark_farm.chatgpt_login"]})
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: (
         None if serial != "1523" else {
             "serial": "1523",
@@ -2283,7 +2285,20 @@ def _dash(monkeypatch, **more):
     # than drawn shut into every dashboard, so the fixture has to answer
     # that read as well (2026-09-21).
     monkeypatch.setattr(app_mod.read, "pool_sheet", _sheet_read(base))
+    monkeypatch.setattr(app_mod.read, "pool_row", _row_read(base))
     return base
+
+
+def _row_read(base):
+    """`read.pool_row` off the fixture's rows: the one address asked for."""
+    def one(settings, kind, address):
+        want = str(address).strip().casefold()
+        rows = (base.get("pool_rows") or {}).get(kind) or []
+        row = next((r for r in rows
+                    if str(r.get("address") or "").strip().casefold() == want),
+                   None)
+        return {"row": row, "pending": dict(base.get("pending") or {})}
+    return one
 
 
 def test_the_tiles_warn_with_thresholds_and_say_the_consequence(web,
@@ -2734,6 +2749,8 @@ def test_an_admin_may_end_anybody_s_hold_from_the_table(web, monkeypatch):
     assert 'title="Ready">With ali</span>' in row, "still says whose it is"
 
     # The POST goes through, and the request says whose phone it was.
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "taken", "owner": "ali"},
@@ -3528,8 +3545,11 @@ def test_the_dashboards_one_script_sends_only_the_pages_own_forms(
     # left the dashboard on 2026-09-21 and is fetched when a door is
     # pressed. The door is still a form that goes to the pool's page
     # without the script.
+    # And `door`: the editor's one-row credentials, `/pools/<kind>/
+    # credentials?address=`, fetched when Edit is pressed (2026-09-21).
     assert calls and all(c.strip() in ("'/clienterror'",
                                        "'/pools/' + kind + '/sheet'",
+                                       "door",
                                        "form.action",
                                        "location.pathname + location.search",
                                        "href")
@@ -4101,15 +4121,20 @@ def test_the_manager_reads_spent_rows_under_a_cap_of_their_own():
 
     from geelark_farm.web import read
 
+    # The queries are module constants now, shared with the one-row read
+    # (2026-09-21); the sheet's function only formats them.
+    assert "status {op} 'used'" in read._GMAIL_Q
+    assert "status {op} 'delivered'" in read._GPT_Q
     body = inspect.getsource(read._pool_rows)
-    assert "status {op} 'used'" in body and "status {op} 'delivered'" in body
     # Three: the Gmails, the GPT accounts and the Spotify ones, which
     # share the app table and are told apart by `product` (2026-09-17).
-    assert body.count('format(op="<>")') == 3, "live rows, read apart"
-    assert body.count('format(op="=")') == 3, "spent rows, read apart"
+    assert body.count('format(op="<>", more="")') == 3, "live rows, read apart"
+    assert body.count('format(op="=", more="")') == 3, "spent rows, read apart"
     assert "on_sheet" not in body, "the sheet flag is retired"
-    assert "AS password" in read._HELD and "AS secret" in read._HELD, (
-        "what the editor opens with")
+    # What the editor opens with is read by its own door now, one row at
+    # a time; the sheet's queries carry no credential (2026-09-21).
+    assert "AS password" in read._CREDS and "AS secret" in read._CREDS
+    assert "AS password" not in read._GMAIL_Q and "AS password" not in read._GPT_Q
 
 
 # ---------------------------------------------- the contract, slice B
@@ -4161,8 +4186,11 @@ def test_the_editor_offers_the_rows_status(web, monkeypatch):
 
     assert 'data-state="free"' in row("free@gmail.com")
     assert 'data-state="on a phone"' in row("busy@gmail.com")
-    assert 'data-password="Kx82!mnQ"' in row("free@gmail.com")
-    assert 'data-secret="JBSWY3DPEHPK3PXP"' in row("free@gmail.com")
+    # The editor reads these for its one row when Edit is pressed; they
+    # no longer ride in every row of the sheet (2026-09-21).
+    assert 'data-password' not in row("free@gmail.com")
+    assert 'data-secret' not in row("free@gmail.com")
+    assert "Kx82!mnQ" not in row("free@gmail.com")
     assert 'data-sellername="dalir"' in row("free@gmail.com")
     from geelark_farm.web import pages
 
@@ -4706,8 +4734,10 @@ def test_the_editor_shows_what_the_row_holds_and_clears_only_on_purpose():
         assert ('name="seller"' in editor) == (kind == "gmail")
     assert '<option value="usa">' in pages._pool_editor("gmail", user, rows)
     script = pages._DASH_SCRIPT
-    assert "f.password.value = tr.dataset.password || ''" in script
-    assert "f.secret.value = tr.dataset.secret || ''" in script
+    # Read for the one row when its Edit is pressed, not off the row's
+    # data attributes (2026-09-21).
+    assert "f.password.value = creds.password || ''" in script
+    assert "f.secret.value = creds.secret || ''" in script
     # The answer decides. It used to close whatever came back - twenty-nine
     # lines before the code that works out whether the save went through -
     # so a refusal threw the typing away and put its reason on the page
@@ -4721,7 +4751,8 @@ def test_the_editor_shows_what_the_row_holds_and_clears_only_on_purpose():
     table = pages._pool_table(
         "gmail", [dict(rows[0], password="p4ss", secret="JBSWY3DP",
                        second="authenticator", serial="")], user)
-    assert 'data-password="p4ss"' in table and 'data-secret="JBSWY3DP"' in table
+    assert 'data-password' not in table and 'data-secret' not in table
+    assert "p4ss" not in table and "JBSWY3DP" not in table
     assert "<tr class=\"editrow\"" not in table, "no row under the row"
     found = table.split('data-find="', 1)[1].split('"', 1)[0]
     assert "p4ss" not in found and "JBSWY3DP" not in found
@@ -6259,7 +6290,7 @@ def test_the_spotify_sheet_sifts_by_kind():
     assert "cat: onCat ? onCat.dataset.cat : null," in script
     # The editor opens on the row's own kind, and does not reach for the
     # key box this pool does not have.
-    assert "if (f.secret) f.secret.value = tr.dataset.secret || '';" in script
+    assert "if (f.secret) f.secret.value = creds.secret || '';" in script
     assert "if (f.category) f.category.value = tr.dataset.cat || 'normal';" \
         in script
     user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
@@ -6288,7 +6319,7 @@ def test_the_proxy_manager_is_ordered_by_the_number_in_the_name():
 
     from geelark_farm.web import read as read_mod
 
-    src = inspect.getsource(read_mod._pool_rows)
+    src = read_mod._PROXY_Q
     assert "regexp_replace(coalesce(proxy_name, '')" in src
     assert "'[^0-9]', '', 'g'), '')::bigint NULLS LAST" in src
     assert "ORDER BY times_used" not in src, "not the builder's order"
@@ -6879,6 +6910,8 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     monkeypatch.setattr(read_mod, "gmail_on_phone",
                         lambda s, serial: dict(creds, asked=serial))
     monkeypatch.setattr(read_mod, "account_on_phone", lambda s, serial: None)
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "app_only",
                                     "state": "taken", "owner": "mehdi"},
@@ -6907,6 +6940,8 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
 
     # Somebody else's phone: the margin is not drawn, whatever the
     # store would say.
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "app_only",
                                     "state": "taken", "owner": "ali"},
@@ -6946,6 +6981,8 @@ def test_the_live_tab_changes_the_ip_without_leaving_the_page(web,
                       "url": "https://phone.geelark.com/i?t=abc"},
            "requested_by": 1}
     monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "app_only",
                                     "state": "taken", "owner": "mehdi"},
@@ -7048,6 +7085,8 @@ def test_the_live_tab_offers_done_and_failed_beside_its_controls(web,
                       "url": "https://phone.geelark.com/i?t=abc"},
            "requested_by": 1}
     monkeypatch.setattr(actions_mod, "one", lambda s, aid: row)
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "app_only",
                                     "state": "taken", "owner": "mehdi"},
@@ -7249,6 +7288,8 @@ def test_nobody_else_boots_a_phone_kept_for_its_maker_not_even_an_admin(
     got = {}
     monkeypatch.setattr(actions_mod, "enqueue",
                         lambda s, **k: got.update(k) or 71)
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "", "owner": "ali",
@@ -7297,6 +7338,8 @@ def test_the_phones_own_page_is_where_a_kept_phone_is_given_back(
     the farm's: it clears the owner, and the keeper may finish it or send
     it an account again. Rare, so the table leaves it to this page - which
     also keeps Boot and Change IP."""
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "", "owner": "mehdi",
@@ -7338,6 +7381,8 @@ def test_the_live_tab_writes_the_account_on_the_phone_beside_the_gmail(
         "address": "jack@spotifylovers.biz", "password": "Spot!fy@123",
         "totp_secret": "", "product": "spotify", "category": "normal",
         "email_code_only": False})
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "taken", "owner": "mehdi"},
@@ -7357,6 +7402,8 @@ def test_the_live_tab_writes_the_account_on_the_phone_beside_the_gmail(
     assert "data-copy" in body and "navigator.clipboard.writeText" in body
 
     # Somebody else's phone: no margin at all, the same rule as the Gmail.
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "taken", "owner": "ali"},
@@ -7389,6 +7436,8 @@ def test_a_gpt_account_in_the_margin_is_named_for_its_own_product(
     monkeypatch.setattr(read_mod, "account_on_phone", lambda s, serial: {
         "address": "buyer@example.com", "password": "", "totp_secret": "",
         "product": "", "category": "", "email_code_only": True})
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "phone": {"serial": serial, "status": "ready",
                                     "state": "taken", "owner": "mehdi"},
@@ -8494,7 +8543,9 @@ def test_both_fetch_handlers_refuse_a_bad_answer_the_same_way():
     assert js.count("answer(r, false)") == 2, "the background refreshes"
     # The press and the sheet fetch: both say so when the server
     # refuses, because both are somebody waiting on a click.
-    assert js.count("answer(r, true)") == 2
+    # Three: the press, the sheet fetch, and the editor's credentials -
+    # each somebody waiting on a click, each told when the server refuses.
+    assert js.count("answer(r, true)") == 3
     # Two: the background reload, and the open sheet's conditional look
     # with its stamp (2026-09-21) - neither is somebody waiting on a
     # click, so neither toasts a refusal.
@@ -8973,6 +9024,8 @@ def test_the_phone_page_says_stopping_and_what_is_on_its_way(web,
     """The dashboard's row said Stopping the moment Cancel was pressed;
     this page - where a build is watched - went on offering Cancel over
     the press it had already taken (2026-09-21, found by audit)."""
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "timeline": [],
         "phone": {"serial": serial, "status": "building", "state": "",
@@ -8984,6 +9037,8 @@ def test_the_phone_page_says_stopping_and_what_is_on_its_way(web,
     assert ">Stopping<" in body and "Stopping&hellip;" in body
     assert 'action="/phones/1503/stop"' not in body
 
+    monkeypatch.setattr(app_mod.read, "phone_holder", lambda s, serial: (
+        (app_mod.read.phone_story(s, serial) or {}).get("phone")))
     monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
         "serial": serial, "timeline": [],
         "phone": {"serial": serial, "status": "ready", "state": "",
@@ -9119,3 +9174,88 @@ def test_a_remove_in_the_gpt_and_spotify_drawers_answers_with_the_row(
             headers={"X-GF-Row": kind})
         assert status == 200, (kind, status)
         assert 'class="rowanswer"' in body and f'data-row-kind="{kind}"' in body
+
+
+# ------------------------------------------- band 4: bytes and milliseconds
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_editor_reads_one_rows_credentials_when_its_door_is_pressed(
+        web, monkeypatch):
+    """~500 passwords and TOTP secrets rode in every drawer fetched, for
+    the one row in a hundred anybody opened (2026-09-21, found by
+    audit). The same people, the same door, one row at a time."""
+    _dash(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "credentials",
+                        lambda s, kind, address: (
+                            {"password": "Kx82!mnQ", "secret": "JBSWY3DP"}
+                            if (kind, address) == ("gmail", "free@gmail.com")
+                            else None))
+    client = web()
+    client.login()
+    status, head, body = client.request(
+        "GET", "/pools/gmail/credentials?address=free%40gmail.com")
+    assert status == 200
+    assert dict(head).get("Content-Type", "").startswith("application/json")
+    import json as _json
+    assert _json.loads(body) == {"password": "Kx82!mnQ", "secret": "JBSWY3DP"}
+
+    status, _, _ = client.request(
+        "GET", "/pools/gmail/credentials?address=nobody%40gmail.com")
+    assert status == 404
+    status, _, _ = client.request("GET", "/pools/proxy/credentials?address=SX1")
+    assert status == 404, "an exit has no editor"
+    # And the operator's allowlist lets the door through: the drawer is
+    # theirs and always has been.
+    assert app_mod._operator_may_get("/pools/gmail/credentials")
+
+
+def test_the_one_row_answer_reads_one_row(monkeypatch):
+    """`_row_answer` read the whole pool - passwords and all - to find one
+    address; the phone doors read a phone's whole story to answer who
+    holds it (2026-09-21, found by audit)."""
+    src = inspect.getsource(app_mod._Handler._row_answer)
+    assert "read.pool_row(self.settings, kind, address)" in src
+    assert "read.pool_sheet(" not in src
+    holder = inspect.getsource(app_mod._Handler._holder_of)
+    assert "read.phone_holder(self.settings, serial)" in holder
+    assert "phone_story" not in holder
+
+
+def test_pool_row_is_the_sheets_own_query_narrowed_to_one_address(monkeypatch):
+    """The same text draws the sheet and the single row, so the two
+    cannot come to differ; the credentials are in neither."""
+    from geelark_farm.web import read
+
+    asked = []
+
+    class _S:
+        def __init__(self, settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append((sql, params))
+            if "status IN ('queued', 'running')" in sql:
+                return []
+            return [{"id": 1, "address": "a@x.com"}] if "= lower(%s)" in sql \
+                else []
+
+    monkeypatch.setattr(read, "Store", _S)
+    got = read.pool_row(None, "gmail", "A@x.com")
+    assert got["row"] == {"id": 1, "address": "a@x.com"}
+    sql, params = asked[0]
+    assert "lower(address) = lower(%s)" in sql and params == ("A@x.com", 1)
+    assert "AS password" not in sql and "AS secret" not in sql, (
+        "no credential value is selected for a row")
+    assert "AS second" in sql, "the kind of second factor stays"
+    asked.clear()
+    read.pool_row(None, "proxy", "SX3")
+    assert "lower(proxy_name) = lower(%s)" in asked[0][0]
+    # And the credentials read is its own, for its own door.
+    asked.clear()
+    read.credentials(None, "gmail", "a@x.com")
+    assert "password" in asked[0][0] and "LIMIT 1" in asked[0][0]

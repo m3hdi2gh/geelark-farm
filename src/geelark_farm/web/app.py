@@ -190,6 +190,8 @@ class _Handler(BaseHTTPRequestHandler):
             # fragment the script mounts inside the overlay it already
             # has - see pages._pool_manager for why it is not in the
             # dashboard any more.
+            if path.startswith("/pools/") and path.endswith("/credentials"):
+                return self._credentials(user, path)
             if path.startswith("/pools/") and path.endswith("/sheet"):
                 return self._pool_sheet(user, path)
             if path == "/pools":
@@ -682,21 +684,17 @@ class _Handler(BaseHTTPRequestHandler):
         if self.headers.get(self.ROW_ASKED) != kind or not address:
             return False
         try:
-            listed = read.pool_sheet(self.settings, kind)
+            found = read.pool_row(self.settings, kind, address)
         except Exception as exc:                              # noqa: BLE001
             # The work is done; only drawing the answer failed. The
             # redirect still tells the page where to look.
             log.warning("could not read %s back after the press (%s)",
                         address, exc)
             return False
-        want = str(address).strip().casefold()
-        row = next((r for r in (listed.get(kind) or [])
-                    if str(r.get("address") or "").strip().casefold() == want),
-                   None)
         self._html(200, pages.row_answer(
-            kind, row, said, user, self._said_note(said),
+            kind, found.get("row"), said, user, self._said_note(said),
             manual_login=self.settings.manual_login,
-            pending=listed.get("pending") or {}))
+            pending=found.get("pending") or {}))
         return True
 
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
@@ -1090,11 +1088,10 @@ class _Handler(BaseHTTPRequestHandler):
         second is "" for the holder and for an admin (2026-09-15); the
         first is the name an admin's request carries."""
         try:
-            story = read.phone_story(self.settings, serial)
+            phone = read.phone_holder(self.settings, serial) or {}
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not read phone %s back (%s)", serial, exc)
             return "", ""
-        phone = (story or {}).get("phone") or {}
         return pages._holder(phone), pages._theirs(user, phone)
 
     def _refuse(self, user: dict, verb: str, payload: dict,
@@ -2110,6 +2107,29 @@ class _Handler(BaseHTTPRequestHandler):
             manual_login=self.settings.manual_login,
             pending=listed.get("pending") or {}), etag=tag)
 
+    def _credentials(self, user: dict, path: str) -> None:
+        """One row's password and second factor, for the editor the moment
+        its Edit is pressed. They rode in every row of the sheet until
+        2026-09-21; the same people, the same door, one row at a time.
+        Answered as JSON, which the script fills the boxes from by
+        `.value` - nothing here is read as markup."""
+        import json as _json
+
+        kind = path[len("/pools/"):-len("/credentials")]
+        meta = pages._POOL_KINDS.get(kind)
+        if not meta or not meta.get("edit") or kind == "proxy":
+            return self._text(404, "no such editor\n")
+        if not pages._may(user, meta["manage"]):
+            return self._text(403, "not yours to open\n")
+        asked = parse_qs(self.path.partition("?")[2])
+        address = str((asked.get("address") or [""])[0]).strip()
+        found = read.credentials(self.settings, kind, address)
+        if found is None:
+            return self._text(404, "no such row\n")
+        self._text(200, _json.dumps({"password": str(found.get("password") or ""),
+                                     "secret": str(found.get("secret") or "")}),
+                   kind="application/json")
+
     def _asset(self, path: str, *, private: bool) -> None:
         """One of the two files the page links to, under its own hash.
 
@@ -2656,6 +2676,9 @@ def _operator_may_get(path: str) -> bool:
     # button's own permission. Without this the drawer answers a
     # redirect to "/" and the sheet never opens for them.
     if path.startswith("/pools/") and path.endswith("/sheet"):
+        return True
+    # And the editor's one-row read, which is the sheet's Edit door.
+    if path.startswith("/pools/") and path.endswith("/credentials"):
         return True
     return path.startswith("/phones/") and path != "/phones"
 

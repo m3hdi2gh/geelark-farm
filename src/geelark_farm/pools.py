@@ -224,7 +224,7 @@ class Pool:
         self._lock = lock
         self.headers = headers
         self._index = {name: i for i, name in enumerate(headers)}
-        self._rows: list[Resource] = []
+        self._rows = []
         # Class-level: `serve` opens a Book per pass, so a per-instance lock
         # is two locks the moment two passes overlap - which is exactly when
         # it has to hold. `claim` re-reads the row as well (see `_still_free`)
@@ -240,6 +240,29 @@ class Pool:
         #: starts or ends a claim passes through - including any added later.
         self._held: dict[int, Resource] = {}
         self._held_lock = threading.Lock()
+
+    # The rows, loaded the first time they are asked for after `unload`.
+    # `run_now` built all three pools for every inline press - three
+    # uncapped SELECTs and a thousand credentials parsed, 140ms on the
+    # farm - for verbs that touch one pool or none (2026-09-21, found by
+    # audit). Lazy at the one place every read goes through, so a verb
+    # that reaches a pool by any path at all, a helper's included, gets
+    # a loaded one: nothing is derived from the verb's source.
+    @property
+    def _rows(self) -> list:
+        rows = getattr(self, "_Pool__rows", None)
+        if rows is None:
+            self.load()
+            rows = self.__rows
+        return rows
+
+    @_rows.setter
+    def _rows(self, value: list) -> None:
+        self.__rows = value
+
+    def unload(self) -> None:
+        """Forget the rows; the next read loads them."""
+        self.__rows = None
 
     # ------------------------------------------------------------- reading
     def load(self) -> None:
@@ -2155,8 +2178,11 @@ class Book:
         self._lock = lock or threading.Lock()
 
     @classmethod
-    def pools_only(cls, settings) -> Book:
+    def pools_only(cls, settings, *, lazy: bool = False) -> Book:
         """The three pools and nothing else, without opening the workbook.
+
+        `lazy`: each pool loads its rows the first time something reads
+        them, so a verb that touches one pool loads one - see Pool._rows.
 
         `Book.open` takes about six seconds against Google, which is fine
         once a pass and impossible on every click. With the pools in the
@@ -2186,7 +2212,11 @@ class Book:
                    phones=PgPhoneLog(settings),
                    history=PgHistory(settings),
                    service=PgServiceBoard(settings))
-        book.reload()
+        if lazy:
+            for pool in (book.gmails, book.proxies, book.apps):
+                pool.unload()
+        else:
+            book.reload()
         return book
 
     def record_history(self, **fields: str) -> None:
