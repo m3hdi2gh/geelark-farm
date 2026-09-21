@@ -115,9 +115,15 @@ export function consoleIn(html, opts = {}) {
     if (answer instanceof Error) return Promise.reject(answer);
     return Promise.resolve(reply(answer));
   };
-  function reply({status = 200, body = '', url = '', textThrows = false}) {
+  function reply({status = 200, body = '', url = '', textThrows = false,
+                  headers = {}}) {
     return {
       ok: status >= 200 && status < 300, status, url, redirected: false,
+      headers: {get: (name) => {
+        for (const k of Object.keys(headers))
+          if (k.toLowerCase() === String(name).toLowerCase()) return headers[k];
+        return null;
+      }},
       // `textThrows` is the case that matters most: the command reached
       // the server and was carried out, and the page then failed to
       // read the answer. Anything the handler does about that must not

@@ -1142,7 +1142,8 @@ def test_confirming_the_add_queues_the_rows_under_the_persons_name(
               rows="new@example.com\tpw2\tJBSWY3DPEHPK3PXP"))
     assert status == 303
     assert dict(headers)["Location"].startswith("/pools/gmail?said=queued")
-    assert got["verb"] == "add_gmails" and got["idem_key"] == "once-abc"
+    assert got["verb"] == "add_gmails"
+    assert got["idem_key"].startswith("once-abc:"), "the press, then its words"
     assert got["payload"]["seller"] == "usa"
     assert got["payload"]["by"] == "mehdi" and got["requested_by"] == 7
     assert got["payload"]["rows"] == [{
@@ -2251,7 +2252,8 @@ def _sheet_read(base):
         listed = base.get("pool_rows") or {}
         return {kind: list(listed.get(kind) or []),
                 "totals": dict(listed.get("totals") or {}),
-                "pending": dict(base.get("pending") or {})}
+                "pending": dict(base.get("pending") or {}),
+                "stamp": str(base.get("stamp") or "s1")}
     return one
 
 
@@ -3026,7 +3028,7 @@ def test_the_gpt_paste_is_previewed_row_by_row_and_confirmed_as_rows(
               rows=f"good@x.com\tpw1\t{SECRET}"))
     assert status == 303
     assert dict(headers)["Location"] == "/pools/gpt?said=queued:91"
-    assert got["verb"] == "add_gpt" and got["idem_key"] == "k-1"
+    assert got["verb"] == "add_gpt" and got["idem_key"].startswith("k-1:")
     assert got["payload"]["rows"] == [
         {"address": "good@x.com", "password": "pw1", "secret": SECRET,
          "email_code_only": False}]
@@ -4274,7 +4276,7 @@ def test_a_remove_can_be_undone_from_the_toast(web, monkeypatch):
     assert row["address"] == "free@gmail.com" and row["password"] == "pw"
     assert row["recovery"] == "back@x.com" and row["secret"] == ""
     assert got[-1]["payload"]["seller"] == "dalir"
-    assert got[-1]["idem_key"] == "undo-41"
+    assert got[-1]["idem_key"].startswith("undo-41:")
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4334,7 +4336,7 @@ def test_a_removed_spotify_row_comes_back_as_a_spotify_row(web, monkeypatch):
     assert got[-1]["payload"]["category"] == "error"
     assert got[-1]["payload"]["rows"] == [{"address": "nova@x.com",
                                            "password": "pw"}]
-    assert got[-1]["idem_key"] == "undo-52"
+    assert got[-1]["idem_key"].startswith("undo-52:")
 
     # What came out of one pool goes back into that pool only.
     status, headers, _ = client.request(
@@ -6300,18 +6302,18 @@ def test_the_pulse_bumps_only_when_the_fingerprint_moves():
 
     pulse = live.Pulse()
     assert pulse.revision == 0 and pulse.everything == 0
-    farm = ("p", "ph", "e", "a", "w")
+    farm = ("p", "ph", "e", "a", "w", "s")
     # The first fingerprint is where the farm is, not a change - it must
     # not wake a page that has just loaded.
     assert pulse.bump(farm + ("l1",)) is False and pulse.revision == 1
     assert pulse.bump(farm + ("l1",)) is False, "the same mark is not news"
     assert pulse.revision == 1
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "l1")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "l1")) is True
     assert pulse.revision == 2 and pulse.everything == 2
     # A log line alone moves `everything` and not the farm's own count:
     # the dashboard does not redraw for a build's chatter, the Logs page
     # does (2026-09-14).
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "l2")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "l2")) is True
     assert pulse.revision == 2 and pulse.everything == 3
     assert pulse.count() == 2 and pulse.count(logs=True) == 3
     # Waiting: past the number you have, or nothing before the timeout.
@@ -6359,17 +6361,22 @@ def test_the_fingerprint_asks_about_every_table_a_page_draws(monkeypatch,
         def _rows(self, sql, params=()):
             asked.append(sql)
             return [{"pools": "2026-09-14", "phones": None, "events": 7,
-                     "actions": 3, "wanted": None, "logs": 900}]
+                     "actions": 3, "wanted": None, "state": "2026-09-21",
+                     "logs": 900}]
 
     monkeypatch.setattr(store_db, "Store", _Store)
     mark = live.take(make_settings(store_enabled=True))
 
-    assert mark == ("2026-09-14", "", "7", "3", "", "900")
+    assert mark == ("2026-09-14", "", "7", "3", "", "2026-09-21", "900")
+    # service_state too: the keeper's pulse, the GeeLark strip, the
+    # breaker and a Cancel that has landed are drawn from it, and none of
+    # them could move the revision (2026-09-21, found by audit).
     for table in ("resources", "phones", "events", "actions", "wanted_builds",
-                  "logs"):
+                  "service_state", "logs"):
         assert table in asked[0], table
     # The log lines are the last column, apart from the farm's own.
-    assert mark[:live.FARM_COLUMNS] == ("2026-09-14", "", "7", "3", "")
+    assert mark[:live.FARM_COLUMNS] == ("2026-09-14", "", "7", "3", "",
+                                        "2026-09-21")
 
     # A store that will not answer is not a crash and not a change.
     monkeypatch.setattr(store_db, "Store",
@@ -6638,7 +6645,7 @@ def test_the_managers_scroll_is_read_off_the_box_that_scrolls():
     assert "|| sheet.querySelector('.tscroll')" in script, "the fallback"
     # And reopening the sheet must not focus the paste box, which scrolls
     # the body back to the top under the restore.
-    assert "function show(kind, fresh)" in script
+    assert "function show(kind, fresh, justIn)" in script
     assert "if (fresh === false) return;" in script
     assert "show(kept, false);" in script
 
@@ -6737,9 +6744,13 @@ def test_the_press_is_the_request_key_and_the_minute_is_the_fallback(
                        _form(csrf=client.csrf(), name="D01", press=stamp))
     client.request("POST", "/pools/proxy/test",
                    _form(csrf=client.csrf(), name="D01"))
-    assert keys[0].endswith(":abc123") and keys[1].endswith(":def456")
-    assert keys[0][:-6] == keys[1][:-6], "same verb, same target, same person"
-    assert keys[2].split(":")[-1].isdigit(), "no stamp: the minute, as before"
+    # The press, then the press's words (2026-09-21): the stamp is the
+    # second-to-last part.
+    assert keys[0].split(":")[-2] == "abc123"
+    assert keys[1].split(":")[-2] == "def456"
+    assert keys[0].rsplit(":", 2)[0] == keys[1].rsplit(":", 2)[0], (
+        "same verb, same target, same person")
+    assert keys[2].split(":")[-2].isdigit(), "no stamp: the minute, as before"
     assert len(set(keys)) == 3
 
 
@@ -8477,11 +8488,17 @@ def test_both_fetch_handlers_refuse_a_bad_answer_the_same_way():
     installed inside the pool sheet."""
     js = assets.JS
     assert js.count("function answer(r, say){") == 1
-    assert js.count("answer(r, false)") == 1, "the background refresh"
+    # Two: the background reload, and the open sheet's conditional look
+    # with its stamp (2026-09-21) - neither is somebody waiting on a
+    # click, so neither toasts a refusal.
+    assert js.count("answer(r, false)") == 2, "the background refreshes"
     # The press and the sheet fetch: both say so when the server
     # refuses, because both are somebody waiting on a click.
     assert js.count("answer(r, true)") == 2
-    assert js.count("answer(r, false)") == 1, "the background refresh"
+    # Two: the background reload, and the open sheet's conditional look
+    # with its stamp (2026-09-21) - neither is somebody waiting on a
+    # click, so neither toasts a refusal.
+    assert js.count("answer(r, false)") == 2, "the background refreshes"
     assert r"if (r.redirected && /\/login(\?|$)/.test(r.url)) {" in js
 
 
@@ -9034,3 +9051,71 @@ def test_the_pending_read_names_every_target_a_command_carries():
     assert got == {"1504": "boot_phone", "SX3": "test_proxy",
                    "1600": "login_accounts", "a@b.com": "login_accounts"}, (
         "the first command a target waits on is the one drawn")
+
+
+# ------------------------------------------- the sheet tells the truth
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_an_open_sheet_is_told_304_until_something_it_is_drawn_from_moves(
+        web, monkeypatch):
+    """The fetched sheet was a snapshot for the life of the tab. An open
+    drawer asks again with the stamp it was drawn from, and the 726KB
+    are sent again only when something moved (2026-09-21)."""
+    base = _dash(monkeypatch)
+    client = web()
+    client.login()
+
+    status, head, body = client.request("GET", "/pools/gmail/sheet")
+    tag = dict(head).get("ETag")
+    assert status == 200 and tag and tag.startswith('W/"'), tag
+    assert 'data-sheet="gmail"' in body
+
+    status, head, body = client.request("GET", "/pools/gmail/sheet",
+                                        headers={"If-None-Match": tag})
+    assert status == 304 and body == ""
+    assert dict(head).get("ETag") == tag
+
+    base["stamp"] = "s2"
+    status, head, body = client.request("GET", "/pools/gmail/sheet",
+                                        headers={"If-None-Match": tag})
+    assert status == 200 and dict(head).get("ETag") != tag
+    assert 'data-sheet="gmail"' in body
+
+
+def test_the_press_key_carries_the_words_and_not_only_the_press():
+    """A corrected Save of the same row from the same drawing of the
+    sheet was "the same press, sent twice" and thrown away with a green
+    "already went through" over it (2026-09-21, found by audit)."""
+    assert app_mod._digest({"a": 1, "by": "x", "by_id": 2}) == \
+        app_mod._digest({"a": 1}), "who pressed is not what was pressed"
+    assert app_mod._digest({"a": 1}) != app_mod._digest({"a": 2})
+    assert len(app_mod._digest({})) == 10
+    src = inspect.getsource(app_mod._Handler._act)
+    assert 'idem_key=f"{idem}:{_digest(payload)}"' in src
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_remove_in_the_gpt_and_spotify_drawers_answers_with_the_row(
+        web, monkeypatch):
+    """The Gmail door answered with its row and these two did not, so a
+    Remove in the drawer left the row on screen exactly as it was
+    (2026-09-21, found by audit)."""
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm import runner as runner_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue", lambda *a, **k: 71)
+    monkeypatch.setattr(actions_mod, "claim", lambda *a, **k: True)
+    monkeypatch.setattr(actions_mod, "pending_for", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "settle", lambda *a, **k: None)
+    monkeypatch.setattr(actions_mod, "one", lambda *a, **k: {"result": "gone"})
+    monkeypatch.setattr(runner_mod, "run_now",
+                        lambda *a, **k: ("done", "gone", None))
+    client = web()
+    client.login()
+    for kind in ("gpt", "spotify"):
+        status, _, body = client.request(
+            "POST", f"/pools/{kind}/remove",
+            body=f"csrf={client.csrf()}&address=x%40y.com&sure=1&back=/",
+            headers={"X-GF-Row": kind})
+        assert status == 200, (kind, status)
+        assert 'class="rowanswer"' in body and f'data-row-kind="{kind}"' in body

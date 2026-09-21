@@ -964,7 +964,24 @@ def pool_sheet(settings: Settings, kind: str) -> dict:
         # So a row with a Send or a Test on its way is drawn with that
         # door pressed, in the drawer as on the dashboard.
         listed["pending"] = _pending(store)
+        listed["stamp"] = _stamp(store)
         return listed
+
+
+def _stamp(store) -> str:
+    """What a pool sheet is drawn from, in one line: the newest change to
+    any pool row and how many there are, and the commands in flight,
+    which decide which doors are drawn pressed. The drawer sends it back
+    (If-None-Match) on every tick it is open and is told 304 until it
+    moves - one small query against the whole sheet being sent again."""
+    rows = store._rows(
+        "SELECT (SELECT count(*) FROM resources) AS n,"
+        "       (SELECT max(updated_at) FROM resources) AS at,"
+        "       (SELECT max(id) FROM actions) AS last,"
+        "       (SELECT count(*) FROM actions"
+        "         WHERE status IN ('queued', 'running')) AS waiting")
+    r = rows[0] if rows else {}
+    return "-".join(str(r.get(k) or "") for k in ("n", "at", "last", "waiting"))
 
 
 def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:

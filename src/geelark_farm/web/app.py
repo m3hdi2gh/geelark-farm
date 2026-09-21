@@ -18,8 +18,10 @@ limiting arrives with the door, not with the internet.
 from __future__ import annotations
 
 import csv
+import hashlib
 import hmac
 import io
+import json
 import logging
 import secrets
 import threading
@@ -748,7 +750,8 @@ class _Handler(BaseHTTPRequestHandler):
         if twin is not None:
             return self._redirect(_said_url(back, f"already:{twin}"))
         req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
-                                    requested_by=user["id"], idem_key=idem)
+                                    requested_by=user["id"],
+                                    idem_key=f"{idem}:{_digest(payload)}")
         # The same drawing of the button, sent again: one row, and it was
         # carried out the first time. Said so, rather than "Queued" over a
         # row that is already finished (2026-09-14). `enqueued` has known
@@ -1321,7 +1324,7 @@ class _Handler(BaseHTTPRequestHandler):
                              said_word="removed-spotify",
                              idem=self._minute_key(user, "remove_app",
                                                    address),
-                             back=back)
+                             back=back, row_of="spotify")
         if path == "/pools/spotify/undo":
             return self._undo_remove(user, "spotify", field)
         return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
@@ -1646,7 +1649,11 @@ class _Handler(BaseHTTPRequestHandler):
                              {"address": address}, said_word="removed-gpt",
                              idem=self._minute_key(user, "remove_app",
                                                    address),
-                             back=back)
+                             # The Gmail door answered with its row and
+                             # these two did not, so a Remove in the
+                             # drawer left the row on screen exactly as
+                             # it was (2026-09-21, found by audit).
+                             back=back, row_of="gpt")
         if path == "/pools/gpt/offer":
             address = (field.get("address") or "").strip()
             return self._act(user, "may_add_gpt", "offer_again",
@@ -2084,10 +2091,24 @@ class _Handler(BaseHTTPRequestHandler):
         if kind not in pages._POOL_KINDS:
             return self._text(404, "no such pool\n")
         listed = read.pool_sheet(self.settings, kind)
+        # A stamp of what the sheet is drawn from. An open drawer asks
+        # again with it on every tick and is told 304 until something
+        # moved, so the list a person works in is current without the
+        # 726KB being sent again for nothing (2026-09-21). Weak, since
+        # the bytes differ on every drawing - the press tokens.
+        stamp = str(listed.get("stamp") or "")
+        tag = ('W/"' + hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:16]
+               + '"') if stamp else ""
+        if tag and self.headers.get("If-None-Match") == tag:
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         self._html(200, pages._pool_sheet(
             kind, listed.get(kind) or [], listed.get("totals") or {}, user,
             manual_login=self.settings.manual_login,
-            pending=listed.get("pending") or {}))
+            pending=listed.get("pending") or {}), etag=tag)
 
     def _asset(self, path: str, *, private: bool) -> None:
         """One of the two files the page links to, under its own hash.
@@ -2114,11 +2135,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _html(self, code: int, body: str) -> None:
+    def _html(self, code: int, body: str, *, etag: str = "") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if etag:
+            self.send_header("ETag", etag)
         # Every page is signed in and some carry a secret once - a
         # one-time password, a form handed back with what was typed -
         # so no browser or proxy may keep a copy.
@@ -2399,6 +2422,23 @@ def _capture_health() -> dict | None:
     except Exception as exc:                                      # noqa: BLE001
         log.debug("the capture's health did not read (%s)", exc)
         return None
+
+
+def _digest(payload: dict) -> str:
+    """The press's words, in ten characters, for the idem key.
+
+    The key was the press token alone - one per drawing of the form - so
+    a corrected Save of the same row from the same drawing of the sheet
+    was "the same press, sent twice" and thrown away with a green
+    "already went through" over it: the operator retyped a password and
+    the row kept the old one (2026-09-21, found by audit). The same press
+    with the same words is still one request; with different words it is
+    a new one. `by`/`by_id` are left out: they are who pressed, not what.
+    """
+    said = {k: v for k, v in (payload or {}).items()
+            if k not in ("by", "by_id")}
+    return hashlib.sha1(json.dumps(said, sort_keys=True, default=str)
+                        .encode("utf-8")).hexdigest()[:10]
 
 
 #: The verbs about the whole pool rather than one row, which the

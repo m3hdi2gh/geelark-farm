@@ -157,14 +157,19 @@ test('a press about one row asks for one row, and takes the fragment',
             'the banner was left where the backdrop covers it');
 });
 
-test('the sheet is fetched once, however often the door is pressed',
+test('the sheet is fetched once, and asked about with its stamp after',
      async () => {
+  // A sheet that is in is not fetched again; a press on its door asks
+  // whether it has moved, with the stamp it was drawn from, and a 304
+  // leaves it exactly as it stands.
   const win = consoleIn(
     '<div class="ov" id="poolov" hidden></div>'
     + '<button data-pool="gmail">Manage</button>',
-    {answer: () => ({status: 200, body:
-      '<section class="sheet" data-sheet="gmail"><div class="sheetbody">'
-      + '</div></section>'})});
+    {answer: (call) => (call.init.headers && call.init.headers['If-None-Match'])
+      ? {status: 304}
+      : {status: 200, headers: {ETag: 'W/"a"'}, body:
+         '<section class="sheet" data-sheet="gmail"><div class="sheetbody">'
+         + '</div></section>'}});
   const doc = win.document;
   const door = doc.querySelector('[data-pool=gmail]');
 
@@ -173,10 +178,46 @@ test('the sheet is fetched once, however often the door is pressed',
   assert.equal(win.__fetches.length, 1, 'one press, one fetch');
   await settle();
 
-  assert.ok(doc.querySelector('.sheet[data-sheet="gmail"]'),
-            'the sheet never arrived');
+  const sheet = doc.querySelector('.sheet[data-sheet="gmail"]');
+  assert.ok(sheet, 'the sheet never arrived');
+  assert.equal(sheet.dataset.etag, 'W/"a"', 'the stamp it was drawn from');
   fire(door, 'click');
-  assert.equal(win.__fetches.length, 1, 'it was fetched again once it was in');
+  await settle();
+  assert.equal(win.__fetches.length, 2, 'a look, not a fetch of the sheet');
+  assert.equal(win.__fetches[1].init.headers['If-None-Match'], 'W/"a"');
+  assert.equal(doc.querySelector('.sheet[data-sheet="gmail"]'), sheet,
+               'told 304, the sheet stands');
+});
+
+test('an open sheet takes the rows that moved when its stamp has', async () => {
+  // The fetched sheet was a snapshot for the life of the tab: keepSheet
+  // looked for the fresh copy in the dashboard's response, which stopped
+  // carrying it - so a list a person worked in all afternoon never moved.
+  const row = (a) => `<tr data-key="gmail:${a}" data-group=""><td>${a}</td></tr>`;
+  const sheetWith = (rows) =>
+    '<section class="sheet" data-sheet="gmail"><div class="sheetbody">'
+    + '<div class="filters"></div><table><tbody>' + rows
+    + '<tr class="none" hidden><td>none</td></tr></tbody></table>'
+    + '</div></section>';
+  const win = consoleIn(
+    '<div class="ov" id="poolov" hidden>' + sheetWith(row('a@x.com')) + '</div>'
+    + '<button data-pool="gmail">Manage</button>',
+    {answer: () => ({status: 200, headers: {ETag: 'W/"b"'},
+                     body: sheetWith(row('a@x.com') + row('b@x.com'))})});
+  const doc = win.document;
+  const sheet = doc.querySelector('.sheet[data-sheet="gmail"]');
+  sheet.dataset.etag = 'W/"a"';
+  const first = sheet.querySelector('tr[data-key="gmail:a@x.com"]');
+
+  fire(doc.querySelector('[data-pool=gmail]'), 'click');
+  await settle();
+
+  assert.equal(win.__fetches[0].init.headers['If-None-Match'], 'W/"a"');
+  assert.equal(sheet.querySelectorAll('tr[data-key]').length, 2,
+               'the row that arrived was not merged in');
+  assert.equal(sheet.querySelector('tr[data-key="gmail:a@x.com"]'), first,
+               'the row that did not change was left where it stood');
+  assert.equal(sheet.dataset.etag, 'W/"b"');
 });
 
 // A page with one server-owned region and a form beside it, which is

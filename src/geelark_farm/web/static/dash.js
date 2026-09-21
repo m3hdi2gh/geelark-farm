@@ -597,15 +597,23 @@
     if (fetching[kind]) return;                // one press, one fetch
     fetching[kind] = true;
     fetch('/pools/' + kind + '/sheet', {credentials: 'same-origin'})
-      .then(function(r){ return answer(r, true) ? r.text() : null; })
-      .then(function(html){
+      .then(function(r){
+        if (!answer(r, true)) return null;
+        return r.text().then(function(html){
+          return {html: html, tag: tagOf(r)};
+        });
+      })
+      .then(function(fetched){
         fetching[kind] = false;
-        if (html === null) return;
-        var made = parse(html).querySelector('.sheet');
+        if (fetched === null) return;
+        var made = parse(fetched.html).querySelector('.sheet');
         if (!made) { location.assign('/pools/' + kind); return; }
+        // The stamp it was drawn from, sent back on every look while
+        // the sheet is open - see refreshSheet.
+        made.dataset.etag = fetched.tag;
         o.insertBefore(made, o.firstChild);
         init();
-        then();
+        then(true);
       })
       .catch(function(){
         fetching[kind] = false;
@@ -614,14 +622,53 @@
       });
   }
 
-  function show(kind, fresh){
+  function tagOf(r){
+    try { return (r.headers && r.headers.get && r.headers.get('ETag')) || ''; }
+    catch (err) { return ''; }
+  }
+
+  // The pool sheets, as opposed to the two the page draws itself.
+  var POOL_SHEETS = ['gmail', 'proxy', 'gpt', 'spotify'];
+  var refreshing = {};
+  // An open sheet, asked for again with the stamp it was drawn from.
+  // The server answers 304 until something it is drawn from has moved,
+  // and the rows that changed are merged in place (keepSheet) when it
+  // has. The fetched sheet used to be a snapshot for the life of the
+  // tab: `keepSheet` looked for the fresh copy in the dashboard's
+  // response, and the sheets left that response on 2026-09-20 - so a
+  // list a person worked in all afternoon never moved (2026-09-21,
+  // found by audit).
+  function refreshSheet(kind){
+    var o = ov(); if (!o) return;
+    var mine = o.querySelector('.sheet[data-sheet="' + kind + '"]');
+    if (!mine || refreshing[kind]) return;
+    refreshing[kind] = true;
+    var asking = {};
+    if (mine.dataset.etag) asking['If-None-Match'] = mine.dataset.etag;
+    fetch('/pools/' + kind + '/sheet',
+          {credentials: 'same-origin', headers: asking})
+      .then(function(r){
+        refreshing[kind] = false;
+        if (r.status === 304) return null;
+        if (!answer(r, false)) return null;
+        var tag = tagOf(r);
+        return r.text().then(function(html){
+          keepSheet(o, kind, parse(html));
+          var now = o.querySelector('.sheet[data-sheet="' + kind + '"]');
+          if (now) now.dataset.etag = tag;
+        });
+      })
+      .catch(function(){ refreshing[kind] = false; });
+  }
+
+  function show(kind, fresh, justIn){
     var o = ov();
     // Not a bare return: with no overlay on the page the press would
     // do nothing at all and say nothing about it. The pool has a page
     // of its own and always has.
     if (!o) { location.assign('/pools/' + kind); return; }
     if (!o.querySelector('.sheet[data-sheet="' + kind + '"]')) {
-      sheetIn(kind, function(){ show(kind, fresh); });
+      sheetIn(kind, function(now){ show(kind, fresh, now); });
       return;
     }
     o.querySelectorAll('.sheet').forEach(function(el){
@@ -629,6 +676,11 @@
     });
     o.hidden = false; openKind = kind;
     behind(true);
+    // Opened by a person onto a sheet fetched some time ago: ask
+    // whether it has moved. Not when it has just arrived, and not when
+    // a swap is reopening it - the swap's own path asks.
+    if (fresh !== false && !justIn && POOL_SHEETS.indexOf(kind) >= 0)
+      refreshSheet(kind);
     var open = o.querySelector('.sheet[data-sheet="' + kind + '"]');
     if (!open) return;
     // The paste box, which is what the manager is opened for. It focused
@@ -1128,6 +1180,9 @@
         here.insertBefore(n, held);
       });
       keepSheet(held, kept, brought);
+      // The pool sheets are not in what the swap brought; they are
+      // asked for on their own, with the stamp.
+      if (POOL_SHEETS.indexOf(kept) >= 0) refreshSheet(kept);
     } else {
       here.replaceChildren.apply(here, nodes);
     }

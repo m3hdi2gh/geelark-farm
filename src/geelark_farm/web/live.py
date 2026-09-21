@@ -55,16 +55,24 @@ MAX_STREAMS = 12
 #: The log lines are the last column and are counted apart: they move
 #: for every line a build writes, and only the Logs page draws them. A
 #: page on the farm's stream does not hear them (2026-09-14).
+#:
+#: `service_state` is in it too: the keeper's pulse, the GeeLark
+#: strip's reading, the breaker, and a Cancel that has landed on a row
+#: are all drawn from it, and none of them could move the revision - a
+#: press in one tab, the badge clearing when the build gave up, the
+#: breaker tripping, all waited on the thirty-second timer (2026-09-21,
+#: found by audit).
 _FINGERPRINT = (
     "SELECT (SELECT max(updated_at) FROM resources) AS pools,"
     "       (SELECT max(updated_at) FROM phones) AS phones,"
     "       (SELECT max(id) FROM events) AS events,"
     "       (SELECT max(id) FROM actions) AS actions,"
     "       (SELECT max(id) FROM wanted_builds) AS wanted,"
+    "       (SELECT max(updated_at) FROM service_state) AS state,"
     "       (SELECT max(id) FROM logs) AS logs"
 )
 #: Which columns of it are the farm's own; the rest is the log lines.
-FARM_COLUMNS = 5
+FARM_COLUMNS = 6
 
 
 class Pulse:
@@ -140,6 +148,7 @@ def take(settings: Settings) -> tuple | None:
     row = rows[0]
     return tuple(str(row.get(k) or "")
                  for k in ("pools", "phones", "events", "actions", "wanted",
+                           "state",
                            "logs"))
 
 
