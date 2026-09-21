@@ -252,6 +252,22 @@ class Credentials:
             time.sleep(remaining + 0.5)
         return totp.now()
 
+    def totp_next_window(self, *, min_life: float = 8.0) -> str:
+        """A code from the window after this one.
+
+        For the one retry a rejected code gets: the same window would give
+        the same six digits back, and prove nothing.
+        """
+        if not self.totp_secret:
+            raise AccountError(
+                f"{self.email} has no authenticator secret, so no code can be "
+                f"produced for it")
+        import pyotp
+
+        interval = pyotp.TOTP(self.totp_secret).interval
+        time.sleep(interval - (time.time() % interval) + 0.5)
+        return self.totp_now(min_life=min_life)
+
 
 @dataclass(frozen=True)
 class Account(Credentials):

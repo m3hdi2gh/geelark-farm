@@ -1467,7 +1467,9 @@ def test_stop_requests_live_in_service_state_and_age_out():
 
     for name in ("ask", "honoured"):
         src = inspect.getsource(getattr(stops, name))
-        assert "state.put(conn, KEY, asked)" in src and "conn.commit()" in src
+        assert "state.update(settings, KEY" in src, (
+            "one edit under the row's lock, not a read then a write")
+        assert "state.put(" not in src and "state.get(" not in src
     assert stops.KEY == "stop_by_hand"
 
 
@@ -1860,3 +1862,46 @@ def test_a_paused_builder_takes_finishes_and_leaves_builds_queued(
     monkeypatch.setattr("geelark_farm.store.jobs.connect", lambda s: conn)
     store_jobs.take(make_settings(), "w1", limit=2)
     assert "kind = ANY" not in conn.sql[0], "unpaused, everything is taken"
+
+
+# ------------------------------ one atomic edit for service_state (2026-09-21)
+def test_a_state_edit_reads_changes_and_writes_under_the_rows_lock(
+        monkeypatch, make_settings):
+    """`put` replaced a value whole, and six subsystems used it as the
+    second half of a read-modify-write across two connections - so two
+    processes editing the same blob within a moment lost one edit."""
+    from geelark_farm.store import state as store_state
+
+    conn = _ScriptedConn([None, ({"a": 1},), None])
+    monkeypatch.setattr("geelark_farm.store.state.connect", lambda s: conn)
+
+    got = store_state.update(make_settings(), "k",
+                             lambda v: {**(v or {}), "b": 2}, {})
+
+    assert got == {"a": 1, "b": 2}
+    assert "ON CONFLICT (key) DO NOTHING" in conn.sql[0], "the row exists first"
+    assert "FOR UPDATE" in conn.sql[1], "and is locked while fn runs"
+    assert conn.sql[2].startswith("UPDATE service_state SET value")
+    assert conn.committed == 1
+
+
+def test_no_writer_of_service_state_does_a_read_then_a_put_any_more():
+    """The six that did, by name. A new one is welcome to `put` a value it
+    computes whole; a read followed by a put is the race this closed."""
+    import inspect
+
+    from geelark_farm import apps, breaker, builder, geo
+    from geelark_farm.store import stops
+
+    for module in (stops, apps, geo):
+        src = inspect.getsource(module)
+        assert "state.put(" not in src, module.__name__
+    assert "store_state.put(" not in inspect.getsource(breaker.PgBreaker)
+    for fn in (builder._bump_captcha_host, builder.forgive_host):
+        src = inspect.getsource(fn)
+        assert "store_state.update(" in src and "store_state.put(" not in src
+    # The one whole-value write left in builder.py, which is not a
+    # read-modify-write: a refusal replaces the last refusal.
+    src = inspect.getsource(builder)
+    assert src.count("store_state.put(") == 1
+    assert 'store_state.put(conn, "geelark_refusal"' in src

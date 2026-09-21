@@ -63,12 +63,14 @@ def _remember(settings: Settings | None, known: dict) -> None:
     _memory.update(known)
     if settings is not None and getattr(settings, "store_enabled", False):
         try:
-            from .store import db
             from .store import state as store_state
 
-            with db.connect(settings) as conn:
-                store_state.put(conn, STATE_KEY, known)
-                conn.commit()
+            # Merged under the row's lock rather than written whole: two
+            # builds placing two exits at once each wrote the cache they
+            # had read, and one exit's place was lost (2026-09-21).
+            store_state.update(settings, STATE_KEY,
+                               lambda current: {**(current or {}), **known},
+                               {})
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not write the geo cache (%s)", exc)
 

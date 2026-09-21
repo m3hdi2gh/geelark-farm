@@ -187,6 +187,12 @@ VERDICTS: dict[str, Verdict] = {
         "address at all; the picture grid this can solve was never shown. "
         "The exit is changed and the same address tried again; the address "
         "is not marked."),
+    "recaptcha_unreachable": Verdict(
+        EXIT, "the phone could not load reCAPTCHA on this exit",
+        "The widget never loaded - \"Cannot contact reCAPTCHA\" - so the "
+        "challenge was never shown and nothing is known against the "
+        "address. The exit is changed and the same address tried again; "
+        "the address is not marked."),
     "captcha_shown": Verdict(
         CREDENTIAL, "{service} showed a CAPTCHA",
         "{service} challenged this address. It follows the account, not the "
@@ -264,9 +270,9 @@ VERDICTS: dict[str, Verdict] = {
         CREDENTIAL, "Google did not recognise the address",
         "Google does not know this address. Check it for typos."),
     "wrong_2fa_code": Verdict(
-        CREDENTIAL, "{service} turned down the 2FA code",
-        "The code was rejected. Usually the wrong 2FA secret in this row - "
-        "check the column beside it."),
+        CREDENTIAL, "{service} turned down the 2FA code twice",
+        "Two codes from two windows were rejected. Usually the wrong 2FA "
+        "secret in this row - check the column beside it."),
     "no_authenticator": Verdict(
         CREDENTIAL, "Google asked for a 2FA code and the row has no secret",
         "Google asked for a code and the row has no 2FA secret. "

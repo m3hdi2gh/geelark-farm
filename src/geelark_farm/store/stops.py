@@ -20,7 +20,6 @@ import time
 
 from ..config import Settings
 from . import state
-from .db import connect
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +37,13 @@ def ask(settings: Settings, serial: str) -> None:
     calls this reports a store that is down rather than a stop that
     quietly went nowhere."""
     now = time.time()
-    with connect(settings) as conn:
-        asked = _pruned(state.get(settings, KEY, {}) or {}, now)
-        asked[str(serial)] = now
-        state.put(conn, KEY, asked)
-        conn.commit()
+    # One edit under the row's lock: `ask` and `honoured` were each a read
+    # on one connection and a write on another, from four processes, so a
+    # press and an honour a moment apart could erase each other
+    # (2026-09-21, found by audit).
+    state.update(settings, KEY,
+                 lambda asked: {**_pruned(asked or {}, now), str(serial): now},
+                 {})
 
 
 def live(value, now: float | None = None) -> set[str]:
@@ -61,8 +62,8 @@ def asked(settings: Settings) -> set[str]:
 def honoured(settings: Settings, serial: str) -> None:
     """Take one request out, the build having given up on it."""
     now = time.time()
-    with connect(settings) as conn:
-        asked = _pruned(state.get(settings, KEY, {}) or {}, now)
-        asked.pop(str(serial), None)
-        state.put(conn, KEY, asked)
-        conn.commit()
+    state.update(settings, KEY,
+                 lambda asked: {k: at
+                                for k, at in _pruned(asked or {}, now).items()
+                                if k != str(serial)},
+                 {})

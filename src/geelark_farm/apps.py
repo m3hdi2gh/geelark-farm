@@ -147,21 +147,22 @@ def remember(settings, package: str, version_id: str, *,
     reporting trouble: a recorder that quietly did nothing would be found
     out one slow build at a time.
     """
-    from .store import db
     from .store import state as store_state
 
-    known = {str(k): _entry(v) for k, v in
-             dict(store_state.get(settings, STATE_KEY, {}) or {}).items()}
-    known = {k: v for k, v in known.items() if v["id"]}
-    if version_id:
-        known[package] = {"id": str(version_id),
-                          "version": str(version_name),
-                          "at": at or time.strftime("%Y-%m-%d")}
-    else:
-        known.pop(package, None)
-    with db.connect(settings) as conn:
-        store_state.put(conn, STATE_KEY, known)
-        conn.commit()
+    def rewrite(current: dict | None) -> dict:
+        known = {str(k): _entry(v) for k, v in dict(current or {}).items()}
+        known = {k: v for k, v in known.items() if v["id"]}
+        if version_id:
+            known[package] = {"id": str(version_id),
+                              "version": str(version_name),
+                              "at": at or time.strftime("%Y-%m-%d")}
+        else:
+            known.pop(package, None)
+        return known
+
+    # Under the row's lock: two uploads a moment apart each read the
+    # list, added their own, and wrote it - one of them lost (2026-09-21).
+    store_state.update(settings, STATE_KEY, rewrite, {})
     forget(package)
 
 

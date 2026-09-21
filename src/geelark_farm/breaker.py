@@ -136,6 +136,13 @@ class Breaker:
             log.error("could not record the build outcome for the breaker "
                       "(%s); it cannot trip on this machine", exc)
 
+    def _update(self, fn) -> dict:
+        """Read, change, write - the one shape every edit here takes, so
+        the store's breaker can do the three under a row lock."""
+        state = fn(self._read())
+        self._write(state)
+        return state
+
     def record(self, build) -> None:
         """Take one build's outcome into account.
 
@@ -145,17 +152,22 @@ class Breaker:
         if not counts_against(build):
             if not shows_it_works(build):
                 return                     # nothing happened; nothing to say
-            state = self._read()
-            if state.get("consecutive"):
-                log.info("a build worked; the breaker's count goes back to 0")
-            self._write({"consecutive": 0})
+
+            def worked(state: dict) -> dict:
+                if state.get("consecutive"):
+                    log.info("a build worked; the breaker's count goes back "
+                             "to 0")
+                return {"consecutive": 0}
+            self._update(worked)
             return
 
-        state = self._read()
-        count = int(state.get("consecutive") or 0) + 1
-        reasons = list(state.get("reasons") or [])[-(self.limit - 1):]
-        reasons.append(build.status)
-        self._write({"consecutive": count, "reasons": reasons})
+        def failed(state: dict) -> dict:
+            count = int(state.get("consecutive") or 0) + 1
+            reasons = list(state.get("reasons") or [])[-(self.limit - 1):]
+            reasons.append(build.status)
+            return {"consecutive": count, "reasons": reasons}
+        state = self._update(failed)
+        count, reasons = state["consecutive"], state["reasons"]
         if count >= self.limit:
             log.error("%d builds in a row have failed (%s) - not building "
                       "again until somebody clears this",
@@ -189,7 +201,7 @@ class Breaker:
 
     def clear(self) -> None:
         """Somebody has looked at it and decided to carry on."""
-        self._write({"consecutive": 0})
+        self._update(lambda state: {"consecutive": 0})
         log.info("the breaker was cleared by hand")
 
 
@@ -222,16 +234,28 @@ class PgBreaker(Breaker):
         return dict(found or {})
 
     def _write(self, state: dict) -> None:
-        from .store import db
+        """Only the one-time import of the file writes whole; every edit
+        goes through `_update`."""
+        self._update(lambda current: state)
+
+    def _update(self, fn) -> dict:
+        """The three steps under the row's lock. Two replicas settling
+        builds at once each read the count, added one, and wrote it -
+        and the count could stand still, or a failure written from a
+        stale read could overwrite the zero a working build had just put
+        there (2026-09-21, found by audit)."""
         from .store import state as store_state
 
+        if not self._imported:
+            self._read()                   # the file, once, into an empty key
         try:
-            with db.connect(self._settings) as conn:
-                store_state.put(conn, "breaker", state)
-                conn.commit()
+            return store_state.update(self._settings, "breaker",
+                                      lambda current: fn(dict(current or {})),
+                                      {})
         except Exception as exc:                                   # noqa: BLE001
             log.error("could not record the build outcome for the breaker "
                       "(%s); it cannot trip on this machine", exc)
+            return fn({})
 
 
 def open_breaker(settings, path: Path, limit: int = LIMIT) -> Breaker:

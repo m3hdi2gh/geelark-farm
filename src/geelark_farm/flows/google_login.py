@@ -120,6 +120,10 @@ FATAL_ADVICE = {
         "the build changes it and tries the same address again",
     "captcha_shown":
         "Google is challenging this exit IP; a cleaner proxy is the fix",
+    "recaptcha_unreachable":
+        "the phone could not load reCAPTCHA at all on this exit - the "
+        "challenge was never shown, so nothing is known against the address; "
+        "the build changes the exit and tries the same address again",
     "password_changed":
         "the password in the sheet is the old one - Google says when it was "
         "changed on the archived screen",
@@ -142,10 +146,12 @@ FATAL_ADVICE = {
         "have 2FA and its secret is missing from the row, or Google decided "
         "this sign-in needed a second factor and the account cannot give one",
     "wrong_2fa_code":
-        "Google rejected the authenticator code, so the totp_secret in the "
-        "sheet is not this account's - a fresh code from a wrong secret is "
-        "wrong every time, which is why this stops rather than retrying. "
-        "Check the secret against the account's authenticator setup",
+        "Google rejected two authenticator codes from two windows, so the "
+        "totp_secret in the sheet is not this account's - a code from a "
+        "wrong secret is wrong every time. One rejection alone was not "
+        "enough to say so: it is what a clock a few seconds out, or Google "
+        "on a bad moment, looks like too. Check the secret against the "
+        "account's authenticator setup",
 }
 
 
@@ -180,6 +186,9 @@ class Context(router.Context):
     #: Times this sign-in has asked Google to widen the list of ways in.
     #: See WIDEN_BUDGET.
     widened: int = 0
+    #: Whether a rejected authenticator code has had its one second try,
+    #: from the next window. See act_totp.
+    code_retried: bool = False
 
 
 # --------------------------------------------------------------- primitives
@@ -285,6 +294,14 @@ def _fatal_reason(ctx: Context) -> str | None:
         # reason - only after the attempt limit. Without a key it is
         # fatal exactly as before.
         if reason == "captcha_shown" and getattr(ctx, "solver_key", ""):
+            continue
+        # Google turned down one code. A row with a key gets one more,
+        # from the next window, before that is a verdict on the key -
+        # see act_totp. Only with a box to type it into: without one this
+        # is a page, not a prompt.
+        if (reason == "wrong_2fa_code" and not ctx.code_retried
+                and getattr(ctx.account, "has_authenticator", False)
+                and screen.find_input(ctx.elements) is not None):
             continue
         return reason
     return None
@@ -395,9 +412,10 @@ def _captchas_met(ctx: Context) -> int:
 
 
 def _captcha_gave_up(ctx: Context, said: str) -> Outcome:
-    path = ctx.save("captcha_shown")
-    return Outcome("fatal", "captcha_shown",
-                   f"{said}; {FATAL_ADVICE['captcha_shown']}",
+    reason = _captcha_word(ctx, "captcha_shown")
+    path = ctx.save(reason)
+    return Outcome("fatal", reason,
+                   f"{said}; {FATAL_ADVICE[reason]}",
                    artifacts=[path] if path else [])
 
 
@@ -621,8 +639,23 @@ def is_loading(ctx: Context) -> bool:
     return still_loading(ctx) or ctx.has(*CHECKING_TEXTS)
 
 
+def _captcha_word(ctx: Context, reason: str) -> str:
+    """What a captcha this flow could not get past is called.
+
+    `captcha_shown` says Google challenged the address. When the widget
+    itself could not load - "Cannot contact reCAPTCHA" - the challenge
+    was never shown to be answered, and what failed was the exit's road
+    to it; three addresses in eight days were marked for a captcha they
+    never saw (2026-09-21, found by audit). The exit's word makes the
+    build change the exit and try the same address again.
+    """
+    if reason == "captcha_shown" and ctx.seen.get("recaptcha_unreachable"):
+        return "recaptcha_unreachable"
+    return reason
+
+
 def act_fatal(ctx: Context) -> Outcome:
-    reason = _fatal_reason(ctx) or "unknown_fatal"
+    reason = _captcha_word(ctx, _fatal_reason(ctx) or "unknown_fatal")
     path = ctx.save(reason)
     detail = FATAL_ADVICE.get(reason,
                               "the screen says this cannot proceed unattended")
@@ -903,8 +936,21 @@ def act_totp(ctx: Context) -> Outcome | None:
                         if ctx.account.recovery_email
                         else FATAL_ADVICE["no_authenticator"]),
                        artifacts=[path] if path else [])
-    code = ctx.account.totp_now()
-    log.info("entering a fresh authenticator code")
+    if ctx.has(*FATAL_TEXTS["wrong_2fa_code"]):
+        # Google turned the first code down. One more, from the NEXT
+        # window - the same window would give the same six digits back -
+        # and only one: four fresh codes against a real account is the
+        # incident that made this fatal in the first place (2026-08-10).
+        # One rejection is what a clock a few seconds out looks like too,
+        # and a key was called wrong on the strength of it (2026-09-21,
+        # found by audit).
+        ctx.code_retried = True
+        code = ctx.account.totp_next_window()
+        log.info("the code was turned down once; one more from the next "
+                 "window")
+    else:
+        code = ctx.account.totp_now()
+        log.info("entering a fresh authenticator code")
     fill(ctx, field, code)
     submit(ctx)
     time.sleep(5)

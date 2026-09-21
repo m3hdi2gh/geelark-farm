@@ -62,8 +62,12 @@ def test_the_store_remembers_what_was_looked_up(monkeypatch, make_settings,
     kept = {}
     monkeypatch.setattr(store_state, "get",
                         lambda s, key, default=None: kept.get(key, default))
-    monkeypatch.setattr(store_state, "put",
-                        lambda conn, key, value: kept.__setitem__(key, value))
+
+    def update(s, key, fn, default=None):
+        kept[key] = fn(kept.get(key, default))
+        return kept[key]
+
+    monkeypatch.setattr(store_state, "update", update)
 
     class _Conn:
         def __enter__(self):

@@ -247,16 +247,32 @@ def _captcha_hosts(settings: Settings) -> dict:
     return dict(_captcha_hosts_memory)
 
 
-def _remember_captcha_hosts(settings: Settings, hosts: dict) -> None:
+def _bump_captcha_host(settings: Settings, host: str, today: str) -> int:
+    """One more challenge against `host` today; returns the day's count.
+
+    One edit under the store's row lock. It was a read, a change and a
+    write on two connections, from two builder replicas and the console's
+    forgive_host at once - so a strike landing between the console's read
+    and its write resurrected the day's strikes for a host the operator
+    had just cleared, which is the very thing forgive_host was written to
+    end (2026-09-21, found by audit).
+    """
+    def bump(hosts: dict | None) -> dict:
+        hosts = dict(hosts or {})
+        seen = hosts.get(host) or {}
+        count = (int(seen.get("count") or 0)
+                 if seen.get("day") == today else 0) + 1
+        hosts[host] = {"day": today, "count": count}
+        return hosts
+
     if getattr(settings, "store_enabled", False):
-        from .store import db
         from .store import state as store_state
-        with db.connect(settings) as conn:
-            store_state.put(conn, "captcha_hosts", hosts)
-            conn.commit()
-        return
-    _captcha_hosts_memory.clear()
-    _captcha_hosts_memory.update(hosts)
+        hosts = store_state.update(settings, "captcha_hosts", bump, {})
+    else:
+        hosts = bump(_captcha_hosts_memory)
+        _captcha_hosts_memory.clear()
+        _captcha_hosts_memory.update(hosts)
+    return int(hosts[host]["count"])
 
 
 def _struck_hosts(settings: Settings) -> set[str]:
@@ -288,12 +304,7 @@ def _strike_captcha_host(settings: Settings, book: Book,
     if not host:
         return []
     today = failures.today()
-    hosts = _captcha_hosts(settings)
-    seen = hosts.get(host) or {}
-    count = (int(seen.get("count") or 0)
-             if seen.get("day") == today else 0) + 1
-    hosts[host] = {"day": today, "count": count}
-    _remember_captcha_hosts(settings, hosts)
+    count = _bump_captcha_host(settings, host, today)
     if count < CAPTCHA_STRIKES_PER_HOST:
         return []
     aside = []
@@ -4194,17 +4205,17 @@ def forgive_host(settings: Settings, host: str, *, by: str = "") -> None:
     if not host or not getattr(settings, "store_enabled", False):
         return
     try:
-        from .store import db
         from .store import state as store_state
 
-        cleared = host_clears(settings)
-        cleared[host] = time.time()
-        strikes = _captcha_hosts(settings)
-        strikes.pop(host, None)
-        with db.connect(settings) as conn:
-            store_state.put(conn, HOST_CLEARS, cleared)
-            store_state.put(conn, "captcha_hosts", strikes)
-            conn.commit()
+        now = time.time()
+        # Each under its row's lock - see _bump_captcha_host for the race
+        # this closes.
+        store_state.update(settings, HOST_CLEARS,
+                           lambda cleared: {**(cleared or {}), host: now}, {})
+        store_state.update(settings, "captcha_hosts",
+                           lambda strikes: {k: v
+                                            for k, v in (strikes or {}).items()
+                                            if k != host}, {})
         log.info("host %s cleared by %s: judged from now on", host,
                  by or "hand")
     except Exception as exc:                                      # noqa: BLE001

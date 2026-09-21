@@ -918,11 +918,24 @@ def test_a_rejected_authenticator_code_stops_rather_than_repeating():
     help and only spends attempts.
     """
     ctx = context_from("google-wrong-2fa-code.xml")
-
     assert ctx.has("wrong code")
+
+    # One rejection is what a clock a few seconds out looks like too, and
+    # a key was called wrong on the strength of it (2026-09-21, found by
+    # audit). A row with a key gets one more code, from the next window.
+    assert login._fatal_reason(ctx) is None
+    assert matched_screen(ctx).name == "2fa_code_entry"
+    ctx.code_retried = True
     assert login._fatal_reason(ctx) == "wrong_2fa_code"
     assert matched_screen(ctx).name == "fatal"
     assert "totp_secret" in login.FATAL_ADVICE["wrong_2fa_code"]
+    assert "two windows" in login.FATAL_ADVICE["wrong_2fa_code"]
+
+    # A row with no key has nothing to retry with: fatal at once.
+    bare = context_for("google-wrong-2fa-code.xml",
+                       Account(email="b@gmail.com", password="x",
+                               totp_secret=""))
+    assert login._fatal_reason(bare) == "wrong_2fa_code"
 
 
 def test_a_code_page_without_a_rejection_is_still_answered():
@@ -2273,3 +2286,46 @@ def test_a_press_that_did_not_land_is_not_a_verdict(tmp_path):
     assert login.act_verify_phone(ctx) is None, "nothing was pressed and "\
         "nothing is concluded"
     assert ctx.widened == 0, "an unlanded press costs no budget"
+
+
+def test_the_second_code_comes_from_the_next_window_and_only_once(
+        phone, monkeypatch):
+    """The same window would give the same six digits back and prove
+    nothing; a third would be the incident this was fatal for."""
+    device = phone(taps_that_work={"Next"})
+    monkeypatch.setattr(login.shell, "pause", lambda lo, hi: None)
+    ctx = context_from("google-wrong-2fa-code.xml")
+    windows = []
+    monkeypatch.setattr(type(ctx.account), "totp_next_window",
+                        lambda self, **k: windows.append("next") or "222222")
+    monkeypatch.setattr(type(ctx.account), "totp_now",
+                        lambda self, **k: windows.append("now") or "111111")
+    typed = []
+    monkeypatch.setattr(login, "fill",
+                        lambda c, field, text: typed.append(text) or True)
+
+    assert login.act_totp(ctx) is None
+    assert windows == ["next"] and typed == ["222222"]
+    assert ctx.code_retried
+    assert login._fatal_reason(ctx) == "wrong_2fa_code", "the next one is"
+
+
+def test_a_captcha_the_phone_could_not_load_is_the_exits_fault():
+    """"Cannot contact reCAPTCHA" is the widget failing to load, not Google
+    challenging the address; three addresses in eight days were marked
+    for a captcha they never saw (2026-09-21, found by audit)."""
+    from geelark_farm import failures
+
+    ctx = context_from("google-verify-chooser.xml")
+    assert login._captcha_word(ctx, "captcha_shown") == "captcha_shown"
+    ctx.seen["recaptcha_unreachable"] = 2
+    assert login._captcha_word(ctx, "recaptcha_unreachable") == \
+        "recaptcha_unreachable"
+    assert login._captcha_word(ctx, "captcha_shown") == "recaptcha_unreachable"
+    assert login._captcha_word(ctx, "password_changed") == "password_changed"
+    out = login._captcha_gave_up(ctx, "three rounds")
+    assert out.reason == "recaptcha_unreachable"
+
+    verdict = failures.verdict("recaptcha_unreachable")
+    assert verdict.blame == failures.EXIT and verdict.needs_a_new_exit
+    assert not verdict.costs_the_credential

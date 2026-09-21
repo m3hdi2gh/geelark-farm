@@ -6008,20 +6008,12 @@ def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
             builder.HOST_CLEARS: {}}
     monkeypatch.setattr(store_state, "get",
                         lambda s, key, default=None: dict(kept.get(key) or {}))
-    monkeypatch.setattr(store_state, "put",
-                        lambda conn, key, value: kept.__setitem__(key, value))
 
-    class _Conn:
-        def __enter__(self):
-            return self
+    def update(s, key, fn, default=None):
+        kept[key] = fn(kept.get(key, default))
+        return kept[key]
 
-        def __exit__(self, *a):
-            return False
-
-        def commit(self):
-            kept["committed"] = True
-
-    monkeypatch.setattr(db, "connect", lambda s: _Conn())
+    monkeypatch.setattr(store_state, "update", update)
     monkeypatch.setattr(builder.time, "time", lambda: 5_000.0)
 
     builder.forgive_host(settings, "10.0.0.0", by="mehdi")
@@ -6029,7 +6021,6 @@ def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
     assert kept[builder.HOST_CLEARS] == {"10.0.0.0": 5_000.0}
     assert "10.0.0.0" not in kept["captcha_hosts"], "the day's strikes go"
     assert kept["captcha_hosts"]["10.0.0.1"]["count"] == 1, "others stay"
-    assert kept["committed"]
     assert builder.host_clears(settings) == {"10.0.0.0": 5_000.0}
     # Without a store there is nothing to write, and nothing breaks.
     builder.forgive_host(make_settings(store_enabled=False), "10.0.0.0")
@@ -6622,3 +6613,29 @@ def test_the_play_walk_is_handed_the_builds_stop_and_its_stop_is_filed_as_one(
         builder_mod._install(None, "P", "com.example", name="x",
                              ordered=False, budget=60, artifacts=None,
                              cancelled=lambda: True)
+
+
+def test_a_captcha_strike_is_one_edit_under_the_stores_lock(monkeypatch,
+                                                            make_settings):
+    """A strike landing between the console's read and its write
+    resurrected the day's strikes for a host the operator had just cleared
+    - the very thing forgive_host was written to end (2026-09-21)."""
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.store import state as store_state
+
+    kept = {"captcha_hosts": {"10.0.0.0": {"day": "2026-09-21", "count": 1}}}
+    edits = []
+
+    def update(s, key, fn, default=None):
+        edits.append(key)
+        kept[key] = fn(kept.get(key, default))
+        return kept[key]
+
+    monkeypatch.setattr(store_state, "update", update)
+    settings = make_settings(store_enabled=True)
+
+    assert builder_mod._bump_captcha_host(settings, "10.0.0.0",
+                                          "2026-09-21") == 2
+    assert builder_mod._bump_captcha_host(settings, "10.0.0.0",
+                                          "2026-09-22") == 1, "a new day"
+    assert edits == ["captcha_hosts", "captcha_hosts"]

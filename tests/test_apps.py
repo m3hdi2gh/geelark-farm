@@ -234,12 +234,14 @@ def test_the_record_carries_the_version_name_its_id_names(monkeypatch,
     monkeypatch.setattr(db, "connect", lambda s: _Conn())
     monkeypatch.setattr(store_state, "get",
                         lambda s, key, default=None: dict(written.get("row", {})))
-    monkeypatch.setattr(store_state, "put",
-                        lambda conn, key, value: written.update(row=value))
+
+    def update(s, key, fn, default=None):
+        written["row"] = fn(dict(written.get("row", {})))
+        return written["row"]
+    monkeypatch.setattr(store_state, "update", update)
 
     apps.remember(settings, "com.anthropic.claude", "42",
                   version_name="1.260910.12", at="2026-09-12")
-    assert written["committed"]
     assert written["row"] == {"com.anthropic.claude": {
         "id": "42", "version": "1.260910.12", "at": "2026-09-12"}}
     assert apps.recorded(settings) == written["row"]

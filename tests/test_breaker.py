@@ -261,3 +261,32 @@ def test_the_builder_reads_the_breakers_word_for_a_person():
     assert builder.STOPPED_BY_A_PERSON is breaker_mod.STOPPED_BY_A_PERSON
     assert breaker_mod.STOPPED_BY_A_PERSON <= breaker_mod.NOTHING_HAPPENED
     assert breaker_mod.BUILDER_GONE <= breaker_mod.NOTHING_HAPPENED
+
+
+def test_the_stores_breaker_counts_under_the_rows_lock(monkeypatch, tmp_path):
+    """Two replicas settling builds at once each read the count, added one
+    and wrote it: the count could stand still, or a failure written from a
+    stale read could overwrite the zero a working build had just put there
+    (2026-09-21, found by audit)."""
+    from geelark_farm.store import state as store_state
+
+    kept = {"breaker": {"consecutive": 1, "reasons": ["captcha_shown"]}}
+    locked = []
+
+    def update(s, key, fn, default=None):
+        locked.append(key)
+        kept[key] = fn(kept.get(key, default))
+        return kept[key]
+
+    monkeypatch.setattr(store_state, "update", update)
+    monkeypatch.setattr(store_state, "get",
+                        lambda s, key, default=None: kept.get(key, default))
+    fuse = breaker_mod.PgBreaker(object(), tmp_path / "breaker.json", limit=3)
+
+    fuse.record(build(False, "error"))
+    assert kept["breaker"] == {"consecutive": 2,
+                               "reasons": ["captcha_shown", "error"]}
+    fuse.record(build(True))
+    assert kept["breaker"] == {"consecutive": 0}
+    fuse.clear()
+    assert locked == ["breaker"] * 3, "every edit, under the lock"
