@@ -302,3 +302,21 @@ def test_the_source_is_what_the_flows_already_take():
     source = mailbox.MailboxSource(
         mailbox.Mailbox("imap.example.com", "a@b.com", "x"))
     assert isinstance(source, codes.CodeSource)
+
+
+def test_a_stop_during_the_mailbox_wait_goes_up_and_the_box_is_closed(box):
+    """The IMAP poll ran to its timeout with no way to stop it; the
+    build's stop is asked before every look, and the connection is still
+    given back on the way out."""
+    now = time.time()
+    source, server = box([])
+
+    class Stop(Exception):
+        pass
+
+    def watch():
+        raise Stop()
+
+    with pytest.raises(Stop):
+        source.code_for("mine@masked.me", since=now, timeout=5, watch=watch)
+    assert server.logged_out, "the connection is given back on a stop too"

@@ -404,13 +404,13 @@ class Mailbox:
     def __init__(self, code="481920"):
         self.code, self.asked = code, []
 
-    def code_for(self, address, *, since, timeout=180):
+    def code_for(self, address, *, since, timeout=180, watch=None):
         self.asked.append((address, since))
         return self.code
 
 
 class SilentMailbox:
-    def code_for(self, address, *, since, timeout=180):
+    def code_for(self, address, *, since, timeout=180, watch=None):
         return None
 
 
@@ -1570,7 +1570,7 @@ def test_a_mailbox_that_will_not_answer_is_not_the_accounts_fault(monkeypatch):
     from geelark_farm.flows import chatgpt_login
 
     class Broken:
-        def code_for(self, address, *, since, timeout=120):
+        def code_for(self, address, *, since, timeout=120, watch=None):
             raise RuntimeError("[AUTHENTICATIONFAILED] Invalid credentials")
 
     outcome = chatgpt_login.act_email_code(code_context(Broken()))
@@ -1588,10 +1588,34 @@ def test_the_address_is_named_when_no_code_came(monkeypatch):
     from geelark_farm.flows import chatgpt_login
 
     class Silent:
-        def code_for(self, address, *, since, timeout=120):
+        def code_for(self, address, *, since, timeout=120, watch=None):
             return None
 
     outcome = chatgpt_login.act_email_code(code_context(Silent()))
 
     assert outcome.reason == "email_code_never_arrived"
     assert "a@b.com" in outcome.detail
+
+
+def test_a_stop_raised_through_the_code_wait_is_not_a_mailbox_fault():
+    """The mailbox handler catches Exception, and the build's stop is one:
+    with the stop riding into the wait as `watch`, a Cancel would have
+    been filed as `mailbox_unreachable` against the address."""
+    from geelark_farm.flows import chatgpt_login
+
+    class Stop(Exception):
+        pass
+
+    class Asks:
+        def code_for(self, address, *, since, timeout=120, watch=None):
+            watch()
+            return "000000"
+
+    ctx = code_context(Asks())
+
+    def pressed():
+        raise Stop()
+
+    ctx.watch = pressed
+    with pytest.raises(Stop):
+        chatgpt_login.act_email_code(ctx)

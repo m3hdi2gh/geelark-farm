@@ -51,6 +51,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .. import screen, shell
 from ..api import Client
@@ -282,13 +283,25 @@ def still_loading(elements: list[screen.Element]) -> bool:
 
 def install(client: Client, phone_id: str, package: str, *,
             budget_seconds: float = 600,
-            artifact_dir: Path | None = None) -> Outcome:
+            artifact_dir: Path | None = None,
+            cancelled: Callable[[], bool] | None = None) -> Outcome:
     """Install `package`, and return a named outcome.
 
     Returns rather than raises, so a batch can record why a row failed and move
     on to the next one.
+
+    `cancelled` is the build's own stop, asked at the top of every turn of
+    both walks. This took none, so a Cancel pressed while the Play Store
+    was being walked - up to five minutes before Install, ten after - was
+    not heard until the walk ended, on a phone billing by the minute
+    (2026-09-21, found by audit). Answered True it ends the walk as
+    `interrupted`; the builder's callable raises instead for a press on
+    the console, and that is left to go up.
     """
     saved: list[str] = []
+
+    def stopped() -> bool:
+        return bool(cancelled and cancelled())
 
     def archive(name: str, xml: str) -> None:
         if artifact_dir and xml:
@@ -307,6 +320,7 @@ def install(client: Client, phone_id: str, package: str, *,
     # meets nothing. So this loops on what is actually on screen rather than
     # assuming a fixed number of dialogs.
     elements: list[screen.Element] = []
+    xml = ""                 # read below; a budget of nothing reads none
     stall = Stall()
     deadline = time.monotonic() + PRE_INSTALL_SECONDS
     dialogs = 0
@@ -315,6 +329,10 @@ def install(client: Client, phone_id: str, package: str, *,
     reopens = 0
     first = True
     while time.monotonic() < deadline:
+        if stopped():
+            return Outcome("fatal", "interrupted",
+                           "stopped before the Install button was reached",
+                           artifacts=saved)
         xml = screen.capture(client, phone_id) or ""
         elements = screen.parse(xml)
         if first:
@@ -459,6 +477,10 @@ def install(client: Client, phone_id: str, package: str, *,
     seen: set[str] = set()
     retaps = 0
     while time.monotonic() < deadline:
+        if stopped():
+            return Outcome("fatal", "interrupted",
+                           "stopped while the package was downloading",
+                           artifacts=saved)
         time.sleep(POLL_SECONDS)
         # Not strict: a poll, where an empty answer means the download has
         # not finished. Raising over one refused `pm list` would throw away

@@ -44,6 +44,7 @@ import imaplib
 import logging
 import re
 import time
+from typing import Callable
 from dataclasses import dataclass
 from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime
@@ -200,7 +201,8 @@ class MailboxSource:
 
     # ------------------------------------------------------------ the flow
     def code_for(self, address: str, *, since: float,
-                 timeout: float = WAIT_SECONDS) -> str | None:
+                 timeout: float = WAIT_SECONDS,
+                 watch: Callable[[], None] | None = None) -> str | None:
         """Wait for the code emailed to `address`, up to `timeout`.
 
         None means the wait ran out with nothing to read, which is a
@@ -216,6 +218,8 @@ class MailboxSource:
         box = self._open()
         try:
             while True:
+                if watch is not None:
+                    watch()              # a stop goes up; the box is closed
                 code = self._look(box, address, floor)
                 if code is not None:
                     log.info("the code emailed to %s was in the mailbox "

@@ -24,7 +24,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,11 @@ log = logging.getLogger(__name__)
 #: because the cost of waiting is a phone sitting idle and the cost of giving
 #: up too early is the whole build - and mail providers are unhurried.
 WAIT_SECONDS = 180
+
+#: How long a source waits between looks at whether it has been told to
+#: stop. The wait itself is the source's; this is only how often the
+#: caller's `watch` gets a word in.
+WATCH_EVERY = 2.0
 
 #: Six digits, standing alone. `\b` on both sides so a longer number - an
 #: order id, a year in a footer - cannot be read as a code, which is the way
@@ -57,10 +62,19 @@ class CodeSource(Protocol):
     it the first look would happily return the code from the previous
     attempt, which is expired and which the page will refuse - and the run
     would then blame the account.
+
+    `watch` is the caller's own stop, the same callable the screen router
+    is driven with: called between looks, and whatever it raises goes up.
+    It is part of the protocol rather than of one source because every
+    source is a wait of minutes, and a wait that takes no stop is deaf by
+    construction - all three were, so a Cancel pressed while a build sat
+    on the code page was unheard for up to ten minutes (2026-09-21, found
+    by audit).
     """
 
     def code_for(self, address: str, *, since: float,
-                 timeout: float = WAIT_SECONDS) -> str | None:
+                 timeout: float = WAIT_SECONDS,
+                 watch: Callable[[], None] | None = None) -> str | None:
         ...
 
 
@@ -72,7 +86,8 @@ class NoSource:
     """
 
     def code_for(self, address: str, *, since: float,
-                 timeout: float = WAIT_SECONDS) -> str | None:
+                 timeout: float = WAIT_SECONDS,
+                 watch: Callable[[], None] | None = None) -> str | None:
         log.info("no mailbox is configured, so the code emailed to %s "
                  "cannot be read", address)
         return None
@@ -122,18 +137,31 @@ class Pending:
 
     # ------------------------------------------------------- the flow's side
     def code_for(self, address: str, *, since: float,
-                 timeout: float = WAIT_SECONDS) -> str | None:
-        """Block until someone answers, or the wait runs out."""
+                 timeout: float = WAIT_SECONDS,
+                 watch: Callable[[], None] | None = None) -> str | None:
+        """Block until someone answers, the wait runs out, or `watch` says
+        stop - in slices, so the stop is heard within WATCH_EVERY."""
         request = Request(address=address, asked_at=since,
                           deadline=time.time() + timeout)
         with self._lock:
             self._waiting.append(request)
         log.info("waiting up to %.0fs for someone to supply the code sent "
                  "to %s", timeout, address)
-        request.answered.wait(timeout)
-        with self._lock:
-            if request in self._waiting:
-                self._waiting.remove(request)
+        try:
+            while not request.answered.is_set():
+                if watch is not None:
+                    watch()
+                left = request.deadline - time.time()
+                if left <= 0:
+                    break
+                request.answered.wait(min(WATCH_EVERY, left))
+        finally:
+            # Whatever ended the wait, the request is not waiting any more
+            # - a stop must not leave a line on the console for a build
+            # that is gone.
+            with self._lock:
+                if request in self._waiting:
+                    self._waiting.remove(request)
         if request.code is None:
             log.warning("nobody supplied the code for %s", address)
         return request.code

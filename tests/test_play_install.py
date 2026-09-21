@@ -860,3 +860,55 @@ def test_an_outcome_reads_as_kind_reason_and_detail():
         "fatal:no_install_button"
     assert str(play_install.Outcome("success", "installed", "com.x")) == \
         "success:installed - com.x"
+
+
+# --------------------------------------- the walk takes a stop (2026-09-21)
+def _walk_nothing(monkeypatch):
+    """A phone with nothing on it and a Play Store that never answers, so
+    the only thing that can end the walk is the stop."""
+    monkeypatch.setattr(play_install.shell, "package_installed",
+                        lambda *a, **k: False)
+    monkeypatch.setattr(play_install, "open_package_page",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(play_install.screen, "capture", lambda *a, **k: "")
+    monkeypatch.setattr(play_install.time, "sleep", lambda s: None)
+
+
+def test_a_stop_ends_the_play_walk_at_the_next_turn(monkeypatch):
+    """`install` took no cancel, so a Cancel pressed while the Store was
+    walked - five minutes before Install, ten after - was not heard until
+    the walk ended (2026-09-21, found by audit)."""
+    _walk_nothing(monkeypatch)
+    turns = []
+
+    def cancelled():
+        turns.append(1)
+        return len(turns) >= 2
+
+    out = play_install.install(None, "P", "com.example", cancelled=cancelled)
+
+    assert out.kind == "fatal" and out.reason == "interrupted"
+    assert len(turns) == 2, "asked every turn, and stopped on the answer"
+
+
+def test_a_stop_that_raises_goes_up_through_the_walk(monkeypatch):
+    """The builder's stop raises for a press on the console, so the word on
+    the row is the person's and not `interrupted`. Nothing in the walk
+    may stand in its way."""
+    _walk_nothing(monkeypatch)
+
+    class Pressed(Exception):
+        pass
+
+    def cancelled():
+        raise Pressed()
+
+    with pytest.raises(Pressed):
+        play_install.install(None, "P", "com.example", cancelled=cancelled)
+
+
+def test_without_a_stop_the_walk_is_the_walk(monkeypatch):
+    _walk_nothing(monkeypatch)
+    monkeypatch.setattr(play_install, "PRE_INSTALL_SECONDS", 0)
+    out = play_install.install(None, "P", "com.example")
+    assert out.reason != "interrupted"

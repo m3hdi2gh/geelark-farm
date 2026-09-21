@@ -202,7 +202,8 @@ def test_pgcodes_is_a_code_source():
     assert isinstance(store_codes.PgCodes.__dict__["code_for"], object)
     assert issubclass(store_codes.PgCodes, object)
     sig = inspect.signature(store_codes.PgCodes.code_for)
-    assert list(sig.parameters) == ["self", "address", "since", "timeout"]
+    assert list(sig.parameters) == ["self", "address", "since", "timeout",
+                                    "watch"]
     assert isinstance(store_codes.PgCodes.__new__(store_codes.PgCodes),
                       codes.CodeSource)
 
@@ -316,3 +317,23 @@ def test_the_code_wait_comes_from_the_environment(tmp_path, monkeypatch):
     assert Settings.load().code_wait_minutes == 10
     monkeypatch.setenv("CODE_WAIT_MINUTES", "15")
     assert Settings.load().code_wait_minutes == 15
+
+
+def test_a_stop_during_the_wait_closes_the_request_with_its_own_word(
+        monkeypatch, make_settings, tmp_path):
+    """The panel goes on asking the customer for a code as long as the
+    request is open. A build that was stopped closes it as `stopped` -
+    not `timeout`, which would read as the customer never answering."""
+    source, seen = _source(monkeypatch, make_settings, tmp_path,
+                           answers=[None])
+    looks = []
+
+    def watch():
+        looks.append(1)
+        if len(looks) == 2:
+            raise RuntimeError("stopped_by_hand")
+
+    with pytest.raises(RuntimeError, match="stopped_by_hand"):
+        source.code_for("c@example.com", since=0.0, watch=watch)
+
+    assert seen["closed"] == [(7, "stopped")]

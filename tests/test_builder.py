@@ -6596,3 +6596,29 @@ def test_the_pass_tick_and_the_stop_poll_are_two_names():
     assert "wait(futures, timeout=PASS_TICK_SECONDS)" in src, (
         "the pass loop's wait is the tick's one caller")
     assert "timeout=STOP_POLL_SECONDS" not in src
+
+
+def test_the_play_walk_is_handed_the_builds_stop_and_its_stop_is_filed_as_one(
+        monkeypatch):
+    """Both places the Store is walked hand the walk `cancelled`, and a
+    walk that answers `interrupted` is raised as the stop it is - returned,
+    the recipe read it as an install that failed (2026-09-21)."""
+    import inspect
+
+    from geelark_farm import builder as builder_mod
+    from geelark_farm.flows import play_install
+
+    src = inspect.getsource(builder_mod)
+    calls = [m.start() for m in __import__("re").finditer(
+        r"play_install\.install\(", src)]
+    assert len(calls) == 2
+    for at in calls:
+        assert "cancelled=cancelled" in src[at:at + 400], src[at:at + 120]
+
+    monkeypatch.setattr(play_install, "install",
+                        lambda *a, **k: play_install.Outcome(
+                            "fatal", "interrupted", "stopped"))
+    with pytest.raises(builder_mod.Aborted, match="interrupted"):
+        builder_mod._install(None, "P", "com.example", name="x",
+                             ordered=False, budget=60, artifacts=None,
+                             cancelled=lambda: True)

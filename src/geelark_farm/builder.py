@@ -1677,8 +1677,15 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
             f"{name} did not come from GeeLark's installer, and there is no "
             f"Google account on this phone to walk the Play Store with")
     log.info("the Play Store is walked for %s", name)
-    return play_install.install(client, phone_id, package,
-                                budget_seconds=budget, artifact_dir=artifacts)
+    got = play_install.install(client, phone_id, package,
+                               budget_seconds=budget, artifact_dir=artifacts,
+                               cancelled=cancelled)
+    # The service's own stop, answered by the walk as a word. Raised here
+    # so it is filed as the stop it is: returned, the recipe would have
+    # read it as an install that failed (2026-09-21).
+    if got.reason == "interrupted":
+        raise Aborted("interrupted")
+    return got
 
 
 def _pick_named_app(book: Book, wanted: str):
@@ -2601,8 +2608,10 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 client, phone_id, settings.target_package,
                 budget_seconds=min(settings.install_budget_seconds,
                                    deadline - time.monotonic()),
-                artifact_dir=artifacts,
+                artifact_dir=artifacts, cancelled=cancelled,
             )
+            if installed.reason == "interrupted":
+                raise Aborted("interrupted")     # as in _install
             build.trails.append(("install", installed.trail))
             if not installed.ok:
                 # Looked, and it is not there - which is a different answer

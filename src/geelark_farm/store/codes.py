@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from typing import Callable
 
 from ..config import Settings
 from .db import Store
@@ -97,7 +98,8 @@ class PgCodes:
 
     # ------------------------------------------------------- the flow's side
     def code_for(self, address: str, *, since: float,
-                 timeout: float | None = None) -> str | None:
+                 timeout: float | None = None,
+                 watch: Callable[[], None] | None = None) -> str | None:
         """Block until the panel supplies a code, or the wait runs out.
 
         `since` is when this sign-in began: wrong codes typed since then
@@ -126,6 +128,15 @@ class PgCodes:
                  "y" if tries_left == 1 else "ies")
         deadline = time.time() + wait
         while True:
+            if watch is not None:
+                try:
+                    watch()
+                except BaseException:
+                    # The build is stopping. Closed with its own word, or
+                    # the panel would go on asking the customer for a
+                    # code no phone is waiting for.
+                    self._close(request_id, "stopped")
+                    raise
             code = self._answered(request_id)
             if code:
                 self._close(request_id, "typed")

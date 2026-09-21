@@ -180,3 +180,52 @@ def test_a_code_typed_while_the_build_is_still_waiting_is_taken():
     assert pending.answer(pending.waiting()[0], "481920") is True
     worker.join(timeout=5)
     assert got["code"] == "481920"
+
+
+# ------------------------------------ the wait takes a stop (2026-09-21 audit)
+class _Stop(Exception):
+    pass
+
+
+def test_every_code_source_takes_the_builds_stop():
+    """The protocol had no stop, so every implementation was deaf by
+    construction: a Cancel pressed while a build sat on the code page was
+    unheard for up to ten minutes (2026-09-21, found by audit). The next
+    source written must take it too, which is why it is on the protocol."""
+    import inspect
+
+    from geelark_farm import mailbox
+    from geelark_farm.store import codes as store_codes
+
+    for source in (codes.CodeSource, codes.NoSource, codes.Pending,
+                   store_codes.PgCodes, mailbox.MailboxSource):
+        assert "watch" in inspect.signature(source.code_for).parameters, (
+            source.__name__)
+
+
+def test_a_person_answered_wait_hears_the_stop_between_looks():
+    """`Pending` waited on one Event for the whole timeout; the stop is now
+    asked between slices, and a stopped request leaves the waiting list -
+    or the console would keep asking for a code for a build that is gone."""
+    import pytest
+
+    pending = codes.Pending()
+    asked = []
+
+    def watch():
+        asked.append(1)
+        if len(asked) == 3:
+            raise _Stop()
+
+    with pytest.raises(_Stop):
+        pending.code_for("a@example.com", since=time.time(), timeout=30,
+                         watch=watch)
+    assert pending.waiting() == [], "a stopped request is not still asking"
+    assert len(asked) == 3
+    assert codes.WATCH_EVERY <= 5.0, "heard within seconds, not minutes"
+
+    # Without a watch, nothing changed: the wait is the wait.
+    assert pending.code_for("a@example.com", since=time.time(),
+                            timeout=0.01) is None
+    assert codes.NoSource().code_for("a@b.com", since=0,
+                                     watch=watch) is None

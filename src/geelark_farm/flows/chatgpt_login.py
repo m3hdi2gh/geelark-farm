@@ -940,9 +940,24 @@ def act_email_code(ctx: Context) -> Outcome | None:
 
     since = ctx.code_since or time.time()
     ctx.code_since = since
+    # The build's stop rides into the wait as `watch`. What it raises is
+    # an Exception too, and the handler below is for the mailbox - so a
+    # stop is told apart by the mark it leaves on the way up, not by its
+    # type, which this module may not import.
+    stopped: list[bool] = []
+
+    def watch() -> None:
+        try:
+            ctx.check()
+        except BaseException:
+            stopped.append(True)
+            raise
+
     try:
-        code = ctx.codes.code_for(ctx.creds.email, since=since)
+        code = ctx.codes.code_for(ctx.creds.email, since=since, watch=watch)
     except Exception as exc:                                      # noqa: BLE001
+        if stopped:
+            raise
         # The mailbox itself, not the account: a refused app password
         # or a server that stopped answering. Said as its own reason so
         # nothing about the account is read into it (2026-09-19).

@@ -319,7 +319,7 @@ def act_code(ctx: Context) -> Outcome | None:
             return ended
     since = ctx.code_since or time.time()
     ctx.code_since = since
-    code = ctx.codes.code_for(ctx.creds.email, since=since)
+    code = ctx.codes.code_for(ctx.creds.email, since=since, watch=ctx.check)
     if code is None:
         reason = ("no_code_source" if isinstance(ctx.codes, codes_mod.NoSource)
                   else "code_timeout")

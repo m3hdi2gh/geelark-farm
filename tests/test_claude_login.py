@@ -42,7 +42,7 @@ class Mailbox:
     def __init__(self, *codes_):
         self.codes, self.asked, self.refused = list(codes_), [], []
 
-    def code_for(self, address, *, since, timeout=None):
+    def code_for(self, address, *, since, timeout=None, watch=None):
         self.asked.append((address, since))
         return self.codes.pop(0) if self.codes else None
 
