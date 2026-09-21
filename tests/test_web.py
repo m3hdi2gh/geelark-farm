@@ -1745,12 +1745,18 @@ def test_the_story_offers_the_phone_buttons_and_returns_there(web,
     # rule and nothing enforced it, so the press went through on a form
     # the page had not offered - and Failed deletes the phone at the next
     # sync and frees the account on it (2026-09-07).
+    monkeypatch.setattr("geelark_farm.store.actions.record_refused",
+                        lambda *a, **k: 88)
     status, headers, _ = client.request(
         "POST", "/phones/1523/state",
         _form(csrf=client.csrf(), state="failed", sure="1",
               back="/phones/1523"))
     assert status == 303
-    assert dict(headers)["Location"] == "/?said=refused"
+    # Back to the page the press was made on, with the request's id, so
+    # the banner reads "phone 1523 is with ali" off the row - not the
+    # bare word, whose sentence is about a missing permission
+    # (2026-09-21, found by audit).
+    assert dict(headers)["Location"] == "/phones/1523?said=no:88"
     assert got == {}, "nothing was queued against somebody else's phone"
 
     # The admin sees the three ways back on ali's phone, and the press
@@ -2244,7 +2250,8 @@ def _sheet_read(base):
     def one(settings, kind):
         listed = base.get("pool_rows") or {}
         return {kind: list(listed.get(kind) or []),
-                "totals": dict(listed.get("totals") or {})}
+                "totals": dict(listed.get("totals") or {}),
+                "pending": dict(base.get("pending") or {})}
     return one
 
 
@@ -5279,7 +5286,7 @@ def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
     assert "in the new tab as soon as GeeLark hands the link back" in script
     assert "var waiting = /[?&]said=queued/.test(got.url);" in script, (
         "queued is not done: look again shortly")
-    assert "if (waiting) lookAgain(2500);" in script
+    assert "if (waiting) climb([2500, 5000, 10000, 20000]);" in script
 
 
 def test_the_mirror_marks_what_is_running_in_one_statement():
@@ -6399,7 +6406,7 @@ def test_the_dashboard_listens_on_the_stream_and_keeps_its_timer():
     # a page that never updates - and every re-check goes through the one
     # clock, so the soonest one stands.
     assert "function lookAgain(ms)" in script
-    assert "if (init.timer && init.due && init.due <= due) return;" in script
+    assert "if (init.timer && init.due && init.due <= due) return false;" in script
     assert "lookAgain(Math.max(250, SWAP_FLOOR - since));" in script, (
         "the stream asks for soon, but no sooner than the floor")
     assert "feed.onerror" in script
@@ -6431,7 +6438,7 @@ def test_one_rows_press_replaces_one_row():
     # A queued answer is the row BEFORE the press - the lane carries it
     # out a moment later - so it is never swapped in, and the page looks
     # again shortly instead (2026-09-14).
-    assert "if (waiting) lookAgain(2500);" in script
+    assert "if (waiting) climb([2500, 5000, 10000, 20000]);" in script
     # And a refusal is not a row to redraw: it is a sentence to read. The
     # words that mean nothing changed are a closed list, so a new verb's
     # success word never lands in it by accident.
@@ -6453,7 +6460,7 @@ def test_one_rows_press_replaces_one_row():
     # can be answered with that row - drawn by the same code, or the two
     # would come to differ.
     assert 'data-key="{esc(key)}"' in _source(pages._pool_table_rows)
-    assert "_pool_table_rows(kind, rows, user, manual_login)" in _source(
+    assert "_pool_table_rows(kind, rows, user, manual_login, pending)" in _source(
         pages._pool_table)
 
 
@@ -7262,9 +7269,13 @@ def test_nobody_else_boots_a_phone_kept_for_its_maker_not_even_an_admin(
     row = body[start:body.index("</tr>", start)]
     assert 'action="/phones/1503/boot"' not in row, "not theirs to start"
     assert ">Done<" in row and ">Failed<" in row, "ending it still is"
+    monkeypatch.setattr("geelark_farm.store.actions.record_refused",
+                        lambda *a, **k: 88)
     status, headers, _ = admin.request(
         "POST", "/phones/1503/boot", _form(csrf=admin.csrf()))
-    assert status == 303 and dict(headers)["Location"] == "/?said=refused"
+    assert status == 303
+    # Boot's form opens its Live tab, so that is where the answer is read.
+    assert dict(headers)["Location"] == "/phones/1503/live?said=no:88"
     assert got == {}, "nothing was queued against ali's phone"
 
 
@@ -8893,3 +8904,133 @@ def test_a_build_asked_to_stop_says_so_on_its_row(web, monkeypatch):
     other = other[:other.index("</tr>")]
     assert 'action="/phones/1504/stop"' in other and ">Building<" in other
 
+
+# ------------------------- a queued press is a fact every surface draws
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_phone_with_a_command_on_its_way_shows_that_door_pressed(
+        web, monkeypatch):
+    """The answer said Queued, the toast went, and the row went on
+    offering the same door over a press the lane had not yet carried out
+    - so it was pressed again (the operator, 2026-09-20; the audit,
+    2026-09-21). The read returns what is pending, on the same
+    connection, and the row draws it."""
+    _dash(monkeypatch,
+          phones=[{"serial": "1504", "status": "ready", "state": ""},
+                  {"serial": "1505", "status": "ready", "state": ""}],
+          pending={"1504": "boot_phone"})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+
+    row = body[body.index('href="/phones/1504"'):]
+    row = row[:row.index("</tr>")]
+    assert "Booting&hellip;" in row and "disabled" in row
+    assert 'action="/phones/1504/boot"' not in row, "not offered twice"
+    assert "<form" not in row.split('class="act"')[1], "nothing to send"
+    other = body[body.index('href="/phones/1505"'):]
+    other = other[:other.index("</tr>")]
+    assert 'action="/phones/1505/boot"' in other, "its neighbour keeps its door"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_pool_sheet_draws_a_pending_row_with_its_door_pressed(
+        web, monkeypatch):
+    base = _dash(monkeypatch)
+    rows = base.get("pool_rows") or {}
+    address = next(r["address"] for r in (rows.get("proxy") or [])
+                   if r.get("state") == "free")
+    base["pending"] = {address: "test_proxy"}
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/pools/proxy/sheet")
+
+    row = body[body.index(f'data-key="proxy:{address}"'):]
+    row = row[:row.index("</tr>")]
+    assert "Testing&hellip;" in row and "disabled" in row
+    assert 'action="/pools/proxy/test"' not in row
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_phone_page_says_stopping_and_what_is_on_its_way(web,
+                                                            monkeypatch):
+    """The dashboard's row said Stopping the moment Cancel was pressed;
+    this page - where a build is watched - went on offering Cancel over
+    the press it had already taken (2026-09-21, found by audit)."""
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "timeline": [],
+        "phone": {"serial": serial, "status": "building", "state": "",
+                  "owner": ""},
+        "stop_asked": True, "pending": ""})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/1503")
+    assert ">Stopping<" in body and "Stopping&hellip;" in body
+    assert 'action="/phones/1503/stop"' not in body
+
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "timeline": [],
+        "phone": {"serial": serial, "status": "ready", "state": "",
+                  "owner": ""},
+        "stop_asked": False, "pending": "change_proxy"})
+    _, _, body = client.request("GET", "/phones/1503")
+    assert "Changing IP&hellip;" in body
+    assert 'action="/phones/1503/proxy"' not in body
+    assert 'action="/phones/1503/boot"' not in body, "one door, pressed"
+
+
+@pytest.mark.parametrize("web", [True], indirect=True)
+def test_the_requests_page_shows_a_stop_that_has_landed(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.store import stops as store_stops
+
+    monkeypatch.setattr(actions_mod, "listing",
+                        lambda s, **k: list(_REQUESTS))
+    monkeypatch.setattr(actions_mod, "counts", lambda s, **k: {})
+    monkeypatch.setattr(store_stops, "asked", lambda s: {"1549"})
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/requests")
+    assert "/phones/1549/stop" not in body, "pressed already: not offered"
+    assert "Stopping&hellip;" in body
+    assert body.count("Stop this one") == 1, "the other phone keeps its door"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_sweep_pressed_twice_is_one_sweep(web, monkeypatch):
+    """Test all and Free all name nothing, so the double-press guard
+    never found their twin: a second press was a second ~27s sweep of
+    GeeLark (2026-09-21, found by audit)."""
+    import geelark_farm.store.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "pending_any",
+                        lambda s, *, verb: 240 if verb == "test_all_proxies"
+                        else None)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda *a, **k: pytest.fail("queued a twin"))
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/test-all", _form(csrf=client.csrf()))
+    assert status == 303
+    assert "said=already:240" in dict(headers)["Location"]
+
+
+def test_the_pending_read_names_every_target_a_command_carries():
+    from geelark_farm.web import read
+
+    class _S:
+        def _rows(self, sql, params=()):
+            assert "status IN ('queued', 'running')" in sql
+            return [{"verb": "boot_phone", "serial": "1504", "address": None,
+                     "name": None},
+                    {"verb": "test_proxy", "serial": None, "address": None,
+                     "name": "SX3"},
+                    {"verb": "login_accounts", "serial": "1600",
+                     "address": "a@b.com", "name": None},
+                    {"verb": "change_proxy", "serial": "1504",
+                     "address": None, "name": None}]
+
+    got = read._pending(_S())
+    assert got == {"1504": "boot_phone", "SX3": "test_proxy",
+                   "1600": "login_accounts", "a@b.com": "login_accounts"}, (
+        "the first command a target waits on is the one drawn")

@@ -245,6 +245,30 @@ _FOLD = {
 }
 
 
+def _pending(store) -> dict[str, str]:
+    """Every queued or running command, by what it names - a serial, an
+    address, an exit's name - to the verb waiting on it.
+
+    A press that the lane carries out a moment later left the row it was
+    about exactly as it was: the answer said "Queued", the toast went,
+    and the row went on offering the same door, so it was pressed again
+    (the operator, 2026-09-20; the audit, 2026-09-21). Read on the same
+    connection as the rows it is drawn beside, and drawn by every
+    surface those rows appear on - the same shape as `stops_asked`, made
+    general so it stops being reinvented a page at a time.
+    """
+    rows = store._rows(
+        "SELECT verb, payload->>'serial' AS serial,"
+        " payload->>'address' AS address, payload->>'name' AS name"
+        " FROM actions WHERE status IN ('queued', 'running') ORDER BY id")
+    out: dict[str, str] = {}
+    for r in rows:
+        for key in (r["serial"], r["address"], r["name"]):
+            if key:
+                out.setdefault(str(key).strip(), str(r["verb"]))
+    return out
+
+
 def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
     from ..store import stops as store_stops
 
@@ -410,6 +434,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         asked_stops = store._rows(
             "SELECT value FROM service_state WHERE key = %s",
             (store_stops.KEY,))
+        pending = _pending(store)
         # The manager's lists, read on the same connection the rest of
         # this page uses: the cards need the free rows anyway, and the
         # whole page is one response.
@@ -434,6 +459,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         "live": live,
         "stops_asked": sorted(store_stops.live(
             asked_stops[0]["value"] if asked_stops else {})),
+        "pending": pending,
         "stock": folded,
         "pool_rows": pools_listed,
         "spotify": {str(r["category"] or ""): int(r["c"] or 0)
@@ -934,7 +960,11 @@ def pool_sheet(settings: Settings, kind: str) -> dict:
     opened it (2026-09-20). It is a drawer; it is read when it is pulled.
     """
     with Store(settings) as store:
-        return _pool_rows(store, kinds=(kind,))
+        listed = _pool_rows(store, kinds=(kind,))
+        # So a row with a Send or a Test on its way is drawn with that
+        # door pressed, in the drawer as on the dashboard.
+        listed["pending"] = _pending(store)
+        return listed
 
 
 def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
@@ -1736,6 +1766,8 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
     """Everything one phone went through, in order: its events, the
     requests that named it, and the archived screens on disk - joined on
     the serial, which is the one name all three sources use."""
+    from ..store import stops as store_stops
+
     with Store(settings) as store:
         phone = store._rows(
             "SELECT p.serial, p.status, p.state, p.gmail, p.app_account,"
@@ -1754,6 +1786,15 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
             " LEFT JOIN api_clients c ON c.id = a.client_id"
             " WHERE a.payload::text ILIKE %s ORDER BY a.id",
             (f"%{serial}%",))
+        # What the dashboard's row knows and this page did not: a Cancel
+        # that has landed, and a command on its way. The phone's own
+        # page is where a build is watched, and it went on offering
+        # Cancel over a press it had already taken (2026-09-21, found by
+        # audit). On this connection, as the dashboard reads them.
+        asked_stops = store._rows(
+            "SELECT value FROM service_state WHERE key = %s",
+            (store_stops.KEY,))
+        pending = _pending(store)
     if not phone and not events:
         return None
     timeline = []
@@ -1784,7 +1825,10 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
             timeline.append(folder)
     timeline.sort(key=lambda t: _stamp_key(t["at"]))
     return {"phone": phone[0] if phone else None, "serial": serial,
-            "timeline": timeline}
+            "timeline": timeline,
+            "stop_asked": serial in store_stops.live(
+                asked_stops[0]["value"] if asked_stops else {}),
+            "pending": pending.get(serial, "")}
 
 
 def _stored(settings: Settings, serial: str) -> list[dict]:

@@ -774,6 +774,39 @@ def _change_ip_form(user: dict, serial: str, back: str = "/") -> str:
             f'<button class="quiet">Change IP</button></form>')
 
 
+#: What a queued command is called on the row it is about, while it
+#: waits: the verb's own word, present tense, since the press has been
+#: taken and not yet carried out.
+_PENDING_WORDS = {
+    "boot_phone": "Booting", "change_proxy": "Changing IP",
+    "power_off_phone": "Switching off", "set_phone_state": "Closing",
+    "login_accounts": "Signing in", "test_proxy": "Testing",
+    "test_all_proxies": "Testing", "mark_proxy_free": "Freeing",
+    "free_all_proxies": "Freeing", "remove_proxy": "Removing",
+    "free_gmail": "Freeing", "edit_gmail": "Saving",
+    "remove_gmail": "Removing", "remove_app": "Removing",
+    "free_app": "Freeing", "offer_again": "Offering",
+    "refund_gmail": "Marking", "stop_phone": "Stopping",
+    "adopt_proxy": "Adopting", "ignore_proxy": "Ignoring",
+    "add_proxies": "Adding", "add_gmails": "Adding",
+}
+
+
+def _pending_word(verb: str) -> str:
+    return _PENDING_WORDS.get(verb, verb.replace("_", " ").capitalize())
+
+
+def _pending_door(verb: str) -> str:
+    """The doors of a row a command is already on its way to: one, shown
+    pressed, saying which. The row used to offer the same door again
+    over a press the lane had not yet carried out, and it was pressed
+    again (2026-09-21). Not a form, so nothing here can be sent."""
+    return (f'<button class="quiet" disabled title="{esc(verb)} is queued '
+            f'for this row and the lane carries it out in a moment; the '
+            f'row is redrawn when it has">{esc(_pending_word(verb))}'
+            f'&hellip;</button>')
+
+
 def _cancel_form(user: dict, serial: str, back: str = "/",
                  asked: bool = False) -> str:
     """"Cancel": the build on this phone gives up at its next step and puts
@@ -1047,6 +1080,9 @@ def _phone_rows(data: dict, user: dict) -> str:
         # a crowded table (the operator, 2026-09-17). The column keeps
         # the address; which product it is belongs with the status.
         badge += _carries(r)
+        # A command on its way to this phone: its doors become that one
+        # word until the lane has carried it out.
+        waiting = str((data.get("pending") or {}).get(serial) or "")
         maker = str(r.get("built_by") or "")
         kept = _kept_for(r)
         if kept:
@@ -1067,7 +1103,9 @@ def _phone_rows(data: dict, user: dict) -> str:
             f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
             f'<td class="mono dim nowrap">'
             f'{_ago(r.get("created_at") or r.get("updated_at")) or "-"}</td>'
-            f'<td class="act">{_row_actions(user, r)}</td></tr>')
+            f'<td class="act">'
+            f'{_pending_door(waiting) if waiting else _row_actions(user, r)}'
+            f'</td></tr>')
     return "".join(lines)
 
 
@@ -2151,7 +2189,8 @@ def _pool_editor(kind: str, user: dict, rows: list[dict]) -> str:
 
 
 def _pool_table_rows(kind: str, rows: list[dict], user: dict,
-                     manual_login: bool = False) -> str:
+                     manual_login: bool = False,
+                     pending: dict | None = None) -> str:
     """The `<tr>`s of a pool table, without the table around them.
 
     Out here so a press about one address can be answered with that one
@@ -2171,7 +2210,8 @@ def _pool_table_rows(kind: str, rows: list[dict], user: dict,
         drawn = "".join(
             f'<td>{_cell_html(kind, i, cell, note)}</td>'
             for i, cell in enumerate(cells))
-        last = (f"<td>{_pool_row_doors(kind, row, user, manual_login)}</td>"
+        waiting = str((pending or {}).get(str(row.get("address") or "")) or "")
+        last = (f"<td>{_pending_door(waiting) if waiting else _pool_row_doors(kind, row, user, manual_login)}</td>"
                 if doors else "")
         # Lower-cased, and only the row's own words - the address, what
         # state it is in, whose it was, which phone has it. The state
@@ -2200,12 +2240,13 @@ def _pool_table_rows(kind: str, rows: list[dict], user: dict,
 
 
 def _pool_table(kind: str, rows: list[dict], user: dict,
-                manual_login: bool = False) -> str:
+                manual_login: bool = False,
+                pending: dict | None = None) -> str:
     meta = _POOL_KINDS[kind]
     head = "".join(f"<th>{esc(c)}</th>" for c in meta["columns"])
     doors = bool(meta["manage"]) and _may(user, meta["manage"])
     span = len(meta["columns"]) + (1 if doors else 0)
-    lines = _pool_table_rows(kind, rows, user, manual_login)
+    lines = _pool_table_rows(kind, rows, user, manual_login, pending)
     if not lines:
         return ('<p class="empty">Nothing in this pool that anybody still '
                 'has a decision about.</p>')
@@ -2329,7 +2370,8 @@ def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
 
 
 def row_answer(kind: str, row: dict | None, said: str, user: dict,
-               said_note: str = "", manual_login: bool = False) -> str:
+               said_note: str = "", manual_login: bool = False,
+               pending: dict | None = None) -> str:
     """One row and the banner about it - the whole of what a press on one
     address changes.
 
@@ -2338,14 +2380,16 @@ def row_answer(kind: str, row: dict | None, said: str, user: dict,
     row gone from the pool answers with no row at all, which is what the
     script removes.
     """
-    drawn = (_pool_table_rows(kind, [row], user, manual_login) if row else "")
+    drawn = (_pool_table_rows(kind, [row], user, manual_login, pending)
+             if row else "")
     return (f'<div class="rowanswer" data-row-kind="{esc(kind)}">'
             f'{_said(said, _DASH_SAID, user, said_note)}'
             f'<table>{drawn}</table></div>')
 
 
 def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
-                manual_login: bool = False) -> str:
+                manual_login: bool = False,
+                pending: dict | None = None) -> str:
     """One pool, as the manager shows it: the paste box, the chips, the
     search, and the table under them.
 
@@ -2375,7 +2419,7 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'</div>'
         f'{_capped(rows, (totals or {}).get(kind))}'
         f'<div class="tscroll">'
-        f'{_pool_table(kind, rows, user, manual_login)}</div>'
+        f'{_pool_table(kind, rows, user, manual_login, pending)}</div>'
         f'</div>{_pool_editor(kind, user, rows)}</section>')
 
 
@@ -4090,7 +4134,8 @@ def requests_page(rows: list[dict], user: dict, said: str = "", *,
                   counts: dict | None = None, view: str = "",
                   mine: bool = False, page: int = 1, pages: int = 1,
                   more: bool = False, hi: int = 0,
-                  progress: dict | None = None) -> str:
+                  progress: dict | None = None,
+                  stops_asked: tuple[str, ...] | list[str] = ()) -> str:
     """The queue, newest first: what was asked, in words, by whom, what
     became of it - and under a command that works several phones, one
     line per phone, with the phone's latest captured log line while it
@@ -4157,7 +4202,11 @@ def requests_page(rows: list[dict], user: dict, said: str = "", *,
             serial = str(ph.get("serial") or "")
             stop = ""
             if status == "running" and can_stop and ph.get("ok") is None:
-                stop = (f'<form method="post" class="inline" '
+                # Pressed already: shown so, not offered again - the same
+                # rule the dashboard's row keeps (2026-09-21).
+                stop = (_cancel_form(user, serial, "/requests", asked=True)
+                        if serial in (stops_asked or ()) else
+                        f'<form method="post" class="inline" '
                         f'action="/phones/{esc(serial)}/stop">'
                         f'{_csrf(user)}<button class="quiet warn">Stop this '
                         f'one</button></form>')
@@ -6724,6 +6773,15 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
     head = f'<span>{_phone_badge(phone)}</span>' if phone else ""
     if phone and phone.get("done_at"):
         head += f'<span class="badge">gone {_day(phone["done_at"])}</span>'
+    # The dashboard's row said Stopping the moment Cancel was pressed;
+    # this page - where a build is watched - went on offering Cancel
+    # over the press it had already taken (2026-09-21, found by audit).
+    stopping = bool(story.get("stop_asked"))
+    waiting = str(story.get("pending") or "")
+    if stopping:
+        head += ('<span class="badge manual" title="Cancel was pressed; '
+                 'the build gives up at its next step and puts back what '
+                 'it held">Stopping</span>')
     actions = []
     # The same rule the table keeps. This page kept none, so clicking a
     # serial that read "with ali" offered Done and Failed on ali's phone
@@ -6748,8 +6806,11 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
             # the table has always offered it. This page offered nothing
             # at all, so opening a build to watch it was a dead end
             # (2026-09-07).
-            actions.append(_cancel_form(user, serial, back))
+            actions.append(_cancel_form(user, serial, back, asked=stopping))
     actions = [a for a in actions if a]
+    if waiting and not stopping:
+        # One door, pressed, until the lane has carried the command out.
+        actions = [_pending_door(waiting)]
 
     items = []
     for group in _fold_story(story.get("timeline") or []):

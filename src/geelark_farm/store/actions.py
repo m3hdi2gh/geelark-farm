@@ -113,6 +113,17 @@ def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
     return int(rows[0]["id"]) if rows else None
 
 
+def pending_any(settings: Settings, *, verb: str) -> int | None:
+    """The id of a queued or running row of this verb, whatever it names
+    - for the verbs that name nothing, like Test all."""
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT id FROM actions WHERE verb = %s"
+            " AND status IN ('queued', 'running') ORDER BY id LIMIT 1",
+            (verb,))
+    return int(rows[0]["id"]) if rows else None
+
+
 def claim(settings: Settings, action_id: int) -> bool:
     """Take one queued row for this process, or answer False.
 

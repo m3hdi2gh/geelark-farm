@@ -523,17 +523,36 @@
   // time (2026-09-14: "the first press does nothing").
   function lookAgain(ms){
     var due = Date.now() + ms;
-    if (init.timer && init.due && init.due <= due) return;
+    // False when an earlier look already stands: the caller's look is
+    // covered, not lost.
+    if (init.timer && init.due && init.due <= due) return false;
     clearTimeout(init.timer);
     init.due = due;
     init.timer = setTimeout(function(){
       init.due = 0;
       reloadWhenSettled();
     }, ms);
+    return true;
   }
   function reloadWhenSettled(){
     if (settled()) { reload(); return; }
     lookAgain(5000);
+  }
+  // Looks that arm each other: the first is taken now, the rest as each
+  // swap lands. The soonest pending look still stands (lookAgain), so a
+  // page with its own timer is not slowed by this - only a page without
+  // one is given the looks it had not.
+  function climb(steps){
+    init.ladder = steps.slice(1);
+    lookAgain(steps[0]);
+  }
+  function nextRung(){
+    // A rung is spent only when it is armed. The swap that carries the
+    // queued answer itself comes through here before the first rung has
+    // fired, and `lookAgain` declines it - that rung has to stay for
+    // the swap the first look brings.
+    if (init.ladder && init.ladder.length && lookAgain(init.ladder[0]))
+      init.ladder.shift();
   }
 
   // ------------------------------------------------------ the manager
@@ -1091,6 +1110,7 @@
       viewBack(seen);
       placeBack(place);
       swapMain.at = Date.now();
+      nextRung();
       return;
     }
     if (held) {
@@ -1119,6 +1139,7 @@
     viewBack(seen);
     placeBack(place);
     swapMain.at = Date.now();
+    nextRung();
   }
 
   // Whether the two documents are the same page with different numbers
@@ -1755,7 +1776,13 @@
         // do NOT put that row back, because the row in this answer is the
         // row before the press (2026-09-14).
         var waiting = /[?&]said=queued/.test(got.url);
-        if (waiting) lookAgain(2500);
+        // One look, two and a half seconds on, was all a queued press
+        // got on a page with no stream and no timer - the pool pages,
+        // the phone page - so a Free that took ten seconds landed on a
+        // page that never looked again (2026-09-21, found by audit). A
+        // ladder: each look arms the next, until the lane has had every
+        // chance it needs.
+        if (waiting) climb([2500, 5000, 10000, 20000]);
         // One row's press, already carried out: put that row back and
         // leave the rest of the page alone.
         //

@@ -399,3 +399,29 @@ test('a region that differs only by the marks init left and the press token is n
   assert.equal(doc.querySelector('.alert'), alert, 'rebuilt for no change');
 });
 
+
+test('a queued answer is looked for again more than once', async () => {
+  // One look, two and a half seconds on, was all a queued press got on
+  // a page with no stream and no timer; a Free that took ten seconds
+  // landed on a page that never looked again.
+  const win = consoleIn(regioned(ONE), {
+    answer: (call) => ({status: 200,
+                        url: /state$/.test(call.url) ? '/?said=queued:71' : '/',
+                        body: answerPage(regioned(ONE))}),
+  });
+  const doc = win.document;
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+  const first = win.__timers.filter((t) => t.fn && t.ms === 2500);
+  assert.equal(first.length, 1, 'the first rung is armed');
+
+  // The first look lands: the swap arms the next rung. (`__runTimers`
+  // takes every pending timer out of the list as it runs it, so it is
+  // called once - a second call would run the rung being looked for.)
+  win.__runTimers();
+  await settle();
+  const second = win.__timers.filter((t) => t.fn && t.ms === 5000);
+  assert.ok(second.length >= 1, 'the second rung was not armed');
+});

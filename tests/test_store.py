@@ -1905,3 +1905,30 @@ def test_no_writer_of_service_state_does_a_read_then_a_put_any_more():
     src = inspect.getsource(builder)
     assert src.count("store_state.put(") == 1
     assert 'store_state.put(conn, "geelark_refusal"' in src
+
+
+def test_a_sweep_has_a_twin_whatever_it_names(monkeypatch, make_settings):
+    asked = []
+
+    class _S:
+        def __init__(self, settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append((sql, params))
+            return [{"id": 240}]
+
+    monkeypatch.setattr("geelark_farm.store.actions.Store", _S)
+    from geelark_farm.store import actions as actions_mod
+
+    assert actions_mod.pending_any(make_settings(),
+                                   verb="test_all_proxies") == 240
+    sql, params = asked[0]
+    assert "verb = %s" in sql and "address" not in sql
+    assert params == ("test_all_proxies",)

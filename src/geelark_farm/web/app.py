@@ -174,7 +174,8 @@ class _Handler(BaseHTTPRequestHandler):
                     view=view, mine=mine, page=number,
                     pages=max(1, -(-int(total or 0) // per)), more=more,
                     hi=int(hi) if hi.isdigit() else 0,
-                    progress=self._progress_of(rows)))
+                    progress=self._progress_of(rows),
+                    stops_asked=self._stops_asked()))
             if path == "/needs":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -552,9 +553,12 @@ class _Handler(BaseHTTPRequestHandler):
                 # taking it over is not.
                 held = self._holder_of(user, serial)[0]
                 if held and held != user.get("username"):
+                    # Boot's form opens its Live tab, so that is where
+                    # the answer is read.
                     return self._refuse(
                         user, "boot_phone", {"serial": serial},
-                        f"phone {serial} is with {held}")
+                        f"phone {serial} is with {held}",
+                        back=f"/phones/{serial}/live")
                 return self._act(user, "may_take_phones", "boot_phone",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "boot", serial),
@@ -574,7 +578,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if held:
                     return self._refuse(
                         user, "change_proxy", {"serial": serial},
-                        f"phone {serial} is with {held}")
+                        f"phone {serial} is with {held}",
+                        back=_phone_back(field, serial))
                 # `boot` is the Live tab's press: the phone comes back up
                 # on its new exit and the tab swaps to the new screen
                 # without leaving the page (2026-09-16).
@@ -688,7 +693,8 @@ class _Handler(BaseHTTPRequestHandler):
                    None)
         self._html(200, pages.row_answer(
             kind, row, said, user, self._said_note(said),
-            manual_login=self.settings.manual_login))
+            manual_login=self.settings.manual_login,
+            pending=listed.get("pending") or {}))
         return True
 
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
@@ -726,8 +732,16 @@ class _Handler(BaseHTTPRequestHandler):
         needle = str(payload.get("serial") or payload.get("name")
                      or payload.get("address") or "")
         try:
-            twin = store_actions.pending_for(self.settings, verb=verb,
-                                             needle=needle)
+            if needle:
+                twin = store_actions.pending_for(self.settings, verb=verb,
+                                                 needle=needle)
+            elif verb in _SWEEPS:
+                # Test all and Free all name nothing, so the guard above
+                # never found their twin: a second press was a second
+                # ~27s sweep of GeeLark (2026-09-21, found by audit).
+                twin = store_actions.pending_any(self.settings, verb=verb)
+            else:
+                twin = None
         except Exception as exc:                                  # noqa: BLE001
             log.debug("pending check skipped (%s)", exc)
             twin = None
@@ -960,6 +974,19 @@ class _Handler(BaseHTTPRequestHandler):
                              user, "login", ",".join(sorted(chosen))),
                          back=back)
 
+    def _stops_asked(self) -> list[str]:
+        """The serials a Cancel has landed on and not yet been honoured
+        for - so the Requests page's "Stop this one" is shown pressed,
+        as the dashboard's row is. Never fatal: a store that will not
+        say is a page with the doors it always had."""
+        from ..store import stops as store_stops
+
+        try:
+            return sorted(store_stops.asked(self.settings))
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the stop requests could not be read (%s)", exc)
+            return []
+
     def _progress_of(self, rows: list[dict]) -> dict:
         """The latest captured log line per phone a running login is
         working, for the Requests sub-rows. Never fatal: a page without
@@ -1068,18 +1095,27 @@ class _Handler(BaseHTTPRequestHandler):
         return pages._holder(phone), pages._theirs(user, phone)
 
     def _refuse(self, user: dict, verb: str, payload: dict,
-                why: str) -> None:
-        """Say no, and leave the same record a refused permission leaves."""
+                why: str, back: str = "/") -> None:
+        """Say no, and leave the same record a refused permission leaves.
+
+        The answer carries the request's id, so the banner reads `why`
+        off the row: it used to answer the bare word, whose sentence is
+        about a missing permission - "phone 3480 is with reza" was shown
+        as "ask an admin for the tick", to a person who had the tick
+        (2026-09-21, found by audit). And it goes back to the page the
+        press was made on, not to the dashboard.
+        """
         from ..store import actions as store_actions
 
         try:
-            store_actions.record_refused(
+            new_id = store_actions.record_refused(
                 self.settings, verb=verb,
                 payload=dict(payload, by=user["username"], by_id=user["id"]),
                 requested_by=user["id"], reason=why)
         except Exception as exc:                                  # noqa: BLE001
             log.warning("could not record the refusal (%s)", exc)
-        return self._redirect(_said_url("/", "refused"))
+            return self._redirect(_said_url(back, "refused"))
+        return self._redirect(_said_url(back, f"no:{new_id}"))
 
     def _phone_state(self, user: dict, serial: str, field: dict) -> None:
         """Take / Back / Done / Failed off the dashboard's table or the
@@ -1095,7 +1131,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._refuse(
                 user, "set_phone_state", {"serial": serial, "state": state},
                 f"phone {serial} is with {theirs} - the three ways a phone "
-                f"comes back belong to whoever is holding it")
+                f"comes back belong to whoever is holding it",
+                back=_phone_back(field, serial))
         payload = {"serial": serial, "state": state}
         if held and held != user.get("username"):
             # An admin ending somebody else's hold (2026-09-15): said on
@@ -2049,7 +2086,8 @@ class _Handler(BaseHTTPRequestHandler):
         listed = read.pool_sheet(self.settings, kind)
         self._html(200, pages._pool_sheet(
             kind, listed.get(kind) or [], listed.get("totals") or {}, user,
-            manual_login=self.settings.manual_login))
+            manual_login=self.settings.manual_login,
+            pending=listed.get("pending") or {}))
 
     def _asset(self, path: str, *, private: bool) -> None:
         """One of the two files the page links to, under its own hash.
@@ -2361,6 +2399,12 @@ def _capture_health() -> dict | None:
     except Exception as exc:                                      # noqa: BLE001
         log.debug("the capture's health did not read (%s)", exc)
         return None
+
+
+#: The verbs about the whole pool rather than one row, which the
+#: double-press guard dedupes on the verb alone. `build_by_hand` is
+#: deliberately not here: two presses may well mean two phones.
+_SWEEPS = frozenset({"test_all_proxies", "free_all_proxies"})
 
 
 def _phone_back(field: dict, serial: str) -> str:
