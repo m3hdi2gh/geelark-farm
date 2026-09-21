@@ -2310,12 +2310,13 @@ def builder_healthy(settings: Settings, now: float | None = None
 def serve_web(settings: Settings, *, stop: threading.Event | None = None,
               start=None) -> int:
     """The console alone: one process, one job. Reads and writes Postgres,
-    serves pages, queues commands; never touches GeeLark, the ledger or a
-    phone. Blocks until `stop`."""
-    from . import web
+    serves pages, queues commands, and polls the read-only wallet in the
+    background; never touches the ledger or a phone. Blocks until `stop`."""
+    from . import wallet, web
 
     stop = stop or threading.Event()
     (start or web.start)(settings)
+    wallet.start(settings, stop)
     log.info("serving the console alone (ROLE=web) on %s:%d",
              settings.web_bind, settings.web_port)
     while True:

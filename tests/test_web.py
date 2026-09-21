@@ -7638,7 +7638,7 @@ def test_the_foot_keeps_every_critical_reading_in_sight():
     for reading in (
             "GeeLark", "read 5m ago",
             # The money question, and the honest answer to it.
-            "Balance", "not reported", "a refusal is the only sign",
+            "Balance", "unavailable", "waiting for wallet reading",
             # The [44002] ceiling, and whose phones are under it.
             "Phone slots", "8 / 40", "6 ours", "2 elsewhere",
             # What is costing money as it is read.
@@ -7652,8 +7652,8 @@ def test_the_foot_keeps_every_critical_reading_in_sight():
     # from and the caveat under the whole thing.
     tag = re.search(r'class="gltag" title="([^"]*)"', line).group(1)
     assert "0 parallel" in tag
-    assert "nothing about money" in tag
-    assert "only sign the balance has run out" in tag
+    assert "/v1/pay/wallet" in tag
+    assert "every five minutes" in tag
 
 
 def test_the_subscription_reading_gives_the_date_the_count_and_the_cost():
@@ -7811,7 +7811,7 @@ def test_a_refusal_stops_being_news_when_a_phone_comes_up():
     # A phone that came up after it: whatever was wrong is over.
     cleared = foot(now - 30)
     assert "balance not enough" not in cleared
-    assert "not reported" in cleared, "and it says so rather than nothing"
+    assert "unavailable" in cleared, "and it says so rather than nothing"
     assert 'class="glfoot bad"' not in cleared
 
     # One that came up before it says nothing about it either way.
@@ -7857,7 +7857,7 @@ def test_only_geelarks_own_words_make_it_the_money():
                   trouble=read.geelark_trouble(plan, proxy, {}))
 
     assert "out of credit" not in line, "the account was never asked about"
-    assert "not reported" in line, "the balance reading is still unread"
+    assert "unavailable" in line, "the balance reading is still unread"
     # It gets a reading of its own, and amber: one build turned down
     # among many is worth seeing and is not a stop.
     assert "Last refusal" in line

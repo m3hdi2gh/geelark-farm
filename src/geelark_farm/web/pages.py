@@ -2762,12 +2762,9 @@ def _geelark_line(data: dict, user: dict) -> str:
     hovers over. A grid carries more and reads as less, and nothing has
     to be hidden to keep it quiet.
 
-    The open API has **no balance**. `/v1/pay/plan/info` carries the
-    profile slots, the expiry, the fee and the included parallels, and
-    nothing about money; nothing else answers (probed, 2026-09-20). So
-    the Balance reading reports the only thing there is to report -
-    whether phones are being refused - and says so plainly while they
-    are not, rather than leaving a gap that reads as "fine".
+    Wallet values come from a separate cached /v1/pay/wallet reading.
+    Cash, gifted money and remaining time are kept distinct; zero cash
+    alone does not mean phones cannot run.
 
     Colour comes from `read.geelark_trouble`, the one judgement the
     alert strip at the top is drawn from as well, so the foot can never
@@ -2777,11 +2774,12 @@ def _geelark_line(data: dict, user: dict) -> str:
         return ""
     found = data.get("geelark") or {}
     plan = found.get("plan") or {}
-    if not plan and not found.get("refusal"):
+    if not plan and not found.get("refusal") and not found.get("wallet_reading"):
         return ""
     trouble = found.get("trouble") or []
 
     cells = [c for c in (_gl_balance(found, trouble),
+                         _gl_time_addon(found),
                          # Only there when GeeLark has turned something
                          # down for a reason that is not the money.
                          _gl_blocked(found, trouble),
@@ -2829,14 +2827,17 @@ def _gl_cell(cell: dict) -> str:
 
 
 def _gl_balance(found: dict, trouble: list) -> dict:
-    """What the account has in it, which GeeLark will not say.
-
-    Nine endpoints were probed for a figure and all nine answered 404
-    (2026-09-20). The only reading is a phone being refused, so that is
-    what this reports - and while none has been, it says the reading is
-    missing rather than implying the account is full. It is the first
-    cell because it is the one that stops the farm.
-    """
+    """Cash reported by the wallet, never inferred from phone activity."""
+    cached = found.get("wallet_reading") or {}
+    money = cached.get("wallet") or {}
+    if money.get("balance") is not None:
+        note, stale = _gl_wallet_age(cached)
+        gift = money.get("giftMoney")
+        if gift is not None:
+            note = f"${float(gift):,.2f} gift credit · {note}"
+        return {"cap": "Balance", "value": f"${float(money['balance']):,.2f}",
+                "note": note, "tone": "warn" if stale else "",
+                "title": "Cash balance. Gift credit and time add-on are separate."}
     for item in trouble:
         if item.get("kind") != "refused":
             continue
@@ -2845,15 +2846,31 @@ def _gl_balance(found: dict, trouble: list) -> dict:
                 "kinds": ("refused",),
                 "note": _gl_brief(item.get("detail")) or "a phone was refused",
                 "title": str(item.get("text") or "")}
-    return {"cap": "Balance", "value": "not reported", "quiet": True,
-            "kinds": ("refused",),
-            "note": "a refusal is the only sign",
-            "title": ("The open API carries no balance: /v1/pay/plan/info "
-                      "has the slots, the expiry and the fee and nothing "
-                      "about money, and no other endpoint answers. The "
-                      "first sign of an empty account is a phone being "
-                      "turned down, and that is what this reading "
-                      "watches for.")}
+    return {"cap": "Balance", "value": "unavailable", "quiet": True,
+            "note": ("refresh failed; retrying" if cached.get("failed")
+                     else "waiting for wallet reading"),
+            "tone": "warn" if cached.get("failed") else "",
+            "title": "No successful wallet reading yet; this does not mean zero."}
+
+
+def _gl_wallet_age(cached: dict) -> tuple[str, bool]:
+    when = cached.get("at")
+    stale = not when or time.time() - float(when) > READING_STALE_AFTER
+    age = f"read {_ago(when)}" if when else "reading time unknown"
+    if cached.get("failed"):
+        return f"last known · {age} · refresh failed", True
+    return (f"last known · {age}" if stale else age), stale
+
+
+def _gl_time_addon(found: dict) -> dict:
+    cached = found.get("wallet_reading") or {}
+    minutes = (cached.get("wallet") or {}).get("availableTimeAddOn")
+    if minutes is None:
+        return {}
+    note, stale = _gl_wallet_age(cached)
+    return {"cap": "Time add-on", "value": f"{int(minutes):,} min",
+            "note": note, "tone": "warn" if stale else "",
+            "title": "Remaining prepaid cloud-phone time; separate from cash."}
 
 
 def _gl_blocked(found: dict, trouble: list) -> dict:
@@ -2983,9 +3000,8 @@ def _gl_source(plan: dict) -> str:
             f"{int(plan.get('profiles') or 0)} profile slots, "
             f"{int(plan.get('parallels') or 0)} parallel phone(s) "
             f"included, ${int(plan.get('monthlyFee') or 0)} a month. "
-            f"/v1/pay/plan/info gives those and nothing about money, nor "
-            f"does any other endpoint, so the only sign the balance has "
-            f"run out is a phone being refused.")
+            f"The plan comes from /v1/pay/plan/info; the wallet is read "
+            f"separately from /v1/pay/wallet, every five minutes.")
 
 
 def _gl_freshness(stale: bool) -> str:
@@ -2994,7 +3010,7 @@ def _gl_freshness(stale: bool) -> str:
             "above as the last thing known rather than as now."
             if stale else
             "The keeper reads the plan every few minutes and leaves the "
-            "answer here; the console never calls GeeLark itself.")
+            "answer here. Wallet readings have their own timestamp.")
 
 
 def _gl_brief(said, limit: int = 46) -> str:

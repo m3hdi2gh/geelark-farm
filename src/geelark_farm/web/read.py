@@ -700,14 +700,12 @@ def _geelark(store, pulse: dict | None = None) -> dict:
     endpoint allows one call a minute for the whole account. The keeper
     calls it every few minutes anyway and leaves the answer here.
 
-    There is no balance in it. `/v1/pay/plan/info` carries the slots and
-    the expiry and nothing about money, and no other endpoint answers
-    (probed, 2026-09-20) - so the only thing that reports an empty
-    account is a phone being refused, which is `refusal`.
+    The web role's background wallet collector leaves a separate reading
+    here. Its freshness is independent of the keeper's plan reading.
     """
     rows = store._rows(
         "SELECT key, value FROM service_state"
-        " WHERE key IN ('geelark_plan', 'geelark_refusal')")
+        " WHERE key IN ('geelark_plan', 'geelark_refusal', 'geelark_wallet')")
     found = {r["key"]: r["value"] for r in rows}
     kept = found.get("geelark_plan") or {}
     refused = found.get("geelark_refusal") or {}
@@ -723,6 +721,7 @@ def _geelark(store, pulse: dict | None = None) -> dict:
         " FROM phones WHERE done_at IS NULL")
     counted = dict(mine[0]) if mine else {"total": 0, "running": 0}
     return {"plan": kept.get("plan") or {}, "at": kept.get("at"),
+            "wallet_reading": found.get("geelark_wallet") or {},
             "refusal": refused.get("said") or "",
             "refused_at": refused.get("at"),
             # Judged here, so the line at the foot says exactly what the
