@@ -587,3 +587,40 @@ test('a redraw waits for a press in flight', async () => {
   await settle(); await settle(); await settle();
   assert.equal(second.classList.contains('busy'), false, 'released after');
 });
+
+test("a Save in the editor is answered with its row, not the whole sheet",
+     async () => {
+  // The editor's form is not inside the row, so its Save never asked
+  // for the one-row answer: the sheet was fetched again and the list
+  // scrolled back to the top (the operator, 2026-09-22).
+  const win = consoleIn(SHEET, {answer: (call) =>
+    /\/credentials\?/.test(call.url)
+      ? {status: 200, body: JSON.stringify({password: 'p', secret: 'K'})}
+      : {status: 200, url: '/?said=done:12',
+         body: '<div class="rowanswer" data-row-kind="gmail">'
+             + '<p class="said toast">saved</p><table>'
+             + '<tr data-key="gmail:a@x.com" data-group="current" '
+             + 'data-state="set aside"><td>a@x.com</td></tr></table></div>'}});
+  const doc = win.document;
+  const dlg = doc.querySelector('dialog.editor');
+  const press = doc.createElement('button');
+  press.setAttribute('data-edit', 'a@x.com');
+  press.setAttribute('data-pool', 'gmail');
+  doc.querySelector('tr[data-key]').appendChild(press);
+  fire(press, 'click');
+  await settle();
+  const form = dlg.querySelector('form');
+  assert.equal(form.dataset.key, 'gmail:a@x.com', 'the form knows its row');
+
+  fire(form, 'submit', {submitter: dlg.querySelector('button.go')});
+  await settle(); await settle();
+  const save = win.__fetches.find((f) => /\/pools\/gmail\/edit$/.test(f.url));
+  assert.ok(save, 'no Save was sent');
+  assert.equal(save.init.headers['X-GF-Row'], 'gmail',
+               'the Save did not ask for one row');
+  assert.equal(doc.querySelector('tr[data-key="gmail:a@x.com"]').dataset.group,
+               'current', 'the row was not put back');
+  assert.equal(dlg.open, false, 'the editor stayed open after a Save');
+  assert.equal(win.__fetches.filter((f) => /\/sheet/.test(f.url)).length, 0,
+               'the whole sheet was fetched again');
+});

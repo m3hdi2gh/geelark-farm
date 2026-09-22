@@ -9255,7 +9255,15 @@ def test_pool_row_is_the_sheets_own_query_narrowed_to_one_address(monkeypatch):
 
     monkeypatch.setattr(read, "Store", _S)
     got = read.pool_row(None, "gmail", "A@x.com")
-    assert got["row"] == {"id": 1, "address": "a@x.com"}
+    # With the one word the sheet groups and badges by. `_pool_rows`
+    # set it on every sheet row and this did not, so the row a press
+    # answered with wore a "-" badge and "now under errored" whatever
+    # the press had done (the operator, 2026-09-22).
+    assert got["row"] == {"id": 1, "address": "a@x.com", "state": "free"}
+    from geelark_farm.web import pages
+
+    drawn = pages.row_answer("gmail", got["row"], "done:1", {"id": 1})
+    assert 'data-state="free"' in drawn and 'data-group="current"' in drawn
     sql, params = asked[0]
     assert "lower(address) = lower(%s)" in sql and params == ("A@x.com", 1)
     assert "AS password" not in sql and "AS secret" not in sql, (

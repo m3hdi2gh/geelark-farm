@@ -1487,6 +1487,11 @@
     if (!dlg || !tr) return;
     var form = dlg.querySelector('form'), f = form.elements;
     var address = button.dataset.edit;
+    // The editor's form is not inside the row it edits, so its Save
+    // never asked for the one-row answer: the whole sheet was fetched
+    // again and the list scrolled back to the top (the operator,
+    // 2026-09-22). The row's key rides on the form instead.
+    form.dataset.key = tr.dataset.key || '';
     f.address.value = address;
     f.new_address.value = address;
     // The password and the key are read for this one row when the door
@@ -1831,7 +1836,8 @@
     }
     var acting = actOn(form, sheet);
     acting.forEach(function(tr){ tr.classList.add('acting'); });
-    var key = form.closest('tr') ? form.closest('tr').dataset.key : null;
+    var key = form.closest('tr') ? form.closest('tr').dataset.key
+              : (form.dataset.key || null);
     var sent = false;
     // A press about one row, answered with that row: ~1KB, and nothing
     // to parse a document out of. The header is what says the script is

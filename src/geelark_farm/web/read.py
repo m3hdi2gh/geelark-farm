@@ -1027,6 +1027,13 @@ def pool_row(settings: Settings, kind: str, address: str) -> dict:
                     break
         else:
             rows = []
+        for row in rows:
+            # The one word the sheet sorts, filters and groups by - set
+            # by `_pool_rows` on every sheet row and forgotten here, so
+            # the row a press answered with had no state: it was drawn
+            # with a "-" badge and "now under errored", whatever the
+            # press had done (the operator, 2026-09-22).
+            row["state"] = _pool_state(kind, row)
         return {"row": rows[0] if rows else None, "pending": _pending(store)}
 
 
