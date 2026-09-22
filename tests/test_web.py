@@ -9628,3 +9628,22 @@ def test_the_pool_page_doors_ask_for_a_row():
     assert src.count('row_of="proxy"') == 1, "free, test, remove share one"
     assert 'payload.get("address") or payload.get("name")' in \
         inspect.getsource(app_mod._Handler._act)
+
+
+def test_the_phones_table_says_whose_gmail_is_on_each_phone(monkeypatch):
+    """Under the address, small, the way the maker's name sits under
+    the status - the operator reads the table by seller when a batch
+    goes wrong (2026-09-22). Nothing under a bare phone."""
+    from geelark_farm.web import pages, read
+
+    src = inspect.getsource(read.dashboard)
+    assert "coalesce(rg.seller, '') AS gmail_seller" in src
+    assert "lower(rg.address) = lower(p.gmail)" in src
+    with_seller = {"gmail": "IronHawk@gmail.com", "gmail_seller": "LEO 21SEP"}
+    assert pages._seller_line(with_seller) == (
+        '<span class="dim maker seller" title="the seller this Gmail came '
+        'from">LEO 21SEP</span>')
+    assert pages._seller_line({"gmail": "", "gmail_seller": "LEO"}) == ""
+    assert pages._seller_line({"gmail": "a@x.com", "gmail_seller": ""}) == ""
+    assert "_seller_line(r)" in inspect.getsource(pages._phone_rows)
+

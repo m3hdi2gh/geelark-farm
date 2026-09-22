@@ -1098,7 +1098,8 @@ def _phone_rows(data: dict, user: dict) -> str:
         lines.append(
             f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
             f'<td>{badge}</td>'
-            f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}</td>'
+            f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}'
+            f'{_seller_line(r)}</td>'
             f'<td>{_account_cell(r)}</td>'
             f'<td class="mono dim">{esc(str(r.get("proxy_name") or "-"))}</td>'
             f'<td class="mono dim nowrap">'
@@ -1174,6 +1175,18 @@ def _carries(row: dict) -> str:
     rule = dict(SPOTIFY_CATEGORIES).get(word, "")
     return (f'<span class="carries {word}" title="a Spotify account of the '
             f'{word} kind - it {esc(rule)}">Spotify {word}</span>')
+
+
+def _seller_line(row: dict) -> str:
+    """The seller the phone's Gmail came from, in small under the
+    address - the same line the maker's name takes under the status.
+    Nothing when there is no Gmail, or the pool never knew whose it
+    was (the operator, 2026-09-22)."""
+    seller = str(row.get("gmail_seller") or "").strip()
+    if not seller or _no_address(str(row.get("gmail") or "").strip()):
+        return ""
+    return (f'<span class="dim maker seller" title="the seller this Gmail '
+            f'came from">{esc(seller)}</span>')
 
 
 def _addr_cell(value, empty: str) -> str:

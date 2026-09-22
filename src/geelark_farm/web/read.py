@@ -288,11 +288,17 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             # than guessed from the app column, so the table can say
             # what a phone carries (2026-09-17).
             " coalesce(ra.product, '') AS app_product,"
-            " coalesce(ra.category, '') AS app_category"
+            " coalesce(ra.category, '') AS app_category,"
+            # Whose stock the Gmail on it was, under the address - the
+            # operator reads the table by seller when a batch goes
+            # wrong (2026-09-22).
+            " coalesce(rg.seller, '') AS gmail_seller"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " LEFT JOIN users bu ON bu.id = p.built_by"
             " LEFT JOIN resources ra ON ra.kind = 'app'"
             "   AND lower(ra.address) = lower(p.app_account)"
+            " LEFT JOIN resources rg ON rg.kind = 'gmail'"
+            "   AND lower(rg.address) = lower(p.gmail)"
             " WHERE p.done_at IS NULL"
             " AND (%s::bigint IS NULL OR p.owner_id = %s)"
             " ORDER BY p.serial", (owner_id, owner_id))
