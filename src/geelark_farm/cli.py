@@ -14,7 +14,7 @@ Commands are grouped by what they are for:
   setup and credentials  verify, ping, plan, proxy
   phone lifecycle        phones, create, delete, start, stop, reap
   device diagnostics     dump, tap, shell, type, screenshot
-  one step at a time     login, install
+  one step at a time     login, flow, install
 
 It named `run` and `rows`, which were renamed and removed, and omitted
 fourteen that exist - while claiming to be the full surface. A test now
