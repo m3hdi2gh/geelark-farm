@@ -67,7 +67,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import apps, breaker, codes, failures, mailbox, phones, shell
+from . import apps, breaker, codes, failures, mailbox, phones, products, shell
 from . import artifacts as archive
 from . import proxy as proxy_mod
 from .accounts import Account
@@ -1273,16 +1273,13 @@ class Wanted:
 
 
 #: The apps a phone can be built with, and what each is called on a page.
-APPS = {"chatgpt": "ChatGPT", "spotify": "Spotify", "claude": "Claude"}
-#: Spotify's package; ChatGPT's is `settings.target_package`. All three
-#: are in GeeLark's app center - Spotify is its own, ChatGPT and Claude
-#: are copies uploaded from a Play-signed phone - and Play is only the
-#: fallback now (2026-09-12).
-SPOTIFY_PACKAGE = "com.spotify.music"
-CLAUDE_PACKAGE = "com.anthropic.claude"
-#: Names in APPS_ON_EVERY_PHONE that are not apps, said once a process
-#: rather than once a build.
-_NOT_AN_APP: set[str] = set()
+#: Read off `products`, which owns everything the farm knows about each
+#: app (the builder review, 2026-09-23); these names stay for the code
+#: and the tests that read them here.
+APPS = {key: spec.name for key, spec in products.PRODUCTS.items()}
+#: Spotify's package; ChatGPT's is `settings.target_package`.
+SPOTIFY_PACKAGE = products.PRODUCTS["spotify"].package
+CLAUDE_PACKAGE = products.PRODUCTS["claude"].package
 #: How many addresses one build may spend before it stops and says so.
 #: Bounded by the budget alone, a phone on a bad exit or a bad batch of
 #: accounts ate address after address and reported budget_exhausted,
@@ -1291,27 +1288,13 @@ GMAILS_PER_BUILD = 5
 
 
 def _apps_every_phone(settings: Settings) -> tuple[str, ...]:
-    """The apps every phone carries: the names in APPS_ON_EVERY_PHONE this
-    builder knows how to install, in the order given, without repeats."""
-    out: list[str] = []
-    for word in getattr(settings, "apps_on_every_phone", ()):
-        app = str(word).strip().lower()
-        if app in APPS:
-            if app not in out:
-                out.append(app)
-        elif app and app not in _NOT_AN_APP:
-            _NOT_AN_APP.add(app)
-            log.warning("APPS_ON_EVERY_PHONE names %r, which is not one of "
-                        "%s; it is skipped", app, ", ".join(sorted(APPS)))
-    return tuple(out)
+    """The apps every phone carries - see `products.apps_every_phone`."""
+    return products.apps_every_phone(settings)
 
 
 def _named(joined: str) -> str:
     """"chatgpt+spotify" the way a person says it."""
-    words = [APPS.get(app, app) for app in joined.split("+") if app]
-    if len(words) > 1:
-        return f"{', '.join(words[:-1])} and {words[-1]}"
-    return words[0] if words else "nothing"
+    return products.named(joined)
 
 
 def _bad_model(settings: Settings, model: str) -> bool:
@@ -1450,43 +1433,31 @@ def _claim_panel(s):
 #: OpenAI, which was every account's until a second product arrived
 #: (2026-09-17): a Spotify row refused for its password said "OpenAI
 #: would not take the password".
-SERVICES = {"chatgpt": "OpenAI", "claude": "Anthropic", "spotify": "Spotify"}
+SERVICES = {key: spec.service for key, spec in products.PRODUCTS.items()}
 
 
 def _service_of(app_row) -> str:
-    return SERVICES.get(_product_of(app_row), "OpenAI")
+    return products.spec_of(getattr(app_row, "values", None)).service
 
 
 def _product_of(app_row) -> str:
     """Which product an account row is for: the panel's `product` column,
     read through the pool's "Product" value; a row with none is the
     console's and the sheet's, and those were always ChatGPT."""
-    values = getattr(app_row, "values", None) or {}
-    return str(values.get("Product") or "").strip().lower() or "chatgpt"
+    return products.product_of(getattr(app_row, "values", None))
 
 
 def _flow_for(settings: Settings, app_row):
-    """The sign-in flow and the package for this account's product. One
-    place, so a third product is one more line here and not a fourth copy
-    of the sign-in loop (flows/claude_login.py, 2026-09-16)."""
-    product = _product_of(app_row)
-    if product == "claude":
-        from .flows import claude_login
-
-        return claude_login, CLAUDE_PACKAGE
-    if product == "spotify":
-        from .flows import spotify_login
-
-        return spotify_login, SPOTIFY_PACKAGE
-    return chatgpt_login, settings.target_package
+    """The sign-in flow and the package for this account's product, off
+    the registry: a new product is an entry in `products`, not another
+    branch here (the builder review, 2026-09-23)."""
+    spec = products.spec_of(getattr(app_row, "values", None))
+    return spec.flow_module(), spec.package_for(settings)
 
 
 def _package_for(settings: Settings, app: str) -> str:
-    if app == "spotify":
-        return SPOTIFY_PACKAGE
-    if app == "claude":
-        return CLAUDE_PACKAGE
-    return settings.target_package
+    return (products.spec(app) or products.PRODUCTS[products.DEFAULT]
+            ).package_for(settings)
 
 
 #: How long an install GeeLark was asked for at boot gets to land after the
@@ -1750,9 +1721,7 @@ def _codes_for(settings: Settings, row, given):
     typed into the panel, which is `given` - the source the run was
     started with.
     """
-    product = str((getattr(row, "values", None) or {})
-                  .get("Product") or "chatgpt").strip().lower()
-    if product == "claude":
+    if products.spec_of(getattr(row, "values", None)).codes == "panel":
         return given
     return mailbox.from_settings(settings) or codes.NoSource()
 

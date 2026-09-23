@@ -22,6 +22,7 @@ from urllib.parse import quote
 # takes judgements rather than data: when a number is worth a colour is
 # the same question whether it is being drawn at the foot of a page or
 # raised as an alert, and two copies of an answer drift.
+from .. import products
 from . import assets
 from .read import (PLAN_WARN_DAYS, READING_STALE_AFTER,
                    REFUSAL_SHOWN_FOR, SLOTS_LOW)
@@ -586,7 +587,10 @@ _PHONE_ORDER = {"ready": 0, "app_only": 1, "incomplete": 2, "building": 3}
 
 #: The flow a captured log line came from, in the words the row shows.
 _FLOW_WORDS = {"google_login": "google sign-in",
-               "chatgpt_login": "chatgpt sign-in",
+               # Every product's sign-in, off the registry: claude_login
+               # and spotify_login lines showed under their raw logger
+               # names (the builder review, 2026-09-23).
+               **products.flow_loggers(),
                "play_install": "play install", "router": "screen",
                "verify": "verifying", "builder": "build"}
 

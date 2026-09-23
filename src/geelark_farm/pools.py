@@ -2424,8 +2424,8 @@ class Book:
         if self._lists is None:
             raise SheetError("this workbook has no Lists tab to sync")
 
-        from . import builder, failures
-        from .flows import chatgpt_login, google_login
+        from . import builder, failures, products
+        from .flows import google_login
 
         def credential_reasons(module) -> list[str]:
             # Set-aside reasons are offered too: a set-aside row carries its
@@ -2442,9 +2442,14 @@ class Book:
             "Gmail Statuses": [GmailPool.claimed_status, GmailPool.spent_status,
                                GmailPool.retired_status, IMPORTED,
                                *credential_reasons(google_login)],
+            # Every product's flow: the app pool holds all three, and
+            # a Claude or Spotify row's reason was flagged by its own
+            # dropdown (the builder review, 2026-09-23).
             "GPT Statuses": [AppPool.claimed_status, AppPool.spent_status,
                              AppPool.retired_status, IMPORTED,
-                             *credential_reasons(chatgpt_login)],
+                             *sorted({r for spec in products.PRODUCTS.values()
+                                      for r in credential_reasons(
+                                          spec.flow_module())})],
             # The proxy tab's words are its own - a proxy is occupied and let
             # go, never judged - so they come from the pool, not the taxonomy.
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
