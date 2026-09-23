@@ -120,6 +120,15 @@ from .flows import chatgpt_login, google_login, play_install  # noqa: F401
 from .gsheet import SheetError
 from .ledger import Ledger
 from .logs import NO_BUILD
+
+# Device helpers, with the modules that own the device since the builder
+# review (2026-09-23); the names stay here for their callers.
+from .phones import FARM_GROUP as FARM_GROUP
+from .phones import _bad_model as _bad_model
+from .phones import _create_kept as _create_kept
+from .phones import _in_the_farms_group as _in_the_farms_group
+from .phones import _live_exits as _live_exits
+from .phones import _remember_refusal as _remember_refusal
 from .pools import Book, PhoneLog, Pool, Resource
 
 # The run's log context, run ids and event sink - runctx since the
@@ -131,6 +140,7 @@ from .runctx import _next_run_id, _record_event
 from .runctx import _run as _run
 from .runctx import _serial as _serial
 from .runctx import set_event_sink as set_event_sink
+from .shell import _touch_method as _touch_method
 
 # Moved to `wishes` with the strict reader the queue uses (the builder
 # review, 2026-09-23); the name stays here for its callers.
@@ -978,41 +988,6 @@ def _named(joined: str) -> str:
     return products.named(joined)
 
 
-def _bad_model(settings: Settings, model: str) -> bool:
-    """Whether GeeLark handed out a model the numbers condemned."""
-    said = (model or "").casefold()
-    return bool(said) and any(bad.casefold() in said
-                              for bad in getattr(settings, "bad_models", ()))
-
-
-def _create_kept(client: Client, settings: Settings, ledger: Ledger, proxy,
-                 *, label: str, account: str):
-    """`phones.create`, and again when the model is one of the bad ones -
-    deleted before anything is spent on it, up to `model_retries` times.
-    GeeLark's API takes no model; the only choice is after the fact, and
-    a phone a few seconds old costs nothing but those seconds (the model
-    gate, 2026-09-10). The last one is kept whatever it is."""
-    tries = max(0, int(getattr(settings, "model_retries", 0)))
-    entry = phones.create(client, settings, proxy, ledger=ledger,
-                          label=label, account=account)
-    for n in range(tries):
-        model = str(getattr(entry, "model", "") or "")
-        if not _bad_model(settings, model):
-            return entry
-        log.warning("phone %s is a %s, which signs in rarely; deleting it "
-                    "and creating another (%d of %d)",
-                    entry.serial or entry.phone_id, model, n + 1, tries)
-        try:
-            phones.delete(client, [entry.phone_id], ledger=ledger)
-        except Exception as exc:                                  # noqa: BLE001
-            log.warning("could not delete phone %s (%s); keeping it",
-                        entry.serial or entry.phone_id, exc)
-            return entry
-        entry = phones.create(client, settings, proxy, ledger=ledger,
-                              label=label, account=account)
-    return entry
-
-
 def _record_signin(settings: Settings, build: Build, *, gmail: str,
                    seller: str, host: str, position: int, reason: str,
                    ok: bool, seconds: float, captcha_rounds: int,
@@ -1086,11 +1061,6 @@ def _align_clock(client: Client, settings: Settings, phone_id: str,
         return ""
     log.info("clock set to %s, where exit %s is", zone, ip)
     return zone
-
-
-def _touch_method(phone_id: str) -> str:
-    """How this phone's taps are made - what the sign-in record says."""
-    return "kernel" if shell._touch_ready.get(phone_id) else "input"
 
 
 #: Builds start within seconds of each other, four at a time, and every
@@ -1177,18 +1147,6 @@ PLAY_RECIPE_EXITS = 3
 PLAY_RETRY_FLOOR_SECONDS = 150.0
 
 
-def _reset_play(client: Client, phone_id: str) -> None:
-    """Force-stop and clear the Play Store - the operator's "clear cache".
-    `pm clear` clears data as well; the Google account is not in it (it
-    lives with AccountManager), and Play signs itself back in."""
-    log.info("force-stopping and clearing the Play Store")
-    shell.run(client, phone_id, f"am force-stop {play_install.PLAY_PACKAGE}",
-              strict=False)
-    shell.run(client, phone_id, f"pm clear {play_install.PLAY_PACKAGE}",
-              strict=False)
-    time.sleep(3)
-
-
 def _install_by_recipe(client: Client, settings: Settings, book: Book,
                        build: Build, phone_id: str, package: str, *,
                        name: str, ordered: bool, remaining, artifacts,
@@ -1216,7 +1174,7 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
         if installed.reason == "download_stalled" and not cleared:
             log.warning("%s: the download is parked (%s); clearing the Play "
                         "Store and asking again", name, installed.reason)
-            _reset_play(client, phone_id)
+            play_install._reset_play(client, phone_id)
             cleared = True
         else:
             if swaps >= PLAY_RECIPE_EXITS or proxy_row is None:
@@ -1256,7 +1214,7 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
             _exit_up(client, settings, phone_id, proxy_row, remaining(),
                      cancelled)
             cleared = False
-            _reset_play(client, phone_id)
+            play_install._reset_play(client, phone_id)
         installed = _install(client, phone_id, package, name=name,
                              ordered=False,
                              budget=min(settings.install_budget_seconds,
@@ -2452,45 +2410,6 @@ def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
     return None
 
 
-def _remember_refusal(settings: Settings, said: str) -> None:
-    """Keep GeeLark's own words about a phone that would not start.
-
-    The open API has no balance in it - `/v1/pay/plan/info` gives the
-    slots and the expiry and nothing about money, and there is no other
-    endpoint (probed, 2026-09-20). So the only thing that says the
-    account has run out is a refusal, and until this it said it only in
-    a log line: nineteen builds were turned down for
-    `[41001] balance not enough` in six hours and the console showed a
-    tripped breaker with no hint why (2026-09-19).
-
-    The code and the sentence are kept apart from each other, because
-    only GeeLark can say whether a refusal is about money and only the
-    code says it: reading every refusal as an empty account put `out of
-    credit` on the console while forty-seven phones were being built,
-    on a day whose one refusal was a proxy it could not check
-    (2026-09-20). A line of the original goes with them for a shape
-    `read_refusal` has never seen.
-
-    Never fatal. It is a note for a page, written on a path that is
-    already reporting a failure.
-    """
-    if not getattr(settings, "store_enabled", False):
-        return
-    try:
-        from .store import db
-        from .store import state as store_state
-
-        note = phones.read_refusal(said)
-        with db.connect(settings) as conn:
-            store_state.put(conn, "geelark_refusal",
-                            {"said": note["said"], "code": note["code"],
-                             "msg": note["msg"], "at": time.time(),
-                             "raw": " ".join(str(said).split())[:200]})
-            conn.commit()
-    except Exception as exc:                                      # noqa: BLE001
-        log.debug("could not keep why a phone would not start (%s)", exc)
-
-
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
               swaps: int = 0, avoid: set[str] | None = None) -> Resource:
@@ -3457,33 +3376,6 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     return {key: items for key, items in outcome.items() if items}
 
 
-def _live_exits(client: Client, skip_groups: tuple[str, ...] = ()
-                ) -> dict[str, list[dict]]:
-    """What GeeLark says is behind each exit: `host:port` -> the phones on it.
-
-    The only authority on this. The Proxy tab records what a run believed when
-    it wrote the row, and the two come apart every time a phone is deleted from
-    the panel or moved onto another exit mid-run.
-
-    A list rather than one phone, because an exit can carry more than one since
-    a build ran dry and borrowed - and keeping the last one seen would have the
-    sync quietly rewrite the tab to name whichever came back second.
-    """
-    found: dict[str, list[dict]] = {}
-    skip = {g.casefold() for g in skip_groups}
-    for phone in phones.listing(client):
-        # A playground's phone is not the farm's exit user: its proxy row,
-        # if it has one, is not the farm's to attach or release (the
-        # builder review, 2026-09-23).
-        if skip and phones.group_of(phone) in skip:
-            continue
-        config = phone.get("proxy") or {}
-        if config.get("server"):
-            found.setdefault(f"{config['server']}:{config.get('port')}",
-                             []).append(phone)
-    return found
-
-
 def _busy_serials(settings: Settings | None) -> frozenset[str]:
     """The phones a queued or running job is about: a login the lane
     queued a minute ago that no builder has taken yet has its row marked
@@ -3850,25 +3742,6 @@ def free_abandoned_claims(book: Book, older_than: float) -> list[str]:
     if freed:
         log.info("freed %d row(s) a dead run left claimed", len(freed))
     return freed
-
-
-#: The GeeLark profile group every phone this farm creates is put in, at
-#: creation, by `phones.create`. The account is shared with other people,
-#: and this is what tells a phone of ours from one of theirs.
-FARM_GROUP = "automation"
-
-
-def _in_the_farms_group(phone: dict) -> bool:
-    """Whether GeeLark says this phone is in the farm's own group.
-
-    The listing answers `group` as an object - `{"id", "name", "remark"}` -
-    and a phone with no group answers the object with every field empty
-    rather than answering nothing, so this reads the name and compares it.
-    """
-    group = phone.get("group") or {}
-    if not isinstance(group, dict):
-        return False
-    return str(group.get("name") or "").strip().casefold() == FARM_GROUP
 
 
 def strand_check(client: Client, book: Book) -> dict[str, list[str]]:

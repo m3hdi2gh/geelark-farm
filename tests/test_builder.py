@@ -5182,7 +5182,7 @@ def test_a_play_page_without_install_gets_a_new_exit_and_a_cleared_play(
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     resets = []
-    monkeypatch.setattr(builder, "_reset_play",
+    monkeypatch.setattr(builder.play_install, "_reset_play",
                         lambda c, p: resets.append(p))
     build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
 
@@ -5203,7 +5203,7 @@ def test_a_parked_download_gets_play_cleared_first_and_an_exit_second(
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     resets = []
-    monkeypatch.setattr(builder, "_reset_play",
+    monkeypatch.setattr(builder.play_install, "_reset_play",
                         lambda c, p: resets.append(p))
     build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
 
@@ -5221,7 +5221,7 @@ def test_a_play_refusal_the_recipe_cannot_answer_is_not_retried(
     monkeypatch.setattr(builder, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
-    monkeypatch.setattr(builder, "_reset_play",
+    monkeypatch.setattr(builder.play_install, "_reset_play",
                         lambda c, p: (_ for _ in ()).throw(AssertionError("no")))
     build = drive(make_book(proxies=4), settings, google=[SIGNED_IN])
 
@@ -5236,7 +5236,7 @@ def test_the_recipe_stops_at_three_exits(device, settings, drive, monkeypatch):
     monkeypatch.setattr(builder, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
-    monkeypatch.setattr(builder, "_reset_play", lambda c, p: None)
+    monkeypatch.setattr(builder.play_install, "_reset_play", lambda c, p: None)
     build = drive(make_book(proxies=6), settings, google=[SIGNED_IN])
 
     assert not build.ok and build.status == "install_failed"

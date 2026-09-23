@@ -57,6 +57,9 @@ from .. import screen, shell
 from ..api import Client
 
 log = logging.getLogger(__name__)
+#: `_reset_play` was the builder's and writes to its logger, as before the
+#: move (the builder review, 2026-09-23).
+_build_log = logging.getLogger("geelark_farm.builder")
 
 PLAY_PACKAGE = "com.android.vending"
 
@@ -558,3 +561,15 @@ def install(client: Client, phone_id: str, package: str, *,
     return Outcome("budget", "budget_exhausted",
                    f"{package} did not appear within {budget_seconds:.0f}s",
                    artifacts=saved)
+
+
+def _reset_play(client: Client, phone_id: str) -> None:
+    """Force-stop and clear the Play Store - the operator's "clear cache".
+    `pm clear` clears data as well; the Google account is not in it (it
+    lives with AccountManager), and Play signs itself back in."""
+    _build_log.info("force-stopping and clearing the Play Store")
+    shell.run(client, phone_id, f"am force-stop {PLAY_PACKAGE}",
+              strict=False)
+    shell.run(client, phone_id, f"pm clear {PLAY_PACKAGE}",
+              strict=False)
+    time.sleep(3)

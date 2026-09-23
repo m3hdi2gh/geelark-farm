@@ -512,3 +512,8 @@ def clear_field(client: Client, phone_id: str, max_chars: int = 64) -> None:
     keys = ([MOVE_END] + [BACKSPACE] * max_chars + [FORWARD_DELETE] * max_chars)
     run(client, phone_id,
         f"input keyevent {' '.join(str(k) for k in keys)}")
+
+
+def _touch_method(phone_id: str) -> str:
+    """How this phone's taps are made - what the sign-in record says."""
+    return "kernel" if _touch_ready.get(phone_id) else "input"

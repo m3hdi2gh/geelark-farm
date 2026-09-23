@@ -1899,9 +1899,13 @@ def test_no_writer_of_service_state_does_a_read_then_a_put_any_more():
     for fn in (builder._bump_captcha_host, builder.forgive_host):
         src = inspect.getsource(fn)
         assert "store_state.update(" in src and "store_state.put(" not in src
-    # The one whole-value write left in builder.py, which is not a
-    # read-modify-write: a refusal replaces the last refusal.
-    src = inspect.getsource(builder)
+    # The one whole-value write left, which is not a read-modify-write: a
+    # refusal replaces the last refusal. In phones since the builder
+    # review moved `_remember_refusal` there (2026-09-23).
+    from geelark_farm import phones
+
+    assert "store_state.put(" not in inspect.getsource(builder)
+    src = inspect.getsource(phones)
     assert src.count("store_state.put(") == 1
     assert 'store_state.put(conn, "geelark_refusal"' in src
 

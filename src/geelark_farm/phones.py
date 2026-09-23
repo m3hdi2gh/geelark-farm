@@ -22,6 +22,9 @@ from .ledger import Entry, Ledger
 from .proxy import Proxy
 
 log = logging.getLogger(__name__)
+#: What the helpers moved here from builder.py write to - its logger, as
+#: before the move (the builder review, 2026-09-23).
+_build_log = logging.getLogger("geelark_farm.builder")
 
 RUNNING, STARTING, STOPPED, EXPIRED = 0, 1, 2, 3
 STATUS_NAMES = {RUNNING: "running", STARTING: "starting",
@@ -557,7 +560,9 @@ def prune_ledger(client: Client, ledger: Ledger) -> list[str]:
     return gone
 
 
-#: The group the farm creates its phones in.
+#: The GeeLark profile group every phone this farm creates is put in, at
+#: creation, by `phones.create`. The account is shared with other people,
+#: and this is what tells a phone of ours from one of theirs.
 FARM_GROUP = "automation"
 
 
@@ -673,3 +678,117 @@ def screenshot(client: Client, phone_id: str, *, timeout: float = 60) -> str | N
             break
     log.warning("screenshot did not complete")
     return None
+
+
+def _bad_model(settings: Settings, model: str) -> bool:
+    """Whether GeeLark handed out a model the numbers condemned."""
+    said = (model or "").casefold()
+    return bool(said) and any(bad.casefold() in said
+                              for bad in getattr(settings, "bad_models", ()))
+
+
+def _create_kept(client: Client, settings: Settings, ledger: Ledger, proxy,
+                 *, label: str, account: str):
+    """`phones.create`, and again when the model is one of the bad ones -
+    deleted before anything is spent on it, up to `model_retries` times.
+    GeeLark's API takes no model; the only choice is after the fact, and
+    a phone a few seconds old costs nothing but those seconds (the model
+    gate, 2026-09-10). The last one is kept whatever it is."""
+    tries = max(0, int(getattr(settings, "model_retries", 0)))
+    entry = create(client, settings, proxy, ledger=ledger,
+                          label=label, account=account)
+    for n in range(tries):
+        model = str(getattr(entry, "model", "") or "")
+        if not _bad_model(settings, model):
+            return entry
+        _build_log.warning("phone %s is a %s, which signs in rarely; deleting it "
+                    "and creating another (%d of %d)",
+                    entry.serial or entry.phone_id, model, n + 1, tries)
+        try:
+            delete(client, [entry.phone_id], ledger=ledger)
+        except Exception as exc:                                  # noqa: BLE001
+            _build_log.warning("could not delete phone %s (%s); keeping it",
+                        entry.serial or entry.phone_id, exc)
+            return entry
+        entry = create(client, settings, proxy, ledger=ledger,
+                              label=label, account=account)
+    return entry
+
+
+def _remember_refusal(settings: Settings, said: str) -> None:
+    """Keep GeeLark's own words about a phone that would not start.
+
+    The open API has no balance in it - `/v1/pay/plan/info` gives the
+    slots and the expiry and nothing about money, and there is no other
+    endpoint (probed, 2026-09-20). So the only thing that says the
+    account has run out is a refusal, and until this it said it only in
+    a log line: nineteen builds were turned down for
+    `[41001] balance not enough` in six hours and the console showed a
+    tripped breaker with no hint why (2026-09-19).
+
+    The code and the sentence are kept apart from each other, because
+    only GeeLark can say whether a refusal is about money and only the
+    code says it: reading every refusal as an empty account put `out of
+    credit` on the console while forty-seven phones were being built,
+    on a day whose one refusal was a proxy it could not check
+    (2026-09-20). A line of the original goes with them for a shape
+    `read_refusal` has never seen.
+
+    Never fatal. It is a note for a page, written on a path that is
+    already reporting a failure.
+    """
+    if not getattr(settings, "store_enabled", False):
+        return
+    try:
+        from .store import db
+        from .store import state as store_state
+
+        note = read_refusal(said)
+        with db.connect(settings) as conn:
+            store_state.put(conn, "geelark_refusal",
+                            {"said": note["said"], "code": note["code"],
+                             "msg": note["msg"], "at": time.time(),
+                             "raw": " ".join(str(said).split())[:200]})
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        _build_log.debug("could not keep why a phone would not start (%s)", exc)
+
+
+def _live_exits(client: Client, skip_groups: tuple[str, ...] = ()
+                ) -> dict[str, list[dict]]:
+    """What GeeLark says is behind each exit: `host:port` -> the phones on it.
+
+    The only authority on this. The Proxy tab records what a run believed when
+    it wrote the row, and the two come apart every time a phone is deleted from
+    the panel or moved onto another exit mid-run.
+
+    A list rather than one phone, because an exit can carry more than one since
+    a build ran dry and borrowed - and keeping the last one seen would have the
+    sync quietly rewrite the tab to name whichever came back second.
+    """
+    found: dict[str, list[dict]] = {}
+    skip = {g.casefold() for g in skip_groups}
+    for phone in listing(client):
+        # A playground's phone is not the farm's exit user: its proxy row,
+        # if it has one, is not the farm's to attach or release (the
+        # builder review, 2026-09-23).
+        if skip and group_of(phone) in skip:
+            continue
+        config = phone.get("proxy") or {}
+        if config.get("server"):
+            found.setdefault(f"{config['server']}:{config.get('port')}",
+                             []).append(phone)
+    return found
+
+
+def _in_the_farms_group(phone: dict) -> bool:
+    """Whether GeeLark says this phone is in the farm's own group.
+
+    The listing answers `group` as an object - `{"id", "name", "remark"}` -
+    and a phone with no group answers the object with every field empty
+    rather than answering nothing, so this reads the name and compares it.
+    """
+    group = phone.get("group") or {}
+    if not isinstance(group, dict):
+        return False
+    return str(group.get("name") or "").strip().casefold() == FARM_GROUP
