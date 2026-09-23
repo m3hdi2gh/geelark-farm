@@ -57,6 +57,17 @@ class PhoneCapacityError(PhoneError):
     """
 
 
+class WaitInterrupted(PhoneError):
+    """A wait on the phone was stopped because the run is shutting down.
+
+    Its own subclass so a build can file it as the stop it is. As a plain
+    PhoneError it read as `phone_would_not_start` - a verdict on the phone -
+    and the empty phone was deleted, which the run's own shutdown is the one
+    stop that must not do (the builder review, 2026-09-23). Still a
+    PhoneError, so every other caller is answered as before.
+    """
+
+
 #: What GeeLark answers when it is out of machines of the requested Android
 #: version. Transient - it clears in minutes - and it arrives at the phone
 #: that happened to ask, not at anything that is wrong (2026-08-28).
@@ -480,8 +491,8 @@ def wait_until_running(client: Client, phone_id: str, *,
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cancelled and cancelled():
-            raise PhoneError(f"stopped waiting for phone {phone_id}: "
-                             f"the run is shutting down")
+            raise WaitInterrupted(f"stopped waiting for phone {phone_id}: "
+                                  f"the run is shutting down")
         state = status(client, phone_id)
         if state == RUNNING:
             if on_running:
@@ -494,8 +505,9 @@ def wait_until_running(client: Client, phone_id: str, *,
             waited = 0.0
             while waited < settle:
                 if cancelled and cancelled():
-                    raise PhoneError(f"stopped waiting for phone {phone_id}: "
-                                     f"the run is shutting down")
+                    raise WaitInterrupted(
+                        f"stopped waiting for phone {phone_id}: the run is "
+                        f"shutting down")
                 nap = min(2.0, settle - waited)
                 time.sleep(nap)
                 waited += nap

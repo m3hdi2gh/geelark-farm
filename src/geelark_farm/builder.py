@@ -1536,6 +1536,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.error("the network went away: %s", exc)
         return finish("network_unreachable",
                       failures.situation("network_unreachable"))
+    except phones.WaitInterrupted as exc:
+        # The run is shutting down, not a phone that would not start: filed
+        # as the stop it is, and the empty phone is kept (KEPT_WHEN_EMPTY) -
+        # a delete needs a stop, a wait and a call, and the process is going
+        # down (the builder review, 2026-09-23).
+        log.info("%s", exc)
+        return finish("interrupted", failures.situation("interrupted"))
     except phones.PhoneCapacityError as exc:
         # Before `PhoneError`, because it is one. GeeLark had no machine of
         # this Android version free, which says nothing about this phone, this
@@ -1820,6 +1827,10 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.error("the network went away: %s", exc)
         return finish("network_unreachable",
                       failures.situation("network_unreachable"))
+    except phones.WaitInterrupted as exc:
+        # As in build_one: the run's shutdown, not the phone (2026-09-23).
+        log.info("%s", exc)
+        return finish("interrupted", failures.situation("interrupted"))
     except phones.PhoneCapacityError as exc:
         log.warning("no capacity at GeeLark: %s", exc)
         return finish("no_capacity", failures.situation("no_capacity"))

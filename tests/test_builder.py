@@ -6942,3 +6942,39 @@ def test_a_finish_installs_the_app_of_its_accounts_product(
     finish = inspect.getsource(builder.finish_one)
     assert "suspect_hosts=_struck_hosts(settings)" in finish
 
+
+# --------------------------------- phase 4.3: the run's shutdown is a stop
+def test_a_shutdown_during_the_boot_is_filed_as_one_and_keeps_the_phone(
+        device, settings, drive, monkeypatch):
+    """A shutdown during the boot wait was `phone_would_not_start`, and the
+    empty phone was deleted - the run's own shutdown is the one stop that
+    must not do that (the builder review, 2026-09-23)."""
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, **k: deleted.extend(ids))
+    monkeypatch.setattr(builder.phones, "ensure_running",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            builder.phones.WaitInterrupted("shutting down")))
+    build = drive(make_book(), settings, google=[SIGNED_IN])
+    assert build.status == "interrupted"
+    assert deleted == [], "the empty phone is kept"
+    assert issubclass(builder.phones.WaitInterrupted, builder.phones.PhoneError)
+
+
+def test_a_shutdown_during_the_play_recipe_is_not_an_install_that_failed(
+        device, settings, drive, monkeypatch):
+    """It broke out of the recipe's loop, and the build read the last
+    refusal as `install_failed` (the builder review, 2026-09-23)."""
+    stopping = []
+    monkeypatch.setattr(builder.kit_install, "_install",
+                        lambda *a, **k: stopping.append(1)
+                        or InstallOutcome("fatal", "no_install_button"))
+    real = builder.build_one
+
+    def build_with_a_shutdown(*a, **k):
+        return real(*a, cancelled=lambda: len(stopping) >= 1, **k)
+
+    monkeypatch.setattr(builder, "build_one", build_with_a_shutdown)
+    build = drive(make_book(proxies=3), settings, google=[SIGNED_IN])
+    assert build.status == "interrupted", build.status
+

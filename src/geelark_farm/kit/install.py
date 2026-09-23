@@ -73,7 +73,10 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
     while (not installed.ok and installed.reason in PLAY_RETRY_REASONS
            and remaining() > PLAY_RETRY_FLOOR_SECONDS):
         if cancelled is not None and cancelled():
-            break
+            # The run's shutdown, raised as the stop it is. It broke out of
+            # the loop and the build read the last refusal as an install
+            # that failed (the builder review, 2026-09-23).
+            raise Aborted("interrupted")
         if installed.reason == "download_stalled" and not cleared:
             log.warning("%s: the download is parked (%s); clearing the Play "
                         "Store and asking again", name, installed.reason)
