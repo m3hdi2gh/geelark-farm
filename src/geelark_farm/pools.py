@@ -1091,6 +1091,14 @@ class ProxyPool(Pool):
     #: answering yesterday is often answering again today. Re-tested every run
     #: alongside the free ones - see builder.check_proxies.
     dead_status = "dead"
+    #: An exit the host gate set aside: Google distrusted its host that
+    #: day. Out of the pool but not dead.
+    suspect_status = "suspect"
+    #: The words for an exit that is out of the pool but not dead: the host
+    #: gate set it aside, or a build asked for a new address on it. A test
+    #: reads them; only a person's press frees them. Owned here since
+    #: 2026-09-23 (builder.SUSPECT/HELD_BACK are these).
+    held_back_statuses = (suspect_status, needs_new_ip)
 
     # A proxy is not spent by being used - it keeps working, and the column
     # says where it is rather than whether it is gone.
@@ -1376,11 +1384,25 @@ class PhoneLog:
                    or value.strip().upper() == "TRUE"):
                 yield offset, cells
 
-    #: What a run writes in `Status`. Three, because three is how many the
-    #: reader acts on differently - see builder.possible_statuses.
+    #: What a run writes in `Status` - see `possible_statuses`. Owned here
+    #: since 2026-09-23; builder.READY/APP_ONLY are these same strings.
     BUILDING = "building"      # a run holds it right now
     READY = "ready"            # signed in, installed, app account on it
-    APP_ONLY = "app_only"     # Google in, the app on it, no account
+    #: A phone with Google signed in and the app installed, and no app
+    #: account.
+    #:
+    #: Named for what it has, not for what it lacks. `incomplete` named the
+    #: absence, and the absence is the whole product: this is the phone
+    #: somebody takes to sign a customer's own account into by hand. Read
+    #: cold in a tab, "incomplete" says "broken", and a reader who believes
+    #: it either throws away a finished thing or waits for it to finish
+    #: something it never will (2026-08-29).
+    #:
+    #: History rows written before this keep the old word. They are a record
+    #: of what was said at the time and are not rewritten; `unfinished()`
+    #: reads the columns rather than the status, so old rows go on working
+    #: either way.
+    APP_ONLY = "app_only"
     #: Neither a product nor a run in progress: the Gmail signed in but the app
     #: never made it onto the device, so there is nothing to sign an account
     #: into and nothing to hand anybody.
@@ -1391,6 +1413,32 @@ class PhoneLog:
     #: became actively misleading the day the word came to name a product
     #: somebody takes off the shelf (2026-08-29).
     INCOMPLETE = "incomplete"
+
+    @classmethod
+    def possible_statuses(cls) -> list[str]:
+        """Every value a run can leave in the Phones tab's Status column.
+
+        Four, because four is how many the reader acts on differently. It
+        used to be twenty-four - every reason a build could stop for - and
+        across every run ever made only two of them appeared. The rest were
+        noise in a dropdown, and the same detail was already in the Note
+        beside them, in full.
+
+        Two of the four are products - `ready` has an account on it,
+        `app_only` has the app and waits for somebody to sign one in - and
+        the reader takes either off the shelf. `incomplete` is neither: the
+        Gmail signed in and the app never arrived, so there is nothing to
+        open. It is the distinction the fourth word exists for, and it was
+        missing while every unfinished build said `app_only` whatever the App
+        column read.
+
+        What is lost is nothing: `Status` says whether a phone is usable and
+        how, `Note` says why not.
+
+        Here rather than in builder.py, whose import from `sync_lists` was
+        the whole pools<->builder cycle (the builder review, 2026-09-23).
+        """
+        return [cls.BUILDING, cls.READY, cls.APP_ONLY, cls.INCOMPLETE]
 
     def __init__(self, worksheet, headers: list[str], lock: threading.Lock):
         self._ws = worksheet
@@ -2424,7 +2472,7 @@ class Book:
         if self._lists is None:
             raise SheetError("this workbook has no Lists tab to sync")
 
-        from . import builder, failures, products
+        from . import failures, products
         from .flows import google_login
 
         def credential_reasons(module) -> list[str]:
@@ -2458,7 +2506,7 @@ class Book:
                                ProxyPool.dead_status, IMPORTED],
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.
-            "Phone Statuses": builder.possible_statuses(),
+            "Phone Statuses": PhoneLog.possible_statuses(),
             # And the State column, which is the other direction: what a person
             # tells the loop to do about a phone. It had no list at all, so it
             # took free text and `dome` was silently nothing - the failure mode

@@ -761,9 +761,9 @@ def free_all_proxies(book, ledger, settings, payload, client):
     """
     if client is None:
         return "failed", "no GeeLark client on this pass", None
-    from . import builder
+    from .pools import ProxyPool
 
-    held = (builder.HELD_BACK + (book.proxies.dead_status,))
+    held = (ProxyPool.held_back_statuses + (book.proxies.dead_status,))
     rows = [r for r in book.proxies._rows
             if not r.error and r.proxy
             and book.proxies.status_of(r) in held]

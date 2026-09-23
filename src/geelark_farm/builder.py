@@ -77,7 +77,7 @@ from .flows import chatgpt_login, google_login, play_install
 from .gsheet import SheetError
 from .ledger import Ledger
 from .logs import NO_BUILD
-from .pools import Book, Pool, Resource
+from .pools import Book, PhoneLog, Pool, ProxyPool, Resource
 
 log = logging.getLogger(__name__)
 
@@ -228,11 +228,9 @@ CAPTCHA_STRIKES_PER_HOST = 3
 #: host. Three to five is what a young account meets anywhere; the hosts
 #: worth setting aside ran to thirteen and forty-three (2026-09-09).
 HEAVY_CAPTCHA_ROUNDS = 6
-SUSPECT = "suspect"
-#: The words for an exit that is out of the pool but not dead: the host
-#: gate set it aside, or a build asked for a new address on it. A test
-#: reads them; only a person's press frees them.
-HELD_BACK = (SUSPECT, "change ip")
+#: The pool's own words - see ProxyPool.suspect_status/held_back_statuses.
+SUSPECT = ProxyPool.suspect_status
+HELD_BACK = ProxyPool.held_back_statuses
 #: Where the day's tally lives with no store: one process, one dict.
 _captcha_hosts_memory: dict = {}
 
@@ -323,26 +321,14 @@ def _strike_captcha_host(settings: Settings, book: Book,
 
 # What the Phones tab records. The build knows exactly why it stopped and says
 # so in the note; the Status column answers the only question asked of it at a
-# glance - can I use this phone.
-READY = "ready"
-#: A phone with Google signed in and the app installed, and no app account.
-#:
-#: Named for what it has, not for what it lacks. `incomplete` named the
-#: absence, and the absence is the whole product: this is the phone somebody
-#: takes to sign a customer's own account into by hand. Read cold in a tab,
-#: "incomplete" says "broken", and a reader who believes it either throws away
-#: a finished thing or waits for it to finish something it never will
-#: (2026-08-29).
-#:
-#: History rows written before this keep the old word. They are a record of
-#: what was said at the time and are not rewritten; `unfinished()` reads the
-#: columns rather than the status, so old rows go on working either way.
-APP_ONLY = "app_only"
+# glance - can I use this phone. The words are the Phones tab's own
+# (PhoneLog); these names stay for the code that reads them here.
+READY = PhoneLog.READY
+APP_ONLY = PhoneLog.APP_ONLY
 
-#: How a build ends when it stops warm on purpose: with manual login on, the
-#: keeper's phones carry no account until an operator sends one (2026-09-08).
-#: In `breaker.WORKED` - it is the stock being kept, not a failure.
-WARM_FOR_OPERATOR = "warm_for_operator"
+#: How a build ends when it stops warm on purpose - see
+#: failures.WARM_FOR_OPERATOR, which the breaker reads too.
+WARM_FOR_OPERATOR = failures.WARM_FOR_OPERATOR
 
 # What becomes of a resource a build was holding. It was a boolean - spent or
 # not - and a challenged app account is neither: it was not used, and putting
@@ -3438,16 +3424,10 @@ def possible_statuses() -> list[str]:
     said `app_only` whatever the App column read.
 
     What is lost is nothing: `Status` says whether a phone is usable and how,
-    `Note` says why not.
+    `Note` says why not. The list is the Phones tab's own now
+    (`PhoneLog.possible_statuses`).
     """
-    from .pools import PhoneLog
-
-    return [PhoneLog.BUILDING, READY, APP_ONLY, PhoneLog.INCOMPLETE]
-
-
-def _this_module():
-    import sys
-    return sys.modules[__name__]
+    return PhoneLog.possible_statuses()
 
 
 def _account_on(book: Book, serial: str, named: str) -> Resource | None:
@@ -4380,7 +4360,7 @@ def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
     for the same reason an unlisted proxy is: which of them belong here is the
     operator's call, and a report that deletes phones is not a report.
 
-    **A credential still held against a phone that is gone.** `reclaim_proxies`
+    **A credential still held against a phone that is gone.** `sync_proxies`
     has done this for exits since a stale serial held thirteen of them out of
     the pool for days; nothing did it for credentials, so two app accounts and
     a Gmail sat `ready` against phones deleted days earlier, out of the pool
@@ -4470,25 +4450,6 @@ def strand_check(client: Client, book: Book) -> dict[str, list[str]]:
         log.warning("%d app account(s) are held against a phone that is gone: "
                     "%s", len(waiting), ", ".join(waiting))
     return outcome
-
-
-def reclaim_proxies(client: Client, book: Book) -> list[Resource]:
-    """Put back every proxy whose phone has been deleted.
-
-    Run before a batch for the same reason `prune_ledger` is: the sheet records
-    what was true when it was written, and phones get deleted from the panel
-    without telling it. Left alone, each deletion permanently removes a working
-    proxy from the pool.
-    """
-    in_use = set()
-    for phone in phones.listing(client):
-        config = phone.get("proxy") or {}
-        if config.get("server"):
-            in_use.add(f"{config['server']}:{config.get('port')}")
-    freed = book.proxies.reclaim(in_use)
-    if freed:
-        log.info("freed %d proxy(s) whose phone no longer exists", len(freed))
-    return freed
 
 
 def check_proxies(client: Client, book: Book) -> tuple[list[Resource],

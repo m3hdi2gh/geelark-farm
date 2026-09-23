@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import failures
+
 log = logging.getLogger(__name__)
 
 #: How many in a row before it opens.
@@ -44,7 +46,7 @@ LIMIT = 5
 #: not a machine that has stopped working, and a breaker that opened on
 #: them would stop the farm for doing exactly what it was asked.
 WORKED = frozenset({"no_usable_gpt", "app_not_asked_for",
-                    "chosen_app_unavailable", "warm_for_operator"})
+                    "chosen_app_unavailable", failures.WARM_FOR_OPERATOR})
 
 #: Nothing was created and nothing was spent, and the verdicts say so. There
 #: is nothing burning for a breaker to stop, and equally nothing that says the

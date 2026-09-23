@@ -170,6 +170,13 @@ def owed_when_exhausted(reason: str) -> bool:
     return reason in OWED_WHEN_EXHAUSTED
 
 
+#: How a build ends when it stops warm on purpose: with manual login on, the
+#: keeper's phones carry no account until an operator sends one (2026-09-08).
+#: In `breaker.WORKED` - it is the stock being kept, not a failure. Here, a
+#: leaf both the builder and the breaker read (the builder review,
+#: 2026-09-23).
+WARM_FOR_OPERATOR = "warm_for_operator"
+
 VERDICTS: dict[str, Verdict] = {
     # -------------------------------------------------- google_login.py
     "phone_distrusted": Verdict(
@@ -288,7 +295,7 @@ VERDICTS: dict[str, Verdict] = {
         "An account goes on when somebody sends one from the dashboard."),
     #: The keeper's own phones, with manual login on: warm and kept warm.
     #: Not a failure - it is the stock being kept (2026-09-08).
-    "warm_for_operator": Verdict(
+    WARM_FOR_OPERATOR: Verdict(
         NOBODY, "it is warm, waiting for an operator to send an account",
         "Google is signed in and the app is on it. No account goes onto a "
         "phone nobody sent it to: pick one on the dashboard and press Send, "
