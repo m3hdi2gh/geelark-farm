@@ -263,6 +263,25 @@ def build_parser() -> argparse.ArgumentParser:
                          help="print the live-view link and wait for Enter before "
                               "driving, so you can open it in time")
 
+    p_flow = sub.add_parser(
+        "flow", help="run one app's sign-in flow on one phone, by hand")
+    p_flow.add_argument("product", metavar="PRODUCT",
+                        help="the app, as the registry names it "
+                             "(chatgpt, spotify, claude)")
+    p_flow.add_argument("--phone", metavar="ID", required=True,
+                        help="the phone to sign into - it must have the app")
+    p_flow.add_argument("--account", metavar="ADDRESS", required=True,
+                        help="the app account's address; the password (and "
+                             "a 2FA key, if it has one) are asked for, or "
+                             "read from FLOW_PASSWORD / FLOW_SECRET")
+    p_flow.add_argument("--code-only", action="store_true",
+                        help="the account signs in with an emailed code, no "
+                             "password")
+    p_flow.add_argument("--fresh", action="store_true",
+                        help="clear the app before signing in")
+    p_flow.add_argument("--keep", action="store_true",
+                        help="leave the phone running afterwards")
+
     p_install = sub.add_parser(
         "install", help="install the target package from the Play Store"
     )
@@ -746,6 +765,86 @@ def cmd_login(settings: Settings, args) -> int:
             print(f"  stopped {phone_id} - billing ended")
         else:
             print(f"  {phone_id} LEFT RUNNING - 'geelark stop' ends billing")
+
+
+def _flow_secret(name: str, prompt: str, *, required: bool) -> str:
+    """A credential for `geelark flow`, never from the command line - a
+    password in argv is in the shell's history and in every process
+    listing. The environment first, then a hidden prompt when there is
+    a terminal to ask at."""
+    import getpass
+    import os
+
+    value = os.environ.get(name, "")
+    if value or not sys.stdin.isatty():
+        if required and not value:
+            raise AccountError(f"no {prompt.lower()} - set {name}, or run it "
+                               f"in a terminal to be asked")
+        return value
+    value = getpass.getpass(f"{prompt}{'' if required else ' (Enter for none)'}: ")
+    if required and not value:
+        raise AccountError(f"no {prompt.lower()} given")
+    return value.strip()
+
+
+def cmd_flow(settings: Settings, args) -> int:
+    """One app sign-in flow, on one phone, driven by hand - the loop a
+    playground works in: capture the screens, write the flow, run it
+    here, then register it (the builder review, 2026-09-23).
+
+    The flow and its package come from `products`, so a product the
+    registry has is a product this runs, with nothing added here. The
+    phone is claimed while the flow drives it, released after, and
+    stopped unless --keep.
+    """
+    from . import codes, mailbox, products
+
+    spec = products.spec(args.product)
+    if spec is None:
+        print(f"no product called {args.product!r} - the registry has "
+              f"{', '.join(products.PRODUCTS)}")
+        return 2
+    creds = accounts.Credentials(
+        email=args.account.strip(),
+        password="" if args.code_only else _flow_secret(
+            "FLOW_PASSWORD", "Password", required=True),
+        totp_secret="" if args.code_only else _flow_secret(
+            "FLOW_SECRET", "2FA key", required=False),
+        email_code_only=bool(args.code_only))
+    creds.validate(what=spec.name)
+
+    client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir,
+                        stale_after=settings.stale_claim_seconds)
+    refuse_if_busy(settings, args.phone)
+    # Where an emailed code comes from, as the builder decides it. The
+    # panel's codes are a customer's, and there is no customer here.
+    source = ((mailbox.from_settings(settings) if spec.codes == "mailbox"
+               else None) or codes.NoSource())
+    ledger.claim(args.phone, label=f"flow {spec.key} {creds.email}")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    artifact_dir = settings.artifact_dir / f"{stamp}-flow-{spec.key}"
+    try:
+        url = phones.ensure_running(client, args.phone)
+        if url:
+            print(f"watch it live:\n  {url}")
+        outcome = spec.flow_module().sign_in(
+            client, args.phone, creds,
+            package=spec.package_for(settings),
+            budget_seconds=settings.app_login_budget_seconds,
+            artifact_dir=artifact_dir, fresh=bool(args.fresh),
+            codes=source, solver_key=settings.capsolver_key)
+        print(f"\noutcome: {outcome}")
+        for path in outcome.artifacts:
+            print(f"  saved: {path}")
+        return 0 if outcome.ok else 1
+    finally:
+        ledger.release(args.phone, note=f"flow {spec.key} finished")
+        if not args.keep:
+            phones.stop(client, args.phone)
+            print(f"  stopped {args.phone} - billing ended")
+        else:
+            print(f"  {args.phone} LEFT RUNNING - 'geelark stop' ends billing")
 
 
 def cmd_breaker(settings: Settings, args) -> int:
@@ -1236,6 +1335,7 @@ def main(argv: list[str] | None = None) -> int:
         "type": cmd_type,
         "screenshot": cmd_screenshot,
         "login": cmd_login,
+        "flow": cmd_flow,
         "install": cmd_install,
         "build": cmd_build,
         "serve": cmd_serve,

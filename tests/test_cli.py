@@ -2463,3 +2463,57 @@ def test_the_console_only_fallback_still_stamps_its_lines(
     err = capsys.readouterr().err
     assert "--- Logging error ---" not in err
     assert "[-/-]" in err
+
+
+# ------------------------------------------ one app flow by hand (phase 1.3)
+def test_a_flow_runs_off_the_registry_and_releases_the_phone(
+        monkeypatch, tmp_path, capsys, make_settings):
+    """`geelark flow <product>`: the playground's loop - run one app's
+    sign-in on one phone - with the flow and package taken from the
+    registry, so a product it has is a product this runs (the builder
+    review, 2026-09-23)."""
+    from geelark_farm import products
+
+    settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
+    book = FakeLedger()
+    fake = Lifecycle(already_running=True)
+    cli_mod = _wire(monkeypatch, fake, ledger=book)
+    called = {}
+
+    def sign_in(client, phone_id, creds, **kw):
+        called.update(phone=phone_id, email=creds.email,
+                      password=creds.password, **kw)
+        return login_outcome(True)
+
+    monkeypatch.setattr(products.AppSpec, "flow_module",
+                        lambda self: SimpleNamespace(sign_in=sign_in))
+    monkeypatch.setenv("FLOW_PASSWORD", "from-the-env")
+    monkeypatch.delenv("FLOW_SECRET", raising=False)
+    args = SimpleNamespace(product="claude", phone="P1",
+                           account="someone@example.com", code_only=False,
+                           fresh=True, keep=False)
+
+    assert cli_mod.cmd_flow(settings, args) == 0
+    assert called["phone"] == "P1" and called["email"] == "someone@example.com"
+    assert called["password"] == "from-the-env", "never from argv"
+    assert called["package"] == "com.anthropic.claude" and called["fresh"]
+    assert [p for p, _ in book.claimed] == ["P1"]
+    assert [p for p, _ in book.released] == ["P1"]
+
+    args.product = "nonesuch"
+    assert cli_mod.cmd_flow(settings, args) == 2
+    assert "the registry has chatgpt, spotify, claude" in capsys.readouterr().out
+
+
+def test_a_flow_is_never_given_a_password_on_the_command_line():
+    """A password in argv is in the shell's history and every process
+    listing: `geelark flow` takes it from FLOW_PASSWORD or a prompt."""
+    from geelark_farm import cli
+
+    parsed = cli.build_parser().parse_args(
+        ["flow", "spotify", "--phone", "P1", "--account", "a@b.com"])
+    assert parsed.product == "spotify" and not hasattr(parsed, "password")
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            ["flow", "spotify", "--phone", "P1", "--account", "a@b.com",
+             "--password", "x"])
