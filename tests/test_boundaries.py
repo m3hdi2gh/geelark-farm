@@ -106,3 +106,55 @@ def test_dead_code_stays_gone():
 
     for name in ("_this_module", "reclaim_proxies"):
         assert not hasattr(builder, name), name
+
+
+# ------------------------------------------ patches that no longer land
+def test_a_patch_on_a_name_builder_no_longer_owns_is_refused(monkeypatch):
+    """The split's main hazard: a caller moves out of builder.py, and the
+    tests that patch `builder.X` keep passing while patching nothing."""
+    from geelark_farm import builder, wishes
+
+    assert builder.Wanted is wishes.Wanted
+    with pytest.raises(AssertionError, match="wishes.Wanted now"):
+        monkeypatch.setattr(builder, "Wanted", object)
+    # What builder still owns - and the modules its code looks up through
+    # it - may be patched as before.
+    monkeypatch.setattr(builder, "_flow_for", lambda *a: None)
+    monkeypatch.setattr(builder, "phones", builder.phones)
+
+
+def test_every_migrated_module_is_scanned_as_part_of_the_builder():
+    """The two lists are the same list: a module split out of builder.py
+    is both a place a patch no longer lands and a file the verdict scans
+    must read."""
+    import conftest
+
+    from tests.build_sources import BUILDER_MODULES
+
+    assert set(conftest.MIGRATED_FROM_BUILDER) == set(BUILDER_MODULES) - {
+        "builder"}
+
+
+def test_no_verdict_is_written_outside_the_builders_files():
+    """The reverse of `builder_sources`: a `finish("...")` or
+    `Aborted("...")` with a literal reason in a file the verdict scans do
+    not read is a builder module nobody added to the list - its reasons
+    would reach a phone with nothing checking they have a verdict."""
+    from tests.build_sources import builder_sources
+
+    scanned = set(builder_sources())
+    strays = []
+    for path in SRC.rglob("*.py"):
+        if path in scanned or "flows" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Call) and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                continue
+            func = node.func
+            if (isinstance(func, ast.Name) and func.id in ("finish", "Aborted")) \
+                    or (isinstance(func, ast.Attribute)
+                        and func.attr == "Aborted"):
+                strays.append(f"{path.relative_to(SRC)}:{node.lineno}")
+    assert not strays, strays

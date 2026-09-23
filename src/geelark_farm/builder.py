@@ -73,11 +73,18 @@ from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
 from .config import Settings
-from .flows import chatgpt_login, google_login, play_install
+
+# chatgpt_login is reached through here by the tests that patch its
+# sign_in; the builder itself asks the products registry (2026-09-23).
+from .flows import chatgpt_login, google_login, play_install  # noqa: F401
 from .gsheet import SheetError
 from .ledger import Ledger
 from .logs import NO_BUILD
 from .pools import Book, PhoneLog, Pool, ProxyPool, Resource
+
+# Moved to `wishes` with the strict reader the queue uses (the builder
+# review, 2026-09-23); the name stays here for its callers.
+from .wishes import Wanted as Wanted
 
 log = logging.getLogger(__name__)
 
@@ -1222,11 +1229,6 @@ def _fresh_proxy(client: Client, book: Book, *,
         except Exception as exc:                                  # noqa: BLE001
             log.debug("the exit's place was not kept (%s)", exc)
         return resource
-
-
-#: Moved to `wishes` with the strict reader the queue uses (the builder
-#: review, 2026-09-23); the name stays here for its callers.
-from .wishes import Wanted  # noqa: E402
 
 
 #: The apps a phone can be built with, and what each is called on a page.
@@ -2753,7 +2755,8 @@ def _remember_refusal(settings: Settings, said: str) -> None:
     if not getattr(settings, "store_enabled", False):
         return
     try:
-        from .store import db, state as store_state
+        from .store import db
+        from .store import state as store_state
 
         note = phones.read_refusal(said)
         with db.connect(settings) as conn:

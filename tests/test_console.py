@@ -1021,15 +1021,17 @@ def test_no_build_ever_changes_the_console_format():
     more - the ids come from a filter attached once at startup - so nothing
     can fail to put one back. That is strictly stronger than restoring it
     correctly, and this is what holds it (2026-08-31)."""
-    import inspect
     import io
     import logging
 
     from geelark_farm import builder as builder_mod
 
     assert not hasattr(builder_mod, "install_build_logging")
-    assert "setFormatter" not in inspect.getsource(builder_mod), (
-        "something in builder is installing a format again")
+    from tests.build_sources import builder_texts
+
+    for path, text in builder_texts():
+        assert "setFormatter" not in text, (
+            f"something in {path.name} is installing a format again")
 
     buffer = io.StringIO()
     handler = logging.StreamHandler(buffer)

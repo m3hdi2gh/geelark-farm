@@ -837,7 +837,7 @@ def reasons_reported_by(module) -> set[str]:
     return found - SUCCESSES
 
 
-def reasons_decided_by_the_builder(module) -> set[str]:
+def reasons_decided_by_the_builder(*modules) -> set[str]:
     """Every status the builder settles a phone with itself.
 
     Not read off a screen: the build decides these - the pool was empty, the
@@ -847,12 +847,17 @@ def reasons_decided_by_the_builder(module) -> set[str]:
 
     `finish(...)` and `Aborted(...)` are how they are written, and `status=`
     is how one is set on a Build directly.
+
+    Several modules, because the builder is being split out of one file
+    (the builder review, 2026-09-23): each is read apart.
     """
     import ast
     import inspect
 
     found: set[str] = set()
-    for node in ast.walk(ast.parse(inspect.getsource(module))):
+    nodes = [node for module in modules
+             for node in ast.walk(ast.parse(inspect.getsource(module)))]
+    for node in nodes:
         if not isinstance(node, ast.Call):
             continue
         name = getattr(node.func, "id", getattr(node.func, "attr", ""))

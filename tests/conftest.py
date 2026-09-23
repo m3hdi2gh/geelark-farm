@@ -82,3 +82,61 @@ def _one_ledger_per_test():
     ledger_mod._SHARED.clear()
     yield
     ledger_mod._SHARED.clear()
+
+
+# ------------------------------------------ patches that no longer land
+#: The modules builder.py has handed names to, by the builder review's
+#: split (2026-09-23). Add the module each step creates.
+MIGRATED_FROM_BUILDER = ("products", "wishes")
+
+
+def _stale_patch(target, name) -> str:
+    """Why patching `target.name` would not reach the code it is meant
+    for, or "".
+
+    `monkeypatch.setattr(builder, "X", fake)` replaces what builder's own
+    globals say `X` is. Once `X` lives in another module, its callers
+    there look it up in that module and never see the fake - the test
+    patches nothing and passes, or quietly reaches the real thing. So a
+    patch on builder of a function or class a migrated module owns is
+    refused, naming where to patch instead.
+    """
+    import inspect
+    import sys
+
+    builder = sys.modules.get("geelark_farm.builder")
+    if builder is None or target is not builder or not isinstance(name, str):
+        return ""
+    current = getattr(builder, name, None)
+    if not (inspect.isfunction(current) or inspect.isclass(current)):
+        return ""
+    owner = getattr(current, "__module__", "") or ""
+    moved = {f"geelark_farm.{m}" for m in MIGRATED_FROM_BUILDER}
+    if owner in moved:
+        return (f"builder.{name} is {owner}.{name} now - patch it there "
+                f"(or where its caller looks it up); a patch on builder "
+                f"reaches nothing")
+    return ""
+
+
+def _install_stale_patch_guard() -> None:
+    """Wrap whatever `MonkeyPatch.setattr` is current - scripts/
+    audit_fakes.py wraps it too, and the two must chain."""
+    from _pytest.monkeypatch import NOTSET, MonkeyPatch
+
+    current = MonkeyPatch.setattr
+    if getattr(current, "_refuses_stale_patches", False):
+        return
+
+    def setattr(self, target, name=NOTSET, value=NOTSET, raising=True):
+        if not isinstance(target, str):
+            why = _stale_patch(target, name)
+            if why:
+                raise AssertionError(why)
+        return current(self, target, name, value, raising)
+
+    setattr._refuses_stale_patches = True
+    MonkeyPatch.setattr = setattr
+
+
+_install_stale_patch_guard()

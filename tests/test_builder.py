@@ -1850,11 +1850,11 @@ def test_the_boot_wait_is_capped_rather_than_given_the_whole_budget():
     """A phone GeeLark kept reporting as `starting` was polled for another
     thirty-eight minutes, because every caller handed over its own deadline."""
     import ast
-    import pathlib
 
-    source = pathlib.Path(builder.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    calls = [node for node in ast.walk(tree)
+    from tests.build_sources import builder_texts
+
+    calls = [node for _, text in builder_texts()
+             for node in ast.walk(ast.parse(text))
              if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Attribute)
              and node.func.attr == "ensure_running"]
@@ -4390,13 +4390,13 @@ def test_every_way_a_person_stops_a_build_is_named_in_one_place():
     """A third stop word added to `Aborted` and not to the set is a phone
     deleted the next time somebody presses the button."""
     import re
-    from pathlib import Path
 
     from geelark_farm import builder as builder_mod
     from geelark_farm import failures
+    from tests.build_sources import builder_texts
 
-    source = Path("src/geelark_farm/builder.py").read_text(encoding="utf-8")
-    raised = set(re.findall(r'raise Aborted\("([a-z_]+)"\)', source))
+    raised = {r for _, text in builder_texts()
+              for r in re.findall(r'raise Aborted\("([a-z_]+)"\)', text)}
     # The ones failures.py says nobody is to blame for and that name a
     # person rather than a fault.
     by_hand = {word for word in raised
@@ -5999,7 +5999,6 @@ def test_a_host_cleared_by_hand_is_judged_from_the_clear_onwards(
 
 def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
         make_settings, tmp_path, monkeypatch):
-    from geelark_farm.store import db
     from geelark_farm.store import state as store_state
 
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
@@ -6368,7 +6367,8 @@ def test_a_refusal_is_kept_as_a_code_and_a_sentence(monkeypatch):
     from contextlib import contextmanager
 
     from geelark_farm import builder
-    from geelark_farm.store import db, state as store_state
+    from geelark_farm.store import db
+    from geelark_farm.store import state as store_state
 
     kept = {}
 

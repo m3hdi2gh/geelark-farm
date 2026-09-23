@@ -15,6 +15,7 @@ import re
 import pytest
 
 from geelark_farm import failures
+from tests.build_sources import builder_modules
 
 FLOWS = pathlib.Path(__file__).resolve().parents[1] / "src/geelark_farm/flows"
 
@@ -219,10 +220,12 @@ def test_every_reason_can_be_said_out_loud():
 def test_the_reasons_a_build_raises_itself_can_also_be_said():
     """`all_exits_refused` and its neighbours never reach VERDICTS - there is no
     credential to blame - but they do reach the Phones tab."""
-    from geelark_farm import builder
 
-    raised = set(re.findall(r'Aborted\("([a-z_]+)"', builder.__file__ and
-                            pathlib.Path(builder.__file__).read_text("utf-8")))
+    from tests.build_sources import builder_texts
+
+    # Every file the builder is made of, read apart (2026-09-23).
+    raised = {r for _, text in builder_texts()
+              for r in re.findall(r'Aborted\("([a-z_]+)"', text)}
 
     assert raised, "the scan found no Aborted() reasons"
     missing = sorted(r for r in raised if r not in failures.SITUATIONS)
@@ -463,9 +466,8 @@ def test_every_status_the_builder_settles_a_phone_with_has_a_verdict():
     the install did not take, an exception reached the top. They end up on a
     Build and are read back through `verdict()` exactly like a flow's, and
     nothing checked them. Nine had none (2026-08-23)."""
-    from geelark_farm import builder
 
-    decided = failures.reasons_decided_by_the_builder(builder)
+    decided = failures.reasons_decided_by_the_builder(*builder_modules())
     missing = sorted(r for r in decided if not failures.knows(r))
 
     assert decided, "the scan found nothing, which cannot be right"
@@ -477,9 +479,8 @@ def test_every_status_the_builder_settles_a_phone_with_has_a_verdict():
 def test_a_status_written_as_a_choice_of_two_is_still_seen():
     """`finish("phone_is_gone" if vanished else "phone_would_not_start", ...)`
     is neither half a bare Constant, and a scanner wanting one sees neither."""
-    from geelark_farm import builder
 
-    decided = failures.reasons_decided_by_the_builder(builder)
+    decided = failures.reasons_decided_by_the_builder(*builder_modules())
 
     assert {"phone_is_gone", "phone_would_not_start"} <= decided
 
@@ -487,9 +488,9 @@ def test_a_status_written_as_a_choice_of_two_is_still_seen():
 def test_the_other_finish_does_not_contribute_a_row_number():
     """`book.phones.finish(row["sheet_row"], ...)` is a different `finish`,
     taking a row rather than a reason."""
-    from geelark_farm import builder
 
-    assert "sheet_row" not in failures.reasons_decided_by_the_builder(builder)
+    decided = failures.reasons_decided_by_the_builder(*builder_modules())
+    assert "sheet_row" not in decided
 
 
 # ------------------------------------------------ the app phase's own prefix
@@ -520,10 +521,9 @@ def test_a_prefix_over_something_unclassified_is_still_unclassified():
 
 def test_a_state_the_phones_tab_holds_is_not_a_reason():
     """`ready` is not something that went wrong and wants no verdict."""
-    from geelark_farm import builder
 
     assert not (failures.BUILD_STATES
-                & failures.reasons_decided_by_the_builder(builder))
+                & failures.reasons_decided_by_the_builder(*builder_modules()))
 
 
 def test_a_verdict_cannot_be_changed_after_the_table_is_built():

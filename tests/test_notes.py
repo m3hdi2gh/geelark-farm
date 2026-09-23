@@ -134,10 +134,11 @@ def test_the_phone_note_never_carries_a_flow_s_own_words():
     wrong thing to put in a tab. Every build-level detail that ends up in the
     Phones tab is either written here or taken from the taxonomy.
     """
-    source = (SRC / "builder.py").read_text(encoding="utf-8")
+    from tests.build_sources import builder_texts
 
-    assert "installed.detail" not in source
-    assert "outcome.detail" not in source
+    for path, source in builder_texts():
+        assert "installed.detail" not in source, path.name
+        assert "outcome.detail" not in source, path.name
 
 
 def test_a_reason_with_no_entry_still_reads_as_a_sentence():
@@ -155,10 +156,14 @@ def test_a_reason_with_no_entry_still_reads_as_a_sentence():
 # it. These read the (status, detail) pairs out of every place a build can end
 # and put each through the real function.
 def build_endings() -> list[tuple[int, str, str]]:
-    """Every `finish(status, detail)` in builder.py, as (line, status, detail)."""
-    tree = ast.parse((SRC / "builder.py").read_text(encoding="utf-8"))
+    """Every `finish(status, detail)` in the builder's files, as (line,
+    status, detail) - every file it is made of, read apart (2026-09-23)."""
+    from tests.build_sources import builder_texts
+
     found = []
-    for node in ast.walk(tree):
+    nodes = [node for _, text in builder_texts()
+             for node in ast.walk(ast.parse(text))]
+    for node in nodes:
         called = (isinstance(node, ast.Call)
                   and ((isinstance(node.func, ast.Name)
                         and node.func.id == "finish")
