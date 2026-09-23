@@ -972,6 +972,99 @@ def _pick(pool, wanted: str, what: str):
                   f"already on a phone, set aside, or not there at all")
 
 
+@dataclass
+class _BuildState:
+    """Everything one build carries from one phase to the next.
+
+    They were twelve locals and three closures inside one 667-line function,
+    shared across six phases through eighteen returns (the builder review,
+    2026-09-23). Named here, each phase says what it reads and writes, and
+    the teardown reads the same object whatever phase ended the build.
+    """
+
+    client: Client
+    settings: Settings
+    book: Book
+    ledger: Ledger
+    index: int
+    build: Build
+    started: float
+    deadline: float
+    calls_before: int
+    on_phone: Callable[[str], None] | None = None
+    on_ready: Callable[[str], None] | None = None
+    #: The wired one: every wait underneath takes it - see _hand_stop_wired.
+    cancelled: Callable[[], bool] | None = None
+    codes_source: codes.CodeSource | None = None
+    want: Wanted | None = None
+    #: A bare phone claims no address and signs nothing in.
+    bare: bool = False
+    phone_id: str = ""
+    #: The exit the phone is on right now; a borrow makes it one the build
+    #: does not own - the lease knows which it owns.
+    proxy_row: Resource | None = None
+    gmail_row: Resource | None = None
+    log_row: int | None = None
+    # Proxies this build tried and moved on from, with what was seen through
+    # each. They stay claimed for the rest of the build so a swap cannot hand
+    # one back, and are released together at the end.
+    refused_exits: list = field(default_factory=list)
+    # Every exit this build owns, has refused or has borrowed, across all of
+    # its phases - see kit.exits.ExitLease.
+    lease: ExitLease = field(default_factory=ExitLease)
+    # The Gmail phase counts its own attempts; the app phase's are the
+    # session's, since that loop is shared with `finish`.
+    tried_gmails: int = 0
+    captchas_here: int = 0                 # on the exit the phone is on now
+    # One exit change for a text captcha per build.
+    text_captchas: int = 0
+    session: _Session | None = None
+    # Whether the Gmail ended up on the device. Not the same question as "did
+    # the build succeed" - see _release. The app account's equivalent lives on
+    # the session, which owns that phase.
+    gmail_signed_in: bool = False
+    # Whether a sign-in was ever started on it. A phone stopped before that
+    # has nothing to be asked about - and asking a phone that may not even
+    # be up answers "could not say", which keeps it (see _discard's caller).
+    asked_google: bool = False
+    #: The apps ordered from GeeLark's installer at boot, by name.
+    ordered: dict = field(default_factory=dict)
+    artifacts: Path | None = None
+    phone_made_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        # One list: what the lease refuses is what the holds release.
+        self.lease.refused = self.refused_exits
+
+    def remaining(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def check_cancelled(self) -> None:
+        """Both ways this build can be stopped: the service going down, and
+        a person pressing Stop this one on its row.
+
+        Only the first was checked here, and the second is the one an
+        operator presses. `STOP_BY_HAND` had exactly one reader,
+        `_Session.check_cancelled`, and the session is not built until
+        after the Google sign-in and the install - so a stop asked for
+        during those, which is most of a build's minutes, was heard only
+        when they ended. Up to twenty-five minutes of a phone billing by
+        the minute after somebody said stop (2026-09-06, found by audit).
+        """
+        if self.cancelled and self.cancelled():
+            raise Aborted("interrupted")
+        # STOP_BY_HAND, and the store's copy of it for a build running in
+        # another container - see _stop_asked (2026-09-10).
+        if _stop_asked(self.settings, self.build.serial):
+            raise Aborted("stopped_by_hand")
+
+    def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
+        self.build.ok, self.build.status, self.build.detail = ok, status, detail
+        self.build.seconds = time.monotonic() - self.started
+        self.build.api_calls = _calls(self.client) - self.calls_before
+        return self.build
+
+
 def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
               index: int, *,
               on_phone: Callable[[str], None] | None = None,
@@ -988,546 +1081,536 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     not end it.
     """
     started = time.monotonic()
-    deadline = started + settings.build_budget_seconds
     build = Build(index=index)
-    phone_id = ""
-    proxy_row: Resource | None = None
-    gmail_row: Resource | None = None
-    log_row: int | None = None
-    # Proxies this build tried and moved on from, with what was seen through
-    # each. They stay claimed for the rest of the build so a swap cannot hand
-    # one back, and are released together at the end.
-    refused_exits: list[tuple[Resource, str]] = []
-    # Every exit this build owns, has refused or has borrowed, across all of
-    # its phases - see kit.exits.ExitLease. `proxy_row` below is the exit
-    # the phone is on right now, which a borrow makes a different one.
-    lease = ExitLease(refused=refused_exits)
-    # The Gmail phase counts its own attempts; the app phase's are the
-    # session's, since that loop is shared with `finish`.
-    tried_gmails = 0
-    captchas_here = 0                     # on the exit the phone is on now
-    # One exit change for a text captcha per build - see below.
-    text_captchas = 0
-    session: _Session | None = None
-    # Whether the Gmail ended up on the device. Not the same question as "did
-    # the build succeed" - see _release. The app account's equivalent lives on
-    # the session, which owns that phase.
-    gmail_signed_in = False
-    # Whether a sign-in was ever started on it. A phone stopped before that
-    # has nothing to be asked about - and asking a phone that may not even
-    # be up answers "could not say", which keeps it (see _discard's caller).
-    asked_google = False
-
-    def remaining() -> float:
-        return deadline - time.monotonic()
-
+    st = _BuildState(client=client, settings=settings, book=book,
+                     ledger=ledger, index=index, build=build, started=started,
+                     deadline=started + settings.build_budget_seconds,
+                     calls_before=_calls(client), on_phone=on_phone,
+                     on_ready=on_ready, codes_source=codes_source, want=want)
     # From here on, `cancelled` is the wired one: it is what every wait
     # underneath takes, and the console's Cancel has to reach those too.
-    cancelled = _hand_stop_wired(settings, build, cancelled)
-
-    def check_cancelled() -> None:
-        """Both ways this build can be stopped: the service going down, and
-        a person pressing Stop this one on its row.
-
-        Only the first was checked here, and the second is the one an
-        operator presses. `STOP_BY_HAND` had exactly one reader,
-        `_Session.check_cancelled`, and the session is not built until
-        after the Google sign-in and the install - so a stop asked for
-        during those, which is most of a build's minutes, was heard only
-        when they ended. Up to twenty-five minutes of a phone billing by
-        the minute after somebody said stop (2026-09-06, found by audit).
-        """
-        if cancelled and cancelled():
-            raise Aborted("interrupted")
-        # STOP_BY_HAND, and the store's copy of it for a build running in
-        # another container - see _stop_asked (2026-09-10).
-        if _stop_asked(settings, build.serial):
-            raise Aborted("stopped_by_hand")
-
-    calls_before = _calls(client)
-
-    def finish(status: str, detail: str = "", ok: bool = False) -> Build:
-        build.ok, build.status, build.detail = ok, status, detail
-        build.seconds = time.monotonic() - started
-        build.api_calls = _calls(client) - calls_before
-        return build
-
+    st.cancelled = _hand_stop_wired(settings, build, cancelled)
     try:
-        # Claiming the Gmail, taking the exit and creating the phone happen
-        # under one lock, and in that order, for two reasons.
-        #
-        # **A phone is not created without an address to sign in.** It used to
-        # be: the phone came first and the tab was asked afterwards, so a run
-        # that had run out of Gmails still paid for a phone, and two of them sat
-        # in the tab as `incomplete` with an empty Gmail column - devices with
-        # nothing on them, which `finish` then refuses because there is no
-        # Google account to build on (2026-08-14).
-        #
-        # **The serials come out in the same order as the addresses.** GeeLark
-        # numbers a phone when it is created, so whoever creates first gets the
-        # lower serial. With the claim and the create apart, two workers
-        # interleaved and phone 701 got the second address while 702 got the
-        # first. Holding both together costs a few seconds of serial creation
-        # at the start of a batch and nothing after it.
-        # A bare phone claims no address and signs nothing in: the Gmail
-        # phase is skipped whole, and the phone is ready once it is up.
-        bare = bool(want is not None and want.no_gmail)
-        with _starting:
-            # Somebody who named an exit gets that exit, so the pairing
-            # below - which is about choosing one - has no part to play.
-            chosen_exit = bool(want and want.proxy_name)
-            proxy_row = None
-            if bare:
-                gmail_row = None
-            elif want and want.gmail:
-                gmail_row = _pick(book.gmails, want.gmail, "Gmail")
-            elif chosen_exit:
-                gmail_row = book.gmails.claim()
-            else:
-                # A Gmail off the queue carries the host it was refused
-                # on, and a second try from the same host is the one thing
-                # that made the first one worthless (the operator,
-                # 2026-09-12). The two are chosen together, and an address
-                # the exits cannot serve is looked past rather than handed
-                # back for the next pass to pick up again (2026-09-13).
-                gmail_row, proxy_row = _pair_up(client, book, settings)
-            if gmail_row is None and not bare:
-                return finish("no_usable_gmail",
-                              "the Gmails tab has no unused address left, so "
-                              "no phone was created" + _held_note(book))
-            if chosen_exit:
-                proxy_row = _pick(book.proxies, want.proxy_name, "exit")
-            elif proxy_row is None:
-                proxy_row = kit_exits._fresh_proxy(
-                    client, book, settings=settings,
-                    avoid_host=str((getattr(gmail_row, "values", None) or {})
-                                   .get("Last Host") or ""))
-            build.proxy = str(proxy_row.proxy)
-            build.proxy_name = proxy_row.name
-            lease.current = proxy_row
+        # In order, each ending the build by returning its Build - or None
+        # to hand on to the next. The app phase always ends it.
+        for step in _BUILD_PHASES:
+            ended = step(st)
+            if ended is not None:
+                return ended
+        return build
+    except Exception as exc:                                      # noqa: BLE001
+        return _ended_by(exc, st.finish, settings, f"build {index}")
+    except BaseException:
+        # Ctrl+C on the CLI's own run: the run's shutdown, filed as one, so
+        # the empty phone is kept rather than deleted (KEPT_WHEN_EMPTY) -
+        # it was left on whatever word the build had reached (2026-09-23).
+        st.finish("interrupted", failures.situation("interrupted"))
+        raise
+    finally:
+        _let_the_build_go(st)
 
-            entry = _create_kept(client, settings, ledger, proxy_row.proxy,
-                                 label=f"build {index}",
-                                 account=gmail_row.label if gmail_row else "")
-        phone_id = entry.phone_id
-        build.phone_id = phone_id
-        build.serial = str(entry.serial or "")
-        build.model = str(getattr(entry, "model", "") or "")
-        _serial.set(build.serial or NO_BUILD)
-        # The first line of this phone's story (C8): born behind which
-        # exit, for which address.
-        _record_event("phone", "created", run_id=_run.get(), build=str(index),
-                      serial=build.serial,
-                      detail=f"created behind {build.proxy_name} for "
-                             f"{gmail_row.label if gmail_row else 'nobody'}"
-                             + (" - a bare phone, as asked" if bare else ""))
-        # This phone did not exist a moment ago, so nothing is installed on
-        # it. Said here rather than left to the field's default so that the
-        # default can mean "nobody looked" - which is what a `finish` that
-        # never reached the device has to be able to say.
-        build.app_installed = False
-        if on_phone:
-            on_phone(phone_id)
-        ledger.claim(phone_id, label=f"build {index}")
+def _acquire(st: _BuildState) -> Build | None:
+    """The Gmail, the exit and the phone, taken together under one lock,
+    and the phone's row and artifacts directory."""
+    # Claiming the Gmail, taking the exit and creating the phone happen
+    # under one lock, and in that order, for two reasons.
+    #
+    # **A phone is not created without an address to sign in.** It used to
+    # be: the phone came first and the tab was asked afterwards, so a run
+    # that had run out of Gmails still paid for a phone, and two of them sat
+    # in the tab as `incomplete` with an empty Gmail column - devices with
+    # nothing on them, which `finish` then refuses because there is no
+    # Google account to build on (2026-08-14).
+    #
+    # **The serials come out in the same order as the addresses.** GeeLark
+    # numbers a phone when it is created, so whoever creates first gets the
+    # lower serial. With the claim and the create apart, two workers
+    # interleaved and phone 701 got the second address while 702 got the
+    # first. Holding both together costs a few seconds of serial creation
+    # at the start of a batch and nothing after it.
+    # A bare phone claims no address and signs nothing in: the Gmail
+    # phase is skipped whole, and the phone is ready once it is up.
+    st.bare = bool(st.want is not None and st.want.no_gmail)
+    with _starting:
+        # Somebody who named an exit gets that exit, so the pairing
+        # below - which is about choosing one - has no part to play.
+        chosen_exit = bool(st.want and st.want.proxy_name)
+        st.proxy_row = None
+        if st.bare:
+            st.gmail_row = None
+        elif st.want and st.want.gmail:
+            st.gmail_row = _pick(st.book.gmails, st.want.gmail, "Gmail")
+        elif chosen_exit:
+            st.gmail_row = st.book.gmails.claim()
+        else:
+            # A Gmail off the queue carries the host it was refused
+            # on, and a second try from the same host is the one thing
+            # that made the first one worthless (the operator,
+            # 2026-09-12). The two are chosen together, and an address
+            # the exits cannot serve is looked past rather than handed
+            # back for the next pass to pick up again (2026-09-13).
+            st.gmail_row, st.proxy_row = _pair_up(st.client, st.book, st.settings)
+        if st.gmail_row is None and not st.bare:
+            return st.finish("no_usable_gmail",
+                          "the Gmails tab has no unused address left, so "
+                          "no phone was created" + _held_note(st.book))
+        if chosen_exit:
+            st.proxy_row = _pick(st.book.proxies, st.want.proxy_name, "exit")
+        elif st.proxy_row is None:
+            st.proxy_row = kit_exits._fresh_proxy(
+                st.client, st.book, settings=st.settings,
+                avoid_host=str((getattr(st.gmail_row, "values", None) or {})
+                               .get("Last Host") or ""))
+        st.build.proxy = str(st.proxy_row.proxy)
+        st.build.proxy_name = st.proxy_row.name
+        st.lease.current = st.proxy_row
 
-        # Serial, id and proxy - the three things that identify this phone
-        # somewhere else. The model and region used to be written beside them
-        # and cost a phone-list call each build to find out; nothing ever read
-        # them back, and every phone had the same two values anyway.
-        # A phone asked for by hand is its builder's from the start: taken
-        # and owned by them, marked with who built it. The keeper's own
-        # phones carry none of that.
-        theirs = ({"State": "taken", "Built by": str(want.requested_by),
-                   "Owner": str(want.requested_by)}
-                  if want is not None and want.requested_by else {})
-        if theirs:
-            build.built_for = int(want.requested_by)
-        log_row = book.phones.start(Serial=build.serial,
-                                    Proxy=build.proxy_name or build.proxy,
-                                    **theirs)
-        # The Gmail was claimed inside `_starting`, before this phone existed -
-        # it has to be, or a phone can be created with no address to sign in.
-        # So the serial goes on now, the moment there is one. Without it the
-        # row reads `in_use` with nothing saying which phone, and a tab with
-        # several at once can be counted but not read (2026-08-29).
-        if gmail_row is not None:
-            book.gmails.note_serial(gmail_row, build.serial)
+        entry = _create_kept(st.client, st.settings, st.ledger, st.proxy_row.proxy,
+                             label=f"build {st.index}",
+                             account=st.gmail_row.label if st.gmail_row else "")
+    st.phone_id = entry.phone_id
+    st.build.phone_id = st.phone_id
+    st.build.serial = str(entry.serial or "")
+    st.build.model = str(getattr(entry, "model", "") or "")
+    _serial.set(st.build.serial or NO_BUILD)
+    # The first line of this phone's story (C8): born behind which
+    # exit, for which address.
+    _record_event("phone", "created", run_id=_run.get(), build=str(st.index),
+                  serial=st.build.serial,
+                  detail=f"created behind {st.build.proxy_name} for "
+                         f"{st.gmail_row.label if st.gmail_row else 'nobody'}"
+                         + (" - a bare phone, as asked" if st.bare else ""))
+    # This phone did not exist a moment ago, so nothing is installed on
+    # it. Said here rather than left to the field's default so that the
+    # default can mean "nobody looked" - which is what a `finish` that
+    # never reached the device has to be able to say.
+    st.build.app_installed = False
+    if st.on_phone:
+        st.on_phone(st.phone_id)
+    st.ledger.claim(st.phone_id, label=f"build {st.index}")
 
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        # By serial, not by batch position: `build3` today and `build3`
-        # three weeks ago are different phones, so a directory could not
-        # be tied to a device and nothing could decide whether its pages
-        # still described anything (2026-08-17).
-        artifacts = (settings.artifact_dir
-                     / f"{stamp}-build{build.serial or index}")
-        build.artifact_dir = str(artifacts)
+    # Serial, id and proxy - the three things that identify this phone
+    # somewhere else. The model and region used to be written beside them
+    # and cost a phone-list call each build to find out; nothing ever read
+    # them back, and every phone had the same two values anyway.
+    # A phone asked for by hand is its builder's from the start: taken
+    # and owned by them, marked with who built it. The keeper's own
+    # phones carry none of that.
+    theirs = ({"State": "taken", "Built by": str(st.want.requested_by),
+               "Owner": str(st.want.requested_by)}
+              if st.want is not None and st.want.requested_by else {})
+    if theirs:
+        st.build.built_for = int(st.want.requested_by)
+    st.log_row = st.book.phones.start(Serial=st.build.serial,
+                                Proxy=st.build.proxy_name or st.build.proxy,
+                                **theirs)
+    # The Gmail was claimed inside `_starting`, before this phone existed -
+    # it has to be, or a phone can be created with no address to sign in.
+    # So the serial goes on now, the moment there is one. Without it the
+    # row reads `in_use` with nothing saying which phone, and a tab with
+    # several at once can be counted but not read (2026-08-29).
+    if st.gmail_row is not None:
+        st.book.gmails.note_serial(st.gmail_row, st.build.serial)
 
-        # Every app the phone is to carry goes in through GeeLark's own
-        # installer, ordered the moment the phone reports running and left
-        # to land while the settle and the Google sign-in go on. The
-        # center takes the orders at once: three given inside two seconds
-        # on phone 2184 were all taken, and the missing app was on the
-        # phone fourteen seconds later (2026-09-12). Play is the fallback,
-        # and only for the app the build is judged on. A bare phone gets
-        # them too: bare is about the accounts, and the Play Store it
-        # cannot walk is not needed for any of this.
-        ordered: dict[str, bool] = {}
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    # By serial, not by batch position: `build3` today and `build3`
+    # three weeks ago are different phones, so a directory could not
+    # be tied to a device and nothing could decide whether its pages
+    # still described anything (2026-08-17).
+    st.artifacts = (st.settings.artifact_dir
+                 / f"{stamp}-build{st.build.serial or st.index}")
+    st.build.artifact_dir = str(st.artifacts)
 
-        def order_apps() -> None:
-            if not settings.app_install_api:
-                return
-            for wanted in _apps_every_phone(settings):
-                ordered[wanted] = apps.begin(
-                    client, phone_id, _package_for(settings, wanted),
-                    name=APPS[wanted], settings=settings)
+def _bring_up(st: _BuildState) -> Build | None:
+    """The phone booted - with every app ordered from GeeLark's installer
+    the moment it runs - its clock set to the exit's zone, and the
+    sign-ins staggered."""
+    # Every app the phone is to carry goes in through GeeLark's own
+    # installer, ordered the moment the phone reports running and left
+    # to land while the settle and the Google sign-in go on. The
+    # center takes the orders at once: three given inside two seconds
+    # on phone 2184 were all taken, and the missing app was on the
+    # phone fourteen seconds later (2026-09-12). Play is the fallback,
+    # and only for the app the build is judged on. A bare phone gets
+    # them too: bare is about the accounts, and the Play Store it
+    # cannot walk is not needed for any of this.
+    st.ordered = {}
 
-        phones.ensure_running(client, phone_id,
-                              timeout=min(phones.BOOT_SECONDS, remaining()),
-                              cancelled=cancelled, on_running=order_apps)
-        phone_made_at = time.monotonic()
-        if on_ready:
-            on_ready(phone_id)
-        _align_clock(client, settings, phone_id, proxy_row)
-        if not bare:
-            shell.pause(*SIGN_IN_STAGGER_SECONDS)
+    def order_apps() -> None:
+        if not st.settings.app_install_api:
+            return
+        for wanted in _apps_every_phone(st.settings):
+            st.ordered[wanted] = apps.begin(
+                st.client, st.phone_id, _package_for(st.settings, wanted),
+                name=APPS[wanted], settings=st.settings)
 
-        # ------------------------------------------------------- the Gmail
-        while not gmail_signed_in and not bare:
-            check_cancelled()
-            if remaining() <= ATTEMPT_SECONDS:
-                return finish("budget_exhausted",
-                              "ran out of budget before a Gmail signed in")
-            if gmail_row is None:
-                # The first was claimed before the phone existed; this is the
-                # next one, after that address was refused on this device - so
-                # this one can say which phone it is on from the start.
-                gmail_row = book.gmails.claim(
-                    build.serial,
-                    avoid_host=str(getattr(getattr(proxy_row, "proxy", None),
-                                           "host", "") or ""))
-                if gmail_row is None:
-                    return finish("no_usable_gmail",
-                                  "the Gmails tab had no other address to try "
-                                  "on this phone" + _held_note(book))
-            # Every field, rather than the three somebody remembered. `Account`
-            # subclasses `Credentials`, and this list was a copy of its fields
-            # as they stood the day it was written: `email_code_only` was added
-            # later and has been silently dropped here ever since, harmless
-            # only because the Gmails tab never sets it. `recovery_email` would
-            # have gone the same way, and the flow would have refused a row for
-            # having no recovery address while the address sat on the row.
-            account = Account(**dataclasses.asdict(gmail_row.credentials),
-                              proxy=build.proxy)
-            chosen = bool(want is not None and want.gmail)
-            # The dashboard's building row reads this line: which address,
-            # and how far into the build's five this one is.
-            if chosen:
-                log.info("signing in as %s (chosen on the build card)",
-                         account.email)
-            elif getattr(settings, "one_gmail_per_phone", True):
-                # One per phone: a distrust refusal ends the build here;
-                # only a credential verdict (wrong password) goes on to
-                # the next address, up to the cap.
-                log.info("signing in as %s (Gmail %d on this phone; one per "
-                         "phone unless the password is wrong)",
-                         account.email, tried_gmails + 1)
-            else:
-                log.info("signing in as %s (Gmail %d of %d on this phone)",
-                         account.email, tried_gmails + 1, GMAILS_PER_BUILD)
-            attempt_started = time.monotonic()
-            asked_google = True
-            outcome = google_login.sign_in(
-                client, phone_id, account,
-                budget_seconds=min(settings.login_budget_seconds, remaining()),
-                artifact_dir=artifacts,
-                solver_key=settings.capsolver_key,
-                captcha_max=settings.captcha_max_attempts,
-                # "Cancel" reaches inside the sign-in. Checked only here,
-                # between build steps, it could not: a sign-in walking a
-                # captcha is one step, so a phone somebody had stopped went
-                # on answering grids for another five minutes.
-                watch=check_cancelled,
-            )
-            build.trails.append(("google", outcome.trail))
-            # Counted against the exit's host whether or not the captcha was
-            # eventually passed: a phone that solves thirteen rounds on
-            # 190.2.143.20 and signs in is still thirteen rounds this host
-            # cost, and the host's other exits are set aside at three such
-            # sign-ins in a day (the operator, 2026-09-09).
-            # A heavy one only: with young accounts nearly every sign-in
-            # meets a three-round captcha on any host, and counting those
-            # set aside four exits on two ordinary hosts in one evening.
-            # What marks a bad host is the sign-in that eats the rounds -
-            # thirteen to forty-three on 190.2.143.20 - or never gets
-            # through at all (the operator, 2026-09-09).
-            rounds = sum(1 for s in (outcome.trail or []) if s == "captcha")
-            _record_signin(
-                settings, build, gmail=account.email,
-                seller=str((gmail_row.values or {}).get("Seller") or ""),
-                host=str(getattr(getattr(proxy_row, "proxy", None), "host", "")
-                         or ""),
-                position=tried_gmails + 1, reason=outcome.reason,
-                ok=bool(outcome.ok),
-                seconds=time.monotonic() - attempt_started,
-                captcha_rounds=rounds,
-                age_seconds=attempt_started - phone_made_at,
-                exit_ip=_exit_ip(proxy_row),
-                touch=_touch_method(phone_id),
-                dumps=int(getattr(outcome, "dumps", 0) or 0),
-                proxy_name=str(getattr(proxy_row, "name", "") or ""))
-            heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
-                     or outcome.reason == "captcha_shown")
-            if heavy and proxy_row is not None:
-                try:
-                    exit_health._strike_captcha_host(settings, book, proxy_row)
-                except Exception as exc:                           # noqa: BLE001
-                    log.warning("could not count the captcha against the "
-                                "exit's host (%s)", exc)
-            if (failures.verdict(outcome.reason).needs_a_new_exit
-                    and proxy_row is not None and text_captchas < 1
-                    and not outcome.ok):
-                # The exit's, not the address's: reCAPTCHA served text or
-                # audio, which it does when it does not trust the address
-                # at all. The exit is changed and the same address goes
-                # again, unmarked, once per build (2026-09-10).
-                text_captchas += 1
-                try:
-                    proxy_row = lease.swap(
-                        client, settings, book, build, phone_id,
-                        "reCAPTCHA offered only text or audio on this exit",
-                        outcome.reason, remaining())
-                except Aborted as exc:
-                    # Not a person's stop - see the Play recipe's handler.
-                    if str(exc) in STOPPED_BY_A_PERSON:
-                        raise
-                    log.warning("the exit could not be changed (%s); the "
-                                "same address goes again on it", exc)
-                    phones.ensure_running(
-                        client, phone_id,
-                        timeout=min(phones.BOOT_SECONDS, remaining()),
-                        cancelled=cancelled)
-                else:
-                    _exit_up(client, settings, phone_id, proxy_row,
-                             remaining(), cancelled)
-                continue
-            if outcome.ok:
-                signed_as = _signed_in_as(book, gmail_row, account.email,
-                                          outcome)
-                build.gmail = signed_as
-                gmail_signed_in = True
-                # On the row now, not at the end. This is the column that
-                # decides whether a phone a killed run left behind is
-                # finishable or gets deleted, and it is true from this moment.
-                rows._note_on_row(book, build.serial, Gmail=signed_as)
-                break
-            # Every way a Google sign-in fails is about the account or the
-            # device, never the exit: a CAPTCHA is Google distrusting this
-            # address's history, not the IP (the network refusals that ARE the
-            # exit's fault come only from the app, in the loop below). So the
-            # Gmail is marked and the next one is tried on the same phone.
-            build.tried.append((account.email, outcome.reason,
-                                book.gmails.service))
-            if failures.verdict(outcome.reason).stops_the_phone:
-                # Nothing was decided about this address, so it keeps its place
-                # in the pool - _release puts it back as stock. Trying the next
-                # one would only meet the same wall.
-                said = failures.verdict(outcome.reason,
-                                        book.gmails.service)
-                return finish(outcome.reason,
-                              f"the Google sign-in could not go on with this "
-                              f"phone - {said.seen}")
-            # The tab gets the taxonomy's advice, not the flow's. A flow
-            # writes for whoever is debugging it; the sheet is read a day
-            # later by someone deciding what to do with that row - and for a
-            # CAPTCHA the two say opposite things, since the flow suggests a
-            # cleaner proxy and the build has just set the address aside.
-            book.gmails.fail(gmail_row, outcome.reason,
-                             note=failures.verdict(outcome.reason,
-                                                  book.gmails.service).advice,
-                             host=str(getattr(getattr(proxy_row, "proxy", None),
-                                              "host", "") or ""),
-                             settings=settings)
-            gmail_row = None
-            tried_gmails += 1
-            said = failures.verdict(outcome.reason, book.gmails.service).seen
-            if chosen:
-                # Theirs, not the pool's: somebody named this address, and
-                # the next free one is not what they asked for. It is set
-                # aside above with the reason beside it; the build stops
-                # and says which address and why (the build card,
-                # 2026-09-10).
-                return finish("chosen_gmail_failed",
-                              f"{account.email} - {said}")
-            if (failures.retryable(outcome.reason)
-                    and getattr(settings, "one_gmail_per_phone", True)):
-                # One Gmail per phone. Google distrusting the first address
-                # is Google distrusting the device and the exit: the second
-                # address on the same phone signed in 54% of the time
-                # against 73% for the first, the fifth never (2026-09-10).
-                # The phone goes - nothing is signed into it - and the next
-                # address gets a fresh one; this address waits on the
-                # ladder (pgpool.fail) and comes back for a fresh phone too.
-                return finish("phone_distrusted",
-                              f"Google distrusted this phone on "
-                              f"{account.email} ({said}); the next address "
-                              f"goes on a fresh phone and exit")
-            if tried_gmails >= GMAILS_PER_BUILD:
-                tally = ", ".join(f"{email} ({reason})"
-                                  for email, reason, _ in build.tried[-tried_gmails:])
-                return finish("gmails_exhausted",
-                              f"{tried_gmails} Gmails from the pool were "
-                              f"refused on this phone in a row - {tally}")
-            # Two refusals of Google's distrust kind on this exit: the
-            # exit is changed before the next address is tried on it. The
-            # address just set aside stays set aside, and the next one
-            # gets a fresh exit. No exit to move to is not a failed build:
-            # the next address goes on the same exit, as before. It
-            # counted captchas alone, so a phone asked for a phone number
-            # five addresses running kept the same exit throughout -
-            # every one of Google's distrust pages is the exit's to
-            # answer for (2026-09-13).
-            if failures.retryable(outcome.reason):
-                captchas_here += 1
-            if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
-                try:
-                    proxy_row = lease.swap(
-                        client, settings, book, build, phone_id,
-                        f"{captchas_here} Gmails met a captcha on this exit",
-                        "captcha_shown", remaining())
-                except Aborted as exc:
-                    # Not a person's stop - see the Play recipe's handler.
-                    if str(exc) in STOPPED_BY_A_PERSON:
-                        raise
-                    log.warning("the exit could not be changed (%s); the "
-                                "next Gmail goes on the same one", exc)
-                    # _new_exit stops the phone before it looks for an
-                    # exit, so a refusal leaves it down.
-                    phones.ensure_running(
-                        client, phone_id,
-                        timeout=min(phones.BOOT_SECONDS, remaining()),
-                        cancelled=cancelled)
-                else:
-                    # The refused exit is held, not freed - the lease has it,
-                    # released at the end, marked with why.
-                    _exit_up(client, settings, phone_id, proxy_row,
-                             remaining(), cancelled)
-                captchas_here = 0
+    phones.ensure_running(st.client, st.phone_id,
+                          timeout=min(phones.BOOT_SECONDS, st.remaining()),
+                          cancelled=st.cancelled, on_running=order_apps)
+    st.phone_made_at = time.monotonic()
+    if st.on_ready:
+        st.on_ready(st.phone_id)
+    _align_clock(st.client, st.settings, st.phone_id, st.proxy_row)
+    if not st.bare:
+        shell.pause(*SIGN_IN_STAGGER_SECONDS)
 
-        # ----------------------------------------------------- the install
-        check_cancelled()
-        marked = cancel._given_up_on(settings, build.serial,
-                              own_take=bool(want and want.requested_by))
-        if marked:
-            return finish("given_up_on",
-                          f"somebody wrote {marked!r} in its State while this "
-                          f"was running, so it was left alone")
-        if bare:
-            # Bare is about the accounts, not the apps: nothing is signed
-            # in anywhere, and the phone still carries all three, because
-            # from the center they cost it seconds rather than the Play
-            # Store's minutes (the operator, 2026-09-12).
-            _install_the_rest(client, settings, build, phone_id, done="",
-                              ordered=ordered, remaining=remaining,
-                              artifacts=artifacts, cancelled=cancelled,
-                              play=False)
-            if not (want is not None and want.app_account):
-                return finish("ready", f"a bare phone - no Google account, "
-                                       f"as asked. On the phone: "
-                                       f"{_named(build.app)}", ok=True)
-            # A bare phone with an account named for it: a `normal`
-            # Spotify account, which wants exactly this phone - no Google
-            # account on it - and goes in now, through the same session
-            # a warm phone's account goes in through (2026-09-17).
-            if remaining() <= 0:
-                return finish("budget_exhausted",
-                              "built, but no time to sign the account in")
-            session = _Session(client=client, settings=settings, book=book,
-                               build=build, phone_id=phone_id,
-                               artifacts=artifacts, deadline=deadline,
-                               started=started, cancelled=cancelled,
-                               codes=codes_source or codes.NoSource(),
-                               lease=lease, want=want)
-            gave_up = _sign_into_app(session)
-            if gave_up is not None:
-                return gave_up
-            # Whichever app the account is for - the registry's word, not
-            # "Spotify" whatever it was (the builder review, 2026-09-23).
-            return finish("ready", f"a bare phone - no Google account, as "
-                                   f"asked - with {build.app_account} "
-                                   f"signed into "
-                                   f"{APPS.get(build.app_product, 'the app')}",
-                          ok=True)
-        if remaining() <= 0:
-            return finish("budget_exhausted", "signed in, but no time to install")
-        # Which app the account goes into, if any. The keeper's own
-        # phones sign into ChatGPT; a hand-built one signs into what was
-        # asked for - none, ChatGPT, Spotify or Claude. That choice is
-        # about the account, not about what is on the phone: every phone
-        # carries all three either way (the operator, 2026-09-12). It is
-        # also the one install a build can fail on, which is why it goes
-        # first and through the Play recipe.
-        app = want.app if want is not None else "chatgpt"
-        build.app = app
-        if not app:
-            # Nothing is signed into anything, but the phone still carries
-            # the apps every phone carries (the operator, 2026-09-12).
-            build.app_installed = False
-            _install_the_rest(client, settings, build, phone_id, done="",
-                              ordered=ordered, remaining=remaining,
-                              artifacts=artifacts, cancelled=cancelled)
-            return finish("ready", f"signed into Google; no app account was "
-                                   f"asked for. On the phone: "
-                                   f"{_named(build.app)}", ok=True)
-        # Every swap the recipe makes goes through the lease, which knows
-        # the exit the build owns before the wait that can raise.
-        installed, proxy_row = _install_by_recipe(
-            client, settings, book, build, phone_id,
-            _package_for(settings, app), name=APPS[app],
-            ordered=bool(ordered.get(app)),
-            remaining=remaining, artifacts=artifacts, cancelled=cancelled,
-            lease=lease, proxy_row=proxy_row,
+def _google_phase(st: _BuildState) -> Build | None:
+    """Google signed in on the phone: the Gmail ladder, the exit swaps
+    Google's distrust asks for, and every sign-in recorded."""
+    # ------------------------------------------------------- the Gmail
+    while not st.gmail_signed_in and not st.bare:
+        st.check_cancelled()
+        if st.remaining() <= ATTEMPT_SECONDS:
+            return st.finish("budget_exhausted",
+                          "ran out of budget before a Gmail signed in")
+        if st.gmail_row is None:
+            # The first was claimed before the phone existed; this is the
+            # next one, after that address was refused on this device - so
+            # this one can say which phone it is on from the start.
+            st.gmail_row = st.book.gmails.claim(
+                st.build.serial,
+                avoid_host=str(getattr(getattr(st.proxy_row, "proxy", None),
+                                       "host", "") or ""))
+            if st.gmail_row is None:
+                return st.finish("no_usable_gmail",
+                              "the Gmails tab had no other address to try "
+                              "on this phone" + _held_note(st.book))
+        # Every field, rather than the three somebody remembered. `Account`
+        # subclasses `Credentials`, and this list was a copy of its fields
+        # as they stood the day it was written: `email_code_only` was added
+        # later and has been silently dropped here ever since, harmless
+        # only because the Gmails tab never sets it. `recovery_email` would
+        # have gone the same way, and the flow would have refused a row for
+        # having no recovery address while the address sat on the row.
+        account = Account(**dataclasses.asdict(st.gmail_row.credentials),
+                          proxy=st.build.proxy)
+        chosen = bool(st.want is not None and st.want.gmail)
+        # The dashboard's building row reads this line: which address,
+        # and how far into the build's five this one is.
+        if chosen:
+            log.info("signing in as %s (chosen on the build card)",
+                     account.email)
+        elif getattr(st.settings, "one_gmail_per_phone", True):
+            # One per phone: a distrust refusal ends the build here;
+            # only a credential verdict (wrong password) goes on to
+            # the next address, up to the cap.
+            log.info("signing in as %s (Gmail %d on this phone; one per "
+                     "phone unless the password is wrong)",
+                     account.email, st.tried_gmails + 1)
+        else:
+            log.info("signing in as %s (Gmail %d of %d on this phone)",
+                     account.email, st.tried_gmails + 1, GMAILS_PER_BUILD)
+        attempt_started = time.monotonic()
+        st.asked_google = True
+        outcome = google_login.sign_in(
+            st.client, st.phone_id, account,
+            budget_seconds=min(st.settings.login_budget_seconds, st.remaining()),
+            artifact_dir=st.artifacts,
+            solver_key=st.settings.capsolver_key,
+            captcha_max=st.settings.captcha_max_attempts,
+            # "Cancel" reaches inside the sign-in. Checked only here,
+            # between build steps, it could not: a sign-in walking a
+            # captcha is one step, so a phone somebody had stopped went
+            # on answering grids for another five minutes.
+            watch=st.check_cancelled,
         )
-        build.trails.append(("install", installed.trail))
-        if not installed.ok:
-            return finish("install_failed",
-                          f"the app could not be installed - "
-                          f"{failures.verdict(installed.reason).seen}")
-        build.app_installed = True
-        # And the rest of them. Every phone carries all three now, the
-        # keeper's own and the ones asked for by hand alike: the center
-        # installs them in the background off one call, so they cost the
-        # build seconds rather than the Play Store's minutes (the
-        # operator, 2026-09-12). One that does not go on is a note, never
-        # a failed phone - the app the wish named is already on.
-        _install_the_rest(client, settings, build, phone_id, done=app,
-                          ordered=ordered, remaining=remaining,
-                          artifacts=artifacts, cancelled=cancelled)
-        if app != "chatgpt":
-            return finish("ready", f"signed into Google, and "
-                                   f"{_named(build.app)} on the phone",
-                          ok=True)
+        st.build.trails.append(("google", outcome.trail))
+        # Counted against the exit's host whether or not the captcha was
+        # eventually passed: a phone that solves thirteen rounds on
+        # 190.2.143.20 and signs in is still thirteen rounds this host
+        # cost, and the host's other exits are set aside at three such
+        # sign-ins in a day (the operator, 2026-09-09).
+        # A heavy one only: with young accounts nearly every sign-in
+        # meets a three-round captcha on any host, and counting those
+        # set aside four exits on two ordinary hosts in one evening.
+        # What marks a bad host is the sign-in that eats the rounds -
+        # thirteen to forty-three on 190.2.143.20 - or never gets
+        # through at all (the operator, 2026-09-09).
+        rounds = sum(1 for s in (outcome.trail or []) if s == "captcha")
+        _record_signin(
+            st.settings, st.build, gmail=account.email,
+            seller=str((st.gmail_row.values or {}).get("Seller") or ""),
+            host=str(getattr(getattr(st.proxy_row, "proxy", None), "host", "")
+                     or ""),
+            position=st.tried_gmails + 1, reason=outcome.reason,
+            ok=bool(outcome.ok),
+            seconds=time.monotonic() - attempt_started,
+            captcha_rounds=rounds,
+            age_seconds=attempt_started - st.phone_made_at,
+            exit_ip=_exit_ip(st.proxy_row),
+            touch=_touch_method(st.phone_id),
+            dumps=int(getattr(outcome, "dumps", 0) or 0),
+            proxy_name=str(getattr(st.proxy_row, "name", "") or ""))
+        heavy = (rounds >= HEAVY_CAPTCHA_ROUNDS
+                 or outcome.reason == "captcha_shown")
+        if heavy and st.proxy_row is not None:
+            try:
+                exit_health._strike_captcha_host(st.settings, st.book, st.proxy_row)
+            except Exception as exc:                           # noqa: BLE001
+                log.warning("could not count the captcha against the "
+                            "exit's host (%s)", exc)
+        if (failures.verdict(outcome.reason).needs_a_new_exit
+                and st.proxy_row is not None and st.text_captchas < 1
+                and not outcome.ok):
+            # The exit's, not the address's: reCAPTCHA served text or
+            # audio, which it does when it does not trust the address
+            # at all. The exit is changed and the same address goes
+            # again, unmarked, once per build (2026-09-10).
+            st.text_captchas += 1
+            try:
+                st.proxy_row = st.lease.swap(
+                    st.client, st.settings, st.book, st.build, st.phone_id,
+                    "reCAPTCHA offered only text or audio on this exit",
+                    outcome.reason, st.remaining())
+            except Aborted as exc:
+                # Not a person's stop - see the Play recipe's handler.
+                if str(exc) in STOPPED_BY_A_PERSON:
+                    raise
+                log.warning("the exit could not be changed (%s); the "
+                            "same address goes again on it", exc)
+                phones.ensure_running(
+                    st.client, st.phone_id,
+                    timeout=min(phones.BOOT_SECONDS, st.remaining()),
+                    cancelled=st.cancelled)
+            else:
+                _exit_up(st.client, st.settings, st.phone_id, st.proxy_row,
+                         st.remaining(), st.cancelled)
+            continue
+        if outcome.ok:
+            signed_as = _signed_in_as(st.book, st.gmail_row, account.email,
+                                      outcome)
+            st.build.gmail = signed_as
+            st.gmail_signed_in = True
+            # On the row now, not at the end. This is the column that
+            # decides whether a phone a killed run left behind is
+            # finishable or gets deleted, and it is true from this moment.
+            rows._note_on_row(st.book, st.build.serial, Gmail=signed_as)
+            break
+        # Every way a Google sign-in fails is about the account or the
+        # device, never the exit: a CAPTCHA is Google distrusting this
+        # address's history, not the IP (the network refusals that ARE the
+        # exit's fault come only from the app, in the loop below). So the
+        # Gmail is marked and the next one is tried on the same phone.
+        st.build.tried.append((account.email, outcome.reason,
+                            st.book.gmails.service))
+        if failures.verdict(outcome.reason).stops_the_phone:
+            # Nothing was decided about this address, so it keeps its place
+            # in the pool - _release puts it back as stock. Trying the next
+            # one would only meet the same wall.
+            said = failures.verdict(outcome.reason,
+                                    st.book.gmails.service)
+            return st.finish(outcome.reason,
+                          f"the Google sign-in could not go on with this "
+                          f"phone - {said.seen}")
+        # The tab gets the taxonomy's advice, not the flow's. A flow
+        # writes for whoever is debugging it; the sheet is read a day
+        # later by someone deciding what to do with that row - and for a
+        # CAPTCHA the two say opposite things, since the flow suggests a
+        # cleaner proxy and the build has just set the address aside.
+        st.book.gmails.fail(st.gmail_row, outcome.reason,
+                         note=failures.verdict(outcome.reason,
+                                              st.book.gmails.service).advice,
+                         host=str(getattr(getattr(st.proxy_row, "proxy", None),
+                                          "host", "") or ""),
+                         settings=st.settings)
+        st.gmail_row = None
+        st.tried_gmails += 1
+        said = failures.verdict(outcome.reason, st.book.gmails.service).seen
+        if chosen:
+            # Theirs, not the pool's: somebody named this address, and
+            # the next free one is not what they asked for. It is set
+            # aside above with the reason beside it; the build stops
+            # and says which address and why (the build card,
+            # 2026-09-10).
+            return st.finish("chosen_gmail_failed",
+                          f"{account.email} - {said}")
+        if (failures.retryable(outcome.reason)
+                and getattr(st.settings, "one_gmail_per_phone", True)):
+            # One Gmail per phone. Google distrusting the first address
+            # is Google distrusting the device and the exit: the second
+            # address on the same phone signed in 54% of the time
+            # against 73% for the first, the fifth never (2026-09-10).
+            # The phone goes - nothing is signed into it - and the next
+            # address gets a fresh one; this address waits on the
+            # ladder (pgpool.fail) and comes back for a fresh phone too.
+            return st.finish("phone_distrusted",
+                          f"Google distrusted this phone on "
+                          f"{account.email} ({said}); the next address "
+                          f"goes on a fresh phone and exit")
+        if st.tried_gmails >= GMAILS_PER_BUILD:
+            tally = ", ".join(f"{email} ({reason})"
+                              for email, reason, _ in st.build.tried[-st.tried_gmails:])
+            return st.finish("gmails_exhausted",
+                          f"{st.tried_gmails} Gmails from the pool were "
+                          f"refused on this phone in a row - {tally}")
+        # Two refusals of Google's distrust kind on this exit: the
+        # exit is changed before the next address is tried on it. The
+        # address just set aside stays set aside, and the next one
+        # gets a fresh exit. No exit to move to is not a failed build:
+        # the next address goes on the same exit, as before. It
+        # counted captchas alone, so a phone asked for a phone number
+        # five addresses running kept the same exit throughout -
+        # every one of Google's distrust pages is the exit's to
+        # answer for (2026-09-13).
+        if failures.retryable(outcome.reason):
+            st.captchas_here += 1
+        if st.captchas_here >= CAPTCHAS_PER_EXIT and st.proxy_row is not None:
+            try:
+                st.proxy_row = st.lease.swap(
+                    st.client, st.settings, st.book, st.build, st.phone_id,
+                    f"{st.captchas_here} Gmails met a captcha on this exit",
+                    "captcha_shown", st.remaining())
+            except Aborted as exc:
+                # Not a person's stop - see the Play recipe's handler.
+                if str(exc) in STOPPED_BY_A_PERSON:
+                    raise
+                log.warning("the exit could not be changed (%s); the "
+                            "next Gmail goes on the same one", exc)
+                # _new_exit stops the phone before it looks for an
+                # exit, so a refusal leaves it down.
+                phones.ensure_running(
+                    st.client, st.phone_id,
+                    timeout=min(phones.BOOT_SECONDS, st.remaining()),
+                    cancelled=st.cancelled)
+            else:
+                # The refused exit is held, not freed - the lease has it,
+                # released at the end, marked with why.
+                _exit_up(st.client, st.settings, st.phone_id, st.proxy_row,
+                         st.remaining(), st.cancelled)
+            st.captchas_here = 0
 
-        # ------------------------------------------------- the app account
-        session = _Session(client=client, settings=settings, book=book,
-                           build=build, phone_id=phone_id, artifacts=artifacts,
-                           deadline=deadline, started=started,
-                           cancelled=cancelled,
-                           codes=codes_source or codes.NoSource(),
-                           lease=lease, want=want)
-        gave_up = _sign_into_app(session)
+def _install_phase(st: _BuildState) -> Build | None:
+    """The app the account goes into, and the rest every phone carries - or
+    the bare phone and the no-account phone, which end here."""
+    # ----------------------------------------------------- the install
+    st.check_cancelled()
+    marked = cancel._given_up_on(st.settings, st.build.serial,
+                          own_take=bool(st.want and st.want.requested_by))
+    if marked:
+        return st.finish("given_up_on",
+                      f"somebody wrote {marked!r} in its State while this "
+                      f"was running, so it was left alone")
+    if st.bare:
+        # Bare is about the accounts, not the apps: nothing is signed
+        # in anywhere, and the phone still carries all three, because
+        # from the center they cost it seconds rather than the Play
+        # Store's minutes (the operator, 2026-09-12).
+        _install_the_rest(st.client, st.settings, st.build, st.phone_id, done="",
+                          ordered=st.ordered, remaining=st.remaining,
+                          artifacts=st.artifacts, cancelled=st.cancelled,
+                          play=False)
+        if not (st.want is not None and st.want.app_account):
+            return st.finish("ready", f"a bare phone - no Google account, "
+                                   f"as asked. On the phone: "
+                                   f"{_named(st.build.app)}", ok=True)
+        # A bare phone with an account named for it: a `normal`
+        # Spotify account, which wants exactly this phone - no Google
+        # account on it - and goes in now, through the same session
+        # a warm phone's account goes in through (2026-09-17).
+        if st.remaining() <= 0:
+            return st.finish("budget_exhausted",
+                          "built, but no time to sign the account in")
+        st.session = _Session(client=st.client, settings=st.settings, book=st.book,
+                           build=st.build, phone_id=st.phone_id,
+                           artifacts=st.artifacts, deadline=st.deadline,
+                           started=st.started, cancelled=st.cancelled,
+                           codes=st.codes_source or codes.NoSource(),
+                           lease=st.lease, want=st.want)
+        gave_up = _sign_into_app(st.session)
         if gave_up is not None:
             return gave_up
+        # Whichever app the account is for - the registry's word, not
+        # "Spotify" whatever it was (the builder review, 2026-09-23).
+        return st.finish("ready", f"a bare phone - no Google account, as "
+                               f"asked - with {st.build.app_account} "
+                               f"signed into "
+                               f"{APPS.get(st.build.app_product, 'the app')}",
+                      ok=True)
+    if st.remaining() <= 0:
+        return st.finish("budget_exhausted", "signed in, but no time to install")
+    # Which app the account goes into, if any. The keeper's own
+    # phones sign into ChatGPT; a hand-built one signs into what was
+    # asked for - none, ChatGPT, Spotify or Claude. That choice is
+    # about the account, not about what is on the phone: every phone
+    # carries all three either way (the operator, 2026-09-12). It is
+    # also the one install a build can fail on, which is why it goes
+    # first and through the Play recipe.
+    app = st.want.app if st.want is not None else "chatgpt"
+    st.build.app = app
+    if not app:
+        # Nothing is signed into anything, but the phone still carries
+        # the apps every phone carries (the operator, 2026-09-12).
+        st.build.app_installed = False
+        _install_the_rest(st.client, st.settings, st.build, st.phone_id, done="",
+                          ordered=st.ordered, remaining=st.remaining,
+                          artifacts=st.artifacts, cancelled=st.cancelled)
+        return st.finish("ready", f"signed into Google; no app account was "
+                               f"asked for. On the phone: "
+                               f"{_named(st.build.app)}", ok=True)
+    # Every swap the recipe makes goes through the lease, which knows
+    # the exit the build owns before the wait that can raise.
+    installed, st.proxy_row = _install_by_recipe(
+        st.client, st.settings, st.book, st.build, st.phone_id,
+        _package_for(st.settings, app), name=APPS[app],
+        ordered=bool(st.ordered.get(app)),
+        remaining=st.remaining, artifacts=st.artifacts, cancelled=st.cancelled,
+        lease=st.lease, proxy_row=st.proxy_row,
+    )
+    st.build.trails.append(("install", installed.trail))
+    if not installed.ok:
+        return st.finish("install_failed",
+                      f"the app could not be installed - "
+                      f"{failures.verdict(installed.reason).seen}")
+    st.build.app_installed = True
+    # And the rest of them. Every phone carries all three now, the
+    # keeper's own and the ones asked for by hand alike: the center
+    # installs them in the background off one call, so they cost the
+    # build seconds rather than the Play Store's minutes (the
+    # operator, 2026-09-12). One that does not go on is a note, never
+    # a failed phone - the app the wish named is already on.
+    _install_the_rest(st.client, st.settings, st.build, st.phone_id, done=app,
+                      ordered=st.ordered, remaining=st.remaining,
+                      artifacts=st.artifacts, cancelled=st.cancelled)
+    if app != "chatgpt":
+        return st.finish("ready", f"signed into Google, and "
+                               f"{_named(st.build.app)} on the phone",
+                      ok=True)
 
-        # Asked of the device, not of the run's own belief - and logged rather
-        # than written to the tab, because "which packages are on it" is a
-        # debugging question and the Note column is read by a person.
-        packages = shell.third_party_packages(client, phone_id)
-        log.info("installed here: %s", ", ".join(packages) or "nothing")
-        return finish("ready", "signed into Google and into the app", ok=True)
+def _app_phase(st: _BuildState) -> Build | None:
+    """The app account signed in, through the session a finish shares."""
+    # ------------------------------------------------- the app account
+    st.session = _Session(client=st.client, settings=st.settings, book=st.book,
+                       build=st.build, phone_id=st.phone_id, artifacts=st.artifacts,
+                       deadline=st.deadline, started=st.started,
+                       cancelled=st.cancelled,
+                       codes=st.codes_source or codes.NoSource(),
+                       lease=st.lease, want=st.want)
+    gave_up = _sign_into_app(st.session)
+    if gave_up is not None:
+        return gave_up
 
-    except Aborted as exc:
+    # Asked of the device, not of the run's own belief - and logged rather
+    # than written to the tab, because "which packages are on it" is a
+    # debugging question and the Note column is read by a person.
+    packages = shell.third_party_packages(st.client, st.phone_id)
+    log.info("installed here: %s", ", ".join(packages) or "nothing")
+    return st.finish("ready", "signed into Google and into the app", ok=True)
+
+
+
+#: build_one's phases, in the order it runs them.
+_BUILD_PHASES = (_acquire, _bring_up, _google_phase, _install_phase,
+                 _app_phase)
+
+
+def _ended_by(exc: Exception, finish, settings: Settings, what: str) -> Build:
+    """How an exception out of a phone job ends it - one ladder for the
+    build and the finish, which had two copies of it (the builder review,
+    2026-09-23). Called from inside their `except`, so `log.exception`
+    still has the traceback."""
+    if isinstance(exc, Aborted):
         return finish(str(exc), failures.situation(str(exc)))
-    except TransportError as exc:
+    if isinstance(exc, TransportError):
         # The machine lost its network, which is not an error nobody planned
         # for - it is a named thing that costs nothing. Reported as such, with
         # the traceback left in the log file rather than dumped over a live
@@ -1536,101 +1619,116 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.error("the network went away: %s", exc)
         return finish("network_unreachable",
                       failures.situation("network_unreachable"))
-    except phones.WaitInterrupted as exc:
+    if isinstance(exc, phones.WaitInterrupted):
         # The run is shutting down, not a phone that would not start: filed
         # as the stop it is, and the empty phone is kept (KEPT_WHEN_EMPTY) -
         # a delete needs a stop, a wait and a call, and the process is going
         # down (the builder review, 2026-09-23).
         log.info("%s", exc)
         return finish("interrupted", failures.situation("interrupted"))
-    except phones.PhoneCapacityError as exc:
+    if isinstance(exc, phones.PhoneCapacityError):
         # Before `PhoneError`, because it is one. GeeLark had no machine of
         # this Android version free, which says nothing about this phone, this
         # account or this row - and `start` has already asked several times.
         log.warning("no capacity at GeeLark: %s", exc)
         return finish("no_capacity", failures.situation("no_capacity"))
-    except phones.PhoneError as exc:
+    if isinstance(exc, phones.PhoneError):
         # Expected, and named. It used to reach the catch-all below and be
         # reported as "an error nobody planned for", which is the wrong thing
         # to tell someone about a phone that simply did not boot - or about one
         # that was deleted underneath the build, which is a different sentence
-        # and points at a different culprit.
+        # and points at a different culprit. A GeeLark capacity refusal, which
+        # is nobody's fault at all, counted against the breaker as one in the
+        # finish until it had the same naming (2026-08-28).
         vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
         if not vanished:
             _remember_refusal(settings, str(exc))
         return finish("phone_is_gone" if vanished else "phone_would_not_start",
                       str(exc))
-    except Exception as exc:                                      # noqa: BLE001
-        # Deliberately broad. Whatever went wrong, the resources this build is
-        # holding must go back and the phone must be stopped - an exception
-        # escaping here leaves three tabs saying `in_use` and a phone billing.
-        log.exception("build %d failed with an unhandled error", index)
-        return finish("error", f"an error nobody planned for stopped it: {exc}")
-    finally:
-        # Once the app phase starts, the session is what holds the claims - it
-        # swaps proxies and claims accounts as it goes. Read them back from it
-        # here rather than from the locals, because an Aborted raised inside it
-        # never returns to update them, and the account it was holding would
-        # stay in_use with nothing to free it.
-        # The Gmail is this function's own - the session never sees it. A
-        # proxy counts as used the moment a phone exists behind it: that phone
-        # keeps it until someone deletes the phone, and handing it on would put
-        # two devices on one exit address.
-        held = [(book.gmails, gmail_row,
-                 SPEND if gmail_signed_in else RELEASE, "", "")]
-        if session is None:
-            # The exit the build owns - never one borrowed from another
-            # phone, which the lease keeps apart (2026-09-23).
-            held.append((book.proxies, lease.current,
-                         SPEND if phone_id else RELEASE, "", ""))
-            # The exits swapped away from before the app phase began. A
-            # session releases its own; with none yet, nobody did, and a
-            # build that ended in its Gmail phase after a swap - stopped,
-            # refused, or finished without an app account - left them
-            # `in_use` for good (2026-09-21, found by audit).
-            held += _refused_holds(book, lease.refused)
-        else:
-            held += _session_holds(book, session, proxy_spent=bool(phone_id))
-        _release(book, build, held, suspect_hosts=_struck_hosts(settings))
-        # A phone with no Google account on it is not a phone. Nothing can be
-        # done with it - `finish` refuses it by name, since there is nothing to
-        # build on - so it is deleted rather than left occupying a plan slot and
-        # a row that reads `incomplete` with an empty Gmail column. Its exit
-        # goes back with it, which is why this runs before the row is written.
-        #
-        # Not while the run is shutting down: an interrupt is not a verdict on
-        # the phone, and the next run's sync sees it either way.
-        # A bare phone has none on purpose, and stays. A stop by hand does
-        # not spare it any more - see STOPPED_BY_A_PERSON for why - only
-        # the run's own shutdown does. And the device is asked whether it
-        # is signed in after all only when a sign-in was ever started on
-        # it: a phone stopped twelve seconds after it was created cannot
-        # be, and asking it anyway answered "could not say" and kept it.
-        empty = bool(phone_id and not gmail_signed_in and not bare
-                     and build.status not in KEPT_WHEN_EMPTY
-                     and not (asked_google
-                              and _signed_in_after_all(client, build)))
-        discarded = empty and _discard(client, book, ledger, build,
-                                       exit_row=lease.current)
-        # By serial, not by the row number `start` handed back ten minutes ago.
-        # Any sibling discarding its phone deletes a row, and every row below it
-        # moves up - so that number can have come to mean a different phone.
-        if log_row is not None:
-            rows._write_row(book, build, drop=discarded)
-            if empty and not discarded:
-                rows._condemn(book, build)
-        if phone_id and not discarded:
-            try:
-                phones.stop(client, phone_id)
-                log.info("stopped %s", phone_id)
-            except Exception as exc:                              # noqa: BLE001
-                build.still_running = True
-                log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
-                          phone_id, exc)
-            ledger.release(phone_id, note=build.status)
-        # Last, so the row says Stopping until there is nothing left to
-        # stop.
-        _stop_honoured(settings, build.serial)
+    # Deliberately broad. Whatever went wrong, the resources this job is
+    # holding must go back and the phone must be stopped - an exception
+    # escaping here leaves three tabs saying `in_use` and a phone billing.
+    log.exception("%s failed with an unhandled error", what)
+    return finish("error", f"an error nobody planned for stopped it: {exc}")
+
+
+def _let_the_phone_go(client: Client, settings: Settings, ledger: Ledger,
+                      build: Build, phone_id: str) -> None:
+    """The last of every phone job: the phone stopped - billing ends - and
+    its claim released, then the stop request answered. Shared by the build
+    and the finish, which each had a copy. `phone_id` empty: nothing left to
+    stop (a discarded phone, or none was made)."""
+    if phone_id:
+        try:
+            phones.stop(client, phone_id)
+            log.info("stopped %s", phone_id)
+        except Exception as exc:                                  # noqa: BLE001
+            build.still_running = True
+            log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
+                      phone_id, exc)
+        ledger.release(phone_id, note=build.status)
+    # Last, so the row says Stopping until there is nothing left to stop.
+    _stop_honoured(settings, build.serial)
+
+
+def _let_the_build_go(st: _BuildState) -> None:
+    """The end of a build, whatever ended it: what it held settled, an empty
+    phone discarded, the row written, the phone let go."""
+    book, build, session = st.book, st.build, st.session
+    # Once the app phase starts, the session is what holds the claims - it
+    # swaps proxies and claims accounts as it goes. Read them back from it
+    # here rather than from the state, because an Aborted raised inside it
+    # never returns to update them, and the account it was holding would
+    # stay in_use with nothing to free it.
+    # The Gmail is the build's own - the session never sees it. A
+    # proxy counts as used the moment a phone exists behind it: that phone
+    # keeps it until someone deletes the phone, and handing it on would put
+    # two devices on one exit address.
+    held = [(book.gmails, st.gmail_row,
+             SPEND if st.gmail_signed_in else RELEASE, "", "")]
+    if session is None:
+        # The exit the build owns - never one borrowed from another
+        # phone, which the lease keeps apart (2026-09-23).
+        held.append((book.proxies, st.lease.current,
+                     SPEND if st.phone_id else RELEASE, "", ""))
+        # The exits swapped away from before the app phase began. A
+        # session releases its own; with none yet, nobody did, and a
+        # build that ended in its Gmail phase after a swap - stopped,
+        # refused, or finished without an app account - left them
+        # `in_use` for good (2026-09-21, found by audit).
+        held += _refused_holds(book, st.lease.refused)
+    else:
+        held += _session_holds(book, session, proxy_spent=bool(st.phone_id))
+    _release(book, build, held, suspect_hosts=_struck_hosts(st.settings))
+    # A phone with no Google account on it is not a phone. Nothing can be
+    # done with it - `finish` refuses it by name, since there is nothing to
+    # build on - so it is deleted rather than left occupying a plan slot and
+    # a row that reads `incomplete` with an empty Gmail column. Its exit
+    # goes back with it, which is why this runs before the row is written.
+    #
+    # Not while the run is shutting down: an interrupt is not a verdict on
+    # the phone, and the next run's sync sees it either way.
+    # A bare phone has none on purpose, and stays. A stop by hand does
+    # not spare it any more - see STOPPED_BY_A_PERSON for why - only
+    # the run's own shutdown does. And the device is asked whether it
+    # is signed in after all only when a sign-in was ever started on
+    # it: a phone stopped twelve seconds after it was created cannot
+    # be, and asking it anyway answered "could not say" and kept it.
+    empty = bool(st.phone_id and not st.gmail_signed_in and not st.bare
+                 and build.status not in KEPT_WHEN_EMPTY
+                 and not (st.asked_google
+                          and _signed_in_after_all(st.client, build)))
+    discarded = empty and _discard(st.client, book, st.ledger, build,
+                                   exit_row=st.lease.current)
+    # By serial, not by the row number `start` handed back ten minutes ago.
+    # Any sibling discarding its phone deletes a row, and every row below it
+    # moves up - so that number can have come to mean a different phone.
+    if st.log_row is not None:
+        rows._write_row(book, build, drop=discarded)
+        if empty and not discarded:
+            rows._condemn(book, build)
+    _let_the_phone_go(st.client, st.settings, st.ledger, build,
+                      "" if discarded else st.phone_id)
 
 
 def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
@@ -1657,10 +1755,13 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                   proxy=phone.get("proxy", ""))
     deadline = started + settings.build_budget_seconds
     session: _Session | None = None
+    calls_before = _calls(client)
 
     def finish(status: str, detail: str = "", ok: bool = False) -> Build:
         build.ok, build.status, build.detail = ok, status, detail
         build.seconds = time.monotonic() - started
+        # As a build's: what the finish cost in calls, on every ending.
+        build.api_calls = _calls(client) - calls_before
         return build
 
     phone_id = build.phone_id
@@ -1816,37 +1917,13 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         log.info("installed here: %s", ", ".join(packages) or "nothing")
         return finish("ready", "signed into Google and into the app", ok=True)
 
-    except Aborted as exc:
-        return finish(str(exc), failures.situation(str(exc)))
-    except TransportError as exc:
-        # The machine lost its network, which is not an error nobody planned
-        # for - it is a named thing that costs nothing. Reported as such, with
-        # the traceback left in the log file rather than dumped over a live
-        # table: two hundred lines of urllib3 to say the connection went away
-        # (2026-08-17).
-        log.error("the network went away: %s", exc)
-        return finish("network_unreachable",
-                      failures.situation("network_unreachable"))
-    except phones.WaitInterrupted as exc:
-        # As in build_one: the run's shutdown, not the phone (2026-09-23).
-        log.info("%s", exc)
-        return finish("interrupted", failures.situation("interrupted"))
-    except phones.PhoneCapacityError as exc:
-        log.warning("no capacity at GeeLark: %s", exc)
-        return finish("no_capacity", failures.situation("no_capacity"))
-    except phones.PhoneError as exc:
-        # The same naming `build_one` has had since 2026-08-17. Finishing
-        # lacked it, so a phone that would not boot was reported here as "an
-        # error nobody planned for" - and a GeeLark capacity refusal, which is
-        # nobody's fault at all, counted against the breaker as one (2026-08-28).
-        vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
-        if not vanished:
-            _remember_refusal(settings, str(exc))
-        return finish("phone_is_gone" if vanished else "phone_would_not_start",
-                      str(exc))
     except Exception as exc:                                      # noqa: BLE001
-        log.exception("finishing %s failed with an unhandled error", build.serial)
-        return finish("error", str(exc))
+        return _ended_by(exc, finish, settings, f"finishing {build.serial}")
+    except BaseException:
+        # As in build_one: Ctrl+C on the CLI's own run, filed as the
+        # shutdown it is rather than left on whatever word it had reached.
+        finish("interrupted", failures.situation("interrupted"))
+        raise
     finally:
         # A proxy swapped in during finishing belongs to this phone now.
         # The hosts at their strike count today go back as suspect, as a
@@ -1889,16 +1966,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             except Exception as exc:                              # noqa: BLE001
                 log.error("could not put %s back to %s (%s)", build.serial,
                           status_before, exc)
-        try:
-            phones.stop(client, phone_id)
-            log.info("stopped %s", phone_id)
-        except Exception as exc:                                  # noqa: BLE001
-            build.still_running = True
-            log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
-                      phone_id, exc)
-        ledger.release(phone_id, note=build.status)
-        # As in build_one: the request outlives the teardown, not the hear.
-        _stop_honoured(settings, build.serial)
+        _let_the_phone_go(client, settings, ledger, build, phone_id)
 
 
 def _suspected(book: Book, session: _Session) -> tuple:

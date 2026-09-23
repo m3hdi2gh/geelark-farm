@@ -3552,12 +3552,14 @@ def test_a_capacity_refusal_is_named_rather_than_called_an_error(
 
     # Both doors: `build_one` has named PhoneError since August, `finish_one`
     # never did, and this arrived through the second one.
+    # One ladder since 2026-09-23, and both doors go through it.
     import inspect
     for name in ("build_one", "finish_one"):
-        source = inspect.getsource(getattr(builder, name))
-        assert "PhoneCapacityError" in source, f"{name} does not name it"
-        assert source.index("PhoneCapacityError") < source.index(
-            "except phones.PhoneError"), f"{name} catches the general case first"
+        assert "_ended_by(exc, " in inspect.getsource(getattr(builder, name)), name
+    source = inspect.getsource(builder._ended_by)
+    assert "PhoneCapacityError" in source, "the ladder does not name it"
+    assert source.index("PhoneCapacityError") < source.index(
+        "phones.PhoneError)"), "the ladder catches the general case first"
 
 
 def test_finishing_names_a_phone_that_will_not_boot_the_way_building_does():
@@ -3568,10 +3570,12 @@ def test_finishing_names_a_phone_that_will_not_boot_the_way_building_does():
 
     from geelark_farm import builder
 
+    # One vocabulary because one ladder (2026-09-23).
     for name in ("build_one", "finish_one"):
-        source = inspect.getsource(getattr(builder, name))
-        assert "phone_would_not_start" in source, name
-        assert "phone_is_gone" in source, name
+        assert "_ended_by(exc, " in inspect.getsource(getattr(builder, name)), name
+    source = inspect.getsource(builder._ended_by)
+    assert "phone_would_not_start" in source
+    assert "phone_is_gone" in source
 
 
 # ------------------ a killed run leaving a row that says what is true of it
@@ -3582,11 +3586,11 @@ def test_the_gmail_reaches_the_row_the_moment_google_is_signed_in():
     empty, and any interruption deleted a working phone (2026-08-28, phone
     1315: signed into Google, app installed, signed into ChatGPT, deleted by
     the next sync two minutes after a restart)."""
-    import inspect
 
-    from geelark_farm import builder
 
-    source = inspect.getsource(builder.build_one)
+    from tests.build_sources import build_one_source
+
+    source = build_one_source()
     signed_in = source.index("gmail_signed_in = True")
     recorded = source.index("_note_on_row(book, build.serial, Gmail=")
 
@@ -4450,12 +4454,11 @@ def test_the_sign_in_watch_is_the_check_that_hears_a_hand_stop():
     import inspect
 
     from geelark_farm import builder as builder_mod
+    from tests.build_sources import build_one_source
 
-    source = inspect.getsource(builder_mod.build_one)
-    assert "watch=check_cancelled" in source
-    body = source.partition("def check_cancelled()")[2].partition(
-        "def finish(")[0]
-    assert "_stop_asked(settings, build.serial)" in body, (
+    assert "watch=check_cancelled" in build_one_source()
+    body = inspect.getsource(builder_mod._BuildState.check_cancelled)
+    assert "_stop_asked(self.settings, self.build.serial)" in body, (
         "the sign-in's watch cannot hear Stop")
     session = inspect.getsource(builder_mod._Session.check_cancelled)
     assert '_stop_asked(getattr(self, "settings", None), self.build.serial)' in session
@@ -4600,9 +4603,10 @@ def test_the_app_a_hand_built_phone_gets_is_what_was_asked_for(make_settings,
     assert builder.Wanted().app == "chatgpt", "the keeper's own phones"
     assert builder.APPS == {"chatgpt": "ChatGPT", "spotify": "Spotify",
                             "claude": "Claude"}
-    import inspect
 
-    src = inspect.getsource(builder.build_one)
+    from tests.build_sources import build_one_source
+
+    src = build_one_source()
     assert 'app = want.app if want is not None else "chatgpt"' in src
     assert "no app account was " in src, "none: no account, the apps still on"
     assert 'if app != "chatgpt":' in src, "Spotify: ready once installed"
@@ -4719,10 +4723,11 @@ def test_a_hand_built_phone_goes_back_on_its_makers_shelf_when_it_is_done():
 def test_a_hand_built_phone_is_its_builders_from_the_moment_it_exists():
     """Taken and owned by whoever asked, and marked built by them; the
     keeper's own phones carry none of that (the operator, 2026-09-08)."""
-    import inspect
 
     assert builder.Wanted().requested_by is None
-    src = inspect.getsource(builder.build_one)
+    from tests.build_sources import build_one_source
+
+    src = build_one_source()
     assert '{"State": "taken", "Built by": str(want.requested_by),' in src
     assert '"Owner": str(want.requested_by)}' in src
     assert "if want is not None and want.requested_by else {})" in src
@@ -4878,7 +4883,9 @@ def test_a_hand_built_phones_own_take_is_not_a_stranger_giving_up_on_it(
     assert builder._given_up_on(settings, "1958", own_take=True) == "failed"
     import inspect
 
-    src = inspect.getsource(builder.build_one)
+    from tests.build_sources import build_one_source
+
+    src = build_one_source()
     assert "own_take=bool(want and want.requested_by)" in src
     src = inspect.getsource(builder._sign_into_app)
     assert "own_take=bool(s.want and s.want.requested_by)" in src
@@ -5726,7 +5733,9 @@ def test_the_sign_in_record_carries_age_exit_country_touch_and_dumps(
     assert rows[0]["age_seconds"] == 140.0 and rows[0]["exit_country"] == "NL"
     assert rows[0]["touch"] == "kernel" and rows[0]["dumps"] == 9
     assert rows[0]["proxy_name"] == "SX9", "which exit, by name (2026-09-15)"
-    src = inspect.getsource(builder.build_one)
+    from tests.build_sources import build_one_source
+
+    src = build_one_source()
     for needle in ("age_seconds=attempt_started - phone_made_at",
                    "exit_ip=_exit_ip(proxy_row)",
                    "touch=_touch_method(phone_id)",
@@ -6509,9 +6518,12 @@ def test_a_persons_stop_is_never_read_as_a_verdict_on_the_exit_pool():
     assert "ensure_running" in up and "cancelled=cancelled" in up
     # And every swap writes the row down - the lease does, inside
     # `swap` - before it boots.
-    for fn in (builder_mod.build_one, builder_mod._install_by_recipe,
-               builder_mod._sign_into_app):
-        body = inspect.getsource(fn)
+    from tests.build_sources import build_one_source
+
+    for fn, body in ((builder_mod.build_one, build_one_source()),
+                     *((f, inspect.getsource(f)) for f in (
+                         builder_mod._install_by_recipe,
+                         builder_mod._sign_into_app))):
         last = 0
         for m in re.finditer(r"_exit_up\(", body):
             # Between the boot before and this one there is a swap.
@@ -6536,7 +6548,9 @@ def test_the_exit_a_raise_interrupted_is_the_one_the_release_sees():
     assert recipe.index("lease.swap(") < recipe.index("_exit_up(")
     assert "hold" not in inspect.signature(
         builder_mod._install_by_recipe).parameters
-    build = inspect.getsource(builder_mod.build_one)
+    from tests.build_sources import build_one_source
+
+    build = build_one_source()
     assert "swapped_to" not in build and "lease=lease" in build
 
 
@@ -6550,8 +6564,9 @@ def test_refused_exits_are_released_when_the_build_never_reached_the_app_phase()
     from geelark_farm import builder as builder_mod
     from geelark_farm.pools import Resource
 
-    build = inspect.getsource(builder_mod.build_one)
-    tail = build[build.index("    finally:"):]
+    # The teardown every build ends in, whichever phase ended it.
+    assert "_let_the_build_go(st)" in inspect.getsource(builder_mod.build_one)
+    tail = inspect.getsource(builder_mod._let_the_build_go).replace("st.", "")
     branch = tail[tail.index("if session is None:"):tail.index("else:")]
     assert "_refused_holds(book, lease.refused)" in branch
     assert "_refused_holds(book, session.refused_exits)" in inspect.getsource(
@@ -6585,12 +6600,17 @@ def test_the_stop_request_outlives_the_teardown_in_both_ways_of_building():
 
     from geelark_farm import builder as builder_mod
 
-    for fn in (builder_mod.build_one, builder_mod.finish_one):
-        src = inspect.getsource(fn)
-        tail = src[src.rindex("    finally:"):]
-        assert "_stop_honoured(settings, build.serial)" in tail, fn.__name__
-        assert tail.rindex("ledger.release(phone_id, note=build.status)") \
-            < tail.index("_stop_honoured(settings, build.serial)"), fn.__name__
+    # Both end in the one teardown since 2026-09-23, from their finally.
+    build = inspect.getsource(builder_mod.build_one)
+    assert "_let_the_build_go(st)" in build[build.rindex("    finally:"):]
+    assert "_let_the_phone_go(" in inspect.getsource(
+        builder_mod._let_the_build_go)
+    finish = inspect.getsource(builder_mod.finish_one)
+    assert "_let_the_phone_go(" in finish[finish.rindex("    finally:"):]
+    tail = inspect.getsource(builder_mod._let_the_phone_go)
+    assert "_stop_honoured(settings, build.serial)" in tail
+    assert tail.rindex("ledger.release(phone_id, note=build.status)") \
+        < tail.index("_stop_honoured(settings, build.serial)")
 
 
 def test_the_pass_tick_and_the_stop_poll_are_two_names():
@@ -6996,3 +7016,78 @@ def test_history_is_written_even_when_the_row_write_fails_another_way(
                                         serial="1401", gmail="g@x.com"))
     assert written and written[0]["Serial"] == "1401"
 
+
+
+# ---------------------------------- phase 4.4: build_one cut into phases
+def test_a_ctrl_c_mid_build_is_filed_as_the_shutdown_and_keeps_the_phone(
+        device, settings, drive, monkeypatch):
+    """Ctrl+C on the CLI's own run left the build on whatever word it had
+    reached - none, at the boot - which is not in KEPT_WHEN_EMPTY, so the
+    teardown deleted the empty phone on the way out; the one stop that must
+    not (the builder review, 2026-09-23)."""
+    deleted, written = [], []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, **k: deleted.extend(ids))
+    monkeypatch.setattr(builder.rows, "_write_row",
+                        lambda book, build, **k: written.append(build.status))
+
+    def ctrl_c(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builder.phones, "ensure_running", ctrl_c)
+    with pytest.raises(KeyboardInterrupt):
+        drive(make_book(), settings, google=[SIGNED_IN])
+    assert written == ["interrupted"]
+    assert deleted == [], "the empty phone is kept"
+    assert device.stops == 1, "and switched off - billing ends"
+
+
+def test_a_finish_counts_its_calls_and_names_an_unplanned_error_as_a_build_does(
+        settings, monkeypatch):
+    """A build's every ending carried what it cost in calls and a finish's
+    carried none; and an error nobody planned for read as a sentence from a
+    build and as the bare exception from a finish. One ladder now
+    (the builder review, 2026-09-23)."""
+    monkeypatch.setattr(builder.rows, "_note_on_row", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(builder.phones, "ensure_running", boom)
+
+    class Counting(Running):
+        def calls_here(self):
+            return self.asked + 7
+
+    client = Counting(2)
+    build = builder.finish_one(client, settings, make_book(), FakeLedger(),
+                               a_warm_phone(), 1)
+    assert build.status == "error"
+    assert build.detail == "an error nobody planned for stopped it: boom"
+    assert client.asked >= 1 and build.api_calls == client.asked
+
+
+def test_no_phase_keeps_a_local_named_like_the_state_it_should_write():
+    """The phases were cut out of one function by prefixing its locals with
+    `st.`, and two tuple targets kept their bare name: the exit paired with
+    the Gmail was dropped for a second one, and the exit the Play recipe
+    ended on never reached the state (2026-09-23, caught by the suite). A
+    bare name that is also a field is that mistake, or the next one."""
+    import ast
+    import dataclasses
+    import inspect
+    import textwrap
+
+    fields = {f.name for f in dataclasses.fields(builder._BuildState)}
+    assert [p.__name__ for p in builder._BUILD_PHASES] == [
+        "_acquire", "_bring_up", "_google_phase", "_install_phase",
+        "_app_phase"]
+    for step in (*builder._BUILD_PHASES, builder._let_the_build_go):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(step)))
+        stored = {n.id for n in ast.walk(tree)
+                  if isinstance(n, ast.Name) and n.id in fields
+                  and isinstance(n.ctx, ast.Store)}
+        allowed = {"book", "build", "session"} \
+            if step is builder._let_the_build_go else set()
+        assert stored <= allowed, (step.__name__, stored - allowed)

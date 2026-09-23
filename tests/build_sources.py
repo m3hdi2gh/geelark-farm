@@ -43,3 +43,19 @@ def builder_texts() -> list[tuple[pathlib.Path, str]]:
     """Each file and its text - scanned apart, never joined, so a pattern
     cannot match across the seam between two files."""
     return [(p, p.read_text(encoding="utf-8")) for p in builder_sources()]
+
+
+def build_one_source() -> str:
+    """build_one as it read before it was cut into phases (the builder
+    review, 2026-09-23): the skeleton, each phase in the order it runs, the
+    ending ladder and the teardown - with the state's `st.` taken off, so a
+    pin on `want.requested_by` reads the line it always read. Joined in the
+    order they run, which is the order the one function had them in."""
+    import inspect
+    import re
+
+    from geelark_farm import builder
+
+    parts = [builder.build_one, *builder._BUILD_PHASES, builder._ended_by,
+             builder._let_the_build_go, builder._let_the_phone_go]
+    return re.sub(r"\bst\.", "", "\n".join(inspect.getsource(p) for p in parts))
