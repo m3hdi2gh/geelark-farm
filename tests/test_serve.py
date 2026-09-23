@@ -2812,7 +2812,7 @@ def test_the_builder_takes_carries_and_looks_again(make_settings, tmp_path,
     handed = [[{"id": 1, "kind": "build", "payload": {}},
                {"id": 2, "kind": "build", "payload": {}}], []]
 
-    def take(n):
+    def take(n, kinds=None):
         assert n >= 1
         got = handed.pop(0) if handed else []
         if not handed:
@@ -3208,7 +3208,9 @@ def test_stop_everything_and_pause_reach_the_builders(make_settings, tmp_path,
     serve_mod.serve_builder(settings, stop=stop, take=take,
                             carry=lambda job: None)
 
-    assert takes == [("finish",), None], (
+    # "Everything" is every kind this builder carries out, never a kind
+    # it does not know (2026-09-23).
+    assert takes == [("finish",), serve_mod.HANDLED_KINDS], (
         "stopped: nothing taken; paused: finishes only; then everything")
 
 
@@ -3299,3 +3301,57 @@ def test_each_replica_beats_its_own_heartbeat(make_settings, tmp_path,
     os.utime(old, (0, 0))
     serve_mod._forget_old_heartbeats(settings)
     assert not old.exists() and serve_mod._builder_heartbeat(settings).exists()
+
+
+# ------------------------------------------- the wire refuses by name (2.3)
+def test_a_wish_with_a_field_this_builder_does_not_know_is_refused_by_name():
+    """`Wanted(**want)` raised TypeError for a field the keeper had and
+    the replica did not - filed as `builder_crashed`, a DEVICE blame the
+    breaker counts, over a deploy-order mistake (2026-09-23)."""
+    import pytest
+
+    from geelark_farm import breaker, builder, failures, wishes
+
+    book = SimpleNamespace(apps=SimpleNamespace(find=lambda a: None))
+    made = serve_mod._job_dict(book, {"kind": "build", "payload": {
+        "want": {"gmail": "g@x.com", "app": "spotify"}}})
+    assert made["want"] == builder.Wanted(gmail="g@x.com", app="spotify")
+    assert builder.Wanted is wishes.Wanted
+    with pytest.raises(wishes.WishNotUnderstood, match="colour"):
+        serve_mod._job_dict(book, {"kind": "build", "payload": {
+            "want": {"gmail": "g@x.com", "colour": "red"}}})
+    with pytest.raises(wishes.WishNotUnderstood, match="'warm'"):
+        serve_mod._job_dict(book, {"kind": "warm", "payload": {}})
+    assert failures.knows("wish_not_understood")
+    assert "wish_not_understood" in breaker.NOTHING_HAPPENED
+
+
+def test_a_job_not_understood_is_answered_before_anything_is_claimed(
+        monkeypatch, make_settings, tmp_path):
+    import geelark_farm.store.jobs as jobs_mod
+
+    finished = []
+    monkeypatch.setattr(jobs_mod, "finish",
+                        lambda s, job_id, **k: finished.append((job_id, k)))
+    ran = []
+    from geelark_farm import builder
+
+    monkeypatch.setattr(builder, "_run_jobs", lambda *a, **k: ran.append(1))
+    settings = make_settings(state_dir=tmp_path)
+    serve_mod._carry_out(settings, object(), SimpleNamespace(), object(),
+                         {"id": 9, "kind": "build",
+                          "payload": {"want": {"colour": "red"}}},
+                         threading.Event())
+    assert ran == [], "nothing built"
+    assert finished and finished[0][0] == 9
+    assert finished[0][1]["status"] == "wish_not_understood"
+
+
+def test_a_builder_takes_only_the_kinds_it_carries_out():
+    import inspect
+
+    loop = inspect.getsource(serve_mod.serve_builder)
+    assert "taken = take(free, kinds=HANDLED_KINDS)" in loop
+    assert "taken = take(free)" + chr(10) not in loop
+    assert serve_mod.HANDLED_KINDS == ("build", "finish")
+

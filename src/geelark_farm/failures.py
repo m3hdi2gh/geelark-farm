@@ -732,6 +732,12 @@ VERDICTS: dict[str, Verdict] = {
         "host killing it. Nothing was judged: the phone it left behind is "
         "settled by the keeper's sweep, and the rows it held go back to "
         "their pools with the run."),
+    "wish_not_understood": Verdict(
+        NOBODY, "the builder is older than the keeper that asked",
+        "The job named something this builder version does not know - a "
+        "field of the wish, or a kind of job. Nothing was claimed or made. "
+        "It happens for a minute during a deploy that reached the keeper "
+        "before the builders; ask again once both run the same version."),
     "builder_crashed": Verdict(
         DEVICE, "the builder crashed on this job",
         "An exception reached the top of the builder's own loop, outside "

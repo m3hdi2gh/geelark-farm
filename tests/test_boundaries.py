@@ -56,7 +56,8 @@ def _module(name: str) -> pathlib.Path:
 #: the top, not inside a function. Each is below the builder or beside
 #: it; an import of it from here is the start of a cycle. `pools` was in
 #: one until 2026-09-23 (`sync_lists` reached back for possible_statuses).
-BELOW_THE_BUILDER = ("pools", "products", "failures", "breaker", "phones",
+BELOW_THE_BUILDER = ("pools", "products", "wishes", "failures", "breaker",
+                     "phones",
                      "shell", "accounts", "api", "proxy", "ledger",
                      "config", "codes", "mailbox", "apps",
                      "flows.router", "flows.google_login",

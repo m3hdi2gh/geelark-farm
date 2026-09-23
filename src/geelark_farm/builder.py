@@ -1224,38 +1224,9 @@ def _fresh_proxy(client: Client, book: Book, *,
         return resource
 
 
-@dataclass(frozen=True)
-class Wanted:
-    """The credentials a person chose for one build, as they typed them.
-
-    Text rather than rows, because the wish is written a pass before the
-    build and `build_one` claims under the lock that stops one Gmail
-    reaching two phones. A row taken in between is a named failure here,
-    not a race there.
-
-    Anything blank means "the pool decides", which is what the keeper's own
-    builds do - so a wish naming only a Gmail is a normal build with one
-    thing pinned.
-    """
-
-    gmail: str = ""
-    proxy_name: str = ""
-    install_app: bool = True
-    app_account: str = ""
-    wanted_id: int | None = None
-    #: Which app: '' for none, 'chatgpt' (the farm's own), 'spotify'. An
-    #: account is only ever signed into ChatGPT (2026-09-08).
-    app: str = "chatgpt"
-    #: Who asked, by user id. The phone is theirs from the moment it
-    #: exists: taken, owned, marked built by them - and not the keeper's
-    #: stock while they hold it (2026-09-08).
-    requested_by: int | None = None
-    #: A bare phone: no Google account at all, and so no app account
-    #: either. Nothing is claimed and nothing is signed in. It still
-    #: carries the apps every phone carries - bare is about the accounts
-    #: (the operator, 2026-09-12) - and it is ready the moment they are
-    #: on it.
-    no_gmail: bool = False
+#: Moved to `wishes` with the strict reader the queue uses (the builder
+#: review, 2026-09-23); the name stays here for its callers.
+from .wishes import Wanted  # noqa: E402
 
 
 #: The apps a phone can be built with, and what each is called on a page.

@@ -2050,11 +2050,23 @@ BUILDER_HEARTBEAT_FILE = "heartbeat-builder"
 JOB_LOST_SECONDS = 300.0
 
 
+#: The job kinds a builder replica carries out, and so the only kinds it
+#: takes from the queue. Any other kind stays queued for a replica that
+#: knows it, instead of being built as a phone (the builder review,
+#: 2026-09-23): `_job_dict` turned every kind that was not "finish" into
+#: a build.
+HANDLED_KINDS = ("build", "finish")
+
+
 def _job_dict(book: Book, job: dict):
     """A queue row back into what `builder._run_jobs` takes."""
-    from . import builder
+    from . import wishes
 
     payload = job.get("payload") or {}
+    if job["kind"] not in HANDLED_KINDS:
+        raise wishes.WishNotUnderstood(
+            f"a job of kind {job['kind']!r}, which this builder does not "
+            f"carry out")
     if job["kind"] == "finish":
         phone = dict(payload.get("phone") or {})
         address = phone.pop("account_address", "")
@@ -2062,7 +2074,7 @@ def _job_dict(book: Book, job: dict):
         return {"kind": "finish", "phone": phone}
     want = payload.get("want")
     return {"kind": "build",
-            "want": builder.Wanted(**want) if want else None}
+            "want": wishes.Wanted.from_payload(want) if want else None}
 
 
 def _wish_worked(build) -> bool:
@@ -2089,7 +2101,7 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
         # crash, answered on the queue, not an exception that leaves the
         # function before the queue hears of it (2026-09-23, found by the
         # builder review).
-        from . import builder
+        from . import builder, wishes
 
         made = _job_dict(book, job)
         builds = builder._run_jobs(client, settings, book, [made],
@@ -2097,6 +2109,13 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                                    cancel=stop, ledger=ledger,
                                    codes_source=_codes_source(settings))
         build = builds[0]
+    except wishes.WishNotUnderstood as exc:
+        # Before anything was claimed or made: a deploy-order mistake,
+        # said by name rather than filed as a crash the breaker counts.
+        log.error("job %s: %s", job.get("id"), exc)
+        store_jobs.finish(settings, job["id"], ok=False,
+                          status="wish_not_understood", detail=str(exc)[:300])
+        return
     except Exception as exc:                                       # noqa: BLE001
         log.exception("job %s died in the builder", job.get("id"))
         store_jobs.finish(settings, job["id"], ok=False,
@@ -2233,7 +2252,7 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
                     taken = take(free, kinds=("finish",))
                 else:
                     held = False
-                    taken = take(free)
+                    taken = take(free, kinds=HANDLED_KINDS)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("could not take from the queue (%s)", exc)
         for job in taken:

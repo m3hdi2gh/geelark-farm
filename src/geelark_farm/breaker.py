@@ -88,11 +88,15 @@ STOPPED_BY_A_PERSON = frozenset({"interrupted", "stopped_by_hand"})
 #: minutes after a routine deploy quoting GeeLark for it. The phone it
 #: left is the sweep's; nothing was judged (2026-09-21, found by audit).
 BUILDER_GONE = frozenset({"builder_lost"})
+#: The builder did not understand the job and touched nothing: a deploy
+#: that reached the keeper first, not a machine failing (2026-09-23).
+NOT_UNDERSTOOD = frozenset({"wish_not_understood"})
 NOTHING_HAPPENED = frozenset({"no_usable_gmail", "no_usable_proxy",
                               "no_working_proxy", "no_other_exit",
                               "no_capacity", "in_use_by_hand",
                               "given_up_on", "phone_distrusted"}
-                             ) | STOPPED_BY_A_PERSON | BUILDER_GONE
+                             ) | STOPPED_BY_A_PERSON | BUILDER_GONE \
+    | NOT_UNDERSTOOD
 
 
 def counts_against(build) -> bool:
