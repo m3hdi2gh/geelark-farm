@@ -210,7 +210,8 @@ class Slots:
         if not getattr(self.settings, "store_enabled", False):
             return
         try:
-            from .store import db, state as store_state
+            from .store import db
+            from .store import state as store_state
 
             with db.connect(self.settings) as conn:
                 store_state.put(conn, "geelark_plan",
@@ -651,12 +652,12 @@ class ControlLane:
         2026-09-08). The rule is unchanged, only the moment: the same
         function, on the same rows, the same refusals for a phone a run
         holds."""
-        from . import builder
+        from . import keeper
 
         if self.client is None:
             return {}
         try:
-            outcome = builder.apply_phone_states(self.client, book, ledger,
+            outcome = keeper.apply_phone_states(self.client, book, ledger,
                                                  self.settings)
         except Exception as exc:                                  # noqa: BLE001
             log.warning("the lane could not carry out the marks (%s); the "
@@ -1034,7 +1035,7 @@ class Housekeeper:
         """One run of the periodic steps. Skipped while the service is
         stopped: a stopped service must sync nothing, as the pass promises
         on the console."""
-        from . import builder
+        from . import keeper
 
         if self.halted:
             return self.last
@@ -1061,7 +1062,7 @@ class Housekeeper:
         book = Book.open(self.settings)
         ledger = Ledger.shared(self.settings.state_dir,
                                stale_after=self.settings.stale_claim_seconds)
-        outcome = builder.sync_sheet(
+        outcome = keeper.sync_sheet(
             self.client, book, ledger, settings=self.settings,
             apply_marks=False, probe_proxies=probe,
             artifact_dir=self.settings.artifact_dir,
@@ -1229,7 +1230,7 @@ def _look(client: Client, settings: Settings, book: Book,
     builds against a two-address tab spends two claims and two live proxy
     checks to create nothing, and ends on a reason the breaker ignores.
     """
-    from . import builder
+    from . import keeper
 
     # Warm is what a Send can use, and nothing else. A taken phone is
     # somebody's, not stock - so Take orders its replacement - and a phone
@@ -1238,7 +1239,7 @@ def _look(client: Client, settings: Settings, book: Book,
     # two free phones read as five, and the keeper built for five). With
     # the keeper finishing phones itself, an app-less one is still a phone
     # it can finish, and counts.
-    warm, _gone = builder._unfinished(client, book, listing=listing)
+    warm, _gone = keeper._unfinished(client, book, listing=listing)
     if settings.manual_login:
         installed = getattr(book.phones, "INSTALLED", "yes")
         warm = [p for p in warm if p.get("app") == installed]
@@ -1667,7 +1668,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     the pass is as long as its longest job, which is how this has always
     behaved and is still what `--once` and every test want.
     """
-    from . import builder
+    from . import builder, keeper
 
     began = time.monotonic()
     book = Book.open(settings)
@@ -1716,7 +1717,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
         # what the last turn found and gets on with counting.
         outcome = dict(housekeeping.last)
     else:
-        outcome = builder.sync_sheet(
+        outcome = keeper.sync_sheet(
             client, book, ledger, settings=settings,
             # Done and Failed are the lane's the moment they land (A-2);
             # the pass keeps them only where there is no lane to do it.
@@ -2272,12 +2273,12 @@ def _order(settings: Settings, client, book: Book, decision, wishes) -> int:
     instead of threads. Returns how many were ordered."""
     from dataclasses import asdict
 
-    from . import builder
+    from . import keeper
     from .store import jobs as store_jobs
 
     ordered = 0
     if decision.finish:
-        waiting, _gone = builder._unfinished(client, book)
+        waiting, _gone = keeper._unfinished(client, book)
         for phone in waiting[:decision.finish]:
             store_jobs.queue(settings, "finish", {"phone": dict(phone)})
             ordered += 1

@@ -958,7 +958,7 @@ def cmd_finish(settings: Settings, args) -> int:
 
 def cmd_pools(settings: Settings, args) -> int:
     """What the resource tabs hold. Spends nothing."""
-    from . import builder
+    from . import keeper
     from .pools import Book
 
     book = Book.open(settings)
@@ -978,7 +978,7 @@ def cmd_pools(settings: Settings, args) -> int:
     client = build_client(settings)
     if args.no_sync:
         print("(reporting the tabs as they stand; --no-sync)\n")
-    for label, items in ({} if args.no_sync else builder.sync_sheet(
+    for label, items in ({} if args.no_sync else keeper.sync_sheet(
             client, book, Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
             settings=settings,

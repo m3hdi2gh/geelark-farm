@@ -1089,7 +1089,7 @@ class ProxyPool(Pool):
     #: A proxy GeeLark could not reach. Not a verdict for good: these are
     #: rented by the month and renewed on the same address, so one that stopped
     #: answering yesterday is often answering again today. Re-tested every run
-    #: alongside the free ones - see builder.check_proxies.
+    #: alongside the free ones - see keeper.check_proxies.
     dead_status = "dead"
     #: An exit the host gate set aside: Google distrusted its host that
     #: day. Out of the pool but not dead.

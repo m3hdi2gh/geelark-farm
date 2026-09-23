@@ -1706,7 +1706,7 @@ def test_no_sync_reports_the_tabs_without_correcting_them_first(
     def refuse(*a, **k):
         raise AssertionError("--no-sync synced anyway")
 
-    monkeypatch.setattr(builder_mod, "sync_sheet", refuse)
+    monkeypatch.setattr(builder_mod.keeper, "sync_sheet", refuse)
 
     assert cli_mod.cmd_pools(settings, pools_args(no_sync=True)) == 0
     out = capsys.readouterr().out
@@ -1867,7 +1867,7 @@ def test_pools_names_the_rows_that_cannot_be_used_and_why(monkeypatch, capsys,
     book.gmails.stuck = [1, 2]
     book.gmails.broken = [SimpleNamespace(sheet_row=7,
                                           error="2FA secret is not base32")]
-    monkeypatch.setattr(builder_mod, "sync_sheet",
+    monkeypatch.setattr(builder_mod.keeper, "sync_sheet",
                         lambda *a, **k: {"retired": ["a@example.com"]})
 
     assert cli_mod.cmd_pools(settings, pools_args()) == 0

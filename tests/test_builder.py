@@ -546,8 +546,8 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
                 "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"},
                {"sheet_row": 3, "phone_id": "P2", "serial": "670",
                 "gmail": "b@example.com", "proxy": "", "status": "no_usable_gpt"}]
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -568,8 +568,8 @@ def test_a_run_finishes_waiting_phones_before_it_builds_new_ones(
 def _job_world(monkeypatch, waiting):
     """Enough of a world for `run` to dispatch jobs and nothing more."""
     book = make_book()
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -658,8 +658,8 @@ def test_asking_for_fewer_phones_than_are_waiting_builds_nothing_new(
     waiting = [{"sheet_row": r, "phone_id": f"P{r}", "serial": str(660 + r),
                 "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}
                for r in (2, 3, 4)]
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: (waiting, []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: (waiting, []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -2250,12 +2250,12 @@ def test_a_sync_step_that_fails_does_not_discard_the_ones_before_it(
     book.phones.rows = lambda: []
     book.reload = lambda: None
     # The proxy check is the step that crashed live; make it raise.
-    monkeypatch.setattr(builder, "check_proxies",
+    monkeypatch.setattr(builder.keeper, "check_proxies",
                         lambda c, b: (_ for _ in ()).throw(
                             SheetError("row 5: the sheet's write quota stayed "
                                        "exhausted")))
     # An earlier step that does real work, so we can prove it survived.
-    monkeypatch.setattr(builder, "sync_proxies",
+    monkeypatch.setattr(builder.keeper, "sync_proxies",
                         lambda c, b, ledger, **k: {"released": ["SX9"]})
 
     outcome = builder.sync_sheet(world["client"], book, FakeLedger(),
@@ -2843,9 +2843,11 @@ def test_the_sync_measures_against_the_window_not_the_budget(monkeypatch):
     import inspect
 
     source = inspect.getsource(builder.run)
+    # `keeper.sync_sheet(...)` since the keeper left builder.py (2026-09-23).
     call = next(n for n in ast.walk(ast.parse(source.lstrip()))
                 if isinstance(n, ast.Call)
-                and getattr(n.func, "id", "") == "sync_sheet")
+                and (getattr(n.func, "id", "") or getattr(n.func, "attr", ""))
+                == "sync_sheet")
     passed = {k.arg: ast.unparse(k.value) for k in call.keywords}
 
     assert passed["stale_claim_seconds"] == "settings.stale_claim_seconds"
@@ -3246,9 +3248,9 @@ def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
     object.__setattr__(book, "sync_lists", lambda: None)
     object.__setattr__(book, "reload", lambda: None)
 
-    monkeypatch.setattr(builder, "apply_phone_states",
+    monkeypatch.setattr(builder.keeper, "apply_phone_states",
                         lambda *a, **k: {"deleted": ["1001"]})
-    monkeypatch.setattr(builder, "settle_abandoned",
+    monkeypatch.setattr(builder.keeper, "settle_abandoned",
                         lambda *a, **k: (_ for _ in ()).throw(
                             TransportError("geelark went away")))
     # Two shapes, not one. `sync_proxies` and `strand_check` answer with a
@@ -3256,9 +3258,9 @@ def test_a_sync_step_survives_a_geelark_failure(monkeypatch):
     # list it files under the step's own name. One lambda for all four sent
     # half of them down a branch they never take in a real sync.
     for name in ("sync_proxies", "strand_check"):
-        monkeypatch.setattr(builder, name, lambda *a, **k: {})
+        monkeypatch.setattr(builder.keeper, name, lambda *a, **k: {})
     for name in ("sync_phone_proxies", "sync_phone_names"):
-        monkeypatch.setattr(builder, name, lambda *a, **k: [])
+        monkeypatch.setattr(builder.keeper, name, lambda *a, **k: [])
 
     outcome = builder.sync_sheet(None, book, None, probe_proxies=False,
         settings=MARK_SETTINGS)
@@ -3487,8 +3489,8 @@ def test_a_finished_build_stops_labelling_the_lines_after_it(
     from geelark_farm.logs import NO_BUILD
 
     book = make_book()
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: ([], []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -3509,8 +3511,8 @@ def test_the_label_is_on_while_the_build_is_running(device, settings,
 
     book = make_book()
     seen = []
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: ([], []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -4033,8 +4035,8 @@ def test_two_batches_at_once_do_not_share_a_label(device, settings,
 
     def one_batch():
         book = make_book()
-        monkeypatch.setattr(builder, "_unfinished", lambda c, b: ([], []))
-        monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+        monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b: ([], []))
+        monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
         monkeypatch.setattr(builder.Book, "open",
                             classmethod(lambda cls, s: book))
         monkeypatch.setattr(builder.Ledger, "load",

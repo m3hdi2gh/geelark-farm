@@ -35,7 +35,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import builder, codes, failures, phones, runctx
+from . import builder, codes, failures, keeper, phones, runctx
 from .accounts import AccountError
 from .api import PLAN_RATE_LIMITED, ApiError, TransportError, build_client
 from .builder import Build
@@ -1232,7 +1232,7 @@ def sync_on_startup(settings: Settings) -> None:
         return
     try:
         with quiet_console(), console.status("opening the sheet...") as spinner:
-            outcome = builder.sync_sheet(
+            outcome = keeper.sync_sheet(
                 build_client(settings), Book.open(settings),
                 Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
@@ -1585,7 +1585,7 @@ def apply_marks(settings: Settings) -> None:
     # Both were reported on the dashboard as things needing a hand - and the
     # action named "make all four tabs agree with the panel" was the one place
     # that would not do it (2026-08-25).
-    show_sync(builder.sync_sheet(build_client(settings), book,
+    show_sync(keeper.sync_sheet(build_client(settings), book,
                                  Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds),
                                  settings=settings,

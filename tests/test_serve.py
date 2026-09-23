@@ -194,7 +194,7 @@ def _with_board(monkeypatch, board, recorder):
             phones=SimpleNamespace(
                 counts=lambda: {"ready": 0, "app_only": 0, "taken": 0}),
             service=board)))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
 
 
 def test_a_ticked_box_clears_the_breaker(monkeypatch, make_settings, tmp_path):
@@ -313,7 +313,7 @@ class Recorder:
         monkeypatch.setattr(serve_mod, "Ledger",
                             SimpleNamespace(load=lambda d, **k: None,
                                             shared=lambda d, **k: None))
-        monkeypatch.setattr(builder, "sync_sheet",
+        monkeypatch.setattr(builder.keeper, "sync_sheet",
                             lambda *a, **k: self.bump("synced") or {})
         monkeypatch.setattr(builder, "run", self._run(fails))
         monkeypatch.setattr(builder, "finish_run",
@@ -404,8 +404,8 @@ def test_a_build_pass_builds_rather_than_re_finishing_a_warm_phone(
     warm = [{"sheet_row": 2, "phone_id": "P2", "serial": "662",
              "gmail": "a@example.com", "proxy": "", "status": "no_usable_gpt"}]
 
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b, **k: (warm, []))
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {})
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b, **k: (warm, []))
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {})
     monkeypatch.setattr(builder.Book, "open", classmethod(lambda cls, s: book))
     monkeypatch.setattr(builder.Ledger, "load",
                         staticmethod(lambda p, **k: FakeLedger()))
@@ -704,7 +704,7 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
         proxies=SimpleNamespace(available=["p"], broken=["bad row"]),
         phones=SimpleNamespace(
             counts=lambda: {"ready": 1, "app_only": 2, "taken": 0}))
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda c, b, **k: ([{"serial": "1"}, {"serial": "2"}], []))
     monkeypatch.setattr(serve_mod.phones, "plan",
                         lambda c: pytest.fail("the plan was read for nothing"))
@@ -1082,7 +1082,7 @@ def test_a_pass_hands_the_answer_on_to_the_sync(monkeypatch, settings):
 
     asked = {}
     Recorder(warm=0, free=10).install(monkeypatch)
-    monkeypatch.setattr(builder, "sync_sheet",
+    monkeypatch.setattr(builder.keeper, "sync_sheet",
                         lambda *a, **k: asked.update(k) or {})
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
@@ -1227,7 +1227,7 @@ def test_a_stopped_pass_syncs_nothing(monkeypatch, make_settings, tmp_path):
     board = Board("Stop everything")
     _with_board(monkeypatch, board, recorder)
     synced = []
-    monkeypatch.setattr(builder, "sync_sheet",
+    monkeypatch.setattr(builder.keeper, "sync_sheet",
                         lambda *a, **k: synced.append(1) or {})
 
     decision = serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
@@ -1615,7 +1615,7 @@ def test_the_dashboard_splits_the_phones_the_sheet_has_never_heard_of(
     Recorder(warm=1, free=5).install(monkeypatch)
     board = Board()
     _with_board(monkeypatch, board, None)
-    monkeypatch.setattr(builder, "sync_sheet", lambda *a, **k: {
+    monkeypatch.setattr(builder.keeper, "sync_sheet", lambda *a, **k: {
         "unknown_phones": ["1", "2", "3"], "unknown_running": ["1"]})
 
     serve_mod.once(object(), make_settings(state_dir=tmp_path), Fuse(),
@@ -2296,7 +2296,7 @@ def test_a_lane_turn_hands_the_launcher_to_the_drain_and_takes_the_wishes(
     started = {}
     monkeypatch.setattr(builder, "run",
                         lambda client, settings, **kw: started.update(kw) or [])
-    monkeypatch.setattr(builder, "apply_phone_states",
+    monkeypatch.setattr(builder.keeper, "apply_phone_states",
                         lambda client, book, ledger, settings:
                         started.update(marks=(book, ledger)) or {})
 
@@ -2391,7 +2391,7 @@ def test_the_housekeeper_runs_the_periodic_steps_without_the_marks(
                         SimpleNamespace(open=lambda s: "the book"))
     monkeypatch.setattr(serve_mod.Ledger, "load",
                         lambda path, **k: "the ledger")
-    monkeypatch.setattr(builder, "sync_sheet",
+    monkeypatch.setattr(builder.keeper, "sync_sheet",
                         lambda client, book, ledger, **k:
                         asked.append((book, ledger, k))
                         or {"discarded": ["1521"]})
@@ -2580,7 +2580,7 @@ def test_warm_is_what_a_send_can_use(monkeypatch, make_settings):
 
     asked = []
     rows = [{"serial": "1", "app": "yes"}, {"serial": "2", "app": ""}]
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda client, book, listing=None, held_too=False:
                         asked.append(held_too) or (list(rows), []))
     book = SimpleNamespace(apps=SimpleNamespace(available=[], broken=[]),
@@ -2610,7 +2610,7 @@ def test_the_lane_hands_a_wish_to_the_build_with_who_asked(monkeypatch,
     started = {}
     monkeypatch.setattr(builder, "run",
                         lambda client, settings, **kw: started.update(kw) or [])
-    monkeypatch.setattr(builder, "apply_phone_states",
+    monkeypatch.setattr(builder.keeper, "apply_phone_states",
                         lambda client, book, ledger, settings: {})
 
     lane.tick(("boot_phone",))
@@ -2726,7 +2726,7 @@ def test_with_the_queue_on_a_pass_orders_rows_instead_of_running_threads(
     monkeypatch.setattr(store_jobs, "queue",
                         lambda s, kind, payload=None, action_id=None:
                         ordered.append((kind, payload or {}, action_id)) or 1)
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda client, book, **k: ([{"serial": "7"}], []))
     decision = SimpleNamespace(build=2, finish=1, jobs=3)
     want = builder.Wanted(gmail="g@x", proxy_name="", install_app=True,
@@ -2967,7 +2967,7 @@ def test_the_pass_counts_the_gmails_a_claim_could_take_not_the_snapshot(
     right now, and that is the number the batch is sized by."""
     from geelark_farm import builder
 
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b, **k: ([], []))
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b, **k: ([], []))
     held = SimpleNamespace(available=["g"] * 36, broken=[], free_now=lambda: 0)
     book = SimpleNamespace(
         apps=SimpleNamespace(available=["a"], broken=[]),
@@ -3136,7 +3136,7 @@ def test_stop_everything_reaches_the_lane(monkeypatch, make_settings):
                         lambda settings, book, ledger, **k: asked.append(k) or 1)
     monkeypatch.setattr(store_wanted, "take", lambda settings: (
         _ for _ in ()).throw(AssertionError("a wish started under Stop")))
-    monkeypatch.setattr(builder, "apply_phone_states", lambda *a, **k: (
+    monkeypatch.setattr(builder.keeper, "apply_phone_states", lambda *a, **k: (
         _ for _ in ()).throw(AssertionError("a mark carried out under Stop")))
 
     assert lane.tick(("boot_phone", "control")) == 1
@@ -3157,7 +3157,7 @@ def test_pause_building_reaches_the_lane_but_lets_the_marks_through(
     monkeypatch.setattr(store_wanted, "take", lambda settings: (
         _ for _ in ()).throw(AssertionError("a build started under Pause")))
     marks = []
-    monkeypatch.setattr(builder, "apply_phone_states",
+    monkeypatch.setattr(builder.keeper, "apply_phone_states",
                         lambda client, book, ledger, settings:
                         marks.append(1) or {})
 

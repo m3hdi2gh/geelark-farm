@@ -740,11 +740,11 @@ def test_proxy(book, ledger, settings, payload, client):
 
 
 def test_all_proxies(book, ledger, settings, payload, client):
-    from . import builder
+    from . import keeper
 
     if client is None:
         return "failed", "no GeeLark client on this pass", None
-    dead, revived = builder.check_proxies(client, book)
+    dead, revived = keeper.check_proxies(client, book)
     return ("done", f"tested every exit no build is holding: {len(dead)} "
                     f"newly dead, {len(revived)} revived", None)
 
@@ -836,7 +836,7 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
     and left free: the Keeper builds the shortfall, and the person presses
     the button again. Nothing here waits: the sentence says what started.
     """
-    from . import builder
+    from . import keeper
 
     addresses = [a.strip() for a in payload.get("addresses") or [] if a.strip()]
     if not addresses:
@@ -847,7 +847,7 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
     # keeping is theirs to send to. Without this, holding a phone and
     # using it were the same door and could not both be open (3644,
     # 2026-09-19).
-    warm, _gone = builder._unfinished(
+    warm, _gone = keeper._unfinished(
         client, book, for_owner=str(payload.get("by_id") or ""))
     # The console's chooser names the phone; the old tick-and-send did not.
     # Named, that phone is the only one offered - and a name that is not a

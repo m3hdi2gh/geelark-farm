@@ -258,7 +258,7 @@ def test_login_selected_pairs_each_chosen_account_with_a_warm_phone(
     book = make_book(apps=4)
     a0, a1, a2, a3 = book.apps._rows
     book.apps.spend(a2, serial="1400", note="already on a phone")
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda client, book_, **k: (_warm("1500", "1501"), []))
     launched = []
 
@@ -726,7 +726,7 @@ def test_login_selected_answers_running_with_a_line_per_phone(monkeypatch):
     from geelark_farm import builder
 
     book = make_book(apps=2)
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda client, book_, **k: (_warm("1500", "1501"), []))
 
     status, said, detail = verbs.login_accounts(
@@ -940,7 +940,7 @@ def test_a_named_phone_is_the_only_one_offered_to_the_account(monkeypatch):
     book = make_book(apps=1)
     a0 = book.apps._rows[0]
     warm = [{"serial": "1500"}, {"serial": "1501"}]
-    monkeypatch.setattr(builder, "_unfinished", lambda c, b, **k: (list(warm), []))
+    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b, **k: (list(warm), []))
     launched = []
 
     status, said, detail = verbs.login_accounts(
@@ -1151,7 +1151,7 @@ def test_login_selected_marks_the_phone_building_before_the_job_starts(
 
     book = make_book(apps=1)
     _phone_on(book, "1500", "")
-    monkeypatch.setattr(builder, "_unfinished",
+    monkeypatch.setattr(builder.keeper, "_unfinished",
                         lambda client, book_, **k: (_warm("1500"), []))
     seen_at_launch = []
 
@@ -1319,7 +1319,8 @@ def test_send_to_a_warm_phone_refuses_a_normal_spotify_account():
     book = make_book(gmails=1, apps=1)
     row = _spotify_row(book, "normal")
     warm = [{"serial": "1500", "phone_id": "P1"}]
-    with patch.object(builder, "_unfinished", lambda c, b, **k: (warm, [])):
+    with patch.object(builder.keeper, "_unfinished",
+                      lambda c, b, **k: (warm, [])):
         status, said, detail = verbs.login_accounts(
             book, None, None,
             {"addresses": [row.values["Address"]], "by": "mehdi"},
