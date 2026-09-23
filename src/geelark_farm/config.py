@@ -534,6 +534,17 @@ class Settings:
     #: (the operator, 2026-09-12). Names out of `builder.APPS`; empty
     #: installs only what a wish asked for. Bare phones stay bare.
     apps_on_every_phone: tuple[str, ...] = ("chatgpt", "spotify", "claude")
+    #: The GeeLark group this process creates its phones in. The farm's is
+    #: `automation`; a playground working from a copy of this project sets
+    #: its own, so its phones and the farm's can be told apart by the one
+    #: thing GeeLark itself records about them (the builder review,
+    #: 2026-09-23).
+    phone_group: str = "automation"
+    #: Groups whose phones this process never stops or re-attaches: a
+    #: playground's, whose phones are nobody's ledger entry here. Read by
+    #: the reap and by the proxy sync; only when `phone_group` is the
+    #: farm's own - a playground reaps its own group and nothing else.
+    spared_groups: tuple[str, ...] = ("playground",)
     #: One Gmail per phone: after an address Google distrusted (captcha,
     #: verify your phone, could not verify) the phone is deleted and the
     #: next address goes on a fresh phone and exit, instead of up to five
@@ -634,6 +645,10 @@ class Settings:
                             in ("1", "true", "yes", "on"),
             apps_on_every_phone=_words("APPS_ON_EVERY_PHONE",
                                        ("chatgpt", "spotify", "claude")),
+            phone_group=(_str("PHONE_GROUP", "automation").strip()
+                         or "automation"),
+            spared_groups=tuple(g.casefold() for g in _words(
+                "SPARED_GROUPS", ("playground",))),
             one_gmail_per_phone=_str("ONE_GMAIL_PER_PHONE", "1").strip()
                                 in ("1", "true", "yes", "on"),
             bad_models=_models("BAD_MODELS"),

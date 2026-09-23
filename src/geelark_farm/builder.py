@@ -3782,7 +3782,9 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     step("abandoned", lambda: settle_abandoned(
         client, book, ledger, busy=_busy_serials(settings)))
     book.reload()
-    step("proxies", lambda: sync_proxies(client, book, ledger))
+    step("proxies", lambda: sync_proxies(
+        client, book, ledger,
+        skip_groups=phones.reap_scope(settings).get("skip_groups", ())))
     step("repointed", lambda: sync_phone_proxies(client, book))
     step("renamed", lambda: sync_phone_names(client, book))
     step("stranded", lambda: strand_check(client, book))
@@ -3807,7 +3809,8 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     return {key: items for key, items in outcome.items() if items}
 
 
-def _live_exits(client: Client) -> dict[str, list[dict]]:
+def _live_exits(client: Client, skip_groups: tuple[str, ...] = ()
+                ) -> dict[str, list[dict]]:
     """What GeeLark says is behind each exit: `host:port` -> the phones on it.
 
     The only authority on this. The Proxy tab records what a run believed when
@@ -3819,7 +3822,13 @@ def _live_exits(client: Client) -> dict[str, list[dict]]:
     sync quietly rewrite the tab to name whichever came back second.
     """
     found: dict[str, list[dict]] = {}
+    skip = {g.casefold() for g in skip_groups}
     for phone in phones.listing(client):
+        # A playground's phone is not the farm's exit user: its proxy row,
+        # if it has one, is not the farm's to attach or release (the
+        # builder review, 2026-09-23).
+        if skip and phones.group_of(phone) in skip:
+            continue
         config = phone.get("proxy") or {}
         if config.get("server"):
             found.setdefault(f"{config['server']}:{config.get('port')}",
@@ -3971,7 +3980,8 @@ def settle_abandoned(client: Client, book: Book, ledger: Ledger,
 
 
 def sync_proxies(client: Client, book: Book,
-                 ledger: Ledger | None = None) -> dict[str, list[str]]:
+                 ledger: Ledger | None = None, *,
+                 skip_groups: tuple[str, ...] = ()) -> dict[str, list[str]]:
     """Make the Proxy tab say what is actually behind each exit.
 
     Three ways the tab drifts, and it only ever fixed one of them:
@@ -3989,7 +3999,7 @@ def sync_proxies(client: Client, book: Book,
     `claimed` rows are left alone. That word means a run holds it right now,
     and a second run tidying it away is how two phones end up on one exit.
     """
-    live = _live_exits(client)
+    live = _live_exits(client, skip_groups)
     changed: dict[str, list[str]] = {"attached": [], "released": [],
                                      "unlisted": []}
 

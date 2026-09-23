@@ -2256,7 +2256,7 @@ def test_a_sync_step_that_fails_does_not_discard_the_ones_before_it(
                                        "exhausted")))
     # An earlier step that does real work, so we can prove it survived.
     monkeypatch.setattr(builder, "sync_proxies",
-                        lambda c, b, ledger: {"released": ["SX9"]})
+                        lambda c, b, ledger, **k: {"released": ["SX9"]})
 
     outcome = builder.sync_sheet(world["client"], book, FakeLedger(),
                                  settings=MARK_SETTINGS)

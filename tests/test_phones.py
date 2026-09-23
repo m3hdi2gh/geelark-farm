@@ -1078,3 +1078,90 @@ def test_the_envelopes_own_success_code_is_not_the_refusal():
     assert said["code"] == 44002
     assert said["msg"] == "profile limit reached"
 
+
+
+# ------------------------------- a playground's phones are not the farm's
+def _grouped(*pairs):
+    """A panel where these phones are up, each in the GeeLark group given."""
+    panel = Panel(on_account=[{"id": p, "group": {"id": "", "name": g,
+                                                  "remark": ""}}
+                              for p, g in pairs],
+                  statuses={p: phones.RUNNING for p, _ in pairs})
+    return panel
+
+
+def test_the_farm_never_reaps_a_playground_phone(tmp_path):
+    """A playground working from a copy of this project makes its phones
+    in its own group, and they are in no ledger the farm keeps - so the
+    farm's reap stopped them as "not in the ledger" (the builder review,
+    2026-09-23)."""
+    from types import SimpleNamespace
+
+    farm = SimpleNamespace(phone_group="automation",
+                           spared_groups=("playground",))
+    scope = phones.reap_scope(farm)
+    assert scope == {"skip_groups": ("playground",)}
+    panel = _grouped(("F1", "automation"), ("G1", "Playground"),
+                     ("X1", ""))
+    verdicts = phones.reapable(panel, ledger_at(tmp_path), **scope)
+    assert sorted(p for p, _ in verdicts) == ["F1", "X1"], (
+        "the farm reaps as before, the playground's group excepted")
+
+
+def test_a_playground_reaps_its_own_group_and_nothing_else(tmp_path):
+    """The other direction is the dangerous one: the farm's claims are in
+    Postgres, so a playground's ledger has never heard of a farm build -
+    and its reap would have stopped every one of them."""
+    from types import SimpleNamespace
+
+    playground = SimpleNamespace(phone_group="playground",
+                                 spared_groups=("playground",))
+    scope = phones.reap_scope(playground)
+    assert scope == {"only_group": "playground"}
+    panel = _grouped(("F1", "automation"), ("G1", "playground"), ("X1", ""))
+    verdicts = phones.reapable(panel, ledger_at(tmp_path), **scope)
+    assert [p for p, _ in verdicts] == ["G1"]
+    assert phones.reap(panel, ledger_at(tmp_path), **scope) == 1
+    assert panel.stopped == ["G1"], "a farm phone was stopped"
+
+
+def test_a_phone_is_made_in_this_processs_group():
+    from geelark_farm.config import Settings
+
+    for group, expected in (("automation", "automation"),
+                            ("playground", "playground"), ("", "automation")):
+        settings = Settings.__new__(Settings)
+        for name, value in (("android", 1), ("region", "us"),
+                            ("phone_name_prefix", "farm"),
+                            ("phone_group", group)):
+            object.__setattr__(settings, name, value)
+        client = RefusingPanel({"code": 45004, "msg": "no"})
+        with pytest.raises(phones.PhoneError):
+            phones.create(client, settings, Proxy("socks5", "1.2.3.4", 1080,
+                                                  "u", "p"),
+                          ledger=FakeLedger(), account="a@example.com")
+        made = [p for path, p in client.posts if path == "/v1/phone/addNew"]
+        assert made[0]["data"][0]["profileGroup"] == expected, group
+
+
+def test_every_reap_and_the_proxy_sync_are_scoped():
+    """Every caller passes the scope: the pass's Service tick, the CLI,
+    the console's menu - and the proxy sync, which re-attached a farm
+    Proxy row to a playground phone on the same exit."""
+    import inspect
+
+    from geelark_farm import builder, cli, serve, ui
+
+    assert "scope=phones.reap_scope(settings)" in inspect.getsource(serve)
+    assert "phones.reap(client, ledger, **(scope or {}))" in \
+        inspect.getsource(serve._controls)
+    for module in (cli, ui):
+        assert "phones.reapable(client, ledger, **phones.reap_scope(settings))" \
+            in inspect.getsource(module), module.__name__
+    assert "skip_groups=phones.reap_scope(settings)" in \
+        inspect.getsource(builder.sync_sheet)
+    panel = _grouped(("F1", "automation"), ("G1", "playground"))
+    for item in panel.items:
+        item["proxy"] = {"server": "1.2.3.4", "port": 1080}
+    live = builder._live_exits(panel, ("playground",))
+    assert [p["id"] for p in live["1.2.3.4:1080"]] == ["F1"]

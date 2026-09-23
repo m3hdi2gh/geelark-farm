@@ -1535,7 +1535,7 @@ def test_the_reap_refuses_while_batches_are_out(monkeypatch, make_settings,
     _with_board(monkeypatch, board, None)
     reaped = []
     monkeypatch.setattr(serve_mod.phones, "reap",
-                        lambda c, led: reaped.append(1) or 0)
+                        lambda c, led, **scope: reaped.append(1) or 0)
     flight = serve_mod.InFlight()
     flight.took_on(builds=2, finishes=0)
 
@@ -1554,7 +1554,7 @@ def test_the_reap_runs_when_nothing_is_out(monkeypatch, make_settings,
     _with_board(monkeypatch, board, None)
     reaped = []
     monkeypatch.setattr(serve_mod.phones, "reap",
-                        lambda c, led: reaped.append(1) or 0)
+                        lambda c, led, **scope: reaped.append(1) or 0)
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots(),
                    flight=serve_mod.InFlight(), pool=Pool())

@@ -1582,7 +1582,8 @@ class Watchdog:
 
 
 def _controls(client: Client, book: Book, ledger, fuse: Breaker,
-              flight: InFlight | None = None) -> frozenset[str]:
+              flight: InFlight | None = None, *,
+              scope: dict | None = None) -> frozenset[str]:
     """Carry out whatever was ticked on the Service tab, and say what was.
 
     Read and acted on at the very top of a pass, which is the one moment
@@ -1639,7 +1640,7 @@ def _controls(client: Client, book: Book, ledger, fuse: Breaker,
 
     if reaping:
         try:
-            stopped = phones.reap(client, ledger)
+            stopped = phones.reap(client, ledger, **(scope or {}))
             log.warning("stopped %d phone(s) nothing was accountable for, "
                         "asked for from the sheet", stopped)
         except Exception as exc:                                  # noqa: BLE001
@@ -1678,7 +1679,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # what the sheet means. This is also what carries out the State column -
     # a phone marked done is deleted here and its slot comes back.
     _drain_actions(settings, book, ledger, client=client, controls_only=True)
-    asked = _controls(client, book, ledger, fuse, flight)
+    asked = _controls(client, book, ledger, fuse, flight,
+                      scope=phones.reap_scope(settings))
     if housekeeping is not None:
         housekeeping.halted = "Stop everything" in asked
     if "Stop everything" in asked:

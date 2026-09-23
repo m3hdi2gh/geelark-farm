@@ -269,7 +269,9 @@ def create(client: Client, settings: Settings, proxy: Proxy, *,
             "proxyQueryChannel": 2,
             "mobileLanguage": "default",
             "netType": 1,
-            "profileGroup": "automation",
+            # The farm's group, or a playground's (settings.phone_group):
+            # what the reap and the proxy sync tell the two apart by.
+            "profileGroup": getattr(settings, "phone_group", "") or FARM_GROUP,
         }],
     }) or {}
 
@@ -555,7 +557,35 @@ def prune_ledger(client: Client, ledger: Ledger) -> list[str]:
     return gone
 
 
-def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
+#: The group the farm creates its phones in.
+FARM_GROUP = "automation"
+
+
+def group_of(item: dict) -> str:
+    """The GeeLark group a listed phone is in, casefolded - "" for none.
+    The listing answers `group` as an object, and a phone with no group
+    answers it with every field empty rather than answering nothing."""
+    group = item.get("group") or {}
+    if not isinstance(group, dict):
+        return ""
+    return str(group.get("name") or "").strip().casefold()
+
+
+def reap_scope(settings) -> dict:
+    """What this process's reap may look at. The farm spares the
+    playground's group; a playground (a `phone_group` of its own) reaps
+    only its own. Without the second half a playground's reap stopped
+    every farm build, because the farm's claims are in Postgres and a
+    playground's ledger has never heard of them (the builder review,
+    2026-09-23)."""
+    group = str(getattr(settings, "phone_group", "") or FARM_GROUP)
+    if group.casefold() != FARM_GROUP:
+        return {"only_group": group.casefold()}
+    return {"skip_groups": tuple(getattr(settings, "spared_groups", ()) or ())}
+
+
+def reapable(client: Client, ledger: Ledger, *, only_group: str | None = None,
+             skip_groups: tuple[str, ...] = ()) -> list[tuple[str, str]]:
     """Which running phones should be stopped, and why.
 
     A phone that is running is spending money, so the question is only ever
@@ -571,10 +601,18 @@ def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
       happens, and it is why that command does not claim.
 
     A fresh claim is left alone - that is a run in progress.
+
+    `only_group`/`skip_groups` scope it by GeeLark group (`reap_scope`):
+    a phone outside what this process may touch is not its business,
+    accounted for or not.
     """
     verdicts = []
+    skip = {g.casefold() for g in skip_groups}
     for item in listing(client):
         if item.get("status") not in (RUNNING, STARTING):
+            continue
+        group = group_of(item)
+        if group in skip or (only_group is not None and group != only_group):
             continue
         phone_id = item.get("id")
         entry = ledger.get(phone_id)
@@ -591,7 +629,9 @@ def reapable(client: Client, ledger: Ledger) -> list[tuple[str, str]]:
 
 
 def reap(client: Client, ledger: Ledger, *, dry_run: bool = False,
-         verdicts: list[tuple[str, str]] | None = None) -> int:
+         verdicts: list[tuple[str, str]] | None = None,
+         only_group: str | None = None,
+         skip_groups: tuple[str, ...] = ()) -> int:
     """Stop every phone nothing is accountable for. The backstop for when a
     run dies before its own cleanup.
 
@@ -601,7 +641,8 @@ def reap(client: Client, ledger: Ledger, *, dry_run: bool = False,
     approved something other than what happened.
     """
     if verdicts is None:
-        verdicts = reapable(client, ledger)
+        verdicts = reapable(client, ledger, only_group=only_group,
+                            skip_groups=skip_groups)
     for phone_id, reason in verdicts:
         if dry_run:
             log.info("would stop %s (%s)", phone_id, reason)

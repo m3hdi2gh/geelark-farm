@@ -1429,7 +1429,7 @@ def stop_phones(settings: Settings) -> None:
     # actually shows a list to a person, looked again instead. A run claiming
     # or releasing a phone in the seconds someone spends reading the question
     # is all it takes for the two answers to differ (2026-08-23).
-    verdicts = phones.reapable(client, ledger)
+    verdicts = phones.reapable(client, ledger, **phones.reap_scope(settings))
     loose = {phone_id for phone_id, _ in verdicts}
     for item in running:
         entry = ledger.get(item.get("id"))

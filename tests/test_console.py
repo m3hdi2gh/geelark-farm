@@ -847,7 +847,7 @@ def test_the_phones_stopped_are_the_phones_the_list_showed(monkeypatch):
     shown = [("P1", "not in the ledger"), ("P2", "already released")]
     looks = {"n": 0}
 
-    def reapable(client, ledger):
+    def reapable(client, ledger, **k):
         looks["n"] += 1
         # A second answer, different from the first - which is the whole point.
         return shown if looks["n"] == 1 else [("P9", "arrived since")]
@@ -886,7 +886,7 @@ def test_stopping_everything_acts_on_the_list_it_printed(monkeypatch):
     monkeypatch.setattr(ui.Ledger, "load",
                         staticmethod(lambda d, **k: SimpleNamespace(
                             get=lambda i: None)))
-    monkeypatch.setattr(ui.phones, "reapable", lambda c, book: [])
+    monkeypatch.setattr(ui.phones, "reapable", lambda c, book, **k: [])
     monkeypatch.setattr(ui.phones, "listing", lambda c: [
         {"id": "P1", "serialNo": "801", "status": ui.phones.RUNNING},
     ])

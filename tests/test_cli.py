@@ -1111,8 +1111,15 @@ class Lifecycle(FakePhones):
     def plan(self, client):
         return self.plan_info
 
-    def reapable(self, client, ledger):
+    def reapable(self, client, ledger, **scope):
+        self.scope = scope
         return self.verdicts
+
+    @staticmethod
+    def reap_scope(settings):
+        from geelark_farm import phones as real
+
+        return real.reap_scope(settings)
 
     def reap(self, client, ledger, *, verdicts=None, dry_run=False):
         self.reaped.extend(verdicts or [])

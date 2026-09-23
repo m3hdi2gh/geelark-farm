@@ -455,7 +455,7 @@ def cmd_reap(settings: Settings, args) -> int:
     client = build_client(settings)
     ledger = Ledger.load(settings.state_dir,
                         stale_after=settings.stale_claim_seconds)
-    verdicts = phones.reapable(client, ledger)
+    verdicts = phones.reapable(client, ledger, **phones.reap_scope(settings))
     if not verdicts:
         print("nothing to reap - no phone is running unaccounted for")
         return 0
