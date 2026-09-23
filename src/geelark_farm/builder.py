@@ -80,6 +80,7 @@ from . import (
     shell,
 )
 from . import artifacts as archive
+
 # Tests reach the proxy module through here (builder.proxy_mod.check);
 # the code that uses it is in kit/exits and keeper now (2026-09-23).
 from . import proxy as proxy_mod  # noqa: F401
@@ -157,6 +158,7 @@ from .keeper import sync_sheet as sync_sheet
 # builder review (2026-09-23). The names stay here for their callers.
 from .kit import exits as kit_exits
 from .kit import install as kit_install
+from .kit.exits import ExitLease as ExitLease
 from .kit.exits import _align_clock as _align_clock
 from .kit.exits import _any_exit_free as _any_exit_free
 from .kit.exits import _borrow_exit as _borrow_exit
@@ -378,6 +380,21 @@ class _Session:
     #: Exits taken from under another phone once the pool ran dry. Not claimed
     #: - they belong to that phone - so they are remembered here instead.
     borrowed: set[str] = field(default_factory=set)
+    #: The build's exits, shared with the phases before this one - see
+    #: kit.exits.ExitLease. A finish starts its own on the exit it found.
+    #: `proxy_row`, `refused_exits`, `borrowed` and `exits` are the lease's,
+    #: kept in step with it, because what settles a session reads them.
+    lease: ExitLease | None = None
+
+    def __post_init__(self) -> None:
+        if self.lease is None:
+            self.lease = ExitLease(current=self.proxy_row,
+                                   refused=self.refused_exits,
+                                   borrowed=self.borrowed, swaps=self.exits)
+        self.proxy_row = self.lease.current
+        self.refused_exits = self.lease.refused
+        self.borrowed = self.lease.borrowed
+        self.exits = self.lease.swaps
 
     def exits_seen(self) -> set[str]:
         """Every exit address this phone has been through, refused or current.
@@ -386,12 +403,7 @@ class _Session:
         phone owns it - so it leaves no trace in `refused_exits`, and without
         this the build would take the same shared exit back every time.
         """
-        seen = {f"{r.proxy.host}:{r.proxy.port}"
-                for r, _ in self.refused_exits if r.proxy}
-        seen |= self.borrowed
-        if self.proxy_row is not None and self.proxy_row.proxy:
-            seen.add(f"{self.proxy_row.proxy.host}:{self.proxy_row.proxy.port}")
-        return seen
+        return self.lease.seen()
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -553,23 +565,13 @@ def _sign_into_app(session: _Session) -> Build | None:
             # reason: if it runs out, it runs out of budget or proxies, and
             # _new_exit says which. The account goes back as stock, never
             # judged.
-            previous = s.proxy_row
-            before = s.exits_seen()
-            s.proxy_row = _new_exit(s.client, s.settings, s.book, s.build,
-                                    s.phone_id, s.proxy_row, outcome.reason,
-                                    s.remaining(), swaps=s.exits,
-                                    avoid=s.exits_seen())
-            taken = s.proxy_row
-            if taken is not None and taken.proxy:
-                where = f"{taken.proxy.host}:{taken.proxy.port}"
-                if where not in before and s.build.shared_exit:
-                    # Borrowed rather than claimed, so nothing else records it.
-                    s.borrowed.add(where)
-                    s.proxy_row = previous   # keep holding what we do own
-            if previous is not None and previous is not s.proxy_row:
-                # Held, not freed - see _new_exit. Released at the end.
-                s.refused_exits.append((previous, outcome.reason))
-            s.exits += 1
+            # Owned or borrowed, and what the build holds - the lease's
+            # (kit.exits.ExitLease). Refused exits are held, not freed, and
+            # released at the end.
+            taken = s.lease.swap(s.client, s.settings, s.book, s.build,
+                                 s.phone_id, outcome.reason, outcome.reason,
+                                 s.remaining())
+            s.proxy_row, s.exits = s.lease.current, s.lease.swaps
             # Written down above; only now the wait that can raise.
             _exit_up(s.client, s.settings, s.phone_id, taken, s.remaining(),
                      s.cancelled)
@@ -996,11 +998,14 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # each. They stay claimed for the rest of the build so a swap cannot hand
     # one back, and are released together at the end.
     refused_exits: list[tuple[Resource, str]] = []
+    # Every exit this build owns, has refused or has borrowed, across all of
+    # its phases - see kit.exits.ExitLease. `proxy_row` below is the exit
+    # the phone is on right now, which a borrow makes a different one.
+    lease = ExitLease(refused=refused_exits)
     # The Gmail phase counts its own attempts; the app phase's are the
     # session's, since that loop is shared with `finish`.
     tried_gmails = 0
     captchas_here = 0                     # on the exit the phone is on now
-    exit_swaps = 0
     # One exit change for a text captcha per build - see below.
     text_captchas = 0
     session: _Session | None = None
@@ -1099,6 +1104,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                    .get("Last Host") or ""))
             build.proxy = str(proxy_row.proxy)
             build.proxy_name = proxy_row.name
+            lease.current = proxy_row
 
             entry = _create_kept(client, settings, ledger, proxy_row.proxy,
                                  label=f"build {index}",
@@ -1285,16 +1291,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # at all. The exit is changed and the same address goes
                 # again, unmarked, once per build (2026-09-10).
                 text_captchas += 1
-                previous = proxy_row
-                seen = {f"{r.proxy.host}:{r.proxy.port}"
-                        for r, _ in refused_exits if r.proxy}
-                if proxy_row.proxy:
-                    seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
                 try:
-                    proxy_row = _new_exit(
-                        client, settings, book, build, phone_id, proxy_row,
+                    proxy_row = lease.swap(
+                        client, settings, book, build, phone_id,
                         "reCAPTCHA offered only text or audio on this exit",
-                        remaining(), swaps=exit_swaps, avoid=seen)
+                        outcome.reason, remaining())
                 except Aborted as exc:
                     # Not a person's stop - see the Play recipe's handler.
                     if str(exc) in STOPPED_BY_A_PERSON:
@@ -1306,9 +1307,6 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                         timeout=min(phones.BOOT_SECONDS, remaining()),
                         cancelled=cancelled)
                 else:
-                    if previous is not None and previous is not proxy_row:
-                        refused_exits.append((previous, outcome.reason))
-                    exit_swaps += 1
                     _exit_up(client, settings, phone_id, proxy_row,
                              remaining(), cancelled)
                 continue
@@ -1391,16 +1389,11 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if failures.retryable(outcome.reason):
                 captchas_here += 1
             if captchas_here >= CAPTCHAS_PER_EXIT and proxy_row is not None:
-                previous = proxy_row
-                seen = {f"{r.proxy.host}:{r.proxy.port}"
-                        for r, _ in refused_exits if r.proxy}
-                if proxy_row.proxy:
-                    seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
                 try:
-                    proxy_row = _new_exit(
-                        client, settings, book, build, phone_id, proxy_row,
+                    proxy_row = lease.swap(
+                        client, settings, book, build, phone_id,
                         f"{captchas_here} Gmails met a captcha on this exit",
-                        remaining(), swaps=exit_swaps, avoid=seen)
+                        "captcha_shown", remaining())
                 except Aborted as exc:
                     # Not a person's stop - see the Play recipe's handler.
                     if str(exc) in STOPPED_BY_A_PERSON:
@@ -1414,11 +1407,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                         timeout=min(phones.BOOT_SECONDS, remaining()),
                         cancelled=cancelled)
                 else:
-                    if previous is not None and previous is not proxy_row:
-                        # Held, not freed - see _new_exit. Released at the
-                        # end, marked with why.
-                        refused_exits.append((previous, "captcha_shown"))
-                    exit_swaps += 1
+                    # The refused exit is held, not freed - the lease has it,
+                    # released at the end, marked with why.
                     _exit_up(client, settings, phone_id, proxy_row,
                              remaining(), cancelled)
                 captchas_here = 0
@@ -1456,8 +1446,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                                artifacts=artifacts, deadline=deadline,
                                started=started, cancelled=cancelled,
                                codes=codes_source or codes.NoSource(),
-                               proxy_row=proxy_row,
-                               refused_exits=refused_exits, want=want)
+                               lease=lease, want=want)
             gave_up = _sign_into_app(session)
             if gave_up is not None:
                 return gave_up
@@ -1485,23 +1474,15 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             return finish("ready", f"signed into Google; no app account was "
                                    f"asked for. On the phone: "
                                    f"{_named(build.app)}", ok=True)
-        # The exit the recipe put the phone on, read back if the recipe
-        # raises rather than returns: the tuple below never lands then,
-        # and the release in the finally would spend the exit before.
-        swapped_to: list = []
-        try:
-            installed, proxy_row = _install_by_recipe(
-                client, settings, book, build, phone_id,
-                _package_for(settings, app), name=APPS[app],
-                ordered=bool(ordered.get(app)),
-                remaining=remaining, artifacts=artifacts, cancelled=cancelled,
-                proxy_row=proxy_row, refused_exits=refused_exits,
-                hold=swapped_to,
-            )
-        except BaseException:
-            if swapped_to:
-                proxy_row = swapped_to[-1]
-            raise
+        # Every swap the recipe makes goes through the lease, which knows
+        # the exit the build owns before the wait that can raise.
+        installed, proxy_row = _install_by_recipe(
+            client, settings, book, build, phone_id,
+            _package_for(settings, app), name=APPS[app],
+            ordered=bool(ordered.get(app)),
+            remaining=remaining, artifacts=artifacts, cancelled=cancelled,
+            lease=lease, proxy_row=proxy_row,
+        )
         build.trails.append(("install", installed.trail))
         if not installed.ok:
             return finish("install_failed",
@@ -1528,8 +1509,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            deadline=deadline, started=started,
                            cancelled=cancelled,
                            codes=codes_source or codes.NoSource(),
-                           proxy_row=proxy_row, refused_exits=refused_exits,
-                           want=want)
+                           lease=lease, want=want)
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up
@@ -1588,14 +1568,16 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         held = [(book.gmails, gmail_row,
                  SPEND if gmail_signed_in else RELEASE, "", "")]
         if session is None:
-            held.append((book.proxies, proxy_row,
+            # The exit the build owns - never one borrowed from another
+            # phone, which the lease keeps apart (2026-09-23).
+            held.append((book.proxies, lease.current,
                          SPEND if phone_id else RELEASE, "", ""))
             # The exits swapped away from before the app phase began. A
             # session releases its own; with none yet, nobody did, and a
             # build that ended in its Gmail phase after a swap - stopped,
             # refused, or finished without an app account - left them
             # `in_use` for good (2026-09-21, found by audit).
-            held += _refused_holds(book, refused_exits)
+            held += _refused_holds(book, lease.refused)
         else:
             held += _session_holds(book, session, proxy_spent=bool(phone_id))
         _release(book, build, held, suspect_hosts=_struck_hosts(settings))
@@ -1617,7 +1599,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                      and build.status not in KEPT_WHEN_EMPTY
                      and not (asked_google
                               and _signed_in_after_all(client, build)))
-        discarded = empty and _discard(client, book, ledger, build)
+        discarded = empty and _discard(client, book, ledger, build,
+                                       exit_row=lease.current)
         # By serial, not by the row number `start` handed back ten minutes ago.
         # Any sibling discarding its phone deletes a row, and every row below it
         # moves up - so that number can have come to mean a different phone.

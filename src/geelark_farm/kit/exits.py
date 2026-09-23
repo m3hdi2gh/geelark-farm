@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from .. import phones, shell
 from .. import proxy as proxy_mod
@@ -297,3 +298,71 @@ def _exit_up(client: Client, settings: Settings, phone_id: str, exit_row,
                           timeout=min(phones.BOOT_SECONDS, budget),
                           cancelled=cancelled)
     _align_clock(client, settings, phone_id, exit_row)
+
+
+def _where(row) -> str:
+    proxy = getattr(row, "proxy", None)
+    return f"{proxy.host}:{proxy.port}" if proxy else ""
+
+
+@dataclass
+class ExitLease:
+    """The exits one phone has been through, and the one this build owns.
+
+    The swap was written four times - the app phase, the Gmail phase twice,
+    the Play recipe - and only the app phase's copy knew about a borrowed
+    exit. The Gmail phase and the recipe kept a borrowed exit as their own,
+    so the end of the build spent it under this phone's serial and the
+    discard of an empty phone freed it: an exit another phone runs on went
+    back on the shelf. And the app phase told a borrowed exit by
+    `build.shared_exit`, which never goes back to False, so after one
+    borrow every fresh exit it claimed was treated as someone else's and
+    left `claimed` for good (the builder review, 2026-09-23).
+
+    One lease, shared by every phase of one build, with one swap count:
+    - `current` is the exit this build owns - claimed by it, settled by it.
+    - `refused` are exits it owned and moved on from, held claimed until the
+      end so a swap cannot take one back, then released with the reason.
+    - `borrowed` are exits taken from under another phone when nothing was
+      free. They are that phone's: never spent, never freed, only avoided.
+
+    Borrowed is read off the pool, not off a flag: an exit `_new_exit`
+    claimed is `claimed`; one it borrowed is still `on a phone`, another's.
+    """
+
+    current: Resource | None = None
+    refused: list = field(default_factory=list)
+    borrowed: set = field(default_factory=set)
+    swaps: int = 0
+
+    def seen(self) -> set[str]:
+        """Every exit this phone has been through - what bounds the loop."""
+        seen = {_where(r) for r, _ in self.refused if _where(r)}
+        seen |= self.borrowed
+        if _where(self.current):
+            seen.add(_where(self.current))
+        return seen
+
+    def swap(self, client: Client, settings: Settings, book: Book, build: Build,
+             phone_id: str, why: str, reason: str, budget: float) -> Resource:
+        """Put the phone behind another exit, and return the one it is on.
+
+        The phone is left stopped: the caller brings it up with `_exit_up`,
+        the one step here that can raise - by then the lease already says
+        where the phone is, so a raise loses nothing. Raises what
+        `_new_exit` raises, with the lease unchanged.
+        """
+        previous = self.current
+        row = _new_exit(client, settings, book, build, phone_id, previous, why,
+                        budget, swaps=self.swaps, avoid=self.seen())
+        if book.proxies.status_of(row) == book.proxies.spent_status:
+            # Another phone's: noted so it is not taken again, and not ours
+            # to settle. The build keeps holding what it does own.
+            self.borrowed.add(_where(row))
+        else:
+            if previous is not None and previous is not row:
+                self.refused.append((previous, reason))
+            self.current = row
+        self.swaps += 1
+        return row
+

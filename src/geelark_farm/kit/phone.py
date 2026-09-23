@@ -12,7 +12,7 @@ from .. import phones, shell
 from ..api import Client
 from ..build_result import Build, outcome_of
 from ..ledger import Ledger
-from ..pools import Book
+from ..pools import Book, Resource
 
 log = logging.getLogger("geelark_farm.builder")
 
@@ -54,7 +54,7 @@ def _signed_in_after_all(client: Client, build: Build) -> bool:
 
 
 def _discard(client: Client, book: Book, ledger: Ledger,
-             build: Build) -> bool:
+             build: Build, *, exit_row: Resource | None = None) -> bool:
     """Delete a phone nothing was ever signed into, and free its exit.
 
     Returns whether it went. A delete that fails leaves the phone to be stopped
@@ -83,7 +83,18 @@ def _discard(client: Client, book: Book, ledger: Ledger,
         Steps=build.steps,
         Note=(f"Deleted rather than kept - nothing was ever signed into it. "
               f"{outcome_of(build).capitalize()}."))
-    resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
+    # The exit this build owned (`exit_row`, from its lease), not the one the
+    # phone was last on: that may be borrowed from another phone, and freeing
+    # it put another phone's exit back on the shelf (the builder review,
+    # 2026-09-23). Without a lease, the exit it was on - and only if nothing
+    # else is recorded behind it.
+    resource = exit_row
+    if resource is None and build.proxy:
+        resource = book.proxies.find_proxy(build.proxy)
+        behind = str((getattr(resource, "values", None) or {})
+                     .get(book.proxies.serial_column) or "") if resource else ""
+        if behind and behind != str(build.serial):
+            resource = None
     if resource is not None:
         book.proxies.release(resource, note=(
             "Free again - the phone taken on it had nothing signed in and was "

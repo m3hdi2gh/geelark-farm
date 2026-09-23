@@ -6492,8 +6492,9 @@ def test_a_persons_stop_is_never_read_as_a_verdict_on_the_exit_pool():
     found = []
     for _, src in builder_texts():
         handlers = [m.start() for m in re.finditer(r"except Aborted as exc:", src)]
+        # Every swap goes through the lease since 2026-09-23.
         found += [(src, at) for at in handlers
-                  if "_new_exit(" in src[max(0, at - 700):at]]
+                  if "lease.swap(" in src[max(0, at - 700):at]]
     assert len(found) == 3, "the three swap handlers"
     for src, at in found:
         after = src[at:at + 400]
@@ -6504,13 +6505,16 @@ def test_a_persons_stop_is_never_read_as_a_verdict_on_the_exit_pool():
     assert "ensure_running" not in new_exit and "cancelled" not in new_exit
     up = inspect.getsource(builder_mod._exit_up)
     assert "ensure_running" in up and "cancelled=cancelled" in up
-    # And every swap writes the row before it boots.
+    # And every swap writes the row down - the lease does, inside
+    # `swap` - before it boots.
     for fn in (builder_mod.build_one, builder_mod._install_by_recipe,
                builder_mod._sign_into_app):
         body = inspect.getsource(fn)
+        last = 0
         for m in re.finditer(r"_exit_up\(", body):
-            before = body[max(0, m.start() - 900):m.start()]
-            assert "refused_exits.append(" in before, fn.__name__
+            # Between the boot before and this one there is a swap.
+            assert ".swap(" in body[last:m.start()], fn.__name__
+            last = m.end()
 
 
 def test_the_exit_a_raise_interrupted_is_the_one_the_release_sees():
@@ -6523,14 +6527,15 @@ def test_the_exit_a_raise_interrupted_is_the_one_the_release_sees():
 
     from geelark_farm import builder as builder_mod
 
+    # Since 2026-09-23 the lease knows the exit before the wait that can
+    # raise: the recipe swaps through it, and the `hold` list the caller
+    # read back on a raise is gone.
     recipe = inspect.getsource(builder_mod._install_by_recipe)
-    assert "hold.append(proxy_row)" in recipe
-    assert recipe.index("hold.append(proxy_row)") < recipe.index("_exit_up(")
+    assert recipe.index("lease.swap(") < recipe.index("_exit_up(")
+    assert "hold" not in inspect.signature(
+        builder_mod._install_by_recipe).parameters
     build = inspect.getsource(builder_mod.build_one)
-    assert "hold=swapped_to," in build
-    assert "proxy_row = swapped_to[-1]" in build
-    assert build.index("except BaseException:") < build.index(
-        "proxy_row = swapped_to[-1]")
+    assert "swapped_to" not in build and "lease=lease" in build
 
 
 def test_refused_exits_are_released_when_the_build_never_reached_the_app_phase():
@@ -6546,9 +6551,16 @@ def test_refused_exits_are_released_when_the_build_never_reached_the_app_phase()
     build = inspect.getsource(builder_mod.build_one)
     tail = build[build.index("    finally:"):]
     branch = tail[tail.index("if session is None:"):tail.index("else:")]
-    assert "_refused_holds(book, refused_exits)" in branch
+    assert "_refused_holds(book, lease.refused)" in branch
     assert "_refused_holds(book, session.refused_exits)" in inspect.getsource(
         builder_mod._session_holds), "one list, both callers"
+    # ...and it is one list: the session's is the lease's.
+    lease = builder_mod.ExitLease()
+    session = builder_mod._Session(
+        client=None, settings=None, book=None, build=builder_mod.Build(index=1),
+        phone_id="P", artifacts=None, deadline=0.0, lease=lease)
+    assert session.refused_exits is lease.refused
+    assert session.borrowed is lease.borrowed
 
     class Proxies:
         pass
@@ -6717,7 +6729,6 @@ def test_a_finish_that_ends_without_looking_puts_the_status_back(
 
 
 # ------------------------------------ phase 4 of the builder review: exits
-@pytest.mark.xfail(strict=True, reason="fixed by ExitLease (phase 4.2)")
 def test_a_borrowed_exit_taken_in_the_gmail_phase_stays_its_owners(
         device, settings, drive, monkeypatch):
     """The Gmail phase's swap kept the borrowed exit as the build's own:
@@ -6739,7 +6750,6 @@ def test_a_borrowed_exit_taken_in_the_gmail_phase_stays_its_owners(
     assert owned.values["Used By"] == "900", "still the phone that owns it"
 
 
-@pytest.mark.xfail(strict=True, reason="fixed by ExitLease (phase 4.2)")
 def test_a_fresh_exit_after_a_borrowed_one_is_not_left_claimed(
         device, settings, drive, monkeypatch):
     """`build.shared_exit` never goes back to False, and the app phase read
@@ -6775,3 +6785,66 @@ def test_a_fresh_exit_after_a_borrowed_one_is_not_left_claimed(
     assert book.proxies.status_of(fresh) != book.proxies.claimed_status, (
         "the fresh exit the phone ended on was never settled")
     assert owned.values["Used By"] == "900"
+
+
+def test_the_lease_owns_what_it_claims_and_only_avoids_what_it_borrows(
+        monkeypatch):
+    """One lease for every phase of a build (2026-09-23): an exit it
+    claims becomes the one it owns and the one before is held as refused;
+    an exit it borrows is noted and avoided, and the build goes on owning
+    what it owned. Borrowed is read off the pool, not off a flag."""
+    book = make_book(proxies=3)
+    first, fresh, theirs = book.proxies._rows
+    book.proxies.claim()                                   # the build's own
+    book.proxies.spend(theirs, serial="900", note="On phone 900.")
+    handed = []
+
+    def new_exit(client, settings, book_, build, phone_id, current, why,
+                 budget, swaps=0, avoid=None):
+        row = handed.pop(0)
+        if row is fresh:
+            book.proxies.claim()
+        return row
+
+    monkeypatch.setattr(builder.kit_exits, "_new_exit", new_exit)
+    lease = builder.ExitLease(current=first)
+    build = builder.Build(index=1)
+
+    handed.append(theirs)
+    on = lease.swap(None, None, book, build, "P", "refused", "network", 60)
+    assert on is theirs and lease.current is first, "still owns its own"
+    assert lease.refused == [] and lease.borrowed == {"10.0.0.2:9999"}
+
+    handed.append(fresh)
+    on = lease.swap(None, None, book, build, "P", "refused", "network", 60)
+    assert on is fresh and lease.current is fresh
+    assert lease.refused == [(first, "network")]
+    assert lease.swaps == 2, "one count across every swap"
+    assert lease.seen() == {"10.0.0.0:9999", "10.0.0.1:9999", "10.0.0.2:9999"}
+
+
+def test_a_discard_frees_the_exit_the_build_owned_not_the_one_it_borrowed(
+        monkeypatch):
+    """The discard freed whatever exit the phone was last on - a borrowed
+    one included, which put another phone's exit back on the shelf
+    (2026-09-23)."""
+    book = make_book(proxies=2)
+    mine, theirs = book.proxies._rows
+    book.proxies.spend(mine, serial="622", note="On phone 622.")
+    book.proxies.spend(theirs, serial="900", note="On phone 900.")
+    for name in ("stop", "wait_until_stopped", "delete"):
+        monkeypatch.setattr(builder.phones, name, lambda *a, **k: True)
+    build = builder.Build(index=1, phone_id="P", serial="622",
+                          proxy=str(theirs.proxy))
+
+    assert builder._discard(None, book, FakeLedger(), build, exit_row=mine)
+    assert book.proxies.status_of(mine) in book.proxies.available_statuses
+    assert book.proxies.status_of(theirs) == book.proxies.spent_status
+
+    # Without a lease: the exit it was on, only when nothing else is
+    # recorded behind it.
+    build = builder.Build(index=1, phone_id="P", serial="622",
+                          proxy=str(theirs.proxy))
+    assert builder._discard(None, book, FakeLedger(), build)
+    assert book.proxies.status_of(theirs) == book.proxies.spent_status
+

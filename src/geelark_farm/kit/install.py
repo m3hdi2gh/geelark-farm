@@ -16,7 +16,7 @@ from ..cancel import STOPPED_BY_A_PERSON, Aborted
 from ..config import Settings
 from ..flows import play_install
 from ..pools import Book
-from .exits import _exit_up, _new_exit
+from .exits import ExitLease, _exit_up
 
 log = logging.getLogger("geelark_farm.builder")
 
@@ -51,16 +51,18 @@ PLAY_RETRY_FLOOR_SECONDS = 150.0
 def _install_by_recipe(client: Client, settings: Settings, book: Book,
                        build: Build, phone_id: str, package: str, *,
                        name: str, ordered: bool, remaining, artifacts,
-                       cancelled, proxy_row, refused_exits: list,
-                       hold: list | None = None
+                       cancelled, lease: ExitLease, proxy_row=None
                        ) -> tuple[play_install.Outcome, object]:
     """`_install`, and the operator's recipe around it when Play will not
     give the app - see PLAY_RETRY_REASONS. Returns the outcome and the
     exit the phone ends up on.
 
-    `hold` is the caller's way of learning that exit when this raises
-    instead of returning: every swap appends the row the phone is now on,
-    and the caller takes the last one before it releases anything."""
+    Every swap goes through the build's `lease`, which knows the exit the
+    build owns before the wait that can raise - the `hold` list the caller
+    used to read back on a raise is gone with it (2026-09-23). `proxy_row`
+    is the exit the phone is on now, when that is not the one it owns."""
+    if proxy_row is None:
+        proxy_row = lease.current
     installed = _install(client, phone_id, package, name=name,
                          ordered=ordered,
                          budget=min(settings.install_budget_seconds,
@@ -80,18 +82,13 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
         else:
             if swaps >= PLAY_RECIPE_EXITS or proxy_row is None:
                 break
-            previous = proxy_row
-            seen = {f"{r.proxy.host}:{r.proxy.port}"
-                    for r, _ in refused_exits if getattr(r, "proxy", None)}
-            if getattr(proxy_row, "proxy", None):
-                seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
             try:
-                proxy_row = _new_exit(
-                    client, settings, book, build, phone_id, proxy_row,
+                proxy_row = lease.swap(
+                    client, settings, book, build, phone_id,
                     f"{name}: the Play Store offered no install "
                     f"({installed.reason}) - exit {swaps + 1} of "
                     f"{PLAY_RECIPE_EXITS}",
-                    remaining(), swaps=swaps, avoid=seen)
+                    installed.reason, remaining())
             except Aborted as exc:
                 # A person's stop is not a verdict on the exit pool, and
                 # this handler read it as one: logged it, booted the
@@ -106,12 +103,7 @@ def _install_by_recipe(client: Client, settings: Settings, book: Book,
                     timeout=min(phones.BOOT_SECONDS, remaining()),
                     cancelled=cancelled)
                 break
-            if previous is not None and previous is not proxy_row:
-                refused_exits.append((previous, installed.reason))
             swaps += 1
-            # The caller reads this back on a raise - see build_one.
-            if hold is not None:
-                hold.append(proxy_row)
             _exit_up(client, settings, phone_id, proxy_row, remaining(),
                      cancelled)
             cleared = False
