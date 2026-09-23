@@ -107,12 +107,26 @@ def _stale_patch(target, name) -> str:
     builder = sys.modules.get("geelark_farm.builder")
     if builder is None or target is not builder or not isinstance(name, str):
         return ""
-    current = getattr(builder, name, None)
-    if not (inspect.isfunction(current) or inspect.isclass(current)):
+    if not hasattr(builder, name):
         return ""
-    owner = getattr(current, "__module__", "") or ""
-    moved = {f"geelark_farm.{m}" for m in MIGRATED_FROM_BUILDER}
-    if owner in moved:
+    current = getattr(builder, name)
+    if inspect.ismodule(current):
+        return ""                      # builder's code looks these up here
+    owner = ""
+    if inspect.isfunction(current) or inspect.isclass(current):
+        owner = getattr(current, "__module__", "") or ""
+        if owner not in {f"geelark_farm.{m}" for m in MIGRATED_FROM_BUILDER}:
+            owner = ""
+    if not owner:
+        # State and constants: a set, a dict, a number re-exported from
+        # the module that owns it now. Replacing builder's name for it
+        # leaves the owner's - the one its code reads - as it was.
+        for m in MIGRATED_FROM_BUILDER:
+            module = sys.modules.get(f"geelark_farm.{m}")
+            if module is not None and getattr(module, name, None) is current:
+                owner = module.__name__
+                break
+    if owner:
         return (f"builder.{name} is {owner}.{name} now - patch it there "
                 f"(or where its caller looks it up); a patch on builder "
                 f"reaches nothing")

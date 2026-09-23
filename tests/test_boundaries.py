@@ -209,3 +209,14 @@ def test_every_module_imports_in_a_fresh_process():
     done = subprocess.run([sys.executable, "-c", script], capture_output=True,
                           text=True, timeout=180)
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_patch_on_state_builder_no_longer_owns_is_refused(monkeypatch):
+    """Sets and constants too: `_STOP_SEEN` and `_STOP_HEARD` are patched
+    by tests, and once they live elsewhere a patch on builder's name for
+    them leaves the owner's - the one its code reads - untouched."""
+    from geelark_farm import builder, runctx
+
+    assert builder._run is runctx._run
+    with pytest.raises(AssertionError, match="runctx._run now"):
+        monkeypatch.setattr(builder, "_run", object())
