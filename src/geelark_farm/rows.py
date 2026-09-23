@@ -251,6 +251,14 @@ def _record(book: Book, build: Build) -> None:
                       build.serial)
     except SheetError as exc:
         log.error("could not record phone %s (%s)", build.serial, exc)
+    except Exception as exc:                                      # noqa: BLE001
+        # Any other failure of the row write - the store's, since the
+        # Phones tab is a table - is said and passed over too, so History
+        # below is always attempted. Only SheetError was caught, and a
+        # store error skipped History, the one record that outlives the row
+        # (the builder review, 2026-09-23).
+        log.error("could not record phone %s (%s); writing its History "
+                  "anyway", build.serial, exc)
     # The Phones tab is current state - a row marked done is deleted, and with
     # it every answer to "what did we build on Tuesday". History keeps the
     # outcome, appended, whichever machine produced it.

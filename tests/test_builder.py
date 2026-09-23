@@ -6978,3 +6978,21 @@ def test_a_shutdown_during_the_play_recipe_is_not_an_install_that_failed(
     build = drive(make_book(proxies=3), settings, google=[SIGNED_IN])
     assert build.status == "interrupted", build.status
 
+
+def test_history_is_written_even_when_the_row_write_fails_another_way(
+        monkeypatch):
+    """`_record` caught only SheetError, and a store error on the row write
+    skipped History - the one record that outlives the row (the builder
+    review, 2026-09-23)."""
+    book = make_book()
+    book.phones.start(Serial="1401", Proxy="SX1")
+    monkeypatch.setattr(book.phones, "write",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError("the store went away")))
+    written = []
+    monkeypatch.setattr(book, "record_history",
+                        lambda **fields: written.append(fields))
+    builder._record(book, builder.Build(index=1, ok=True, status="ready",
+                                        serial="1401", gmail="g@x.com"))
+    assert written and written[0]["Serial"] == "1401"
+
