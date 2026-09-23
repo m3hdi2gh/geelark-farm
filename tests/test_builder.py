@@ -4165,7 +4165,8 @@ def test_a_stops_the_phone_suspect_reason_is_recorded_on_the_session(
                         lambda client, phone_id, creds, **kw: SimpleNamespace(
                             ok=False, reason="session_unverified", detail="",
                             trail=[]))
-    monkeypatch.setattr(builder, "_given_up_on", lambda book, serial, **k: "")
+    monkeypatch.setattr(builder.cancel, "_given_up_on",
+                        lambda book, serial, **k: "")
 
     out = builder._sign_into_app(session)
 
@@ -4470,7 +4471,8 @@ def test_a_stop_pressed_on_the_console_reaches_a_build_in_another_container(
     hear it, and the row's Stopping badge - drawn from the store - went
     back to Building over a teardown still making three GeeLark calls
     (2026-09-21, found by audit)."""
-    from geelark_farm import builder as builder_mod
+    # The stop state lives in cancel since 2026-09-23.
+    from geelark_farm import cancel as builder_mod
     from geelark_farm.store import stops as store_stops
 
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
@@ -6416,7 +6418,8 @@ def test_a_hand_stop_is_heard_by_every_wait_a_build_makes(
     of a build's minutes - went unheard until the sign-in began (the
     operator, 2026-09-21: "the cancel button does not work instantly").
     """
-    from geelark_farm import builder as builder_mod
+    # The stop state lives in cancel since 2026-09-23.
+    from geelark_farm import cancel as builder_mod
     from geelark_farm.store import stops as store_stops
 
     settings = make_settings(state_dir=tmp_path, store_enabled=True)
@@ -6581,7 +6584,12 @@ def test_the_pass_tick_and_the_stop_poll_are_two_names():
     from geelark_farm import builder as builder_mod
 
     src = inspect.getsource(builder_mod)
-    assert len(re.findall(r"^STOP_POLL_SECONDS = ", src, re.M)) == 1
+    from tests.build_sources import builder_texts
+
+    # Once across every file the builder is made of (cancel.py since
+    # 2026-09-23), not once in builder.py.
+    assert sum(len(re.findall(r"^STOP_POLL_SECONDS = ", text, re.M))
+               for _, text in builder_texts()) == 1
     assert len(re.findall(r"^PASS_TICK_SECONDS = ", src, re.M)) == 1
     assert builder_mod.PASS_TICK_SECONDS == 1.0
     assert "wait(futures, timeout=PASS_TICK_SECONDS)" in src, (

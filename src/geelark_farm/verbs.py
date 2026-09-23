@@ -1318,12 +1318,12 @@ def withdraw_panel_account(book, ledger, settings, payload, client):
 def stop_phone(book, ledger, settings, payload, client):
     """"Stop this one": the job on one phone gives up at its next step,
     the way an interrupt would, and puts back what it held."""
-    from . import builder
+    from . import cancel
 
     serial = str(payload.get("serial") or "").strip()
     if not serial:
         return "refused", "no phone named", None
-    builder.STOP_BY_HAND.add(serial)
+    cancel.STOP_BY_HAND.add(serial)
     if getattr(settings, "store_enabled", False):
         # The build is in a builder container, not this process: the set
         # above is heard by nobody there. The store's copy is (the

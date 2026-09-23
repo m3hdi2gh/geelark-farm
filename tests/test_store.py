@@ -441,7 +441,7 @@ def test_a_dead_store_costs_the_mirror_and_never_the_pass(monkeypatch,
 def test_the_event_sink_cannot_take_a_build_down(monkeypatch):
     """Guarded from both sides: emit never raises, and even a sink that
     does costs a warning, not the build's result."""
-    import geelark_farm.runctx as builder_mod   # the sink lives in runctx
+    import geelark_farm.runctx as builder_mod  # the sink lives in runctx
 
     builder_mod.set_event_sink(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -1748,7 +1748,6 @@ def test_the_schema_carries_the_apis_practice_room():
     """A table of its own, shaped like the columns the API reads off
     `resources` - so the reader is the same code with another table name,
     and no pool or console query has to remember a flag."""
-    from geelark_farm.store import db
     from geelark_farm.web import api_v1_read as api_read
 
     sql = schema_text()

@@ -87,7 +87,7 @@ def _one_ledger_per_test():
 # ------------------------------------------ patches that no longer land
 #: The modules builder.py has handed names to, by the builder review's
 #: split (2026-09-23). Add the module each step creates.
-MIGRATED_FROM_BUILDER = ("products", "wishes", "runctx")
+MIGRATED_FROM_BUILDER = ("products", "wishes", "runctx", "cancel")
 
 
 def _stale_patch(target, name) -> str:

@@ -21,7 +21,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "geelark_farm"
 
 #: The builder and every module split out of it, as dotted names under
 #: geelark_farm.
-BUILDER_MODULES = ("builder", "products", "wishes", "runctx")
+BUILDER_MODULES = ("builder", "products", "wishes", "runctx", "cancel")
 
 
 def builder_modules() -> list[ModuleType]:

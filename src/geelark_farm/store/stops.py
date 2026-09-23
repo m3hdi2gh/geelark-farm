@@ -2,7 +2,7 @@
 
 The serials somebody asked to stop from the console, kept in
 `service_state` under `KEY` so a builder on any host hears a press made
-on the keeper's console. `builder.STOP_BY_HAND` was a set in the keeper's
+on the keeper's console. `cancel.STOP_BY_HAND` was a set in the keeper's
 own memory: with the builds in a container of their own the Cancel button
 on a building row did nothing at all (the operator, 2026-09-10).
 

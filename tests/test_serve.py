@@ -2860,7 +2860,6 @@ def test_every_role_attaches_the_store_before_it_does_anything(
 
 def test_attaching_the_store_ensures_the_schema_routes_events_and_captures_logs(
         make_settings, tmp_path, monkeypatch):
-    from geelark_farm import builder as builder_mod
     from geelark_farm.store import db as store_db
     from geelark_farm.store import logdb as store_logdb
 
