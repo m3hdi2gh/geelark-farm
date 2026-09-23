@@ -4607,9 +4607,16 @@ def test_the_app_a_hand_built_phone_gets_is_what_was_asked_for(make_settings,
     from tests.build_sources import build_one_source
 
     src = build_one_source()
-    assert 'app = want.app if want is not None else "chatgpt"' in src
+    assert 'app = want.app if want is not None else products.DEFAULT' in src
     assert "no app account was " in src, "none: no account, the apps still on"
-    assert 'if app != "chatgpt":' in src, "Spotify: ready once installed"
+    # Spotify and Claude: ready once installed. The registry's word since
+    # 2026-09-24, where it was `if app != "chatgpt"`.
+    assert "if not products.signs_in_on_gmail_build(app):" in src
+    from geelark_farm import products
+    assert {k for k, s in products.PRODUCTS.items()
+            if s.signs_in_on_gmail_build} == {"chatgpt"}
+    assert not products.signs_in_on_gmail_build("nonsense")
+    assert products.signs_in_on_gmail_build(""), "blank is ChatGPT"
     assert '_package_for(settings, app)' in src
 
 
@@ -7114,3 +7121,76 @@ def test_a_named_account_for_another_app_on_a_gmail_build_is_refused_first(
     assert device.created == 0, "no phone was paid for"
     assert len(book.gmails.available) == 2 and len(book.proxies.available) == 2
 
+
+
+# ------------------------------- band 1: the registry's word, and kit/phone
+def test_the_build_asks_the_registry_which_app_signs_in_on_a_gmail_phone(
+        device, settings, drive, monkeypatch):
+    """`if app != "chatgpt"` was written into the build. It is the
+    registry's word now, so a product that should sign in on a new phone
+    with a Gmail is one field, not an edit to the builder (2026-09-24).
+    Taken away from ChatGPT, the keeper's own build stops at `ready` with
+    the app on and no account asked for."""
+    import dataclasses
+
+    from geelark_farm import products
+
+    monkeypatch.setitem(products.PRODUCTS, "chatgpt", dataclasses.replace(
+        products.PRODUCTS["chatgpt"], signs_in_on_gmail_build=False))
+    book = make_book()
+    build = drive(book, settings, google=[SIGNED_IN], app=[])
+    assert build.status == "ready" and build.ok
+    assert build.app_account == ""
+    assert "ChatGPT" in build.detail and "on the phone" in build.detail
+
+
+def test_an_automation_that_is_not_a_build_ends_the_way_a_build_does(
+        settings, monkeypatch):
+    """kit/phone holds one job on one phone: what it cost, how an exception
+    ends it, and the phone let go - so a playground script, or the next
+    kind of job, is not a third copy of build_one's ending (the builder
+    review, 2026-09-23). Nothing here imports the builder."""
+    from geelark_farm import cancel, phones
+    from geelark_farm.build_result import Build
+    from geelark_farm.kit.phone import PhoneRun, _ended_by, _let_the_phone_go
+
+    stopped, released, honoured = [], [], []
+    monkeypatch.setattr(phones, "stop", lambda c, pid: stopped.append(pid))
+    monkeypatch.setattr(cancel, "_stop_honoured",
+                        lambda s, serial: honoured.append(serial))
+
+    class Ledger:
+        def release(self, pid, note=""):
+            released.append((pid, note))
+
+    class Client:
+        calls = 3
+
+        def calls_here(self):
+            return self.calls
+
+    client = Client()
+    build = Build(index=1, phone_id="P9", serial="4300")
+
+    def automation():
+        run = PhoneRun(client, build)
+        try:
+            client.calls += 4                     # it asked GeeLark things
+            raise phones.PhoneCapacityError("[43043] High demand")
+        except Exception as exc:                  # noqa: BLE001
+            return _ended_by(exc, run.finish, settings, "a playground job")
+        finally:
+            _let_the_phone_go(client, settings, Ledger(), build, "P9")
+
+    ended = automation()
+    assert ended is build and ended.status == "no_capacity" and not ended.ok
+    assert ended.api_calls == 4 and ended.seconds >= 0
+    assert stopped == ["P9"] and released == [("P9", "no_capacity")]
+    assert honoured == ["4300"], "the stop request is answered last"
+
+    # And the build and the finish both end through it.
+    import inspect
+    assert "PhoneRun(" in inspect.getsource(builder._BuildState.__post_init__)
+    assert "PhoneRun(client, build" in inspect.getsource(builder.finish_one)
+    assert builder._ended_by is __import__(
+        "geelark_farm.kit.phone", fromlist=["_ended_by"])._ended_by
