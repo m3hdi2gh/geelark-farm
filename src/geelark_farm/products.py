@@ -47,6 +47,13 @@ class AppSpec:
     #: customer through the panel (`given`). A customer is never asked for
     #: a ChatGPT code (the operator, 2026-09-19).
     codes: str = "mailbox"
+    #: Whether a new phone with a Gmail signs an account of it in as its
+    #: last step. Only ChatGPT's does: its sign-in goes through Google's
+    #: own machinery, which is why the build puts a Gmail on first. The
+    #: others' accounts go on a warm phone through Send, or - Spotify's
+    #: `normal` - on a bare one. It was `if app != "chatgpt"` written into
+    #: the build (the builder review, 2026-09-23).
+    signs_in_on_gmail_build: bool = False
 
     def package_for(self, settings) -> str:
         return self.package or settings.target_package
@@ -59,7 +66,8 @@ class AppSpec:
 #: them. The first is what a row with no Product is.
 PRODUCTS: dict[str, AppSpec] = {
     "chatgpt": AppSpec("chatgpt", "ChatGPT", "OpenAI",
-                       "geelark_farm.flows.chatgpt_login"),
+                       "geelark_farm.flows.chatgpt_login",
+                       signs_in_on_gmail_build=True),
     # All three are in GeeLark's app center - Spotify is its own, ChatGPT
     # and Claude are copies uploaded from a Play-signed phone - and Play
     # is only the fallback now (2026-09-12).
@@ -83,6 +91,13 @@ def product_of(values: Mapping[str, object] | None) -> str:
 
 def spec(key: str) -> AppSpec | None:
     return PRODUCTS.get(str(key or "").strip().lower())
+
+
+def signs_in_on_gmail_build(key: str) -> bool:
+    """Whether a new phone with a Gmail signs an account of this product
+    in. A word the farm does not know signs nothing in."""
+    found = spec(key or DEFAULT)
+    return bool(found and found.signs_in_on_gmail_build)
 
 
 def spec_of(values: Mapping[str, object] | None) -> AppSpec:

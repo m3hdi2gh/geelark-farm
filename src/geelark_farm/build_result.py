@@ -231,7 +231,7 @@ def outcome_of(build: Build) -> str:
         # phone has no Google account, and a Spotify phone no ChatGPT
         # account, and the one sentence said both of a bare Spotify phone
         # (3517, 2026-09-17).
-        product = APPS.get(build.app_product or "chatgpt", "the app")
+        product = APPS.get(build.app_product or products.DEFAULT, "the app")
         if not build.gmail:
             return ("a bare phone - no Google account" + (
                 f", with {build.app_account} signed into {product}"

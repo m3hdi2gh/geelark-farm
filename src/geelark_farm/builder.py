@@ -85,7 +85,7 @@ from . import artifacts as archive
 # the code that uses it is in kit/exits and keeper now (2026-09-23).
 from . import proxy as proxy_mod  # noqa: F401
 from .accounts import Account
-from .api import Client, TransportError
+from .api import Client
 
 # What a build produced and how it is said - build_result since the
 # builder review (2026-09-23) - and the Phones tab it is written to
@@ -178,7 +178,11 @@ from .kit.install import PLAY_RETRY_REASONS as PLAY_RETRY_REASONS
 from .kit.install import _install as _install
 from .kit.install import _install_by_recipe as _install_by_recipe
 from .kit.phone import ATTEMPT_SECONDS as ATTEMPT_SECONDS
+from .kit.phone import PhoneRun as PhoneRun
+from .kit.phone import _calls as _calls
 from .kit.phone import _discard as _discard
+from .kit.phone import _ended_by as _ended_by
+from .kit.phone import _let_the_phone_go as _let_the_phone_go
 from .kit.phone import _signed_in_after_all as _signed_in_after_all
 from .ledger import Ledger
 from .logs import NO_BUILD
@@ -846,11 +850,6 @@ def _package_for(settings: Settings, app: str) -> str:
             ).package_for(settings)
 
 
-def _calls(client) -> int:
-    count = getattr(client, "calls_here", None)
-    return int(count()) if callable(count) else 0
-
-
 def _install_the_rest(client: Client, settings: Settings, build: Build,
                       phone_id: str, *, done: str, ordered: dict,
                       remaining, artifacts, cancelled, play: bool = True
@@ -918,7 +917,7 @@ def _pick_named_app(book: Book, wanted: str):
                      if (r.label or "").strip().lower() == want), None)
     values = (getattr(resource, "values", None) or {})
     held = resource is not None and domain.held_back(
-        str(values.get("Product") or "").strip() or "chatgpt",
+        products.product_of(values),
         str(values.get("Credential kind") or "").strip(),
         str(values.get("Customer ready") or "").strip().upper() == "TRUE")
     if resource is None or not held:
@@ -990,7 +989,6 @@ class _BuildState:
     build: Build
     started: float
     deadline: float
-    calls_before: int
     on_phone: Callable[[str], None] | None = None
     on_ready: Callable[[str], None] | None = None
     #: The wired one: every wait underneath takes it - see _hand_stop_wired.
@@ -1031,10 +1029,15 @@ class _BuildState:
     ordered: dict = field(default_factory=dict)
     artifacts: Path | None = None
     phone_made_at: float = 0.0
+    #: What this job costs and how it ended - taken when the state is,
+    #: which is before the first call (kit.phone.PhoneRun).
+    run: PhoneRun | None = None
 
     def __post_init__(self) -> None:
         # One list: what the lease refuses is what the holds release.
         self.lease.refused = self.refused_exits
+        if self.run is None:
+            self.run = PhoneRun(self.client, self.build, started=self.started)
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -1059,10 +1062,7 @@ class _BuildState:
             raise Aborted("stopped_by_hand")
 
     def finish(self, status: str, detail: str = "", ok: bool = False) -> Build:
-        self.build.ok, self.build.status, self.build.detail = ok, status, detail
-        self.build.seconds = time.monotonic() - self.started
-        self.build.api_calls = _calls(self.client) - self.calls_before
-        return self.build
+        return self.run.finish(status, detail, ok)
 
 
 def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
@@ -1085,7 +1085,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     st = _BuildState(client=client, settings=settings, book=book,
                      ledger=ledger, index=index, build=build, started=started,
                      deadline=started + settings.build_budget_seconds,
-                     calls_before=_calls(client), on_phone=on_phone,
+                     on_phone=on_phone,
                      on_ready=on_ready, codes_source=codes_source, want=want)
     # From here on, `cancelled` is the wired one: it is what every wait
     # underneath takes, and the console's Cancel has to reach those too.
@@ -1131,19 +1131,20 @@ def _acquire(st: _BuildState) -> Build | None:
     # A bare phone claims no address and signs nothing in: the Gmail
     # phase is skipped whole, and the phone is ready once it is up.
     st.bare = bool(st.want is not None and st.want.no_gmail)
-    # A named account on a phone with a Gmail is signed in only when it
-    # is ChatGPT's: the install phase ends any other app at "ready", and
+    # A named account on a phone with a Gmail is signed in only when its
+    # product says so (products.signs_in_on_gmail_build - ChatGPT's
+    # alone today): the install phase ends any other app at "ready", and
     # a Spotify `error` account named there was installed for and never
     # signed in, with nobody told (the builder review, 2026-09-23). The
     # card refuses it; this is the net under the card, before anything
     # is claimed or a phone is paid for.
     if (not st.bare and st.want is not None and st.want.app_account
-            and (st.want.app or "chatgpt") != "chatgpt"):
+            and not products.signs_in_on_gmail_build(st.want.app)):
         return st.finish("chosen_app_unavailable",
                          f"{st.want.app_account} is a {st.want.app} account, "
-                         f"and a new phone with a Gmail signs in only "
-                         f"ChatGPT ones - a warm phone takes it through "
-                         f"Send on its row")
+                         f"and a new phone with a Gmail does not sign those "
+                         f"in - a warm phone takes it through Send on its "
+                         f"row")
     with _starting:
         # Somebody who named an exit gets that exit, so the pairing
         # below - which is about choosing one - has no part to play.
@@ -1548,7 +1549,7 @@ def _install_phase(st: _BuildState) -> Build | None:
     # carries all three either way (the operator, 2026-09-12). It is
     # also the one install a build can fail on, which is why it goes
     # first and through the Play recipe.
-    app = st.want.app if st.want is not None else "chatgpt"
+    app = st.want.app if st.want is not None else products.DEFAULT
     st.build.app = app
     if not app:
         # Nothing is signed into anything, but the phone still carries
@@ -1584,7 +1585,7 @@ def _install_phase(st: _BuildState) -> Build | None:
     _install_the_rest(st.client, st.settings, st.build, st.phone_id, done=app,
                       ordered=st.ordered, remaining=st.remaining,
                       artifacts=st.artifacts, cancelled=st.cancelled)
-    if app != "chatgpt":
+    if not products.signs_in_on_gmail_build(app):
         return st.finish("ready", f"signed into Google, and "
                                f"{_named(st.build.app)} on the phone",
                       ok=True)
@@ -1614,74 +1615,6 @@ def _app_phase(st: _BuildState) -> Build | None:
 #: build_one's phases, in the order it runs them.
 _BUILD_PHASES = (_acquire, _bring_up, _google_phase, _install_phase,
                  _app_phase)
-
-
-def _ended_by(exc: Exception, finish, settings: Settings, what: str) -> Build:
-    """How an exception out of a phone job ends it - one ladder for the
-    build and the finish, which had two copies of it (the builder review,
-    2026-09-23). Called from inside their `except`, so `log.exception`
-    still has the traceback."""
-    if isinstance(exc, Aborted):
-        return finish(str(exc), failures.situation(str(exc)))
-    if isinstance(exc, TransportError):
-        # The machine lost its network, which is not an error nobody planned
-        # for - it is a named thing that costs nothing. Reported as such, with
-        # the traceback left in the log file rather than dumped over a live
-        # table: two hundred lines of urllib3 to say the connection went away
-        # (2026-08-17).
-        log.error("the network went away: %s", exc)
-        return finish("network_unreachable",
-                      failures.situation("network_unreachable"))
-    if isinstance(exc, phones.WaitInterrupted):
-        # The run is shutting down, not a phone that would not start: filed
-        # as the stop it is, and the empty phone is kept (KEPT_WHEN_EMPTY) -
-        # a delete needs a stop, a wait and a call, and the process is going
-        # down (the builder review, 2026-09-23).
-        log.info("%s", exc)
-        return finish("interrupted", failures.situation("interrupted"))
-    if isinstance(exc, phones.PhoneCapacityError):
-        # Before `PhoneError`, because it is one. GeeLark had no machine of
-        # this Android version free, which says nothing about this phone, this
-        # account or this row - and `start` has already asked several times.
-        log.warning("no capacity at GeeLark: %s", exc)
-        return finish("no_capacity", failures.situation("no_capacity"))
-    if isinstance(exc, phones.PhoneError):
-        # Expected, and named. It used to reach the catch-all below and be
-        # reported as "an error nobody planned for", which is the wrong thing
-        # to tell someone about a phone that simply did not boot - or about one
-        # that was deleted underneath the build, which is a different sentence
-        # and points at a different culprit. A GeeLark capacity refusal, which
-        # is nobody's fault at all, counted against the breaker as one in the
-        # finish until it had the same naming (2026-08-28).
-        vanished = "env not found" in str(exc) or "no longer exists" in str(exc)
-        if not vanished:
-            _remember_refusal(settings, str(exc))
-        return finish("phone_is_gone" if vanished else "phone_would_not_start",
-                      str(exc))
-    # Deliberately broad. Whatever went wrong, the resources this job is
-    # holding must go back and the phone must be stopped - an exception
-    # escaping here leaves three tabs saying `in_use` and a phone billing.
-    log.exception("%s failed with an unhandled error", what)
-    return finish("error", f"an error nobody planned for stopped it: {exc}")
-
-
-def _let_the_phone_go(client: Client, settings: Settings, ledger: Ledger,
-                      build: Build, phone_id: str) -> None:
-    """The last of every phone job: the phone stopped - billing ends - and
-    its claim released, then the stop request answered. Shared by the build
-    and the finish, which each had a copy. `phone_id` empty: nothing left to
-    stop (a discarded phone, or none was made)."""
-    if phone_id:
-        try:
-            phones.stop(client, phone_id)
-            log.info("stopped %s", phone_id)
-        except Exception as exc:                                  # noqa: BLE001
-            build.still_running = True
-            log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
-                      phone_id, exc)
-        ledger.release(phone_id, note=build.status)
-    # Last, so the row says Stopping until there is nothing left to stop.
-    _stop_honoured(settings, build.serial)
 
 
 def _let_the_build_go(st: _BuildState) -> None:
@@ -1768,14 +1701,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                   proxy=phone.get("proxy", ""))
     deadline = started + settings.build_budget_seconds
     session: _Session | None = None
-    calls_before = _calls(client)
-
-    def finish(status: str, detail: str = "", ok: bool = False) -> Build:
-        build.ok, build.status, build.detail = ok, status, detail
-        build.seconds = time.monotonic() - started
-        # As a build's: what the finish cost in calls, on every ending.
-        build.api_calls = _calls(client) - calls_before
-        return build
+    # As a build's: seconds and what the finish cost in calls, on every
+    # ending - one PhoneRun for both (kit/phone.py).
+    finish = PhoneRun(client, build, started=started).finish
 
     phone_id = build.phone_id
     _serial.set(build.serial or NO_BUILD)

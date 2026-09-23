@@ -892,6 +892,7 @@ CREATE INDEX IF NOT EXISTS actions_pending
     ON actions (verb, status) WHERE status IN ('queued', 'running');
 
 -- ------------------------------------------- the origin checker, rev 36
+-- rev 36: the account-origin checker's own queue.
 -- One row per address somebody asked about: was this ChatGPT account made
 -- with Google, or with a password of its own? The console queues rows; a
 -- browser in a container of its own takes them one at a time and writes
