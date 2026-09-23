@@ -2488,7 +2488,7 @@ def test_a_sheet_that_will_not_take_the_row_does_not_lose_the_build(
     urllib3 error three times in place of what each phone had reached."""
     def unreachable(*a, **k):
         raise ConnectionError("Failed to resolve 'sheets.googleapis.com'")
-    monkeypatch.setattr(builder, "_record", unreachable)
+    monkeypatch.setattr(builder.rows, "_record", unreachable)
 
     build = drive(make_book(), settings, google=[SIGNED_IN])
 
@@ -3545,7 +3545,7 @@ def test_a_capacity_refusal_is_named_rather_than_called_an_error(
             "start failed [43043] High demand for Android 15 cloud phones.")
 
     monkeypatch.setattr(builder.phones, "ensure_running", refuse)
-    monkeypatch.setattr(builder, "_write_row",
+    monkeypatch.setattr(builder.rows, "_write_row",
                         lambda *a, **k: captured.setdefault("row", a))
 
     # Both doors: `build_one` has named PhoneError since August, `finish_one`
@@ -3734,7 +3734,7 @@ def test_a_phone_somebody_started_by_hand_is_left_alone(state, settings,
     The app would be showing a session this run did not create, and
     `act_reset_app` settles that ambiguity with `pm clear` - throwing away
     somebody's signed-in account to make room for one of ours."""
-    monkeypatch.setattr(builder, "_note_on_row", lambda *a, **k: None)
+    monkeypatch.setattr(builder.rows, "_note_on_row", lambda *a, **k: None)
     ledger = FakeLedger()
     build = builder.finish_one(Running(state), settings, make_book(), ledger,
                                a_warm_phone(), 1)
@@ -3746,7 +3746,7 @@ def test_a_phone_somebody_started_by_hand_is_left_alone(state, settings,
 def test_a_stopped_phone_is_finished_as_before(settings, monkeypatch):
     """The guard must not refuse the ordinary case, which is every phone the
     service itself stopped."""
-    monkeypatch.setattr(builder, "_note_on_row", lambda *a, **k: None)
+    monkeypatch.setattr(builder.rows, "_note_on_row", lambda *a, **k: None)
     seen = []
     monkeypatch.setattr(builder.phones, "ensure_running",
                         lambda *a, **k: seen.append("booted"))
@@ -6212,7 +6212,7 @@ def test_an_empty_phone_the_network_would_not_let_go_is_marked_failed_for_the_sy
         def write(self, serial, **fields):
             raise RuntimeError("no")
 
-    monkeypatch.setattr(builder, "_phone_note", lambda b: "Stopped short.")
+    monkeypatch.setattr(builder.rows, "_phone_note", lambda b: "Stopped short.")
     builder._condemn(SimpleNamespace(phones=Refuses()),
                      SimpleNamespace(serial="622", status="x", tried=[],
                                      app_installed=False, ok=False,
@@ -6662,9 +6662,9 @@ def test_a_phone_somebody_is_using_is_not_stopped_by_the_refusal(
     stopped, written, handed = [], [], []
     monkeypatch.setattr(builder.phones, "stop",
                         lambda c, pid, *a, **k: stopped.append(pid))
-    monkeypatch.setattr(builder, "_write_row",
+    monkeypatch.setattr(builder.rows, "_write_row",
                         lambda *a, **k: written.append(a))
-    monkeypatch.setattr(builder, "_note_on_row",
+    monkeypatch.setattr(builder.rows, "_note_on_row",
                         lambda *a, **k: written.append(k))
     ledger = FakeLedger()
 

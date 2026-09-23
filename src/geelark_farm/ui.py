@@ -35,10 +35,10 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import builder, codes, failures, keeper, phones, runctx
+from . import build_result, builder, codes, failures, keeper, phones, runctx
 from .accounts import AccountError
 from .api import PLAN_RATE_LIMITED, ApiError, TransportError, build_client
-from .builder import Build
+from .build_result import Build
 from .config import ConfigError, Settings
 from .gsheet import GSpreadError, SheetError
 from .ledger import Ledger
@@ -792,8 +792,8 @@ def build_summary_panel(builds: list[Build]) -> Panel:
             # so after twenty minutes the console said `no_usable_gpt` and left
             # you to open the sheet to find out which accounts it had tried.
             body.append(Text(f"   {b.name}  ", style=BAD)
-                        + Text(builder.outcome_of(b), style=BAD))
-        for attempt in builder.attempts_of(b):
+                        + Text(build_result.outcome_of(b), style=BAD))
+        for attempt in build_result.attempts_of(b):
             body.append(Padding(Text(f"tried {attempt}", style=DIM),
                                 (0, 0, 0, 6)))
 
@@ -1076,7 +1076,7 @@ def menu() -> Table:
 def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
     """Ask how many phones to end up with, defaulting to what the stock allows.
 
-    What that number is, and which pool decides it, is `builder.Capacity` - the
+    What that number is, and which pool decides it, is `build_result.Capacity` - the
     arithmetic is the domain's, not the console's. This shows it and takes the
     answer.
     """
@@ -1085,7 +1085,7 @@ def confirm_build(settings: Settings, snap: Snapshot) -> dict | None:
                       f"not in this sheet - `build` has nothing to read[/]")
         return None
 
-    can = builder.Capacity(waiting=snap.phones_unfinished,
+    can = build_result.Capacity(waiting=snap.phones_unfinished,
                            proxies=snap.proxies_free, gmails=snap.gmails_free,
                            app_accounts=snap.apps_free)
 

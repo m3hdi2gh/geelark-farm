@@ -909,7 +909,7 @@ def cmd_serve(settings: Settings, args) -> int:
 
 def cmd_build(settings: Settings, args) -> int:
     """Build phones out of the resource tabs, rather than one row at a time."""
-    from . import builder
+    from . import build_result, builder
 
     client = build_client(settings)
 
@@ -934,7 +934,7 @@ def cmd_build(settings: Settings, args) -> int:
     if not builds:
         print("nothing to do - no phone is waiting and the pools are empty")
         return 0
-    print(builder.summarise(builds))
+    print(build_result.summarise(builds))
     # An empty result is success: a finished pool is the normal state, and
     # exiting non-zero for it would make this unusable from cron.
     return 0 if all(b.ok for b in builds) else 1
@@ -942,7 +942,7 @@ def cmd_build(settings: Settings, args) -> int:
 
 def cmd_finish(settings: Settings, args) -> int:
     """Complete phones that have everything but an app account."""
-    from . import builder
+    from . import build_result, builder
 
     client = build_client(settings)
     builds = builder.finish_run(client, settings, limit=args.limit,
@@ -952,7 +952,7 @@ def cmd_finish(settings: Settings, args) -> int:
     if not builds:
         print("nothing to finish - no phone is waiting on an app account")
         return 0
-    print(builder.summarise(builds))
+    print(build_result.summarise(builds))
     return 0 if all(b.ok for b in builds) else 1
 
 

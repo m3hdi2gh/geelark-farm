@@ -1844,7 +1844,7 @@ class HistoryLog:
     #: fields it belongs with.
     #: Appended to, never reordered: `append` writes by position, so a column
     #: inserted anywhere but the end moves every value in every row written
-    #: before it. `App` is last for that reason - `builder._record` has been
+    #: before it. `App` is last for that reason - `rows._record` has been
     #: sending it since the column existed on the Phones tab and History had
     #: nowhere to put it, so it was dropped on every row (2026-08-30).
     HEADERS = ["When", "Machine", "Serial", "Event", "Seconds", "Proxy",

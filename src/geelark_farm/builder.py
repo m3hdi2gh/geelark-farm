@@ -63,7 +63,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 from . import (
     apps,
@@ -76,6 +75,7 @@ from . import (
     mailbox,
     phones,
     products,
+    rows,
     runctx,
     shell,
 )
@@ -83,6 +83,18 @@ from . import artifacts as archive
 from . import proxy as proxy_mod
 from .accounts import Account
 from .api import ApiError, Client, TransportError
+
+# What a build produced and how it is said - build_result since the
+# builder review (2026-09-23) - and the Phones tab it is written to
+# (rows). The names stay here for their callers.
+from .build_result import APPS as APPS
+from .build_result import Build as Build
+from .build_result import Capacity as Capacity
+from .build_result import Reporter as Reporter
+from .build_result import _mark as _mark
+from .build_result import attempts_of as attempts_of
+from .build_result import outcome_of as outcome_of
+from .build_result import summarise as summarise
 from .cancel import _STOP_HEARD as _STOP_HEARD
 from .cancel import _STOP_SEEN as _STOP_SEEN
 
@@ -119,7 +131,6 @@ from .exit_health import host_clears as host_clears
 # chatgpt_login is reached through here by the tests that patch its
 # sign_in; the builder itself asks the products registry (2026-09-23).
 from .flows import chatgpt_login, google_login, play_install  # noqa: F401
-from .gsheet import SheetError
 
 # The keeper's reconciliation of the tabs with the world - keeper.py since
 # the builder review (2026-09-23). The build path never called it; the
@@ -151,6 +162,13 @@ from .phones import _in_the_farms_group as _in_the_farms_group
 from .phones import _live_exits as _live_exits
 from .phones import _remember_refusal as _remember_refusal
 from .pools import Book, PhoneLog, Pool, Resource
+from .rows import _condemn as _condemn
+from .rows import _count_try as _count_try
+from .rows import _note_on_row as _note_on_row
+from .rows import _phone_note as _phone_note
+from .rows import _phone_status as _phone_status
+from .rows import _record as _record
+from .rows import _write_row as _write_row
 
 # The run's log context, run ids and event sink - runctx since the
 # builder review (2026-09-23). The names stay here for their callers;
@@ -258,193 +276,6 @@ _STRIKE = re.compile(r"\(strike (\d+) of \d+, last on phone ([^)]*)\)")
 # it is what stops a phone being created with nothing to sign in, and what makes
 # the serials come out in the order the addresses were taken.
 _starting = threading.Lock()
-
-
-@dataclass
-class Build:
-    """What one phone's construction produced, for the summary and the tab."""
-
-    index: int
-    ok: bool = False
-    status: str = "not_started"
-    #: The hand-built request this came from, when it came from one. The
-    #: person who asked is watching a row on the dashboard, and this is what
-    #: joins their row to what happened.
-    wanted_id: int | None = None
-    #: Who the phone was opened for, by user id, when it was asked for by
-    #: hand. The row is `taken` by them while the build runs - that is
-    #: what "Building - yours" reads off - and goes back on their shelf
-    #: when it ends: off, still theirs, and bootable by them in one press
-    #: (the operator, 2026-09-18). None for the keeper's own phones.
-    built_for: int | None = None
-    phone_id: str = ""
-    serial: str = ""
-    proxy: str = ""
-    #: What the Proxy tab calls that exit - `SX4`. The Phones tab records this
-    #: rather than the address: it is the string you search the vendor's panel
-    #: with, and the address is already one column away in the Proxy tab.
-    proxy_name: str = ""
-    gmail: str = ""
-    #: "brand model" as GeeLark reported it, for the sign-in record.
-    model: str = ""
-    #: Whether the target app is on the device. The row already said whether
-    #: Google was signed in (the Gmail column) and whether the app account
-    #: was (GPT Account); this was the one step of the three that nothing
-    #: recorded, so `incomplete` covered "waiting on an app account" and "the
-    #: app never installed" with the same word and no way to tell them apart
-    #: (2026-08-21).
-    #:
-    #: Three states, not two, because "no app" and "never looked" are
-    #: different answers and only one of them belongs on a row. `None` is a
-    #: run that did not get far enough to find out: a `finish` that could not
-    #: start the phone knows nothing about what is installed on it. As a bool
-    #: that run said `False`, and `_record` wrote `incomplete` with a cross in
-    #: the App column over a phone that had the app - phone 1415 was demoted
-    #: from `app_only` to `incomplete` that way, by an attempt that never
-    #: reached the device, and `app_only` is a product somebody sells
-    #: (2026-08-30).
-    #:
-    #: A phone this run created is `False` rather than `None`: it is new, so
-    #: nothing is installed on it, and that is knowledge.
-    app_installed: bool | None = None
-    #: Which app this phone carries: '' for none, 'chatgpt', 'spotify'.
-    app: str = ""
-    app_account: str = ""
-    #: Which product the account on it is for - what the good-build
-    #: sentence names, since 2026-09-17 a Spotify phone is not "signed
-    #: into ChatGPT". Empty when nothing is signed in.
-    app_product: str = ""
-    detail: str = ""
-    seconds: float = 0.0
-    #: GeeLark requests this build sent, for the count that decides how
-    #: many phones may be built at once against the 200-a-minute limit.
-    api_calls: int = 0
-    #: Where this build's archived pages went, for the prune to judge.
-    artifact_dir: str = ""
-    #: The screens each phase walked, as (phase, [screen, ...]). Written to
-    #: History as one cell, which is the only account of a run that crosses
-    #: machines: the log file is per-day and lives on whichever computer
-    #: produced it, so nothing about a build on the Mac was readable from
-    #: here at all (2026-08-23).
-    #:
-    #: Kept as parts rather than a formatted string for the reason `tried` is:
-    #: what a terminal wants to show and what a sheet cell wants are not the
-    #: same shape, and formatting early throws away the choice.
-    trails: list[tuple[str, list[str]]] = field(default_factory=list)
-
-    # True when this build's phone could not be confirmed stopped. The summary
-    # must never claim nothing is billing while this is set.
-    still_running: bool = False
-    #: Whether this phone ended up on an exit another phone is also using. The
-    #: pool ran dry and the build borrowed rather than stopping; the note says
-    #: so, because two accounts arriving from one address is a thing to know.
-    shared_exit: bool = False
-    #: Every credential this build gave up on, as (address, reason, service).
-    #: Kept as parts rather than a formatted string because the two readers
-    #: want different words for it: the terminal summary wants the reason
-    #: token, which is what you grep the logs for, and the sheet wants the
-    #: sentence.
-    #:
-    #: The service is carried because this list holds both kinds - the Gmails
-    #: the Google phase worked through and the app accounts the ChatGPT phase
-    #: did - and three of the reasons can come from either. Without it every
-    #: one of them was rendered as Google's doing, so an app account OpenAI
-    #: refused was reported to the operator as a Google refusal (2026-08-20).
-    tried: list[tuple[str, str, str]] = field(default_factory=list)
-
-    @property
-    def steps(self) -> str:
-        """The path this build walked, as one cell.
-
-        Runs of the same screen are collapsed to `name x3`. A screen handled
-        three times without progress is the whole tell that something is
-        looping, and printing it three times spends the width saying it
-        three times.
-        """
-        parts = []
-        for phase, screens in self.trails:
-            if not screens:
-                continue
-            run: list[str] = []
-            last, count = "", 0
-            for name in [*screens, ""]:
-                if name == last:
-                    count += 1
-                    continue
-                if last:
-                    run.append(f"{last} x{count}" if count > 1 else last)
-                last, count = name, 1
-            parts.append(f"{phase}: " + " > ".join(run))
-        return " | ".join(parts)
-
-    @property
-    def name(self) -> str:
-        return f"phone {self.serial}" if self.serial else f"build {self.index}"
-
-
-@dataclass(frozen=True)
-class Capacity:
-    """How many ready phones the current stock can produce, and out of what.
-
-    Domain arithmetic, not presentation, which is why it is here rather than in
-    the console that asks the question. Getting it wrong offered three phones
-    against two app accounts, and the third was certain to end on
-    no_usable_gpt having spent a phone, a Gmail and a proxy to get there
-    (2026-08-11).
-
-    The trap is that a phone waiting to be finished and a phone built from
-    nothing both consume exactly one app account. They cannot be added up
-    independently: the app pool caps the run as a whole.
-    """
-
-    waiting: int          # phones that need only an app account
-    proxies: int
-    gmails: int
-    app_accounts: int
-
-    @property
-    def from_scratch(self) -> int:
-        """New phones the proxies and Gmails allow, app accounts aside."""
-        return min(self.proxies, self.gmails)
-
-    @property
-    def total(self) -> int:
-        """Ready phones obtainable now."""
-        return min(self.app_accounts, self.waiting + self.from_scratch)
-
-    @property
-    def finishing(self) -> int:
-        """Of those, how many are finished rather than built. Finishing comes
-        first because it is the cheapest ready phone available."""
-        return min(self.total, self.waiting)
-
-    @property
-    def building(self) -> int:
-        return self.total - self.finishing
-
-    @property
-    def limited_by(self) -> str:
-        """Which pool is actually binding - the one worth topping up.
-
-        Named rather than assumed: "10 gpt accounts is the limit, so 2 phones
-        uses them all" is visibly untrue, and a line that does not add up stops
-        being read.
-        """
-        if not self.app_accounts:
-            return "app accounts"
-        if self.app_accounts <= self.waiting + self.from_scratch:
-            return "app accounts"
-        if self.proxies <= self.gmails:
-            return "proxies"
-        return "gmails"
-
-
-class Reporter(Protocol):
-    """Where a run announces its progress - the plain CLI or the console."""
-
-    def start(self, index: int, total: int, *,
-              serial: str = "", gmail: str = "") -> None: ...
-    def finish(self, build: Build) -> None: ...
 
 
 #: The one stop that still keeps a phone nothing was signed into: the
@@ -984,11 +815,6 @@ def _fresh_proxy(client: Client, book: Book, *,
         return resource
 
 
-#: The apps a phone can be built with, and what each is called on a page.
-#: Read off `products`, which owns everything the farm knows about each
-#: app (the builder review, 2026-09-23); these names stay for the code
-#: and the tests that read them here.
-APPS = {key: spec.name for key, spec in products.PRODUCTS.items()}
 #: Spotify's package; ChatGPT's is `settings.target_package`.
 SPOTIFY_PACKAGE = products.PRODUCTS["spotify"].package
 CLAUDE_PACKAGE = products.PRODUCTS["claude"].package
@@ -1142,14 +968,6 @@ API_INSTALL_WAIT_SECONDS = 180
 def _calls(client) -> int:
     count = getattr(client, "calls_here", None)
     return int(count()) if callable(count) else 0
-
-
-def _mark(build) -> str:
-    """OK, FAIL - or WARM: a phone kept warm on purpose is not a failure,
-    and read as one in the log for a day (2026-09-08)."""
-    if build.ok:
-        return "OK"
-    return "WARM" if build.status == WARM_FOR_OPERATOR else "FAIL"
 
 
 #: The Play Store outcomes the operator's recipe answers, and how. A page
@@ -1754,7 +1572,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # On the row now, not at the end. This is the column that
                 # decides whether a phone a killed run left behind is
                 # finishable or gets deleted, and it is true from this moment.
-                _note_on_row(book, build.serial, Gmail=signed_as)
+                rows._note_on_row(book, build.serial, Gmail=signed_as)
                 break
             # Every way a Google sign-in fails is about the account or the
             # device, never the exit: a CAPTCHA is Google distrusting this
@@ -2056,9 +1874,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # Any sibling discarding its phone deletes a row, and every row below it
         # moves up - so that number can have come to mean a different phone.
         if log_row is not None:
-            _write_row(book, build, drop=discarded)
+            rows._write_row(book, build, drop=discarded)
             if empty and not discarded:
-                _condemn(book, build)
+                rows._condemn(book, build)
         if phone_id and not discarded:
             try:
                 phones.stop(client, phone_id)
@@ -2243,7 +2061,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # back `status_before`. Without the second half an interrupted
         # finish left it saying `building`, and `settle_abandoned` treats
         # a `building` row with a stale claim as abandoned.
-        _note_on_row(book, build.serial, Status=book.phones.BUILDING)
+        rows._note_on_row(book, build.serial, Status=book.phones.BUILDING)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         artifacts = settings.artifact_dir / f"{stamp}-finish{build.serial}"
@@ -2378,12 +2196,12 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # where the run concludes the phone is the fault; this is the same
         # conclusion, spent (2026-08-30).
         if breaker.counts_against(build) or _refused_what_it_was_given(session):
-            _count_try(settings, book, build)
-        _write_row(book, build)
-        if (_phone_status(build) is None and status_before
+            rows._count_try(settings, book, build)
+        rows._write_row(book, build)
+        if (rows._phone_status(build) is None and status_before
                 and status_before != book.phones.BUILDING):
             try:
-                _note_on_row(book, build.serial, Status=status_before)
+                rows._note_on_row(book, build.serial, Status=status_before)
             except Exception as exc:                              # noqa: BLE001
                 log.error("could not put %s back to %s (%s)", build.serial,
                           status_before, exc)
@@ -2714,107 +2532,6 @@ def _release(book: Book, build: Build, held: list[tuple], *,
                       pool.tab, resource.label, exc)
 
 
-def outcome_of(build: Build) -> str:
-    """Why this phone ended where it did, as one lowercase clause.
-
-    Shared with the console, which lays the same facts out over several lines
-    rather than in one sentence. Two renderings of one build used to be two
-    descriptions of it: the tab said what happened and the console printed
-    `no_usable_gpt`, which is the token this file spent a day removing from
-    everywhere else.
-    """
-    if build.ok:
-        # From the facts, not one sentence for every good build: a bare
-        # phone has no Google account, and a Spotify phone no ChatGPT
-        # account, and the one sentence said both of a bare Spotify phone
-        # (3517, 2026-09-17).
-        product = APPS.get(build.app_product or "chatgpt", "the app")
-        if not build.gmail:
-            return ("a bare phone - no Google account" + (
-                f", with {build.app_account} signed into {product}"
-                if build.app_account else ", nothing signed in"))
-        if build.app_account:
-            return f"signed into Google, and into {product} in the app"
-        return "signed into Google, and into ChatGPT in the app"
-    return build.detail or failures.situation(build.status)
-
-
-def attempts_of(build: Build) -> list[str]:
-    """Every credential this build gave up on, one readable line each."""
-    return [f"{email} - {failures.verdict(reason, service).seen}"
-            for email, reason, service in build.tried]
-
-
-def _phone_status(build: Build) -> str | None:
-    """Which of the three words this build ended on, or None for "cannot say".
-
-    `READY if build.ok else APP_ONLY` said the app was on the device whenever
-    a build stopped short - including when the install was the thing that
-    failed. The `App` column beside it said `x` at the same time.
-
-    Vague while `app_only` meant "not finished". Actively misleading once it
-    named a product: the tab would offer a phone with no app to somebody whose
-    whole use for it is opening that app (2026-08-29).
-
-    That fix answered one half. The other half is a run that never looked:
-    `else PhoneLog.INCOMPLETE` was reached by a `finish` whose phone would not
-    start, and wrote `incomplete` over a row that had truthfully said
-    `app_only` for two hours. `app_only` is one of the two things this farm
-    sells, and the demoted phone was headed for its third strike and deletion
-    (phone 1415, 2026-08-30).
-
-    So None, and `_record` leaves the columns it would have written alone.
-    """
-    from .pools import PhoneLog
-
-    if build.ok:
-        return READY
-    if build.app_installed is None:
-        return None
-    return APP_ONLY if build.app_installed else PhoneLog.INCOMPLETE
-
-
-def _phone_note(build: Build) -> str:
-    """What the Phones tab says about this build, in sentences.
-
-    The Status column already carries the verdict - `ready` or `incomplete` -
-    and the Gmail, GPT Account and Proxy columns already carry the what. This
-    is the only cell with room to say how it went, so it is written as prose
-    for someone reading the row rather than as a trace for someone debugging.
-
-    It used to be neither: `no_usable_gpt. tried: a@b.com: email_code_required.
-    the Gpt Info tab has no unused account left`, and for a phone that worked,
-    the output of `pm list packages`. The reason tokens are still exact in the
-    terminal summary and the logs, which is where you want to grep them.
-    """
-    opening = (f"Ready - {outcome_of(build)}." if build.ok
-               else f"Stopped short: {outcome_of(build)}.")
-    # `no_usable_gpt` is not a fault, it is a finished product of the other
-    # kind: Google is signed in, the app is on it, and only an account is
-    # missing. Read cold, "Stopped short" says the opposite - and this phone is
-    # exactly the one somebody takes to sign a customer in by hand. The
-    # taxonomy already computes the reassuring half and it was being thrown
-    # away here (2026-08-29).
-    if not build.ok and build.status == "no_usable_gpt":
-        opening += (" The phone itself is finished - signed into Google with "
-                    "the app installed - and is ready to take as it is if "
-                    "somebody is signing in themselves.")
-    if build.shared_exit:
-        # Said on the phone's own row, because whoever reads it later is
-        # deciding whether these accounts can be treated as unrelated.
-        opening += (" The pool had nothing free when an exit refused this "
-                    "phone, so it shares one with another - both accounts "
-                    "reach the services from the same address.")
-    if not build.tried:
-        return opening
-    # Everything it gave up on before getting here. On a ready phone these are
-    # the false starts; on one that stopped short they are the whole story.
-    attempts = "; ".join(line.replace(" - ", " (", 1) + ")"
-                         for line in attempts_of(build))
-    lead = "Also tried" if build.ok else "Tried"
-    return f"{opening} {lead}: {attempts}."
-
-
 def _signed_in_as(book: Book, gmail_row, given: str, outcome) -> str:
     """The address the device holds, and the pool row renamed to it when
     that is not the address it was sold under (2026-09-16: lrinki795
@@ -2838,182 +2555,6 @@ def _signed_in_as(book: Book, gmail_row, given: str, outcome) -> str:
             log.warning("the Gmail row could not be renamed to %s (%s)",
                         held, exc)
     return held
-
-
-def _note_on_row(book: Book, serial: str, **fields: str) -> None:
-    """Say on a phone's row what has just become true of it.
-
-    The row was written once, at the end, in a `finally`. Everything a build
-    learned on the way - which Gmail signed in, above all - lived only in
-    memory until then, so a run that died left a row saying nothing had
-    happened.
-
-    `settle_abandoned` reads that row to decide whether a phone a dead run
-    left behind is worth finishing or is not a phone at all, and it reads the
-    Gmail column to do it. Empty for the whole length of a build meant every
-    interruption deleted a phone that was signed in and working: 1315 had
-    signed into Google, installed the app and signed into ChatGPT, and was
-    deleted by the next sync two minutes after a restart (2026-08-28).
-
-    By serial, never by the row number `start` handed back ten minutes ago: a
-    sibling discarding its phone deletes a row, and every row below it moves
-    up, so that number can have come to mean a different phone.
-
-    Never fatal. The build is what matters and this is only how it is
-    remembered - a sheet that will not take the write costs a line in the log
-    and the old behaviour, not the run.
-    """
-    what = ", ".join(fields)
-    try:
-        if not book.phones.write(serial, **fields):
-            log.warning("phone %s has no row in the Phones tab to note %s on",
-                        serial, what)
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("could not note %s on phone %s's row (%s); a run "
-                    "interrupted from here would leave the row saying less "
-                    "than is true", what, serial, exc)
-
-
-def _count_try(settings: Settings, book: Book, build: Build) -> None:
-    """Tally one failed finish, and say so on the row when it is the last one.
-
-    Never raises: it is called from a `finally`, where an exception replaces
-    the value the function was about to return.
-    """
-    try:
-        from .store import person
-
-        made = person.count_try(settings, build.serial)
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("could not count the attempt on %s (%s)", build.serial, exc)
-        return
-    limit = book.phones.GIVE_UP_AFTER
-    if made >= limit:
-        log.warning("phone %s has failed %d finishes; it will not be offered "
-                    "again until the %s cell is cleared",
-                    build.serial, made, book.phones.TRIES_COLUMN)
-        build.detail = (f"{build.detail}. Tried {made} times and set aside - "
-                        f"clear the {book.phones.TRIES_COLUMN} cell to offer "
-                        f"it again").strip(". ")
-
-
-def _condemn(book: Book, build: Build) -> None:
-    """An empty phone GeeLark would not delete is marked `failed` on its
-    row, so the sync deletes it on a later pass - the same door the
-    console's Failed goes through.
-
-    The delete fails when the network does: phone 3237 was created,
-    GeeLark answered 502 to the sign-in's shell command and then to the
-    stop, and the phone was "recorded and left alone" - an empty
-    `incomplete` row on the shelf that an operator booted two hours
-    later and forgot (2026-09-16). Nothing ever tried the delete again.
-    Never fatal, like every row write in this `finally`.
-    """
-    note = (f"{_phone_note(build)} Nothing was signed into it and GeeLark "
-            f"would not delete it when asked; marked failed so the sync "
-            f"deletes it once GeeLark answers.")
-    try:
-        if not book.phones.write(build.serial, State="failed", Note=note):
-            log.warning("phone %s has no row left to mark failed", build.serial)
-            return
-    except Exception as exc:                                      # noqa: BLE001
-        log.error("could not mark phone %s failed for the sync (%s) - it "
-                  "stays on the shelf as incomplete", build.serial, exc)
-        return
-    log.info("phone %s: empty and not deleted; marked failed for the sync",
-             build.serial)
-
-
-def _write_row(book: Book, build: Build, *, drop: bool = False) -> None:
-    """Put this build in the Phones tab, and never raise doing it.
-
-    Both callers are in a `finally`, where an exception does not merely fail -
-    it replaces the value the function was about to return. A sheet that went
-    unreachable mid-run therefore threw away three finished Builds and left the
-    summary reporting the same urllib3 error three times, in place of what each
-    phone had actually reached (2026-08-17).
-
-    The row can be rebuilt from the log and from History. The outcome, once the
-    Build carrying it is gone, cannot.
-    """
-    try:
-        if drop:
-            book.phones.drop(build.serial)
-        else:
-            _record(book, build)
-    except Exception as exc:                                      # noqa: BLE001
-        log.error("could not write %s to the Phones tab (%s) - the run's own "
-                  "summary and the log still have it", build.name, exc)
-
-
-def _record(book: Book, build: Build) -> None:
-    """Write the finished phone to the Phones tab. Also in a finally.
-
-    The three step columns read left to right in the order the steps happen:
-    Google, then the app, then the app account. Each says the address that
-    signed in where there is one to show, and a cross where the step did not
-    happen - so `incomplete` beside three crosses and `incomplete` beside two
-    addresses are told apart without reading the note.
-    """
-    note = _phone_note(build)
-    cross = book.phones.NO
-    status = _phone_status(build)
-
-    def said(value: str) -> str:
-        return value or cross
-
-    # Status and App are claims about the device. A run that never reached it
-    # makes neither, and the cells keep what the last run that did look put
-    # there. Everything else is about the run itself - which exit it used,
-    # what happened - and is true whether or not the phone ever came up.
-    device: dict[str, str] = {}
-    if status is not None:
-        device = {"Status": status,
-                  "App": book.phones.YES if build.app_installed else cross}
-        # Which one, for the table: "Spotify" beside a phone that has
-        # it, rather than "waiting for one". Written only by a run that
-        # knows - the same rule as the two above, applied per column
-        # rather than to the group. `finish_one` sets `app_installed`
-        # and never `app`, so every finish used to blank this: the row
-        # then said nothing was on a phone with all three apps on it,
-        # and the console's table said so too (3644, 2026-09-19).
-        if build.app:
-            device["App name"] = build.app
-
-    # A phone asked for on the build card is `taken` by whoever asked from
-    # the moment it exists - that is what keeps the keeper off it and what
-    # "Building - yours" reads - and the hold ends with the build. It goes
-    # back on their shelf: State blank, Owner still theirs, so the row
-    # offers Boot in one press and nobody else can press it (the operator,
-    # 2026-09-18). Written before `_condemn`, which is the one thing that
-    # may put `failed` here afterwards, and never on the keeper's own.
-    shelf = {"State": ""} if build.built_for else {}
-    try:
-        wrote = book.phones.write(
-            build.serial,
-            Proxy=build.proxy_name or build.proxy,
-            Gmail=said(build.gmail), Note=note,
-            **{"GPT Account": said(build.app_account)}, **device, **shelf,
-        )
-        if not wrote:
-            log.error("phone %s has no row in the Phones tab to record on; "
-                      "its result is in the summary above and nowhere else",
-                      build.serial)
-    except SheetError as exc:
-        log.error("could not record phone %s (%s)", build.serial, exc)
-    # The Phones tab is current state - a row marked done is deleted, and with
-    # it every answer to "what did we build on Tuesday". History keeps the
-    # outcome, appended, whichever machine produced it.
-    # History is appended whatever happened, and `Event` is the one word it
-    # gets. Where the run cannot name a phone status it names its own outcome
-    # instead - `phone_would_not_start` says more about that row than a
-    # guessed `incomplete` ever did, and it is already a `failures` token.
-    book.record_history(
-        Serial=build.serial, Event=status or build.status,
-        Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Gmail=build.gmail, Note=note, Steps=build.steps,
-        **{"GPT Account": build.app_account,
-           "App": book.phones.INSTALLED if build.app_installed else ""})
 
 
 def possible_statuses() -> list[str]:
@@ -3533,40 +3074,3 @@ def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:
                       phone_id, exc)
 
 
-def summarise(builds: list[Build]) -> str:
-    """The end-of-run table."""
-    if not builds:
-        return "nothing was built"
-
-    lines = ["", "=" * 72, "SUMMARY", "=" * 72]
-    for b in builds:
-        mark = "ready " if b.ok else "FAILED"
-        lines.append(f" {mark}  {b.name:<14} {b.status:<22} {b.seconds:>5.0f}s")
-        if b.gmail:
-            lines.append(f"          {b.gmail}"
-                         f"{f'  +  {b.app_account}' if b.app_account else ''}")
-        if b.proxy:
-            lines.append(f"          via {b.proxy}")
-        # The token, not the sentence: this is the copy you grep the logs and
-        # the artifacts with. The sheet gets the sentence.
-        for email, reason, _service in b.tried:
-            lines.append(f"          tried {email}: {reason}")
-
-    ready = sum(1 for b in builds if b.ok)
-    unstopped = [b for b in builds if b.still_running]
-    lines.append("-" * 72)
-    lines.append(f" {ready}/{len(builds)} phones ready.")
-    if unstopped:
-        lines.append("")
-        lines.append(f" *** {len(unstopped)} PHONE(S) COULD NOT BE STOPPED - "
-                     f"THESE ARE STILL BILLING ***")
-        for b in unstopped:
-            lines.append(f"     {b.phone_id}")
-        lines.append(" Run 'geelark reap' now.")
-    else:
-        lines.append(" Every phone was told to stop. GeeLark can go on showing "
-                     "one as running for a minute after.")
-    if ready < len(builds):
-        lines.append(" The Phones tab records every phone, ready or not; the "
-                     "resource tabs record why each credential failed.")
-    return "\n".join(lines)

@@ -88,7 +88,8 @@ def _one_ledger_per_test():
 #: The modules builder.py has handed names to, by the builder review's
 #: split (2026-09-23). Add the module each step creates.
 MIGRATED_FROM_BUILDER = ("products", "wishes", "runctx", "cancel",
-                         "exit_health", "keeper")
+                         "exit_health", "keeper",
+                         "build_result", "rows")
 
 
 def _stale_patch(target, name) -> str:

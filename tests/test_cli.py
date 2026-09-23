@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import geelark_farm.build_result as build_result_mod
 from geelark_farm import cli
 from geelark_farm.accounts import AccountError, Credentials
 from geelark_farm.api import TransportError
@@ -1803,7 +1804,7 @@ def test_finish_exit_code(builds, expected, tmp_path, monkeypatch, capsys,
     settings = make_settings(state_dir=tmp_path, artifact_dir=tmp_path)
     monkeypatch.setattr(cli, "build_client", lambda s: object())
     monkeypatch.setattr(builder_mod, "finish_run", lambda *a, **k: builds)
-    monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+    monkeypatch.setattr(build_result_mod, "summarise", lambda b: "summary")
 
     assert cli.cmd_finish(settings, Args()) == expected
     if not builds:
@@ -1824,7 +1825,7 @@ def test_a_finish_dry_run_reports_nothing_and_succeeds(tmp_path, monkeypatch,
     def refuse(builds):
         raise AssertionError("a dry run summarised anyway")
 
-    monkeypatch.setattr(builder_mod, "summarise", refuse)
+    monkeypatch.setattr(build_result_mod, "summarise", refuse)
 
     assert cli.cmd_finish(settings, Args(dry_run=True)) == 0
 
@@ -2012,7 +2013,7 @@ def test_a_watched_build_mints_its_link_per_phone_and_does_not_block(
     monkeypatch.setattr(cli_mod.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input",
                         lambda prompt="": pytest.fail("blocked on nobody"))
-    monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+    monkeypatch.setattr(build_result_mod, "summarise", lambda b: "summary")
 
     def run(client, settings_, *, count, workers, dry_run, on_ready):
         on_ready("P7")
@@ -2151,7 +2152,7 @@ def test_watching_waits_when_there_is_somebody_to_wait_for(
 
     if command == "build":
         cli_mod = _wire(monkeypatch, fake)
-        monkeypatch.setattr(builder_mod, "summarise", lambda b: "summary")
+        monkeypatch.setattr(build_result_mod, "summarise", lambda b: "summary")
         monkeypatch.setattr(builder_mod, "run",
                             lambda c, s, *, count, workers, dry_run, on_ready:
                             on_ready("P7") or [build(1, True)])
