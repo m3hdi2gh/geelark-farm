@@ -6937,5 +6937,8 @@ def test_a_finish_installs_the_app_of_its_accounts_product(
                                phone, 1)
     assert installed == [(builder.SPOTIFY_PACKAGE, "Spotify")]
     assert build.status == "install_failed"
-    assert "suspect_hosts=_struck_hosts(settings)" in         __import__("inspect").getsource(builder.finish_one)
+    import inspect
+
+    finish = inspect.getsource(builder.finish_one)
+    assert "suspect_hosts=_struck_hosts(settings)" in finish
 
