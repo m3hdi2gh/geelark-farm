@@ -1557,6 +1557,20 @@ class PhoneLog:
             log.debug("could not read the State of %s (%s)", wanted, exc)
         return ""
 
+    def status_of(self, serial: str) -> str:
+        """This phone's Status cell, right now, as written - "" when the
+        row is not there or cannot be read. Never raises, for the same
+        reason `state_of` does not: a finish reads it before it marks
+        the row `building`, to put back if it ends without looking."""
+        wanted = str(serial).strip()
+        try:
+            for _offset, cells in self._typed_rows("the Phones tab"):
+                if (cells.get("Serial") or "").strip() == wanted:
+                    return (cells.get("Status") or "").strip()
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("could not read the Status of %s (%s)", wanted, exc)
+        return ""
+
     @staticmethod
     def tries(cells: dict) -> int:
         """How many finishes this row has been through. Unreadable counts as

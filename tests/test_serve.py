@@ -2832,7 +2832,11 @@ def test_the_builder_takes_carries_and_looks_again(make_settings, tmp_path,
                                    carry=lambda job: carried.append(job["id"]))
 
     assert code == 0 and sorted(carried) == [1, 2]
-    assert (tmp_path / serve_mod.BUILDER_HEARTBEAT_FILE).exists()
+    # Its own file: the replicas share `state/`, and one shared file let
+    # a live replica's beat keep a dead one green (2026-09-23).
+    beat = serve_mod._builder_heartbeat(settings)
+    assert beat.exists() and beat.name.startswith(
+        serve_mod.BUILDER_HEARTBEAT_FILE + "-")
     ok, said = serve_mod.healthy(settings)
     assert ok and "builder" in said
 
@@ -3220,3 +3224,78 @@ def test_the_stopped_banner_says_what_the_builders_still_hold(monkeypatch,
     monkeypatch.setattr(store_jobs, "counts", lambda s: (0, 0))
     assert serve_mod._jobs_still_on(make_settings(store_enabled=True,
                                                   build_queue=True)) == ""
+
+
+# ---------------------------------------- phase 0 of the builder review
+def test_a_job_the_builder_cannot_report_is_said_out_loud(make_settings,
+                                                          tmp_path,
+                                                          monkeypatch, caplog):
+    """A pool thread's exception goes into a future nobody reads: a job
+    whose report to the queue failed vanished without a line anywhere
+    (2026-09-23, found by the builder review)."""
+    import logging
+
+    stop = threading.Event()
+    handed = [[{"id": 7, "kind": "build", "payload": {}}], []]
+
+    def take(n, kinds=None):
+        got = handed.pop(0) if handed else []
+        if not handed:
+            stop.set()
+        return got[:n]
+
+    def carry(job):
+        raise RuntimeError("the queue is down")
+
+    monkeypatch.setattr(serve_mod, "build_client", lambda s: object())
+    monkeypatch.setattr(serve_mod.Book, "open", classmethod(
+        lambda cls, s: SimpleNamespace(reload=lambda: None)))
+    monkeypatch.setattr(serve_mod.Ledger, "shared",
+                        classmethod(lambda cls, d, stale_after=None: object()))
+    monkeypatch.setattr(serve_mod.Listener, "start", lambda self: None)
+    settings = make_settings(state_dir=tmp_path, role="builder",
+                             builder_workers=1)
+    with caplog.at_level(logging.ERROR):
+        serve_mod.serve_builder(settings, stop=stop, take=take, carry=carry)
+    assert any("job 7: the builder could not report it" in r.getMessage()
+               for r in caplog.records), [r.getMessage() for r in caplog.records]
+
+
+def test_a_broken_builder_import_stops_the_replica_rather_than_every_job():
+    """Imported on the main thread before the loop, so a module a deploy
+    broke stops the process; and inside the job's `try`, so a job that
+    meets it is answered on the queue (2026-09-23, found by the builder
+    review)."""
+    import inspect
+
+    loop = inspect.getsource(serve_mod.serve_builder)
+    assert loop.index("from . import builder") < loop.index("while not stop")
+    carried = inspect.getsource(serve_mod._carry_out)
+    assert carried.index("try:") < carried.index("from . import builder")
+
+
+def test_each_replica_beats_its_own_heartbeat(make_settings, tmp_path,
+                                              monkeypatch):
+    """The replicas share `state/`; one file let a live replica keep a
+    dead one's healthcheck green (2026-09-23, found by the builder
+    review)."""
+    import time as _time
+
+    from geelark_farm import config as config_mod
+
+    settings = make_settings(state_dir=tmp_path, role="builder")
+    monkeypatch.setattr(config_mod, "machine", lambda: "replica-a")
+    (tmp_path / f"{serve_mod.BUILDER_HEARTBEAT_FILE}-replica-b").write_text(
+        str(_time.time()), encoding="utf-8")
+    ok, said = serve_mod.builder_healthy(settings)
+    assert not ok, "another replica's beat is not this one's"
+    serve_mod._builder_heartbeat(settings).write_text(str(_time.time()),
+                                                      encoding="utf-8")
+    assert serve_mod.builder_healthy(settings)[0]
+
+    old = tmp_path / f"{serve_mod.BUILDER_HEARTBEAT_FILE}-gone"
+    old.write_text("0", encoding="utf-8")
+    import os
+    os.utime(old, (0, 0))
+    serve_mod._forget_old_heartbeats(settings)
+    assert not old.exists() and serve_mod._builder_heartbeat(settings).exists()

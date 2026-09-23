@@ -2080,12 +2080,15 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                stop: threading.Event) -> None:
     """One job, start to finish, on a builder's thread: run it, tell the
     queue, the wish and the command what became of it."""
-    from . import breaker as _breaker
-    from . import builder
     from .store import jobs as store_jobs
-    from .store import wanted as store_wanted
 
     try:
+        # Inside the `try`: a module that will not import is this job's
+        # crash, answered on the queue, not an exception that leaves the
+        # function before the queue hears of it (2026-09-23, found by the
+        # builder review).
+        from . import builder
+
         made = _job_dict(book, job)
         builds = builder._run_jobs(client, settings, book, [made],
                                    workers=1, reporter=None, on_ready=None,
@@ -2097,6 +2100,9 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
         store_jobs.finish(settings, job["id"], ok=False,
                           status="builder_crashed", detail=str(exc)[:300])
         return
+    from . import breaker as _breaker
+    from .store import wanted as store_wanted
+
     store_jobs.finish(settings, job["id"], ok=build.ok, status=build.status,
                       serial=str(build.serial or ""),
                       detail=build.detail or "", seconds=build.seconds,
@@ -2142,6 +2148,14 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
 
     stop = stop or threading.Event()
     worker = _config.machine()
+    # On the main thread, before the loop. Every job imports it on a pool
+    # thread, where an import that fails is caught per job - so a module
+    # broken by a deploy dropped every job while the heartbeat below
+    # stayed fresh. Here it stops the process, and `restart: always`
+    # shows a container that will not start (2026-09-23, found by the
+    # builder review).
+    from . import builder  # noqa: F401
+
     client = build_client(settings)
     book = Book.open(settings)
     ledger = Ledger.shared(settings.state_dir,
@@ -2171,6 +2185,13 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
     def one(job: dict) -> None:
         try:
             carry(job)
+        except Exception:                                         # noqa: BLE001
+            # A pool thread's exception goes into a future nobody reads.
+            # `_carry_out` answers the queue for everything the build can
+            # raise; what escapes it - the queue's own write failing - is
+            # said here, or it is said nowhere (2026-09-23).
+            log.exception("job %s: the builder could not report it",
+                          job.get("id"))
         finally:
             with lock:
                 running.pop(job["id"], None)
@@ -2178,10 +2199,11 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
 
     log.info("building for the queue as %s, %d at a time (ROLE=builder)",
              worker, workers)
+    _forget_old_heartbeats(settings)
     held = False
     while not stop.is_set():
         try:
-            (settings.state_dir / BUILDER_HEARTBEAT_FILE).write_text(
+            _builder_heartbeat(settings).write_text(
                 str(time.time()), encoding="utf-8")
         except OSError as exc:
             log.warning("could not write the builder heartbeat (%s)", exc)
@@ -2294,9 +2316,33 @@ def _take_results(settings: Settings, fuse: Breaker) -> None:
         store_jobs.mark_seen(settings, [j["id"] for j in done])
 
 
+def _builder_heartbeat(settings: Settings):
+    """This replica's own heartbeat file. The replicas share `state/`,
+    and one shared file meant a live replica's beat kept a dead one's
+    healthcheck green (2026-09-23, found by the builder review). Named
+    by `config.machine()`, which is the container id for a replica - the
+    healthcheck runs in the same container and finds the same name."""
+    from . import config as _config
+
+    return settings.state_dir / f"{BUILDER_HEARTBEAT_FILE}-{_config.machine()}"
+
+
+def _forget_old_heartbeats(settings: Settings, older_than: float = 86400.0
+                           ) -> None:
+    """A replica's name changes with every deploy, so its file outlives
+    it. A day old is nobody's."""
+    now = time.time()
+    for path in settings.state_dir.glob(f"{BUILDER_HEARTBEAT_FILE}*"):
+        try:
+            if now - path.stat().st_mtime > older_than:
+                path.unlink()
+        except OSError as exc:
+            log.debug("could not forget %s (%s)", path.name, exc)
+
+
 def builder_healthy(settings: Settings, now: float | None = None
                     ) -> tuple[bool, str]:
-    path = settings.state_dir / BUILDER_HEARTBEAT_FILE
+    path = _builder_heartbeat(settings)
     try:
         last = float(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):

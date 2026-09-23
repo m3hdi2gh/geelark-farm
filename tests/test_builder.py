@@ -6639,3 +6639,65 @@ def test_a_captcha_strike_is_one_edit_under_the_stores_lock(monkeypatch,
     assert builder_mod._bump_captcha_host(settings, "10.0.0.0",
                                           "2026-09-22") == 1, "a new day"
     assert edits == ["captcha_hosts", "captcha_hosts"]
+
+
+# ---------------------------------------- phase 0 of the builder review
+@pytest.mark.parametrize("state", [0, 1])          # RUNNING, STARTING
+def test_a_phone_somebody_is_using_is_not_stopped_by_the_refusal(
+        state, settings, monkeypatch):
+    """The refusal was asked inside the `try`, after `on_phone`: so the
+    `finally` stopped the phone the net exists to keep hands off, and
+    `on_phone` had already put it in the set `_stop_all` stops at
+    shutdown (2026-09-23, found by the builder review)."""
+    stopped, written, handed = [], [], []
+    monkeypatch.setattr(builder.phones, "stop",
+                        lambda c, pid, *a, **k: stopped.append(pid))
+    monkeypatch.setattr(builder, "_write_row",
+                        lambda *a, **k: written.append(a))
+    monkeypatch.setattr(builder, "_note_on_row",
+                        lambda *a, **k: written.append(k))
+    ledger = FakeLedger()
+
+    build = builder.finish_one(Running(state), settings, make_book(), ledger,
+                               a_warm_phone(), 1, on_phone=handed.append)
+
+    assert build.status == "in_use_by_hand" and not build.ok
+    assert stopped == [], "the person's phone was switched off"
+    assert handed == [], "and put in the set the shutdown stops"
+    assert written == [], "and its row rewritten"
+
+
+def test_a_finish_that_ends_without_looking_puts_the_status_back(
+        settings, monkeypatch):
+    """A finish marks the row `building` as it starts. An ending that
+    never reached the device makes no claim about it, so `_record` left
+    the cell on `building` - and the keeper's `settle_abandoned` then
+    relabelled it `app_only` with "ended before it could say why"
+    (2026-09-23, found by the builder review)."""
+    book = make_book(gmails=3, proxies=3, apps=3,
+                     phone_headers=PHONE_APP_HEADERS)
+    tab = book.phones._ws
+    book.phones.start(Serial="1401", Proxy="SX1")
+    builder._record(book, builder.Build(
+        index=1, status="no_usable_gpt", serial="1401",
+        gmail="a@b.com", app_installed=True))
+
+    def status():
+        return tab.rows[0][PHONE_APP_HEADERS.index("Status")]
+
+    assert status() == "app_only"
+    seen = []
+
+    def would_not_start(*a, **k):
+        seen.append(status())
+        raise builder.phones.PhoneError("phone P1 would not start")
+
+    monkeypatch.setattr(builder.phones, "ensure_running", would_not_start)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+
+    build = builder.finish_one(Running(2), settings, book, FakeLedger(),
+                               a_warm_phone(), 1)
+
+    assert build.status == "phone_would_not_start"
+    assert seen == [book.phones.BUILDING], "marked while it worked"
+    assert status() == "app_only", "and put back when it could not look"

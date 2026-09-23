@@ -2549,36 +2549,57 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # As in build_one: the console's Cancel rides in the one callable
     # every wait underneath takes.
     cancelled = _hand_stop_wired(settings, build, cancelled)
+
+    # A phone that is already running, with nothing in the ledger holding
+    # it, is one somebody started by hand and is using right now. Do not
+    # drive it.
+    #
+    # This is the second net under the `taken` word, and it catches the
+    # case that word is forgotten in. What it prevents is severe: the app
+    # would be showing a session this run did not create, `act_reset_app`
+    # reads a chat screen with no `Log in` control as the app's logged-out
+    # mode, and settles the ambiguity with `pm clear` - throwing away
+    # somebody's signed-in account to make room for one of ours. The flow's
+    # own docstring names that cost; it was written about a previous run's
+    # session, not about a person's (2026-08-29).
+    #
+    # Asked before the `try` and before `on_phone`, and answered without
+    # touching the phone. It was asked inside both, so the refusal ran
+    # the `finally` - which stops the phone - and `on_phone` had already
+    # put it in the set `_stop_all` stops at shutdown: the net meant to
+    # keep the run's hands off a person's phone switched that phone off
+    # (2026-09-23, found by the builder review).
+    held = ledger.get(phone_id)
+    if held is None or not held.is_claimed or held.is_stale:
+        try:
+            live = phones.status(client, phone_id)
+        except Exception as exc:                                  # noqa: BLE001
+            # Not knowing is not a reason to refuse - the boot below asks
+            # again anyway, and a finish that cannot start is its own
+            # named failure.
+            log.debug("could not read the state of %s (%s)", phone_id, exc)
+        else:
+            if live in (phones.RUNNING, phones.STARTING):
+                finish("in_use_by_hand",
+                       "the phone is already running and nothing here "
+                       "started it, so somebody is using it")
+                # Nothing was claimed, nothing was written, and the phone
+                # is left exactly as it was. A Stop pressed on it is
+                # answered all the same.
+                _stop_honoured(settings, build.serial)
+                return build
+
+    # What the row said before this finish marked it `building`. An
+    # ending that never reached the device - a phone that would not
+    # start, a stop before the checks - makes no claim about it
+    # (`_phone_status` is None), and `_record` then left the cell on
+    # `building`; the keeper's `settle_abandoned` relabelled it
+    # `app_only` with "ended before it could say why" (2026-09-23,
+    # found by the builder review). It goes back to this instead.
+    status_before = book.phones.status_of(build.serial)
     try:
         if on_phone:
             on_phone(phone_id)
-
-        # A phone that is already running, with nothing in the ledger holding
-        # it, is one somebody started by hand and is using right now. Do not
-        # drive it.
-        #
-        # This is the second net under the `taken` word, and it catches the
-        # case that word is forgotten in. What it prevents is severe: the app
-        # would be showing a session this run did not create, `act_reset_app`
-        # reads a chat screen with no `Log in` control as the app's logged-out
-        # mode, and settles the ambiguity with `pm clear` - throwing away
-        # somebody's signed-in account to make room for one of ours. The flow's
-        # own docstring names that cost; it was written about a previous run's
-        # session, not about a person's (2026-08-29).
-        held = ledger.get(phone_id)
-        if held is None or not held.is_claimed or held.is_stale:
-            try:
-                live = phones.status(client, phone_id)
-            except Exception as exc:                              # noqa: BLE001
-                # Not knowing is not a reason to refuse - the boot below asks
-                # again anyway, and a finish that cannot start is its own
-                # named failure.
-                log.debug("could not read the state of %s (%s)", phone_id, exc)
-            else:
-                if live in (phones.RUNNING, phones.STARTING):
-                    return finish("in_use_by_hand",
-                                  "the phone is already running and nothing "
-                                  "here started it, so somebody is using it")
 
         ledger.claim(phone_id, label=f"finish {build.serial}")
         # Say on the sheet that this phone is in hand, the moment it is. A
@@ -2588,10 +2609,11 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # sitting warm and untouched. The account's row says `in_use` in the
         # same minute, and the two are meant to be read together (2026-08-28).
         #
-        # Restored by `_write_row` in the `finally` whatever happens, so an
-        # interrupted finish does not leave it saying `building` forever - and
-        # `settle_abandoned` treats a `building` row with a stale claim as
-        # abandoned, which is exactly what it would be.
+        # Restored in the `finally` whatever happens: `_write_row` writes
+        # the Status the run found, and an ending that found none puts
+        # back `status_before`. Without the second half an interrupted
+        # finish left it saying `building`, and `settle_abandoned` treats
+        # a `building` row with a stale claim as abandoned.
         _note_on_row(book, build.serial, Status=book.phones.BUILDING)
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -2729,6 +2751,13 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         if breaker.counts_against(build) or _refused_what_it_was_given(session):
             _count_try(settings, book, build)
         _write_row(book, build)
+        if (_phone_status(build) is None and status_before
+                and status_before != book.phones.BUILDING):
+            try:
+                _note_on_row(book, build.serial, Status=status_before)
+            except Exception as exc:                              # noqa: BLE001
+                log.error("could not put %s back to %s (%s)", build.serial,
+                          status_before, exc)
         try:
             phones.stop(client, phone_id)
             log.info("stopped %s", phone_id)
