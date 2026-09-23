@@ -6714,3 +6714,64 @@ def test_a_finish_that_ends_without_looking_puts_the_status_back(
     assert build.status == "phone_would_not_start"
     assert seen == [book.phones.BUILDING], "marked while it worked"
     assert status() == "app_only", "and put back when it could not look"
+
+
+# ------------------------------------ phase 4 of the builder review: exits
+@pytest.mark.xfail(strict=True, reason="fixed by ExitLease (phase 4.2)")
+def test_a_borrowed_exit_taken_in_the_gmail_phase_stays_its_owners(
+        device, settings, drive, monkeypatch):
+    """The Gmail phase's swap kept the borrowed exit as the build's own:
+    the end of the build spent it under this phone's serial, and the
+    discard of the empty phone then freed it - so the exit another phone
+    runs on went back on the shelf as free stock (found by the builder
+    review, 2026-09-23)."""
+    settings = _many_gmails_per_phone(settings)
+    book = make_book(gmails=2, proxies=2, apps=1)
+    owned = book.proxies._rows[1]
+    book.proxies.spend(owned, serial="900", note="On phone 900.")
+    challenged = Outcome("fatal", "captcha_shown")
+
+    build = drive(book, settings, google=[challenged, challenged])
+
+    assert device.proxies_set == ["10.0.0.1"], "it moved onto the shared exit"
+    assert not build.ok
+    assert book.proxies.status_of(owned) == book.proxies.spent_status
+    assert owned.values["Used By"] == "900", "still the phone that owns it"
+
+
+@pytest.mark.xfail(strict=True, reason="fixed by ExitLease (phase 4.2)")
+def test_a_fresh_exit_after_a_borrowed_one_is_not_left_claimed(
+        device, settings, drive, monkeypatch):
+    """`build.shared_exit` never goes back to False, and the app phase read
+    it to decide whether the exit it had just been handed was borrowed - so
+    after one borrow, every fresh exit it claimed was treated as someone
+    else's and never settled: `claimed` for good (found by the builder
+    review, 2026-09-23)."""
+    book = make_book(gmails=1, proxies=3, apps=1)
+    owned = book.proxies._rows[1]
+    book.proxies.spend(owned, serial="900", note="On phone 900.")
+    fresh = book.proxies._rows[2]
+    book.proxies.fail(fresh, "dead", note="down for now")
+    real = builder.kit_exits._fresh_proxy
+    calls = []
+
+    def fresh_proxy(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:
+            # Nothing free at the first swap: the build borrows 900's.
+            raise builder.Aborted("no_usable_proxy")
+        if len(calls) == 3:
+            book.proxies.release(fresh, note="back")   # one came free
+        return real(*a, **k)
+
+    monkeypatch.setattr(builder.kit_exits, "_fresh_proxy", fresh_proxy)
+    rejected = Outcome("fatal", "network_ssl_rejected")
+
+    build = drive(book, settings, google=[SIGNED_IN],
+                  app=[rejected, rejected, SIGNED_IN])
+
+    assert build.ok, build.status
+    assert device.proxies_set == ["10.0.0.1", "10.0.0.2"]
+    assert book.proxies.status_of(fresh) != book.proxies.claimed_status, (
+        "the fresh exit the phone ended on was never settled")
+    assert owned.values["Used By"] == "900"
