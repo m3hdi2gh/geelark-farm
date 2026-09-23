@@ -3279,7 +3279,9 @@ def test_a_finish_that_installs_records_that_it_did():
 
     source = inspect.getsource(builder.finish_one)
 
-    assert "play_install.install(" in source
+    # Through the kit's install - GeeLark's installer, then Play - since
+    # 2026-09-23, for the account's own product.
+    assert "kit_install._install(" in source
     assert 'trails.append(("install"' in source
 
 
@@ -6625,9 +6627,12 @@ def test_the_play_walk_is_handed_the_builds_stop_and_its_stop_is_filed_as_one(
     from geelark_farm.flows import play_install
     from tests.build_sources import builder_texts
 
+    # One walk since 2026-09-23: the finish installs through the kit's
+    # `_install`, which is the walk below, like a build.
+    walk = r"play_install\.install\("
     calls = [(src, m.start()) for _, src in builder_texts()
-             for m in __import__("re").finditer(r"play_install\.install\(", src)]
-    assert len(calls) == 2
+             for m in __import__("re").finditer(walk, src)]
+    assert len(calls) == 1
     for src, at in calls:
         assert "cancelled=cancelled" in src[at:at + 400], src[at:at + 120]
 
@@ -6904,4 +6909,33 @@ def test_a_set_aside_note_names_the_service_of_the_accounts_product():
     said = builder.failures.verdict("code_timeout", "Anthropic").seen
     assert said in note
     assert "OpenAI" not in note
+
+
+def test_a_finish_installs_the_app_of_its_accounts_product(
+        settings, monkeypatch):
+    """`finish_one` installed ChatGPT's package whatever the account was
+    for, and only through Play (the builder review, 2026-09-23)."""
+    from geelark_farm.pools import Resource
+
+    monkeypatch.setattr(builder.rows, "_note_on_row", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "ensure_running", lambda *a, **k: None)
+    monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(builder.shell, "device_accounts",
+                        lambda *a, **k: ["g@x.com"])
+    monkeypatch.setattr(builder.shell, "third_party_packages",
+                        lambda *a, **k: [])
+    installed = []
+    refused = InstallOutcome("fatal", "no_install_button")
+    monkeypatch.setattr(builder.kit_install, "_install",
+                        lambda c, p, package, **k: installed.append(
+                            (package, k["name"])) or refused)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: True)
+    account = Resource(sheet_row=3, values={"Product": "spotify"})
+    phone = dict(a_warm_phone(), account=account)
+
+    build = builder.finish_one(Running(2), settings, make_book(), FakeLedger(),
+                               phone, 1)
+    assert installed == [(builder.SPOTIFY_PACKAGE, "Spotify")]
+    assert build.status == "install_failed"
+    assert "suspect_hosts=_struck_hosts(settings)" in         __import__("inspect").getsource(builder.finish_one)
 

@@ -1745,18 +1745,22 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                           "there is nothing left to finish; rebuild it")
         build.gmail = build.gmail or present[0]
 
-        if settings.target_package not in shell.third_party_packages(client,
-                                                                     phone_id):
-            log.info("%s is not installed here; installing it first",
-                     settings.target_package)
-            installed = play_install.install(
-                client, phone_id, settings.target_package,
-                budget_seconds=min(settings.install_budget_seconds,
-                                   deadline - time.monotonic()),
-                artifact_dir=artifacts, cancelled=cancelled,
-            )
-            if installed.reason == "interrupted":
-                raise Aborted("interrupted")     # as in _install
+        # The app of the account this finish signs in - the registry's
+        # package for its product, not ChatGPT's whatever the account was
+        # for - and through GeeLark's installer first, Play after, as a
+        # build does (the builder review, 2026-09-23). A finish with no
+        # account named signs in the pool's next one, which is ChatGPT's.
+        spec = products.spec_of(getattr(phone.get("account"), "values", None))
+        package = spec.package_for(settings)
+        if package not in shell.third_party_packages(client, phone_id):
+            log.info("%s is not installed here; installing it first", package)
+            ordered = bool(settings.app_install_api and apps.begin(
+                client, phone_id, package, name=spec.name, settings=settings))
+            installed = kit_install._install(
+                client, phone_id, package, name=spec.name, ordered=ordered,
+                budget=min(settings.install_budget_seconds,
+                           deadline - time.monotonic()),
+                artifacts=artifacts, cancelled=cancelled)
             build.trails.append(("install", installed.trail))
             if not installed.ok:
                 # Looked, and it is not there - which is a different answer
@@ -1834,8 +1838,12 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         return finish("error", str(exc))
     finally:
         # A proxy swapped in during finishing belongs to this phone now.
+        # The hosts at their strike count today go back as suspect, as a
+        # build's do - a finish released them as stock (the builder review,
+        # 2026-09-23).
         _release(book, build,
-                 _session_holds(book, session, proxy_spent=True))
+                 _session_holds(book, session, proxy_spent=True),
+                 suspect_hosts=_struck_hosts(settings))
         # One more attempt on the tally, but only for a finish that says
         # something about the phone.
         #
