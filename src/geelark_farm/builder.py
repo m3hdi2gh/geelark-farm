@@ -1450,9 +1450,13 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             gave_up = _sign_into_app(session)
             if gave_up is not None:
                 return gave_up
+            # Whichever app the account is for - the registry's word, not
+            # "Spotify" whatever it was (the builder review, 2026-09-23).
             return finish("ready", f"a bare phone - no Google account, as "
                                    f"asked - with {build.app_account} "
-                                   f"signed into Spotify", ok=True)
+                                   f"signed into "
+                                   f"{APPS.get(build.app_product, 'the app')}",
+                          ok=True)
         if remaining() <= 0:
             return finish("budget_exhausted", "signed in, but no time to install")
         # Which app the account goes into, if any. The keeper's own

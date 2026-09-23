@@ -6848,3 +6848,40 @@ def test_a_discard_frees_the_exit_the_build_owned_not_the_one_it_borrowed(
     assert builder._discard(None, book, FakeLedger(), build)
     assert book.proxies.status_of(theirs) == book.proxies.spent_status
 
+
+# --------------------------------- phase 4.3 of the builder review: words
+def test_a_ready_phone_with_no_account_is_not_said_to_be_in_chatgpt():
+    """A phone asked for without an account, or with Spotify on it and
+    nobody to sign in, read "signed into Google, and into ChatGPT in the
+    app" (the builder review, 2026-09-23)."""
+    from geelark_farm.builder import Build, outcome_of
+
+    assert outcome_of(Build(index=1, ok=True, gmail="g@x.com",
+                            app="chatgpt+spotify+claude")) == (
+        "signed into Google, with no app account - ChatGPT, Spotify and "
+        "Claude on the phone")
+    assert outcome_of(Build(index=1, ok=True, gmail="g@x.com")) == (
+        "signed into Google, with no app account")
+
+
+def test_a_bare_phones_account_is_named_by_its_own_product(
+        device, settings, monkeypatch):
+    """The bare path said "signed into Spotify" whatever the account was
+    for, and never said its apps were on (2026-09-23)."""
+    book = make_book(gmails=1, proxies=1, apps=1)
+    book.apps._rows[0].values["Product"] = "claude"
+    monkeypatch.setattr(builder.kit_install, "_install",
+                        lambda *a, **k: INSTALLED)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: True)
+    signed = []
+    import geelark_farm.flows.claude_login as claude_login
+    monkeypatch.setattr(claude_login, "sign_in",
+                        lambda *a, **k: signed.append(1) or SIGNED_IN)
+    want = builder.Wanted(no_gmail=True, app="claude",
+                          app_account="a0@example.com")
+    build = builder.build_one(None, settings, book, FakeLedger(), 1, want=want)
+
+    assert build.ok, build.status
+    assert signed == [1]
+    assert build.detail.endswith("a0@example.com signed into Claude")
+

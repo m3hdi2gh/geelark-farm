@@ -238,7 +238,13 @@ def outcome_of(build: Build) -> str:
                 if build.app_account else ", nothing signed in"))
         if build.app_account:
             return f"signed into Google, and into {product} in the app"
-        return "signed into Google, and into ChatGPT in the app"
+        # Ready with no app account: a phone asked for without one, or with
+        # Spotify or Claude on it and nobody to sign in. It said "and into
+        # ChatGPT in the app" of every one of them (the builder review,
+        # 2026-09-23).
+        on = products.named(build.app) if build.app else ""
+        return ("signed into Google, with no app account"
+                + (f" - {on} on the phone" if on else ""))
     return build.detail or failures.situation(build.status)
 
 
