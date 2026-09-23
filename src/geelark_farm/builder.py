@@ -1899,7 +1899,10 @@ def _suspected(book: Book, session: _Session) -> tuple:
     burned all their tries and tripped the breaker.
     """
     row = session.app_row
-    said = failures.verdict(session.suspect_reason, book.apps.service).seen
+    # The service of this account's own product - the pool's `service` is
+    # OpenAI, and a Claude or Spotify row's note said "OpenAI" (the builder
+    # review, 2026-09-23).
+    said = failures.verdict(session.suspect_reason, _service_of(row)).seen
     serial = str(session.build.serial or "")
     seen = _STRIKE.search(row.values.get(book.apps.note_column) or "")
     strikes, last = (int(seen.group(1)), seen.group(2)) if seen else (0, "")
@@ -1957,7 +1960,8 @@ def _session_holds(book: Book, session: _Session | None, *,
     # travels too: it becomes the row's status, so the cell says what was
     # asked rather than a word that needs a glossary.
     held += [(book.apps, resource, SET_ASIDE,
-              f"On {today} {failures.verdict(why, book.apps.service).seen}. "
+              f"On {today} "
+              f"{failures.verdict(why, _service_of(resource)).seen}. "
               f"The account was "
               f"asked, not judged - nothing is known against it. Fix what it "
               f"was asked for, then blank this status to offer it again.", why)

@@ -6885,3 +6885,23 @@ def test_a_bare_phones_account_is_named_by_its_own_product(
     assert signed == [1]
     assert build.detail.endswith("a0@example.com signed into Claude")
 
+
+def test_a_set_aside_note_names_the_service_of_the_accounts_product():
+    """The pool's `service` is OpenAI, and a Claude or Spotify account set
+    aside was said to have been asked by OpenAI (the builder review,
+    2026-09-23)."""
+    from geelark_farm.pools import Resource
+
+    book = make_book(apps=1)
+    claude = Resource(sheet_row=5, values={"Product": "claude", "Note": ""})
+    session = SimpleNamespace(
+        app_row=None, app_signed_in=False, proxy_row=None, refused_exits=[],
+        set_aside=[(claude, "code_timeout")], condemned=[], judged={},
+        judged_by={}, suspect_reason="", build=builder.Build(index=1),
+        borrowed=set())
+    held = builder._session_holds(book, session, proxy_spent=False)
+    note = next(h[3] for h in held if h[1] is claude)
+    said = builder.failures.verdict("code_timeout", "Anthropic").seen
+    assert said in note
+    assert "OpenAI" not in note
+
