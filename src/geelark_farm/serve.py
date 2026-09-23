@@ -2500,28 +2500,12 @@ def run(settings: Settings, *, stop: threading.Event | None = None,
         # The console alone: nothing below - the client, the breaker, the
         # watchdog, the lane, the loop - belongs to this process.
         return serve_web(settings, stop=stop)
-    if role == "builder":
-        from . import shell as _shell
-        from .flows import google_login as _google
+    from . import switches
 
-        _shell.HUMAN_CADENCE = bool(settings.human_cadence)
-        _shell.KERNEL_TOUCH = bool(getattr(settings, "kernel_touch", True))
-        _google.SIGN_IN_VIA = settings.sign_in_via
+    if role == "builder":
+        switches.apply(settings)
         return serve_builder(settings, stop=stop)
-    # The hand's cadence for every login this process runs - see
-    # shell.HUMAN_CADENCE for why (the operator, 2026-09-09).
-    from . import shell as _shell
-    _shell.HUMAN_CADENCE = bool(settings.human_cadence)
-    if _shell.HUMAN_CADENCE:
-        log.info("typing and tapping with a hand's cadence (HUMAN_CADENCE)")
-    _shell.KERNEL_TOUCH = bool(getattr(settings, "kernel_touch", True))
-    if _shell.KERNEL_TOUCH:
-        log.info("taps go into the phone's touch device in the viewer's "
-                 "shape (KERNEL_TOUCH)")
-    from .flows import google_login as _google
-    _google.SIGN_IN_VIA = settings.sign_in_via
-    if _google.SIGN_IN_VIA == "play":
-        log.info("the Google sign-in starts from Google Play (SIGN_IN_VIA)")
+    switches.apply(settings, announce=True)
     # Resolved here rather than in the signature, because it depends on a
     # setting. A caller that passes its own is untouched - which is every
     # test, and the reason the parameter exists.

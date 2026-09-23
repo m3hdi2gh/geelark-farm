@@ -158,3 +158,53 @@ def test_no_verdict_is_written_outside_the_builders_files():
                         and func.attr == "Aborted"):
                 strays.append(f"{path.relative_to(SRC)}:{node.lineno}")
     assert not strays, strays
+
+
+# ------------------------------------------------ one place for a switch
+def test_the_device_switches_are_set_in_one_place(monkeypatch):
+    """They were set in two copies inside serve.run, one per role, and a
+    sign-in run by hand from the CLI set them nowhere (2026-09-23)."""
+    from types import SimpleNamespace
+
+    from geelark_farm import serve, shell, switches
+    from geelark_farm.flows import google_login
+
+    monkeypatch.setattr(shell, "HUMAN_CADENCE", False)
+    monkeypatch.setattr(shell, "KERNEL_TOUCH", False)
+    monkeypatch.setattr(google_login, "SIGN_IN_VIA", "settings")
+    switches.apply(SimpleNamespace(human_cadence=True, kernel_touch=True,
+                                   sign_in_via="play"))
+    assert shell.HUMAN_CADENCE and shell.KERNEL_TOUCH
+    assert google_login.SIGN_IN_VIA == "play"
+    for path in SRC.rglob("*.py"):
+        if path.name in ("switches.py", "shell.py", "google_login.py"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for flag in (".HUMAN_CADENCE =", ".KERNEL_TOUCH =", ".SIGN_IN_VIA ="):
+            assert flag not in text, f"{path.relative_to(SRC)} sets {flag}"
+    assert "switches.apply(settings" in __import__("inspect").getsource(serve.run)
+
+
+# --------------------------------------------------------- import smoke
+def test_every_module_imports_in_a_fresh_process():
+    """A module a deploy broke was found by the first job that imported
+    it, on a pool thread, where the error went nowhere (2026-09-23). Here
+    it is found before the commit: every module, in a process that has
+    imported nothing else first."""
+    import subprocess
+    import sys
+
+    names = sorted(
+        "geelark_farm." + ".".join(p.relative_to(SRC).with_suffix("").parts)
+        for p in SRC.rglob("*.py") if p.name != "__init__.py")
+    script = ("import importlib, sys\n"
+              "bad = []\n"
+              f"for name in {names!r}:\n"
+              "    try:\n"
+              "        importlib.import_module(name)\n"
+              "    except Exception as exc:\n"
+              "        bad.append(f'{name}: {exc!r}')\n"
+              "print(chr(10).join(bad)); sys.exit(1 if bad else 0)" + chr(10))
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True,
+                          text=True, timeout=180)
+    assert done.returncode == 0, done.stdout + done.stderr

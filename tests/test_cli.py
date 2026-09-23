@@ -2487,6 +2487,11 @@ def test_a_flow_runs_off_the_registry_and_releases_the_phone(
 
     monkeypatch.setattr(products.AppSpec, "flow_module",
                         lambda self: SimpleNamespace(sign_in=sign_in))
+    from geelark_farm import switches
+
+    switched = []
+    monkeypatch.setattr(switches, "apply",
+                        lambda s, **k: switched.append(s))
     monkeypatch.setenv("FLOW_PASSWORD", "from-the-env")
     monkeypatch.delenv("FLOW_SECRET", raising=False)
     args = SimpleNamespace(product="claude", phone="P1",
@@ -2497,6 +2502,7 @@ def test_a_flow_runs_off_the_registry_and_releases_the_phone(
     assert called["phone"] == "P1" and called["email"] == "someone@example.com"
     assert called["password"] == "from-the-env", "never from argv"
     assert called["package"] == "com.anthropic.claude" and called["fresh"]
+    assert switched == [settings], "driven the way the farm drives a phone"
     assert [p for p, _ in book.claimed] == ["P1"]
     assert [p for p, _ in book.released] == ["P1"]
 

@@ -797,8 +797,12 @@ def cmd_flow(settings: Settings, args) -> int:
     phone is claimed while the flow drives it, released after, and
     stopped unless --keep.
     """
-    from . import codes, mailbox, products
+    from . import codes, mailbox, products, switches
 
+    # Driven the way the farm drives a phone - the hand's cadence, the
+    # touch device, the sign-in route - or what works here is not what
+    # the farm will do.
+    switches.apply(settings)
     spec = products.spec(args.product)
     if spec is None:
         print(f"no product called {args.product!r} - the registry has "
