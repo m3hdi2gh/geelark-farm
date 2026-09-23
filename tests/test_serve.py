@@ -2867,7 +2867,9 @@ def test_attaching_the_store_ensures_the_schema_routes_events_and_captures_logs(
     done = []
     monkeypatch.setattr(store_db, "ensure_schema",
                         lambda s: done.append("schema"))
-    monkeypatch.setattr(builder_mod, "set_event_sink",
+    from geelark_farm import runctx
+
+    monkeypatch.setattr(runctx, "set_event_sink",
                         lambda sink: done.append("events"))
     monkeypatch.setattr(store_logdb, "install", lambda s: done.append("logs"))
 

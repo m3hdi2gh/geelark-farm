@@ -2458,8 +2458,8 @@ def _attach_store(settings: Settings) -> None:
     """
     if not settings.store_enabled:
         return
-    # Injected, not imported by builder - see builder.set_event_sink.
-    from . import builder
+    # Injected, not imported by the builder - see runctx.set_event_sink.
+    from . import runctx
     from .store import db as store_db
     from .store import events as store_events
     from .store import logdb as store_logdb
@@ -2469,7 +2469,7 @@ def _attach_store(settings: Settings) -> None:
     except Exception as exc:                                      # noqa: BLE001
         log.warning("could not ensure the store schema at startup (%s); "
                     "store writes will keep failing until it is back", exc)
-    builder.set_event_sink(
+    runctx.set_event_sink(
         lambda kind, **kw: store_events.emit(settings, kind, **kw))
     # C8: the process's own log lines, batched into the store off a
     # bounded queue. Never in a build's path; switches itself off if

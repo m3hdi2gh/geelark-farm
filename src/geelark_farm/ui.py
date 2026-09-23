@@ -35,7 +35,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from . import builder, codes, failures, phones
+from . import builder, codes, failures, phones, runctx
 from .accounts import AccountError
 from .api import PLAN_RATE_LIMITED, ApiError, TransportError, build_client
 from .builder import Build
@@ -722,7 +722,7 @@ def build_with_live_table(settings: Settings, **kwargs) -> list[Build]:
         builds = builder.run(client, settings, reporter=reporter,
                              cancel=cancel, codes_source=pending, **kwargs)
 
-    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel,
+    _drive_live_table(reporter, runctx.BuildContextFilter(), work, cancel,
                       pending)
     return builds
 
@@ -745,7 +745,7 @@ def finish_with_live_table(settings: Settings, **kwargs) -> list[Build]:
                                     cancel=cancel, codes_source=pending,
                                     **kwargs)
 
-    _drive_live_table(reporter, builder.BuildContextFilter(), work, cancel,
+    _drive_live_table(reporter, runctx.BuildContextFilter(), work, cancel,
                       pending)
     return builds
 

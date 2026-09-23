@@ -106,7 +106,7 @@ class Capture:
         # The same stamp the file gets: which run and which build the line
         # belongs to, read off the worker's context. On this handler, not
         # trusted to have been put there by a handler before it.
-        from ..builder import BuildContextFilter
+        from ..runctx import BuildContextFilter
 
         self.handler.addFilter(BuildContextFilter())
         self.dropped = 0

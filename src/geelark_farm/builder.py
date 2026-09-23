@@ -55,19 +55,17 @@ GeeLark cannot reach at all is marked `dead`.
 from __future__ import annotations
 
 import dataclasses
-import itertools
 import logging
 import re
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import apps, breaker, codes, failures, mailbox, phones, products, shell
+from . import apps, breaker, codes, failures, mailbox, phones, products, runctx, shell
 from . import artifacts as archive
 from . import proxy as proxy_mod
 from .accounts import Account
@@ -81,6 +79,16 @@ from .gsheet import SheetError
 from .ledger import Ledger
 from .logs import NO_BUILD
 from .pools import Book, PhoneLog, Pool, ProxyPool, Resource
+
+# The run's log context, run ids and event sink - runctx since the
+# builder review (2026-09-23). The names stay here for their callers;
+# the event sink itself is read in runctx, where set_event_sink puts it.
+from .runctx import BuildContextFilter as BuildContextFilter
+from .runctx import _build as _build
+from .runctx import _next_run_id, _record_event
+from .runctx import _run as _run
+from .runctx import _serial as _serial
+from .runctx import set_event_sink as set_event_sink
 
 # Moved to `wishes` with the strict reader the queue uses (the builder
 # review, 2026-09-23); the name stays here for its callers.
@@ -101,90 +109,6 @@ log = logging.getLogger(__name__)
 #: 5 s and then 2 s and never the 1 s written here (2026-09-21, found by
 #: audit).
 PASS_TICK_SECONDS = 1.0
-
-#: The batch a thread's work belongs to, and the job within that batch.
-#:
-#: `default=` is not optional. `ContextVar.get()` with no default raises
-#: LookupError, and a filter runs OUTSIDE the try that guards `emit` -
-#: `Handler.handle` calls it directly, and neither `callHandlers` nor
-#: `Logger._log` catches - so a filter that raises comes back out of the
-#: `log.info(...)` call and kills the build on its own log line.
-#:
-#: ContextVars rather than the `threading.local` that was here: a pool thread
-#: is reused, and a local left set leaks into the next job on it. A token and
-#: a `reset` in a `finally` cannot.
-_run: ContextVar[str] = ContextVar("geelark_run", default=NO_BUILD)
-_build: ContextVar[int | str] = ContextVar("geelark_build", default=NO_BUILD)
-#: The phone a worker is on, once it has one. Stamped on every log record
-#: of that worker: the captured log lines carry the serial, so a page can
-#: show "what is phone 1556 doing right now" as the last line it logged -
-#: without the builder reporting anything extra.
-_serial: ContextVar[str] = ContextVar("geelark_serial", default=NO_BUILD)
-
-
-#: Where build events go, when anywhere. Injected by `serve` when the store
-#: is enabled, never imported: the sheet retirement's trunk rule is that no
-#: module imports `store` unconditionally, and an injection point keeps this
-#: file ignorant of whether a store even exists. The sink must not raise -
-#: store.events.emit already cannot - but the call is guarded anyway,
-#: because "the monitoring took the build down" must be impossible from
-#: both sides.
-_event_sink = None
-
-
-def set_event_sink(sink) -> None:
-    global _event_sink
-    _event_sink = sink
-
-
-def _record_event(kind: str, what: str, **fields) -> None:
-    """One event through the sink, when there is one. `what` is the
-    event's status word - phrased this way so the scan for the statuses a
-    build settles a phone with (`failures.reasons_decided_by_the_builder`)
-    does not read an event's word as a verdict. Never raises: an event
-    that is not recorded costs one debug line, never the build."""
-    if _event_sink is None:
-        return
-    try:
-        _event_sink(kind, status=what, **fields)
-    except Exception as exc:                                      # noqa: BLE001
-        log.debug("%s event not recorded (%s)", kind, exc)
-
-
-_RUN_IDS = itertools.count(1)
-
-
-def _next_run_id() -> str:
-    """One id per batch.
-
-    `_run_jobs` is the boundary because it is exactly one batch: under `serve`
-    with a pool, one pass submits one `work`, which makes one `builder.run`,
-    which makes one `_run_jobs` - so a run id is also a pass's id. Short,
-    because it is on every line of the file and of the console.
-    """
-    return f"r{next(_RUN_IDS)}"
-
-
-class BuildContextFilter(logging.Filter):
-    """Stamp every log record with the run and the build it came from.
-
-    `row` stays exactly what it has always been - the bare int job index, or
-    NO_BUILD - because `ui.ReporterLogHandler.emit` and `ui.print_new_notices`
-    both gate on `isinstance(row, int)` and the live table's rows are keyed by
-    that int. A composite id there does not raise; it silently freezes the
-    step column on "starting" for a whole batch.
-
-    Nothing here may raise, for the reason given above the ContextVars.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.build = _build.get()
-        record.run = _run.get()
-        record.row = record.build
-        if not getattr(record, "serial", ""):
-            record.serial = _serial.get()
-        return True
-
 
 # A credential the service judged and rejected costs that credential and nothing
 # else: the build takes the next one and tries it on the phone it already has,
@@ -4648,9 +4572,9 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                         "api_calls": build.api_calls,
                         "gmail": build.gmail, "proxy": build.proxy_name,
                         "app_account": build.app_account})
-        if _event_sink is not None:
+        if runctx._event_sink is not None:
             try:
-                _event_sink(
+                runctx._event_sink(
                     "build_finished", run_id=_run.get(), build=str(index),
                     serial=build.serial, status=build.status,
                     seconds=round(build.seconds, 1),

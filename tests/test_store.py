@@ -441,7 +441,7 @@ def test_a_dead_store_costs_the_mirror_and_never_the_pass(monkeypatch,
 def test_the_event_sink_cannot_take_a_build_down(monkeypatch):
     """Guarded from both sides: emit never raises, and even a sink that
     does costs a warning, not the build's result."""
-    import geelark_farm.builder as builder_mod
+    import geelark_farm.runctx as builder_mod   # the sink lives in runctx
 
     builder_mod.set_event_sink(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))

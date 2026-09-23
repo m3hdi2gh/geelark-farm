@@ -1249,7 +1249,7 @@ def _configure_logging(settings: Settings):
     # formatter raises ValueError, `handleError` prints to stderr, and the
     # message is gone. Nothing asserts on stderr, so the suite would stay
     # green while the tool went mute (2026-08-31).
-    from .builder import BuildContextFilter
+    from .runctx import BuildContextFilter
     console.addFilter(BuildContextFilter())
     console.setFormatter(logging.Formatter(
         "%(levelname)s [%(run)s/%(row)s] %(name)s: %(message)s"))

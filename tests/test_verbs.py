@@ -791,10 +791,10 @@ def test_stock_arriving_is_an_event_when_there_is_a_store(monkeypatch,
 
 
 def test_an_account_set_aside_is_an_event_on_its_phone(monkeypatch):
-    from geelark_farm import builder
+    from geelark_farm import builder, runctx
 
     seen = []
-    monkeypatch.setattr(builder, "_event_sink",
+    monkeypatch.setattr(runctx, "_event_sink",
                         lambda kind, **kw: seen.append((kind, kw)))
     book = make_book(apps=1)
     account = book.apps._rows[0]
