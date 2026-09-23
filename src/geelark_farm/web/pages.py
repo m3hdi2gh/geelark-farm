@@ -2590,14 +2590,19 @@ def _free_picker(name: str, rows, blank: str) -> str:
 #:
 #: A Spotify account says which phone it wants and the two answers do
 #: not overlap - `normal` wants a phone with *no* Google account on it,
-#: `error` wants one that has a Gmail (2026-09-17). So each is offered
-#: on exactly one of them. Offered on both, `normal` sat in the list on
-#: every ordinary build and the server refused every press.
+#: `error` wants one that has a Gmail (2026-09-17). Offered on both,
+#: `normal` sat in the list on every ordinary build and the server
+#: refused every press.
+#:
+#: `error` is offered on neither since 2026-09-24: a new build never
+#: signed it in (see verbs.SPOTIFY_ERROR_ON_A_BUILD), and the warm phone
+#: its row's own Send picks is where it goes. It stays a value the route
+#: knows, so a stale page is told why rather than "not a kind".
 ACCOUNT_KINDS: tuple[tuple[str, str, bool, bool], ...] = (
     #  value             word                                   bare   gmail
     ("", "none &mdash; sign in later", True, True),
     ("spotify:normal", "Spotify &mdash; normal", True, False),
-    ("spotify:error", "Spotify &mdash; error", False, True),
+    ("spotify:error", "Spotify &mdash; error", False, False),
     ("chatgpt:", "ChatGPT &mdash; password and a 2fa key", False, True),
     ("chatgpt:eco", "ChatGPT &mdash; eco, a code is emailed to it",
      False, True),
@@ -2725,7 +2730,8 @@ def _build_card(data: dict, user: dict) -> str:
                     + (' data-bare="1"' if bare else '')
                     + (' data-gmail="1"' if gmail else '')
                     + f'>{word}</option>'
-                    for value, word, bare, gmail in ACCOUNT_KINDS)
+                    for value, word, bare, gmail in ACCOUNT_KINDS
+                    if bare or gmail)
                 + '</select></label>')
     # Which account of that kind. Filled by the script from the free
     # rows, which carry their own product and category - so the list is

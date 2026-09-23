@@ -177,6 +177,12 @@ def build_by_hand(book, ledger, settings, payload, client):
             refused = _spotify_fits(book, app_account, no_gmail)
             if refused:
                 return "refused", refused, None
+        # What is left on a phone with a Gmail is an `error` account,
+        # which a new build never signed in - its row's Send is the door
+        # (2026-09-24). Asked after the kind checks, so a `normal` one
+        # still hears its own reason.
+        if not no_gmail:
+            return "refused", SPOTIFY_ERROR_ON_A_BUILD, None
 
     def add_typed(pool, kind, address, password, secret=""):
         """Put a typed credential in its tab, unless it is already there."""
@@ -393,6 +399,16 @@ def add_gpt(book, ledger, settings, payload, client):
 #: which phone they may be signed in on - and the words are the ones the
 #: operators already use (2026-09-17).
 SPOTIFY_CATEGORIES = ("normal", "error")
+
+#: Why an `error` Spotify account is refused on a new build. It wants a
+#: phone that has a Gmail, and the build signed only ChatGPT accounts in
+#: there: it installed Spotify and reported the phone ready, with the
+#: account never signed in and nobody told (the builder review,
+#: 2026-09-23). The warm phone its own Send picks is the door that works,
+#: so the card sends people there instead (the operator, 2026-09-24).
+SPOTIFY_ERROR_ON_A_BUILD = (
+    "an error Spotify account goes on a warm phone, not on a new build - "
+    "press Send on its row in the Spotify pool")
 
 
 def add_spotify(book, ledger, settings, payload, client):

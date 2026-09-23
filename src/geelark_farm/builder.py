@@ -1131,6 +1131,19 @@ def _acquire(st: _BuildState) -> Build | None:
     # A bare phone claims no address and signs nothing in: the Gmail
     # phase is skipped whole, and the phone is ready once it is up.
     st.bare = bool(st.want is not None and st.want.no_gmail)
+    # A named account on a phone with a Gmail is signed in only when it
+    # is ChatGPT's: the install phase ends any other app at "ready", and
+    # a Spotify `error` account named there was installed for and never
+    # signed in, with nobody told (the builder review, 2026-09-23). The
+    # card refuses it; this is the net under the card, before anything
+    # is claimed or a phone is paid for.
+    if (not st.bare and st.want is not None and st.want.app_account
+            and (st.want.app or "chatgpt") != "chatgpt"):
+        return st.finish("chosen_app_unavailable",
+                         f"{st.want.app_account} is a {st.want.app} account, "
+                         f"and a new phone with a Gmail signs in only "
+                         f"ChatGPT ones - a warm phone takes it through "
+                         f"Send on its row")
     with _starting:
         # Somebody who named an exit gets that exit, so the pairing
         # below - which is about choosing one - has no part to play.

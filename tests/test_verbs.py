@@ -1290,6 +1290,21 @@ def test_a_spotify_account_goes_only_on_the_phone_its_kind_wants():
          "app_account": normal.values["Address"]}, None)
     assert status == "refused" and "no Google account" in said
 
+    # And an error account on a phone with a Gmail - the one it wants -
+    # is refused as well: a new build never signed it in. Its row's Send
+    # puts it on a warm phone (2026-09-24).
+    status, said, _ = verbs.build_by_hand(
+        book, None, None,
+        {"by": "mehdi", "gmail": "", "app": "spotify",
+         "app_account": errored.values["Address"]}, None)
+    assert (status, said) == ("refused", verbs.SPOTIFY_ERROR_ON_A_BUILD)
+    typed = dict(by="mehdi", gmail="", app="spotify", app_typed=True,
+                 app_category="error", app_account="new@example.com",
+                 app_password="p")
+    status, said, _ = verbs.build_by_hand(book, None, None, typed, None)
+    assert (status, said) == ("refused", verbs.SPOTIFY_ERROR_ON_A_BUILD)
+    assert book.apps.find("new@example.com") is None, "nothing was written"
+
     # A row a phone is behind is refused the same way, by the row itself
     # - a Spotify row is never in `available`, which held every Send
     # back as "not free" on the first live try (2026-09-17).

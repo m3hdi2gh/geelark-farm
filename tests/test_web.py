@@ -3702,13 +3702,14 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert got["payload"]["app"] == ""
     assert got["payload"]["app_account"] == ""
 
-    # Named properly, the same account goes on as a Spotify one.
+    # Named properly, the same account goes on as a Spotify one - on
+    # the one phone a new build may carry it on, a bare one.
     client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), gmail="a@example.com",
-                         account_kind="spotify:error",
+                   _form(csrf=client.csrf(), gmail="none",
+                         account_kind="spotify:normal",
                          app_account="s@example.com"))
     assert got["payload"]["app"] == "spotify"
-    assert got["payload"]["app_category"] == "error"
+    assert got["payload"]["app_category"] == "normal"
     assert got["payload"]["app_account"] == "s@example.com"
 
     # No Gmail: a bare phone, signed in nowhere, whatever the other boxes
@@ -3813,7 +3814,10 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert 'data-bare="1" data-gmail="1">none &mdash; sign in later' in card
     assert 'value="spotify:normal" data-bare="1">' in card, (
         "the one kind a bare phone may carry, and only a bare one")
-    assert 'value="spotify:error"' in card and 'value="chatgpt:eco"' in card
+    assert 'value="chatgpt:eco"' in card
+    # Offered on neither since 2026-09-24: a new build never signed an
+    # error account in, and its row's Send is the door.
+    assert 'value="spotify:error"' not in card
     assert 'name="install_app"' not in card, "the tick is long gone"
     assert '<optgroup label="pick one">' not in card, (
         "the free rows moved into the dialog")
@@ -7540,7 +7544,7 @@ def test_each_spotify_kind_is_offered_on_the_one_phone_it_belongs_on(
                          app_account="s@example.com"))
     assert not got
 
-    # And each on the phone it wants.
+    # normal on the phone it wants.
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), gmail="none",
                          account_kind="spotify:normal",
@@ -7548,11 +7552,23 @@ def test_each_spotify_kind_is_offered_on_the_one_phone_it_belongs_on(
     assert got["payload"]["app"] == "spotify"
     assert got["payload"]["app_category"] == "normal"
     got.clear()
-    client.request("POST", "/phones/build",
-                   _form(csrf=client.csrf(), gmail="a@example.com",
-                         account_kind="spotify:error",
-                         app_account="s@example.com"))
-    assert got["payload"]["app_category"] == "error"
+
+    # error on a phone with a Gmail: refused too, and told where it goes.
+    # A new build installed Spotify and said ready, the account never
+    # signed in (the builder review, 2026-09-23; the operator chose the
+    # refusal, 2026-09-24).
+    from geelark_farm import verbs
+
+    refused = []
+    monkeypatch.setattr(actions_mod, "record_refused",
+                        lambda s, **k: refused.append(k["reason"]) or 93)
+    status, headers, _ = client.request(
+        "POST", "/phones/build",
+        _form(csrf=client.csrf(), gmail="a@example.com",
+              account_kind="spotify:error", app_account="s@example.com"))
+    assert not got, "an error account must not reach a new build"
+    assert refused == [verbs.SPOTIFY_ERROR_ON_A_BUILD]
+    assert "Send on its row" in refused[0]
 
 
 def test_the_account_box_always_has_an_option_worth_nothing():

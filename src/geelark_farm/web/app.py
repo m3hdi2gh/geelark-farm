@@ -453,10 +453,13 @@ class _Handler(BaseHTTPRequestHandler):
                            in pages.ACCOUNT_KINDS
                            if (bare if no_gmail else gmail)}
                 if kind not in allowed:
+                    from ..verbs import SPOTIFY_ERROR_ON_A_BUILD
                     return self._refuse(
                         user, "build_by_hand",
                         {"gmail": "" if no_gmail else gmail,
                          "account_kind": kind},
+                        SPOTIFY_ERROR_ON_A_BUILD
+                        if kind == "spotify:error" else
                         "a phone with no Google account can only carry a "
                         "normal Spotify account"
                         if no_gmail else

@@ -7091,3 +7091,26 @@ def test_no_phase_keeps_a_local_named_like_the_state_it_should_write():
         allowed = {"book", "build", "session"} \
             if step is builder._let_the_build_go else set()
         assert stored <= allowed, (step.__name__, stored - allowed)
+
+
+def test_a_named_account_for_another_app_on_a_gmail_build_is_refused_first(
+        device, settings, drive, monkeypatch):
+    """The install phase ends every app but ChatGPT at `ready`, so a
+    Spotify account named on a build with a Gmail was installed for and
+    never signed in - the phone said ready and nobody was told (the
+    builder review, 2026-09-23). The card refuses it; under the card the
+    build does, before a Gmail or an exit is claimed or a phone is made."""
+    book = make_book()
+    real = builder.build_one
+
+    def asked(*a, **k):
+        return real(*a, want=builder.Wanted(
+            gmail="", app="spotify", app_account="s@example.com"), **k)
+
+    monkeypatch.setattr(builder, "build_one", asked)
+    build = drive(book, settings, google=[SIGNED_IN])
+    assert build.status == "chosen_app_unavailable"
+    assert "s@example.com" in build.detail and "Send" in build.detail
+    assert device.created == 0, "no phone was paid for"
+    assert len(book.gmails.available) == 2 and len(book.proxies.available) == 2
+
