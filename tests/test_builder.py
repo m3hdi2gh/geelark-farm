@@ -5104,7 +5104,7 @@ def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_hos
     still thirteen rounds that host cost (the operator, 2026-09-09)."""
     settings = _many_gmails_per_phone(settings)
     struck = []
-    monkeypatch.setattr(builder, "_strike_captcha_host",
+    monkeypatch.setattr(builder.exit_health, "_strike_captcha_host",
                         lambda s, b, row: struck.append(row.proxy.host) or [])
     heavy = Outcome("success", "signed_in",
                     trail=["email_entry"] + ["captcha"] * 6
@@ -5987,11 +5987,11 @@ def test_a_host_cleared_by_hand_is_judged_from_the_clear_onwards(
         "ok": 80, "n": 100, "gmails": 100, "rate": 0.8})
     monkeypatch.setattr(store_signins, "exit_rates",
                         lambda s, days=7, since=None: [])
-    monkeypatch.setattr(builder, "host_clears", lambda s: {})
+    monkeypatch.setattr(builder.exit_health, "host_clears", lambda s: {})
     assert builder.gate_hosts(book, settings)["gated"], "bad host, set aside"
     book.proxies.release(book.proxies._rows[0], note="freed by hand")
 
-    monkeypatch.setattr(builder, "host_clears",
+    monkeypatch.setattr(builder.exit_health, "host_clears",
                         lambda s: {"10.0.0.0": 1_000.0})
     assert builder.gate_hosts(book, settings)["gated"] == [], (
         "the week's verdict is about the old address; judged from the clear")

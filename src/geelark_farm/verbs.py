@@ -662,9 +662,9 @@ def _test_many(client, rows) -> dict:
 
 
 def _forgive(settings, resource, by: str) -> None:
-    from . import builder
+    from . import exit_health
 
-    builder.forgive_host(
+    exit_health.forgive_host(
         settings, str(getattr(getattr(resource, "proxy", None), "host", "")
                       or ""), by=by)
 
