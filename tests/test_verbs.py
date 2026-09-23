@@ -940,7 +940,8 @@ def test_a_named_phone_is_the_only_one_offered_to_the_account(monkeypatch):
     book = make_book(apps=1)
     a0 = book.apps._rows[0]
     warm = [{"serial": "1500"}, {"serial": "1501"}]
-    monkeypatch.setattr(builder.keeper, "_unfinished", lambda c, b, **k: (list(warm), []))
+    monkeypatch.setattr(builder.keeper, "_unfinished",
+                        lambda c, b, **k: (list(warm), []))
     launched = []
 
     status, said, detail = verbs.login_accounts(
