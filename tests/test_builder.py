@@ -3158,7 +3158,7 @@ def test_a_borrowed_exit_is_not_handed_back_when_the_swap_is_refused(
     borrowed.proxy = builder.proxy_mod.parse("socks5://u:p@1.2.3.4:1080")
     Proxies._rows = [borrowed]
 
-    monkeypatch.setattr(builder, "_fresh_proxy",
+    monkeypatch.setattr(builder.kit_exits, "_fresh_proxy",
                         lambda *a, **k: (_ for _ in ()).throw(
                             builder.Aborted("no_usable_proxy")))
     monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
@@ -3193,7 +3193,7 @@ def test_an_exit_this_build_claimed_is_handed_back_when_the_swap_is_refused(
     claimed = Resource(sheet_row=4, values={})
     claimed.proxy = builder.proxy_mod.parse("socks5://u:p@5.6.7.8:1080")
 
-    monkeypatch.setattr(builder, "_fresh_proxy", lambda *a, **k: claimed)
+    monkeypatch.setattr(builder.kit_exits, "_fresh_proxy", lambda *a, **k: claimed)
     monkeypatch.setattr(builder.phones, "stop", lambda *a, **k: None)
     monkeypatch.setattr(builder.phones, "set_proxy",
                         lambda *a, **k: (_ for _ in ()).throw(
@@ -5180,7 +5180,7 @@ def test_a_play_page_without_install_gets_a_new_exit_and_a_cleared_play(
                _play("success", "installed")]
     # Spotify's own install rides after ChatGPT's on a keeper build; once
     # the script is spent it simply lands.
-    monkeypatch.setattr(builder, "_install",
+    monkeypatch.setattr(builder.kit_install, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     resets = []
@@ -5201,7 +5201,7 @@ def test_a_parked_download_gets_play_cleared_first_and_an_exit_second(
                _play("success", "installed")]
     # Spotify's own install rides after ChatGPT's on a keeper build; once
     # the script is spent it simply lands.
-    monkeypatch.setattr(builder, "_install",
+    monkeypatch.setattr(builder.kit_install, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     resets = []
@@ -5220,7 +5220,7 @@ def test_a_play_refusal_the_recipe_cannot_answer_is_not_retried(
     answers = [_play("fatal", "play_needs_payment")]
     # Spotify's own install rides after ChatGPT's on a keeper build; once
     # the script is spent it simply lands.
-    monkeypatch.setattr(builder, "_install",
+    monkeypatch.setattr(builder.kit_install, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     monkeypatch.setattr(builder.play_install, "_reset_play",
@@ -5235,7 +5235,7 @@ def test_the_recipe_stops_at_three_exits(device, settings, drive, monkeypatch):
     answers = [_play("fatal", "no_install_button")] * 6
     # Spotify's own install rides after ChatGPT's on a keeper build; once
     # the script is spent it simply lands.
-    monkeypatch.setattr(builder, "_install",
+    monkeypatch.setattr(builder.kit_install, "_install",
                         lambda *a, **k: (answers.pop(0) if answers
                                          else _play("success", "installed")))
     monkeypatch.setattr(builder.play_install, "_reset_play", lambda c, p: None)
@@ -6485,13 +6485,17 @@ def test_a_persons_stop_is_never_read_as_a_verdict_on_the_exit_pool():
     import re
 
     from geelark_farm import builder as builder_mod
+    from tests.build_sources import builder_texts
 
-    src = inspect.getsource(builder_mod)
-    handlers = [m.start() for m in re.finditer(r"except Aborted as exc:", src)]
-    around_a_swap = [at for at in handlers
-                     if "_new_exit(" in src[max(0, at - 700):at]]
-    assert len(around_a_swap) == 3, "the three swap handlers"
-    for at in around_a_swap:
+    # Across every file the builder is made of - one of the three is in
+    # kit/install.py since 2026-09-23 - each read apart.
+    found = []
+    for _, src in builder_texts():
+        handlers = [m.start() for m in re.finditer(r"except Aborted as exc:", src)]
+        found += [(src, at) for at in handlers
+                  if "_new_exit(" in src[max(0, at - 700):at]]
+    assert len(found) == 3, "the three swap handlers"
+    for src, at in found:
         after = src[at:at + 400]
         assert "if str(exc) in STOPPED_BY_A_PERSON:" in after, src[at:at + 120]
         assert after.index("STOPPED_BY_A_PERSON") < after.index("log.warning")
@@ -6604,16 +6608,15 @@ def test_the_play_walk_is_handed_the_builds_stop_and_its_stop_is_filed_as_one(
     """Both places the Store is walked hand the walk `cancelled`, and a
     walk that answers `interrupted` is raised as the stop it is - returned,
     the recipe read it as an install that failed (2026-09-21)."""
-    import inspect
 
     from geelark_farm import builder as builder_mod
     from geelark_farm.flows import play_install
+    from tests.build_sources import builder_texts
 
-    src = inspect.getsource(builder_mod)
-    calls = [m.start() for m in __import__("re").finditer(
-        r"play_install\.install\(", src)]
+    calls = [(src, m.start()) for _, src in builder_texts()
+             for m in __import__("re").finditer(r"play_install\.install\(", src)]
     assert len(calls) == 2
-    for at in calls:
+    for src, at in calls:
         assert "cancelled=cancelled" in src[at:at + 400], src[at:at + 120]
 
     monkeypatch.setattr(play_install, "install",

@@ -23,7 +23,8 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "geelark_farm"
 #: geelark_farm.
 BUILDER_MODULES = ("builder", "products", "wishes", "runctx", "cancel",
                    "exit_health", "keeper",
-                   "build_result", "rows")
+                   "build_result", "rows",
+                   "kit.exits", "kit.holds", "kit.install", "kit.phone")
 
 
 def builder_modules() -> list[ModuleType]:

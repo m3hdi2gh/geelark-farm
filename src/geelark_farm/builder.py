@@ -80,9 +80,11 @@ from . import (
     shell,
 )
 from . import artifacts as archive
-from . import proxy as proxy_mod
+# Tests reach the proxy module through here (builder.proxy_mod.check);
+# the code that uses it is in kit/exits and keeper now (2026-09-23).
+from . import proxy as proxy_mod  # noqa: F401
 from .accounts import Account
-from .api import ApiError, Client, TransportError
+from .api import Client, TransportError
 
 # What a build produced and how it is said - build_result since the
 # builder review (2026-09-23) - and the Phones tab it is written to
@@ -150,6 +152,32 @@ from .keeper import sync_phone_names as sync_phone_names
 from .keeper import sync_phone_proxies as sync_phone_proxies
 from .keeper import sync_proxies as sync_proxies
 from .keeper import sync_sheet as sync_sheet
+
+# The pieces any automation that drives a phone needs - kit/ since the
+# builder review (2026-09-23). The names stay here for their callers.
+from .kit import exits as kit_exits
+from .kit import install as kit_install
+from .kit.exits import _align_clock as _align_clock
+from .kit.exits import _any_exit_free as _any_exit_free
+from .kit.exits import _borrow_exit as _borrow_exit
+from .kit.exits import _exit_ip as _exit_ip
+from .kit.exits import _exit_up as _exit_up
+from .kit.exits import _fresh_proxy as _fresh_proxy
+from .kit.exits import _new_exit as _new_exit
+from .kit.holds import RELEASE as RELEASE
+from .kit.holds import SET_ASIDE as SET_ASIDE
+from .kit.holds import SPEND as SPEND
+from .kit.holds import _refused_holds as _refused_holds
+from .kit.holds import _release as _release
+from .kit.install import API_INSTALL_WAIT_SECONDS as API_INSTALL_WAIT_SECONDS
+from .kit.install import PLAY_RECIPE_EXITS as PLAY_RECIPE_EXITS
+from .kit.install import PLAY_RETRY_FLOOR_SECONDS as PLAY_RETRY_FLOOR_SECONDS
+from .kit.install import PLAY_RETRY_REASONS as PLAY_RETRY_REASONS
+from .kit.install import _install as _install
+from .kit.install import _install_by_recipe as _install_by_recipe
+from .kit.phone import ATTEMPT_SECONDS as ATTEMPT_SECONDS
+from .kit.phone import _discard as _discard
+from .kit.phone import _signed_in_after_all as _signed_in_after_all
 from .ledger import Ledger
 from .logs import NO_BUILD
 
@@ -227,9 +255,6 @@ PASS_TICK_SECONDS = 1.0
 #   the exit's         keep the credential, get a different exit address
 #   the device's       stop; the next credential meets the same wall
 
-# What a build needs left to be worth starting another attempt: a stop, a boot
-# and a login. Below this the honest thing is to report what it has.
-ATTEMPT_SECONDS = 420
 
 #: Captchas met on one exit before the exit is changed rather than the
 #: next Gmail spent. A captcha is Google distrusting the address, and one
@@ -249,12 +274,6 @@ APP_ONLY = PhoneLog.APP_ONLY
 #: failures.WARM_FOR_OPERATOR, which the breaker reads too.
 WARM_FOR_OPERATOR = failures.WARM_FOR_OPERATOR
 
-# What becomes of a resource a build was holding. It was a boolean - spent or
-# not - and a challenged app account is neither: it was not used, and putting
-# it back blank is what made every run pick the same one again.
-SPEND = "spend"
-RELEASE = "release"
-SET_ASIDE = "set aside"
 
 #: App-login reasons where the account was typed in and the phone took the
 #: blame, but the account could as easily be the culprit: a session that
@@ -668,22 +687,6 @@ def _give_back_condemned(s: _Session) -> None:
                     s.build.serial, len(given_back), ", ".join(given_back))
 
 
-def _any_exit_free(book: Book) -> bool:
-    """Whether the exit pool could hand anything out at all right now.
-
-    Asked of the store when it can answer, because the Book's own rows
-    are a snapshot taken when the pass began and the question decides
-    which of two words a person reads in the log.
-    """
-    counted = getattr(book.proxies, "free_now", None)
-    if counted is not None:
-        try:
-            return counted() > 0
-        except Exception as exc:                                  # noqa: BLE001
-            log.debug("could not count the free exits (%s)", exc)
-    return bool(book.proxies.available)
-
-
 #: How many addresses one build looks past when the exit pool cannot
 #: serve the first. Each one is a single statement, and the pool's hosts
 #: are few: past a handful the answer is "there are no exits for these
@@ -729,7 +732,7 @@ def _pair_up(client: Client, book: Book, settings: Settings):
             avoid = str((getattr(row, "values", None) or {})
                         .get("Last Host") or "")
             try:
-                return row, _fresh_proxy(client, book, settings=settings,
+                return row, kit_exits._fresh_proxy(client, book, settings=settings,
                                          avoid_host=avoid)
             except Aborted as refused:
                 held.append(row)
@@ -745,74 +748,6 @@ def _pair_up(client: Client, book: Book, settings: Settings):
                 book.gmails.release(row)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("could not put %s back (%s)", row.label, exc)
-
-
-def _fresh_proxy(client: Client, book: Book, *,
-                 settings: Settings | None = None,
-                 avoid_host: str = "") -> Resource:
-    """Claim a proxy GeeLark can actually reach.
-
-    Checked before it is used, because an unreachable proxy is the one failure
-    that is genuinely the proxy's: GeeLark either carried the request or it did
-    not. Those are marked `dead` and the next one is tried.
-
-    The proxy being replaced is released only after this returns, so `claim()`
-    cannot hand back the very proxy that was just judged.
-
-    There is no cap on how many dead ones it will skip. Each is marked `dead`
-    before the next is claimed, so the pool strictly shrinks and this cannot
-    spin - and a cap costs working phones: when a whole purchase batch died,
-    one build hit five dead proxies in a row and gave up while four live ones
-    sat in the tab (2026-08-11).
-
-    The two ways to run out are told apart, because they need different things
-    doing. `no_usable_proxy` means the tab has nothing left to hand out.
-    `no_working_proxy` means it had rows and every one of them was unreachable,
-    which is a fact about the stock rather than about this run.
-    """
-    skipped = 0
-    wanted_elsewhere = avoid_host
-    while True:
-        resource = book.proxies.claim(avoid_host=wanted_elsewhere)
-        if resource is None and wanted_elsewhere:
-            # Nothing came back, and two different things look like this:
-            # every free exit is on the host this address was refused on,
-            # or there are no free exits at all. Saying the first when it
-            # is the second sends the reader looking at hosts over a pool
-            # that is simply empty (2026-09-13).
-            if not _any_exit_free(book):
-                raise Aborted("no_working_proxy" if skipped
-                              else "no_usable_proxy")
-            # Every one of them is where this address has already been
-            # refused. The caller looks past it to the next address.
-            raise Aborted("no_other_exit")
-        if resource is None:
-            raise Aborted("no_working_proxy" if skipped else "no_usable_proxy")
-        try:
-            result = proxy_mod.check(client, resource.proxy)
-        except (proxy_mod.ProxyError, ApiError) as exc:
-            # The name, not the label: the label carries the whole address,
-            # and so does the error after it, so the line printed one
-            # credential-bearing URL twice and wrapped over two rows to do it.
-            # What the name is for is finding the exit in the vendor's panel;
-            # what failed and why is the error's job.
-            log.warning("proxy %s is dead: %s", resource.name or resource.label,
-                        exc)
-            book.proxies.fail(resource, "dead", note=(
-                f"GeeLark could not reach it when a phone was put behind it: "
-                f"{exc}"))
-            skipped += 1
-            continue
-        book.proxies.record_exit(resource, str(result.get("outboundIP") or ""))
-        # The check already said where the exit is; keeping it here is what
-        # lets the clock be set without a second call to anybody.
-        try:
-            from . import geo
-
-            geo.remember_check(settings, result)
-        except Exception as exc:                                  # noqa: BLE001
-            log.debug("the exit's place was not kept (%s)", exc)
-        return resource
 
 
 #: Spotify's package; ChatGPT's is `settings.target_package`.
@@ -859,55 +794,6 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                              proxy_name=proxy_name)
     except Exception as exc:                                      # noqa: BLE001
         log.debug("sign-in not recorded (%s)", exc)
-
-
-def _exit_ip(proxy_row) -> str:
-    """The address Google sees through this exit: the last outbound IP
-    the check recorded, else the proxy's own host."""
-    values = getattr(proxy_row, "values", None) or {}
-    ip = str(values.get("Last Exit IP") or "").strip()
-    if ip:
-        return ip
-    return str(getattr(getattr(proxy_row, "proxy", None), "host", "") or "")
-
-
-def _align_clock(client: Client, settings: Settings, phone_id: str,
-                 proxy_row) -> str:
-    """Set the phone's timezone to its exit's (GEO_ALIGN). Returns the
-    zone set, or "". Never fatal: a phone that keeps its clock is what
-    every phone had until today."""
-    if not getattr(settings, "geo_align", True) or proxy_row is None:
-        return ""
-    from . import geo
-
-    ip = _exit_ip(proxy_row)
-    # What the build's own proxy check already said, then GeeLark asked
-    # again, and only then the address lookup - which on this server
-    # resolves nothing at all, and for a whole day left every clock unset
-    # (2026-09-12). `also` files GeeLark's answer under the exit the row
-    # carried, so the sign-in record finds a country there too.
-    place = dict(geo.known(settings, ip) or {})
-    exit_proxy = getattr(proxy_row, "proxy", None)
-    if not place.get("tz") and exit_proxy is not None:
-        place = dict(geo.by_proxy(client, exit_proxy, settings, also=ip) or {})
-    zone = str(place.get("tz") or "")
-    ip = str(place.get("ip") or "") or ip
-    if not zone and ip:
-        zone = geo.timezone_for(settings, ip)
-    if not zone or not re.fullmatch(r"[A-Za-z_]+(?:/[A-Za-z_+\-0-9]+){1,2}",
-                                    zone):
-        return ""
-    try:
-        shell.run(client, phone_id,
-                  f"settings put global auto_time_zone 0; "
-                  f"setprop persist.sys.timezone {zone}; "
-                  f"date +%Z")
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("could not set the clock of %s to %s (%s)", phone_id,
-                    zone, exc)
-        return ""
-    log.info("clock set to %s, where exit %s is", zone, ip)
-    return zone
 
 
 #: Builds start within seconds of each other, four at a time, and every
@@ -958,108 +844,9 @@ def _package_for(settings: Settings, app: str) -> str:
             ).package_for(settings)
 
 
-#: How long an install GeeLark was asked for at boot gets to land after the
-#: sign-in, before Play is walked for it instead. Spotify is on well inside
-#: the sign-in's two minutes when the order was taken; three more is
-#: patience, not a budget.
-API_INSTALL_WAIT_SECONDS = 180
-
-
 def _calls(client) -> int:
     count = getattr(client, "calls_here", None)
     return int(count()) if callable(count) else 0
-
-
-#: The Play Store outcomes the operator's recipe answers, and how. A page
-#: with no Install (`no_install_button`, `play_page_never_loaded`,
-#: `app_unavailable`, a server error) is the exit: stop the phone, put it
-#: behind another exit, start it, force-stop and clear the Play Store,
-#: open the page again - "usually the third exit does it". A download
-#: parked pending or on one percentage (`download_stalled`) is Play's own
-#: state: force-stop and clear it, and the download goes through; a second
-#: stall is treated like a page with no Install (the operator, 2026-09-10).
-PLAY_RETRY_REASONS = frozenset({"no_install_button", "play_page_never_loaded",
-                                "app_unavailable", "play_server_error",
-                                "download_stalled"})
-PLAY_RECIPE_EXITS = 3
-#: Not worth starting another round with less than this left.
-PLAY_RETRY_FLOOR_SECONDS = 150.0
-
-
-def _install_by_recipe(client: Client, settings: Settings, book: Book,
-                       build: Build, phone_id: str, package: str, *,
-                       name: str, ordered: bool, remaining, artifacts,
-                       cancelled, proxy_row, refused_exits: list,
-                       hold: list | None = None
-                       ) -> tuple[play_install.Outcome, object]:
-    """`_install`, and the operator's recipe around it when Play will not
-    give the app - see PLAY_RETRY_REASONS. Returns the outcome and the
-    exit the phone ends up on.
-
-    `hold` is the caller's way of learning that exit when this raises
-    instead of returning: every swap appends the row the phone is now on,
-    and the caller takes the last one before it releases anything."""
-    installed = _install(client, phone_id, package, name=name,
-                         ordered=ordered,
-                         budget=min(settings.install_budget_seconds,
-                                    remaining()),
-                         artifacts=artifacts, cancelled=cancelled)
-    cleared = False
-    swaps = 0
-    while (not installed.ok and installed.reason in PLAY_RETRY_REASONS
-           and remaining() > PLAY_RETRY_FLOOR_SECONDS):
-        if cancelled is not None and cancelled():
-            break
-        if installed.reason == "download_stalled" and not cleared:
-            log.warning("%s: the download is parked (%s); clearing the Play "
-                        "Store and asking again", name, installed.reason)
-            play_install._reset_play(client, phone_id)
-            cleared = True
-        else:
-            if swaps >= PLAY_RECIPE_EXITS or proxy_row is None:
-                break
-            previous = proxy_row
-            seen = {f"{r.proxy.host}:{r.proxy.port}"
-                    for r, _ in refused_exits if getattr(r, "proxy", None)}
-            if getattr(proxy_row, "proxy", None):
-                seen.add(f"{proxy_row.proxy.host}:{proxy_row.proxy.port}")
-            try:
-                proxy_row = _new_exit(
-                    client, settings, book, build, phone_id, proxy_row,
-                    f"{name}: the Play Store offered no install "
-                    f"({installed.reason}) - exit {swaps + 1} of "
-                    f"{PLAY_RECIPE_EXITS}",
-                    remaining(), swaps=swaps, avoid=seen)
-            except Aborted as exc:
-                # A person's stop is not a verdict on the exit pool, and
-                # this handler read it as one: logged it, booted the
-                # phone the person had just asked to stop, and carried
-                # on (2026-09-21, found by audit).
-                if str(exc) in STOPPED_BY_A_PERSON:
-                    raise
-                log.warning("no other exit to try the Play Store from (%s)",
-                            exc)
-                phones.ensure_running(
-                    client, phone_id,
-                    timeout=min(phones.BOOT_SECONDS, remaining()),
-                    cancelled=cancelled)
-                break
-            if previous is not None and previous is not proxy_row:
-                refused_exits.append((previous, installed.reason))
-            swaps += 1
-            # The caller reads this back on a raise - see build_one.
-            if hold is not None:
-                hold.append(proxy_row)
-            _exit_up(client, settings, phone_id, proxy_row, remaining(),
-                     cancelled)
-            cleared = False
-            play_install._reset_play(client, phone_id)
-        installed = _install(client, phone_id, package, name=name,
-                             ordered=False,
-                             budget=min(settings.install_budget_seconds,
-                                        remaining()),
-                             artifacts=artifacts, cancelled=cancelled)
-    return installed, proxy_row
 
 
 def _install_the_rest(client: Client, settings: Settings, build: Build,
@@ -1095,7 +882,7 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
             # asks to be signed in (2026-09-12).
             taken = apps.begin(client, phone_id, _package_for(settings, app),
                                name=APPS[app], settings=settings)
-        got = _install(client, phone_id, _package_for(settings, app),
+        got = kit_install._install(client, phone_id, _package_for(settings, app),
                        name=APPS[app], ordered=taken,
                        budget=min(settings.install_budget_seconds, remaining()),
                        artifacts=artifacts, cancelled=cancelled, play=play)
@@ -1107,45 +894,6 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
                         "without it", APPS[app], build.serial, got.reason)
             build.tried.append((app, got.reason, "Play" if play else "GeeLark"))
     build.app = "+".join(on)
-
-
-def _install(client: Client, phone_id: str, package: str, *, name: str,
-             ordered: bool, budget: float, artifacts,
-             cancelled=None, play: bool = True) -> play_install.Outcome:
-    """The app onto the phone: by the order GeeLark's installer already
-    took at boot when there was one, and by the Play Store otherwise -
-    or as well, if the order never landed. The Play outcome is the type
-    either way, since the builder reads `.trail` and `.reason` off it.
-
-    `play` is false where there is no Play Store to walk: the Store asks
-    to be signed in, and a bare phone has no Google account at all, so
-    the walk could only end in screens nobody can answer (2026-09-12).
-    """
-    if ordered:
-        wait = min(API_INSTALL_WAIT_SECONDS, budget)
-        if apps.wait_installed(client, phone_id, package, budget_seconds=wait,
-                               cancelled=cancelled):
-            log.info("%s is on, from GeeLark's installer", name)
-            return play_install.Outcome("success", "installed",
-                                        f"{name} installed by GeeLark")
-        log.warning("%s has not landed from GeeLark's installer in %.0fs",
-                    name, wait)
-        budget = max(0.0, budget - wait)
-    if not play:
-        return play_install.Outcome(
-            "fatal", "install_failed",
-            f"{name} did not come from GeeLark's installer, and there is no "
-            f"Google account on this phone to walk the Play Store with")
-    log.info("the Play Store is walked for %s", name)
-    got = play_install.install(client, phone_id, package,
-                               budget_seconds=budget, artifact_dir=artifacts,
-                               cancelled=cancelled)
-    # The service's own stop, answered by the walk as a word. Raised here
-    # so it is filed as the stop it is: returned, the recipe would have
-    # read it as an install that failed (2026-09-21).
-    if got.reason == "interrupted":
-        raise Aborted("interrupted")
-    return got
 
 
 def _pick_named_app(book: Book, wanted: str):
@@ -1345,7 +1093,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
             if chosen_exit:
                 proxy_row = _pick(book.proxies, want.proxy_name, "exit")
             elif proxy_row is None:
-                proxy_row = _fresh_proxy(
+                proxy_row = kit_exits._fresh_proxy(
                     client, book, settings=settings,
                     avoid_host=str((getattr(gmail_row, "values", None) or {})
                                    .get("Last Host") or ""))
@@ -1891,76 +1639,6 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         _stop_honoured(settings, build.serial)
 
 
-def _signed_in_after_all(client: Client, build: Build) -> bool:
-    """Ask the device itself, once, before throwing the phone away.
-
-    The flow's verdict is what the run saw while it was watching. Google adds
-    the account after its own consent closes, and it takes as long as it takes:
-    every phone that survived a `stuck_on_sign_in_closed` failure on 2026-09-04
-    was found later holding the account it was supposed to have, with nothing
-    in the device's own account history but the add. The ones that did not
-    survive were deleted by this path, signed in, on the strength of a verdict
-    that was already out of date when it was written.
-
-    Deleting is the one thing here that cannot be undone: a phone kept in error
-    is a row somebody closes, and a phone deleted in error is a Gmail, a proxy
-    and the minutes spent on both. So this is asked strictly, and anything that
-    is not a clear "there is nothing on it" keeps the phone.
-    """
-    try:
-        present = shell.device_accounts(client, build.phone_id, strict=True)
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("phone %s could not say whether it is signed in (%s), so "
-                    "it is kept rather than deleted",
-                    build.serial or build.phone_id, exc)
-        return True
-    if not present:
-        return False
-    log.warning("phone %s is signed in as %s after all - the run gave up "
-                "before Google finished. Keeping it.",
-                build.serial or build.phone_id, ", ".join(present))
-    return True
-
-
-def _discard(client: Client, book: Book, ledger: Ledger,
-             build: Build) -> bool:
-    """Delete a phone nothing was ever signed into, and free its exit.
-
-    Returns whether it went. A delete that fails leaves the phone to be stopped
-    and recorded the ordinary way - half-deleting it, with its row dropped and
-    the device still there, is the one outcome worse than keeping it.
-    """
-    try:
-        # Stopped first, and not as a courtesy: GeeLark refuses to delete a
-        # running phone, and this runs before the stop that the ordinary path
-        # does at the end. Both phones this discarded on 2026-08-17 were still
-        # running when it asked, so both refusals came back under failDetails
-        # while the tool went on to drop their rows.
-        phones.stop(client, build.phone_id)
-        phones.wait_until_stopped(client, build.phone_id)
-        phones.delete(client, [build.phone_id], ledger=ledger)
-    except Exception as exc:                                      # noqa: BLE001
-        log.error("phone %s has no Google account on it and could not be "
-                  "deleted (%s); it is recorded and left alone",
-                  build.serial or build.phone_id, exc)
-        return False
-    log.info("deleted phone %s - nothing was ever signed into it (%s)",
-             build.serial or build.phone_id, outcome_of(build))
-    book.record_history(
-        Serial=build.serial, Event="discarded",
-        Seconds=f"{build.seconds:.0f}", Proxy=build.proxy_name or build.proxy,
-        Steps=build.steps,
-        Note=(f"Deleted rather than kept - nothing was ever signed into it. "
-              f"{outcome_of(build).capitalize()}."))
-    resource = book.proxies.find_proxy(build.proxy) if build.proxy else None
-    if resource is not None:
-        book.proxies.release(resource, note=(
-            "Free again - the phone taken on it had nothing signed in and was "
-            "deleted."))
-    build.phone_id = ""
-    return True
-
-
 def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                phone: dict, index: int, *,
                on_phone: Callable[[str], None] | None = None,
@@ -2217,148 +1895,6 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         _stop_honoured(settings, build.serial)
 
 
-def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
-    """An exit already behind another phone, when nothing is free.
-
-    This breaks the rule the rest of the module keeps: one phone per exit. It
-    is deliberate and it is a last resort, reached only once the pool has
-    nothing free at all, because the alternative is what happened to phone 762
-    - everything done right, one ordinary refusal, and no second exit to answer
-    it with.
-
-    What it costs is worth stating plainly. Two phones behind one address means
-    Google and OpenAI can see the two accounts arriving from the same place, so
-    a run that shares exits is linking the accounts it builds. That is the
-    operator's trade to make and they have made it; the sharing is written into
-    both the phone's note and the proxy's, so it is never a surprise later.
-
-    `avoid` is every exit this build has already been through. Without it the
-    loop has no bound: a phone refused twice would take back the exit that
-    refused it first and go round for as long as its budget lasted, which is
-    exactly what holding refused proxies claimed was written to stop
-    (2026-08-11, phone 658, forty-nine minutes).
-    """
-    for resource in book.proxies._rows:
-        if resource.error or not resource.proxy:
-            continue
-        if book.proxies.status_of(resource) != book.proxies.spent_status:
-            continue                      # free, dead or claimed - not shared
-        if f"{resource.proxy.host}:{resource.proxy.port}" in avoid:
-            continue
-        return resource
-    return None
-
-
-def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
-              phone_id: str, current: Resource | None, why: str, budget: float,
-              swaps: int = 0, avoid: set[str] | None = None) -> Resource:
-    """Get the phone onto a different exit address: another proxy.
-
-    Claimed and set, and handed back - the phone is left stopped, and
-    `_exit_up` brings it up once the caller holds the row. The boot used
-    to be this function's last act, so a raise out of its wait - a Cancel
-    pressed on the row, a phone that would not start - meant the caller
-    never got the row: its `proxy_row` still named the exit before, the
-    phone stood on the new one, and the end-of-build release spent the
-    wrong row while the one the phone was on stayed `in_use` for good
-    (2026-09-21, found by audit). Nothing below can now raise once the
-    exit is ours and on the phone.
-
-    There used to be a cheaper branch first - sx.org can hand a proxy a new
-    address while keeping its host, port and credentials, so nothing on the
-    phone changes. It is gone: only the vendor's `port` product can do that,
-    this account holds none, and buying them is not the plan (2026-08-25).
-
-    The phone is stopped before anything: GeeLark's documentation says not to
-    call the update while a phone is starting, and Android reads the proxy
-    when the network comes up - a phone left running would keep the exit just
-    judged.
-    """
-    log.warning("%s - getting a different exit address", why)
-    phones.stop(client, phone_id)
-
-    # Whether the exit below is one this build took or one it is standing on
-    # beside another phone. They are settled in opposite ways and were told
-    # apart nowhere: see the refusal handler.
-    borrowed = False
-    try:
-        replacement = _fresh_proxy(client, book, settings=settings)
-    except Aborted as exc:
-        if str(exc) != "no_usable_proxy":
-            # The stock was unreachable, not refusing. Reported as it is:
-            # "every exit refused" would send the reader looking at OpenAI when
-            # the answer is that their proxies are down (2026-08-11, phone 671,
-            # which met three dead proxies from an expired batch and was
-            # recorded as though the service had judged it).
-            raise
-        # An empty pool means two different things, and saying the wrong one
-        # sends the reader to the wrong place. A build that has already worked
-        # through several exits emptied the pool itself - it holds each refused
-        # one claimed - and that is a fact about the pool or the service. A
-        # build on its first swap emptied nothing: there was simply no free
-        # proxy to move to, which is what happens when a run is given as many
-        # phones as it has proxies. Phone 762 was told "every exit in the pool
-        # was refused in turn" after being refused exactly once (2026-08-16).
-        # Nothing free. Rather than stop here, take one that another phone is
-        # already on - see _borrow_exit for what that costs.
-        replacement = _borrow_exit(book, avoid or set())
-        if replacement is None:
-            raise Aborted("all_exits_refused" if swaps
-                          else "no_exit_to_move_to") from None
-        borrowed = True
-        build.shared_exit = True
-        log.warning("no free proxy left; sharing %s, which %s is already on",
-                    replacement.label,
-                    (replacement.values.get("Used By") or "another phone"))
-    try:
-        phones.set_proxy(client, phone_id, replacement.proxy)
-    except ApiError as exc:
-        # The phone keeps the proxy it had, so nothing is broken - but this
-        # build cannot do what it came here to do, and saying "the login
-        # failed" would hide that.
-        #
-        # Only if it was ours. A borrowed exit is one another phone is running
-        # on right now - `_borrow_exit` returns it without claiming it - and
-        # releasing that blanks its status and wipes the `Used By` naming its
-        # real owner. The next build then claims it, putting a third phone on
-        # the address and leaving nothing that says whose it was. The path
-        # into this is not exotic: the pool empties, a proxy is borrowed, and
-        # GeeLark refuses to move onto it - which is what [45004] is, and a
-        # borrowed exit is exactly the kind that draws one.
-        if not borrowed:
-            book.proxies.release(replacement, note=(
-                f"Free again - GeeLark would not move a phone onto it: {exc}"))
-        raise Aborted("proxy_change_refused") from exc
-    # `current` is deliberately NOT released here. Releasing it put it straight
-    # back on the shelf as `unused`, where the very next swap could claim it
-    # again - so a phone that kept being refused went round the pool instead of
-    # through it, for as long as its budget lasted: phone 658 spent 49 minutes
-    # alternating request_rejected and network_ssl_rejected across the same
-    # proxies (2026-08-11). Holding it claimed for the rest of the build is
-    # what makes the loop terminate: each swap costs one proxy, so the pool is
-    # the bound. The caller collects these and releases them all at the end.
-    build.proxy = str(replacement.proxy)
-    build.proxy_name = replacement.name
-    return replacement
-
-
-def _exit_up(client: Client, settings: Settings, phone_id: str, exit_row,
-             budget: float, cancelled: Callable[[], bool] | None) -> None:
-    """Bring the phone back up on the exit `_new_exit` just put it on.
-
-    Called after the caller has written the row down - into `proxy_row`,
-    and the one before it into `refused_exits` - so that whatever this
-    wait raises, the release at the end of the build sees the exit the
-    phone is actually standing on. See `_new_exit` for what happened
-    when the two were one function.
-    """
-    time.sleep(5)
-    phones.ensure_running(client, phone_id,
-                          timeout=min(phones.BOOT_SECONDS, budget),
-                          cancelled=cancelled)
-    _align_clock(client, settings, phone_id, exit_row)
-
-
 def _suspected(book: Book, session: _Session) -> tuple:
     """What becomes of an account a phone stopped on for an APP_SUSPECTS
     reason: a strike, and at SUSPECT_STRIKES different phones, set aside.
@@ -2394,21 +1930,6 @@ def _suspected(book: Book, session: _Session) -> tuple:
             f"Free again - {said} (strike {strikes} of {SUSPECT_STRIKES}, "
             f"last on phone {serial}). The phone took the blame, but if "
             f"different phones keep ending there this row is set aside.", "")
-
-
-def _refused_holds(book: Book, refused: list[tuple]) -> list[tuple]:
-    """Exits a service refused this phone through, and what each becomes:
-    held back rather than freed. The proxy is not condemned - a refusal is
-    per-session, which is measured - but its *address* has just been
-    turned down, and nothing here can change one: the address is the
-    vendor's to rotate, not ours. Freeing it hands the next build the
-    same address to be refused through again."""
-    today = failures.today()
-    return [(book.proxies, resource, SET_ASIDE,
-             f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
-             f"the exit address is the thing that was turned down. Change it "
-             f"in the vendor's panel, then set this cell to `free`.", why)
-            for resource, why in refused]
 
 
 def _session_holds(book: Book, session: _Session | None, *,
@@ -2455,81 +1976,6 @@ def _session_holds(book: Book, session: _Session | None, *,
               f"was asked for, then blank this status to offer it again.", why)
              for resource, why in session.set_aside]
     return held
-
-
-def _release(book: Book, build: Build, held: list[tuple], *,
-             suspect_hosts: frozenset | set = frozenset()) -> None:
-    """Hand every still-claimed resource its outcome.
-
-    `suspect_hosts` are the exit hosts Google challenged enough today (see
-    `_struck_hosts`): an exit going back as stock onto one of them goes
-    back as `suspect` instead, with Free on the row as the way back.
-
-    `spent` is what the resource ended up on a device as, not whether the build
-    as a whole succeeded. A Gmail that signed in is on that phone whatever
-    happens afterwards, so a build that then fails its app login must still
-    mark it used - releasing it would hand a signed-in account to the next
-    phone, which is the one mistake in this file that costs an account rather
-    than a minute. The same goes for a proxy the phone was created behind.
-
-    Runs in a finally, so it must not raise: a sheet error here would replace
-    the build's real result with a network complaint, and the resources would
-    stay claimed either way.
-    """
-    for pool, resource, action, note, reason in held:
-        if resource is None:
-            continue
-        try:
-            if action == SET_ASIDE:
-                pool.set_aside(resource, reason=reason, note=note)
-                if pool is book.apps:
-                    # An account leaving the pool is an event (C8): it is
-                    # what the Gpt Pool's "set aside" list is made of.
-                    _record_event("account", "set_aside", run_id=_run.get(),
-                                  build=str(build.index),
-                                  serial=str(build.serial or ""),
-                                  detail=f"{resource.label}: {reason}")
-            elif action == SPEND:
-                # A rename's note - "Sold as x; signs in as y" - survives
-                # the spend: it is the one place the sold address is kept.
-                sold = str((resource.values or {}).get("Note") or "")
-                sold = f" {sold}" if sold.startswith("Sold as ") else ""
-                pool.spend(resource, serial=build.serial, note=(
-                    f"On phone {build.serial}.{sold}"
-                    if build.ok else
-                    f"On phone {build.serial}, which stopped short of ready - "
-                    f"see that row in the Phones tab.{sold}"))
-            elif (pool is book.proxies and suspect_hosts
-                  and str(getattr(getattr(resource, "proxy", None), "host", ""))
-                  in suspect_hosts):
-                host = resource.proxy.host
-                pool.fail(resource, SUSPECT, note=(
-                    f"Suspect - Google challenged {CAPTCHA_STRIKES_PER_HOST} "
-                    f"or more sign-ins on {host} today ({failures.today()}); "
-                    f"set aside on its own as this build let go of it. Press "
-                    f"Free to use it again."))
-                log.warning("%s goes back as suspect, not stock: %s is a host "
-                            "Google kept challenging today", resource.label,
-                            host)
-            else:
-                # Claimed but never put on a device - the Gmail fetched just as
-                # the budget ran out, the app account nothing was tried with,
-                # the exit that was swapped away from. It is stock, and it goes
-                # back as stock.
-                pool.release(resource, note=note or (
-                    "Free again - a build claimed it but never got as far as "
-                    "using it."))
-        except Exception as exc:                                  # noqa: BLE001
-            # Broad, and the docstring above says why: this runs in a finally,
-            # where an exception does not fail the call - it replaces the value
-            # the call was about to return. `SheetError` covered the quota and
-            # the network, and `batch_write` re-raises every other APIError
-            # untouched: a revoked key or a bad range escaped, took the Build
-            # with it, and left the resources after this one in the list still
-            # claimed with nothing coming back to free them.
-            log.error("%s: could not release %s (%s) - it stays in_use until "
-                      "'geelark pools --release-stuck'",
-                      pool.tab, resource.label, exc)
 
 
 def _signed_in_as(book: Book, gmail_row, given: str, outcome) -> str:

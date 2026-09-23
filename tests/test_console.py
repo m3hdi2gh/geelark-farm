@@ -822,17 +822,23 @@ def test_a_dead_proxy_is_named_once_not_twice():
     it, so the line printed one credential-bearing URL twice and wrapped over
     two rows to do it. The name is what finds the exit in the vendor's panel;
     what failed and why is the error's job."""
-    import inspect
     import re
 
-    from geelark_farm import builder
+    from tests.build_sources import builder_texts
 
-    flat = " ".join(inspect.getsource(builder).split())
-    named = re.findall(r'"proxy %s is dead: %s", ([\w. ]+?),', flat)
-
-    assert named, "the warning moved - update this test with it"
+    # Two copies since the split (2026-09-23): the keeper's check and the
+    # build's fresh-exit test. Each is pinned in its own file.
+    where = {}
+    for path, text in builder_texts():
+        named = re.findall(r'"proxy %s is dead: %s", ([\w. ]+?),',
+                           " ".join(text.split()))
+        if named:
+            where[path.name] = named
+    assert set(where) == {"keeper.py", "exits.py"}, (
+        f"the warning moved - update this test with it: {sorted(where)}")
     # The name first. `resource.label` alone is what said it twice.
-    assert all(arg.startswith("resource.name") for arg in named), named
+    for named in where.values():
+        assert all(arg.startswith("resource.name") for arg in named), named
 
 
 # ------------------------------- what is stopped is what was approved

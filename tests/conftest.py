@@ -89,7 +89,8 @@ def _one_ledger_per_test():
 #: split (2026-09-23). Add the module each step creates.
 MIGRATED_FROM_BUILDER = ("products", "wishes", "runctx", "cancel",
                          "exit_health", "keeper",
-                         "build_result", "rows")
+                         "build_result", "rows",
+                         "kit.exits", "kit.holds", "kit.install", "kit.phone")
 
 
 def _stale_patch(target, name) -> str:

@@ -58,6 +58,7 @@ def _module(name: str) -> pathlib.Path:
 #: one until 2026-09-23 (`sync_lists` reached back for possible_statuses).
 BELOW_THE_BUILDER = ("pools", "products", "wishes", "runctx", "cancel",
                      "exit_health", "keeper", "build_result", "rows",
+                     "kit.exits", "kit.holds", "kit.install", "kit.phone",
                      "failures",
                      "breaker",
                      "phones",
@@ -222,3 +223,54 @@ def test_a_patch_on_state_builder_no_longer_owns_is_refused(monkeypatch):
     assert builder._run is runctx._run
     with pytest.raises(AssertionError, match="runctx._run now"):
         monkeypatch.setattr(builder, "_run", object())
+
+
+def test_builder_keeps_the_modules_tests_patch_through():
+    """ruff drops an import the module itself no longer uses, and a test
+    that patches `builder.proxy_mod.check` then fails on an attribute that
+    is not there (2026-09-23, the kit move). These stay, used or not."""
+    import types
+
+    from geelark_farm import builder
+
+    for name in ("phones", "shell", "apps", "play_install", "chatgpt_login",
+                 "google_login", "proxy_mod", "time", "breaker", "failures",
+                 "archive", "keeper", "cancel", "exit_health", "rows",
+                 "products", "runctx"):
+        assert isinstance(getattr(builder, name, None), types.ModuleType), name
+
+
+def test_every_relative_import_inside_a_function_resolves():
+    """A function-level `from . import geo` moved from builder.py into
+    kit/ resolved to kit.geo, and failed only when a build reached it -
+    the import-smoke test imports modules, not function bodies (the kit
+    move, 2026-09-23)."""
+    bad = []
+    for path in SRC.rglob("*.py"):
+        package = list(path.relative_to(SRC).parts[:-1])
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.ImportFrom) and node.level):
+                continue
+            base = package[:len(package) - (node.level - 1)]
+            if node.level - 1 > len(package):
+                bad.append(f"{path.relative_to(SRC)}:{node.lineno} climbs out")
+                continue
+            if node.module:
+                target = SRC.joinpath(*base, *node.module.split("."))
+                if not (target.with_suffix(".py").exists()
+                        or (target / "__init__.py").exists()):
+                    bad.append(f"{path.relative_to(SRC)}:{node.lineno} "
+                               f"{'.' * node.level}{node.module}")
+            else:
+                for alias in node.names:
+                    target = SRC.joinpath(*base, alias.name)
+                    # A module, or a name the package itself defines
+                    # (`from . import __version__`).
+                    package_init = SRC.joinpath(*base, "__init__.py")
+                    if not (target.with_suffix(".py").exists()
+                            or (target / "__init__.py").exists()
+                            or f"{alias.name} =" in package_init.read_text(
+                                encoding="utf-8")):
+                        bad.append(f"{path.relative_to(SRC)}:{node.lineno} "
+                                   f"from {'.' * node.level} import {alias.name}")
+    assert not bad, bad
