@@ -1548,27 +1548,26 @@ class PhoneLog:
         Never raises. A build must not die because this read failed - the worst
         case is that it carries on, which is what it did before this existed.
         """
-        wanted = str(serial).strip()
-        try:
-            for _offset, cells in self._typed_rows("the Phones tab"):
-                if (cells.get("Serial") or "").strip() == wanted:
-                    return (cells.get("State") or "").strip().casefold()
-        except Exception as exc:                                  # noqa: BLE001
-            log.debug("could not read the State of %s (%s)", wanted, exc)
-        return ""
+        return self._cell_of(serial, "State").casefold()
 
     def status_of(self, serial: str) -> str:
         """This phone's Status cell, right now, as written - "" when the
         row is not there or cannot be read. Never raises, for the same
         reason `state_of` does not: a finish reads it before it marks
         the row `building`, to put back if it ends without looking."""
+        return self._cell_of(serial, "Status")
+
+    def _cell_of(self, serial: str, column: str) -> str:
+        """One cell of this phone's row, stripped - "" when the row is not
+        there or the tab cannot be read. One reader for `state_of` and
+        `status_of`, never raising for both."""
         wanted = str(serial).strip()
         try:
             for _offset, cells in self._typed_rows("the Phones tab"):
                 if (cells.get("Serial") or "").strip() == wanted:
-                    return (cells.get("Status") or "").strip()
+                    return (cells.get(column) or "").strip()
         except Exception as exc:                                  # noqa: BLE001
-            log.debug("could not read the Status of %s (%s)", wanted, exc)
+            log.debug("could not read the %s of %s (%s)", column, wanted, exc)
         return ""
 
     @staticmethod
