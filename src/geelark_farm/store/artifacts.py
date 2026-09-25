@@ -62,15 +62,19 @@ def folders(settings: Settings, serial: str) -> list[dict]:
             "SELECT folder, min(created_at),"
             " array_agg(name ORDER BY name) FILTER (WHERE name LIKE '%%.xml'),"
             " max(convert_from(content, 'UTF8'))"
-            "   FILTER (WHERE name = 'outcome.txt')"
+            "   FILTER (WHERE name = 'outcome.txt'),"
+            " array_agg(name ORDER BY name) FILTER (WHERE name LIKE '%%.png')"
             " FROM artifacts WHERE serial = %s GROUP BY folder"
             " ORDER BY min(created_at)", (str(serial),))
         rows = cur.fetchall()
         conn.rollback()
     out = []
-    for folder, when, names, outcome in rows:
+    for folder, when, names, outcome, images in rows:
         out.append({"folder": folder, "at": when,
                     "files": list(names or []),
+                    # The screenshots a failing flow saved - the phone's
+                    # page shows the last one (web/journey, 2026-09-26).
+                    "images": list(images or []),
                     "outcome": (outcome or "").strip().splitlines()[0]
                     if (outcome or "").strip() else ""})
     return out

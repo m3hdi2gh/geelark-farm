@@ -328,6 +328,11 @@ class _Handler(BaseHTTPRequestHandler):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
                 return self._screen(user, path)
+            if path.startswith("/phones/") and ("/wire/" in path
+                                                or "/shot/" in path):
+                if user["sees"] != "all":
+                    return self._html(403, pages.forbidden(user))
+                return self._picture(user, path)
             if path.startswith("/phones/"):
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -337,8 +342,10 @@ class _Handler(BaseHTTPRequestHandler):
                 if story is None:
                     return self._html(404, pages.page(
                         "404", "<h2>No such phone</h2>", user=user))
+                runs = [_run_words(run) for run in
+                        read.phone_journey(self.settings, serial)]
                 return self._html(200, pages.phone_story_page(
-                    story, user, explain=_explain,
+                    story, user, explain=_explain, journey=runs,
                     said=(parse_qs(self.path.partition("?")[2])
                           .get("said") or [""])[0]))
             self._html(404, pages.page("404", "<h2>Nothing here</h2>",
@@ -1222,6 +1229,47 @@ class _Handler(BaseHTTPRequestHandler):
             return self._html(404, pages.page(
                 "404", "<h2>No such screen</h2>", user=user))
         return self._text(200, found.decode("utf-8", errors="replace"))
+
+    def _picture(self, user: dict, path: str) -> None:
+        """A picture of one archived screen for the phone's journey: `wire`
+        draws the screen from its XML (web/journey), `shot` is the real
+        screenshot a failing flow saved. The same guards as the XML's
+        (read.screen_bytes); a screenshot is shown to those who may take
+        phones, since it is the phone's screen as it stood."""
+        from ..store.users import may
+        from . import journey
+
+        serial, _, rest = path[len("/phones/"):].partition("/")
+        what, _, rest = rest.partition("/")
+        folder, _, name = rest.partition("/")
+        if what == "shot" and not may(user, "may_take_phones"):
+            return self._html(403, pages.forbidden(user))
+        found = (read.screen_bytes(self.settings, serial, folder, name,
+                                   suffix=".png" if what == "shot" else ".xml")
+                 if serial.isdigit() and what in ("wire", "shot") else None)
+        if found is None:
+            return self._html(404, pages.page(
+                "404", "<h2>No such screen</h2>", user=user))
+        if what == "wire":
+            return self._bytes(200, journey.wireframe_svg(found).encode(),
+                               "image/svg+xml")
+        return self._bytes(200, found, "image/png")
+
+    def _bytes(self, code: int, data: bytes, kind: str) -> None:
+        """An archived picture. They never change once written, so the
+        browser keeps them - privately: they are this farm's screens."""
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "private, max-age=86400")
+        # A drawing is shown as an image; opened on its own it is a page,
+        # and it may run nothing.
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; style-src 'unsafe-inline'")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def _service(self, user: dict, what: str, field: dict) -> None:
         """Pause / Resume / Clear breaker / Stop / Start. Every one asks
@@ -2631,6 +2679,31 @@ def _explain(status: str) -> tuple[str, str]:
         return "", ""
     found = verdict(status)
     return found.seen, found.advice
+
+
+#: Who a verdict blames, in the words the phone's journey shows.
+BLAME_WORDS = {"credential": "the account", "exit": "the exit",
+               "device": "the phone", "challenged": "a code or a check",
+               "nobody": "nobody"}
+
+
+def _run_words(run: dict) -> dict:
+    """A run of the phone's journey with what ended it in words: the
+    specific reason where the failing flow named its last screen for one
+    (`180610-captcha_shown.xml`), the run's own status otherwise - and
+    who that blames."""
+    from ..failures import knows, verdict
+
+    reason = ""
+    dump = str(run.get("last_dump") or "")
+    if "-" in dump:
+        reason = dump.split("-", 1)[1].rsplit(".", 1)[0]
+    for word in (reason, str(run.get("status") or "")):
+        if word and knows(word):
+            found = verdict(word)
+            return dict(run, why=found.seen, advice=found.advice,
+                        blame=BLAME_WORDS.get(found.blame, ""), reason=word)
+    return dict(run, why="", advice="", blame="", reason="")
 
 
 #: Where an add flow may return to. Two places, both real pages: the tab

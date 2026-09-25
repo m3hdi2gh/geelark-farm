@@ -233,6 +233,11 @@ def test_hold(web, monkeypatch):  # noqa: F811
     import geelark_farm.web.app as app_mod
     monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
     monkeypatch.setattr(app_mod.read, "gmail_sellers", lambda s: ["LEO"])
+    # Phone 4435's journey, from the real fixture (tests/fixtures/
+    # journey.json): its page draws the stages, the screens from their
+    # XML and - where $GF_DEVSHOT names a png - the screenshot
+    # (2026-09-26).
+    _journey_4435(monkeypatch, app_mod)
     monkeypatch.setattr(
         store_sessions, "find",
         lambda settings, token: {"user": dict(FakeStore.user), "csrf": "c1"})
@@ -257,3 +262,43 @@ def test_hold(web, monkeypatch):  # noqa: F811
             os.remove(flip)
             print("  flipped 3243 to ready")
         time.sleep(1)
+
+
+def _journey_4435(monkeypatch, app_mod):
+    import json
+    import pathlib
+    from datetime import datetime, timezone
+
+    from geelark_farm.web import journey
+
+    data = json.loads((pathlib.Path(__file__).parent / "fixtures"
+                       / "journey.json").read_text(encoding="utf-8"))["4435"]
+    runs = journey.runs_from(
+        data["lines"], data["folders"],
+        [datetime(2026, 9, 25, 17, 59, 28, tzinfo=timezone.utc)])
+    real_story = app_mod.read.phone_story
+
+    def story(settings, serial):
+        if serial != "4435":
+            return real_story(settings, serial)
+        return {"serial": "4435", "phone": None, "stop_asked": False,
+                "pending": "", "timeline": [
+                    {"at": "2026-09-25 18:06:12+00", "source": "event",
+                     "kind": "build_finished", "status": "phone_distrusted",
+                     "run": "r1/1", "text": "ok=False", "seconds": 406}]}
+
+    shot = os.environ.get("GF_DEVSHOT") or ""
+
+    def screen(settings, serial, folder, name, *, suffix=".xml"):
+        if serial != "4435":
+            return None
+        if suffix == ".png":
+            return (pathlib.Path(shot).read_bytes()
+                    if shot and os.path.exists(shot) else None)
+        text = data["xml"].get(name)
+        return text.encode("utf-8") if text else None
+
+    monkeypatch.setattr(app_mod.read, "phone_story", story)
+    monkeypatch.setattr(app_mod.read, "phone_journey",
+                        lambda s, serial: runs if serial == "4435" else [])
+    monkeypatch.setattr(app_mod.read, "screen_bytes", screen)

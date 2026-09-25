@@ -2054,22 +2054,26 @@ def _stored(settings: Settings, serial: str) -> list[dict]:
     return [{"at": f["at"], "source": "artifact", "kind": "screens",
              "status": f["outcome"], "run": f["folder"],
              "folder": f["folder"], "files": f["files"],
+             "images": f.get("images") or [],
              "text": f"{len(f['files'])} screen(s) archived in {f['folder']}"
                      + (f" - {f['outcome']}" if f["outcome"] else ""),
              "seconds": None} for f in found]
 
 
-def screen_bytes(settings: Settings, serial: str, folder: str, name: str
-                 ) -> bytes | None:
-    """One archived screen's text, from the store when it is on and has
-    it, from the disk this host can see otherwise. The same three guards
-    as `screen_file`: nothing here reads a name it was not told."""
+def screen_bytes(settings: Settings, serial: str, folder: str, name: str,
+                 *, suffix: str = ".xml") -> bytes | None:
+    """One archived screen, from the store when it is on and has it, from
+    the disk this host can see otherwise - its XML, or with `suffix=".png"`
+    the screenshot a failing flow saved. The same three guards as
+    `screen_file`: nothing here reads a name it was not told."""
+    if suffix not in (".xml", ".png"):
+        return None
     if not (serial and folder and name):
         return None
     if any(sep in folder + name for sep in ("/", "\\")) or ".." in (folder,
                                                                      name):
         return None
-    if not name.endswith(".xml"):
+    if not name.endswith(suffix):
         return None
     if settings.artifacts_in_pg:
         from ..store import artifacts as store_artifacts
@@ -2082,13 +2086,42 @@ def screen_bytes(settings: Settings, serial: str, folder: str, name: str
             found = None
         if found is not None:
             return found
-    path = screen_file(settings, serial, folder, name)
+    path = screen_file(settings, serial, folder, name, suffix=suffix)
     if path is None:
         return None
     try:
         return path.read_bytes()
     except OSError:
         return None
+
+
+def phone_journey(settings: Settings, serial: str) -> list[dict]:
+    """The runs one phone went through, newest last: the stages of each,
+    the screens it read and which of them are archived - read back from
+    its log lines, its `phone created` events and its archived folders
+    (web/journey). Empty where the store is off or has nothing: the
+    phone's page then shows its story alone, as it did."""
+    from . import journey
+
+    if not settings.store_enabled:
+        return []
+    try:
+        with Store(settings) as store:
+            lines = store._rows(
+                "SELECT at, logger, msg FROM logs WHERE serial = %s"
+                " AND at > now() - interval '30 days' ORDER BY at"
+                " LIMIT 20000", (serial,))
+            created = [r["at"] for r in store._rows(
+                "SELECT at FROM events WHERE serial = %s AND kind = 'phone'"
+                " AND detail LIKE 'created%%' ORDER BY at", (serial,))]
+    except Exception as exc:                                       # noqa: BLE001
+        log.warning("could not read phone %s's journey (%s)", serial, exc)
+        return []
+    folders = _stored(settings, serial) if settings.artifacts_in_pg else []
+    seen = {f["folder"] for f in folders}
+    folders += [f for f in _archived(settings.artifact_dir, serial)
+                if f["folder"] not in seen]
+    return journey.runs_from(lines, folders, created)
 
 
 def _archived(root, serial: str) -> list[dict]:
@@ -2115,6 +2148,8 @@ def _archived(root, serial: str) -> list[dict]:
                        .splitlines()[0] if outcome_file.is_file() else "")
             files = sorted(f.name for f in folder.iterdir()
                            if f.suffix == ".xml" and f.is_file())
+            images = sorted(f.name for f in folder.iterdir()
+                            if f.suffix == ".png" and f.is_file())
             when = datetime.fromtimestamp(folder.stat().st_mtime,
                                           tz=timezone.utc)
         except (OSError, IndexError) as exc:
@@ -2122,7 +2157,7 @@ def _archived(root, serial: str) -> list[dict]:
             continue
         found.append({"at": when, "source": "artifact", "kind": "screens",
                       "status": outcome, "run": folder.name,
-                      "folder": folder.name, "files": files,
+                      "folder": folder.name, "files": files, "images": images,
                       "text": f"{len(files)} screen(s) archived in "
                               f"{folder.name}"
                               + (f" - {outcome}" if outcome else ""),
@@ -2130,11 +2165,13 @@ def _archived(root, serial: str) -> list[dict]:
     return found
 
 
-def screen_file(settings: Settings, serial: str, folder: str, name: str):
+def screen_file(settings: Settings, serial: str, folder: str, name: str,
+                *, suffix: str = ".xml"):
     """The path of one archived screen, or None. Guarded three ways: the
     folder must be one of this phone's (artifacts.serial_of), the file
-    must be one plain .xml name inside it, and the resolved path must
-    still sit under artifact_dir - so a crafted name walks nowhere."""
+    must be one plain .xml (or .png) name inside it, and the resolved
+    path must still sit under artifact_dir - so a crafted name walks
+    nowhere."""
     from pathlib import Path
 
     from ..artifacts import serial_of
@@ -2144,7 +2181,9 @@ def screen_file(settings: Settings, serial: str, folder: str, name: str):
     if any(sep in folder + name for sep in ("/", "\\")) or ".." in (folder,
                                                                      name):
         return None
-    if not name.endswith(".xml") or serial_of(Path(folder)) != serial:
+    if suffix not in (".xml", ".png"):
+        return None
+    if not name.endswith(suffix) or serial_of(Path(folder)) != serial:
         return None
     root = settings.artifact_dir
     try:

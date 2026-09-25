@@ -1810,8 +1810,8 @@ def test_archived_screens_are_served_only_from_their_own_folder(
     real = read_mod.screen_file
     art = make_settings(artifact_dir=tmp_path)
     monkeypatch.setattr(app_mod.read, "screen_file",
-                        lambda s, serial, folder, name:
-                        real(art, serial, folder, name))
+                        lambda s, serial, folder, name, **k:
+                        real(art, serial, folder, name, **k))
     client = web()
     client.login()
     status, headers, text = client.request(
@@ -9710,3 +9710,120 @@ def test_a_send_that_went_through_closes_its_sheet_and_says_so():
     assert branch.index("swapMain(doc);") < branch.index("sayIt(doc);")
     # Turned away, it stays open with the reason: the test is `turned`.
     assert js.index("var turned = ") < at
+
+
+# ------------------------------------------ the phone's journey (2026-09-26)
+def _journey_4435():
+    import json
+    import pathlib
+    from datetime import datetime, timezone
+
+    from geelark_farm.web import journey
+
+    data = json.loads((pathlib.Path(__file__).parent / "fixtures"
+                       / "journey.json").read_text(encoding="utf-8"))
+    phone = data["4435"]
+    return journey.runs_from(
+        phone["lines"], phone["folders"],
+        [datetime(2026, 9, 25, 17, 59, 28, tzinfo=timezone.utc)]), phone
+
+
+def _journey_story(monkeypatch):
+    runs, _ = _journey_4435()
+    monkeypatch.setattr(app_mod.read, "phone_story", lambda s, serial: {
+        "serial": serial, "phone": None, "timeline": [
+            {"at": "2026-09-25 18:06:12+00", "source": "event",
+             "kind": "build_finished", "status": "phone_distrusted",
+             "run": "r1/1", "text": "ok=False", "seconds": 406}],
+        "stop_asked": False, "pending": ""})
+    monkeypatch.setattr(app_mod.read, "phone_journey", lambda s, serial: runs)
+
+
+def test_the_phone_page_draws_where_its_run_spent_its_time(web, monkeypatch):
+    """Its story was a list of events; where a run lost its minutes and
+    which screen it stopped on were a search through log lines (the
+    operator, 2026-09-26)."""
+    _journey_story(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/phones/4435")
+
+    panel = body[body.index("Its journey"):body.index("Its story")]
+    assert "Build" in panel and "phone_distrusted" in panel
+    # The reason the flow named its last screen for, and who it blames.
+    assert "The service showed a CAPTCHA" in panel
+    assert "blamed on the account" in panel
+    # The stages, the one that stopped open, screen by screen.
+    assert 'class="jseg failed"' in panel and "× Google" in panel
+    assert "Google, screen by screen" in panel
+    folder = "20260925-175928-build4435"
+    assert f'src="/phones/4435/wire/{folder}/180404-captcha.xml"' in panel
+    assert "captcha ×11" in panel
+    assert panel.count("→ answered, and another came") == 3
+    assert f'src="/phones/4435/shot/{folder}/captcha-screen.png"' in panel
+    assert 'loading="lazy"' in panel
+
+
+def test_a_screenshot_is_for_those_who_may_take_phones(web, monkeypatch):
+    _journey_story(monkeypatch)
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_take_phones": False})
+    client = web()
+    client.login(username="narrow")
+    _, _, body = client.request("GET", "/phones/4435")
+    assert "/shot/" not in body
+    assert "shown to those who may take phones" in body
+    assert "/wire/" in body, "the drawings are not the phone's screen"
+
+
+def test_journey_pictures_are_served_only_from_the_phones_own_folder(
+        web, monkeypatch, tmp_path, make_settings):
+    import geelark_farm.web.read as read_mod
+
+    _, phone = _journey_4435()
+    folder = "20260925-175928-build4435"
+    mine = tmp_path / folder
+    mine.mkdir()
+    (mine / "180404-captcha.xml").write_text(
+        phone["xml"]["180404-captcha.xml"], encoding="utf-8")
+    (mine / "captcha-screen.png").write_bytes(b"png-bytes")
+    other = tmp_path / "20260925-175928-build4436"
+    other.mkdir()
+    (other / "180404-captcha.xml").write_text("<theirs/>", encoding="utf-8")
+    real = read_mod.screen_file
+    art = make_settings(artifact_dir=tmp_path)
+    monkeypatch.setattr(app_mod.read, "screen_file",
+                        lambda s, serial, folder, name, **k:
+                        real(art, serial, folder, name, **k))
+    client = web()
+    client.login()
+
+    status, headers, body = client.request(
+        "GET", f"/phones/4435/wire/{folder}/180404-captcha.xml")
+    assert status == 200 and dict(headers)["Content-Type"] == "image/svg+xml"
+    assert body.startswith("<svg") and "pe•••@gmail.com" in body
+    assert "default-src 'none'" in dict(headers)["Content-Security-Policy"]
+    status, headers, body = client.request(
+        "GET", f"/phones/4435/shot/{folder}/captcha-screen.png")
+    assert status == 200 and dict(headers)["Content-Type"] == "image/png"
+    assert body == "png-bytes"
+    for bad in (f"/phones/4435/wire/{folder}/captcha-screen.png",
+                f"/phones/4435/shot/{folder}/180404-captcha.xml",
+                "/phones/4435/wire/20260925-175928-build4436/180404-captcha.xml",
+                f"/phones/4435/wire/{folder}/..%2F..%2Fsecret.xml",
+                f"/phones/4435/other/{folder}/180404-captcha.xml"):
+        status, _, _ = client.request("GET", bad)
+        assert status == 404, bad
+
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "narrow", "role": "operator",
+                         "sees": "all", "may_take_phones": False})
+    narrow = web()
+    narrow.login(username="narrow")
+    status, _, _ = narrow.request(
+        "GET", f"/phones/4435/shot/{folder}/captcha-screen.png")
+    assert status == 403
+    status, _, _ = narrow.request(
+        "GET", f"/phones/4435/wire/{folder}/180404-captcha.xml")
+    assert status == 200

@@ -6903,7 +6903,7 @@ def _now_entry(phone: dict) -> str:
 
 
 def phone_story_page(story: dict, user: dict, *, explain=None,
-                     said: str = "") -> str:
+                     said: str = "", journey=None) -> str:
     """Everything one phone went through, two lines an entry: what
     happened, then why or what it means. Identical failures in a row
     fold into one entry with every time listed; the story closes with
@@ -6994,6 +6994,7 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
             f'<h2>Phone {esc(serial)}</h2>{head}'
             f'<span class="status">{" ".join(actions)}</span></div>'
             + (_phone_facts(serial, phone) if phone else "")
+            + _journey_panel(journey or [], serial, user)
             + f'<div class="panel wrap"><h3>Its story '
               f'<span class="n">{_plural(len(items), "entry", "entries")}'
               f'</span></h3>{table}{hint}'
@@ -7002,6 +7003,160 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
               f' · <a href="/logs?phone={esc(serial)}">open its log lines'
               f'</a></p></div></div>')
     return page(f"Phone {serial}", body, user=user, here="/")
+
+
+# ------------------------------------------------------- the journey
+#: A screen the router names, the way a person says it.
+SCREEN_WORDS = {"email_entry": "email", "password_entry": "password",
+                "2fa_code_entry": "2FA code", "dismissable": "a notice",
+                "email_code_entry": "emailed code", "loading": "loading",
+                "captcha": "captcha", "welcome": "welcome",
+                "google_account_sheet": "Google's account sheet"}
+_STAGE_MARK = {"done": "✓", "failed": "×", "refused": "!", "running": "…"}
+
+
+def _screen_word(name: str) -> str:
+    return SCREEN_WORDS.get(name, name.replace("_", " "))
+
+
+def _journey_panel(runs: list[dict], serial: str, user: dict) -> str:
+    """Where each of the phone's runs spent its time and the screens it
+    saw, newest first - the newest open, the older ones folded. Its story
+    below keeps every event; this is the picture of it (the operator,
+    2026-09-26)."""
+    if not runs:
+        return ""
+    parts = []
+    for i, run in enumerate(reversed(runs)):
+        head, body = _journey_head(run), _journey_body(run, serial, user)
+        if i == 0:
+            parts.append(f'<section class="jrun">{head}{body}</section>')
+        else:
+            parts.append(f'<details class="jrun"><summary>{head}</summary>'
+                         f'{body}</details>')
+    return (f'<div class="panel wrap journey"><h3>Its journey '
+            f'<span class="n">{_plural(len(runs), "run")}</span></h3>'
+            + "".join(parts)
+            + '<p class="dim">Each run from its log lines: how long every '
+              'stage took and the screens the phone showed. A screen is '
+              'drawn from what the phone reported; the photo is the real '
+              'screen where a flow stopped.</p></div>')
+
+
+def _journey_head(run: dict) -> str:
+    kind = "Build" if run.get("kind") == "build" else "Finish"
+    end = (_clock(run["end"]) if run.get("end") else "still going")
+    took = _span(run["seconds"]) if run.get("seconds") is not None else ""
+    word = str(run.get("status") or "")
+    pill = (f'<span class="badge mono">{esc(word)}</span>' if word else
+            '<span class="badge live">running</span>')
+    return (f'<div class="jhead"><span class="jkind">{kind}</span>'
+            f'<span class="dim mono">{_day(run["start"])} '
+            f'{_clock(run["start"])} → {end}</span>'
+            f'<span class="mono">{took}</span>{pill}</div>')
+
+
+def _journey_body(run: dict, serial: str, user: dict) -> str:
+    out = []
+    why = str(run.get("why") or "")
+    if why and run.get("failed_at"):
+        blame = str(run.get("blame") or "")
+        chip = (f'<span class="jblame">blamed on {esc(blame)}</span>'
+                if blame and blame != "nobody" else "")
+        out.append(f'<p class="jwhy">{esc(why[0].upper() + why[1:])}{chip}</p>')
+    stages = run.get("stages") or []
+    segs = "".join(
+        f'<span class="jseg {esc(st["state"])}" '
+        f'style="flex:{max(1, int(st.get("seconds") or 1))} 1 0" '
+        f'title="{esc(st["word"])} · {_span(st.get("seconds") or 0)}">'
+        f'{_STAGE_MARK.get(st["state"], "")} {esc(st["word"])}</span>'
+        for st in stages if st["name"] != "created")
+    if segs:
+        out.append(f'<div class="jbar">{segs}</div>')
+    out.append('<div class="jstages">' + "".join(
+        f'<div class="jst {esc(st["state"])}"><b>'
+        f'{_STAGE_MARK.get(st["state"], "")} {esc(st["word"])}</b>'
+        f'<span class="mono">{_span(st.get("seconds") or 0)}</span>'
+        f'<span class="dim mono">{_clock(st["start"])}</span></div>'
+        for st in stages) + '</div>')
+    folder = str(run.get("folder") or "")
+    for st in stages:
+        if not st["screens"]:
+            continue
+        cards = _journey_cards(st, serial, folder,
+                               last=st["state"] in ("failed", "refused"))
+        if st["state"] in ("failed", "refused", "running"):
+            side = _journey_side(run, st, serial, folder, user)
+            out.append(f'<div class="jopen"><p class="jlabel">'
+                       f'{esc(st["word"])}, screen by screen</p>'
+                       f'<div class="jcards">{cards}{side}</div></div>')
+        else:
+            out.append(f'<details class="jmore"><summary>{esc(st["word"])}: '
+                       f'{_plural(len(st["screens"]), "screen")}</summary>'
+                       f'<div class="jcards">{cards}</div></details>')
+    return "".join(out)
+
+
+def _journey_cards(stage: dict, serial: str, folder: str, *, last: bool
+                   ) -> str:
+    cards = []
+    screens = stage["screens"]
+    for i, s in enumerate(screens):
+        word = _screen_word(s["name"])
+        times = f" ×{s['visits']}" if s["visits"] > 1 else ""
+        if s.get("file") and folder:
+            src = (f"/phones/{_q(serial)}/wire/{_q(folder)}/{_q(s['file'])}")
+            picture = (f'<img src="{src}" loading="lazy" width="120" '
+                       f'height="240" alt="{esc(word)}, as the phone reported it">')
+        else:
+            picture = f'<span class="jnone">{esc(word)}</span>'
+        taps = (f'<span class="dim">tapped {esc(", ".join(s["taps"][:2]))}'
+                f'</span>' if s.get("taps") else "")
+        bad = " bad" if last and i == len(screens) - 1 else ""
+        cards.append(
+            f'<figure class="jcard{bad}">{picture}<figcaption>'
+            f'<b>{esc(word)}{times}</b><span class="mono dim">'
+            f'+{_span(s.get("offset") or 0)} · {_span(s.get("seconds") or 0)}'
+            f'</span>{taps}</figcaption></figure>')
+    return "".join(cards)
+
+
+def _journey_side(run: dict, stage: dict, serial: str, folder: str,
+                  user: dict) -> str:
+    """Beside the stage that stopped: the captcha rounds, if there were
+    any, and the phone's real screen where it stopped."""
+    out = []
+    if stage.get("captchas"):
+        rows = "".join(
+            f'<div><span class="mono dim">{_clock(c["at"])}</span> '
+            f'{esc(c["prompt"])} → answered, and another came</div>'
+            for c in stage["captchas"])
+        out.append(f'<div class="jcaps"><p class="jlabel">Inside the captcha'
+                   f'</p>{rows}</div>')
+    from ..store.users import may
+
+    shot, dump = str(run.get("shot") or ""), str(run.get("last_dump") or "")
+    if shot and folder:
+        # The route's own rule (app._picture): looking is not a press, so
+        # not `_may`, which also asks whether presses are on at all.
+        if may(user, "may_take_phones"):
+            src = f"/phones/{_q(serial)}/shot/{_q(folder)}/{_q(shot)}"
+            out.append(f'<figure class="jshot"><a href="{src}" target="_blank" '
+                       f'rel="noopener"><img src="{src}" loading="lazy" '
+                       f'width="220" alt="The phone\'s screen where it stopped">'
+                       f'</a><figcaption>The last screen · '
+                       f'<a href="{src}" target="_blank" rel="noopener">full size'
+                       f'</a></figcaption></figure>')
+        else:
+            out.append('<p class="dim jshot">A screenshot of where it stopped '
+                       'is kept; it is shown to those who may take phones.</p>')
+    elif dump and folder:
+        src = f"/phones/{_q(serial)}/wire/{_q(folder)}/{_q(dump)}"
+        out.append(f'<figure class="jshot"><img src="{src}" loading="lazy" '
+                   f'width="220" alt="The last screen, as the phone reported '
+                   f'it"><figcaption>The last screen, as reported</figcaption>'
+                   f'</figure>')
+    return "".join(out)
 
 
 # ------------------------------------------------------------ confirming
