@@ -8906,9 +8906,12 @@ def test_the_phone_table_is_a_region_the_server_owns(web, monkeypatch):
     # reloaded (2026-09-21, found by audit the same evening). A block
     # added to <main> has to declare itself here or it never moves.
     regions = re.findall(r'data-live="([a-z]+)"', body)
+    # The Send list is one too, where the Send sheet is drawn at all -
+    # only with manual login on (2026-09-26).
+    sends = ['send'] if 'data-sheet="send"' in body else []
     assert sorted(regions) == sorted(
         ["alerts", "top", "rail", "tally", "phones", "build", "side",
-         "foot"]), regions
+         "foot"] + sends), regions
     assert len(regions) == len(set(regions)), "a region is one node"
     # And none of them inside another: `swapRegions` replaces each
     # region's children, and a region under a region would be replaced
@@ -9662,4 +9665,32 @@ def test_the_phones_table_says_whose_gmail_is_on_each_phone(monkeypatch):
     assert pages._seller_line({"gmail": "", "gmail_seller": "LEO"}) == ""
     assert pages._seller_line({"gmail": "a@x.com", "gmail_seller": ""}) == ""
     assert "_seller_line(r)" in inspect.getsource(pages._phone_rows)
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_the_send_list_is_a_region_and_moves_while_it_is_open(
+        web, monkeypatch):
+    """The Send sheet sat outside every region, so the region swap never
+    touched it: phone 4444 was still offered seven minutes after an
+    account went onto it, and the press was refused (the operator,
+    2026-09-26)."""
+    _dash(monkeypatch, phones=[
+        {"serial": "4444", "status": "app_only", "state": "", "gmail": "",
+         "app_account": "", "proxy_name": "US37"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    send = body[body.index('data-sheet="send"'):]
+    send = send[:send.index("</section>")]
+    assert '<div data-live="send">' in send, "the list is a region"
+
+    js = assets.JS
+    keep = js[js.index("function keepSheet(held, kind, fresh){"):]
+    keep = keep[:keep.index("\n  }\n")]
+    branch = keep[keep.index("if (kind === 'send') {"):]
+    # Open: replaced when it changed, with the account put back on the
+    # new rows - the click that opened the sheet filled the old ones.
+    assert "!sendSame(list, flist)" in branch
+    assert "i.value = who;" in branch
+    assert "function sendSame(mine, fresh){" in js
 

@@ -2534,9 +2534,15 @@ def _send_sheet(data: dict, user: dict) -> str:
         f'{_phone_badge(p)}<span class="age">{esc(str(p.get("proxy_name") or ""))}'
         f'</span><button class="go small" style="margin-left:auto">Send</button>'
         f'</form>' for p in able)
-    body = (f'<div class="slab">{rows}</div>' if rows else
-            '<p class="empty">No phone can take an account right now - '
-            'every one of them already has one, or is still building.</p>')
+    # A region of its own: the list is the page's data, and outside every
+    # region it was drawn once and never again - it offered phone 4444
+    # seven minutes after an account went onto it, and the press was
+    # refused (the operator, 2026-09-26).
+    body = ('<div data-live="send">'
+            + (f'<div class="slab">{rows}</div>' if rows else
+               '<p class="empty">No phone can take an account right now - '
+               'every one of them already has one, or is still building.</p>')
+            + '</div>')
     return (f'<section class="sheet narrow" data-sheet="send" hidden>'
             f'<header><h3>Send to a phone</h3><span class="hint mono" '
             f'data-hint></span><button type="button" class="x" data-shut="1" '

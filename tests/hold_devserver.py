@@ -192,7 +192,7 @@ def test_hold(web, monkeypatch):  # noqa: F811
     from geelark_farm.store import sessions as store_sessions
 
     spotify = _spotify_rows()
-    _dash(monkeypatch, pool_rows={
+    base = _dash(monkeypatch, pool_rows={
         "gmail": _rows(), "gpt": _gpt_rows(),
         "spotify": spotify,
         "proxy": _proxies(), "totals": {"gmail": {"live": 36, "spent": 40}}},
@@ -243,7 +243,17 @@ def test_hold(web, monkeypatch):  # noqa: F811
     # How long to hold it up, in minutes: twenty by default, longer
     # when somebody is testing by hand (GF_DEVMINUTES).
     minutes = int(os.environ.get("GF_DEVMINUTES") or 20)
+    # A file at $GF_DEVFLIP_FILE makes warm phone 3243 ready, the way an
+    # account going onto it does - so a list that should move while the
+    # page is open can be watched moving (the Send sheet, 2026-09-26).
+    flip = os.environ.get("GF_DEVFLIP_FILE") or ""
     for _ in range(minutes * 60):
         if os.path.exists(stop):
             break
+        if flip and os.path.exists(flip):
+            for phone in base.get("phones") or []:
+                if phone.get("serial") == "3243":
+                    phone.update(status="ready", app_account="flip@x.com")
+            os.remove(flip)
+            print("  flipped 3243 to ready")
         time.sleep(1)

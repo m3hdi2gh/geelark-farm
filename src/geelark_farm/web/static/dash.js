@@ -1246,6 +1246,19 @@
     return copy;
   }
 
+  // The send list compared without the address the open sheet filled in,
+  // which the fresh copy never carries - or it would be rebuilt every tick.
+  function sendSame(mine, fresh){
+    if (typeof mine.isEqualNode !== 'function') return false;
+    var a = comparable(mine), b = comparable(fresh);
+    [a, b].forEach(function(copy){
+      Array.prototype.forEach.call(
+        copy.querySelectorAll('input[name=addresses]'),
+        function(i){ i.setAttribute('value', ''); });
+    });
+    return a.isEqualNode(b);
+  }
+
   // Each region's new contents in place of its old, and nothing else
   // touched. False when the page has no region yet, which is every page
   // but the dashboard for now.
@@ -1295,6 +1308,25 @@
       if (old) old.replaceWith(s); else held.appendChild(s);
     });
     if (!mine || !theirs) return;
+    // The send list, open: the phones that can take an account change
+    // under it - one that got an account a minute ago was still offered,
+    // and the press was refused (the operator, 2026-09-26). Replaced only
+    // when it changed, and the account the sheet was opened for is put
+    // back on the new rows, since the click that opened it filled them.
+    if (kind === 'send') {
+      var list = mine.querySelector('[data-live="send"]');
+      var flist = theirs.querySelector('[data-live="send"]');
+      if (list && flist && !sendSame(list, flist)) {
+        var hint = mine.querySelector('[data-hint]');
+        var who = hint ? hint.textContent : '';
+        list.replaceChildren.apply(
+          list, Array.prototype.slice.call(flist.childNodes));
+        list.querySelectorAll('input[name=addresses]').forEach(function(i){
+          i.value = who;
+        });
+      }
+      return;
+    }
     // A sheet showing a page of its own - the preview of a paste, the
     // "are you sure" of a remove - is not a list to update. Its table
     // is that page's, and the pool's rows were being merged into it:
