@@ -15,6 +15,7 @@ Commands are grouped by what they are for:
   phone lifecycle        phones, create, delete, start, stop, reap
   device diagnostics     dump, tap, shell, type, screenshot
   one step at a time     login, flow, install
+  writing a new flow     watch, draft, replay
 
 It named `run` and `rows`, which were renamed and removed, and omitted
 fourteen that exist - while claiming to be the full surface. A test now
@@ -29,9 +30,21 @@ import dataclasses
 import logging
 import signal
 import sys
+import threading
 import time
+from pathlib import Path
 
-from . import __version__, accounts, phones, proxy, screen, shell
+from . import (
+    __version__,
+    accounts,
+    capture,
+    draft,
+    phones,
+    proxy,
+    replay,
+    screen,
+    shell,
+)
 from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
 from .config import REPO_ROOT, ConfigError, Settings, revision
@@ -188,6 +201,32 @@ def build_parser() -> argparse.ArgumentParser:
                         help="phone id (default: the only running phone)")
     p_dump.add_argument("--save", metavar="PATH",
                         help="also save the raw XML as a test fixture")
+
+    # The three a new flow is written with: record a walk, draft a flow
+    # from it, run the flow over it again for nothing (2026-09-25).
+    p_watch = sub.add_parser(
+        "watch", help="record every screen while you drive the phone by hand")
+    p_watch.add_argument("--phone", metavar="ID")
+    p_watch.add_argument("--into", metavar="PATH",
+                         help="where to keep it (default: under artifacts/)")
+    p_watch.add_argument("--every", type=float, default=capture.EVERY,
+                         metavar="SECONDS", help="how often to look")
+    p_watch.add_argument("--seconds", type=float, default=capture.SECONDS,
+                         metavar="SECONDS", help="stop after this long")
+
+    p_draft = sub.add_parser(
+        "draft", help="write the first draft of a flow from a recorded walk")
+    p_draft.add_argument("walk", metavar="PATH")
+    p_draft.add_argument("--save", metavar="PATH", help="write it to a file")
+
+    p_replay = sub.add_parser(
+        "replay", help="run a flow over a recorded walk - no phone, no cost")
+    p_replay.add_argument("walk", metavar="PATH")
+    p_replay.add_argument("--flow", required=True, metavar="MODULE",
+                          help="the module whose SCREENS to drive, as "
+                               "package.module")
+    p_replay.add_argument("--budget", type=float, default=900.0,
+                          metavar="SECONDS")
 
     p_tap = sub.add_parser("tap", help="tap the element with this label")
     p_tap.add_argument("label")
@@ -638,6 +677,65 @@ def cmd_type(settings: Settings, args) -> int:
             return 1
         print(f"typed {len(args.text)} character(s) into the focused field")
     return 0
+
+
+def cmd_watch(settings: Settings, args) -> int:
+    """Record a walk while a person drives the phone in GeeLark's viewer.
+
+    The first of the three tools a new flow is written with. Stop it with
+    Ctrl+C when the job is done; what it has kept is written either way.
+    """
+    client = build_client(settings)
+    with device(settings, client, args.phone) as phone_id:
+        url = phones.ensure_running(client, phone_id)
+        if url:
+            print(f"drive it here:\n  {url}\n")
+        where = (Path(args.into) if args.into else
+                 settings.artifact_dir
+                 / f"{time.strftime('%Y%m%d-%H%M%S')}-walk-{phone_id}")
+        print(f"recording into {where}")
+        print("do the job by hand; every screen you reach is kept.")
+        print("Ctrl+C when you are done.\n")
+        stopped = threading.Event()
+        try:
+            capture.watch(client, phone_id, where, every=args.every,
+                          seconds=args.seconds, cancelled=stopped.is_set)
+        except KeyboardInterrupt:
+            stopped.set()
+            print("\nstopping - writing what was kept")
+            capture.watch(client, phone_id, where, every=args.every,
+                          seconds=0, cancelled=lambda: True)
+        walk = capture.read(where)
+        print(f"\n{len(walk['steps'])} screen(s), {walk['seconds']:.0f}s"
+              + (f", {walk['addresses_removed']} address(es) removed"
+                 if walk["addresses_removed"] else ""))
+        print(f"next:  geelark draft {Path(where).as_posix()}")
+        return 0
+
+
+def cmd_draft(settings: Settings, args) -> int:
+    """The first draft of a flow, from a recorded walk. Touches no phone."""
+    source = draft.draft(Path(args.walk))
+    if args.save:
+        Path(args.save).write_text(source, encoding="utf-8")
+        print(f"written to {args.save}")
+    else:
+        print(source)
+    return 0
+
+
+def cmd_replay(settings: Settings, args) -> int:
+    """Run a flow over a recorded walk. Touches no phone."""
+    try:
+        screens = replay.load_screens(args.flow)
+    except Exception as exc:                                      # noqa: BLE001
+        print(f"could not load {args.flow}: {exc}", file=sys.stderr)
+        return 2
+    outcome = replay.over(Path(args.walk), screens,
+                          budget_seconds=args.budget)
+    print(f"\nscreens: {' > '.join(outcome.trail) or 'none'}")
+    print(f"outcome: {outcome}")
+    return 0 if outcome.ok else 1
 
 
 def cmd_screenshot(settings: Settings, args) -> int:
@@ -1334,6 +1432,9 @@ def main(argv: list[str] | None = None) -> int:
         "plan": cmd_plan,
         "proxy": cmd_proxy,
         "dump": cmd_dump,
+        "watch": cmd_watch,
+        "draft": cmd_draft,
+        "replay": cmd_replay,
         "tap": cmd_tap,
         "shell": cmd_shell,
         "type": cmd_type,
