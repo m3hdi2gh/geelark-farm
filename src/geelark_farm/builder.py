@@ -984,7 +984,25 @@ def _codes_for(settings: Settings, row, given):
     """
     if products.spec_of(getattr(row, "values", None)).codes == "panel":
         return given
+    # Only an address whose mail forwards into the farm's mailbox is read
+    # there. mahtabitabi80@gmail.com was sent to wait on it - ChatGPT had
+    # emailed the code to Gmail, where the farm cannot look - and ended
+    # "the mailbox would not answer" twice (the operator, 2026-09-26: those
+    # accounts end in masked.me). Anything else has no source, and the
+    # flow says the code was the only way in.
+    if not _mail_is_ours(settings, row):
+        return codes.NoSource()
     return mailbox.from_settings(settings) or codes.NoSource()
+
+
+def _mail_is_ours(settings: Settings, row) -> bool:
+    """Whether this account's email lands in the farm's own mailbox."""
+    credentials = getattr(row, "credentials", None)
+    address = str(getattr(credentials, "email", "") or getattr(row, "label", "")
+                  or "").strip().casefold()
+    domain = address.rpartition("@")[2]
+    ours = getattr(settings, "mail_alias_domains", ("masked.me",)) or ()
+    return bool(domain) and domain in ours
 
 
 def _pick(pool, wanted: str, what: str):

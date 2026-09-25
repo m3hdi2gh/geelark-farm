@@ -6263,8 +6263,9 @@ def test_a_chatgpt_code_never_comes_from_the_customer():
                                mail_imap_user="box@example.com",
                                mail_imap_password="app-password")
 
-    def row(product):
-        return SimpleNamespace(values={"Product": product})
+    def row(product, address="alias_1@masked.me"):
+        return SimpleNamespace(values={"Product": product},
+                               credentials=SimpleNamespace(email=address))
 
     # No mailbox: the page is reported and the account set aside, which
     # is what the farm did before any of this - never the panel.
@@ -6272,9 +6273,21 @@ def test_a_chatgpt_code_never_comes_from_the_customer():
                       codes_mod.NoSource)
     assert isinstance(builder._codes_for(no_box, row(""), panel),
                       codes_mod.NoSource), "a blank product is chatgpt"
-    # With one: the farm's own mailbox.
+    # With one: the farm's own mailbox - for an address whose mail lands
+    # in it. A plain Gmail's code never does, and it was sent to wait
+    # there (mahtabitabi80@gmail.com, the operator, 2026-09-26).
     assert isinstance(builder._codes_for(with_box, row("chatgpt"), panel),
                       mailbox_mod.MailboxSource)
+    assert isinstance(builder._codes_for(
+        with_box, row("chatgpt", "Someone80@Gmail.com"), panel),
+        codes_mod.NoSource)
+    other = SimpleNamespace(**vars(with_box),
+                            mail_alias_domains=("relay.example",))
+    assert isinstance(builder._codes_for(
+        other, row("chatgpt", "a@relay.example"), panel),
+        mailbox_mod.MailboxSource), "the domains are a setting"
+    assert isinstance(builder._codes_for(other, row("chatgpt"), panel),
+                      codes_mod.NoSource)
     # Claude keeps the customer's.
     assert builder._codes_for(with_box, row("claude"), panel) is panel
     assert builder._codes_for(no_box, row("claude"), panel) is panel
