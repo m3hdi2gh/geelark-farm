@@ -264,13 +264,19 @@ def test_every_relative_import_inside_a_function_resolves():
             else:
                 for alias in node.names:
                     target = SRC.joinpath(*base, alias.name)
-                    # A module, or a name the package itself defines
-                    # (`from . import __version__`).
+                    # A module, or a name the package itself defines -
+                    # `from . import __version__`, and a class or a
+                    # function too. The comment said "a name the package
+                    # defines" and the code read only assignments, so
+                    # `from . import TaskSpec` was called unresolvable
+                    # while importing perfectly well (2026-09-26).
                     package_init = SRC.joinpath(*base, "__init__.py")
+                    defines = (package_init.read_text(encoding="utf-8")
+                               if package_init.exists() else "")
                     if not (target.with_suffix(".py").exists()
                             or (target / "__init__.py").exists()
-                            or f"{alias.name} =" in package_init.read_text(
-                                encoding="utf-8")):
+                            or any(f"{what}{alias.name}" in defines
+                                   for what in ("", "class ", "def "))):
                         bad.append(f"{path.relative_to(SRC)}:{node.lineno} "
                                    f"from {'.' * node.level} import {alias.name}")
     assert not bad, bad

@@ -572,6 +572,25 @@ VERDICTS: dict[str, Verdict] = {
         DEVICE, "the app was not on the phone",
         "The package is not on the device, so there was nothing to "
         "sign into."),
+    # ------------------------------------------- tasks/ (2026-09-26)
+    #: `app_probe`: the app opened and drew a page neither word list
+    #: knows. Nobody's fault - not the phone's and not an account's -
+    #: because this is the answer the task exists to bring back. The
+    #: capture is the page, and a new word is written from it.
+    "unrecognised_screen": Verdict(
+        NOBODY, "the app drew a page this does not have words for",
+        "Read the capture under artifacts/ and add the wording to the "
+        "task's own lists, or pass them for this run: an app that "
+        "changed its first screen says so this way."),
+    #: `app_probe`'s two answers. Neither is a failure of anything: the
+    #: question was which one it is.
+    "signed_in": Verdict(
+        NOBODY, "the app is signed in on this phone",
+        "Nothing to do - this is the answer the task was asked for."),
+    "signed_out": Verdict(
+        NOBODY, "the app is signed out on this phone",
+        "The account is no longer on this phone. Whether that matters "
+        "is the account's own story; this only reports it."),
     "rate_limited": Verdict(
         DEVICE, "OpenAI stopped answering this phone",
         "OpenAI is refusing to keep talking to this device. Leave it "

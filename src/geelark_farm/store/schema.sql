@@ -891,3 +891,42 @@ ALTER TABLE code_requests ALTER COLUMN deadline DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS actions_pending
     ON actions (verb, status) WHERE status IN ('queued', 'running');
 
+
+-- rev 36: every run of a task - the jobs a phone does that are not builds
+-- (`tasks.py`). A build has the Phones tab and History, a sign-in has
+-- `signins`, and a task had nowhere - so "does this automation work,
+-- and how often?" could only be answered by reading logs (2026-09-26).
+--
+-- `reason` is the flow's own word, the one failures.py has a sentence
+-- for; `blame` is what that word means for whoever reads a hundred of
+-- them. A rate says something is wrong and only the blame says what.
+--
+-- The row opens before the work and closes after it, so a run that dies
+-- without finishing is a row saying `running` rather than no row at all.
+-- `inputs` never holds a field the task marked secret.
+CREATE TABLE IF NOT EXISTS task_runs (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    task       text        NOT NULL,
+    status     text        NOT NULL DEFAULT 'running',
+    ok         boolean     NOT NULL DEFAULT false,
+    reason     text        NOT NULL DEFAULT '',
+    blame      text        NOT NULL DEFAULT '',
+    detail     text        NOT NULL DEFAULT '',
+    inputs     jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    phone_id   text        NOT NULL DEFAULT '',
+    serial     text        NOT NULL DEFAULT '',
+    seconds    numeric     NOT NULL DEFAULT 0,
+    api_calls  integer     NOT NULL DEFAULT 0,
+    trail      text        NOT NULL DEFAULT '',
+    -- Where the screens went: the artifacts folder this run archived,
+    -- read back by `store.artifacts` like a build's.
+    folder     text        NOT NULL DEFAULT '',
+    by_id      bigint,
+    job_id     bigint,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    ended_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS task_runs_by_task
+    ON task_runs (task, started_at DESC);
+CREATE INDEX IF NOT EXISTS task_runs_open
+    ON task_runs (started_at) WHERE status = 'running';

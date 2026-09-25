@@ -143,7 +143,8 @@ def name_pages(pages: list[list[screen.Element]],
         usable = [w for w in labels if _useful(w)]
         pressable = {e.label for e in pages[i] if e.clickable and e.label}
         says = sorted([w for w in usable if w not in pressable], key=_score)
-        base = slug((says or sorted(usable, key=_score))[0]) if usable             else f"page_{i + 1}"
+        best = says or sorted(usable, key=_score)
+        base = slug(best[0]) if best else f"page_{i + 1}"
         used[base] = used.get(base, 0) + 1
         names.append(base if used[base] == 1 else f"{base}_{used[base]}")
     return names

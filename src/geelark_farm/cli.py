@@ -16,6 +16,7 @@ Commands are grouped by what they are for:
   device diagnostics     dump, tap, shell, type, screenshot
   one step at a time     login, flow, install
   writing a new flow     watch, draft, replay
+  jobs, not builds       tasks, task, task-runs
 
 It named `run` and `rows`, which were renamed and removed, and omitted
 fourteen that exist - while claiming to be the full surface. A test now
@@ -227,6 +228,17 @@ def build_parser() -> argparse.ArgumentParser:
                                "package.module")
     p_replay.add_argument("--budget", type=float, default=900.0,
                           metavar="SECONDS")
+
+    sub.add_parser("tasks", help="the jobs a phone does that are not builds")
+
+    p_task = sub.add_parser("task", help="run one of them on a phone")
+    p_task.add_argument("name")
+    p_task.add_argument("inputs", nargs="*", metavar="name=value")
+    p_task.add_argument("--phone", metavar="ID")
+
+    p_task_runs = sub.add_parser("task-runs", help="what has been run")
+    p_task_runs.add_argument("name", nargs="?")
+    p_task_runs.add_argument("--days", type=int, default=7)
 
     p_tap = sub.add_parser("tap", help="tap the element with this label")
     p_tap.add_argument("label")
@@ -677,6 +689,80 @@ def cmd_type(settings: Settings, args) -> int:
             return 1
         print(f"typed {len(args.text)} character(s) into the focused field")
     return 0
+
+
+def cmd_tasks(settings: Settings, args) -> int:
+    """What there is to run (`tasks/`)."""
+    from . import tasks as task_reg
+
+    for spec in task_reg.TASKS.values():
+        print(f"{spec.key:16} {spec.title}")
+        print(f"{'':16} {spec.summary}")
+        for field in spec.inputs:
+            mark = "" if field.required else " (optional)"
+            secret = " [secret]" if field.secret else ""
+            print(f"{'':18} - {field.name}{mark}{secret}"
+                  + (f": {field.help}" if field.help else ""))
+        print()
+    return 0
+
+
+def cmd_task_runs(settings: Settings, args) -> int:
+    """What has been run, and how it went."""
+    from .store import task_runs
+
+    if not settings.store_enabled:
+        print("the store is off, so no run was written down")
+        return 0
+    for row in task_runs.recent(settings, args.name or ""):
+        mark = "ok " if row["ok"] else "NO "
+        print(f"{mark} {row['task']:14} {row['reason']:24} "
+              f"{row['blame']:10} {float(row['seconds']):5.0f}s  "
+              f"{row['folder']}")
+    if args.name:
+        got = task_runs.tally(settings, args.name, days=args.days)
+        print(f"\n{got['runs']} run(s) in {args.days} days, "
+              f"{got['worked']} worked ({got['rate'] * 100:.0f}%), "
+              f"median {got['median_seconds']:.0f}s")
+        for reason, n in got["reasons"].items():
+            print(f"  {n:3}  {reason}")
+        if got["blames"]:
+            print("  whose fault: " + ", ".join(
+                f"{k} {v}" for k, v in got["blames"].items()))
+    return 0
+
+
+def cmd_task(settings: Settings, args) -> int:
+    """Run one task on one phone."""
+    from . import tasks as task_reg
+
+    spec = task_reg.spec(args.name)
+    if spec is None:
+        print(f"no task called {args.name!r} - there is "
+              f"{', '.join(task_reg.names())}", file=sys.stderr)
+        return 2
+    given = {}
+    for pair in args.inputs:
+        if "=" not in pair:
+            print(f"inputs are name=value; got {pair!r}", file=sys.stderr)
+            return 2
+        key, _, value = pair.partition("=")
+        given[key.strip()] = value
+    from .tasks import drive
+
+    client = build_client(settings)
+    ledger = Ledger.load(settings.state_dir,
+                         stale_after=settings.stale_claim_seconds)
+    with device(settings, client, args.phone) as phone_id:
+        refuse_if_busy(settings, phone_id)
+        ledger.claim(phone_id, label=f"task {spec.key}")
+        build = drive.one(settings, spec, given, phone_id=phone_id,
+                          client=client, ledger=ledger)
+    print(f"\noutcome: {build.status}"
+          + (f" - {build.detail}" if build.detail else ""))
+    print(f"screens: {build.steps or 'none'}")
+    print(f"took {build.seconds:.0f}s, {build.api_calls} call(s)")
+    return 0 if build.ok else 1
 
 
 def cmd_watch(settings: Settings, args) -> int:
@@ -1432,6 +1518,9 @@ def main(argv: list[str] | None = None) -> int:
         "plan": cmd_plan,
         "proxy": cmd_proxy,
         "dump": cmd_dump,
+        "tasks": cmd_tasks,
+        "task": cmd_task,
+        "task-runs": cmd_task_runs,
         "watch": cmd_watch,
         "draft": cmd_draft,
         "replay": cmd_replay,
