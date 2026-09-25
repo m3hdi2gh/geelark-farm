@@ -94,6 +94,14 @@ def accounts(text: str) -> list[dict]:
         if not secret:
             secret, rest = _regroup(rest)
         password = rest[0] if rest else ""
+        # A password can be shaped like an address - `A@123456789.b` is one
+        # (2026-09-25). A line needs a password and may have a recovery
+        # address, so when nothing else is left for the password, the
+        # second address-shaped piece IS the password. Read as a recovery
+        # address, it pushed the 2fa key into the password's place and the
+        # GPT pool refused the line as "two addresses on one line".
+        if not password and len(emails) > 1:
+            password = emails.pop(1)
         row = {
             "address": emails[0] if emails else "",
             "recovery": emails[1] if len(emails) > 1 else "",

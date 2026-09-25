@@ -458,6 +458,12 @@ def _sign_into_app(session: _Session) -> Build | None:
                             "the next pass can sign an account into it")
         if s.app_row is None:
             if s.want is not None and s.want.app_account:
+                # Tried here already and refused: say what its service
+                # said, not that the account is not free.
+                refused = _chosen_refused_here(s)
+                if refused:
+                    _give_back_condemned(s)
+                    return s.finish("chosen_app_refused", refused)
                 try:
                     s.app_row = _pick_named_app(s.book, s.want.app_account)
                 except Aborted as refused:
@@ -614,6 +620,34 @@ def _sign_into_app(session: _Session) -> Build | None:
         s.condemned.append(condemned)
         s.judged[condemned] = outcome.reason
     return None
+
+
+def _chosen_refused_here(s: _Session) -> str:
+    """What the service said about the account chosen for this phone, if
+    this session already tried it - "" when it has not.
+
+    A chosen account its service refused is set aside or put back, and the
+    loop comes round to pick it again: `_pick_named_app` found it not free
+    and the build ended `chosen_app_unavailable`, "somebody took it", for an
+    account Spotify had just called a wrong password (phones 4265 and 4276,
+    2026-09-23). The last attempt decides: an exit swap keeps the account
+    and tries again, so only its final word is the account's.
+    """
+    wanted = str(s.want.app_account or "").strip().lower()
+    for address, reason, service in reversed(s.build.tried):
+        if str(address).strip().lower() != wanted:
+            continue
+        said = failures.verdict(reason, service).seen
+        # What `_give_back_condemned` does with it: a hand-chosen account
+        # whose own credential was refused stays set aside; anything else
+        # goes back untouched.
+        kept = (address in s.judged
+                and failures.verdict(reason).costs_the_credential)
+        after = ("It stays set aside for a person to check" if kept
+                 else "It goes back to the pool untouched")
+        return (f"{address}, the account chosen for this phone: {said}. "
+                f"{after}; the phone stays warm - send it another account")
+    return ""
 
 
 #: No threshold, deliberately. The first version of this asked for two
@@ -950,7 +984,25 @@ def _codes_for(settings: Settings, row, given):
     """
     if products.spec_of(getattr(row, "values", None)).codes == "panel":
         return given
+    # Only an address whose mail forwards into the farm's mailbox is read
+    # there. mahtabitabi80@gmail.com was sent to wait on it - ChatGPT had
+    # emailed the code to Gmail, where the farm cannot look - and ended
+    # "the mailbox would not answer" twice (the operator, 2026-09-26: those
+    # accounts end in masked.me). Anything else has no source, and the
+    # flow says the code was the only way in.
+    if not _mail_is_ours(settings, row):
+        return codes.NoSource()
     return mailbox.from_settings(settings) or codes.NoSource()
+
+
+def _mail_is_ours(settings: Settings, row) -> bool:
+    """Whether this account's email lands in the farm's own mailbox."""
+    credentials = getattr(row, "credentials", None)
+    address = str(getattr(credentials, "email", "") or getattr(row, "label", "")
+                  or "").strip().casefold()
+    domain = address.rpartition("@")[2]
+    ours = getattr(settings, "mail_alias_domains", ("masked.me",)) or ()
+    return bool(domain) and domain in ours
 
 
 def _pick(pool, wanted: str, what: str):

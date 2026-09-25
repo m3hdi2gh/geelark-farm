@@ -100,3 +100,30 @@ def test_a_line_with_both_a_key_and_a_recovery_address_is_refused():
     (row,) = paste.accounts("a@x.com\tpw1\tABCDEFGHIJKLMNOP\trec@x.com")
     assert row["secret"] and row["recovery"]
     assert "both an authenticator key and a recovery address" in row["error"]
+
+
+def test_a_password_shaped_like_an_address_is_the_password():
+    """A GPT account's password carried an `@` and a dot, so the reader took
+    it for a recovery address, put the 2fa key in the password's place, and
+    the GPT pool refused the line as "two addresses on one line"
+    (2026-09-25). A line needs a password; a recovery address is optional -
+    so with nothing else left for the password, that piece is it."""
+    from geelark_farm.web import paste
+
+    for line in ("acct@gmail.com Pw@1234567.x ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+                 "acct@gmail.com\tPw@1234567.x\tABCDEFGHIJKLMNOPQRSTUVWXYZ234567"):
+        (row,) = paste.accounts(line)
+        assert row["address"] == "acct@gmail.com"
+        assert row["password"] == "Pw@1234567.x"
+        assert row["secret"] == "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        assert row["recovery"] == "" and not row.get("error")
+        assert row["unread"] == []
+
+    # A Gmail row whose password looks like an address, then a real
+    # recovery address: the order the seller wrote them in decides.
+    (row,) = paste.accounts("g@gmail.com\tPw@1234567.x\tback@mail.com")
+    assert (row["password"], row["recovery"]) == ("Pw@1234567.x", "back@mail.com")
+
+    # An ordinary password leaves the second address a recovery address.
+    (row,) = paste.accounts("g@gmail.com\tplainpass\tback@mail.com")
+    assert (row["password"], row["recovery"]) == ("plainpass", "back@mail.com")

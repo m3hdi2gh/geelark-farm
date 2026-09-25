@@ -1425,13 +1425,17 @@ def test_a_builds_screens_are_mirrored_listed_and_served_from_the_store(
     assert names == {"010300-captcha.xml", "outcome.txt"}, "the big one stayed"
 
     conn = _ScriptedConn([[("20260910-010203-build622", "when",
-                            ["010300-captcha.xml"], "failed captcha_shown\n")],
+                            ["010300-captcha.xml"], "failed captcha_shown\n",
+                            ["010305-captcha_shown.png"])],
                           (memoryview(b"<hierarchy/>"),), None])
     monkeypatch.setattr(artifacts, "connect", lambda s: conn)
     listed = artifacts.folders(s, "622")
+    # The screenshots too, for the phone's journey (2026-09-26).
     assert listed == [{"folder": "20260910-010203-build622", "at": "when",
                        "files": ["010300-captcha.xml"],
+                       "images": ["010305-captcha_shown.png"],
                        "outcome": "failed captcha_shown"}]
+    assert "LIKE '%%.png'" in conn.sql[-1]
     assert artifacts.get(s, "622", "20260910-010203-build622",
                          "010300-captcha.xml") == b"<hierarchy/>"
     artifacts.prune(s, days=7)

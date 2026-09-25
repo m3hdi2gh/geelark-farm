@@ -1,0 +1,778 @@
+{
+ "4435": {
+  "lines": [
+   {
+    "at": "2026-09-25 17:59:29.061017+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone is stopped - starting it (billing is per minute)"
+   },
+   {
+    "at": "2026-09-25 17:59:29.895504+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "billing: Per-minute usage"
+   },
+   {
+    "at": "2026-09-25 18:01:33.555111+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing ChatGPT (2098579148801630209) in the background"
+   },
+   {
+    "at": "2026-09-25 18:01:34.030623+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing Spotify (2067127873273200642) in the background"
+   },
+   {
+    "at": "2026-09-25 18:01:34.519309+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing Claude (2098583520775839746) in the background"
+   },
+   {
+    "at": "2026-09-25 18:01:34.519493+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone running; settling for 30s"
+   },
+   {
+    "at": "2026-09-25 18:02:06.328273+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "clock set to America/Los_Angeles, where exit 150.241.226.105 is"
+   },
+   {
+    "at": "2026-09-25 18:02:15.935605+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "signing in as person@gmail.com (Gmail 1 on this phone; one per phone unless the password is wrong)"
+   },
+   {
+    "at": "2026-09-25 18:02:30.127977+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Sign in' at (337, 932) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:02:31.792458+00:00",
+    "logger": "geelark_farm.shell",
+    "msg": "phone 638925989904122188: taps go into /dev/input/event0 (scale 1.00x1.00)"
+   },
+   {
+    "at": "2026-09-25 18:02:33.101943+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "pressed Google Play's 'Sign in'"
+   },
+   {
+    "at": "2026-09-25 18:02:45.019985+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: loading (visit 1)"
+   },
+   {
+    "at": "2026-09-25 18:02:59.506834+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: dismissable (visit 1)"
+   },
+   {
+    "at": "2026-09-25 18:03:02.708450+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'SKIP' at (75, 1291) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:03:04.411398+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "dismissed 'SKIP'"
+   },
+   {
+    "at": "2026-09-25 18:03:13.667047+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: email_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 18:03:15.944110+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "entering the email address"
+   },
+   {
+    "at": "2026-09-25 18:03:15.944365+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (422, 467) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:03:51.988347+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'NEXT' at (614, 834) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:04:04.876691+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 1)"
+   },
+   {
+    "at": "2026-09-25 18:04:12.967426+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 2)"
+   },
+   {
+    "at": "2026-09-25 18:04:12.968089+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping \"I'm not a robot\" at (85, 565) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:04:19.393937+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 3)"
+   },
+   {
+    "at": "2026-09-25 18:04:28.767824+00:00",
+    "logger": "geelark_farm.flows.recaptcha",
+    "msg": "captcha grid at (47, 247, 677, 877) of the 720x1440 screenshot, sent at 300x300"
+   },
+   {
+    "at": "2026-09-25 18:04:29.465047+00:00",
+    "logger": "geelark_farm.capsolver",
+    "msg": "CapSolver answered {'objects': [3, 5, 6], 'size': 3, 'type': 'multi'} for 'Select all images with a fire hydrant'"
+   },
+   {
+    "at": "2026-09-25 18:04:29.465241+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "captcha: 'Select all images with a fire hydrant' -> tiles [3, 5, 6] of a 3x3 grid at [(152, 562), (572, 562), (152, 772)]"
+   },
+   {
+    "at": "2026-09-25 18:04:40.918537+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'VERIFY' at (592, 944) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:04:49.293081+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 4)"
+   },
+   {
+    "at": "2026-09-25 18:04:54.030882+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 5)"
+   },
+   {
+    "at": "2026-09-25 18:05:00.833001+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 6)"
+   },
+   {
+    "at": "2026-09-25 18:05:05.544462+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 7)"
+   },
+   {
+    "at": "2026-09-25 18:05:11.198274+00:00",
+    "logger": "geelark_farm.flows.recaptcha",
+    "msg": "captcha grid at (47, 247, 677, 877) of the 720x1440 screenshot, sent at 300x300"
+   },
+   {
+    "at": "2026-09-25 18:05:11.916822+00:00",
+    "logger": "geelark_farm.capsolver",
+    "msg": "CapSolver answered {'objects': [0, 2, 6], 'size': 3, 'type': 'multi'} for 'Select all images with a fire hydrant'"
+   },
+   {
+    "at": "2026-09-25 18:05:11.917132+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "captcha: 'Select all images with a fire hydrant' -> tiles [0, 2, 6] of a 3x3 grid at [(152, 352), (572, 352), (152, 772)]"
+   },
+   {
+    "at": "2026-09-25 18:05:23.290132+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'VERIFY' at (590, 926) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:05:31.242142+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 8)"
+   },
+   {
+    "at": "2026-09-25 18:05:40.049692+00:00",
+    "logger": "geelark_farm.flows.recaptcha",
+    "msg": "captcha grid at (47, 247, 677, 877) of the 720x1440 screenshot, sent at 300x300"
+   },
+   {
+    "at": "2026-09-25 18:05:40.553285+00:00",
+    "logger": "geelark_farm.capsolver",
+    "msg": "CapSolver answered {'objects': [8, 1, 4], 'size': 3, 'type': 'multi'} for 'Select all images with crosswalks'"
+   },
+   {
+    "at": "2026-09-25 18:05:40.553941+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "captcha: 'Select all images with crosswalks' -> tiles [8, 1, 4] of a 3x3 grid at [(572, 772), (362, 352), (362, 562)]"
+   },
+   {
+    "at": "2026-09-25 18:05:51.983037+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'VERIFY' at (588, 939) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 18:05:59.745441+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 9)"
+   },
+   {
+    "at": "2026-09-25 18:06:04.724711+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 10)"
+   },
+   {
+    "at": "2026-09-25 18:06:10.501506+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: captcha (visit 11)"
+   },
+   {
+    "at": "2026-09-25 18:06:10.524235+00:00",
+    "logger": "geelark_farm.store.pgpool",
+    "msg": "Gmails: person@gmail.com refused (captcha_shown), try 3 of 3 - it stays set aside"
+   },
+   {
+    "at": "2026-09-25 18:06:12.785490+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "deleted 638925989904122188"
+   },
+   {
+    "at": "2026-09-25 18:06:12.786008+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "deleted phone 4435 - nothing was ever signed into it (Google distrusted this phone on person@gmail.com (Google showed a CAPTCHA); the next address goes on a fresh phone and exit)"
+   },
+   {
+    "at": "2026-09-25 18:06:12.795624+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4435 FAIL: phone_distrusted (406s)"
+   }
+  ],
+  "folders": [
+   {
+    "folder": "20260925-175928-build4435",
+    "files": [
+     "180245-loading.xml",
+     "180259-dismissable.xml",
+     "180313-email_entry.xml",
+     "180404-captcha.xml",
+     "180610-captcha_shown.xml"
+    ],
+    "images": [
+     "captcha-grid.png",
+     "captcha-screen.png"
+    ]
+   }
+  ],
+  "xml": {
+   "180313-email_entry.xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"android:id/content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/minute_maid\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"Sign in Use your Google Account. The account will be added to this device and available to other Google apps.Learn more about using your account\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"yDmH0d\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,1247]\"><node index=\"0\" text=\"\" resource-id=\"ZCHFDb\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,128]\" /><node index=\"1\" text=\"\" resource-id=\"logo\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[298,128][424,171]\" /><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,167][720,1247]\"><node index=\"0\" text=\"Sign in\" resource-id=\"headingText\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,167][683,249]\" /><node index=\"1\" text=\"\" resource-id=\"headingSubtext\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,246][683,379]\"><node index=\"0\" text=\"Use your Google Account. The account will be added to this device and available to other Google apps.\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[50,262][670,334]\" /><node index=\"1\" text=\"&#10;\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[647,301][647,334]\" /><node index=\"2\" text=\"Learn more about using your account\" resource-id=\"learnMore\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[130,337][592,375]\" /></node><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,415][683,574]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,415][683,574]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,428][683,523]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,428][683,521]\"><node NAF=\"true\" index=\"0\" text=\"\" resource-id=\"identifierId\" class=\"android.widget.EditText\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"true\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,430][683,521]\" /></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,428][683,523]\" /><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,435][678,523]\" /></node><node index=\"1\" text=\"\" resource-id=\"c1\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,520][683,520]\" /><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,520][683,574]\"><node index=\"0\" text=\"Forgot email?\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[32,534][189,569]\" /></node></node></node><node index=\"3\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[24,650][453,732]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[24,650][453,732]\"><node index=\"0\" text=\"Create account\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[24,660][220,722]\" /></node></node><node index=\"4\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,1213][42,1247]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,138]\"><node index=\"0\" text=\"Sign in Use your Google Account. The account will be added to this device and available to other Google apps.Learn more about using your account\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,138]\" /></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1245][720,1362]\"><node index=\"0\" text=\"NEXT\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[543,1264][687,1342]\" /></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"android:id/navigationBarBackground\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1362][720,1440]\" /></node></hierarchy>",
+   "180404-captcha.xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"android:id/content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/minute_maid\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"Verify it\u2019s you To help keep your account safe, Google wants to make sure it\u2019s really you trying to sign in\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"true\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"yDmH0d\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,1247]\"><node index=\"0\" text=\"\" resource-id=\"ZCHFDb\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,128]\" /><node index=\"1\" text=\"\" resource-id=\"logo\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[298,128][424,171]\" /><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,167][720,1247]\"><node index=\"0\" text=\"Verify it\u2019s you\" resource-id=\"headingText\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,167][683,249]\" /><node index=\"1\" text=\"To help keep your account safe, Google wants to make sure it\u2019s really you trying to sign in\" resource-id=\"headingSubtext\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,246][683,340]\" /><node index=\"2\" text=\"person@gmail.com\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[221,353][544,383]\" /><node index=\"3\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,634]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,468]\"><node index=\"0\" text=\"Confirm you\u2019re not a robot\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,468]\" /></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][683,634]\"><node index=\"0\" text=\"\" resource-id=\"c5\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][683,634]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][535,644]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][535,634]\" /></node></node></node></node><node index=\"4\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,1213][42,1247]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,105]\"><node index=\"0\" text=\"Verify it\u2019s you To help keep your account safe, Google wants to make sure it\u2019s really you trying to sign in\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,105]\" /></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1245][720,1362]\"><node index=\"0\" text=\"TRY ANOTHER WAY\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[13,1264][270,1342]\" /><node index=\"1\" text=\"NEXT\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[543,1264][687,1342]\" /></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"android:id/navigationBarBackground\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1362][720,1440]\" /></node></hierarchy>",
+   "180610-captcha_shown.xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"android:id/content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/minute_maid\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"Verify it\u2019s you To help keep your account safe, Google wants to make sure it\u2019s really you trying to sign in\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"yDmH0d\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,1247]\"><node index=\"0\" text=\"\" resource-id=\"ZCHFDb\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,128]\" /><node index=\"1\" text=\"\" resource-id=\"logo\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[298,128][424,171]\" /><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,167][720,1247]\"><node index=\"0\" text=\"Verify it\u2019s you\" resource-id=\"headingText\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,167][683,249]\" /><node index=\"1\" text=\"To help keep your account safe, Google wants to make sure it\u2019s really you trying to sign in\" resource-id=\"headingSubtext\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,246][683,340]\" /><node index=\"2\" text=\"person@gmail.com\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[221,353][544,383]\" /><node index=\"3\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,634]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,468]\"><node index=\"0\" text=\"Confirm you\u2019re not a robot\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,432][683,468]\" /></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][683,634]\"><node index=\"0\" text=\"\" resource-id=\"c5\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][683,634]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][535,644]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][535,634]\"><node index=\"0\" text=\"reCAPTCHA\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"true\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][535,634]\"><node index=\"0\" text=\"\" resource-id=\"rc-anchor-alert\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[40,507][535,629]\" /><node index=\"1\" text=\"\" resource-id=\"rc-anchor-container\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,503][531,629]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,505][378,627]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,505][125,627]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,505][125,627]\"><node index=\"0\" text=\"I'm not a robot\" resource-id=\"recaptcha-anchor\" class=\"android.widget.CheckBox\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[58,541][106,588]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[123,505][373,627]\" /></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[61,601][518,601]\" /></node></node></node></node></node></node></node><node index=\"4\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,1213][42,1247]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\" /><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[32,39][688,1037]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,39][690,1037]\"><node index=\"0\" text=\"reCAPTCHA\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,39][690,1037]\"><node index=\"0\" text=\"\" resource-id=\"rc-imageselect\" class=\"android.app.Dialog\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,39][690,1040]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,39][690,1040]\" /><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[45,50][678,236]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[45,50][678,238]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[84,89][662,198]\"><node index=\"0\" text=\"Select all images with\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[84,89][308,118]\" /><node index=\"1\" text=\"crosswalks\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[84,115][662,171]\" /><node index=\"2\" text=\"Click verify once there are none left.\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[84,169][448,198]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[676,210][676,236]\" /></node><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[45,242][678,880]\"><node index=\"0\" text=\"Image challenge\" resource-id=\"1\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[254,242][468,456]\" /><node index=\"1\" text=\"Image challenge\" resource-id=\"4\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"true\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[254,454][468,668]\" /><node index=\"2\" text=\"Image challenge\" resource-id=\"8\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[466,665][680,880]\" /></node><node index=\"3\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[45,875][678,928]\"><node index=\"0\" text=\"Please also check the new images.\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[45,875][678,928]\" /></node><node index=\"4\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,936][690,1040]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,939][690,1040]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[44,949][282,1029]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[44,949][125,1029]\"><node index=\"0\" text=\"Get a new challenge\" resource-id=\"recaptcha-reload-button\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[44,949][125,1029]\" /></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[122,949][203,1029]\"><node index=\"0\" text=\"Get an audio challenge\" resource-id=\"recaptcha-audio-button\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[122,949][203,1029]\" /></node><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[200,949][282,1029]\"><node index=\"0\" text=\"Help\" resource-id=\"recaptcha-help-button\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[200,949][282,1029]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[510,952][676,1024]\"><node index=\"0\" text=\"VERIFY\" resource-id=\"recaptcha-verify-button\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[510,952][676,1024]\" /></node></node></node><node index=\"5\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[34,1037][690,1037]\" /></node></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1245][720,1362]\"><node index=\"0\" text=\"TRY ANOTHER WAY\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[13,1264][270,1342]\" /><node index=\"1\" text=\"NEXT\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[543,1264][687,1342]\" /></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"android:id/navigationBarBackground\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1362][720,1440]\" /></node></hierarchy>",
+   "180245-loading.xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"android:id/content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/interstitial_layout\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/glif_layout\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_header_scroll_view\" class=\"android.widget.ScrollView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,486]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_header\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,486]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_icon_container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,130][681,182]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_icon\" class=\"android.widget.ImageView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,130][91,182]\" /></node><node index=\"1\" text=\"Checking info\u2026\" resource-id=\"com.google.android.gms:id/suc_layout_title\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[39,208][681,261]\" /></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,486][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_lottie_illustration\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,486][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_lottie_view\" class=\"android.widget.ImageView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[65,486][655,1127]\" /></node></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"com.google.android.gms:id/minute_maid\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node NAF=\"true\" index=\"0\" text=\"\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\" /></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"android:id/navigationBarBackground\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1362][720,1440]\" /></node></hierarchy>",
+   "180259-dismissable.xml": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"android:id/content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/container\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/minute_maid\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/suc_layout_status\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,0][720,1440]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_template_content\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1362]\"><node index=\"0\" text=\"\" resource-id=\"com.google.android.gms:id/sud_layout_content\" class=\"android.widget.FrameLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1245]\"><node index=\"0\" text=\"Sign in - Google Accounts\" resource-id=\"\" class=\"android.webkit.WebView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"true\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,39][720,1247]\"><node index=\"0\" text=\"\" resource-id=\"yDmH0d\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,128][683,1247]\"><node index=\"0\" text=\"\" resource-id=\"logo\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[298,128][424,171]\" /><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,167][720,1247]\"><node index=\"0\" text=\"Sign in with ease\" resource-id=\"headingText\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,167][683,249]\" /><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,285][683,789]\"><node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,285][683,789]\"><node index=\"0\" text=\"We can search for accounts connected to this phone number by obtaining your number from your carrier and exchanging device info, such as your SIM card identifier (standard message and data rates may apply).\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,655][683,789]\" /></node></node><node index=\"2\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,1213][42,1247]\" /></node><node index=\"2\" text=\"\" resource-id=\"ZCHFDb\" class=\"android.widget.TextView\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[37,1246][683,1246]\" /></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1245][720,1362]\"><node index=\"0\" text=\"SKIP\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[13,1264][116,1342]\" /><node index=\"1\" text=\"NEXT\" resource-id=\"\" class=\"android.widget.Button\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"true\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[543,1264][687,1342]\" /></node></node></node></node></node></node></node></node><node index=\"1\" text=\"\" resource-id=\"android:id/navigationBarBackground\" class=\"android.view.View\" package=\"com.google.android.gms\" content-desc=\"\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,1362][720,1440]\" /></node></hierarchy>"
+  }
+ },
+ "4445": {
+  "lines": [
+   {
+    "at": "2026-09-25 19:15:57.622528+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone is stopped - starting it (billing is per minute)"
+   },
+   {
+    "at": "2026-09-25 19:15:58.500178+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "billing: Per-minute usage"
+   },
+   {
+    "at": "2026-09-25 19:17:00.651896+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing ChatGPT (2098579148801630209) in the background"
+   },
+   {
+    "at": "2026-09-25 19:17:01.127138+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing Spotify (2067127873273200642) in the background"
+   },
+   {
+    "at": "2026-09-25 19:17:01.599253+00:00",
+    "logger": "geelark_farm.apps",
+    "msg": "GeeLark is installing Claude (2098583520775839746) in the background"
+   },
+   {
+    "at": "2026-09-25 19:17:01.600342+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone running; settling for 30s"
+   },
+   {
+    "at": "2026-09-25 19:17:33.259944+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "clock set to America/Los_Angeles, where exit 185.202.107.84 is"
+   },
+   {
+    "at": "2026-09-25 19:17:52.455590+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "signing in as person@gmail.com (Gmail 1 on this phone; one per phone unless the password is wrong)"
+   },
+   {
+    "at": "2026-09-25 19:18:06.494183+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Sign in' at (357, 943) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:18:07.968158+00:00",
+    "logger": "geelark_farm.shell",
+    "msg": "phone 638933687508926713: taps go into /dev/input/event0 (scale 1.00x1.00)"
+   },
+   {
+    "at": "2026-09-25 19:18:09.283710+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "pressed Google Play's 'Sign in'"
+   },
+   {
+    "at": "2026-09-25 19:18:20.733276+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: loading (visit 1)"
+   },
+   {
+    "at": "2026-09-25 19:18:33.481051+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: dismissable (visit 1)"
+   },
+   {
+    "at": "2026-09-25 19:18:37.434485+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'SKIP' at (63, 1304) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:18:39.142147+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "dismissed 'SKIP'"
+   },
+   {
+    "at": "2026-09-25 19:18:47.733099+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: email_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 19:18:50.341383+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "entering the email address"
+   },
+   {
+    "at": "2026-09-25 19:18:50.341733+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (427, 484) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:19:15.228010+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'NEXT' at (631, 849) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:19:27.073349+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: password_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 19:19:28.937446+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "entering the password"
+   },
+   {
+    "at": "2026-09-25 19:19:28.937917+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (273, 442) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:19:47.324283+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'NEXT' at (615, 833) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:19:59.846108+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "screen: dismissable (visit 2)"
+   },
+   {
+    "at": "2026-09-25 19:20:02.830301+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'I agree' at (594, 829) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 19:20:04.630729+00:00",
+    "logger": "geelark_farm.flows.google_login",
+    "msg": "dismissed 'I agree'"
+   },
+   {
+    "at": "2026-09-25 19:20:10.000017+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "ChatGPT is on, from GeeLark's installer"
+   },
+   {
+    "at": "2026-09-25 19:20:11.096311+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "Spotify is on, from GeeLark's installer"
+   },
+   {
+    "at": "2026-09-25 19:20:12.270877+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "Claude is on, from GeeLark's installer"
+   },
+   {
+    "at": "2026-09-25 19:20:12.934338+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "stopped 638933687508926713"
+   },
+   {
+    "at": "2026-09-25 19:20:12.937916+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 WARM: warm_for_operator (260s)"
+   },
+   {
+    "at": "2026-09-25 20:45:28.964590+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone is stopped - starting it (billing is per minute)"
+   },
+   {
+    "at": "2026-09-25 20:45:29.762542+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "billing: Per-minute usage"
+   },
+   {
+    "at": "2026-09-25 20:47:30.796639+00:00",
+    "logger": "geelark_farm.api",
+    "msg": "/v1/phone/status failed (HTTPSConnectionPool(host='openapi.geelark.com', port=443): Read timed out. (read timeout=90.0)); retrying in 2.5s"
+   },
+   {
+    "at": "2026-09-25 20:47:33.878002+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone running; settling for 30s"
+   },
+   {
+    "at": "2026-09-25 20:48:06.316887+00:00",
+    "logger": "geelark_farm.mailbox",
+    "msg": "codes emailed to eco accounts are read from person@gmail.com at imap.gmail.com"
+   },
+   {
+    "at": "2026-09-25 20:48:06.317965+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "signing into com.openai.chatgpt as person@gmail.com"
+   },
+   {
+    "at": "2026-09-25 20:48:27.169584+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: welcome (visit 1)"
+   },
+   {
+    "at": "2026-09-25 20:48:30.581220+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Log in or sign up' at (330, 1215) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 20:48:32.313347+00:00",
+    "logger": "geelark_farm.shell",
+    "msg": "phone 638933687508926713: taps go into /dev/input/event0 (scale 1.00x1.00)"
+   },
+   {
+    "at": "2026-09-25 20:48:33.622397+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "taking the email login path via 'Log in or sign up'"
+   },
+   {
+    "at": "2026-09-25 20:48:44.328075+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: google_account_sheet (visit 1)"
+   },
+   {
+    "at": "2026-09-25 20:48:47.756287+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Close sheet' at (380, 468) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 20:48:49.441115+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "closed Google's account chooser ('Close sheet')"
+   },
+   {
+    "at": "2026-09-25 20:48:58.096204+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 20:49:01.059601+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "entering the app account's email address"
+   },
+   {
+    "at": "2026-09-25 20:49:01.060091+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (444, 561) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 20:49:32.277593+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Continue' at (357, 675) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 20:50:02.004151+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_code_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 20:50:05.583536+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "the mailbox could not be read for person@gmail.com (person@gmail.com at imap.gmail.com would not let us in ([ALERT] Invalid credentials (Failure)))"
+   },
+   {
+    "at": "2026-09-25 20:50:05.601585+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 refused 1 accounts and signed none in (person@gmail.com); putting them back rather than leaving them condemned"
+   },
+   {
+    "at": "2026-09-25 20:50:06.385231+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "stopped 638933687508926713"
+   },
+   {
+    "at": "2026-09-25 20:50:06.388742+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 WARM: warm_for_operator (277s)"
+   },
+   {
+    "at": "2026-09-25 21:29:15.539910+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone is stopped - starting it (billing is per minute)"
+   },
+   {
+    "at": "2026-09-25 21:29:16.155873+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "billing: Per-minute usage"
+   },
+   {
+    "at": "2026-09-25 21:29:57.397001+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone running; settling for 30s"
+   },
+   {
+    "at": "2026-09-25 21:30:29.629111+00:00",
+    "logger": "geelark_farm.mailbox",
+    "msg": "codes emailed to eco accounts are read from person@gmail.com at imap.gmail.com"
+   },
+   {
+    "at": "2026-09-25 21:30:29.629767+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "signing into com.openai.chatgpt as person@gmail.com"
+   },
+   {
+    "at": "2026-09-25 21:30:50.392257+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: welcome (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:30:53.915547+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Log in or sign up' at (367, 1219) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 21:30:55.629559+00:00",
+    "logger": "geelark_farm.shell",
+    "msg": "phone 638933687508926713: taps go into /dev/input/event0 (scale 1.00x1.00)"
+   },
+   {
+    "at": "2026-09-25 21:30:57.468396+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "taking the email login path via 'Log in or sign up'"
+   },
+   {
+    "at": "2026-09-25 21:31:08.110018+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: google_account_sheet (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:31:10.772727+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Close sheet' at (435, 416) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 21:31:12.126525+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "closed Google's account chooser ('Close sheet')"
+   },
+   {
+    "at": "2026-09-25 21:31:20.560926+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:31:22.417573+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "entering the app account's email address"
+   },
+   {
+    "at": "2026-09-25 21:31:22.419067+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (280, 619) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 21:31:45.027627+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Continue' at (344, 754) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 21:32:00.996934+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_code_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:32:03.747081+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "the mailbox could not be read for person@gmail.com (person@gmail.com at imap.gmail.com would not let us in ([ALERT] Invalid credentials (Failure)))"
+   },
+   {
+    "at": "2026-09-25 21:32:04.003009+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 refused 1 accounts and signed none in (person@gmail.com); putting them back rather than leaving them condemned"
+   },
+   {
+    "at": "2026-09-25 21:32:04.662683+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "stopped 638933687508926713"
+   },
+   {
+    "at": "2026-09-25 21:32:04.672555+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 WARM: warm_for_operator (169s)"
+   },
+   {
+    "at": "2026-09-25 21:56:03.921644+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone is stopped - starting it (billing is per minute)"
+   },
+   {
+    "at": "2026-09-25 21:56:04.540593+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "billing: Per-minute usage"
+   },
+   {
+    "at": "2026-09-25 21:56:55.997570+00:00",
+    "logger": "geelark_farm.phones",
+    "msg": "phone running; settling for 30s"
+   },
+   {
+    "at": "2026-09-25 21:57:28.268233+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "signing into com.openai.chatgpt as person@gmail.com"
+   },
+   {
+    "at": "2026-09-25 21:57:48.586462+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: welcome (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:57:51.714636+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Log in or sign up' at (356, 1212) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 21:57:53.201781+00:00",
+    "logger": "geelark_farm.shell",
+    "msg": "phone 638933687508926713: taps go into /dev/input/event0 (scale 1.00x1.00)"
+   },
+   {
+    "at": "2026-09-25 21:57:55.029911+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "taking the email login path via 'Log in or sign up'"
+   },
+   {
+    "at": "2026-09-25 21:58:05.392873+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: google_account_sheet (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:58:06.975918+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Close sheet' at (356, 322) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 21:58:08.724712+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "closed Google's account chooser ('Close sheet')"
+   },
+   {
+    "at": "2026-09-25 21:58:17.198561+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:58:19.225978+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "entering the app account's email address"
+   },
+   {
+    "at": "2026-09-25 21:58:19.226390+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'EditText' at (342, 550) (clickable=True)"
+   },
+   {
+    "at": "2026-09-25 21:58:42.832532+00:00",
+    "logger": "geelark_farm.screen",
+    "msg": "tapping 'Continue' at (343, 677) (clickable=False)"
+   },
+   {
+    "at": "2026-09-25 21:58:59.538316+00:00",
+    "logger": "geelark_farm.flows.chatgpt_login",
+    "msg": "screen: email_code_entry (visit 1)"
+   },
+   {
+    "at": "2026-09-25 21:59:02.687471+00:00",
+    "logger": "geelark_farm.codes",
+    "msg": "no mailbox is configured, so the code emailed to person@gmail.com cannot be read"
+   },
+   {
+    "at": "2026-09-25 21:59:03.359297+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "stopped 638933687508926713"
+   },
+   {
+    "at": "2026-09-25 21:59:03.363719+00:00",
+    "logger": "geelark_farm.builder",
+    "msg": "phone 4445 WARM: warm_for_operator (179s)"
+   }
+  ],
+  "folders": [
+   {
+    "folder": "20260925-191557-build4445",
+    "files": [
+     "191820-loading.xml",
+     "191833-dismissable.xml",
+     "191847-email_entry.xml",
+     "191927-password_entry.xml"
+    ],
+    "images": []
+   },
+   {
+    "folder": "20260925-204528-finish4445",
+    "files": [
+     "204827-welcome.xml",
+     "204844-google_account_sheet.xml",
+     "204858-email_entry.xml",
+     "205002-email_code_entry.xml",
+     "205005-mailbox_unreachable.xml"
+    ],
+    "images": []
+   },
+   {
+    "folder": "20260925-212915-finish4445",
+    "files": [
+     "213050-welcome.xml",
+     "213108-google_account_sheet.xml",
+     "213120-email_entry.xml",
+     "213200-email_code_entry.xml",
+     "213203-mailbox_unreachable.xml"
+    ],
+    "images": []
+   },
+   {
+    "folder": "20260925-215603-finish4445",
+    "files": [
+     "215748-welcome.xml",
+     "215805-google_account_sheet.xml",
+     "215817-email_entry.xml",
+     "215859-email_code_entry.xml",
+     "215902-no_code_source.xml"
+    ],
+    "images": []
+   }
+  ]
+ }
+}

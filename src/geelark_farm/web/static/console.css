@@ -961,3 +961,48 @@ tr.now td:last-child{border-radius:0 8px 8px 0}
  .grid2,.grid3,.tiles,.ticks{grid-template-columns:1fr}
  .story .item{grid-template-columns:1fr}
 }
+
+/* The phone's journey (2026-09-26): each run's stages, how long each
+   took, and the screens where it stopped. */
+.journey .jrun{border-top:1px solid var(--line2);padding:14px 0;display:flex;
+ flex-direction:column;gap:12px}
+.journey details.jrun>summary{cursor:pointer;list-style:none}
+.journey details.jrun>summary::-webkit-details-marker{display:none}
+.journey details.jrun[open]>summary{margin-bottom:12px}
+.jhead{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+.jkind{font-weight:600;color:var(--bright)}
+.jwhy{margin:0;color:var(--ink)}
+.jblame{font-size:12px;padding:2px 9px;border-radius:999px;margin-left:10px;
+ background:var(--amber-bg);color:var(--amber);white-space:nowrap}
+.jbar{display:flex;gap:2px;height:30px;border-radius:6px;overflow:hidden}
+.jseg{min-width:8px;display:flex;align-items:center;padding:0 8px;
+ font-size:12px;white-space:nowrap;overflow:hidden;background:var(--panel2);
+ color:var(--muted)}
+.jseg.done{background:var(--blue-bg);color:var(--blue)}
+.jseg.failed{background:var(--red-bg);color:var(--red)}
+.jseg.refused{background:var(--amber-bg);color:var(--amber)}
+.jseg.running{background:var(--violet-bg);color:var(--violet)}
+.jstages{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+ gap:10px}
+.jst{display:flex;flex-direction:column;font-size:13px}
+.jst .mono{font-size:12px}
+.jst.failed b{color:var(--red)} .jst.refused b{color:var(--amber)}
+.jlabel{margin:0 0 8px;font-size:12px;letter-spacing:.08em;
+ text-transform:uppercase;color:var(--muted)}
+.jcards{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;
+ align-items:flex-start}
+.jcard{margin:0;flex:0 0 auto;width:120px;display:flex;flex-direction:column;
+ gap:3px;font-size:12px}
+.jcard img,.jcard .jnone{width:120px;height:240px;box-sizing:border-box;
+ border-radius:10px;border:1px solid var(--line);background:#f4f6f9;
+ display:flex;align-items:center;justify-content:center;color:#5b6576}
+.jcard.bad img,.jcard.bad .jnone{border:2px solid var(--red)}
+.jcard figcaption{display:flex;flex-direction:column}
+.jcaps{display:flex;flex-direction:column;gap:6px;font-size:13px;
+ min-width:260px;max-width:420px;padding-left:4px}
+.jshot{margin:0;flex:0 0 auto;width:220px;display:flex;flex-direction:column;
+ gap:4px;font-size:12px}
+.jshot img{width:220px;border-radius:12px;border:1px solid var(--line);
+ display:block}
+.jmore>summary{cursor:pointer;color:var(--muted);font-size:13px}
+.jmore[open]>summary{margin-bottom:8px}

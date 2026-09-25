@@ -6263,8 +6263,9 @@ def test_a_chatgpt_code_never_comes_from_the_customer():
                                mail_imap_user="box@example.com",
                                mail_imap_password="app-password")
 
-    def row(product):
-        return SimpleNamespace(values={"Product": product})
+    def row(product, address="alias_1@masked.me"):
+        return SimpleNamespace(values={"Product": product},
+                               credentials=SimpleNamespace(email=address))
 
     # No mailbox: the page is reported and the account set aside, which
     # is what the farm did before any of this - never the panel.
@@ -6272,9 +6273,21 @@ def test_a_chatgpt_code_never_comes_from_the_customer():
                       codes_mod.NoSource)
     assert isinstance(builder._codes_for(no_box, row(""), panel),
                       codes_mod.NoSource), "a blank product is chatgpt"
-    # With one: the farm's own mailbox.
+    # With one: the farm's own mailbox - for an address whose mail lands
+    # in it. A plain Gmail's code never does, and it was sent to wait
+    # there (mahtabitabi80@gmail.com, the operator, 2026-09-26).
     assert isinstance(builder._codes_for(with_box, row("chatgpt"), panel),
                       mailbox_mod.MailboxSource)
+    assert isinstance(builder._codes_for(
+        with_box, row("chatgpt", "Someone80@Gmail.com"), panel),
+        codes_mod.NoSource)
+    other = SimpleNamespace(**vars(with_box),
+                            mail_alias_domains=("relay.example",))
+    assert isinstance(builder._codes_for(
+        other, row("chatgpt", "a@relay.example"), panel),
+        mailbox_mod.MailboxSource), "the domains are a setting"
+    assert isinstance(builder._codes_for(other, row("chatgpt"), panel),
+                      codes_mod.NoSource)
     # Claude keeps the customer's.
     assert builder._codes_for(with_box, row("claude"), panel) is panel
     assert builder._codes_for(no_box, row("claude"), panel) is panel
@@ -7194,3 +7207,55 @@ def test_an_automation_that_is_not_a_build_ends_the_way_a_build_does(
     assert "PhoneRun(client, build" in inspect.getsource(builder.finish_one)
     assert builder._ended_by is __import__(
         "geelark_farm.kit.phone", fromlist=["_ended_by"])._ended_by
+
+
+# ---------------- item 6: a chosen account refused says the service's word
+def _spotify_bare_build(settings, monkeypatch, *answers):
+    """A bare phone asked for with a chosen Spotify account, the flow
+    answering from a script."""
+    import geelark_farm.flows.spotify_login as spotify_login
+
+    book = make_book(gmails=1, proxies=1, apps=1)
+    book.apps._rows[0].values["Product"] = "spotify"
+    monkeypatch.setattr(builder.kit_install, "_install",
+                        lambda *a, **k: INSTALLED)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: True)
+    left = list(answers)
+    monkeypatch.setattr(spotify_login, "sign_in",
+                        lambda *a, **k: left.pop(0))
+    want = builder.Wanted(no_gmail=True, app="spotify",
+                          app_account="a0@example.com")
+    build = builder.build_one(None, settings, book, FakeLedger(), 1,
+                              want=want)
+    return build, book
+
+
+def test_a_chosen_account_its_service_refused_says_what_the_service_said(
+        device, settings, monkeypatch):
+    """Spotify called the chosen account a wrong password, and the build
+    ended `chosen_app_unavailable` - "somebody took it" - because the loop
+    came back to pick the account it had just set aside (phones 4265 and
+    4276, 2026-09-23; the operator, 2026-09-26)."""
+    build, book = _spotify_bare_build(
+        settings, monkeypatch, Outcome("fatal", "wrong_password"))
+
+    assert build.status == "chosen_app_refused", build.detail
+    assert build.detail.startswith(
+        "a0@example.com, the account chosen for this phone: Spotify would "
+        "not take the password. It stays set aside for a person to check")
+    assert "not free" not in build.detail
+    row = book.apps._rows[0]
+    assert book.apps.status_of(row) not in book.apps.available_statuses
+    assert "chosen_app_refused" in builder.breaker.WORKED, (
+        "a warm phone asked for by hand is not a machine that stopped")
+
+
+def test_a_chosen_account_the_service_only_challenged_is_said_to_go_back(
+        device, settings, monkeypatch):
+    """A refusal that judged nothing about the account - a code that never
+    came - puts it back, and the sentence says so."""
+    build, _ = _spotify_bare_build(
+        settings, monkeypatch, Outcome("fatal", "code_timeout"))
+
+    assert build.status == "chosen_app_refused", build.detail
+    assert "It goes back to the pool untouched" in build.detail

@@ -520,6 +520,12 @@ class Settings:
     mail_imap_host: str = "imap.gmail.com"
     mail_imap_user: str = ""
     mail_imap_password: str = ""
+    #: The address domains whose mail forwards into that mailbox - the
+    #: AdGuard aliases. Only those are read there: a code ChatGPT emails
+    #: to a plain gmail.com address never arrives in it, and every such
+    #: sign-in was sent to wait on it (six of six, 2026-09-24/25).
+    #: MAIL_ALIAS_DOMAINS, comma-separated.
+    mail_alias_domains: tuple[str, ...] = ("masked.me",)
     #: Apps GeeLark's own app center carries go in through its installer,
     #: fired the moment the phone is up, instead of through the Play Store
     #: screens - seven of a warm phone's eleven minutes (2026-09-08). Off,
@@ -640,6 +646,8 @@ class Settings:
             mail_imap_host=_str("MAIL_IMAP_HOST", "imap.gmail.com"),
             mail_imap_user=_str("MAIL_IMAP_USER", ""),
             mail_imap_password=_str("MAIL_IMAP_PASSWORD", ""),
+            mail_alias_domains=tuple(d.casefold().lstrip("@") for d in _words(
+                "MAIL_ALIAS_DOMAINS", ("masked.me",))),
             captcha_max_attempts=_int("CAPTCHA_MAX_ATTEMPTS", 3, minimum=1),
             app_install_api=_str("APP_INSTALL_API", "1").strip()
                             in ("1", "true", "yes", "on"),

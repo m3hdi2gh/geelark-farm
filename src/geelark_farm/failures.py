@@ -301,11 +301,23 @@ VERDICTS: dict[str, Verdict] = {
         "phone nobody sent it to: pick one on the dashboard and press Send, "
         "and the keeper builds the next warm phone at once."),
     "chosen_app_unavailable": Verdict(
-        NOBODY, "the GPT account it was asked to use was not free",
+        NOBODY, "the app account it was asked to use could not be used",
         "Somebody chose that account and it was taken, set aside or "
-        "removed between the asking and the building. The phone is warm, "
-        "so nothing was wasted - ask again with another account, or let "
-        "the next pass sign in whichever is next."),
+        "removed between the asking and the building - or it is for an "
+        "app a new phone with a Gmail does not sign in (a Spotify error "
+        "account goes on a warm phone through Send on its row). Nothing "
+        "was wasted - ask again with another account."),
+    #: The account chosen for the phone was tried on it and its service
+    #: said no. It ended `chosen_app_unavailable` - "somebody took it" -
+    #: because the loop came back to pick the account it had just set
+    #: aside (phones 4265 and 4276, 2026-09-23; the operator, 2026-09-26).
+    #: The Note carries the service's own word about the account.
+    "chosen_app_refused": Verdict(
+        NOBODY, "the account chosen for it was refused by its service",
+        "The phone is warm - Google is in and the app is on it. The Note "
+        "says what the service said about the account and whether it was "
+        "set aside or put back; check that account, then send another one "
+        "to this phone."),
     "no_authenticator_option": Verdict(
         CREDENTIAL, "Google offered no authenticator to use",
         "Google offered no authenticator choice on this account."),
