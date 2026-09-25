@@ -1965,6 +1965,21 @@
         // add that was turned away keeps what was typed: that is the
         // thing to correct.
         var turned = /[?&]said=(no|refused|already|bad|none)(?:[:&]|$)/;
+        // Sent: the account is on its way to that phone, so the sheet
+        // closes. Left open, the page - which holds still for an open
+        // sheet - went on showing the account waiting and the phone
+        // warm, and a press the keeper took in two seconds read as
+        // nothing at all (the operator, 2026-09-26). Turned away, it
+        // stays open with the reason.
+        // The banner is put in by hand: with the sheet shut the swap takes
+        // the region path, which leaves everything outside the regions
+        // alone - the "Queued" banner included.
+        if (sheet && sheet.dataset.sheet === 'send' && !turned.test(got.url)) {
+          shut();
+          swapMain(doc);
+          sayIt(doc);
+          return;
+        }
         if (/[/]add$/.test(form.action) && !turned.test(got.url)) {
           restoreSheet(sheet);
           if (sheet) sheet.querySelectorAll('textarea[name=pasted]')

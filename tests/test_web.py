@@ -9694,3 +9694,19 @@ def test_the_send_list_is_a_region_and_moves_while_it_is_open(
     assert "i.value = who;" in branch
     assert "function sendSame(mine, fresh){" in js
 
+
+
+def test_a_send_that_went_through_closes_its_sheet_and_says_so():
+    """The keeper took the press in two seconds, and the sheet stayed
+    open over a page that holds still for an open sheet - the account
+    still waiting, the phone still warm - so it read as nothing at all
+    (the operator, 2026-09-26). Shut, the swap takes the region path,
+    which leaves the banner out; it is put in by hand."""
+    js = assets.JS
+    at = js.index("if (sheet && sheet.dataset.sheet === 'send'"
+                  " && !turned.test(got.url)) {")
+    branch = js[at:js.index("}", at)]
+    assert "shut();" in branch and "swapMain(doc);" in branch
+    assert branch.index("swapMain(doc);") < branch.index("sayIt(doc);")
+    # Turned away, it stays open with the reason: the test is `turned`.
+    assert js.index("var turned = ") < at
