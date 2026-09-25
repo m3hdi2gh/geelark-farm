@@ -238,6 +238,7 @@ def test_hold(web, monkeypatch):  # noqa: F811
     # XML and - where $GF_DEVSHOT names a png - the screenshot
     # (2026-09-26).
     _journey_4435(monkeypatch, app_mod)
+    _tasks(monkeypatch)
     monkeypatch.setattr(
         store_sessions, "find",
         lambda settings, token: {"user": dict(FakeStore.user), "csrf": "c1"})
@@ -262,6 +263,70 @@ def test_hold(web, monkeypatch):  # noqa: F811
             os.remove(flip)
             print("  flipped 3243 to ready")
         time.sleep(1)
+
+
+def _tasks(monkeypatch):
+    """The Tasks pages on fake rows: a task that mostly works, one that
+    has never run, and one run with the screens of phone 4435's own
+    archived folder - so the cards are drawn from real XML."""
+    from geelark_farm.web import task_read
+
+    runs = [
+        {"id": 91, "task": "app_probe", "status": "failed", "ok": False,
+         "reason": "unrecognised_screen", "blame": "nobody",
+         "detail": "com.android.chrome drew a page neither list knows",
+         "inputs": {"package": "com.android.chrome"}, "serial": "4435",
+         "seconds": 35, "api_calls": 13, "trail": "app_probe: ",
+         "folder": "20260925-175928-build4435", "started_at": None},
+        {"id": 90, "task": "app_probe", "status": "done", "ok": True,
+         "reason": "signed_out", "blame": "",
+         "detail": "com.android.chrome drew its sign-in screen",
+         "inputs": {"package": "com.android.chrome"}, "serial": "4435",
+         "seconds": 19, "api_calls": 8, "trail": "app_probe: signed_out",
+         "folder": "20260925-175928-build4435", "started_at": None},
+        {"id": 89, "task": "app_probe", "status": "failed", "ok": False,
+         "reason": "app_not_installed", "blame": "device",
+         "detail": "com.openai.chatgpt is not on the phone",
+         "inputs": {"package": "com.openai.chatgpt"}, "serial": "4435",
+         "seconds": 2, "api_calls": 2, "trail": "", "folder": "",
+         "started_at": None},
+    ]
+    tally = {"runs": 3, "worked": 1, "rate": 1 / 3, "median_seconds": 19,
+             "reasons": {"unrecognised_screen": 1, "app_not_installed": 1},
+             "blames": {"nobody": 1, "device": 1}}
+
+    monkeypatch.setattr(task_read, "listing", lambda settings: {
+        "days": 7, "counted": True,
+        "tasks": [{"key": s.key, "title": s.title, "summary": s.summary,
+                   "inputs": [{"name": f.name, "label": f.label,
+                               "required": f.required, "secret": f.secret,
+                               "help": f.help} for f in s.inputs],
+                   "tally": tally if s.key == "app_probe" else {}}
+                  for s in __import__(
+                      "geelark_farm.tasks", fromlist=["TASKS"]).TASKS.values()]})
+    monkeypatch.setattr(task_read, "runs", lambda settings, task="", page=1: {
+        "task": task, "spec": __import__(
+            "geelark_farm.tasks", fromlist=["spec"]).spec(task),
+        "page": 1, "rows": runs if task == "app_probe" else [],
+        "tally": tally if task == "app_probe" else {}, "more": False,
+        "days": 7})
+
+    def one(settings, run_id):
+        row = next((dict(r) for r in runs if r["id"] == int(run_id)), None)
+        if row is None:
+            return None
+        # Real screens: 4435's own folder, from the journey fixture.
+        row["screens"] = [
+            {"name": name, "at": name[:2] + ":" + name[2:4] + ":" + name[4:6],
+             "screen": name[7:].removesuffix(".xml").replace("_", " "),
+             "wire": f"/phones/4435/wire/{row['folder'] or 'x'}/{name}",
+             "shot": ""}
+            for name in ("180245-loading.xml", "180259-dismissable.xml",
+                         "180313-email_entry.xml", "180404-captcha.xml",
+                         "180610-captcha_shown.xml")] if row["folder"] else []
+        return row
+
+    monkeypatch.setattr(task_read, "one", one)
 
 
 def _journey_4435(monkeypatch, app_mod):

@@ -270,6 +270,33 @@ class _Handler(BaseHTTPRequestHandler):
                                      page=_page_number(first)),
                     user, signals=read.signals(self.settings), kind=kind,
                     q=q, day=day, explain=_explain))
+            # ------------------------------------------- tasks (2026-09-26)
+            # Read-only: what the jobs that are not builds have been
+            # doing. The pages and their reader live in their own two
+            # modules, so this is the whole of the farm's router that
+            # knows about them.
+            if path == "/tasks" or path.startswith("/tasks/"):
+                from . import task_pages, task_read
+
+                if not task_pages.may_see(user):
+                    return self._html(403, pages.forbidden(user))
+                rest = path[len("/tasks"):].strip("/")
+                if not rest:
+                    return self._html(200, task_pages.tasks_page(
+                        task_read.listing(self.settings), user,
+                        said=first.get("said", "")))
+                name, _, run = rest.partition("/")
+                if run.isdigit():
+                    row = task_read.one(self.settings, int(run))
+                    if row is None or str(row.get("task")) != name:
+                        return self._html(404, pages.page(
+                            "404", "<h2>No such run</h2>", user=user))
+                    return self._html(200, task_pages.run_page(
+                        row, user, advice=_verdict))
+                return self._html(200, task_pages.task_page(
+                    task_read.runs(self.settings, name,
+                                   page=_page_number(first)),
+                    user, said=first.get("said", "")))
             if path == "/logins":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -2861,6 +2888,17 @@ def _operator_may_post(path: str) -> bool:
         return True
     # One failed hand-built request: take it off the list.
     return path.startswith("/wishes/") and path.endswith("/dismiss")
+
+
+def _verdict(status: str):
+    """The whole verdict for a task run's reason - both sentences, not
+    the one `_advice` gives. A word the table never heard of answers
+    None, and the page falls back to the run's own detail rather than
+    printing the safe default at somebody as though it were a finding.
+    """
+    from ..failures import knows, verdict
+
+    return verdict(status) if knows(status) else None
 
 
 def _advice(status: str) -> str:

@@ -58,6 +58,7 @@ _RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/proxy", "Proxy Pool", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
+         ("/tasks", "Tasks", ""),
          ("/logins", "Login rate", ""),
          ("/events", "Events", ""), ("/api-clients", "API clients", ""),
          ("/users", "Users", ""))
@@ -73,6 +74,9 @@ _ICONS = {
          'rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
     "/pools/gmail": '<path d="M4 6l8 6 8-6"/><rect x="3" y="5" width="18" '
                     'height="14" rx="2"/>',
+    # A tick in a box: a job done, which is what a task run is.
+    "/tasks": '<path d="M9 11l3 3L20 6"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 '
+              '2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>',
     "/pools/proxy": '<circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17"/>'
                     '<path d="M12 3c-2.5 2.4-4 5.4-4 9s1.5 6.6 4 9c2.5-2.4 4-5.4 '
                     '4-9s-1.5-6.6-4-9z"/>',
