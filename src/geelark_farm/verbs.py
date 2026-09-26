@@ -282,6 +282,12 @@ def build_by_hand(book, ledger, settings, payload, client):
         refused = _account_is_free(book, app_account)
         if refused:
             return "refused", refused, None
+    # Free on the row is not free: a build asked for a minute ago names
+    # it and claims it only when it gets there (2026-09-27).
+    going = store_wanted.on_its_way(settings, app_account, gmail)
+    if going:
+        return ("refused", f"{going} is already on its way to a phone being "
+                           f"built - see the Phones table", None)
 
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,

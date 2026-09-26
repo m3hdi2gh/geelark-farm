@@ -797,6 +797,9 @@ _PENDING_WORDS = {
     "free_gmail": "Freeing", "edit_gmail": "Saving",
     "remove_gmail": "Removing", "remove_app": "Removing",
     "remove_delivered_apps": "Removing",
+    # A build asked for by hand, carrying this Gmail or account to the
+    # phone it is making - claimed only when it gets there (2026-09-27).
+    "build_by_hand": "Building a phone",
     "free_app": "Freeing", "offer_again": "Offering",
     "refund_gmail": "Marking", "stop_phone": "Stopping",
     "adopt_proxy": "Adopting", "ignore_proxy": "Ignoring",
@@ -1459,7 +1462,8 @@ def _group_of(state: str) -> str:
     is asked about."""
     if state in ("used", "delivered"):
         return "spent"
-    if state in ("free", "on a phone", "set aside", "set_aside"):
+    if state in ("free", "on a phone", "set aside", "set_aside",
+                 "on its way"):
         return "current"
     return "errored"
 
@@ -1696,7 +1700,8 @@ def _spotify_send_form(user: dict, row: dict, back: str = "/") -> str:
 
 
 def _pool_queue(kind: str, rows: list[dict], user: dict,
-                manual_login: bool, quiet: bool = False) -> str:
+                manual_login: bool, quiet: bool = False,
+                pending: dict | None = None) -> str:
     """What is actually free, under the number that counts it.
 
     Every one of them, in a box that scrolls past the first few: the
@@ -1726,12 +1731,17 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
         # The Spotify kind as its mark alone, and a short door beside it:
         # the pill and the words took the row and left the address in an
         # ellipsis (the operator, 2026-09-18).
+        # One a command or a build is already on its way with shows that
+        # instead of its door, the way the sheet's row does: it kept its
+        # `+ phone` after it was sent (the operator, 2026-09-27).
+        waiting = str((pending or {}).get(label) or "")
+        door = (_pending_door(waiting) if waiting and send else
+                (_spotify_send_form(user, row) if kind == "spotify"
+                 else _send_form(user, label)) if send else "")
         if kind == "spotify":
-            aside = _category_dot(tag) + (
-                _spotify_send_form(user, row) if send else "")
+            aside = _category_dot(tag) + door
         else:
-            aside = (_send_form(user, label) if send
-                     else f'<span class="tag">{esc(tag)}</span>')
+            aside = door or f'<span class="tag">{esc(tag)}</span>'
         items.append(f'<li><span class="t" title="{esc(label)}">'
                      f'{_split_address(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
@@ -1760,7 +1770,8 @@ def _category_dot(category: str) -> str:
 
 def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
                why: str, user: dict, manual_login: bool = False,
-               alerts: list[dict] | None = None) -> str:
+               alerts: list[dict] | None = None,
+               pending: dict | None = None) -> str:
     meta = _POOL_KINDS[kind]
     # One door. `+ add` and `Manage all` opened the same manager, one
     # focused on the paste box and one on the search, and two buttons that
@@ -1784,6 +1795,8 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
     short = (f'<p class="railnote warn">{esc(why[:1].upper() + why[1:])}</p>'
              if kind == "gmail" and colour == "amber" and count and not alerts
              else "")
+    queue = _pool_queue(kind, rows, user, manual_login, quiet=bool(alerts),
+                        pending=pending)
     add = (f'<button type="button" class="go small" data-pool="{kind}">'
            f'Manage</button>' if opens else "")
     return (
@@ -1792,7 +1805,7 @@ def _pool_card(kind: str, count: int, rows: list[dict], colour: str,
         f'<span class="t">{esc(meta["name"])}<i>{esc(meta["under"])}</i></span>'
         f'{add}</header>'
         f'{_pool_alerts(alerts or [])}{short}{_category_split(kind, rows)}'
-        f'{_pool_queue(kind, rows, user, manual_login, quiet=bool(alerts))}'
+        f'{queue}'
         f'</section>')
 
 
@@ -1938,7 +1951,8 @@ def _cards(kinds: tuple, data: dict, user: dict, manual_login: bool,
     return "".join(
         _pool_card(row["kind"], row["count"], listed.get(row["kind"]) or [],
                    row["colour"], row["why"], user, manual_login,
-                   (alerts or {}).get(row["kind"]) or [])
+                   (alerts or {}).get(row["kind"]) or [],
+                   pending=data.get("pending") or {})
         for row in rows if row["kind"] in kinds)
 
 

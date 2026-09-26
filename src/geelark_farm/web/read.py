@@ -245,6 +245,20 @@ _FOLD = {
 }
 
 
+#: The addresses a build asked for by hand is on its way with. Nothing is
+#: claimed until the build reaches them, minutes later, so the rows read
+#: free - a `normal` Spotify account kept its `+ phone` and its place in
+#: the card's count after it was sent (the operator, 2026-09-27). A
+#: subquery, so every count and picker can leave them out in its own SQL.
+_ON_ITS_WAY = ("SELECT lower(x) FROM wanted_builds w,"
+               " unnest(ARRAY[w.app_account, w.gmail]) AS x"
+               " WHERE w.status IN ('queued', 'running') AND x <> ''")
+
+
+#: The state word of such a row in the manager.
+ON_ITS_WAY = "on its way"
+
+
 def _pending(store) -> dict[str, str]:
     """Every queued or running command, by what it names - a serial, an
     address, an exit's name - to the verb waiting on it.
@@ -266,6 +280,15 @@ def _pending(store) -> dict[str, str]:
         for key in (r["serial"], r["address"], r["name"]):
             if key:
                 out.setdefault(str(key).strip(), str(r["verb"]))
+    # And what a build asked for by hand is on its way with: the wish,
+    # not a command, carries it to its phone (2026-09-27).
+    wishes = store._rows(
+        "SELECT app_account, gmail FROM wanted_builds"
+        " WHERE status IN ('queued', 'running')")
+    for r in wishes:
+        for key in (r.get("app_account"), r.get("gmail")):
+            if key and str(key).strip():
+                out.setdefault(str(key).strip(), "build_by_hand")
     return out
 
 
@@ -331,6 +354,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "SELECT coalesce(category, '') AS category, count(*) AS c"
             " FROM resources WHERE kind = 'app' AND status = ''"
             f"   AND error IS NULL AND {IS_SPOTIFY}"
+            f"   AND lower(address) NOT IN ({_ON_ITS_WAY})"
             " GROUP BY 1")
         # What a person can choose from when they build one by hand. Capped:
         # this is a picker, not the pool page, and a select with four hundred
@@ -341,6 +365,7 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "SELECT address AS label FROM resources"
             " WHERE kind = 'gmail' AND status = '' AND error IS NULL"
             "   AND address <> ''"
+            f"   AND lower(address) NOT IN ({_ON_ITS_WAY})"
             " ORDER BY sheet_row NULLS LAST, id LIMIT 60")
         # The app rows carry what kind of account they are, because the
         # card asks that first now: a bare phone may take a `normal`
@@ -365,7 +390,8 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
             "           ORDER BY sheet_row NULLS LAST, id) AS seat"
             "  FROM resources"
             "  WHERE kind = 'app' AND status = '' AND error IS NULL"
-            "    AND address <> '') AS free"
+            "    AND address <> ''"
+            f"   AND lower(address) NOT IN ({_ON_ITS_WAY})) AS free"
             " WHERE seat <= 60 ORDER BY product, category, seat")
         choose["proxies"] = store._rows(
             "SELECT proxy_name AS label FROM resources"
@@ -1173,6 +1199,9 @@ def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
                       "spotify": counted.get("spotify",
                                              {"live": 0, "spent": 0}),
                       "proxy": counted.get("proxy", {"live": 0, "spent": 0})}
+    going = {str(r["x"]) for r in store._rows(
+        f"SELECT x FROM ({_ON_ITS_WAY.replace('lower(x)', 'lower(x) AS x', 1)})"
+        " AS going")}
     for kind, listed in rows.items():
         if kind == "totals":
             continue
@@ -1181,6 +1210,12 @@ def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
             # An unreadable row is `broken` whatever its status says -
             # that is the thing about it a person has to act on.
             row["state"] = _pool_state(kind, row)
+            # Free on the row, but a build asked for by hand is carrying
+            # it to a phone and claims it when it gets there: the status
+            # says so, not `free` (the operator, 2026-09-27).
+            if (row["state"] == "free" and kind != "proxy"
+                    and str(row.get("address") or "").lower() in going):
+                row["state"] = ON_ITS_WAY
     return rows
 
 

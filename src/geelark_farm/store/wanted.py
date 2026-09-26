@@ -55,6 +55,27 @@ def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
     return int(rows[0]["id"])
 
 
+def on_its_way(settings: Settings | None, *addresses: str) -> str:
+    """Which of these addresses a wish still open already names, or "".
+
+    Nothing is claimed when a wish is written - the build claims its
+    Gmail and its account by name when it reaches them, minutes later -
+    so until then the rows read free, and a second press on the same
+    account asked for a second phone (the operator, 2026-09-27). No
+    store, no answer: a caller without one has nothing to ask."""
+    wanted = [a.strip().lower() for a in addresses if a and a.strip()]
+    if (settings is None or not wanted
+            or not getattr(settings, "store_enabled", False)):
+        return ""
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT lower(app_account) AS app_account, lower(gmail) AS gmail"
+            " FROM wanted_builds WHERE status IN ('queued', 'running')")
+    named = {str(r[k]) for r in rows for k in ("app_account", "gmail")
+             if r.get(k)}
+    return next((a for a in wanted if a in named), "")
+
+
 def take(settings: Settings, limit: int = 2) -> list[dict]:
     """Claim the oldest wishes, marking them `running` in the same breath.
 
