@@ -999,6 +999,11 @@ class _Handler(BaseHTTPRequestHandler):
         product = str(kept.get("Product") or "").strip().lower()
         if (product == "spotify") != (kind == "spotify"):
             return self._redirect("/?said=gone")
+        # The add makes a free row, and a delivered account is not stock:
+        # undone, it would go to the next phone. The archive keeps it
+        # (2026-09-27).
+        if str(kept.get("Status") or "").strip().lower() == "delivered":
+            return self._redirect("/?said=kept_delivered")
         secret = str(kept.get("Secret") or kept.get("2FA Secret") or "").strip()
         if kind == "spotify":
             payload = {"rows": [{"address": kept["Address"],

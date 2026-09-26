@@ -1134,11 +1134,16 @@ def remove_gmail(book, ledger, settings, payload, client):
                     f"archived, not deleted", {"removed": kept})
 
 
-def _app_row(book, payload):
+def _app_row(book, payload, *, delivered_goes=False):
     """The GPT row this command names, or the refusal that says why not.
 
     Same rule as `_gmail_row`, for the same reason: a row a phone is
-    behind, or one already delivered, is not stock to edit or tidy away.
+    behind is not stock to edit or tidy away. A delivered one is not
+    either - Free or Edit would put it back where a build could take it
+    - but no phone is behind it (handing it over blanked the serial), so
+    Remove may take it out of the pool: `delivered_goes`. The one
+    exception is a row the panel handed in, which its API reads the
+    order back from (the operator, 2026-09-27).
     """
     address = (payload.get("address") or "").strip()
     resource = book.apps.find(address)
@@ -1146,8 +1151,18 @@ def _app_row(book, payload):
         return None, ("failed", f"{address or '?'} is not in the "
                                 f"{book.apps.tab} tab", None)
     status = book.apps.status_of(resource)
-    if status in (book.apps.claimed_status, book.apps.spent_status,
-                  book.apps.retired_status):
+    if status == book.apps.retired_status:
+        source = str((resource.values or {}).get("Source") or "")
+        if source.strip().lower() == "panel":
+            return None, ("refused", f"{address} was delivered to a panel "
+                                     f"customer - the panel still reads "
+                                     f"this row, so it stays", None)
+        if delivered_goes:
+            return resource, None
+        return None, ("refused", f"{address} is delivered - it went out on "
+                                 f"a phone; Remove takes it out of the "
+                                 f"pool", None)
+    if status in (book.apps.claimed_status, book.apps.spent_status):
         return None, ("refused", f"{address} is {status} - a phone is behind "
                                  f"it", None)
     return resource, None
@@ -1220,7 +1235,7 @@ def edit_app(book, ledger, settings, payload, client):
 def remove_app(book, ledger, settings, payload, client):
     """Out of the pool and into the archive. The row rides in the detail
     so Requests can put it back, the way a removed Gmail or proxy can."""
-    resource, refused = _app_row(book, payload)
+    resource, refused = _app_row(book, payload, delivered_goes=True)
     if refused:
         return refused
     address = str(resource.values.get("Address") or "")
@@ -1229,6 +1244,8 @@ def remove_app(book, ledger, settings, payload, client):
     kept = {name: str(resource.values.get(name) or "")
             for name in ("Address", "Password", "2FA Secret",
                          book.apps.EMAIL_CODE_COLUMN, "Product", "Category")}
+    # So Undo can tell a delivered row, which must not come back as stock.
+    kept["Status"] = book.apps.status_of(resource)
     book.apps.delete_row(resource, by=_by(payload))
     return ("done", f"{address} removed from the pool by {_by(payload)} - "
                     f"archived, not deleted", {"removed": kept})

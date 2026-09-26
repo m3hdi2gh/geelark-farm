@@ -324,6 +324,9 @@ _DASH_SAID = {
     "removed-spotify": "Removed - the row is out of the Spotify pool.",
     "gone": "That cannot be undone any more - the request that removed it "
             "kept nothing to put back.",
+    "kept_delivered": "A delivered account does not come back as stock - "
+                      "it would go to the next phone. The archive keeps "
+                      "the whole row.",
     # It said "the next pass starts it within about thirty seconds",
     # which was true when only a pass could write the sheet. A command
     # rings a bell now and a lane takes it: measured over a day,
@@ -2107,16 +2110,21 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 f'<button class="quiet bad" data-busy="Removing&hellip;">'
                 f'Remove</button></form>')
         return f'<div class="doors">{"".join(doors)}</div>'
+    # A delivered account is finished with: Free and Edit would both be
+    # refused - they would put it back where a build could take it - and
+    # Remove is the one thing left to do with it (2026-09-27).
+    finished = kind in ("gpt", "spotify") and state == "delivered"
     # A row a run set aside gets Free: one press, back on the shelf, and
     # nothing else on the row touched (the operator, 2026-09-06).
-    if meta.get("free") and state not in ("free", "on a phone"):
+    if (meta.get("free") and state not in ("free", "on a phone")
+            and not finished):
         doors.append(
             f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
             f'<input type="hidden" name="{field}" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="/">'
             f'<button class="quiet ok" data-busy="Freeing&hellip;" '
             f'title="back on the shelf, as it is">Free</button></form>')
-    if meta["edit"]:
+    if meta["edit"] and not finished:
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
             f' data-pool="{kind}">Edit</button>')
@@ -4805,7 +4813,7 @@ def _csrf(user: dict) -> str:
 #: tick was worn by every one of these, so a refusal looked exactly like a
 #: success and the person walked away believing it (2026-09-07).
 _SAID_NO = frozenset({"no", "refused", "off", "auto", "none", "gone", "bad",
-                      "too_late"})
+                      "too_late", "kept_delivered"})
 
 
 def _links_out(user: dict | None) -> bool:

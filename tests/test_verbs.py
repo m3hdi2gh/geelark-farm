@@ -436,6 +436,50 @@ def test_removing_a_spotify_row_keeps_its_kind():
     assert detail["removed"]["Category"] == "error"
 
 
+def test_a_delivered_account_can_be_removed_but_not_freed_or_edited():
+    """Delivered is finished with: no phone is behind it - handing it over
+    blanked the serial - and the operator wants it out of the pool. Remove
+    said "a phone is behind it" about 25 delivered Spotify rows
+    (2026-09-27). Free and Edit stay shut: either would put a delivered
+    account back where a build could take it."""
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    address = a0.values["Address"]
+    a0.values["Product"] = "spotify"
+    book.apps.retire(a0, note="handed over")
+    assert book.apps.status_of(a0) == "delivered"
+
+    for verb in (verbs.edit_app, verbs.free_app):
+        status, said, _ = verb(book, None, None,
+                               {"address": address, "secret": "",
+                                "by": "mehdi"}, None)
+        assert status == "refused", said
+        assert "a phone is behind it" not in said and "delivered" in said
+
+    status, said, detail = verbs.remove_app(
+        book, None, None, {"address": address, "by": "mehdi"}, None)
+    assert status == "done" and "removed from the pool" in said, said
+    assert a0 not in book.apps._rows
+    assert detail["removed"]["Product"] == "spotify"
+    assert detail["removed"]["Status"] == "delivered"
+
+
+def test_a_delivered_panel_account_stays_for_the_panel():
+    """A row the panel handed in is what its API reads the order back
+    from; removing it would take a customer's account out from under
+    their panel."""
+    book = make_book(apps=1)
+    a0 = book.apps._rows[0]
+    a0.values["Source"] = "panel"
+    book.apps.retire(a0, note="handed over")
+
+    status, said, _ = verbs.remove_app(
+        book, None, None, {"address": a0.values["Address"], "by": "mehdi"},
+        None)
+    assert status == "refused" and "panel" in said, said
+    assert a0 in book.apps._rows
+
+
 def test_removing_a_gmail_keeps_the_row_it_removed():
     book = make_book(gmails=1)
     g0 = book.gmails._rows[0]

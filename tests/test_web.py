@@ -4376,6 +4376,32 @@ def test_a_removed_spotify_row_comes_back_as_a_spotify_row(web, monkeypatch):
     assert status == 303 and dict(headers)["Location"] == "/?said=gone"
 
 
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_undo_does_not_put_a_delivered_account_back_as_stock(web,
+                                                             monkeypatch):
+    """Undo re-adds through the pool's add, which makes a free row: a
+    delivered account removed and undone would be offered to the next
+    phone. The archive keeps it; the toast says so (2026-09-27)."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: pytest.fail("nothing to put back"))
+    kept = {"Address": "done@x.com", "Password": "pw", "Product": "spotify",
+            "Category": "normal", "Status": "delivered"}
+    monkeypatch.setattr(actions_mod, "one", lambda s, i: {
+        "id": i, "verb": "remove_app", "status": "done", "result": "",
+        "requested_by": 7, "detail": {"removed": kept}})
+    client = web()
+    client.login()
+    status, headers, _ = client.request(
+        "POST", "/pools/spotify/undo", _form(csrf=client.csrf(), req="53"))
+    assert status == 303
+    assert dict(headers)["Location"] == "/?said=kept_delivered"
+    _, _, body = client.request("GET", "/?said=kept_delivered")
+    assert "archive" in body
+
+
 def test_the_gpt_pool_page_and_badge_leave_the_spotify_rows_out(monkeypatch):
     """One table, two pools: every read the GPT Pool page and its badge
     make says which product, or the page lists Spotify accounts as GPT
@@ -6211,6 +6237,22 @@ def test_send_is_offered_only_on_a_row_that_is_free():
     # rule - it spends the account just as surely.
     normal = {"address": "n@x.com", "state": "used", "category": "normal"}
     assert "+ phone" not in pages._pool_row_doors("spotify", normal, user, True)
+
+
+def test_a_delivered_account_offers_remove_and_nothing_else():
+    """Free and Edit on a delivered row both lead to a refusal - a door
+    that leads nowhere is worse than no door - and Remove is the one
+    thing the operator wants done with it (2026-09-27)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gpt": True}
+    for kind in ("gpt", "spotify"):
+        doors = pages._pool_row_doors(
+            kind, {"address": "d@x.com", "state": "delivered",
+                   "category": "normal"}, user, True)
+        assert "Remove</button>" in doors, kind
+        assert ">Free</button>" not in doors and "data-edit" not in doors
 
 
 def test_the_status_says_which_account_the_phone_carries():
