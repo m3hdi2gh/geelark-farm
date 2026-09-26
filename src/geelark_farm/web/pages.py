@@ -796,6 +796,7 @@ _PENDING_WORDS = {
     "free_all_proxies": "Freeing", "remove_proxy": "Removing",
     "free_gmail": "Freeing", "edit_gmail": "Saving",
     "remove_gmail": "Removing", "remove_app": "Removing",
+    "remove_delivered_apps": "Removing",
     "free_app": "Freeing", "offer_again": "Offering",
     "refund_gmail": "Marking", "stop_phone": "Stopping",
     "adopt_proxy": "Adopting", "ignore_proxy": "Ignoring",
@@ -1380,6 +1381,7 @@ _POOL_KINDS = {
         "add": "may_add_gpt", "manage": "may_add_gpt",
         "preview": "/pools/gpt/preview", "free": "/pools/gpt/free",
         "edit": "/pools/gpt/edit", "remove": "/pools/gpt/remove",
+        "remove_delivered": "/pools/gpt/remove-delivered",
         "how": ("address, password, then the 2fa secret - one account per "
                 "line, tabs or commas between. An eco paste is addresses "
                 "and nothing else"),
@@ -1394,6 +1396,7 @@ _POOL_KINDS = {
         "add": "may_add_gpt", "manage": "may_add_gpt",
         "preview": "/pools/spotify/preview", "free": "/pools/spotify/free",
         "edit": "/pools/spotify/edit", "remove": "/pools/spotify/remove",
+        "remove_delivered": "/pools/spotify/remove-delivered",
         "how": ("email, then the password - one account per line, tabs or "
                 "commas between"),
         "columns": ("Address", "Status", "Category", "On phone"),
@@ -2128,7 +2131,10 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
         doors.append(
             f'<button type="button" class="quiet" data-edit="{esc(address)}"'
             f' data-pool="{kind}">Edit</button>')
-    if meta["remove"]:
+    # A delivered row the panel handed in stays: its API reads the order
+    # back from it, and the verb refuses it.
+    if meta["remove"] and not (finished
+                               and str(row.get("panel_ref") or "").strip()):
         doors.append(
             f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
             f'<input type="hidden" name="{field}" value="{esc(address)}">'
@@ -2398,6 +2404,39 @@ def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
             f'Free all{f" · {aside}" if aside else ""}</button></form>')
 
 
+def _removable_delivered(rows: list[dict]) -> list[dict]:
+    """The delivered rows Remove may take: all but the ones the panel
+    handed in, which its API reads the order back from."""
+    return [r for r in rows if str(r.get("state") or "") == "delivered"
+            and not str(r.get("panel_ref") or "").strip()]
+
+
+def _remove_delivered_door(kind: str, rows: list[dict], user: dict) -> str:
+    """Every delivered account of this pool out of it, in one press - 25
+    delivered Spotify accounts were 25 presses and 25 confirms (the
+    operator, 2026-09-27). Under `spent` only, like Free all under its
+    own chip; the count is what it would remove, and the route asks
+    once before it does."""
+    meta = _POOL_KINDS[kind]
+    if not meta.get("remove_delivered") or not _may(user, meta["manage"]):
+        return ""
+    n = len(_removable_delivered(rows))
+    # Asked beside the button, like every Remove in the drawer: the
+    # server's own confirm page is for a press made without the script.
+    ask = (f"Remove all {n} delivered {meta['name'].split()[0]} accounts? "
+           f"They go to the archive, which keeps each row whole; Undo does "
+           f"not bring them back as stock.")
+    return (f'<form method="post" action="{meta["remove_delivered"]}" '
+            f'class="inline" data-for-group="spent" hidden '
+            f'data-ask="{esc(ask)}" data-yes="Remove all {n}">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<input type="hidden" name="n" value="{n}">'
+            f'<button class="quiet bad" data-busy="Removing&hellip;" '
+            f'title="every delivered account leaves the pool for the '
+            f'archive"{"" if n else " disabled"}>'
+            f'Remove all delivered{f" · {n}" if n else ""}</button></form>')
+
+
 def row_answer(kind: str, row: dict | None, said: str, user: dict,
                said_note: str = "", manual_login: bool = False,
                pending: dict | None = None) -> str:
@@ -2479,6 +2518,7 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'{_seller_filter(kind, rows)}'
         f'{_test_all_door(kind, rows, user)}'
         f'{_free_all_door(kind, rows, user)}'
+        f'{_remove_delivered_door(kind, rows, user)}'
         # The script has always written "12 of 190 shown" into this,
         # and the CSS has always reserved the space for it, and it was
         # never rendered - so the count nobody could see is how you

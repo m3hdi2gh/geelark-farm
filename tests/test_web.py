@@ -6253,6 +6253,76 @@ def test_a_delivered_account_offers_remove_and_nothing_else():
                    "category": "normal"}, user, True)
         assert "Remove</button>" in doors, kind
         assert ">Free</button>" not in doors and "data-edit" not in doors
+    # A delivered row the panel handed in stays for the panel.
+    doors = pages._pool_row_doors(
+        "gpt", {"address": "p@x.com", "state": "delivered",
+                "panel_ref": "ord_1"}, user, True)
+    assert "Remove</button>" not in doors
+
+
+def test_remove_all_delivered_sits_under_the_spent_chip():
+    """One press for the whole spent list of an account pool - shown only
+    under `spent`, since a door acting on rows you are not looking at is
+    a trap - and counting only what it would remove (2026-09-27)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gpt": True, "may_add_gmail": True}
+    rows = [{"address": f"d{i}@x.com", "state": "delivered"}
+            for i in range(3)]
+    rows += [{"address": "p@x.com", "state": "delivered",
+              "panel_ref": "ord_1"},
+             {"address": "f@x.com", "state": "free"}]
+    door = pages._remove_delivered_door("spotify", rows, user)
+    assert 'action="/pools/spotify/remove-delivered"' in door
+    assert 'data-for-group="spent"' in door and " hidden" in door
+    assert "Remove all delivered · 3" in door
+    assert "disabled" not in door
+    assert 'name="n" value="3"' in door
+    # Asked beside the button, the way every Remove in the drawer is.
+    assert 'data-ask="Remove all 3 delivered Spotify accounts?' in door
+    assert 'data-yes="Remove all 3"' in door
+    assert "/pools/spotify/remove-delivered" in pages._pool_sheet(
+        "spotify", rows, {}, user)
+    assert "disabled" in pages._remove_delivered_door(
+        "gpt", [{"address": "f@x.com", "state": "free"}], user)
+    assert pages._remove_delivered_door("gmail", rows, user) == ""
+    assert pages._remove_delivered_door("proxy", rows, user) == ""
+    assert pages._remove_delivered_door(
+        "spotify", rows, dict(user, role="operator", is_admin=False,
+                            may_add_gpt=False)) == ""
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_remove_all_delivered_asks_first_then_queues_one_command(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 61)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/spotify/remove-delivered",
+        _form(csrf=client.csrf(), n="25", back="/"))
+    assert status == 200 and got == []
+    assert "Remove all 25 delivered Spotify accounts?" in body
+    assert 'name="sure" value="1"' in body
+
+    status, headers, _ = client.request(
+        "POST", "/pools/spotify/remove-delivered",
+        _form(csrf=client.csrf(), n="25", sure="1", back="/"))
+    assert status == 303
+    assert dict(headers)["Location"].startswith("/?said=queued:61")
+    assert got[-1]["verb"] == "remove_delivered_apps"
+    assert got[-1]["payload"]["pool"] == "spotify"
+
+    client.request("POST", "/pools/gpt/remove-delivered",
+                   _form(csrf=client.csrf(), n="x", sure="1", back="/"))
+    assert got[-1]["payload"]["pool"] == "gpt"
 
 
 def test_the_status_says_which_account_the_phone_carries():

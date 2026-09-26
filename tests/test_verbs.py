@@ -480,6 +480,41 @@ def test_a_delivered_panel_account_stays_for_the_panel():
     assert a0 in book.apps._rows
 
 
+def test_remove_all_delivered_takes_that_pools_delivered_rows_only():
+    """One press for the whole spent list: 25 delivered Spotify accounts
+    were 25 presses and 25 confirms (the operator, 2026-09-27). Only the
+    pool it was pressed in, only what is delivered, and never a row the
+    panel still reads."""
+    book = make_book(apps=4)
+    a0, a1, a2, a3 = book.apps._rows
+    for row in (a0, a1, a3):
+        row.values["Product"] = "spotify"
+    a3.values["Source"] = "panel"
+    for row in (a0, a2, a3):
+        book.apps.retire(row, note="handed over")
+
+    status, said, detail = verbs.remove_delivered_apps(
+        book, None, None, {"pool": "spotify", "by": "mehdi"}, None)
+
+    assert status == "done", said
+    assert said.startswith("1 delivered Spotify account removed"), said
+    assert "1 kept for the panel" in said
+    assert detail["removed"] == [a0.values["Address"]]
+    assert a0 not in book.apps._rows
+    assert all(r in book.apps._rows for r in (a1, a2, a3))
+
+    status, said, detail = verbs.remove_delivered_apps(
+        book, None, None, {"pool": "gpt", "by": "mehdi"}, None)
+    assert status == "done" and detail["removed"] == [a2.values["Address"]]
+
+    status, said, _ = verbs.remove_delivered_apps(
+        book, None, None, {"pool": "spotify", "by": "mehdi"}, None)
+    assert status == "done" and said.startswith("no delivered Spotify"), said
+
+    assert verbs.remove_delivered_apps(
+        book, None, None, {"pool": "proxy"}, None)[0] == "refused"
+
+
 def test_removing_a_gmail_keeps_the_row_it_removed():
     book = make_book(gmails=1)
     g0 = book.gmails._rows[0]
@@ -1946,6 +1981,7 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         # Stock: rows in the store, and nothing else.
         "add_gmails", "add_gpt", "add_spotify", "add_panel_account",
         "edit_gmail", "remove_gmail", "edit_app", "remove_app",
+        "remove_delivered_apps",
         "free_gmail", "free_app", "refund_gmail", "offer_again",
         "withdraw_panel_account",
         # Exits, where the answer needs no word from GeeLark.
