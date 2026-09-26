@@ -374,6 +374,11 @@ class _Session:
     #: The APP_SUSPECTS reason the phone stopped on, if it did - read at
     #: release time so the account it happened with carries a strike.
     suspect_reason: str = ""
+    #: Any other reason the phone stopped on with an account in the app:
+    #: the account goes back free, but with what happened in its note -
+    #: "never got as far as using it" was written on three Spotify rows
+    #: the service had just turned away (2026-09-26).
+    stopped_on: str = ""
     #: Which service judged each account this phone tried, by address -
     #: the app pool holds two products now and its own `service` names
     #: one of them (2026-09-17).
@@ -608,6 +613,8 @@ def _sign_into_app(session: _Session) -> Build | None:
                 # The phone keeps the blame, but the account was typed in -
                 # _session_holds counts a strike against it on the way out.
                 s.suspect_reason = outcome.reason
+            else:
+                s.stopped_on = outcome.reason
             _give_back_condemned(s)
             return s.finish(named,
                             f"the app login could not go on with this phone - "
@@ -1712,7 +1719,14 @@ def _let_the_build_go(st: _BuildState) -> None:
     # is signed in after all only when a sign-in was ever started on
     # it: a phone stopped twelve seconds after it was created cannot
     # be, and asking it anyway answered "could not say" and kept it.
-    empty = bool(st.phone_id and not st.gmail_signed_in and not st.bare
+    # Unless it was built for one account that did not go in: a bare
+    # phone exists for that account, and nothing can be sent to it
+    # after - a `normal` Spotify only goes on a new bare phone. Three
+    # such sends left three Incomplete phones (the operator, 2026-09-26).
+    carried = bool(st.bare and st.want is not None and st.want.app_account
+                   and not (session is not None and session.app_signed_in))
+    empty = bool(st.phone_id and not st.gmail_signed_in
+                 and (carried or not st.bare)
                  and build.status not in KEPT_WHEN_EMPTY
                  and not (st.asked_google
                           and _signed_in_after_all(st.client, build)))
@@ -2023,6 +2037,13 @@ def _session_holds(book: Book, session: _Session | None, *,
     if (session.app_row is not None and not session.app_signed_in
             and session.suspect_reason):
         app = _suspected(book, session)
+    elif (session.app_row is not None and not session.app_signed_in
+            and session.stopped_on):
+        said = failures.verdict(session.stopped_on,
+                                _service_of(session.app_row)).seen
+        app = (book.apps, session.app_row, RELEASE,
+               f"Tried on phone {session.build.serial} on {today}: {said}. "
+               f"The account itself was not judged; free to send again.", "")
     held: list[tuple] = [app]
     if session.proxy_row is not None:
         held.append((book.proxies, session.proxy_row,

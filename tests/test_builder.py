@@ -4076,7 +4076,7 @@ def _suspect_session(note, serial, reason="session_unverified"):
     Note carrying whatever the last release wrote there."""
     row = SimpleNamespace(values={"Note": note})
     return SimpleNamespace(app_row=row, app_signed_in=False,
-                           suspect_reason=reason,
+                           suspect_reason=reason, stopped_on="",
                            build=SimpleNamespace(serial=serial),
                            proxy_row=None, refused_exits=[], set_aside=[])
 
@@ -6929,6 +6929,61 @@ def test_a_bare_phones_account_is_named_by_its_own_product(
     assert build.ok, build.status
     assert signed == [1]
     assert build.detail.endswith("a0@example.com signed into Claude")
+
+
+def _bare_spotify(monkeypatch, outcome):
+    """A bare phone built for one `normal` Spotify account, and what the
+    Spotify login answers on it."""
+    book = make_book(gmails=1, proxies=1, apps=1)
+    book.apps._rows[0].values["Product"] = "spotify"
+    monkeypatch.setattr(builder.kit_install, "_install",
+                        lambda *a, **k: INSTALLED)
+    monkeypatch.setattr(builder.apps, "begin", lambda *a, **k: True)
+    import geelark_farm.flows.spotify_login as spotify_login
+    monkeypatch.setattr(spotify_login, "sign_in", lambda *a, **k: outcome)
+    deleted = []
+    monkeypatch.setattr(builder.phones, "delete",
+                        lambda c, ids, ledger=None: deleted.extend(ids))
+    want = builder.Wanted(no_gmail=True, app="spotify",
+                          app_account="a0@example.com")
+    return book, want, deleted
+
+
+def test_a_bare_phone_whose_one_account_did_not_go_in_is_deleted(
+        device, settings, monkeypatch):
+    """A bare phone built for a Spotify account exists for that account:
+    no Gmail, and nothing can send another Spotify to it - a `normal` one
+    only goes on a new bare phone. Three sends that Spotify turned away
+    left three Incomplete phones with nothing on them (4486, 4487 and 4488,
+    the operator, 2026-09-26)."""
+    book, want, deleted = _bare_spotify(
+        monkeypatch, Outcome("fatal", "rate_limited"))
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1, want=want)
+
+    assert not build.ok and build.status == "app_rate_limited", build.status
+    assert deleted == ["PHONE1"]
+    assert build.phone_id == ""
+    assert book.phones._ws.rows == [], "no Incomplete row is left behind"
+    assert len(book.proxies.available) == 1, "its exit goes back"
+    # The account goes back free - Spotify judged the phone, not it - and
+    # its note says what happened rather than that nothing was tried.
+    row = book.apps._rows[0]
+    assert book.apps.status_of(row) in book.apps.available_statuses
+    note = row.values[book.apps.note_column]
+    assert "never got as far" not in note
+    assert "Spotify stopped answering this phone" in note
+    assert "622" in note
+
+
+def test_a_bare_phone_whose_account_went_in_is_kept(device, settings,
+                                                    monkeypatch):
+    book, want, deleted = _bare_spotify(monkeypatch, SIGNED_IN)
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1, want=want)
+
+    assert build.ok and build.status == "ready", build.detail
+    assert deleted == [] and build.phone_id == "PHONE1"
 
 
 def test_a_set_aside_note_names_the_service_of_the_accounts_product():

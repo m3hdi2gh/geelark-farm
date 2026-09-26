@@ -506,6 +506,15 @@ def test_an_app_prefixed_reason_is_answered_by_the_one_underneath_it():
     assert outer.seen.startswith("the app login could not go on")
 
 
+def test_a_rate_limit_names_the_service_that_set_it():
+    """It said "OpenAI stopped answering this phone" about Spotify's "Try
+    again later" (phones 4486 and 4488, 2026-09-26)."""
+    found = failures.verdict("rate_limited", "Spotify")
+    assert found.seen == "Spotify stopped answering this phone"
+    assert "OpenAI" not in found.seen + found.advice
+    assert failures.verdict("rate_limited", "OpenAI").seen.startswith("OpenAI")
+
+
 def test_the_table_answers_a_reason_that_begins_with_app_of_its_own():
     """`app_not_installed` and `app_would_not_start` are the table's, and the
     builder does not double the prefix on them."""

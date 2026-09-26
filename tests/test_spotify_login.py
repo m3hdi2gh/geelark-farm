@@ -145,6 +145,28 @@ def test_an_address_spotify_does_not_know_is_its_own_reason(phone):
     assert not sl._tap_safely(ctx, "Create account")
 
 
+def test_an_address_spotify_does_not_know_said_under_the_box(phone):
+    """The same answer drawn another way: "Email isn't linked to a Spotify
+    account. Sign up instead." under the address box of the login page
+    itself. Not a wording the flow knew, so it pressed Continue three times
+    and was filed stuck_on_email_entry - and an address with no account
+    behind it went back to the pool free (phone 4487, 2026-09-26)."""
+    ctx = ctx_for("unlinked-inline")
+    assert matched(ctx) == "fatal"
+    out = sl.act_fatal(ctx)
+    assert out.kind == "fatal" and out.reason == "no_such_account"
+    assert not sl._tap_safely(ctx, "Sign up")
+    assert phone["tapped"] == []
+
+
+def test_try_again_later_after_the_challenge_is_a_refusal(phone):
+    """challenge.spotify.com after the grid was answered: "Something went
+    wrong / Try again later." (phones 4486 and 4488, 2026-09-26)."""
+    ctx = ctx_for("try-again-later")
+    assert matched(ctx) == "fatal"
+    assert sl.act_fatal(ctx).reason == "rate_limited"
+
+
 def test_a_connection_error_that_will_not_clear_blames_the_exit(phone):
     """Reloading fixes it about half the time; the other half is an exit
     Spotify will not serve, and saying so is what makes the builder swap

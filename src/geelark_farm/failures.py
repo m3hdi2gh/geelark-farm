@@ -604,8 +604,8 @@ VERDICTS: dict[str, Verdict] = {
         "The account is no longer on this phone. Whether that matters "
         "is the account's own story; this only reports it."),
     "rate_limited": Verdict(
-        DEVICE, "OpenAI stopped answering this phone",
-        "OpenAI is refusing to keep talking to this device. Leave it "
+        DEVICE, "{service} stopped answering this phone",
+        "{service} is refusing to keep talking to this device. Leave it "
         "and come back later; another account now meets the same limit."),
     "too_many_attempts": Verdict(
         DEVICE, "Google stopped answering this phone",

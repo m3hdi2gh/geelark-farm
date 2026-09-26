@@ -236,8 +236,14 @@ FATAL_TEXTS = {
     # other password will either, so it is its own reason rather than a
     # refused password. Fatal is what keeps the flow off "Create
     # account", which would make an account nobody asked for.
+    # The login page says it too, under the address box: "Email isn't
+    # linked to a Spotify account. Sign up instead." - unknown here, it
+    # was filed stuck_on_email_entry and the address went back free
+    # (phone 4487, 2026-09-26).
     "no_such_account": (
         "is not linked to spotify", "isn't linked to spotify",
+        "is not linked to a spotify account",
+        "isn't linked to a spotify account",
         "does not have a spotify account", "doesn't have a spotify account",
         "no account with that email", "could not find an account",
     ),
