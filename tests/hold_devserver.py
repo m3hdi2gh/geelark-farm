@@ -81,7 +81,8 @@ def _spotify_rows():
         i += 1
         rows.append({"id": i, "address": f"handed{n}@outlook.com",
                      "status": "delivered", "serial": str(3100 + n),
-                     "note": "Delivered.", "error": None, "state": "used",
+                     "note": "Delivered.", "error": None,
+                     "state": "delivered",
                      "category": "normal" if n % 2 else "error",
                      "password": "Sp0t!old", "secret": "", "second": ""})
     return rows

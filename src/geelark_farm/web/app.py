@@ -1030,6 +1030,32 @@ class _Handler(BaseHTTPRequestHandler):
         return self._act(user, permission, add_verb, payload,
                          idem=f"undo-{req}", back="/")
 
+    def _remove_delivered(self, user: dict, kind: str, field: dict) -> None:
+        """"Remove all delivered" on an account pool's spent list: asked
+        once, then one command for every delivered row of that pool
+        (the operator, 2026-09-27). The count on the question is the one
+        the button was drawn with; the verb removes what is delivered
+        when it runs, and says how many."""
+        name = "Spotify" if kind == "spotify" else "GPT"
+        back = "/"
+        n = str(field.get("n") or "").strip()
+        many = f"all {n}" if n.isdigit() else "all the"
+        if field.get("sure") != "1":
+            return self._html(200, pages.confirm_page(
+                user, title=f"Remove {many} delivered {name} accounts?",
+                text=("They leave the pool for the archive, which keeps "
+                      "each row whole. A delivered account the panel "
+                      "handed in stays. Undo does not bring them back as "
+                      "stock."),
+                action=f"/pools/{kind}/remove-delivered",
+                fields={"n": n, "sure": "1", "back": back},
+                button=f"Yes, remove {many} delivered", back=back))
+        return self._act(user, "may_add_gpt", "remove_delivered_apps",
+                         {"pool": kind},
+                         idem=self._minute_key(user, "remove_delivered",
+                                               kind),
+                         back=back)
+
     def _login_accounts(self, user: dict, addresses: list,
                         back: str = "/", serial: str = "") -> None:
         """"Log in selected" (C6), off the dashboard or the Gpt Pool -
@@ -1444,6 +1470,8 @@ class _Handler(BaseHTTPRequestHandler):
                              back=back, row_of="spotify")
         if path == "/pools/spotify/undo":
             return self._undo_remove(user, "spotify", field)
+        if path == "/pools/spotify/remove-delivered":
+            return self._remove_delivered(user, "spotify", field)
         return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                           user=user))
 
@@ -1750,6 +1778,8 @@ class _Handler(BaseHTTPRequestHandler):
                  "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_app", address),
                 back=_add_back(field, "/pools/gpt"), row_of="gpt")
+        if path == "/pools/gpt/remove-delivered":
+            return self._remove_delivered(user, "gpt", field)
         if path == "/pools/gpt/remove":
             address = (field.get("address") or "").strip()
             back = _add_back(field, "/pools/gpt")
@@ -2598,7 +2628,8 @@ def _digest(payload: dict) -> str:
 #: The verbs about the whole pool rather than one row, which the
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
-_SWEEPS = frozenset({"test_all_proxies", "free_all_proxies"})
+_SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",
+                     "remove_delivered_apps"})
 
 
 def _phone_back(field: dict, serial: str) -> str:
@@ -2875,7 +2906,8 @@ _OPERATOR_POSTS = (
     # whoever keeps the GPT ones (2026-09-17).
     "/pools/spotify/preview", "/pools/spotify/add",
     "/pools/spotify/edit", "/pools/spotify/remove", "/pools/spotify/free",
-    "/pools/spotify/undo",
+    "/pools/spotify/undo", "/pools/spotify/remove-delivered",
+    "/pools/gpt/remove-delivered",
     # The one service control an operator is offered: the breaker means
     # builds keep failing, and fresh stock is the answer to it. The
     # permission on the other side is what decides; this only says the

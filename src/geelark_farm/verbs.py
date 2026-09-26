@@ -1251,6 +1251,44 @@ def remove_app(book, ledger, settings, payload, client):
                     f"archived, not deleted", {"removed": kept})
 
 
+def remove_delivered_apps(book, ledger, settings, payload, client):
+    """Every delivered account of one pool - `spotify` or `gpt` - out of
+    it and into the archive, in one press: 25 delivered Spotify accounts
+    were 25 presses and 25 confirms (the operator, 2026-09-27).
+
+    What `remove_app` does to one delivered row, row by row, with its
+    one exception kept: a row the panel handed in stays, since its API
+    reads the order back from it. The addresses ride in the detail and
+    nothing else - no password, because no Undo puts a delivered account
+    back as stock; the archive holds each row whole.
+    """
+    pool = str(payload.get("pool") or "").strip().lower()
+    if pool not in ("spotify", "gpt"):
+        return "refused", f"{pool or '?'} is not an account pool", None
+    name = "Spotify" if pool == "spotify" else "GPT"
+    removed, panel = [], 0
+    for resource in list(book.apps._rows):
+        if book.apps.status_of(resource) != book.apps.retired_status:
+            continue
+        values = resource.values or {}
+        product = str(values.get("Product") or "").strip().lower()
+        if (product == "spotify") != (pool == "spotify"):
+            continue
+        if str(values.get("Source") or "").strip().lower() == "panel":
+            panel += 1
+            continue
+        book.apps.delete_row(resource, by=_by(payload))
+        removed.append(str(values.get("Address") or ""))
+    kept = f"; {panel} kept for the panel" if panel else ""
+    if not removed:
+        return ("done", f"no delivered {name} account to remove{kept}",
+                {"removed": []})
+    what = f"delivered {name} account" + ("" if len(removed) == 1 else "s")
+    return ("done", f"{len(removed)} {what} removed from the pool by "
+                    f"{_by(payload)} - archived, not deleted{kept}",
+            {"removed": removed})
+
+
 def _panel_row(settings, ref: str):
     """The row the panel named, read from the store.
 
@@ -1783,6 +1821,7 @@ VERBS = {
     "remove_gmail": remove_gmail,
     "edit_app": edit_app,
     "remove_app": remove_app,
+    "remove_delivered_apps": remove_delivered_apps,
     "free_gmail": free_gmail,
     "refund_gmail": refund_gmail,
     "free_app": free_app,
