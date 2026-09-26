@@ -4068,6 +4068,10 @@ def describe(verb: str, payload: dict) -> tuple[str, str]:
         return f"Change IP on {p.get('serial', '?')}", ""
     if verb == "stop_phone":
         return f"Stop phone {p.get('serial', '?')}", ""
+    if verb == "run_task":
+        return (f"Run {p.get('task', '?')} on {p.get('serial', '?')}",
+                ", ".join(f"{k}={v}" for k, v in
+                          (p.get("inputs") or {}).items()))
     if verb == "add_gmails":
         seller = p.get("seller") or ""
         return (f"Add {_plural(len(rows), 'gmail')}",

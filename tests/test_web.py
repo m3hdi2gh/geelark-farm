@@ -8176,9 +8176,11 @@ def test_the_pool_pages_are_handed_the_sentence_and_the_reader():
         assert "_said(said, _POOL_SAID, user, said_note)" in body, name
 
     # Four pool pages, plus the dashboard, which has had it all along -
-    # and the pool pages' one-row answer (2026-09-22).
+    # and the pool pages' one-row answer (2026-09-22) - and a task's page,
+    # whose Run answers "phone 4435 is taken ..." in the verb's words
+    # (2026-09-27).
     handler = inspect.getsource(app)
-    assert handler.count("said_note=self._said_note(") == 6, (
+    assert handler.count("said_note=self._said_note(") == 7, (
         "every pool page is handed the settled row's own sentence")
 
 

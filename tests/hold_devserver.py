@@ -310,6 +310,14 @@ def _tasks(monkeypatch):
         "page": 1, "rows": runs if task == "app_probe" else [],
         "tally": tally if task == "app_probe" else {}, "more": False,
         "days": 7})
+    # The Run form's list: a warm phone, a delivered one, a taken one.
+    monkeypatch.setattr(task_read, "phones", lambda settings, limit=400: [
+        {"serial": "4435", "status": "ready", "state": "",
+         "gmail": "g0@example.com"},
+        {"serial": "3243", "status": "incomplete", "state": "",
+         "gmail": "g1@example.com"},
+        {"serial": "3480", "status": "ready", "state": "taken",
+         "gmail": "g2@example.com"}])
 
     def one(settings, run_id):
         row = next((dict(r) for r in runs if r["id"] == int(run_id)), None)

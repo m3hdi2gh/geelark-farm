@@ -864,7 +864,8 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
     # using it were the same door and could not both be open (3644,
     # 2026-09-19).
     warm, _gone = keeper._unfinished(
-        client, book, for_owner=str(payload.get("by_id") or ""))
+        client, book, for_owner=str(payload.get("by_id") or ""),
+        busy=keeper._busy_serials(settings))
     # The console's chooser names the phone; the old tick-and-send did not.
     # Named, that phone is the only one offered - and a name that is not a
     # warm phone is a refusal in words, not the next phone in line.
@@ -1605,6 +1606,91 @@ def boot_phone(book, ledger, settings, payload, client):
             {"state": "taken", "url": url})
 
 
+#: How many tasks the farm runs at once. One: the GeeLark account's two
+#: hundred calls a minute are the farm's builds' first, and a task is a
+#: person asking a question, which can wait for the one before it.
+TASKS_AT_ONCE = 1
+
+
+def run_task(book, ledger, settings, payload, client, action_id=None):
+    """"Run": one of `tasks.TASKS` on one phone, onto the builders' queue.
+
+    Everything that can be answered without the phone is answered here,
+    in words, before anything is queued: the task, its inputs, whether
+    the phone exists, whether something else has it. What is left - the
+    phone being up with nobody's claim on it - is the builder's to ask,
+    at the moment it takes the job (`serve._carry_task`).
+
+    A task ends by switching its phone off, as every phone job does. So
+    a phone somebody has taken is refused rather than switched off under
+    them; a warm or a delivered phone was off already and is off again.
+
+    A task that asks for a secret is refused outright. A password or a
+    2FA key is typed at the command line and forgotten; a queue is a
+    table, and a table keeps what it is given.
+    """
+    from . import phones as phones_mod
+    from . import tasks as registry
+    from .store import jobs as store_jobs
+
+    spec = registry.spec(str(payload.get("task") or ""))
+    if spec is None:
+        return "refused", f"there is no task called {payload.get('task')!r}", None
+    if spec.secrets():
+        return ("refused", f"{spec.key} asks for a secret, which is typed on "
+                           f"the command line and never queued", None)
+    try:
+        inputs = spec.check(dict(payload.get("inputs") or {}))
+    except ValueError as exc:
+        return "refused", str(exc), None
+    serial = str(payload.get("serial") or "").strip()
+    if not serial.isdigit():
+        return "refused", "a task needs a phone - give its serial", None
+    if not (getattr(settings, "build_queue", False)
+            and getattr(settings, "store_enabled", False)):
+        return ("failed", "tasks run on the builders, and this farm has no "
+                          "build queue", None)
+    row = next((r for r in book.phones.rows()
+                if str(r.get("Serial") or "").strip() == serial), None)
+    if row is None:
+        return "failed", f"phone {serial} is not in the Phones tab", None
+    if row.get("Status") == book.phones.BUILDING:
+        return "refused", f"phone {serial} is being worked on right now", None
+    if str(row.get("State") or "").strip() == "taken":
+        return ("refused", f"phone {serial} is taken - a task switches its "
+                           f"phone off when it ends, so release it first",
+                None)
+    if serial in store_jobs.open_serials(settings):
+        return "refused", f"a job for phone {serial} is already queued", None
+    if store_jobs.open_count(settings, "task") >= TASKS_AT_ONCE:
+        return ("refused", "another task is running - one at a time, so the "
+                           "builds keep their share of GeeLark", None)
+    if client is None:
+        return "failed", "no GeeLark client on this pass", None
+    live = next((p for p in phones_mod.listing(client)
+                 if str(p.get("serialNo")) == serial), None)
+    if live is None:
+        return "failed", f"phone {serial} is not in GeeLark's list", None
+    held = ledger.get(live["id"]) if ledger is not None else None
+    if held is not None and held.is_claimed and not held.is_stale:
+        return "refused", f"phone {serial} is held by a run ({held.label})", None
+    job = store_jobs.queue(
+        settings, "task",
+        {"task": spec.key, "inputs": inputs, "by_id": payload.get("by_id"),
+         "phone": {"serial": serial, "phone_id": str(live["id"])}},
+        action_id=action_id)
+    # `running`, not `done`: the builder settles the row with what the
+    # task came to (serve._settle_task).
+    return ("running", f"{spec.key} on phone {serial} is queued - a builder "
+                       f"takes it within seconds",
+            {"task": spec.key, "serial": serial, "job": job})
+
+
+#: Hand this verb the id of its own row: the job carries it, and the
+#: builder settles the row when the task ends.
+run_task.wants_action = True
+
+
 def _is_building(settings, serial: str) -> bool:
     """Whether a run is holding this phone right now.
 
@@ -1772,6 +1858,7 @@ VERBS = {
     "control": control,
     "set_phone_state": set_phone_state,
     "boot_phone": boot_phone,
+    "run_task": run_task,
     "clear_tries": clear_tries,
     "ignore_proxy": ignore_proxy,
     "change_proxy": change_proxy,
@@ -1826,6 +1913,9 @@ for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               # free again at once (A-1, 2026-09-08). The pass still drains
               # it too, as the backstop it is for every lane verb.
               login_accounts,
+              # A handful of checks and one row on the jobs table; the
+              # minutes of the task are a builder's (2026-09-27).
+              run_task,
               # One UPDATE against the store and nothing else: a person
               # ticking off a refund should not wait for a pass.
               refund_gmail):

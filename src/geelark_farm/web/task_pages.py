@@ -1,11 +1,13 @@
 """The Tasks pages: what there is to run, how it has been going, and
 one run with the screens it saw.
 
-Read-only, on purpose and for now. The value of the first version is
-that what the playground has been doing becomes visible to whoever is
-not running it from a terminal - the numbers, the reasons, and the page
-a flow gave up on. The Run button is the next slice and has its own
-decision to make (which phone, from which pool, how many at once).
+The first version was read-only: what the playground had been doing
+became visible to whoever was not running it from a terminal - the
+numbers, the reasons, and the page a flow gave up on. The Run form came
+second (2026-09-27), with its three decisions made by the operator: the
+phone is one somebody names, one task runs at a time, and only an admin
+runs one. The form is drawn from the task's own fields, so a new task
+gets a form nobody wrote.
 
 No viewer of its own: a run's screens are drawn by `journey.wireframe_svg`
 through the phone page's own `/phones/<serial>/wire/...` route, which
@@ -17,12 +19,20 @@ seven thousand lines that somebody else is usually editing.
 """
 from __future__ import annotations
 
-from .pages import _may, _said, _when, esc, page
+from .pages import _csrf, _may, _said, _when, esc, page
 
-#: The banner words a task page can be sent.
+#: The banner words a task page can be sent. Plain sentences, as every
+#: other page's table is: `_said` escapes what it is given, and the
+#: first version's (tone, words) pairs were never drawn, so nobody saw
+#: that they would not have drawn (2026-09-27). A request's own sentence
+#: - "phone 4435 is taken - ..." - replaces these when there is one.
 _TASK_SAID = {
-    "queued": ("info", "Queued - it starts within a second."),
-    "none": ("warn", "Nothing to run."),
+    "queued": "Queued - a builder takes it within seconds. Its row "
+              "appears below; reload to see it end.",
+    "already": "Already asked - that phone has a task on its way.",
+    "twice": "That press already went through the first time.",
+    "refused": "Only an admin runs a task.",
+    "no": "It was not run.",
 }
 
 #: What a blame means, in the words the rest of the console uses. The
@@ -97,7 +107,8 @@ def tasks_page(data: dict, user: dict, said: str = "",
 
 
 def task_page(data: dict, user: dict, said: str = "",
-              said_note: str = "") -> str:
+              said_note: str = "", *, phones=(), serial: str = "",
+              may_run: bool = False) -> str:
     """One task: how it has been going, and every run of it."""
     spec = data.get("spec")
     if spec is None:
@@ -127,7 +138,8 @@ def task_page(data: dict, user: dict, said: str = "",
             f'<span class="sub" style="margin:0">{_rate(tally)}</span></div>'
             f'<p class="sub">{esc(spec.summary)}</p>'
             + _said(said, _TASK_SAID, user, said_note)
-            + _how_to_run(spec))
+            + (_run_form(spec, user, phones, serial) if may_run
+               else _how_to_run(spec)))
     if reasons:
         body += (f'<div class="panel"><h3>When it did not work</h3>'
                  f'<table>{reasons}</table>'
@@ -142,16 +154,72 @@ def task_page(data: dict, user: dict, said: str = "",
     return page(spec.title, body, user=user, here="/tasks")
 
 
-def _how_to_run(spec) -> str:
+def _run_form(spec, user: dict, phones, serial: str = "") -> str:
+    """Run it: the phone, then the task's own fields, then the button.
+
+    The phone list is a suggestion the browser filters as a serial is
+    typed - four hundred phones do not fit a select, and a person who
+    came from a phone's page already knows the number (`?serial=`).
+    A task that asks for a secret gets no form at all: its secret is
+    typed on the command line and forgotten, never sent to a queue.
+    """
+    if spec.secrets():
+        return (_how_to_run(spec, why="It asks for a secret, which is typed "
+                                      "on the command line and never sent "
+                                      "through the console."))
+    known = "".join(
+        f'<option value="{esc(str(p.get("serial") or ""))}">'
+        f'{esc(_phone_line(p))}</option>'
+        for p in phones if str(p.get("serial") or "").isdigit())
+    wanted = serial if str(serial or "").isdigit() else ""
+    fields = "".join(
+        f'<label class="field"><span>{esc(f.label)}'
+        f'{"" if f.required else " (optional)"}</span>'
+        f'<input name="in_{esc(f.name)}" autocomplete="off" '
+        f'spellcheck="false" class="mono"'
+        f'{" required" if f.required else ""}'
+        f' placeholder="{esc(f.help)}"></label>'
+        for f in spec.inputs)
+    return (f'<div class="panel"><h3>Run it</h3>'
+            f'<form method="post" action="/tasks/{esc(spec.key)}/run">'
+            f'{_csrf(user)}'
+            f'<label class="field"><span>Phone</span>'
+            f'<input name="serial" list="task-phones" required '
+            f'inputmode="numeric" pattern="[0-9]+" autocomplete="off" '
+            f'class="mono" placeholder="serial, e.g. 4435" '
+            f'value="{esc(wanted)}"></label>'
+            f'<datalist id="task-phones">{known}</datalist>'
+            f'{fields}'
+            f'<div class="row" style="margin-top:10px">'
+            f'<button class="go">Run</button>'
+            f'<span class="hint">One at a time. A phone that is off is '
+            f'started and switched off again; one somebody has taken is '
+            f'refused.</span></div></form>'
+            f'<details><summary class="dim">From the command line</summary>'
+            f'<pre class="mono" style="margin:6px 0 0;overflow-x:auto">'
+            f'{_command(spec)}</pre></details></div>')
+
+
+def _phone_line(phone: dict) -> str:
+    """What the list says beside a serial: enough to know the phone."""
+    return " · ".join(str(phone.get(k)) for k in ("status", "state", "gmail")
+                      if phone.get(k))
+
+
+def _command(spec) -> str:
+    asks = "".join(f" {f.name}=..." for f in spec.inputs if f.required)
+    return (f'geelark task {esc(spec.key)}{esc(asks)} '
+            f'--phone &lt;ID&gt;')
+
+
+def _how_to_run(spec, why: str = "Only an admin runs one from here.") -> str:
     """The line to type, until the Run button exists. Its required
     fields in the order the spec lists them, because that is the order
     somebody reading the page above has just seen them in."""
-    asks = "".join(f" {f.name}=..." for f in spec.inputs if f.required)
     return (f'<div class="panel"><h3>How to run it</h3>'
-            f'<p class="hint">Nothing on this page starts one yet.</p>'
+            f'<p class="hint">{esc(why)}</p>'
             f'<pre class="mono" style="margin:0;overflow-x:auto">'
-            f'geelark task {esc(spec.key)}{esc(asks)} '
-            f'--phone &lt;ID&gt;</pre></div>')
+            f'{_command(spec)}</pre></div>')
 
 
 def _serial(row: dict) -> str:
@@ -252,6 +320,14 @@ def run_page(row: dict, user: dict, advice=None) -> str:
                  'reached the store.</p></div>')
     return page(f"Run {int(row['id'])}", body + "</div>", user=user,
                 here="/tasks")
+
+
+def may_run(user: dict, settings) -> bool:
+    """Who gets the Run form: an admin, on a console whose buttons are
+    switched on. The verb and `_act` ask again; this only decides what
+    is drawn."""
+    return (user.get("role") == "admin"
+            and bool(getattr(settings, "web_mutations", False)))
 
 
 def may_see(user: dict) -> bool:

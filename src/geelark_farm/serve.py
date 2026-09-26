@@ -737,6 +737,12 @@ def _run_action(settings: Settings, conn, action: dict, *, book: Book,
             status, result, detail = handler(
                 book, ledger, settings, action["payload"], client,
                 launch=launcher)
+        elif getattr(handler, "wants_action", False):
+            # A verb that queues work for a builder: the job carries the
+            # row's id, and the builder settles the row when it ends.
+            status, result, detail = handler(
+                book, ledger, settings, action["payload"], client,
+                action_id=action["id"])
         else:
             status, result, detail = handler(
                 book, ledger, settings, action["payload"], client)
@@ -2056,7 +2062,12 @@ JOB_LOST_SECONDS = 300.0
 #: knows it, instead of being built as a phone (the builder review,
 #: 2026-09-23): `_job_dict` turned every kind that was not "finish" into
 #: a build.
-HANDLED_KINDS = ("build", "finish")
+HANDLED_KINDS = ("build", "finish", "task")
+#: What a builder still takes under "Pause building": work somebody asked
+#: for on a phone that already exists. A finish puts a customer's account
+#: on a phone waiting for it, a task reads one; neither builds anything,
+#: which is all Pause was written to stop (2026-09-21, 2026-09-27).
+PAUSED_KINDS = ("finish", "task")
 
 
 def _job_dict(book: Book, job: dict):
@@ -2097,6 +2108,8 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
     queue, the wish and the command what became of it."""
     from .store import jobs as store_jobs
 
+    if job.get("kind") == "task":
+        return _carry_task(settings, client, ledger, job)
     try:
         # Inside the `try`: a module that will not import is this job's
         # crash, answered on the queue, not an exception that leaves the
@@ -2143,6 +2156,97 @@ def _carry_out(settings: Settings, client, book: Book, ledger, job: dict,
                             detail=build.detail or build.status)
     if job.get("action_id") is not None:
         _settle_action(settings, job["action_id"], [made], builds)
+
+
+def _carry_task(settings: Settings, client, ledger, job: dict) -> None:
+    """One task, on a builder's thread (2026-09-27).
+
+    The verb answered everything it could without the phone. What only
+    the moment of taking can answer is asked here, before anything is
+    touched: a claim somebody else holds, and a phone that is up with no
+    claim at all - somebody using it by hand, the case `run_finish` guards
+    for the same reason. Refused there, the phone is left exactly as it
+    was: nothing claimed, nothing started, nothing stopped.
+
+    Then `tasks.drive.one`, which opens the run's row, runs it and ends it
+    the way every phone job ends. Its result goes on the job and on the
+    request, never into the breaker - a task that finds an app signed out
+    has found something out, not failed a build (`_take_results`).
+    """
+    from . import phones
+    from . import tasks as registry
+    from .store import jobs as store_jobs
+
+    payload = job.get("payload") or {}
+    spec = registry.spec(str(payload.get("task") or ""))
+    phone = payload.get("phone") or {}
+    phone_id = str(phone.get("phone_id") or "")
+    serial = str(phone.get("serial") or "")
+    key = spec.key if spec is not None else str(payload.get("task") or "?")
+
+    def answer(ok: bool, status: str, detail: str = "",
+               seconds: float = 0.0) -> None:
+        store_jobs.finish(settings, job["id"], ok=ok, status=status,
+                          serial=serial, detail=detail, seconds=seconds)
+        if job.get("action_id") is not None:
+            _settle_task(settings, job["action_id"], key, serial, ok=ok,
+                         status=status, detail=detail, seconds=seconds)
+
+    if spec is None or not phone_id:
+        log.error("job %s: a task job naming %r on %r", job.get("id"),
+                  payload.get("task"), phone_id)
+        return answer(False, "wish_not_understood",
+                      f"no task {key!r}, or no phone, in the job")
+    held = ledger.get(phone_id)
+    if held is not None and held.is_claimed and not held.is_stale:
+        return answer(False, "phone_busy",
+                      f"phone {serial} is held by a run ({held.label})")
+    try:
+        live = phones.status(client, phone_id)
+    except Exception as exc:                                      # noqa: BLE001
+        # Not knowing is not a reason to refuse: the boot asks again.
+        log.debug("could not read the state of %s (%s)", phone_id, exc)
+        live = None
+    if live in (phones.RUNNING, phones.STARTING):
+        return answer(False, "in_use_by_hand",
+                      "the phone is already running and nothing here "
+                      "started it, so somebody is using it")
+    ledger.claim(phone_id, label=f"task {spec.key}")
+    try:
+        from .tasks import drive
+
+        build = drive.one(settings, spec, dict(payload.get("inputs") or {}),
+                          phone_id=phone_id, client=client, ledger=ledger,
+                          serial=serial, by_id=payload.get("by_id"),
+                          job_id=job["id"])
+    except Exception as exc:                                      # noqa: BLE001
+        # Only what is raised before `drive.one`'s own `try` - its inputs
+        # judged against the spec. Nothing was started; the claim goes.
+        log.exception("job %s: the task %s did not start", job.get("id"),
+                      spec.key)
+        ledger.release(phone_id, note="task_not_started")
+        return answer(False, "error", str(exc)[:300])
+    answer(bool(build.ok), build.status, build.detail or "", build.seconds)
+
+
+def _settle_task(settings: Settings, action_id: int, key: str, serial: str,
+                 *, ok: bool, status: str, detail: str,
+                 seconds: float) -> None:
+    """Close the request a Run press became, in one line. Never fatal:
+    the task's own row is the record, this is the Requests page's."""
+    try:
+        from .store import actions as store_actions
+
+        took = round(seconds)
+        store_actions.settle(
+            settings, action_id, status="done" if ok else "failed",
+            result=f"{key} on {serial}: {status}"
+                   + (f" - {took // 60}m {took % 60:02d}s" if took else ""),
+            detail={"task": key, "serial": serial, "status": status,
+                    "ok": ok, "seconds": took, "detail": detail[:200]})
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("web action %s could not be settled (%s); its row "
+                    "stays running", action_id, exc)
 
 
 def _codes_source(settings: Settings):
@@ -2250,7 +2354,7 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
                     held = True
                 elif "Pause building" in asked:
                     held = False
-                    taken = take(free, kinds=("finish",))
+                    taken = take(free, kinds=PAUSED_KINDS)
                 else:
                     held = False
                     taken = take(free, kinds=HANDLED_KINDS)
@@ -2278,7 +2382,8 @@ def _order(settings: Settings, client, book: Book, decision, wishes) -> int:
 
     ordered = 0
     if decision.finish:
-        waiting, _gone = keeper._unfinished(client, book)
+        waiting, _gone = keeper._unfinished(
+            client, book, busy=keeper._busy_serials(settings))
         for phone in waiting[:decision.finish]:
             store_jobs.queue(settings, "finish", {"phone": dict(phone)})
             ordered += 1
@@ -2323,6 +2428,11 @@ def _take_results(settings: Settings, fuse: Breaker) -> None:
         log.warning("could not read the queue's results (%s)", exc)
         return
     for job in done:
+        if job.get("kind") == "task":
+            # A task reads a phone; what it reads is not a build's verdict
+            # on the farm's exits and devices, and eleven "signed_out"s
+            # must not open the fuse (2026-09-27).
+            continue
         result = job.get("result") or {}
         build = SimpleNamespace(ok=bool(result.get("ok")),
                                 status=str(result.get("status") or "unknown"),

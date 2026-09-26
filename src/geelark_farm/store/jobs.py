@@ -14,6 +14,12 @@ A row's payload is JSON: `{"want": {...}}` for a hand-built phone (the
 for a finish, with `account_address` in it when a command chose the
 account. Nothing here imports the builder: the shapes are dicts, and the
 builder role turns them back into what `_run_jobs` takes.
+
+A `task` (2026-09-27) is the third kind: one of `tasks.TASKS` on a phone
+that already exists - `{"task": key, "inputs": {...}, "phone": {...}}`.
+Its phone rides under the same `phone` key a finish's does, so
+`open_serials` counts it and nothing else is offered that phone while
+the task is queued or running.
 """
 
 from __future__ import annotations
@@ -133,6 +139,17 @@ def open_serials(settings: Settings) -> set[str]:
         if serial:
             out.add(serial)
     return out
+
+
+def open_count(settings: Settings, kind: str) -> int:
+    """How many jobs of one kind are queued or running."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT count(*) FROM jobs WHERE kind = %s"
+            " AND status IN ('queued', 'running')", (kind,))
+        (n,) = cur.fetchone()
+        conn.rollback()
+    return int(n or 0)
 
 
 def counts(settings: Settings) -> tuple[int, int]:

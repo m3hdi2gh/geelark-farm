@@ -293,10 +293,14 @@ class _Handler(BaseHTTPRequestHandler):
                             "404", "<h2>No such run</h2>", user=user))
                     return self._html(200, task_pages.run_page(
                         row, user, advice=_verdict))
+                said = first.get("said", "")
+                runner = task_pages.may_run(user, self.settings)
                 return self._html(200, task_pages.task_page(
                     task_read.runs(self.settings, name,
                                    page=_page_number(first)),
-                    user, said=first.get("said", "")))
+                    user, said=said, said_note=self._said_note(said),
+                    phones=task_read.phones(self.settings) if runner else (),
+                    serial=first.get("serial", ""), may_run=runner))
             if path == "/logins":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -444,6 +448,9 @@ class _Handler(BaseHTTPRequestHandler):
                     user=user))
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
+            if self.path.startswith("/tasks/") and \
+                    self.path.endswith("/run"):
+                return self._task_post(user, field)
             if self.path == "/phones/build":
                 # Two choices: the Gmail and the account. The exit is not
                 # one of them - the build picks one and swaps it when an
@@ -873,6 +880,33 @@ class _Handler(BaseHTTPRequestHandler):
                 continue
             row["twice"] = here in seen
             seen.add(here)
+
+    def _task_post(self, user: dict, field: dict) -> None:
+        """Run: one task on one phone, as a request like any other button's.
+
+        Only the fields the task declares are passed on, and never one it
+        marks secret - the verb refuses such a task anyway, and a secret
+        must not reach the actions table even on its way to a refusal.
+        Admin only: the gate above already sends an operator away, and
+        `_act` asks again (2026-09-27, the agreed rule for phase 4).
+        """
+        from .. import tasks as registry
+
+        name = self.path[len("/tasks/"):-len("/run")]
+        spec = registry.spec(name)
+        if spec is None or spec.key != name:
+            return self._html(404, pages.page(
+                "404", "<h2>No such task</h2>", user=user))
+        inputs = {f.name: str(field.get(f"in_{f.name}") or "").strip()
+                  for f in spec.inputs if not f.secret}
+        return self._act(
+            user, "admin", "run_task",
+            {"task": spec.key,
+             "serial": str(field.get("serial") or "").strip(),
+             "inputs": {k: v for k, v in inputs.items() if v}},
+            idem=self._minute_key(user, "task",
+                                  f"{spec.key}:{field.get('serial', '')}"),
+            back=f"/tasks/{spec.key}")
 
     def _said_note(self, said: str) -> str:
         """The verb's own sentence for a press that did not go through.

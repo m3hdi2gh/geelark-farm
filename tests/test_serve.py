@@ -3171,8 +3171,8 @@ def test_stop_everything_and_pause_reach_the_builders(make_settings, tmp_path,
                                                       monkeypatch):
     """A replica draining the same queue read neither control and built
     through both. Stopped it takes nothing; paused it takes finishes -
-    a customer's account onto a phone waiting for it - and leaves builds
-    queued."""
+    a customer's account onto a phone waiting for it - and tasks, which
+    read a phone that exists (2026-09-27), and leaves builds queued."""
     from geelark_farm import signals
 
     stop = threading.Event()
@@ -3211,8 +3211,9 @@ def test_stop_everything_and_pause_reach_the_builders(make_settings, tmp_path,
 
     # "Everything" is every kind this builder carries out, never a kind
     # it does not know (2026-09-23).
-    assert takes == [("finish",), serve_mod.HANDLED_KINDS], (
-        "stopped: nothing taken; paused: finishes only; then everything")
+    assert takes == [("finish", "task"), serve_mod.HANDLED_KINDS], (
+        "stopped: nothing taken; paused: no builds; then everything")
+    assert "build" not in serve_mod.PAUSED_KINDS
 
 
 def test_the_stopped_banner_says_what_the_builders_still_hold(monkeypatch,
@@ -3354,5 +3355,7 @@ def test_a_builder_takes_only_the_kinds_it_carries_out():
     loop = inspect.getsource(serve_mod.serve_builder)
     assert "taken = take(free, kinds=HANDLED_KINDS)" in loop
     assert "taken = take(free)" + chr(10) not in loop
-    assert serve_mod.HANDLED_KINDS == ("build", "finish")
+    # `task` since 2026-09-27: `_carry_out` hands it to `_carry_task`
+    # before `_job_dict` - which would still refuse it - is reached.
+    assert serve_mod.HANDLED_KINDS == ("build", "finish", "task")
 

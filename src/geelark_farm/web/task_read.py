@@ -95,6 +95,27 @@ def one(settings: Settings, run_id: int) -> dict | None:
     return row
 
 
+def phones(settings: Settings, limit: int = 400) -> list[dict]:
+    """The phones a Run can be pointed at, for the form's list: every live
+    row, newest first. Only a suggestion - the verb is what decides, and
+    it refuses a taken or a busy phone in words."""
+    if not settings.store_enabled:
+        return []
+    from ..store.db import Store
+
+    try:
+        with Store(settings) as store:
+            return [dict(r) for r in store._rows(
+                "SELECT serial, status, state, gmail, app_account"
+                " FROM phones WHERE done_at IS NULL"
+                " ORDER BY id DESC LIMIT %s", (int(limit),))]
+    except Exception as exc:                                      # noqa: BLE001
+        # The form still works: a serial can be typed.
+        log.warning("the phones for the Run form could not be read (%s)",
+                    exc)
+        return []
+
+
 def _screens(settings: Settings, row: dict) -> list[dict]:
     """What the run archived, in the order the flow met it - which is the
     order the names carry, because the router stamps each with the time
