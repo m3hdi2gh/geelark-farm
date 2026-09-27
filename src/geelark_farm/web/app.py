@@ -1114,6 +1114,31 @@ class _Handler(BaseHTTPRequestHandler):
                                                kind),
                          back=back)
 
+    def _remove_gmail_group(self, user: dict, field: dict) -> None:
+        """"Remove all" under the Gmail pool's spent or errored chip:
+        asked once, then one command for every row under it (the
+        operator, 2026-09-28). Any other group goes nowhere."""
+        group = str(field.get("group") or "").strip().lower()
+        back = "/"
+        if group not in ("spent", "errored"):
+            return self._redirect("/?said=none")
+        n = str(field.get("n") or "").strip()
+        many = f"all {n}" if n.isdigit() else "all the"
+        if field.get("sure") != "1":
+            return self._html(200, pages.confirm_page(
+                user, title=f"Remove {many} {group} Gmails?",
+                text=("They leave the pool for the archive, which keeps "
+                      "each row whole. Free rows, rows set aside by hand "
+                      "and rows on a phone are never touched."),
+                action="/pools/gmail/remove-group",
+                fields={"group": group, "n": n, "sure": "1", "back": back},
+                button=f"Yes, remove {many} {group}", back=back))
+        return self._act(user, "may_add_gmail", "remove_gmail_group",
+                         {"group": group},
+                         idem=self._minute_key(user, "remove_gmail_group",
+                                               group),
+                         back=back)
+
     def _login_accounts(self, user: dict, addresses: list,
                         back: str = "/", serial: str = "") -> None:
         """"Log in selected" (C6), off the dashboard or the Gpt Pool -
@@ -1599,6 +1624,8 @@ class _Handler(BaseHTTPRequestHandler):
                  "state": (field.get("state") or "").strip()},
                 idem=self._minute_key(user, "edit_gmail", address),
                 back=_gmail_back(field), row_of="gmail")
+        if path == "/pools/gmail/remove-group":
+            return self._remove_gmail_group(user, field)
         if path == "/pools/gmail/remove":
             address = (field.get("address") or "").strip()
             back = _gmail_back(field)
@@ -2687,7 +2714,7 @@ def _digest(payload: dict) -> str:
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
 _SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",
-                     "remove_delivered_apps"})
+                     "remove_delivered_apps", "remove_gmail_group"})
 
 
 def _phone_back(field: dict, serial: str) -> str:
@@ -2953,6 +2980,7 @@ _OPERATOR_POSTS = (
     "/phones/build",
     "/pools/gmail/preview", "/pools/gmail/add",
     "/pools/gmail/edit", "/pools/gmail/remove", "/pools/gmail/undo",
+    "/pools/gmail/remove-group",
     "/pools/gmail/free", "/pools/gmail/refund",
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",

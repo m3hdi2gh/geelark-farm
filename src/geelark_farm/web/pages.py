@@ -796,7 +796,7 @@ _PENDING_WORDS = {
     "free_all_proxies": "Freeing", "remove_proxy": "Removing",
     "free_gmail": "Freeing", "edit_gmail": "Saving",
     "remove_gmail": "Removing", "remove_app": "Removing",
-    "remove_delivered_apps": "Removing",
+    "remove_delivered_apps": "Removing", "remove_gmail_group": "Removing",
     # A build asked for by hand, carrying this Gmail or account to the
     # phone it is making - claimed only when it gets there (2026-09-27).
     "build_by_hand": "Building a phone",
@@ -1374,6 +1374,7 @@ _POOL_KINDS = {
         "add": "may_add_gmail", "manage": "may_add_gmail",
         "preview": "/pools/gmail/preview", "free": "/pools/gmail/free",
         "edit": "/pools/gmail/edit", "remove": "/pools/gmail/remove",
+        "remove_group": "/pools/gmail/remove-group",
         "how": ("address, password, then the 2fa secret or the recovery "
                 "address - one account per line, tabs or commas between"),
         "columns": ("Address", "Status", "2FA", "Seller", "On phone"),
@@ -2451,6 +2452,33 @@ def _remove_delivered_door(kind: str, rows: list[dict], user: dict) -> str:
             f'Remove all delivered{f" · {n}" if n else ""}</button></form>')
 
 
+def _remove_group_door(kind: str, group: str, rows: list[dict],
+                       user: dict) -> str:
+    """Every row under one of the Gmail pool's chips - `spent` or
+    `errored` - out of it in one press (the operator, 2026-09-28). Under
+    its own chip only, counting only that chip's rows; asked once beside
+    the button."""
+    meta = _POOL_KINDS[kind]
+    if (group not in ("spent", "errored") or not meta.get("remove_group")
+            or not _may(user, meta["manage"])):
+        return ""
+    n = sum(1 for r in rows
+            if _group_of(str(r.get("state") or "")) == group)
+    noun = "Gmail" if n == 1 else "Gmails"
+    ask = (f"Remove all {n} {group} {noun}? They go to the archive, which "
+           f"keeps each row whole.")
+    return (f'<form method="post" action="{meta["remove_group"]}" '
+            f'class="inline" data-for-group="{group}" hidden '
+            f'data-ask="{esc(ask)}" data-yes="Remove all {n}">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<input type="hidden" name="group" value="{group}">'
+            f'<input type="hidden" name="n" value="{n}">'
+            f'<button class="quiet bad" data-busy="Removing&hellip;" '
+            f'title="every {group} row leaves the pool for the archive"'
+            f'{"" if n else " disabled"}>'
+            f'Remove all{f" · {n}" if n else ""}</button></form>')
+
+
 def row_answer(kind: str, row: dict | None, said: str, user: dict,
                said_note: str = "", manual_login: bool = False,
                pending: dict | None = None) -> str:
@@ -2533,6 +2561,8 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'{_test_all_door(kind, rows, user)}'
         f'{_free_all_door(kind, rows, user)}'
         f'{_remove_delivered_door(kind, rows, user)}'
+        f'{_remove_group_door(kind, "spent", rows, user)}'
+        f'{_remove_group_door(kind, "errored", rows, user)}'
         # The script has always written "12 of 190 shown" into this,
         # and the CSS has always reserved the space for it, and it was
         # never rendered - so the count nobody could see is how you

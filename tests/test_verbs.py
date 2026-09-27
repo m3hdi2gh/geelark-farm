@@ -529,6 +529,44 @@ def test_removing_a_gmail_keeps_the_row_it_removed():
     assert detail["removed"]["Password"] == "pw"
 
 
+def test_remove_all_takes_one_gmail_group_and_nothing_else():
+    """One press for the Gmail pool's spent or errored list (the operator,
+    2026-09-28). The groups are the manager's own chips: `spent` is a
+    used address, `errored` is every word a run left on a row - and
+    neither ever reaches a row that is free, set aside by hand, or on a
+    phone."""
+    book = make_book(gmails=7)
+    rows = book.gmails._rows
+    book.gmails.retire(rows[0], note="done")             # used -> spent
+    book.gmails.retire(rows[1], note="done")
+    book.gmails.fail(rows[2], "captcha_shown")           # errored
+    book.gmails.fail(rows[3], "wrong_password")
+    rows[4].values["Status"] = "set_aside"               # current
+    book.gmails.claim("1500")                            # rows[5] in_use
+    keep = [rows[4], rows[6]]
+
+    status, said, detail = verbs.remove_gmail_group(
+        book, None, None, {"group": "spent", "by": "mehdi"}, None)
+    assert status == "done", said
+    assert said.startswith("2 spent Gmails removed"), said
+    assert sorted(detail["removed"]) == ["g0@example.com", "g1@example.com"]
+
+    status, said, detail = verbs.remove_gmail_group(
+        book, None, None, {"group": "errored", "by": "mehdi"}, None)
+    assert status == "done" and said.startswith("2 errored Gmails"), said
+    assert sorted(detail["removed"]) == ["g2@example.com", "g3@example.com"]
+
+    left = [r.values["Address"] for r in book.gmails._rows]
+    assert left == ["g4@example.com", "g5@example.com", "g6@example.com"]
+    assert all(r in book.gmails._rows for r in keep)
+
+    status, said, _ = verbs.remove_gmail_group(
+        book, None, None, {"group": "spent"}, None)
+    assert status == "done" and said.startswith("no spent Gmail"), said
+    assert verbs.remove_gmail_group(
+        book, None, None, {"group": "current"}, None)[0] == "refused"
+
+
 # ------------------------------------------- the panel's two verbs (C9)
 # These run unattended against the live Gpt Info tab the first time a
 # panel POSTs an account, so they are tested against the real AppPool over
@@ -2012,7 +2050,7 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         # Stock: rows in the store, and nothing else.
         "add_gmails", "add_gpt", "add_spotify", "add_panel_account",
         "edit_gmail", "remove_gmail", "edit_app", "remove_app",
-        "remove_delivered_apps",
+        "remove_delivered_apps", "remove_gmail_group",
         "free_gmail", "free_app", "refund_gmail", "offer_again",
         "withdraw_panel_account",
         # Exits, where the answer needs no word from GeeLark.

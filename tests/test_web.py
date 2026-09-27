@@ -6293,6 +6293,68 @@ def test_remove_all_delivered_sits_under_the_spent_chip():
                             may_add_gpt=False)) == ""
 
 
+def test_the_gmail_pool_has_remove_all_under_spent_and_errored():
+    """One per chip, each counting only its own chip's rows, and each shown
+    only while that chip is pressed (2026-09-28)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_add_gmail": True}
+    rows = ([{"address": f"u{i}@gmail.com", "state": "used"}
+             for i in range(3)]
+            + [{"address": "c@gmail.com", "state": "captcha_shown"},
+               {"address": "b@gmail.com", "state": "broken"},
+               {"address": "f@gmail.com", "state": "free"},
+               {"address": "s@gmail.com", "state": "set_aside"},
+               {"address": "p@gmail.com", "state": "on a phone"}])
+    spent = pages._remove_group_door("gmail", "spent", rows, user)
+    errored = pages._remove_group_door("gmail", "errored", rows, user)
+    assert 'data-for-group="spent"' in spent and " hidden" in spent
+    assert "Remove all · 3" in spent and 'name="group" value="spent"' in spent
+    assert 'data-for-group="errored"' in errored
+    assert "Remove all · 2" in errored
+    assert 'action="/pools/gmail/remove-group"' in errored
+    assert 'data-ask="Remove all 2 errored Gmails?' in errored
+    sheet = pages._pool_sheet("gmail", rows, {}, user)
+    assert sheet.count("/pools/gmail/remove-group") == 2
+    assert pages._remove_group_door("gmail", "current", rows, user) == ""
+    assert pages._remove_group_door("proxy", "spent", rows, user) == ""
+    assert pages._remove_group_door(
+        "gmail", "spent", rows, dict(user, role="operator", is_admin=False,
+                                     may_add_gmail=False)) == ""
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_gmail_remove_all_asks_then_queues_one_command(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 71)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, _, body = client.request(
+        "POST", "/pools/gmail/remove-group",
+        _form(csrf=client.csrf(), group="errored", n="12", back="/"))
+    assert status == 200 and got == []
+    assert "Remove all 12 errored Gmails?" in body
+
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/remove-group",
+        _form(csrf=client.csrf(), group="errored", n="12", sure="1",
+              back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "remove_gmail_group"
+    assert got[-1]["payload"]["group"] == "errored"
+
+    status, headers, _ = client.request(
+        "POST", "/pools/gmail/remove-group",
+        _form(csrf=client.csrf(), group="current", sure="1", back="/"))
+    assert len(got) == 1, "a group that is not spent or errored goes nowhere"
+
+
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_remove_all_delivered_asks_first_then_queues_one_command(
         web, monkeypatch):
