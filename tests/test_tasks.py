@@ -339,4 +339,6 @@ def test_the_schema_names_the_table_and_the_revision_moved():
     # The guard in test_store reads `-- rev N:`, so the header has to be
     # written that way - a section-shaped one left it reading rev 35.
     assert "-- rev 36: every run of a task" in text
-    assert db.SCHEMA_REV == "36"
+    # At least: rev 37 let a task into `jobs` (2026-09-27), and this pin
+    # is about the table having arrived, not about nothing coming after.
+    assert int(db.SCHEMA_REV) >= 36

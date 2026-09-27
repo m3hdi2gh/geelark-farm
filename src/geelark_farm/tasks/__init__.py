@@ -110,7 +110,8 @@ TASKS: dict[str, TaskSpec] = {
         summary="Launches a package and reports whether it shows a "
                 "signed-in screen, a sign-in screen, or a page neither "
                 "list knows. Answers 'is this phone still signed in?' "
-                "for a delivered account, without a person opening it.",
+                "for a phone the farm still holds, without a person "
+                "opening it.",
         runs="geelark_farm.tasks.app_probe",
         inputs=(
             Field("package", "Package name",

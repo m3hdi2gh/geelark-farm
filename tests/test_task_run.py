@@ -462,3 +462,26 @@ def test_the_run_post_never_forwards_a_secret(monkeypatch):
     app._Handler._task_post(fake, ADMIN, {"serial": "1", "in_key": "hunter2",
                                           "in_where": "x"})
     assert fake.acted[2]["inputs"] == {"where": "x"}
+
+
+# ------------------------------------------------------------ the schema
+def test_the_database_accepts_every_kind_a_builder_takes():
+    """The first Run on the live farm was refused by `jobs_kind_check`:
+    every test above fakes `store_jobs.queue`, so none of them ever met
+    the table (2026-09-27). What the schema file leaves in force - the
+    last definition of the constraint - must allow every kind the
+    builders are told to take."""
+    import re
+    from pathlib import Path
+
+    import geelark_farm.store as store_pkg
+
+    schema = (Path(store_pkg.__file__).parent / "schema.sql").read_text(
+        encoding="utf-8")
+    # From `CREATE TABLE jobs` on: the pools' table has a `kind` too.
+    at = schema.index("CREATE TABLE IF NOT EXISTS jobs")
+    rules = [m.group(1) for m in re.finditer(
+        r"(?:CONSTRAINT jobs_kind_check\s+CHECK|kind\s+text NOT NULL CHECK)"
+        r"\s*\(kind IN \(([^)]*)\)\)", schema) if m.start() > at]
+    allowed = set(re.findall(r"'(\w+)'", rules[-1]))
+    assert set(serve_mod.HANDLED_KINDS) <= allowed, allowed

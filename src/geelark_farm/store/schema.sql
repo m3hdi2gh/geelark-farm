@@ -930,3 +930,11 @@ CREATE INDEX IF NOT EXISTS task_runs_by_task
     ON task_runs (task, started_at DESC);
 CREATE INDEX IF NOT EXISTS task_runs_open
     ON task_runs (started_at) WHERE status = 'running';
+
+-- rev 37: a task is a job (2026-09-27). The first Run pressed on the live
+-- farm was refused here - `jobs.kind` allowed only builds and finishes, and
+-- every test had faked the insert. Dropped by name and added again, so the
+-- file still converges when it is applied twice.
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_kind_check;
+ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check
+    CHECK (kind IN ('build', 'finish', 'task'));
