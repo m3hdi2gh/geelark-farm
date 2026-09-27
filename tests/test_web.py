@@ -6317,6 +6317,12 @@ def test_the_gmail_pool_has_remove_all_under_spent_and_errored():
     assert 'data-ask="Remove all 2 errored Gmails?' in errored
     sheet = pages._pool_sheet("gmail", rows, {}, user)
     assert sheet.count("/pools/gmail/remove-group") == 2
+    # The pool's own count, not the drawn rows': the sheet draws 300 of
+    # each list and the verb takes them all (1514 spent, 2026-09-28).
+    counted = pages._pool_sheet(
+        "gmail", rows, {"gmail": {"group_spent": 1514,
+                                  "group_errored": 245}}, user)
+    assert "Remove all · 1514" in counted and "Remove all · 245" in counted
     assert pages._remove_group_door("gmail", "current", rows, user) == ""
     assert pages._remove_group_door("proxy", "spent", rows, user) == ""
     assert pages._remove_group_door(

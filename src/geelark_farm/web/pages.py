@@ -2452,8 +2452,14 @@ def _remove_delivered_door(kind: str, rows: list[dict], user: dict) -> str:
             f'Remove all delivered{f" · {n}" if n else ""}</button></form>')
 
 
+def _group_total(totals: dict | None, kind: str, group: str) -> int | None:
+    """How many rows the pool holds under this chip, when the read said."""
+    found = ((totals or {}).get(kind) or {}).get(f"group_{group}")
+    return None if found is None else int(found)
+
+
 def _remove_group_door(kind: str, group: str, rows: list[dict],
-                       user: dict) -> str:
+                       user: dict, total: int | None = None) -> str:
     """Every row under one of the Gmail pool's chips - `spent` or
     `errored` - out of it in one press (the operator, 2026-09-28). Under
     its own chip only, counting only that chip's rows; asked once beside
@@ -2462,8 +2468,10 @@ def _remove_group_door(kind: str, group: str, rows: list[dict],
     if (group not in ("spent", "errored") or not meta.get("remove_group")
             or not _may(user, meta["manage"])):
         return ""
-    n = sum(1 for r in rows
-            if _group_of(str(r.get("state") or "")) == group)
+    # The pool's own count when there is one: the sheet draws 300 of each
+    # list and the verb takes every row (2026-09-28).
+    n = total if total is not None else sum(
+        1 for r in rows if _group_of(str(r.get("state") or "")) == group)
     noun = "Gmail" if n == 1 else "Gmails"
     ask = (f"Remove all {n} {group} {noun}? They go to the archive, which "
            f"keeps each row whole.")
@@ -2561,8 +2569,10 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'{_test_all_door(kind, rows, user)}'
         f'{_free_all_door(kind, rows, user)}'
         f'{_remove_delivered_door(kind, rows, user)}'
-        f'{_remove_group_door(kind, "spent", rows, user)}'
-        f'{_remove_group_door(kind, "errored", rows, user)}'
+        f'{_remove_group_door(kind, "spent", rows, user,
+                              _group_total(totals, kind, "spent"))}'
+        f'{_remove_group_door(kind, "errored", rows, user,
+                              _group_total(totals, kind, "errored"))}'
         # The script has always written "12 of 190 shown" into this,
         # and the CSS has always reserved the space for it, and it was
         # never rendered - so the count nobody could see is how you
