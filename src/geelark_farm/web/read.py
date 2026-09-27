@@ -976,6 +976,12 @@ _SECOND = (" CASE WHEN coalesce(totp_secret, '') <> '' THEN 'authenticator'"
 _CREDS = (" coalesce(password, '') AS password,"
           " coalesce(nullif(totp_secret, ''), recovery_email, '') AS secret")
 
+#: The Gmail statuses under the manager's `current` and `spent` chips;
+#: every other word, and any unreadable row, is `errored`. The same split
+#: as verbs._GMAIL_CURRENT plus `used`.
+GMAIL_NOT_ERRORED = frozenset({"", "free", "in_use", "ready", "set_aside",
+                               "set aside", "used"})
+
 #: The status that means a row is finished with, per pool. Proxies have
 #: none: an exit goes back on the shelf.
 _SPENT = {"gmail": "used", "app": "delivered"}
@@ -1188,11 +1194,21 @@ def _pool_rows(store, kinds: tuple[str, ...] | None = None) -> dict:
         " count(*) FILTER (WHERE NOT (kind = 'gmail' AND status = 'used')"
         "   AND NOT (kind = 'app' AND status = 'delivered')) AS live,"
         " count(*) FILTER (WHERE (kind = 'gmail' AND status = 'used')"
-        "   OR (kind = 'app' AND status = 'delivered')) AS spent"
+        "   OR (kind = 'app' AND status = 'delivered')) AS spent,"
+        # The Gmail manager's two Remove all doors, counted in full: the
+        # sheet draws 300 of each and the verb takes every row, so a door
+        # counting drawn rows said 300 over 1514 (2026-09-28). The same
+        # split as verbs._gmail_group.
+        " count(*) FILTER (WHERE kind = 'gmail' AND error IS NULL"
+        "   AND status = 'used') AS gone,"
+        " count(*) FILTER (WHERE kind = 'gmail' AND (error IS NOT NULL"
+        "   OR NOT (coalesce(status, '') = ANY(%s)))) AS errored"
         " FROM resources WHERE kind IN ('gmail', 'app', 'proxy')"
-        " GROUP BY 1")
+        " GROUP BY 1", (sorted(GMAIL_NOT_ERRORED),))
     counted = {str(r["kind"]): {"live": int(r["live"] or 0),
-                                "spent": int(r["spent"] or 0)}
+                                "spent": int(r["spent"] or 0),
+                                "group_spent": int(r.get("gone") or 0),
+                                "group_errored": int(r.get("errored") or 0)}
                for r in totals}
     rows["totals"] = {"gmail": counted.get("gmail", {"live": 0, "spent": 0}),
                       "gpt": counted.get("app", {"live": 0, "spent": 0}),
