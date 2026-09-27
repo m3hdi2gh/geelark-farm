@@ -118,7 +118,12 @@ def capture(client: Client, phone_id: str) -> str | None:
     because that line is `UI hierchary dumped to: ...` - misspelled in AOSP,
     and not something to hang a screen router on.
     """
-    run(client, phone_id, f"rm -f {DUMP_PATH}; uiautomator dump {DUMP_PATH}")
+    # Asked again when GeeLark sits on it: the pair does the same thing
+    # however often it runs, and a read that hung for 90 seconds ended a
+    # Spotify sign-in the operator had just watched succeed (4667,
+    # 2026-09-27).
+    run(client, phone_id, f"rm -f {DUMP_PATH}; uiautomator dump {DUMP_PATH}",
+        retry=True)
     raw = read(client, phone_id, f"cat {DUMP_PATH}")
     start = raw.find("<?xml")
     if start == -1:

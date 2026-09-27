@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import screen, shell
-from ..api import Client
+from ..api import Client, TransportError
 
 log = logging.getLogger(__name__)
 
@@ -264,6 +265,23 @@ def act_wait(ctx: Context) -> Outcome | None:
 #: How long a page is read before its first touch (with the cadence on).
 READ_SECONDS = (1.5, 4.0)
 EMPTY_DUMPS_LIMIT = 12
+
+
+@contextmanager
+def saying_what_was_typed(ctx) -> Iterator[None]:
+    """Mark a dropped line with whether the secret had gone in.
+
+    A flow returns rather than raises, except when GeeLark stops
+    answering, and then the builder saw only "the connection went away" -
+    so an account whose password was in, and which the operator watched
+    sign in, went back to the pool as untouched (phone 4667, 2026-09-27).
+    `secret_typed` on the exception is the flow's own `signed_something_in`
+    at the moment the line dropped."""
+    try:
+        yield
+    except TransportError as exc:
+        exc.secret_typed = bool(getattr(ctx, "signed_something_in", False))
+        raise
 
 
 def drive(ctx: Context, screens: list[Screen], *,

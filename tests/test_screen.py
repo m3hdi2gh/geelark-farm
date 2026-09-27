@@ -165,6 +165,25 @@ def test_the_dump_file_is_removed_before_it_is_written():
     assert rm < dump
 
 
+def test_the_dump_is_asked_again_when_geelark_does_not_answer(monkeypatch):
+    """`rm -f; uiautomator dump` does the same thing however often it runs,
+    so a read GeeLark sat on for 90 seconds is asked again rather than
+    ending the run. Asked once, it ended a Spotify sign-in the operator had
+    just watched succeed - the read-back after the password was the call
+    that hung (phone 4667, 2026-09-27)."""
+    asked = []
+
+    def fake_run(client, phone_id, cmd, **kwargs):
+        asked.append((cmd, kwargs.get("retry")))
+        return ""
+
+    monkeypatch.setattr(screen, "run", fake_run)
+    monkeypatch.setattr(screen, "read", lambda c, p, cmd: BODY)
+    assert screen.capture(None, "P") == BODY
+    assert asked == [(f"rm -f {screen.DUMP_PATH}; uiautomator dump "
+                      f"{screen.DUMP_PATH}", True)]
+
+
 # ------------------------------------ which box the read-back looks at
 def test_the_field_that_was_typed_into_is_the_one_read_back(monkeypatch):
     """`element` was passed in and then ignored: the read-back took whatever
@@ -337,7 +356,7 @@ def test_body_text_is_not_pressed_unless_the_caller_allows_it(finger):
 # ------------------------------------------------------- reading the dump
 def catting(monkeypatch, answer):
     """A device whose `cat` of the dump file returns `answer`."""
-    monkeypatch.setattr(screen, "run", lambda c, p, cmd: "")
+    monkeypatch.setattr(screen, "run", lambda c, p, cmd, **k: "")
     monkeypatch.setattr(screen, "read", lambda c, p, cmd: answer)
 
 

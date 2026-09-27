@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +36,16 @@ log = logging.getLogger(__name__)
 
 #: How many in a row before it opens.
 LIMIT = 5
+
+#: Reasons that are one outage, not one phone: GeeLark or the network
+#: stopped answering, and every build running at that moment ends the same
+#: way in the same breath. Nine did at 00:38 on 2026-09-27 - nine in a row,
+#: and the farm stopped over a minute and a half of hiccup. Within
+#: OUTAGE_SECONDS of the one counted, another is the same outage and is not
+#: counted again; an outage that goes on is counted once a window, so a
+#: machine that has really lost its network still stops.
+OUTAGES = frozenset({"network_unreachable"})
+OUTAGE_SECONDS = 180.0
 
 #: A build that got a phone to one step short of ready. The whole point of
 #: the warm stock, and evidence the pipeline works - so it clears the count
@@ -169,12 +180,29 @@ class Breaker:
             self._update(worked)
             return
 
+        now = time.time()
+        same = []
+
         def failed(state: dict) -> dict:
+            outage = float(state.get("outage_at") or 0)
+            if build.status in OUTAGES:
+                if outage and now - outage < OUTAGE_SECONDS:
+                    same.append(True)
+                    return state
+                outage = now
             count = int(state.get("consecutive") or 0) + 1
             reasons = list(state.get("reasons") or [])[-(self.limit - 1):]
             reasons.append(build.status)
-            return {"consecutive": count, "reasons": reasons}
+            counted = {"consecutive": count, "reasons": reasons}
+            if outage:
+                counted["outage_at"] = outage
+            return counted
         state = self._update(failed)
+        if same:
+            log.info("%s is the same outage as the one already counted; "
+                     "the breaker's count stays at %d", build.status,
+                     int(state.get("consecutive") or 0))
+            return
         count, reasons = state["consecutive"], state["reasons"]
         if count >= self.limit:
             log.error("%d builds in a row have failed (%s) - not building "

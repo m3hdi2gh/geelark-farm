@@ -40,6 +40,42 @@ def test_a_machine_that_cannot_reach_the_network_does_count():
     assert counts_against(build(False, "all_exits_refused"))
 
 
+def test_one_outage_under_many_builds_counts_once(tmp_path, monkeypatch):
+    """GeeLark stopped answering for a minute and a half at 00:38 with
+    nine phones building, and all nine ended `network_unreachable` in the
+    same breath: nine in a row, the farm stopped over one hiccup
+    (2026-09-27). One outage is one failure - the ones that land within
+    OUTAGE_SECONDS of the one counted are the same outage."""
+    now = [1000.0]
+    monkeypatch.setattr(breaker_mod.time, "time", lambda: now[0])
+    fuse = Breaker(tmp_path / "breaker.json", limit=3)
+
+    for _ in range(9):
+        fuse.record(build(False, "network_unreachable"))
+        now[0] += 5
+    assert fuse.seen()[0] == 1 and fuse.reason() == ""
+
+    # An outage that goes on keeps counting, one per window - so a
+    # machine that has really lost its network still stops.
+    now[0] += breaker_mod.OUTAGE_SECONDS
+    fuse.record(build(False, "network_unreachable"))
+    now[0] += breaker_mod.OUTAGE_SECONDS + 1
+    fuse.record(build(False, "network_unreachable"))
+    assert "3 builds in a row failed" in fuse.reason()
+
+
+def test_other_failures_still_count_one_each_during_an_outage(
+        tmp_path, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(breaker_mod.time, "time", lambda: now[0])
+    fuse = Breaker(tmp_path / "breaker.json", limit=3)
+    fuse.record(build(False, "network_unreachable"))
+    fuse.record(build(False, "phone_never_started"))
+    fuse.record(build(False, "network_unreachable"))
+    fuse.record(build(False, "phone_never_started"))
+    assert fuse.seen()[0] == 3
+
+
 def test_a_phone_that_worked_never_counts():
     assert not counts_against(build(True))
     assert shows_it_works(build(True))
