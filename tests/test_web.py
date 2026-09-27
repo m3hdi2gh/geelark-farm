@@ -6450,18 +6450,20 @@ def test_the_pulse_bumps_only_when_the_fingerprint_moves():
 
     pulse = live.Pulse()
     assert pulse.revision == 0 and pulse.everything == 0
-    farm = ("p", "ph", "e", "a", "w", "s")
+    # Seven columns of the farm's own since 2026-09-28: task_runs joined
+    # so a run's page follows its stages.
+    farm = ("p", "ph", "e", "a", "w", "s", "t")
     # The first fingerprint is where the farm is, not a change - it must
     # not wake a page that has just loaded.
     assert pulse.bump(farm + ("l1",)) is False and pulse.revision == 1
     assert pulse.bump(farm + ("l1",)) is False, "the same mark is not news"
     assert pulse.revision == 1
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "l1")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "l1")) is True
     assert pulse.revision == 2 and pulse.everything == 2
     # A log line alone moves `everything` and not the farm's own count:
     # the dashboard does not redraw for a build's chatter, the Logs page
     # does (2026-09-14).
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "l2")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "l2")) is True
     assert pulse.revision == 2 and pulse.everything == 3
     assert pulse.count() == 2 and pulse.count(logs=True) == 3
     # Waiting: past the number you have, or nothing before the timeout.
@@ -6510,21 +6512,23 @@ def test_the_fingerprint_asks_about_every_table_a_page_draws(monkeypatch,
             asked.append(sql)
             return [{"pools": "2026-09-14", "phones": None, "events": 7,
                      "actions": 3, "wanted": None, "state": "2026-09-21",
-                     "logs": 900}]
+                     "tasks": "2026-09-28", "logs": 900}]
 
     monkeypatch.setattr(store_db, "Store", _Store)
     mark = live.take(make_settings(store_enabled=True))
 
-    assert mark == ("2026-09-14", "", "7", "3", "", "2026-09-21", "900")
+    assert mark == ("2026-09-14", "", "7", "3", "", "2026-09-21",
+                    "2026-09-28", "900")
     # service_state too: the keeper's pulse, the GeeLark strip, the
     # breaker and a Cancel that has landed are drawn from it, and none of
     # them could move the revision (2026-09-21, found by audit).
+    # task_runs since 2026-09-28: a running task's page follows it.
     for table in ("resources", "phones", "events", "actions", "wanted_builds",
-                  "service_state", "logs"):
+                  "service_state", "task_runs", "logs"):
         assert table in asked[0], table
     # The log lines are the last column, apart from the farm's own.
     assert mark[:live.FARM_COLUMNS] == ("2026-09-14", "", "7", "3", "",
-                                        "2026-09-21")
+                                        "2026-09-21", "2026-09-28")
 
     # A store that will not answer is not a crash and not a change.
     monkeypatch.setattr(store_db, "Store",

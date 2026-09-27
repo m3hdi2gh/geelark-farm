@@ -938,3 +938,13 @@ CREATE INDEX IF NOT EXISTS task_runs_open
 ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_kind_check;
 ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check
     CHECK (kind IN ('build', 'finish', 'task'));
+
+-- rev 38: a run you can watch (2026-09-28). `stage` is where the run is
+-- - starting, booting, settling, reading, ended - so its page can say so
+-- while it happens; `live_url` is GeeLark's viewer for the phone, kept
+-- only while the phone is up and blanked when the run ends, since the
+-- link drives the phone; `updated_at` moves with every one of them, and
+-- is what the console's live stream watches.
+ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS stage text NOT NULL DEFAULT '';
+ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS live_url text NOT NULL DEFAULT '';
+ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();

@@ -82,8 +82,22 @@ def one(settings: Settings, spec: TaskSpec, given: dict, *, phone_id: str,
     folder = settings.artifact_dir / f"{stamp}-task-{spec.key}-{serial or phone_id}"
     run_id = _open_row(settings, spec, checked, phone_id, serial, by_id, job_id)
 
+    def where(stage: str, live_url: str | None = None) -> None:
+        # The run's page reads these; a playground with the store off
+        # has no row and says nothing.
+        if run_id is not None:
+            from ..store import task_runs
+
+            task_runs.stage(settings, run_id, stage, live_url)
+
     try:
-        phones.ensure_running(client, phone_id)
+        # `on_url` fires the moment GeeLark hands the viewer's link back,
+        # before the boot wait - which is the minute worth watching.
+        phones.ensure_running(
+            client, phone_id,
+            on_url=lambda url: where("booting", url),
+            on_running=lambda: where("settling"))
+        where("reading")
         doing = Doing(client=client, phone_id=phone_id, settings=settings,
                       inputs=checked, serial=serial, artifact_dir=folder,
                       watch=watch, budget_seconds=budget_seconds)

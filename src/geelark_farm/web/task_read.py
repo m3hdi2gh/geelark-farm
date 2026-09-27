@@ -95,6 +95,29 @@ def one(settings: Settings, run_id: int) -> dict | None:
     return row
 
 
+def request(settings: Settings, task: str, action_id: int) -> dict | None:
+    """What a Run press has become: the request, and the run once a
+    builder has opened it. None when the request is not a Run of this
+    task - the page is a 404 then, not somebody else's request.
+
+    The run is looked up through the job the request queued, so the page
+    the press landed on turns into the run's page the moment there is
+    one, at the same address."""
+    if not settings.store_enabled:
+        return None
+    from ..store import actions as store_actions
+    from ..store import task_runs
+
+    action = store_actions.one(settings, int(action_id))
+    if not action or action.get("verb") != "run_task":
+        return None
+    if str((action.get("payload") or {}).get("task") or "") != task:
+        return None
+    found = task_runs.by_action(settings, int(action_id))
+    return {"action": action,
+            "run": one(settings, found["id"]) if found else None}
+
+
 def phones(settings: Settings, limit: int = 400) -> list[dict]:
     """The phones a Run can be pointed at, for the form's list: every live
     row, newest first. Only a suggestion - the verb is what decides, and

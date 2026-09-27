@@ -69,10 +69,13 @@ _FINGERPRINT = (
     "       (SELECT max(id) FROM actions) AS actions,"
     "       (SELECT max(id) FROM wanted_builds) AS wanted,"
     "       (SELECT max(updated_at) FROM service_state) AS state,"
+    "       (SELECT max(updated_at) FROM task_runs) AS tasks,"
     "       (SELECT max(id) FROM logs) AS logs"
 )
 #: Which columns of it are the farm's own; the rest is the log lines.
-FARM_COLUMNS = 6
+#: `tasks` is the seventh: a run's page follows it stage by stage
+#: (2026-09-28, rev 38).
+FARM_COLUMNS = 7
 
 
 class Pulse:
@@ -148,7 +151,7 @@ def take(settings: Settings) -> tuple | None:
     row = rows[0]
     return tuple(str(row.get(k) or "")
                  for k in ("pools", "phones", "events", "actions", "wanted",
-                           "state",
+                           "state", "tasks",
                            "logs"))
 
 

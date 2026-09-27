@@ -13,6 +13,10 @@ tell them apart. Both are written at the end, from `failures.verdict`.
 
 What never lands here: a secret. The runner writes `spec.public(...)`,
 which is the inputs with the fields the task marked secret taken out.
+
+`stage` and `live_url` (rev 38) are the run as it happens, for the page
+that watches it: where it is now, and GeeLark's viewer while the phone
+is up. The link drives the phone, so it is blanked when the run ends.
 """
 from __future__ import annotations
 
@@ -23,6 +27,9 @@ from ..config import Settings
 from .db import connect
 
 log = logging.getLogger(__name__)
+
+#: Where a run can be, in order. The page draws them as a line.
+STAGES = ("starting", "booting", "settling", "reading", "ended")
 
 
 def start(settings: Settings, *, task: str, inputs: dict | None = None,
@@ -38,7 +45,8 @@ def start(settings: Settings, *, task: str, inputs: dict | None = None,
     with connect(settings) as conn:
         cur = conn.execute(
             "INSERT INTO task_runs (task, inputs, phone_id, serial, by_id,"
-            " job_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            " job_id, stage) VALUES (%s, %s, %s, %s, %s, %s, 'starting')"
+            " RETURNING id",
             (str(task), json.dumps(inputs or {}), str(phone_id or ""),
              str(serial or ""), by_id, job_id))
         new_id = int(cur.fetchone()[0])
@@ -59,6 +67,7 @@ def finish(settings: Settings, run_id: int, *, ok: bool, reason: str,
                 " blame = %s, detail = left(%s, 2000), seconds = %s,"
                 " api_calls = %s, trail = left(%s, 1000), folder = %s,"
                 " serial = coalesce(nullif(%s, ''), serial),"
+                " stage = 'ended', live_url = '', updated_at = now(),"
                 " ended_at = now() WHERE id = %s",
                 ("done" if ok else "failed", bool(ok), str(reason),
                  str(blame), str(detail), float(seconds), int(api_calls),
@@ -66,6 +75,39 @@ def finish(settings: Settings, run_id: int, *, ok: bool, reason: str,
             conn.commit()
     except Exception as exc:                                      # noqa: BLE001
         log.error("could not close task run %s (%s)", run_id, exc)
+
+
+def stage(settings: Settings, run_id: int, where: str,
+          live_url: str | None = None) -> None:
+    """Say where the run is now, and - when the phone has just been
+    started - the viewer's link. Never raises into a run: a page that
+    lags a stage behind is a page, and the phone is the work."""
+    if where not in STAGES:
+        raise ValueError(f"no stage called {where!r}")
+    try:
+        with connect(settings) as conn:
+            conn.execute(
+                "UPDATE task_runs SET stage = %s,"
+                " live_url = coalesce(%s, live_url), updated_at = now()"
+                " WHERE id = %s AND status = 'running'",
+                (where, live_url, int(run_id)))
+            conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("task run %s: stage %s not written (%s)", run_id,
+                    where, exc)
+
+
+def by_action(settings: Settings, action_id: int) -> dict | None:
+    """The run a Run press became, once a builder has opened it: the
+    press is a request, the request a job, and the job names the run.
+    None until then - the page says it is still queued."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT r.id, r.task FROM task_runs r JOIN jobs j"
+            " ON j.id = r.job_id WHERE j.action_id = %s"
+            " ORDER BY r.id DESC LIMIT 1", (int(action_id),))
+        row = cur.fetchone()
+    return {"id": int(row[0]), "task": str(row[1])} if row else None
 
 
 def one(settings: Settings, run_id: int) -> dict | None:

@@ -286,14 +286,38 @@ class _Handler(BaseHTTPRequestHandler):
                         task_read.listing(self.settings), user,
                         said=first.get("said", "")))
                 name, _, run = rest.partition("/")
+                asked, _, req = run.partition("/")
+                if asked == "req" and req.isdigit():
+                    # Where Run lands: the request, until a builder has
+                    # opened the run, and the run itself after - one
+                    # address that follows the press all the way.
+                    got = task_read.request(self.settings, name, int(req))
+                    if got is None:
+                        return self._html(404, pages.page(
+                            "404", "<h2>No such request</h2>", user=user))
+                    watch = task_pages.may_run(user, self.settings)
+                    if got["run"] is not None:
+                        return self._html(200, task_pages.run_page(
+                            got["run"], user, advice=_verdict, watch=watch))
+                    return self._html(200, task_pages.waiting_page(
+                        got["action"], name, user))
+                said = first.get("said", "")
+                word, _, req = said.partition(":")
+                if word in ("queued", "already", "twice") and req.isdigit() \
+                        and not run:
+                    # The Run form is sent by the browser itself, so this
+                    # redirect is followed and the address bar says where
+                    # the run is - the page's live stream then reloads the
+                    # run, not the task (2026-09-28).
+                    return self._redirect(f"/tasks/{name}/req/{req}")
                 if run.isdigit():
                     row = task_read.one(self.settings, int(run))
                     if row is None or str(row.get("task")) != name:
                         return self._html(404, pages.page(
                             "404", "<h2>No such run</h2>", user=user))
                     return self._html(200, task_pages.run_page(
-                        row, user, advice=_verdict))
-                said = first.get("said", "")
+                        row, user, advice=_verdict,
+                        watch=task_pages.may_run(user, self.settings)))
                 runner = task_pages.may_run(user, self.settings)
                 return self._html(200, task_pages.task_page(
                     task_read.runs(self.settings, name,

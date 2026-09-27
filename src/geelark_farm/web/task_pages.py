@@ -19,7 +19,28 @@ seven thousand lines that somebody else is usually editing.
 """
 from __future__ import annotations
 
-from .pages import _csrf, _may, _said, _when, esc, page
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from ..store.task_runs import STAGES
+from .pages import VIEWER_BOX, VIEWER_WIDTH, _csrf, _may, _said, _when, esc, page
+
+#: A stage in the words the page uses. `queued` is before the run has a
+#: row: the request is waiting for a builder.
+_STAGE_WORDS = {"queued": "in the queue", "starting": "starting the phone",
+                "booting": "booting", "settling": "settling",
+                "reading": "reading the app", "ended": "done"}
+#: How much of GeeLark's viewer box is drawn: its natural size is
+#: VIEWER_BOX, and 0.72 of it fits beside the stages on a laptop and
+#: inside a phone's width.
+_VIEW_SCALE = 0.72
+#: The clock beside the stages, counted in the browser from the start
+#: time the page carries. Outside every live region, so it is started
+#: once and keeps counting the element a swap puts back.
+_TICK = ("<script>setInterval(function(){"
+         "document.querySelectorAll('[data-since]').forEach(function(n){"
+         "var s=Math.max(0,Math.round(Date.now()/1000-(+n.dataset.since)));"
+         "n.textContent=(s>=60?Math.floor(s/60)+'m ':'')+(s%60)+'s';});"
+         "},1000);</script>")
 
 #: The banner words a task page can be sent. Plain sentences, as every
 #: other page's table is: `_said` escapes what it is given, and the
@@ -181,8 +202,11 @@ def _run_form(spec, user: dict, phones, serial: str = "") -> str:
         f' placeholder="{esc(f.help)}"></label>'
         for f in spec.inputs)
     return (f'<div class="panel"><h3>Run it</h3>'
-            f'<form method="post" action="/tasks/{esc(spec.key)}/run">'
-            f'{_csrf(user)}'
+            # `target`: sent by the browser rather than the console's
+            # fetch, so the address bar follows the redirect to the run's
+            # own page and its live stream reloads that page (2026-09-28).
+            f'<form method="post" action="/tasks/{esc(spec.key)}/run" '
+            f'target="_self">{_csrf(user)}'
             f'<label class="field"><span>Phone</span>'
             f'<input name="serial" list="task-phones" required '
             f'inputmode="numeric" pattern="[0-9]+" autocomplete="off" '
@@ -246,23 +270,118 @@ def _blame_cell(row: dict) -> str:
     return f'<span class="badge {_BLAME_TONE.get(who, "")}">{esc(who)}</span>'
 
 
-def run_page(row: dict, user: dict, advice=None) -> str:
-    """One run: what it came to, and every screen it kept.
+def _stages(now: str) -> str:
+    """Where the run is, as a line: what is behind it, where it is, and
+    what is still to come."""
+    order = ("queued",) + STAGES
+    at = order.index(now) if now in order else 0
+    bits = []
+    for i, stage in enumerate(order):
+        word = esc(_STAGE_WORDS[stage])
+        if i < at or now == "ended":
+            bits.append(f'<span class="badge">{word}</span>')
+        elif i == at:
+            bits.append(f'<span class="badge info"><b>{word}</b></span>')
+        else:
+            bits.append(f'<span class="dim">{word}</span>')
+    return (f'<p class="row" style="gap:6px">'
+            f'{" <span class=dim>&rsaquo;</span> ".join(bits)}</p>')
 
-    The screens are drawn by the phone page's own route, so this page
-    adds no viewer and no second opinion about what a screen looks like.
+
+def _clock(since: float | None) -> str:
+    """How long it has been running, beside the word running. It sat at
+    the end of the stages, where it read "done 1m 42s" under a run that
+    was not done (the devserver, 2026-09-28)."""
+    if not since:
+        return ""
+    return f'<span class="mono dim" data-since="{int(since)}"></span>'
+
+
+def _viewer(row: dict, watch: bool) -> str:
+    """GeeLark's viewer, framed, while the phone is up.
+
+    Its address carries the width it draws at, so the frame's markup is
+    the same on every drawing of the page and the live swap - which only
+    replaces what changed - leaves the stream playing. Watching only:
+    unlike the Live tab, closing this page stops nothing. The task
+    switches the phone off itself when it ends."""
+    url = str(row.get("live_url") or "")
+    if not (watch and url and str(row.get("status")) == "running"):
+        return ""
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["w"] = str(VIEWER_WIDTH)
+    src = urlunsplit(parts._replace(query=urlencode(query)))
+    w, h = VIEWER_BOX
+    return (f'<div class="panel"><h3>The phone, live</h3>'
+            f'<div style="width:{int(w * _VIEW_SCALE)}px;'
+            f'height:{int(h * _VIEW_SCALE)}px;overflow:hidden;max-width:100%">'
+            f'<iframe src="{esc(src)}" width="{w}" height="{h}" '
+            f'title="phone {esc(str(row.get("serial") or ""))}, live" '
+            f'style="border:0;transform:scale({_VIEW_SCALE});'
+            f'transform-origin:0 0" '
+            f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
+            f'</div><p class="hint">Watching only - closing this page does '
+            f'not stop the phone. The task switches it off when it ends.'
+            f'</p></div>')
+
+
+def waiting_page(action: dict, task: str, user: dict) -> str:
+    """A Run press before a builder has opened its run: queued, or the
+    reason it will not run. The same three regions as the run's page, so
+    the live swap turns this into that one at the same address."""
+    status = str(action.get("status") or "")
+    serial = str((action.get("payload") or {}).get("serial") or "")
+    ended = status in ("refused", "failed", "cancelled")
+    body = (f'<p class="said no">{esc(str(action.get("result") or status))}'
+            f'</p><p><a href="/tasks/{esc(task)}">Back to {esc(task)}</a></p>'
+            if ended else
+            '<p class="hint">A builder takes it within seconds; this page '
+            'follows it from there.</p>')
+    head = (f'<div class="top"><h2>{esc(task)} on {esc(serial)}</h2>'
+            + ('<span class="badge bad">not run</span>' if ended else "")
+            + '</div>' + ("" if ended else _stages("queued")))
+    return page(f"{task} on {serial}",
+                f'<div class="narrow">'
+                f'<p><a class="dim" href="/tasks/{esc(task)}">&larr; '
+                f'{esc(task)}</a></p>'
+                f'<div data-live="run-head">{head}</div>'
+                f'<div data-live="run-view"></div>'
+                f'<div data-live="run-body">{body}</div></div>' + _TICK,
+                user=user, here="/tasks", live="" if ended else "farm")
+
+
+def run_page(row: dict, user: dict, advice=None, watch: bool = False) -> str:
+    """One run: where it is while it runs, what it came to, and every
+    screen it kept.
+
+    Three live regions - the head with its stages, the phone's viewer,
+    and the rest - so a running page moves stage by stage on the
+    console's own stream and the viewer is never redrawn under the
+    person watching it. The screens are drawn by the phone page's own
+    route, so this page adds no second opinion about what a screen
+    looks like.
     """
     task = esc(str(row.get("task") or ""))
+    running = str(row.get("status")) == "running"
+    started = row.get("started_at")
+    since = started.timestamp() if hasattr(started, "timestamp") else None
     said = advice(str(row.get("reason") or "")) if advice else None
     # `.said` is green with a tick and `.said.no` is red with a bang -
     # the console's two, and the only two. A guessed `.said.bad` drew a
     # failed run as a success (seen in the devserver, 2026-09-26).
     tone = "" if row.get("ok") else "no"
-    body = (f'<div class="narrow">'
-            f'<p><a class="dim" href="/tasks/{task}">&larr; {task}</a></p>'
-            f'<div class="top"><h2>Run {int(row["id"])}</h2>'
-            f'{_outcome(row)}{_blame_cell(row)}</div>')
-    if said is not None:
+    # Whose fault is a verdict, and a running run has none yet.
+    head = (f'<div class="top"><h2>Run {int(row["id"])}</h2>'
+            f'{_outcome(row)}'
+            + (_clock(since) + "</div>"
+               + _stages(str(row.get("stage") or "starting"))
+               if running else f'{_blame_cell(row)}</div>'))
+    body = ""
+    # While it runs there is no verdict yet, only the stages above.
+    if running:
+        pass
+    elif said is not None:
         body += (f'<p class="said {tone}">{esc(said.seen)}'
                  f'<br><span class="dim">{esc(said.advice)}</span></p>')
     elif row.get("detail"):
@@ -270,10 +389,13 @@ def run_page(row: dict, user: dict, advice=None) -> str:
 
     facts = [("phone", _serial(row)),
              ("started", _when(row.get("started_at")) or
-              '<span class="dim">-</span>'),
-             ("took", f'{float(row.get("seconds") or 0):.0f}s'),
-             ("api calls", str(row.get("api_calls") or 0)),
-             ("screens", str(len(row.get("screens") or [])))]
+              '<span class="dim">-</span>')]
+    # Counted when the run ends; "0s, 0 calls" under a running one
+    # reads as a run that did nothing.
+    if not running:
+        facts += [("took", f'{float(row.get("seconds") or 0):.0f}s'),
+                  ("api calls", str(row.get("api_calls") or 0)),
+                  ("screens", str(len(row.get("screens") or [])))]
     body += ('<div class="panel"><table>'
              + "".join(f'<tr><td class="dim">{esc(k)}</td><td>{v}</td></tr>'
                        for k, v in facts) + "</table></div>")
@@ -315,11 +437,20 @@ def run_page(row: dict, user: dict, advice=None) -> str:
                  f'<p class="dim">Drawn from each page\'s own elements, the '
                  f'way a phone\'s journey draws them. An address in one is a '
                  f'stand-in: a run never writes a real one down.</p></div>')
+    elif running:
+        body += ('<div class="panel"><p class="empty">The screens it keeps '
+                 'appear here when it ends.</p></div>')
     else:
         body += ('<div class="panel"><p class="empty">No screen of this run '
                  'reached the store.</p></div>')
-    return page(f"Run {int(row['id'])}", body + "</div>", user=user,
-                here="/tasks")
+    return page(f"Run {int(row['id'])}",
+                f'<div class="narrow">'
+                f'<p><a class="dim" href="/tasks/{task}">&larr; {task}</a></p>'
+                f'<div data-live="run-head">{head}</div>'
+                f'<div data-live="run-view">{_viewer(row, watch)}</div>'
+                f'<div data-live="run-body">{body}</div></div>'
+                + (_TICK if running else ""),
+                user=user, here="/tasks", live="farm" if running else "")
 
 
 def may_run(user: dict, settings) -> bool:

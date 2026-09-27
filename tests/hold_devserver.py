@@ -337,6 +337,39 @@ def _tasks(monkeypatch):
 
     monkeypatch.setattr(task_read, "one", one)
 
+    # The cockpit: request 9001 is queued, 9002 was refused, 9003 is a
+    # run in its reading stage with a viewer framed beside it.
+    import time as _time
+    from datetime import datetime, timezone
+
+    running = {"id": 93, "task": "app_probe", "status": "running",
+               "ok": False, "reason": "", "blame": "", "detail": "",
+               "stage": "reading",
+               "live_url": "https://example.com/?w=336&token=dev",
+               "inputs": {"package": "com.openai.chatgpt"}, "serial": "4813",
+               "seconds": 0, "api_calls": 0, "trail": "", "folder": "",
+               "screens": [],
+               "started_at": datetime.fromtimestamp(_time.time() - 75,
+                                                    tz=timezone.utc)}
+    actions = {
+        9001: {"status": "running", "result": "queued",
+               "payload": {"task": "app_probe", "serial": "4435"}},
+        9002: {"status": "refused",
+               "result": "phone 3480 is taken - a task switches its phone "
+                         "off when it ends, so release it first",
+               "payload": {"task": "app_probe", "serial": "3480"}},
+        9003: {"status": "running", "result": "queued",
+               "payload": {"task": "app_probe", "serial": "4813"}}}
+
+    def request(settings, task, action_id):
+        action = actions.get(int(action_id))
+        if action is None or action["payload"]["task"] != task:
+            return None
+        return {"action": dict(action, verb="run_task"),
+                "run": dict(running) if int(action_id) == 9003 else None}
+
+    monkeypatch.setattr(task_read, "request", request)
+
 
 def _journey_4435(monkeypatch, app_mod):
     import json
