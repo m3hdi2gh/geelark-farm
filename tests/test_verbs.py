@@ -1865,6 +1865,37 @@ def _asked(book, payload):
     return status, said, asked
 
 
+def test_an_account_a_build_is_already_on_its_way_with_is_not_sent_twice():
+    """A `normal` Spotify account rides a bare build and is claimed only
+    when the build reaches it, minutes later - so it stayed free, kept
+    its `+ phone`, and a second press would have built a second phone
+    for the same account (the operator, 2026-09-27)."""
+    from unittest.mock import patch
+
+    import geelark_farm.store.wanted as wanted_mod
+
+    book = make_book(apps=1)
+    address = book.apps._rows[0].values["Address"]
+    asked = {}
+    with patch.object(wanted_mod, "on_its_way",
+                      lambda s, *a: address), \
+            patch.object(wanted_mod, "ask",
+                         lambda s, **k: asked.update(k) or 5):
+        status, said, _ = verbs.build_by_hand(
+            book, None, None,
+            {"by": "mehdi", "app": "chatgpt", "install_app": True,
+             "app_account": address}, None)
+    assert status == "refused", said
+    assert "already on its way" in said and address in said
+    assert asked == {}, "no second wish is written"
+
+
+def test_on_its_way_asks_no_store_it_was_not_given():
+    import geelark_farm.store.wanted as wanted_mod
+
+    assert wanted_mod.on_its_way(None, "a@x.com") == ""
+
+
 def test_an_eco_account_chosen_from_the_pool_can_actually_be_built_with():
     """It could not. The free check asked `available`, and `available`
     subtracts exactly the kinds the automatic claim holds back - every

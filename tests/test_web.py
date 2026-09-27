@@ -9250,6 +9250,70 @@ def test_the_pending_read_names_every_target_a_command_carries():
         "the first command a target waits on is the one drawn")
 
 
+def test_an_account_an_open_build_carries_reads_as_pending():
+    """The wish, not a command, is what carries a `normal` Spotify account
+    to its phone, and the account is claimed only when the build reaches
+    it - so it read as free, with its `+ phone`, for minutes after the
+    press (the operator, 2026-09-27)."""
+    from geelark_farm.web import read
+
+    class _S:
+        def _rows(self, sql, params=()):
+            if "wanted_builds" in sql:
+                assert "status IN ('queued', 'running')" in sql
+                return [{"app_account": "Kat@x.com", "gmail": ""},
+                        {"app_account": "", "gmail": "g@gmail.com"}]
+            return [{"verb": "boot_phone", "serial": "1504",
+                     "address": None, "name": None}]
+
+    got = read._pending(_S())
+    assert got == {"1504": "boot_phone", "Kat@x.com": "build_by_hand",
+                   "g@gmail.com": "build_by_hand"}
+
+
+def test_the_card_draws_an_account_on_its_way_pressed_and_counts_it_out():
+    """Still listed - it has not reached a phone yet - but with its door
+    shown pressed, saying what is happening; and the free counts and the
+    build card's pickers leave it out."""
+    import inspect
+
+    from geelark_farm.web import pages, read
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_login_accounts": True}
+    rows = [{"address": "kat@x.com", "state": "free", "category": "normal"},
+            {"address": "n@x.com", "state": "free", "category": "normal"}]
+    card = pages._pool_queue("spotify", rows, user, True,
+                             pending={"kat@x.com": "build_by_hand"})
+    kat = card[card.index("kat"):card.index("</li>", card.index("kat"))]
+    assert "Building a phone&hellip;" in kat and "+ phone" not in kat
+    other = card[card.index(">n<"):]
+    assert "+ phone" in other
+    assert pages._pending_word("build_by_hand") == "Building a phone"
+
+    source = inspect.getsource(read.dashboard)
+    assert source.count("_ON_ITS_WAY") >= 3, (
+        "the Spotify free count and both pickers leave it out")
+
+
+def test_the_manager_says_on_its_way_for_a_row_a_build_carries():
+    from geelark_farm.web import pages, read
+
+    class _S:
+        def _rows(self, sql, params=()):
+            if "AS going" in sql:
+                return [{"x": "kat@x.com"}]
+            if "status <> 'delivered'" in sql:
+                return [{"address": "Kat@x.com", "status": "", "error": None},
+                        {"address": "n@x.com", "status": "", "error": None}]
+            return []
+
+    rows = read._pool_rows(_S(), kinds=("spotify",))
+    states = {r["address"]: r["state"] for r in rows["spotify"]}
+    assert states == {"Kat@x.com": "on its way", "n@x.com": "free"}
+    assert pages._group_of("on its way") == "current"
+
+
 # ------------------------------------------- the sheet tells the truth
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_an_open_sheet_is_told_304_until_something_it_is_drawn_from_moves(
