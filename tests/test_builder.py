@@ -6986,6 +6986,55 @@ def test_a_bare_phone_whose_account_went_in_is_kept(device, settings,
     assert deleted == [] and build.phone_id == "PHONE1"
 
 
+def _dropped(typed: bool):
+    from geelark_farm.api import TransportError
+
+    exc = TransportError("/v1/shell/execute failed after 1 attempt(s): "
+                         "Read timed out. (read timeout=90.0)")
+    exc.secret_typed = typed
+    return exc
+
+
+def test_an_account_whose_password_went_in_before_the_line_dropped_is_held(
+        device, settings, monkeypatch):
+    """The password went in, the read-back hung, and the run filed it as
+    a lost connection: the account back in the pool as untouched and the
+    phone as empty, while the operator was watching it signed in (4667,
+    2026-09-27). Now the account is set aside naming the phone, the phone
+    says so, and a bare phone is not deleted with the session on it."""
+    book, want, deleted = _bare_spotify(monkeypatch, SIGNED_IN)
+    import geelark_farm.flows.spotify_login as spotify_login
+    monkeypatch.setattr(spotify_login, "sign_in",
+                        lambda *a, **k: (_ for _ in ()).throw(_dropped(True)))
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1, want=want)
+
+    assert build.status == "network_unreachable"
+    assert "a0@example.com" in build.detail
+    assert "may be signed in" in build.detail
+    assert deleted == [] and build.phone_id == "PHONE1", "kept, not deleted"
+    row = book.apps._rows[0]
+    assert book.apps.status_of(row) == builder.MAY_BE_SIGNED_IN
+    note = row.values[book.apps.note_column]
+    assert "622" in note and "may be signed in" in note
+    assert failures.knows(builder.MAY_BE_SIGNED_IN)
+
+
+def test_a_line_that_dropped_before_the_password_leaves_it_as_it_was(
+        device, settings, monkeypatch):
+    book, want, deleted = _bare_spotify(monkeypatch, SIGNED_IN)
+    import geelark_farm.flows.spotify_login as spotify_login
+    monkeypatch.setattr(spotify_login, "sign_in",
+                        lambda *a, **k: (_ for _ in ()).throw(_dropped(False)))
+
+    build = builder.build_one(None, settings, book, FakeLedger(), 1, want=want)
+
+    assert build.status == "network_unreachable"
+    assert deleted == ["PHONE1"], "nothing on it, so it goes as before"
+    row = book.apps._rows[0]
+    assert book.apps.status_of(row) in book.apps.available_statuses
+
+
 def test_a_set_aside_note_names_the_service_of_the_accounts_product():
     """The pool's `service` is OpenAI, and a Claude or Spotify account set
     aside was said to have been asked by OpenAI (the builder review,

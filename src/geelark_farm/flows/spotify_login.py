@@ -996,18 +996,21 @@ def sign_in(client: Client, phone_id: str, creds: Credentials, *,
                            f"this run's password")
         return None
 
-    out = router.drive(ctx, SCREENS, is_done=logged_in, watch=watch,
-                       budget_seconds=budget_seconds, logger=log)
-    if not out.ok:
-        return out
-    # The router proved a home screen. This proves whose it is.
-    failed = verify_account(ctx)
-    if failed is not None:
-        failed.trail = out.trail
-        return failed
-    return Outcome("success", "logged_in",
-                   f"the app's own account page names {creds.email}",
-                   artifacts=out.artifacts, trail=out.trail)
+    # Whether the secret had gone in, if GeeLark stops answering: the
+    # builder cannot tell otherwise (2026-09-27).
+    with router.saying_what_was_typed(ctx):
+        out = router.drive(ctx, SCREENS, is_done=logged_in, watch=watch,
+                           budget_seconds=budget_seconds, logger=log)
+        if not out.ok:
+            return out
+        # The router proved a home screen. This proves whose it is.
+        failed = verify_account(ctx)
+        if failed is not None:
+            failed.trail = out.trail
+            return failed
+        return Outcome("success", "logged_in",
+                       f"the app's own account page names {creds.email}",
+                       artifacts=out.artifacts, trail=out.trail)
 
 
 def sign_in_on_phone(client: Client, phone_id: str, creds: Credentials,

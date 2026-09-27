@@ -177,6 +177,11 @@ def owed_when_exhausted(reason: str) -> bool:
 #: 2026-09-23).
 WARM_FOR_OPERATOR = "warm_for_operator"
 
+#: The status an app account is set aside with when GeeLark stopped
+#: answering after its password or code had gone in: it may well be signed
+#: in on that phone, and nothing checked (phone 4667, 2026-09-27).
+MAY_BE_SIGNED_IN = "may_be_signed_in"
+
 VERDICTS: dict[str, Verdict] = {
     # -------------------------------------------------- google_login.py
     "phone_distrusted": Verdict(
@@ -680,6 +685,16 @@ VERDICTS: dict[str, Verdict] = {
         "GeeLark refused the swap, so the phone kept the exit it had and the "
         "build stopped rather than go on through an address that had already "
         "refused it. Nothing is wrong with the credentials."),
+    MAY_BE_SIGNED_IN: Verdict(
+        DEVICE, "GeeLark stopped answering after the account's password "
+        "went in, so it may be signed in on that phone",
+        "The sign-in got as far as the password (or the emailed code) and "
+        "then GeeLark sat on the read that would have confirmed it, so the "
+        "run ended as a lost connection with nothing checked. The account "
+        "is held rather than offered again, because it may already be on "
+        "that phone. Send it to the same phone again - that signs it in "
+        "afresh and records it - or look at the phone, then blank this "
+        "status."),
     "network_unreachable": Verdict(
         NOBODY, "this machine lost its connection",
         "The network went away mid-build - GeeLark, Google Sheets and Google's "

@@ -742,3 +742,36 @@ def test_the_outcome_counts_the_dumps_the_sign_in_took(device, tmp_path):
     out = drive(context(tmp_path), screens)
 
     assert out.reason == "in" and out.dumps == device.captures == 2
+
+
+# ------------------------------------- what was typed when the line dropped
+@pytest.mark.parametrize("module", ["spotify_login", "chatgpt_login",
+                                    "claude_login"])
+def test_a_drop_after_the_secret_says_the_secret_was_typed(module,
+                                                           monkeypatch):
+    """GeeLark stopped answering the read-back after a Spotify password
+    had gone in, and the account went back to the pool as untouched while
+    the operator watched it sign in (phone 4667, 2026-09-27). Every flow
+    now says, on the way out, whether it got that far."""
+    import importlib
+
+    from geelark_farm.accounts import Credentials
+    from geelark_farm.api import TransportError
+
+    flow = importlib.import_module(f"geelark_farm.flows.{module}")
+    monkeypatch.setattr(flow.shell, "package_installed", lambda *a, **k: True)
+    monkeypatch.setattr(flow, "launch", lambda *a, **k: True)
+    creds = Credentials(email="a@x.com", password="pw", totp_secret="")
+
+    for typed in (True, False):
+        def drive(ctx, *a, typed=typed, **k):
+            if typed:
+                ctx.submitted_password = True
+                ctx.submitted_code = True
+            raise TransportError("/v1/shell/execute failed after 1 "
+                                 "attempt(s): Read timed out")
+
+        monkeypatch.setattr(flow.router, "drive", drive)
+        with pytest.raises(TransportError) as caught:
+            flow.sign_in(None, "P", creds, package="app.pkg")
+        assert caught.value.secret_typed is typed, (module, typed)

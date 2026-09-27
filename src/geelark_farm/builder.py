@@ -85,7 +85,7 @@ from . import artifacts as archive
 # the code that uses it is in kit/exits and keeper now (2026-09-23).
 from . import proxy as proxy_mod  # noqa: F401
 from .accounts import Account
-from .api import Client
+from .api import Client, TransportError
 
 # What a build produced and how it is said - build_result since the
 # builder review (2026-09-23) - and the Phones tab it is written to
@@ -279,6 +279,7 @@ APP_ONLY = PhoneLog.APP_ONLY
 #: How a build ends when it stops warm on purpose - see
 #: failures.WARM_FOR_OPERATOR, which the breaker reads too.
 WARM_FOR_OPERATOR = failures.WARM_FOR_OPERATOR
+MAY_BE_SIGNED_IN = failures.MAY_BE_SIGNED_IN
 
 
 #: App-login reasons where the account was typed in and the phone took the
@@ -379,6 +380,11 @@ class _Session:
     #: "never got as far as using it" was written on three Spotify rows
     #: the service had just turned away (2026-09-26).
     stopped_on: str = ""
+    #: GeeLark stopped answering after this session's account had its
+    #: password or code typed in: it may be signed in on the phone, so it
+    #: is held rather than given back, and the phone is not deleted as
+    #: empty (phone 4667, 2026-09-27).
+    may_be_signed_in: bool = False
     #: Which service judged each account this phone tried, by address -
     #: the app pool holds two products now and its own `service` names
     #: one of them (2026-09-17).
@@ -530,32 +536,16 @@ def _sign_into_app(session: _Session) -> Build | None:
         source = _codes_for(s.settings, s.app_row, s.codes)
         log.info("signing into %s as %s", package,
                  s.app_row.credentials.email)
-        outcome = flow.sign_in(
-            s.client, s.phone_id, s.app_row.credentials,
-            package=package,
-            budget_seconds=min(s.settings.app_login_budget_seconds,
-                               s.remaining()),
-            artifact_dir=s.artifacts,
-            # Where a code the service emails is answered from -
-            # this account's own source, not the run's (see
-            # `_codes_for`). Nothing by default, which reports the page
-            # exactly as it always did.
-            codes=source,
-            # The solver, for the one app flow that meets a captcha:
-            # Spotify hands its challenge to Chrome, and reCAPTCHA asks
-            # for pictures there rather than taking the tick - five
-            # exits running (3644, 2026-09-19). Taken and ignored by the
-            # other two flows, exactly as `codes` above is by Spotify's.
-            solver_key=s.settings.capsolver_key,
-            # As above: a press on Cancel is felt at the next screen, not
-            # at the end of this login.
-            watch=s.check_cancelled,
-            # Every attempt after the first starts from a cleared app. The
-            # previous one left the app wherever it stopped, and the router
-            # matches whatever is on screen - so without this, one account's
-            # verification page is read as the next account's problem.
-            fresh=s.attempted > 0 or s.reset_first,
-        )
+        try:
+            outcome = _sign_in_flow(s, flow, package, source)
+        except TransportError as exc:
+            if getattr(exc, "secret_typed", False):
+                s.may_be_signed_in = True
+                log.warning("GeeLark stopped answering after %s's secret "
+                            "went in on phone %s; it may be signed in there "
+                            "and is held", s.app_row.credentials.email,
+                            s.build.serial)
+            raise
         s.attempted += 1
         # Each attempt appends its own, so a phone that worked through three
         # accounts leaves three paths rather than one path with the first two
@@ -627,6 +617,53 @@ def _sign_into_app(session: _Session) -> Build | None:
         s.condemned.append(condemned)
         s.judged[condemned] = outcome.reason
     return None
+
+
+def _sign_in_flow(s: _Session, flow, package: str, source):
+    """One app login on this session's phone, as the flow for the
+    account's product drives it. Apart from `_sign_into_app` so the
+    loop there can hold what a dropped line leaves behind (2026-09-27).
+    """
+    return flow.sign_in(
+        s.client, s.phone_id, s.app_row.credentials,
+        package=package,
+        budget_seconds=min(s.settings.app_login_budget_seconds,
+                           s.remaining()),
+        artifact_dir=s.artifacts,
+        # Where a code the service emails is answered from -
+        # this account's own source, not the run's (see
+        # `_codes_for`). Nothing by default, which reports the page
+        # exactly as it always did.
+        codes=source,
+        # The solver, for the one app flow that meets a captcha:
+        # Spotify hands its challenge to Chrome, and reCAPTCHA asks
+        # for pictures there rather than taking the tick - five
+        # exits running (3644, 2026-09-19). Taken and ignored by the
+        # other two flows, exactly as `codes` above is by Spotify's.
+        solver_key=s.settings.capsolver_key,
+        # As above: a press on Cancel is felt at the next screen, not
+        # at the end of this login.
+        watch=s.check_cancelled,
+        # Every attempt after the first starts from a cleared app. The
+        # previous one left the app wherever it stopped, and the router
+        # matches whatever is on screen - so without this, one account's
+        # verification page is read as the next account's problem.
+        fresh=s.attempted > 0 or s.reset_first,
+    )
+
+
+def _may_be_on_it(session: _Session | None, build: Build) -> Build:
+    """The phone's own sentence, when the line dropped after its account's
+    secret went in: "this machine lost its connection" alone left a phone
+    the operator had watched sign in reading as empty (4667, 2026-09-27)."""
+    if (session is not None and session.may_be_signed_in
+            and session.app_row is not None):
+        build.detail = (f"{build.detail.rstrip('.')}. "
+                        f"{session.app_row.credentials.email} may be signed "
+                        f"in on this phone - its password went in before "
+                        f"GeeLark stopped answering; the account is held. "
+                        f"Send it here again to sign it in and record it.")
+    return build
 
 
 def _chosen_refused_here(s: _Session) -> str:
@@ -1158,7 +1195,8 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 return ended
         return build
     except Exception as exc:                                      # noqa: BLE001
-        return _ended_by(exc, st.finish, settings, f"build {index}")
+        return _may_be_on_it(
+            st.session, _ended_by(exc, st.finish, settings, f"build {index}"))
     except BaseException:
         # Ctrl+C on the CLI's own run: the run's shutdown, filed as one, so
         # the empty phone is kept rather than deleted (KEPT_WHEN_EMPTY) -
@@ -1723,8 +1761,12 @@ def _let_the_build_go(st: _BuildState) -> None:
     # phone exists for that account, and nothing can be sent to it
     # after - a `normal` Spotify only goes on a new bare phone. Three
     # such sends left three Incomplete phones (the operator, 2026-09-26).
+    # Nor one GeeLark stopped answering after the account's password went
+    # in: the session may be on it (4667, 2026-09-27).
     carried = bool(st.bare and st.want is not None and st.want.app_account
-                   and not (session is not None and session.app_signed_in))
+                   and not (session is not None
+                            and (session.app_signed_in
+                                 or session.may_be_signed_in)))
     empty = bool(st.phone_id and not st.gmail_signed_in
                  and (carried or not st.bare)
                  and build.status not in KEPT_WHEN_EMPTY
@@ -1925,7 +1967,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         return finish("ready", "signed into Google and into the app", ok=True)
 
     except Exception as exc:                                      # noqa: BLE001
-        return _ended_by(exc, finish, settings, f"finishing {build.serial}")
+        return _may_be_on_it(
+            session, _ended_by(exc, finish, settings,
+                               f"finishing {build.serial}"))
     except BaseException:
         # As in build_one: Ctrl+C on the CLI's own run, filed as the
         # shutdown it is rather than left on whatever word it had reached.
@@ -2035,6 +2079,16 @@ def _session_holds(book: Book, session: _Session | None, *,
     app: tuple = (book.apps, session.app_row,
                   SPEND if session.app_signed_in else RELEASE, "", "")
     if (session.app_row is not None and not session.app_signed_in
+            and getattr(session, "may_be_signed_in", False)):
+        # First, because it is the one where giving the account back is
+        # wrong: it may be signed in on this phone (4667, 2026-09-27).
+        said = failures.verdict(MAY_BE_SIGNED_IN,
+                                _service_of(session.app_row)).seen
+        app = (book.apps, session.app_row, SET_ASIDE,
+               f"On {today} on phone {session.build.serial}: {said}. Send "
+               f"it to phone {session.build.serial} again, or look at that "
+               f"phone, then blank this status.", MAY_BE_SIGNED_IN)
+    elif (session.app_row is not None and not session.app_signed_in
             and session.suspect_reason):
         app = _suspected(book, session)
     elif (session.app_row is not None and not session.app_signed_in
