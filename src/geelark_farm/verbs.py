@@ -1296,6 +1296,48 @@ def remove_delivered_apps(book, ledger, settings, payload, client):
             {"removed": removed})
 
 
+#: The Gmail rows no group verb may touch: free, set aside by hand, or on
+#: a phone - the manager's `current` chip (pages._group_of).
+_GMAIL_CURRENT = frozenset({"", "free", "in_use", "ready", "set_aside",
+                            "set aside"})
+
+
+def _gmail_group(book, resource) -> str:
+    """Which of the manager's chips a Gmail row is under, read the way
+    the manager reads it (web.read._pool_state, pages._group_of): an
+    unreadable row is errored whatever its status says."""
+    if resource.error:
+        return "errored"
+    status = book.gmails.status_of(resource)
+    if status == book.gmails.retired_status:
+        return "spent"
+    return "current" if status in _GMAIL_CURRENT else "errored"
+
+
+def remove_gmail_group(book, ledger, settings, payload, client):
+    """Every Gmail under one of the manager's chips - `spent` or
+    `errored` - out of the pool and into the archive, in one press (the
+    operator, 2026-09-28). What `remove_gmail` does to one row, row by
+    row; `current` is never a choice, so a free row, one set aside by
+    hand, or one on a phone cannot be reached from here."""
+    group = str(payload.get("group") or "").strip().lower()
+    if group not in ("spent", "errored"):
+        return ("refused", f"{group or '?'} is not a group Remove all takes",
+                None)
+    removed = []
+    for resource in list(book.gmails._rows):
+        if _gmail_group(book, resource) != group:
+            continue
+        book.gmails.delete_row(resource, by=_by(payload))
+        removed.append(str((resource.values or {}).get("Address") or ""))
+    if not removed:
+        return "done", f"no {group} Gmail to remove", {"removed": []}
+    what = f"{group} Gmail" + ("" if len(removed) == 1 else "s")
+    return ("done", f"{len(removed)} {what} removed from the pool by "
+                    f"{_by(payload)} - archived, not deleted",
+            {"removed": removed})
+
+
 def _panel_row(settings, ref: str):
     """The row the panel named, read from the store.
 
@@ -1915,6 +1957,7 @@ VERBS = {
     "edit_app": edit_app,
     "remove_app": remove_app,
     "remove_delivered_apps": remove_delivered_apps,
+    "remove_gmail_group": remove_gmail_group,
     "free_gmail": free_gmail,
     "refund_gmail": refund_gmail,
     "free_app": free_app,
