@@ -624,3 +624,46 @@ test("a Save in the editor is answered with its row, not the whole sheet",
   assert.equal(win.__fetches.filter((f) => /\/sheet/.test(f.url)).length, 0,
                'the whole sheet was fetched again');
 });
+
+test('an open sheet takes its doors and its cap line along with its rows',
+     async () => {
+  // Remove all spent took all 1523 rows, and the open sheet swapped its
+  // rows and its chip counts - spent 0 - while the door beside the chips
+  // went on offering "Remove all · 1522" and the line under them said
+  // "300 of 1522" (the operator, 2026-09-28). The doors that answer a
+  // whole group, and the cap line, are the sheet's counts too.
+  const door = (n, hidden) =>
+    `<form method="post" action="/pools/gmail/remove-group" class="inline"`
+    + ` data-for-group="spent"${hidden ? ' hidden' : ''}>`
+    + `<input type="hidden" name="n" value="${n}">`
+    + `<button>Remove all · ${n}</button></form>`;
+  const cap = (n) => n ? `<p class="dim capped">300 of ${n}</p>` : '';
+  const sheetWith = (n, hidden) =>
+    '<section class="sheet" data-sheet="gmail"><div class="sheetbody">'
+    + '<div class="filters"><span class="chips">'
+    + '<button type="button" class="pill" data-group="spent"'
+    + ' aria-pressed="true">spent<b>' + n + '</b></button></span>'
+    + door(n, hidden) + '</div>' + cap(n)
+    + '<div class="tscroll"><table><tbody>'
+    + '<tr class="none" hidden><td>none</td></tr></tbody></table></div>'
+    + '</div></section>';
+  const win = consoleIn(
+    '<div class="ov" id="poolov" hidden>' + sheetWith(1522, false) + '</div>'
+    + '<button data-pool="gmail">Manage</button>',
+    {answer: () => ({status: 200, headers: {ETag: 'W/"b"'},
+                     body: sheetWith(0, true)})});
+  const doc = win.document;
+  const sheet = doc.querySelector('.sheet[data-sheet="gmail"]');
+  sheet.dataset.etag = 'W/"a"';
+
+  fire(doc.querySelector('[data-pool=gmail]'), 'click');
+  await settle();
+
+  const now = sheet.querySelector('form[data-for-group="spent"]');
+  assert.match(now.textContent, /Remove all · 0/);
+  assert.equal(now.querySelector('input[name=n]').value, '0');
+  assert.equal(now.hidden, false,
+               'the chip the person is looking at keeps its door showing');
+  assert.equal(sheet.querySelector('.capped'), null,
+               'a cap line for rows that are gone goes with them');
+});

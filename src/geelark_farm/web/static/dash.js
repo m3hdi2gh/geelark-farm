@@ -1366,6 +1366,29 @@
     mine.querySelectorAll('.filters .pill b').forEach(function(b, i){
       if (counts[i]) b.textContent = counts[i].textContent;
     });
+    // The doors that answer a whole group carry counts too, and so does
+    // the cap line: Remove all spent emptied the list and the door went
+    // on saying "Remove all · 1522" (the operator, 2026-09-28). Each is
+    // replaced by its fresh twin - same action, same group - keeping
+    // whether the chip in front of it has it showing.
+    mine.querySelectorAll('.filters form[data-for-group]').forEach(function(f){
+      var twin = null;
+      theirs.querySelectorAll('.filters form[data-for-group]').forEach(function(t){
+        if (t.getAttribute('action') === f.getAttribute('action')
+            && t.dataset.forGroup === f.dataset.forGroup) twin = t;
+      });
+      if (!twin || twin.outerHTML === f.outerHTML) return;
+      twin.hidden = f.hidden;
+      f.replaceWith(twin);
+    });
+    var cap = mine.querySelector('.capped');
+    var freshCap = theirs.querySelector('.capped');
+    if (cap && freshCap) cap.replaceWith(freshCap);
+    else if (cap) cap.remove();
+    else if (freshCap) {
+      var scroll = mine.querySelector('.tscroll');
+      if (scroll) scroll.parentNode.insertBefore(freshCap, scroll);
+    }
   }
 
   // 3. One row changed, so one row is replaced - not the page under it.
