@@ -541,7 +541,7 @@ def _sign_into_app(session: _Session) -> Build | None:
         except TransportError as exc:
             if getattr(exc, "secret_typed", False):
                 s.may_be_signed_in = True
-                log.warning("GeeLark stopped answering after %s's secret "
+                log.warning("the cloud stopped answering after %s's secret "
                             "went in on phone %s; it may be signed in there "
                             "and is held", s.app_row.credentials.email,
                             s.build.serial)
@@ -2685,7 +2685,8 @@ def _stop_all(client: Client, phone_ids: set[str], ledger: Ledger) -> None:
             ledger.release(phone_id, note="stopped by interrupt cleanup")
             print(f"  stopped {phone_id}", flush=True)
         except Exception as exc:                                  # noqa: BLE001
-            log.error("COULD NOT STOP %s (%s) - run 'geelark reap' now",
+            log.error("COULD NOT STOP %s (%s) - it is still running and "
+                      "billing; the keeper's next sync settles it",
                       phone_id, exc)
 
 

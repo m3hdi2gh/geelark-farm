@@ -212,22 +212,22 @@ def begin(client: Client, phone_id: str, package: str, *, name: str,
         version = version_id(client, phone_id, package, name=name,
                              settings=settings)
         if not version:
-            log.info("GeeLark's app center has no %s; Play installs it", name)
+            log.info("the cloud's app center has no %s; Play installs it", name)
             return False
         reply = client.post(INSTALL, {"envId": phone_id,
                                       "appVersionId": version}, strict=False)
     except Exception as exc:                                       # noqa: BLE001
-        log.warning("GeeLark's installer could not be asked for %s (%s); "
+        log.warning("the cloud installer could not be asked for %s (%s); "
                     "Play installs it", name, exc)
         return False
     code = reply.get("code")
     if code in (0, ALREADY_INSTALLING):
-        log.info("GeeLark is installing %s (%s) in the background", name,
+        log.info("the cloud installer is putting %s (%s) on in the background", name,
                  version)
         return True
     if code == NO_SUCH_VERSION:
         forget(package)
-    log.warning("GeeLark refused to install %s: [%s] %s; Play installs it",
+    log.warning("the cloud installer refused %s: [%s] %s; Play installs it",
                 name, code, reply.get("msg"))
     return False
 

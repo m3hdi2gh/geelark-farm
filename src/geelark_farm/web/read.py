@@ -782,6 +782,10 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
     #
     # A serial whose build has said nothing yet returns nothing, and
     # `_progress` falls through to a dim "starting", which is the truth.
+    #
+    # The live-view line is left out: it carries the viewer's own address,
+    # which names the vendor, and it is a link for `_live_links` to read,
+    # not a sentence for the row (2026-09-28).
     lines = store._rows(
         "SELECT l.serial, l.logger, l.msg, l.at, l.run, p.created_at AS started"
         " FROM logs l"
@@ -790,7 +794,9 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
         " WHERE l.serial = ANY(%s)"
         "   AND l.id = (SELECT max(m.id) FROM logs m"
         "               WHERE m.serial = l.serial"
-        "                 AND m.at >= p.created_at)", (list(serials),))
+        "                 AND m.at >= p.created_at"
+        "                 AND m.msg NOT LIKE 'watch it live: %%')",
+        (list(serials),))
     return {str(r["serial"]): r for r in lines}
 
 

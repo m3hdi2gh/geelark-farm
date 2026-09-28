@@ -5161,6 +5161,10 @@ def test_the_building_row_reads_the_run_that_is_holding_the_phone():
     assert "p.created_at AS started" in sql, (
         "and how long it has been going, from the row's own start rather "
         "than from the first line of whatever ran last")
+    # The live-view line carries the viewer's own address, which names
+    # the vendor; it is a link for _live_links, never the row's sentence
+    # (2026-09-28).
+    assert "m.msg NOT LIKE 'watch it live: %%'" in sql
 
 
 def test_the_page_starts_at_the_top_and_stays_there():
@@ -5866,8 +5870,9 @@ def test_nothing_a_person_reads_names_the_vendor():
     import re
     import tokenize
 
-    from geelark_farm import api, failures, forgotten, keeper, rows, verbs
-    from geelark_farm.kit import exits, install
+    from geelark_farm import (api, apps, failures, forgotten, keeper, rows,
+                              verbs)
+    from geelark_farm.kit import exits, install, phone
     from geelark_farm.web import api_v1, journey, live, pages, read, task_pages
 
     allowed = re.compile(
@@ -5877,7 +5882,8 @@ def test_nothing_a_person_reads_names_the_vendor():
         re.I)
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
-                   failures, api, rows, exits, install, forgotten, keeper):
+                   failures, api, rows, exits, install, phone, forgotten,
+                   keeper, apps):
         src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
         for i, tok in enumerate(toks):

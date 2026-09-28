@@ -176,7 +176,7 @@ def _ended_by(exc: Exception, finish, settings: Settings, what: str) -> Build:
         # Before `PhoneError`, because it is one. GeeLark had no machine of
         # this Android version free, which says nothing about this phone, this
         # account or this row - and `start` has already asked several times.
-        log.warning("no capacity at GeeLark: %s", exc)
+        log.warning("no capacity at the cloud: %s", exc)
         return finish("no_capacity", failures.situation("no_capacity"))
     if isinstance(exc, phones.PhoneError):
         # Expected, and named. It used to reach the catch-all below and be
@@ -210,7 +210,8 @@ def _let_the_phone_go(client: Client, settings: Settings, ledger: Ledger,
             log.info("stopped %s", phone_id)
         except Exception as exc:                                  # noqa: BLE001
             build.still_running = True
-            log.error("COULD NOT STOP %s (%s) - run 'geelark reap'",
+            log.error("COULD NOT STOP %s (%s) - it is still running and "
+                      "billing; the keeper's next sync settles it",
                       phone_id, exc)
         ledger.release(phone_id, note=build.status)
     # Last, so the row says Stopping until there is nothing left to stop.
