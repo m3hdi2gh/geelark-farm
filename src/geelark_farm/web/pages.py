@@ -3831,10 +3831,16 @@ def viewer_page(serial: str, user: dict, url: str,
         "show();"
         # GeeLark's own title bar is cropped off the top - the frame moves
         # up by its height - and ours stands above the box instead.
+        # Stacked (a narrow window, or a phone): the screen keeps its
+        # size - the width is the only limit - and the margin scrolls
+        # under it. Fitting the height as well shrank the phone to a
+        # thumbnail the moment the window was narrowed (the operator,
+        # 2026-09-29).
+        "var stacked=window.matchMedia('(max-width:820px)');"
         "function fit(){"
         " var h=stage.clientHeight||window.innerHeight,"
         "     w=stage.clientWidth||window.innerWidth;"
-        " var k=Math.min(h/BOX_H,w/BOX_W);"
+        " var k=stacked.matches?Math.min(1,w/BOX_W):Math.min(h/BOX_H,w/BOX_W);"
         " box.style.width=Math.floor(BOX_W*k)+'px';"
         " box.style.height=Math.floor((BOX_H-BAR)*k)+'px';"
         # Exactly the room GeeLark's own bar had, scaled with it: a fixed
@@ -3979,8 +3985,12 @@ def viewer_page(serial: str, user: dict, url: str,
         'margin-top:6px;overflow:hidden}'
         '.gf-bar i{display:block;height:100%;background:var(--ok,#3c9)}'
         '.gf-chip{margin:0 0 12px}'
-        '@media (max-width:820px){#gf-wrap{flex-direction:column}'
-        '#gf-side{width:auto;border-left:0;border-top:1px solid var(--line)}}'
+        # Stacked: the page scrolls, the screen stays its size.
+        '@media (max-width:820px){html,body{overflow:auto}'
+        '#gf-wrap{position:static;flex-direction:column;min-height:100vh}'
+        '#gf-stage{flex:none;overflow:visible;justify-content:center}'
+        '#gf-side{width:auto;flex:none;overflow:visible;border-left:0;'
+        'border-top:1px solid var(--line)}}'
         '</style>'
         f'<div id="gf-wrap"><div id="gf-stage"><div id="gf-col">'
         f'<header id="gf-brand">{BRAND_MARK}<b>IranSpoty</b>'

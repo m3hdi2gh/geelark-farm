@@ -2680,7 +2680,12 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     # One fixed width for the viewer, and its box scaled to the window:
     # the phone fits any monitor, Back and Home included (2026-09-16).
     assert "u.searchParams.set('w',String(W))" in body
-    assert "var k=Math.min(h/BOX_H,w/BOX_W);" in body
+    assert "Math.min(h/BOX_H,w/BOX_W)" in body
+    # Stacked under 820px, the screen keeps its size - width is the only
+    # limit - and the margin scrolls under it (the operator, 2026-09-29).
+    assert "stacked.matches?Math.min(1,w/BOX_W)" in body
+    assert "@media (max-width:820px){html,body{overflow:auto}" in body
+    assert "#gf-wrap{position:static;flex-direction:column" in body
     # Our bar takes exactly the room GeeLark's had (2026-09-28).
     assert "brand.style.height=Math.round(BAR*k)+'px';" in body
     assert ("frame.style.transform='translateY('+(-BAR*k)+'px) "
