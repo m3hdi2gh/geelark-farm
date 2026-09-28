@@ -18,6 +18,7 @@ import logging
 import re
 import time
 
+from . import pools
 from . import proxy as proxy_mod
 from .api import ApiError
 
@@ -131,9 +132,10 @@ def build_by_hand(book, ledger, settings, payload, client):
 
     who = _by(payload)
     gmail = (payload.get("gmail") or "").strip()
-    # The exit is not the card's to choose any more: the build picks one
-    # and swaps it whenever an install or a sign-in shows it is bad. The
-    # panel API may still name one, and a named one is honoured.
+    # The exit: blank means auto - the build picks one and swaps it
+    # whenever an install or a sign-in shows it is bad. The card's dialog
+    # (back 2026-09-28) and the panel API may name one, and a named free
+    # one is honoured; a typed proxy string joins the pool first (below).
     proxy_name = (payload.get("proxy_name") or "").strip()
     # A bare phone: no Google account, and so no app and no account.
     no_gmail = bool(payload.get("no_gmail"))
@@ -249,6 +251,17 @@ def build_by_hand(book, ledger, settings, payload, client):
                     f"that account was not usable - {refused}", None)
         book.reload()
 
+    # A typed exit (the card's dialog, 2026-09-28): validated and put in
+    # the pool the way a pasted one is - named as typed, or given the next
+    # name - and the wish names that row. One the pool already holds by
+    # host:port is that row, not a second copy of it.
+    if proxy_name and payload.get("proxy_typed"):
+        proxy_name, refused = _typed_exit(
+            book, ledger, settings, payload, proxy_name,
+            str(payload.get("proxy_label") or "").strip())
+        if refused:
+            return "refused", f"that exit was not usable - {refused}", None
+
     # A blank box is not a refusal, it is the word the box itself shows:
     # "auto". `builder.build_one` claims the next free row when the wish
     # names none, and the form says so out loud - so refusing it here made
@@ -262,8 +275,7 @@ def build_by_hand(book, ledger, settings, payload, client):
         # the row has to be free, not merely present. It said only "is not
         # in the Gmails tab", so a spent address was accepted here and
         # refused half an hour later where nobody was looking.
-        free = any((r.label or "").strip().lower() == name.strip().lower()
-                   for r in pool.available)
+        free = any(pools.is_called(r, name) for r in pool.available)
         if not free:
             return ("refused",
                     f"the {what} {name} is not free - it is already on a "
@@ -538,6 +550,37 @@ def _next_name(book) -> str:
         if hit:
             highest = max(highest, int(hit.group(1)))
     return f"SX{highest + 1}"
+
+
+def _typed_exit(book, ledger, settings, payload, raw: str,
+                label: str) -> tuple[str, str]:
+    """The pool row a typed proxy string stands for: the one already
+    there by host:port, else the one `add_proxies` makes of it. Returns
+    (name, "") or ("", why not).
+
+    Untested on arrival, on purpose: `build_by_hand` answers inside the
+    request that pressed Build (`runs_inline`), and a proxy test is
+    seconds of somebody else's network. The build itself is the test - a
+    dead exit fails the phone the way any dead exit does, and the Exits
+    page can test it by hand."""
+    from .store import validate
+
+    try:
+        checked = validate.proxy_row(raw=raw, name=label)
+    except (validate.AccountError, validate.ProxyError) as exc:
+        return "", str(exc)
+    have = book.proxies.find_proxy(f"{checked['host']}:{checked['port']}")
+    if have is not None:
+        return have.name, ""
+    status, said, detail = add_proxies(
+        book, ledger, settings,
+        dict(payload, rows=[{"raw": raw, "name": label}]), None)
+    added = (detail or {}).get("added") or []
+    if not added:
+        why = ((detail or {}).get("refused") or [said])[0]
+        return "", str(why)
+    book.reload()
+    return str(added[0]), ""
 
 
 def add_proxies(book, ledger, settings, payload, client):

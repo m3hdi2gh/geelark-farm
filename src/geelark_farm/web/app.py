@@ -534,13 +534,21 @@ class _Handler(BaseHTTPRequestHandler):
                 account = (field.get("app_account") or "").strip()
                 if not which:
                     account = ""
+                # The exit box (back 2026-09-28): a pool row's name when
+                # picked, a proxy string when typed. A name never holds a
+                # colon and a proxy string always does, which is a surer
+                # tell than the pool's host:port list for a value that is
+                # either a name or a whole URL.
+                exit_ = (field.get("proxy_name") or "").strip()
                 payload = {
                     "gmail": gmail,
                     "no_gmail": no_gmail,
                     "gmail_typed": bool(gmail) and self._is_new("gmail", gmail),
                     "gmail_password": field.get("gmail_password") or "",
                     "gmail_secret": field.get("gmail_secret") or "",
-                    "proxy_name": (field.get("proxy_name") or "").strip(),
+                    "proxy_name": exit_,
+                    "proxy_typed": ":" in exit_,
+                    "proxy_label": (field.get("proxy_label") or "").strip(),
                     "app": which,
                     "install_app": bool(which),
                     "app_account": account,

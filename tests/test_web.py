@@ -3695,9 +3695,11 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert 'action="/phones/build"' in body
     assert "pick@example.com" in body, "a free Gmail is offered in the dialog"
     assert "gpt@example.com" in body, "a free account too"
-    assert "SX9" not in body, "the exit is the build's business now"
-    assert 'name="proxy_name"' not in body
-    assert "auto &mdash; the next free one" in body, "blank means the pool decides"
+    assert '<input type="radio" name="pick-proxy-new" value="SX9"> SX9' in body, (
+        "a free exit is offered in the exit dialog (back 2026-09-28)")
+    assert '<select name="proxy_name" data-new="proxy-new"' in body
+    assert body.count("auto &mdash; the next free one") == 2, (
+        "blank means the pool decides - the Gmail and the exit")
     assert 'value="none">none &mdash; no Google account' in body
     assert 'select name="app"' not in body, "which app is not a choice"
     assert "ChatGPT, Spotify and Claude already on it" in body
@@ -3712,7 +3714,8 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert got["verb"] == "build_by_hand"
     assert got["payload"]["gmail"] == "pick@example.com"
     assert got["payload"]["no_gmail"] is False
-    assert got["payload"]["proxy_name"] == "SX9", "the API may still name one"
+    assert got["payload"]["proxy_name"] == "SX9", "picked by name"
+    assert got["payload"]["proxy_typed"] is False
     assert got["payload"]["app"] == "chatgpt"
     assert got["payload"]["install_app"] is True
     assert got["payload"]["app_account"] == "gpt@example.com"
@@ -3828,18 +3831,20 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
 
-    # Two choices, each a select - the exit is the build's own business,
-    # and so is which app (the operator, 2026-09-12): the Gmail (auto,
-    # none, or "choose...", which opens a dialog to type one or pick a
-    # free one) and the account.
+    # Three choices, each a select: the Gmail (auto, none, or
+    # "choose...", which opens a dialog to type one or pick a free one),
+    # the account, and - back since 2026-09-28, the operator's ask - the
+    # exit: auto by default, or "choose..." for a dialog to type one or
+    # pick a free one. Which app is still nobody's choice (2026-09-12).
     card = body[body.index('class="byhand"'):body.index("Build</button>")]
-    for name in ("gmail", "account_kind", "app_account"):
+    for name in ("gmail", "account_kind", "app_account", "proxy_name"):
         assert f'<select name="{name}"' in card, name
     assert '<select name="app"' not in card, "every phone carries all three"
-    assert 'name="proxy_name"' not in card, "an exit is never chosen here"
     assert 'name="gmail" data-new="gmail-new"' in card
     assert 'name="app_account" data-new="account-new"' in card
-    assert card.count("choose&hellip;</option>") == 2
+    assert 'name="proxy_name" data-new="proxy-new"' in card
+    assert card.count("choose&hellip;</option>") == 3
+    assert card.index('name="app_account"') < card.index('name="proxy_name"')
     assert "type a new one" not in card
     assert '<option value="">auto &mdash; the next free one (1 free)</option>' in card
     assert '<option value="none">none &mdash; no Google account</option>' in card
@@ -3854,15 +3859,21 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert 'name="install_app"' not in card, "the tick is long gone"
     assert '<optgroup label="pick one">' not in card, (
         "the free rows moved into the dialog")
-    assert "Exit:" not in body, "nothing about the exit at all (the operator)"
-    for ident in ("gmail-new", "account-new"):
+    for ident in ("gmail-new", "account-new", "proxy-new"):
         assert f'<dialog class="editor" id="{ident}"' in body, ident
+    # The exit's own dialog: the proxy string and a name to type, or one
+    # of the free exits to pick.
+    pdlg = body[body.index('id="proxy-new"'):]
+    pdlg = pdlg[:pdlg.index("</dialog>")]
+    assert 'data-field="proxy_address"' in pdlg and 'data-field="proxy_label"' in pdlg
+    assert '<input type="radio" name="pick-proxy-new" value="SX1"> SX1' in pdlg
+    assert '<input type="hidden" name="proxy_label" value="">' in body
     # The dialog: the boxes, then the free rows to pick from.
     gdlg = body[body.index('id="gmail-new"'):body.index('id="account-new"')]
     assert 'data-field="gmail_secret"' in gdlg
     assert "Authenticator key" in gdlg and "empty = the account has none" in gdlg
     assert '<input type="radio" name="pick-gmail-new" value="a@x.com"> a@x.com' in gdlg
-    adlg = body[body.index('id="account-new"'):]
+    adlg = body[body.index('id="account-new"'):body.index('id="proxy-new"')]
     assert 'data-field="app_secret"' in adlg
     assert ('<input type="radio" name="pick-account-new" value="g@x.com"> '
             'g@x.com') in adlg
@@ -3876,6 +3887,37 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert 'select[name="app"]' not in script, "there is no App box to gate"
     assert "function openNew(pick, was)" in script
     assert "' (from the pool)'" in script, "a picked row says where it came from"
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_a_typed_exit_is_told_apart_from_a_picked_one(web, monkeypatch):
+    """The exit box carries either a pool row's name (picked in the
+    dialog) or a proxy string somebody typed. A name never holds a colon;
+    a proxy string always does - so the route says which it was, and
+    the verb adds a typed one to the pool before the build claims it
+    (the operator, 2026-09-28)."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 91)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="", account_kind="",
+                         proxy_name="US7", proxy_label=""))
+    assert got[-1]["payload"]["proxy_name"] == "US7"
+    assert got[-1]["payload"]["proxy_typed"] is False
+
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="", account_kind="",
+                         proxy_name="socks5://u:p@10.0.0.9:1080",
+                         proxy_label="US99"))
+    assert got[-1]["payload"]["proxy_name"] == "socks5://u:p@10.0.0.9:1080"
+    assert got[-1]["payload"]["proxy_typed"] is True
+    assert got[-1]["payload"]["proxy_label"] == "US99"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -4870,7 +4912,8 @@ def test_the_gpt_box_stops_promising_none():
     assert '<select name="account_kind"' in card
     assert 'none &mdash; sign in later' in card, (
         "an account only when one is chosen (2026-09-08)")
-    assert pages.NEXT_FREE not in card
+    kinds = card[card.index('name="account_kind"'):card.index('name="proxy_name"')]
+    assert pages.NEXT_FREE not in kinds, "the exit box says it; this one never"
     assert 'name="app_secret"' in card, "a typed account needs its key"
 
 

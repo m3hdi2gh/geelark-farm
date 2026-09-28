@@ -195,7 +195,7 @@ from .phones import _create_kept as _create_kept
 from .phones import _in_the_farms_group as _in_the_farms_group
 from .phones import _live_exits as _live_exits
 from .phones import _remember_refusal as _remember_refusal
-from .pools import Book, PhoneLog, Pool, Resource
+from .pools import Book, PhoneLog, Pool, Resource, is_called
 from .rows import _condemn as _condemn
 from .rows import _count_try as _count_try
 from .rows import _note_on_row as _note_on_row
@@ -1056,9 +1056,8 @@ def _pick(pool, wanted: str, what: str):
     this one, and quietly building with another is the kind of help nobody
     asked for - it spends the wrong Gmail and reads as success.
     """
-    want = wanted.strip().lower()
     for resource in pool.available:
-        if (resource.label or "").strip().lower() == want:
+        if is_called(resource, wanted):
             if pool.claim_this(resource):
                 return resource
             raise Aborted(f"the {what} {wanted} was taken while this was "

@@ -7363,3 +7363,22 @@ def test_a_chosen_account_the_service_only_challenged_is_said_to_go_back(
 
     assert build.status == "chosen_app_refused", build.detail
     assert "It goes back to the pool untouched" in build.detail
+
+
+def test_a_named_exit_is_found_by_its_name():
+    """The row somebody named in the build card or the panel API is the
+    exit called SX9, whose label is "SX9 (socks5://...)" - matching the
+    label alone never found a named exit and every such build was refused
+    as "not free in the tab" (2026-09-28). A Gmail is still found by its
+    address, which is its label."""
+    book = make_book(gmails=1, proxies=2)
+    book.proxies._rows[1].values["Name"] = "SX9"
+    picked = builder._pick(book.proxies, "sx9", "exit")
+    assert picked is book.proxies._rows[1]
+    assert book.proxies.status_of(picked) == "claimed"
+    gmail = builder._pick(book.gmails, "g0@example.com", "Gmail")
+    assert gmail is book.gmails._rows[0]
+    with pytest.raises(builder.Aborted, match="SX9 is not free in the tab"):
+        builder._pick(book.proxies, "SX9", "exit")
+    with pytest.raises(builder.Aborted, match="not there at all"):
+        builder._pick(book.proxies, "SX8", "exit")

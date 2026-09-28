@@ -2806,6 +2806,7 @@ def _build_card(data: dict, user: dict) -> str:
                  "for here is still built.")
     gmails = _label_list(choose.get("gmails"))
     apps = _label_list(choose.get("apps"))
+    proxies = _label_list(choose.get("proxies"))
     account_kinds = _account_kinds(choose.get("apps"))
     # Two boxes. The exit is not one of them: the build picks one and
     # swaps it whenever an install or a sign-in shows it is bad - a
@@ -2856,18 +2857,30 @@ def _build_card(data: dict, user: dict) -> str:
                    f' data-rows="{esc(_account_rows_json(choose.get("apps")))}">'
                    '<option value="__new__">choose&hellip;</option>'
                    '</select></label>')
+    # The exit, back by the operator's ask (2026-09-28): auto - the build
+    # picks one and still swaps it when an install or a sign-in shows it
+    # is bad - or "choose...", a dialog to type a proxy string (it joins
+    # the pool, untested until the build) or pick a free exit by name.
+    # The value is a name when picked and a proxy string when typed; the
+    # route tells them apart by the colon a name never carries.
+    exit_box = (f'<label class="field"><span>Exit</span>'
+                f'<select name="proxy_name" data-new="proxy-new">'
+                f'<option value="">auto &mdash; the next free one '
+                f'({exits} free)</option>'
+                f'<option value="__new__">choose&hellip;</option>'
+                f'</select></label>')
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        + gmail_box + kind_box + account_box
+        + gmail_box + kind_box + account_box + exit_box
         + '<button class="go">Build</button>'
-        # What the two dialogs typed rides here; the address itself is the
-        # choice's value.
+        # What the three dialogs typed rides here; the address itself is
+        # the choice's value.
         + "".join(f'<input type="hidden" name="{name}" value="">'
                   for name in ("gmail_password", "gmail_secret",
-                               "app_password", "app_secret"))
+                               "app_password", "app_secret", "proxy_label"))
         + '</form>'
         + _new_dialog("gmail-new", "Choose a Gmail", [
             ("gmail_address", "Address", ""),
@@ -2878,6 +2891,11 @@ def _build_card(data: dict, user: dict) -> str:
             ("app_address", "Address", ""),
             ("app_password", "Password", ""),
             ("app_secret", "2FA secret", "optional")], rows=apps)
+        + _new_dialog("proxy-new", "Choose an exit", [
+            ("proxy_address", "Proxy",
+             "socks5://user:pass@host:port, or host:port:user:pass"),
+            ("proxy_label", "Name", "optional - the next SX number if empty")],
+            rows=proxies)
         # The dialog's rows are the free ones of the chosen kind, swapped
         # in by the script; `rows=apps` above is what it starts with.
         + '</div>')

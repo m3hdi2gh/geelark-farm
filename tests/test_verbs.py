@@ -1903,6 +1903,52 @@ def _asked(book, payload):
     return status, said, asked
 
 
+def test_a_typed_exit_joins_the_pool_and_the_wish_names_it():
+    """The build card's exit box is back (the operator, 2026-09-28): a
+    typed proxy string is validated and added to the pool - named as
+    typed, or given the next name - and the wish names that row. One the
+    pool already holds by host:port is not added twice; its row is what
+    the wish names. A picked name is honoured as it always was."""
+    book = make_book(gmails=1, proxies=1)
+    before = len(book.proxies._rows)
+
+    status, said, asked = _asked(book, {
+        "gmail": "", "account_kind": "", "app": "", "install_app": False,
+        "proxy_name": "socks5://u:p@10.0.0.9:1080", "proxy_typed": True,
+        "proxy_label": "US99"})
+    assert status == "done", said
+    assert asked["proxy_name"] == "US99"
+    assert len(book.proxies._rows) == before + 1
+    row = book.proxies.find_proxy("10.0.0.9:1080")
+    assert row is not None and row.name == "US99"
+    assert "US99" in said
+
+    # The same exit typed again, host:port already in the pool: the row
+    # it has is the row the wish names, and nothing is added.
+    status, said, asked = _asked(book, {
+        "gmail": "", "account_kind": "", "app": "", "install_app": False,
+        "proxy_name": "10.0.0.9:1080:u:p", "proxy_typed": True,
+        "proxy_label": ""})
+    assert status == "done", said
+    assert asked["proxy_name"] == "US99"
+    assert len(book.proxies._rows) == before + 1
+
+    # Typed and no use: refused in words, and nothing added.
+    status, said, asked = _asked(book, {
+        "gmail": "", "account_kind": "", "app": "", "install_app": False,
+        "proxy_name": "not a proxy at all", "proxy_typed": True,
+        "proxy_label": ""})
+    assert status == "refused" and "exit" in said, said
+    assert len(book.proxies._rows) == before + 1
+
+    # Picked: the free row's name rides on the wish, as before.
+    name = book.proxies._rows[0].name
+    status, said, asked = _asked(book, {
+        "gmail": "", "account_kind": "", "app": "", "install_app": False,
+        "proxy_name": name, "proxy_typed": False})
+    assert status == "done" and asked["proxy_name"] == name
+
+
 def test_an_account_a_build_is_already_on_its_way_with_is_not_sent_twice():
     """A `normal` Spotify account rides a bare build and is claimed only
     when the build reaches it, minutes later - so it stayed free, kept

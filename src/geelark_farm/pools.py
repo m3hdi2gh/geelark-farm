@@ -107,6 +107,19 @@ def clip(value: str, limit: int = NOTE_LIMIT) -> str:
     return value[:limit - 1].rstrip() + "…"
 
 
+def is_called(resource, wanted: str) -> bool:
+    """Whether `wanted` names this row: its label, or - for an exit - the
+    bare vendor name, which is what the build card's picker and the panel
+    API send. The label of a named exit is "SX4 (socks5://...)", so
+    matching on the label alone never found a named exit at all, and every
+    build that named one was refused as "not free" (2026-09-28)."""
+    want = (wanted or "").strip().lower()
+    if not want:
+        return False
+    return want in {(getattr(resource, "label", "") or "").strip().lower(),
+                    (getattr(resource, "name", "") or "").strip().lower()}
+
+
 @dataclass
 class Resource:
     """One row of a resource tab, and what it turned out to be."""
