@@ -1253,9 +1253,13 @@ def test_with_manual_login_on_the_dashboard_offers_the_buttons(web,
     # a panel of its own and went with it.
     # One on the card in the rail, one on the row in the sheet - and
     # the sheet is fetched now (2026-09-21).
-    assert body.count("data-choose=") == 1
-    assert _sheets(client, ("gpt",)).count("data-choose=") == 1
-    assert body.count('name="serial" value="1501"') == 1
+    # The chooser went (the operator, 2026-09-28): the press sends the
+    # account to the next warm phone by itself, and the sheet that
+    # listed phones - still offering one an account was on its way to -
+    # is not drawn at all.
+    assert "data-choose=" not in body
+    assert 'data-sheet="send"' not in body
+    assert 'name="serial" value="1501"' not in body
     assert "&rarr; phone" in body
     assert "Log in selected" not in body
 
@@ -4168,26 +4172,19 @@ def test_the_manager_reads_spent_rows_under_a_cap_of_their_own():
 
 # ---------------------------------------------- the contract, slice B
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
-def test_the_manager_carries_the_chooser_and_the_drawer_shut(web, monkeypatch):
-    """Which phone an account goes to is chosen, not taken from the top;
-    and a serial opens the phone's page here rather than leaving. Both
-    ride in the one response, shut, like the pool sheets."""
+def test_the_manager_carries_the_drawer_shut(web, monkeypatch):
+    """A serial opens the phone's page here rather than leaving; the
+    drawer rides in the one response, shut, like the pool sheets. The
+    phone chooser that rode beside it went on 2026-09-28: it listed a
+    phone an account was already on its way to."""
     _dash(monkeypatch, phones=[
         {"serial": "1500", "status": "app_only", "state": "", "gmail": "",
-         "app_account": "", "proxy_name": "SX27"},
-        {"serial": "1501", "status": "app_only", "state": "taken",
-         "owner": "ali", "app_account": "", "proxy_name": "SX1"},
-        {"serial": "1502", "status": "ready", "state": "",
-         "app_account": "h@x.com", "proxy_name": "SX2"}])
+         "app_account": "", "proxy_name": "SX27"}])
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
 
-    send = body[body.index('data-sheet="send" hidden'):]
-    send = send[:send.index("</section>")]
-    assert 'name="serial" value="1500"' in send, "warm and nobody's"
-    assert 'value="1501"' not in send, "somebody holds it"
-    assert 'value="1502"' not in send, "it already has an account"
+    assert 'data-sheet="send"' not in body
     assert 'data-sheet="phone" hidden' in body
     assert "[data-drawer]" in body or 'data-drawer' in body
 
@@ -5282,22 +5279,14 @@ def test_done_and_failed_ask_beside_the_button(web, monkeypatch):
     assert "function askFirst(form, question, answer)" in script
 
 
-def test_the_send_sheet_counts_a_cross_as_no_account(web, monkeypatch):
-    """The build writes a cross into the account column of a warm phone,
-    and the sheet read the cross as an account - so with a warm phone on
-    the list it said none could take one (the operator, 2026-09-08)."""
+def test_the_send_sheet_is_gone(web, monkeypatch):
+    """It read a cross as an account once (2026-09-08) and offered a
+    phone an account was already on its way to (2026-09-28); the press
+    picks the next warm phone by itself now, and the verb refuses when
+    there is none."""
     from geelark_farm.web import pages
 
-    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
-            "may_login_accounts": True}
-    data = {"phones": [{"serial": "1848", "status": "app_only",
-                        "app_account": "\u2717", "state": "",
-                        "proxy_name": "SX22"}]}
-    sheet = pages._send_sheet(data, user)
-    assert 'name="serial" value="1848"' in sheet
-    assert "No phone can take an account" not in sheet
-    gone = dict(data, phones=[dict(data["phones"][0], state="failed")])
-    assert 'value="1848"' not in pages._send_sheet(gone, user), "leaving"
+    assert not hasattr(pages, "_send_sheet")
 
 
 # ---------------------------------- what GeeLark has on, and Boot (2026-09-08)
@@ -5307,8 +5296,6 @@ def test_a_phone_geelark_has_on_reads_running_and_offers_no_boot(web,
     """Booted from the console or by hand in GeeLark, a running phone is
     billing - and it read as free, Boot and all, so nobody could tell it
     was on (the operator, 2026-09-08)."""
-    from geelark_farm.web import pages
-
     _dash(monkeypatch, phones=[
         {"serial": "1862", "status": "ready", "state": "", "running": True,
          "gmail": "a@gmail.com", "app_account": "x@y.com"},
@@ -5343,15 +5330,9 @@ def test_a_phone_geelark_has_on_reads_running_and_offers_no_boot(web,
     assert ">Boot<" in again
     table = again[again.index('id="phones"'):again.index("</table>")]
     assert "Running" not in table
-    # And the send sheet does not offer a phone that is on: the finish
-    # would refuse it as in use by hand.
-    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
-            "may_login_accounts": True}
-    sheet = pages._send_sheet(
-        {"phones": [{"serial": "1848", "status": "app_only",
-                     "app_account": "\u2717", "state": "", "running": True}]},
-        user)
-    assert 'value="1848"' not in sheet
+    # A phone that is on is not offered to a Send either: the chooser
+    # went (2026-09-28), and the verb's own warm list leaves a running
+    # phone out (keeper._unfinished, busy serials).
 
 
 def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
@@ -7428,7 +7409,7 @@ def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
     assert "here.insertBefore(n, held);" in script
     assert "keepSheet(held, kept, brought);" in script
     assert "else if (held) behind(true);" in script
-    assert "else if (kept && kept !== 'send') show(kept, false);" in script
+    assert "else if (kept) show(kept, false);" in script
     keep = assets.JS[assets.JS.index("function keepSheet(held, kind, fresh)"):]
     assert "fresh.replaceWith(held)" not in keep
     assert "if (old) old.replaceWith(s); else held.appendChild(s);" in keep
@@ -9140,12 +9121,9 @@ def test_the_phone_table_is_a_region_the_server_owns(web, monkeypatch):
     # reloaded (2026-09-21, found by audit the same evening). A block
     # added to <main> has to declare itself here or it never moves.
     regions = re.findall(r'data-live="([a-z]+)"', body)
-    # The Send list is one too, where the Send sheet is drawn at all -
-    # only with manual login on (2026-09-26).
-    sends = ['send'] if 'data-sheet="send"' in body else []
     assert sorted(regions) == sorted(
         ["alerts", "top", "rail", "tally", "phones", "build", "side",
-         "foot"] + sends), regions
+         "foot"]), regions
     assert len(regions) == len(set(regions)), "a region is one node"
     # And none of them inside another: `swapRegions` replaces each
     # region's children, and a region under a region would be replaced
@@ -9966,48 +9944,106 @@ def test_the_phones_table_says_whose_gmail_is_on_each_phone(monkeypatch):
 
 
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
-def test_the_send_list_is_a_region_and_moves_while_it_is_open(
-        web, monkeypatch):
-    """The Send sheet sat outside every region, so the region swap never
-    touched it: phone 4444 was still offered seven minutes after an
-    account went onto it, and the press was refused (the operator,
-    2026-09-26)."""
-    _dash(monkeypatch, phones=[
-        {"serial": "4444", "status": "app_only", "state": "", "gmail": "",
-         "app_account": "", "proxy_name": "US37"}])
+def test_a_sent_account_stays_in_the_card_with_its_state(web, monkeypatch):
+    """An account sent to a phone left the card's list a while later and
+    said nothing in between: its row now stays, and reads what is
+    happening - sent, signing in on which phone, ready on which phone -
+    with no door while it is on its way, and its door back when the phone
+    was marked failed and the row is free again (the operator,
+    2026-09-28)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "may_login_accounts": True}
+    rows = [
+        {"address": "free@x.com", "state": "free"},
+        {"address": "sent@x.com", "state": "sent", "serial": "4860"},
+        {"address": "going@x.com", "state": "signing in", "serial": "4861"},
+        {"address": "on@x.com", "state": "ready", "serial": "4862"},
+    ]
+    drawn = pages._pool_queue("gpt", rows, user, True)
+    items = {li[li.index('title="') + 7:li.index('"', li.index('title="') + 7)]: li
+             for li in drawn.split("<li")[1:]}
+    free, sent = items["free@x.com"], items["sent@x.com"]
+    going, on = items["going@x.com"], items["on@x.com"]
+    # What is on its way is drawn first, then what is free.
+    assert drawn.index("sent@") < drawn.index("free@")
+    assert "&rarr; phone" in free
+    assert "&rarr; phone" not in sent and "Sent" in sent
+    assert "&rarr; phone" not in going
+    assert "Signing in" in going and "4861" in going
+    assert "&rarr; phone" not in on
+    assert "Ready" in on and 'href="/phones/4862"' in on
+    # The number over the card is what is free, as before.
+    assert sorted(pages._card_free(rows)) == ["free@x.com"]
+
+    # The Spotify card follows the same rule (the operator, 2026-09-28).
+    srows = [{"address": "e@x.com", "state": "ready", "serial": "4870",
+              "category": "error"}]
+    sd = pages._pool_queue("spotify", srows, user, True)
+    assert "Ready" in sd and "&rarr; phone" not in sd and "+ phone" not in sd
+
+
+def test_the_card_rows_carry_the_accounts_on_their_way(monkeypatch):
+    """`_card_rows` listed the free rows and counted the rest; the ones a
+    person sent are rows now, with the phone they are on and how far the
+    phone has got: claimed and not yet building is `sent`, building is
+    `signing in`, ready is `ready` (2026-09-28)."""
+    from geelark_farm.web import read
+
+    class _S:
+        def _rows(self, sql, params=()):
+            if "AS pool," in sql and "count(*)" not in sql \
+                    and "p.status" not in sql:
+                return [{"pool": "gpt", "address": "free@x.com",
+                         "seller": "", "category": "", "host": "",
+                         "port": None}]
+            if "p.status" in sql:
+                return [{"pool": "gpt", "address": "sent@x.com",
+                         "serial": "4860", "phone_status": "app_only",
+                         "category": ""},
+                        {"pool": "gpt", "address": "going@x.com",
+                         "serial": "4861", "phone_status": "building",
+                         "category": ""},
+                        {"pool": "spotify", "address": "on@x.com",
+                         "serial": "4862", "phone_status": "ready",
+                         "category": "error"}]
+            return [{"pool": "gpt", "n": 5}]
+
+    out = read._card_rows(_S())
+    states = {r["address"]: r["state"] for r in out["gpt"] if r.get("address")}
+    assert states == {"free@x.com": "free", "sent@x.com": "sent",
+                      "going@x.com": "signing in"}
+    assert [r["state"] for r in out["spotify"]] == ["ready"]
+    assert out["spotify"][0]["serial"] == "4862"
+    # The held count still stands behind the free rows, as placeholders.
+    assert sum(1 for r in out["gpt"] if r["state"] == "on a phone") == 5
+
+
+@pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_a_send_goes_straight_to_the_next_warm_phone(web, monkeypatch):
+    """The press posts the address alone; the verb pairs it with the
+    next warm phone. No serial is chosen anywhere (2026-09-28)."""
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 81)
     client = web()
     client.login()
-    _, _, body = client.request("GET", "/")
-    send = body[body.index('data-sheet="send"'):]
-    send = send[:send.index("</section>")]
-    assert '<div data-live="send">' in send, "the list is a region"
+    status, headers, _ = client.request(
+        "POST", "/accounts/login",
+        _form(csrf=client.csrf(), addresses="waiting@x.com", back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "login_accounts"
+    assert got[-1]["payload"]["addresses"] == ["waiting@x.com"]
+    assert "serial" not in got[-1]["payload"], "no phone is chosen"
 
     js = assets.JS
-    keep = js[js.index("function keepSheet(held, kind, fresh){"):]
-    keep = keep[:keep.index("\n  }\n")]
-    branch = keep[keep.index("if (kind === 'send') {"):]
-    # Open: replaced when it changed, with the account put back on the
-    # new rows - the click that opened the sheet filled the old ones.
-    assert "!sendSame(list, flist)" in branch
-    assert "i.value = who;" in branch
-    assert "function sendSame(mine, fresh){" in js
-
-
-
-def test_a_send_that_went_through_closes_its_sheet_and_says_so():
-    """The keeper took the press in two seconds, and the sheet stayed
-    open over a page that holds still for an open sheet - the account
-    still waiting, the phone still warm - so it read as nothing at all
-    (the operator, 2026-09-26). Shut, the swap takes the region path,
-    which leaves the banner out; it is put in by hand."""
-    js = assets.JS
-    at = js.index("if (sheet && sheet.dataset.sheet === 'send'"
-                  " && !turned.test(got.url)) {")
-    branch = js[at:js.index("}", at)]
-    assert "shut();" in branch and "swapMain(doc);" in branch
-    assert branch.index("swapMain(doc);") < branch.index("sayIt(doc);")
-    # Turned away, it stays open with the reason: the test is `turned`.
-    assert js.index("var turned = ") < at
+    assert "data-choose" not in js, "no chooser left in the script"
+    assert "sendSame" not in js
+    assert "if (kind === 'send')" not in js
 
 
 # ------------------------------------------ the phone's journey (2026-09-26)

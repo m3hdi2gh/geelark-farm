@@ -1664,13 +1664,16 @@ def _send_form(user: dict, address: str, back: str = "/") -> str:
     (`MANUAL_LOGIN`) and only for somebody who may - otherwise it is a
     button that leads nowhere.
     """
+    # No phone is chosen: the press goes to the next warm phone by
+    # itself. The chooser that used to open here listed a phone an
+    # account was already on its way to (the operator, 2026-09-28).
     return (f'<form method="post" class="inline" action="/accounts/login">'
             f'{_csrf(user)}'
             f'<input type="hidden" name="addresses" value="{esc(address)}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
-            f'<button class="quiet send" data-choose="{esc(address)}" '
-            f'title="sign this account into a phone">&rarr; phone</button>'
-            f'</form>')
+            f'<button class="quiet send" data-busy="Sending&hellip;" '
+            f'title="sign this account into the next free phone">'
+            f'&rarr; phone</button></form>')
 
 
 def _may_send(user: dict, manual_login: bool) -> bool:
@@ -1718,7 +1721,14 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
     made the fifth look like it did not exist.
     """
     free = [r for r in rows if (r.get("state") or "") == "free"]
-    if not free:
+    # The accounts a person sent, under the free ones: each stays in the
+    # list and reads what is happening to it - sent, signing in on which
+    # phone, ready on which phone - until the phone is marked done (it
+    # is delivered and leaves) or failed (it is free again, with its
+    # door back). They left the list a while after the press and said
+    # nothing in between (the operator, 2026-09-28).
+    going = [r for r in rows if (r.get("state") or "") in _ON_ITS_WAY]
+    if not free and not going:
         if quiet:
             return ""                # the card's alert has already said it
         held = len(rows)
@@ -1730,6 +1740,11 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
     # above says how many, and a list that stops at four made the fifth
     # look like it did not exist (the operator, 2026-09-05).
     items = []
+    for row in going:
+        label = str(row.get("address") or "?")
+        items.append(f'<li class="going"><span class="t" title="{esc(label)}">'
+                     f'{_split_address(label)}</span>'
+                     f'{_on_its_way_chip(row)}</li>')
     for row in free:
         label = str(row.get("address") or "?")
         tag = (str(row.get("seller") or "") if kind == "gmail" else
@@ -1753,6 +1768,34 @@ def _pool_queue(kind: str, rows: list[dict], user: dict,
         items.append(f'<li><span class="t" title="{esc(label)}">'
                      f'{_split_address(label)}</span>{aside}</li>')
     return f'<ul class="queue">{"".join(items)}</ul>'
+
+
+#: The states a sent account passes through in the card, in order, and
+#: the word each wears. `read._on_its_way_state` decides which.
+_ON_ITS_WAY = {"sent": "Sent", "signing in": "Signing in", "ready": "Ready"}
+
+
+def _card_free(rows: list[dict]) -> list[str]:
+    """The addresses the card's number counts: the free ones only."""
+    return [str(r.get("address") or "") for r in rows
+            if (r.get("state") or "") == "free"]
+
+
+def _on_its_way_chip(row: dict) -> str:
+    """The state of an account on its way, with the phone it is on: a
+    ready one links to the phone, the rest name it."""
+    state = str(row.get("state") or "")
+    word = _ON_ITS_WAY.get(state, state)
+    serial = str(row.get("serial") or "").strip()
+    klass = {"sent": "wait", "signing in": "wait", "ready": "on"}.get(state, "")
+    where = ""
+    if serial and state == "ready":
+        where = f' <a href="/phones/{esc(serial)}" class="mono">{esc(serial)}</a>'
+    elif serial:
+        where = f' <span class="mono">{esc(serial)}</span>'
+    return (f'<span class="going {klass}" title="{esc(word)}'
+            f'{" on phone " + esc(serial) if serial else ""}">'
+            f'<i></i>{esc(word)}{where}</span>')
 
 
 def _split_address(label: str) -> str:
@@ -2594,8 +2637,9 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
 
 def _pool_manager(data: dict, user: dict,
                   manual_login: bool = False) -> str:
-    """The drawer the pool doors open into: a mount, and the two sheets
-    that are about phones rather than stock.
+    """The drawer the pool doors open into: a mount, and the one sheet
+    that is about a phone rather than stock. The phone chooser that stood
+    beside it went on 2026-09-28: a Send picks the next warm phone.
 
     The three pool sheets used to be rendered here, shut, on every
     response - 925,488 of the dashboard's 1,012,694 bytes, 651 rows and
@@ -2608,62 +2652,13 @@ def _pool_manager(data: dict, user: dict,
     Without the script the doors are still forms that go to the pool's
     own page, which is what they were before the manager existed.
     """
-    sheets = []
-    if _may_send(user, manual_login):
-        sheets.append(_send_sheet(data, user))
-    sheets.append(
+    drawer = (
         '<section class="sheet drawer" data-sheet="phone" hidden>'
         '<header><h3 class="mono" data-title></h3><span class="hint" data-hint>'
         '</span><button type="button" class="x" data-shut="1" '
         'aria-label="Close">&times;</button></header>'
         '<div class="sheetbody" data-drawer></div></section>')
-    return f'<div class="ov" id="poolov" hidden>{"".join(sheets)}</div>'
-
-def _send_sheet(data: dict, user: dict) -> str:
-    """Which phone an account goes to: the phones that can take one, each
-    with its status and exit and one Send. Only `app_only` phones nobody
-    holds - a phone that already has an account is not a place to put a
-    second one, and a phone somebody holds is theirs.
-
-    The address is filled in by the script from the row that was pressed;
-    without the script the row's own button sends to the next warm phone,
-    which is what it always did.
-    """
-    # `app_account` holds a cross, not a blank, on a phone with no account
-    # - the build writes one - so "no account" is the same test the cell
-    # uses. Read as a plain truthy string, every warm phone failed it and
-    # the sheet said none could take one (the operator, 2026-09-08).
-    able = [p for p in (data.get("phones") or [])
-            if (p.get("status") or "") == "app_only"
-            and _no_address(p.get("app_account"))
-            and not p.get("running")
-            and (p.get("state") or "") not in ("taken", "done", "failed")]
-    rows = "".join(
-        f'<form method="post" class="pickrow" action="/accounts/login">'
-        f'{_csrf(user)}<input type="hidden" name="addresses" value="">'
-        f'<input type="hidden" name="serial" value="{esc(str(p["serial"]))}">'
-        f'<input type="hidden" name="back" value="/">'
-        f'<span class="serial mono">{esc(str(p["serial"]))}</span>'
-        f'{_phone_badge(p)}<span class="age">{esc(str(p.get("proxy_name") or ""))}'
-        f'</span><button class="go small" style="margin-left:auto">Send</button>'
-        f'</form>' for p in able)
-    # A region of its own: the list is the page's data, and outside every
-    # region it was drawn once and never again - it offered phone 4444
-    # seven minutes after an account went onto it, and the press was
-    # refused (the operator, 2026-09-26).
-    body = ('<div data-live="send">'
-            + (f'<div class="slab">{rows}</div>' if rows else
-               '<p class="empty">No phone can take an account right now - '
-               'every one of them already has one, or is still building.</p>')
-            + '</div>')
-    return (f'<section class="sheet narrow" data-sheet="send" hidden>'
-            f'<header><h3>Send to a phone</h3><span class="hint mono" '
-            f'data-hint></span><button type="button" class="x" data-shut="1" '
-            f'aria-label="Close">&times;</button></header>'
-            f'<div class="sheetbody">{body}'
-            f'<p class="dim" style="margin:0;font-size:12px">The phone is '
-            f'booted and the account signed into the app on it. It shows as '
-            f'<b>Ready</b> when done.</p></div></section>')
+    return f'<div class="ov" id="poolov" hidden>{drawer}</div>'
 
 
 #: What a blank picker means, said the same way in all three.

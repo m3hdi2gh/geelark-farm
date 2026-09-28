@@ -937,11 +937,33 @@ def _card_rows(store) -> dict:
         "   AND NOT (coalesce(status, '') IN ('', 'free', 'unused')"
         "            AND error IS NULL)"
         " GROUP BY 1")
+    # The accounts a person sent, as rows with the phone each is on and
+    # how far that phone has got: they left the card's list a while after
+    # the press and said nothing in between (the operator, 2026-09-28).
+    # Claimed with the phone not yet building is `sent`; building is
+    # `signing in`; ready is `ready`. Anything else on a phone is the
+    # held count below, as before.
+    going = store._rows(
+        "SELECT CASE WHEN " + IS_SPOTIFY + " THEN 'spotify' ELSE 'gpt' END"
+        "   AS pool, r.address, coalesce(r.serial, '') AS serial,"
+        " coalesce(p.status, '') AS phone_status,"
+        " coalesce(r.category, '') AS category"
+        " FROM resources r"
+        " LEFT JOIN phones p ON p.serial = r.serial AND p.done_at IS NULL"
+        " WHERE r.kind = 'app' AND r.status IN ('in_use', 'ready')"
+        "   AND r.error IS NULL AND coalesce(r.address, '') <> ''"
+        "   AND coalesce(r.serial, '') <> ''"
+        " ORDER BY r.updated_at DESC LIMIT %s", (POOL_LIMIT,))
     out = {k: [] for k in ("gmail", "gpt", "spotify", "proxy")}
     for row in free:
         pool = str(row.pop("pool"))
         if pool in out:
             out[pool].append(dict(row, state="free"))
+    for row in going:
+        pool = str(row.pop("pool"))
+        state = _on_its_way_state(str(row.pop("phone_status") or ""))
+        if pool in out and state:
+            out[pool].append(dict(row, state=state))
     # The held ones as placeholders, not as rows: `_pool_queue` only ever
     # counts them, and a card that says "Nothing free. 40 rows held" must
     # not be handed forty addresses to say it.
@@ -950,6 +972,22 @@ def _card_rows(store) -> dict:
         if pool in out:
             out[pool] += [{"state": "on a phone"}] * int(row["n"] or 0)
     return out
+
+
+def _on_its_way_state(phone_status: str) -> str:
+    """What the card says about an account on a phone, from the phone's
+    own status: claimed for a phone that has not started its login yet
+    is `sent`, a building phone is `signing in`, a ready one is `ready`.
+    A phone in any other state - gone, app-only again after a failed
+    login - is not a row of the card's; the pool's own status says the
+    rest."""
+    if phone_status == "building":
+        return "signing in"
+    if phone_status == "ready":
+        return "ready"
+    if phone_status in ("app_only", "incomplete"):
+        return "sent"
+    return ""
 
 
 def pool_rows(settings: Settings) -> dict:

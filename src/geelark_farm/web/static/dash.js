@@ -710,26 +710,6 @@
       show(door.dataset.pool);
       return;
     }
-    // -> phone: choose the phone rather than take the next one. The row's
-    // own form still works without this (the next warm phone).
-    var choose = e.target.closest('[data-choose]');
-    if (choose) {
-      var o2 = ov(), sheet2 = o2 && o2.querySelector('.sheet[data-sheet="send"]');
-      if (sheet2) {
-        e.preventDefault();
-        opener = choose;
-        sheet2.querySelectorAll('input[name=addresses]').forEach(function(i){
-          i.value = choose.dataset.choose;
-        });
-        var hint = sheet2.querySelector('[data-hint]');
-        if (hint) hint.textContent = choose.dataset.choose;
-        o2.querySelectorAll('.sheet').forEach(function(el){
-          el.hidden = el !== sheet2;
-        });
-        o2.hidden = false; openKind = 'send'; behind(true);
-        return;
-      }
-    }
     // A serial opens the phone's page in a drawer, here, rather than
     // leaving the dashboard for it.
     var link = e.target.closest(
@@ -1195,7 +1175,7 @@
     init();
     if (kept === 'phone' && drawerHref) openDrawer(drawerHref, true);
     else if (held) behind(true);
-    else if (kept && kept !== 'send') show(kept, false);
+    else if (kept) show(kept, false);
     typedBack(typed);
     viewBack(seen);
     placeBack(place);
@@ -1244,19 +1224,6 @@
     Array.prototype.forEach.call(copy.querySelectorAll('input[name="press"]'),
       function(n){ n.setAttribute('value', ''); });
     return copy;
-  }
-
-  // The send list compared without the address the open sheet filled in,
-  // which the fresh copy never carries - or it would be rebuilt every tick.
-  function sendSame(mine, fresh){
-    if (typeof mine.isEqualNode !== 'function') return false;
-    var a = comparable(mine), b = comparable(fresh);
-    [a, b].forEach(function(copy){
-      Array.prototype.forEach.call(
-        copy.querySelectorAll('input[name=addresses]'),
-        function(i){ i.setAttribute('value', ''); });
-    });
-    return a.isEqualNode(b);
   }
 
   // Each region's new contents in place of its old, and nothing else
@@ -1308,25 +1275,6 @@
       if (old) old.replaceWith(s); else held.appendChild(s);
     });
     if (!mine || !theirs) return;
-    // The send list, open: the phones that can take an account change
-    // under it - one that got an account a minute ago was still offered,
-    // and the press was refused (the operator, 2026-09-26). Replaced only
-    // when it changed, and the account the sheet was opened for is put
-    // back on the new rows, since the click that opened it filled them.
-    if (kind === 'send') {
-      var list = mine.querySelector('[data-live="send"]');
-      var flist = theirs.querySelector('[data-live="send"]');
-      if (list && flist && !sendSame(list, flist)) {
-        var hint = mine.querySelector('[data-hint]');
-        var who = hint ? hint.textContent : '';
-        list.replaceChildren.apply(
-          list, Array.prototype.slice.call(flist.childNodes));
-        list.querySelectorAll('input[name=addresses]').forEach(function(i){
-          i.value = who;
-        });
-      }
-      return;
-    }
     // A sheet showing a page of its own - the preview of a paste, the
     // "are you sure" of a remove - is not a list to update. Its table
     // is that page's, and the pool's rows were being merged into it:
@@ -1988,21 +1936,6 @@
         // add that was turned away keeps what was typed: that is the
         // thing to correct.
         var turned = /[?&]said=(no|refused|already|bad|none)(?:[:&]|$)/;
-        // Sent: the account is on its way to that phone, so the sheet
-        // closes. Left open, the page - which holds still for an open
-        // sheet - went on showing the account waiting and the phone
-        // warm, and a press the keeper took in two seconds read as
-        // nothing at all (the operator, 2026-09-26). Turned away, it
-        // stays open with the reason.
-        // The banner is put in by hand: with the sheet shut the swap takes
-        // the region path, which leaves everything outside the regions
-        // alone - the "Queued" banner included.
-        if (sheet && sheet.dataset.sheet === 'send' && !turned.test(got.url)) {
-          shut();
-          swapMain(doc);
-          sayIt(doc);
-          return;
-        }
         if (/[/]add$/.test(form.action) && !turned.test(got.url)) {
           restoreSheet(sheet);
           if (sheet) sheet.querySelectorAll('textarea[name=pasted]')
