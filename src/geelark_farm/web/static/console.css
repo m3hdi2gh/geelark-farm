@@ -23,6 +23,23 @@ nav{width:224px;flex-shrink:0;background:var(--rail);border-right:1px solid
 nav .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
  letter-spacing:.4px;color:#eef3fa;padding:2px 12px 22px}
 nav .brand svg{flex-shrink:0}
+/* ---- the brand: the mark beside the name over CLOUD FARM. One block,
+   sized by where it sits - the page title (32px mark), the rail (24px),
+   the Boot tab card (40px). The glow under the mark is the logo cyan at
+   a whisper, so it reads as lit rather than pasted on. */
+.brandmark{display:inline-flex;align-items:center;gap:11px;letter-spacing:0}
+.brandmark svg{width:32px;height:auto;flex:none;
+ filter:drop-shadow(0 0 9px rgba(0,231,255,.22))}
+.brandname{display:flex;flex-direction:column;gap:2px;line-height:1.05}
+.brandname b{font-size:18px;font-weight:700;color:var(--bright);letter-spacing:-.1px}
+.brandname span{font-size:10px;font-weight:500;color:#6fd3e8;letter-spacing:2.6px;
+ text-transform:uppercase}
+h2 .brandmark{font-weight:inherit}
+nav .brand .brandmark svg{width:24px;filter:none}
+nav .brand .brandname b{font-size:15px}
+nav .brand .brandname span{font-size:9px;letter-spacing:2.3px}
+.card .brand .brandmark svg{width:40px}
+.card .brand .brandname b{font-size:20px}
 nav a{display:flex;align-items:center;gap:11px;height:40px;padding:0 12px;
  border-radius:7px;color:#9aa7ba;font-size:14px;position:relative}
 nav a svg{width:17px;height:17px;flex-shrink:0;opacity:.85}

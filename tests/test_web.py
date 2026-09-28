@@ -1225,7 +1225,11 @@ def test_the_dashboard_shows_the_stock_the_phones_and_who_is_waiting(web):
     # The pools stand on their side in the rail now, one row each.
     assert ">12</b><span class=\"t\">Gmail" in body, "one row per pool"
     assert ">20</b><span class=\"t\">Proxies" in body
-    assert "Instance manager" in body, "the page says what it is"
+    # The page wears the IranSpoty mark and name where "Instance manager"
+    # stood (the operator, 2026-09-28); the status sentence says what it
+    # is doing.
+    assert "Instance manager" not in body
+    assert 'class="brandmark"' in body and "<b>IranSpoty</b>" in body
     assert "last pass" not in body, "the pass's clock is the alert strip's job"
     assert "IronHawk@gmail.com" in body and "SX27" in body
     assert 'class="badge warn">App only' in body
@@ -4172,6 +4176,47 @@ def test_the_manager_reads_spent_rows_under_a_cap_of_their_own():
 
 # ---------------------------------------------- the contract, slice B
 @pytest.mark.parametrize("web", [MANUAL_ON], indirect=True)
+def test_every_page_wears_the_iranspoty_brand(web, monkeypatch):
+    """The dashboard's title, the admin's rail, the Boot tab's card and
+    the tab icon all said geelark; each wears the IranSpoty mark and the
+    name over CLOUD FARM now (the operator, 2026-09-28). The operator's
+    page has no rail, so the brand is its title; the admin's rail carries
+    it small and the title carries it too."""
+    from geelark_farm.web import pages
+
+    _dash(monkeypatch)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    top = body[body.index('class="top"'):]
+    top = top[:top.index("</div>", top.index("brandmark"))]
+    assert "<svg" in top and "<b>IranSpoty</b>" in top
+    assert "<span>Cloud Farm</span>" in top
+    assert "<title>Dashboard — IranSpoty</title>" in body
+    assert "geelark" not in body.lower().split("<main")[0], "the chrome"
+    rail = body[body.index("<nav>"):body.index("</nav>")]
+    assert 'class="brand"' in rail and "<b>IranSpoty</b>" in rail
+    assert "geelark farm" not in rail
+    # The tab icon is the mark, not the mockup's phone.
+    assert "rect x=" not in pages._FAVICON and "linearGradient" in pages._FAVICON
+
+    boot = pages.live_page("1862", {"username": "sara", "role": "operator",
+                                    "csrf": "c"}, said="queued:70", row={})
+    assert "geelark farm" not in boot and "<b>IranSpoty</b>" in boot
+
+    # An operator's page has no rail: the title is the brand, and the
+    # person and the way out stand beside it as before.
+    monkeypatch.setattr(FakeStore, "user",
+                        {"id": 9, "username": "sara", "role": "operator",
+                         "sees": "all", "may_login_accounts": True})
+    other = web()
+    other.login(username="sara")
+    _, _, op = other.request("GET", "/")
+    assert "<nav>" not in op
+    assert 'class="brandmark"' in op and 'class="whoout"' in op
+    assert "Instance manager" not in op
+
+
 def test_the_manager_carries_the_drawer_shut(web, monkeypatch):
     """A serial opens the phone's page here rather than leaving; the
     drawer rides in the one response, shut, like the pool sheets. The

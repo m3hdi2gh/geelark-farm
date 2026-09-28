@@ -33,13 +33,9 @@ from .read import (PLAN_WARN_DAYS, READING_STALE_AFTER,
 #: string, inlined on every page: no static files, nothing to cache-bust,
 #: nothing to path-handle. Every colour is a token so a page never picks
 #: its own; every control has a visible focus state.
-#: The tab icon - the mockup's phone, inlined so no file is served.
-_FAVICON = (
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='"
-    "0 0 24 24' fill='none' stroke='%234f8ef7' stroke-width='2'%3E%3Crect x"
-    "='6' y='2.5' width='12' height='19' rx='2.5'/%3E%3Cline x1='10' y1='18"
-    "' x2='14' y2='18'/%3E%3C/svg%3E"
-)
+#: The tab icon: the IranSpoty mark, inlined so no file is served. Built
+#: below from BRAND_MARK, once the mark is defined.
+_FAVICON = ""
 
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -98,10 +94,14 @@ _ICONS = {
               '5.5-5s4.8 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path '
               'd="M15.5 15.3c2.6.2 4.3 1.8 5 4.7"/>',
 }
-_BRAND_ICON = ('<svg width="22" height="22" viewBox="0 0 24 24" fill="none" '
-               'stroke="#4f8ef7" stroke-width="2" aria-hidden="true"><rect x="6" '
-               'y="2.5" width="12" height="19" rx="2.5"/><line x1="10" y1="18" '
-               'x2="14" y2="18"/></svg>')
+def _brand() -> str:
+    """The IranSpoty mark beside the name over CLOUD FARM - the one brand
+    block every page wears where "geelark farm" and "Instance manager"
+    stood (the operator, 2026-09-28). Sized by where it sits: the page's
+    title, the admin's rail, the Boot tab's card."""
+    return (f'<span class="brandmark">{BRAND_MARK}'
+            f'<span class="brandname"><b>IranSpoty</b>'
+            f'<span>Cloud Farm</span></span></span>')
 
 
 #: Who the whole console belongs to.
@@ -171,7 +171,7 @@ def page(title: str, body: str, *, user: dict | None = None,
         header = ""
     elif user is not None:
         counts = user.get("nav") or {}
-        links = [f'<nav><div class="brand">{_BRAND_ICON}geelark farm</div>']
+        links = [f'<nav><div class="brand">{_brand()}</div>']
         for path, label, key in _RAIL:
             # An operator has one page, so there is nowhere for a rail to
             # go. Everything they do is on it, and a rail of links that
@@ -3509,7 +3509,10 @@ def dashboard(data: dict, user: dict, said: str = "",
     # be swapped, and a block that comes and goes changes the page's
     # shape, which is the whole-of-main path.
     body = (f'<div class="wide"><div data-live="alerts">{strip}</div>'
-            f'<div class="top" data-live="top"><h2>Instance manager</h2>'
+            # The brand is the title: an operator's page has no rail to
+            # carry it, and "Instance manager" said nothing the status
+            # sentence beside it does not (the operator, 2026-09-28).
+            f'<div class="top" data-live="top"><h2>{_brand()}</h2>'
             f'<span class="status">{_status_sentence(data)}'
             f'{_controls(data, user)}</span>'
             f'{_who_and_out(user)}</div>'
@@ -3533,7 +3536,7 @@ def dashboard(data: dict, user: dict, said: str = "",
         (data.get("queue") or {}).get("queued") or 0) > 0 or any(
             str(w.get("status") or "") in ("queued", "running")
             for w in (data.get("wishes") or []))
-    return page("Instance manager", body, user=quiet, here="/",
+    return page("Dashboard", body, user=quiet, here="/",
                 live="farm", refresh=10 if busy else 15)
 
 
@@ -3602,7 +3605,7 @@ def live_page(serial: str, user: dict, said: str = "",
     body = (f'<div class="card" style="width:min(520px,100%);'
             f'text-align:center">'
             f'<div class="brand" style="justify-content:center">'
-            f'{_BRAND_ICON}geelark farm</div>'
+            f'{_brand()}</div>'
             f'<h2 style="color:var(--{colour})">{esc(title)}</h2>'
             f'<p class="muted">{esc(note)}</p>'
             f'<a class="btn quiet" href="/">Back to the dashboard</a></div>'
@@ -7556,3 +7559,12 @@ def _account_margin(account: dict) -> str:
             f'{f"<p class=gf-chip>{chip}</p>" if chip else ""}'
             f'{_margin_rows("gf-acct", "Address", account, say_no_key=False)}'
             f'{note}')
+
+
+# The tab icon, from the mark: the same path and gradient the pages draw,
+# as a data URI. Chrome and Firefox draw an SVG favicon with its gradient.
+import urllib.parse as _urlq  # noqa: E402
+
+_FAVICON = "data:image/svg+xml," + _urlq.quote(
+    BRAND_MARK.replace(' aria-hidden="true" focusable="false"', ""),
+    safe="/:=,'()")

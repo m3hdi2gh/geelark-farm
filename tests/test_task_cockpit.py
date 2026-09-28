@@ -152,7 +152,10 @@ def test_a_running_run_draws_its_stages_and_listens_to_the_farm():
     assert "data-since=" in drawn, "the clock counts in the browser"
     for region in ("run-head", "run-view", "run-body"):
         assert f'data-live="{region}"' in drawn, region
-    assert "0s" not in drawn and "No screen of this run" not in drawn, \
+    # The page's own content, past the chrome: the tab icon in <head> is
+    # a data URI and carries every pair of characters (2026-09-28).
+    shown = drawn.split("<main", 1)[-1]
+    assert "0s" not in shown and "No screen of this run" not in shown, \
         "nothing that reads as a run that did nothing"
 
 
