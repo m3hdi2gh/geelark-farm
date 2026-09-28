@@ -7449,3 +7449,52 @@ def test_a_one_off_its_build_never_reached_is_dropped_at_the_end():
 
     src = inspect.getsource(builder._let_the_build_go)
     assert "_waiting_one_offs(book.proxies" in src
+
+
+def test_the_sync_tells_phones_on_one_gateway_apart_by_username(monkeypatch):
+    """Ten proxies on one endpoint (2026-09-28): the panel says which
+    username each phone is on, and the sync attaches each phone to that
+    row alone - not every phone on the gateway to every row - and frees
+    the sibling whose phone is gone."""
+    from geelark_farm import keeper
+    from tests.test_pools import PROXY_HEADERS, FakeWorksheet, proxy_row
+
+    pool_rows = [proxy_row(f"79.127.168.43:50101:user_{i}:pw") for i in (1, 2, 3)]
+    for i, r in enumerate(pool_rows, 1):
+        r[0] = f"PS{i}"
+    book = make_book(proxies=0)
+    book.proxies = type(book.proxies)(FakeWorksheet(PROXY_HEADERS, pool_rows),
+                                      PROXY_HEADERS, threading.Lock())
+    book.proxies.load()
+    ps1, ps2, ps3 = book.proxies._rows
+    book.proxies.spend(ps2, serial="4002")          # its phone is gone below
+    live = [{"id": "P1", "serialNo": "4001", "status": 0,
+             "proxy": {"type": "socks5", "server": "79.127.168.43",
+                       "port": 50101, "username": "user_1", "password": "pw"}},
+            {"id": "P3", "serialNo": "4003", "status": 0,
+             "proxy": {"type": "socks5", "server": "79.127.168.43",
+                       "port": 50101, "username": "user_3", "password": "pw"}}]
+    monkeypatch.setattr(keeper.phones, "listing", lambda c: list(live))
+
+    class Client:
+        def data(self, path, payload, **_):
+            return {"list": []}
+
+    changed = keeper.sync_proxies(Client(), book, FakeLedger())
+    assert book.proxies.status_of(ps1) == "on a phone"
+    assert ps1.values["Used By"] == "4001"
+    assert book.proxies.status_of(ps3) == "on a phone"
+    assert ps3.values["Used By"] == "4003"
+    assert book.proxies.status_of(ps2) == "free", "its phone is gone"
+    assert sorted(changed["attached"]) == [
+        "PS1 (socks5://user_1:***@79.127.168.43:50101) -> phone 4001",
+        "PS3 (socks5://user_3:***@79.127.168.43:50101) -> phone 4003"]
+    assert changed["released"] == [
+        "PS2 (socks5://user_2:***@79.127.168.43:50101)"]
+
+    # And the Phones tab's Proxy column is corrected to the right name.
+    book.phones.start(Serial="4003", Proxy="PS1", Gmail="", State="")
+    corrected = keeper.sync_phone_proxies(Client(), book)
+    assert corrected == ["phone 4003"]
+    row = [r for r in book.phones.rows() if str(r.get("Serial")) == "4003"][0]
+    assert row["Proxy"] == "PS3"

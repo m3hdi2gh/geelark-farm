@@ -613,7 +613,7 @@ def sync_proxies(client: Client, book: Book,
         if resource.error or not resource.proxy:
             continue
         status = book.proxies.status_of(resource)
-        behind = live.get(f"{resource.proxy.host}:{resource.proxy.port}") or []
+        behind = phones.behind_exit(live, resource.proxy)
         if status == book.proxies.claimed_status:
             # `claimed` means a run is holding it, and this used to stop there
             # because the power state cannot tell a live run from a dead one.
@@ -660,10 +660,14 @@ def sync_phone_proxies(client: Client, book: Book) -> list[str]:
     """
     live = {str(phone.get("serialNo")): phone
             for phone in phones.listing(client)}
-    # host:port -> what the Proxy tab calls it, so the correction is written in
-    # the same words a build would have written.
+    # host:port:username -> what the Proxy tab calls it, so the correction
+    # is written in the same words a build would have written; the endpoint
+    # alone as well, for a panel that does not say the username.
     named = {f"{r.proxy.host}:{r.proxy.port}": (r.name or str(r.proxy))
              for r in book.proxies._rows if r.proxy}
+    named.update({f"{r.proxy.host}:{r.proxy.port}:{r.proxy.username or ''}":
+                  (r.name or str(r.proxy))
+                  for r in book.proxies._rows if r.proxy})
     corrected = []
     for row in book.phones.rows():
         phone = live.get(str(row.get("Serial")))
@@ -672,8 +676,10 @@ def sync_phone_proxies(client: Client, book: Book) -> list[str]:
         config = phone.get("proxy") or {}
         if not config.get("server"):
             continue
-        actual = named.get(f"{config['server']}:{config.get('port')}",
-                           f"{config['server']}:{config.get('port')}")
+        endpoint = f"{config['server']}:{config.get('port')}"
+        actual = (named.get(phones.exit_key(config))
+                  if config.get("username") else None) \
+            or named.get(endpoint, endpoint)
         if (row.get("Proxy") or "").strip() != actual:
             book.phones.finish(row["sheet_row"], Proxy=actual)
             corrected.append(f"phone {row.get('Serial')}")

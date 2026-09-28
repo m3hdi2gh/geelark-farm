@@ -2206,3 +2206,26 @@ def test_set_aside_keeps_a_free_exit_off_the_shelf_until_freed():
     book.proxies.attach(rows[2], "1603")
     assert book.proxies.status_of(rows[2]) == "set aside"
     assert rows[2].values["Used By"] == "1603"
+
+
+def test_add_proxies_tells_ten_on_one_gateway_apart(monkeypatch):
+    """A vendor that multiplexes: ten proxies on one host:port, told apart
+    by the username. The add door matched the endpoint alone and called
+    nine of them "already in the pool" (2026-09-28); the pool's own
+    identity has been the triple since 2026-08-14."""
+    book = make_book(proxies=0)
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
+    rows = [{"raw": f"79.127.168.43:50101:user_{i}:pw", "name": f"PS{i}"}
+            for i in range(1, 11)]
+    status, said, detail = verbs.add_proxies(
+        book, None, None, {"by": "mehdi", "rows": rows}, object())
+    assert status == "done", said
+    assert said == "10 proxies added", said
+    assert len(detail["added"]) == 10 and len(book.proxies.available) == 10
+    # The same ten again: every one is already there.
+    status, said, detail = verbs.add_proxies(
+        book, None, None, {"by": "mehdi", "rows": rows}, object())
+    assert said == "0 proxies added, 10 already in the pool", said
+    assert book.proxies.find_exact("79.127.168.43", 50101, "user_3").name == "PS3"
+    assert book.proxies.find_exact("79.127.168.43", 50101, "user_99") is None

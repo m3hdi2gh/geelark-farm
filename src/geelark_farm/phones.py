@@ -790,7 +790,33 @@ def _live_exits(client: Client, skip_groups: tuple[str, ...] = ()
         if config.get("server"):
             found.setdefault(f"{config['server']}:{config.get('port')}",
                              []).append(phone)
+            # And under the full key, for a vendor that multiplexes: ten
+            # proxies on one endpoint, told apart by the username, and
+            # the phones on each are that row's alone (2026-09-28).
+            if config.get("username"):
+                found.setdefault(exit_key(config), []).append(phone)
     return found
+
+
+def exit_key(config: dict) -> str:
+    """`host:port:username` - what tells one proxy from another on the same
+    gateway. The username is the panel's own, blank when it has none."""
+    return (f"{config.get('server')}:{config.get('port')}"
+            f":{config.get('username') or ''}")
+
+
+def behind_exit(live: dict, proxy) -> list[dict]:
+    """The phones the panel says are on this row's proxy. By the full key
+    when the panel names usernames; by the endpoint alone only for a
+    panel that does not - ten rows on one gateway would otherwise each
+    be told every phone on all ten (2026-09-28)."""
+    if proxy is None:
+        return []
+    endpoint = f"{proxy.host}:{proxy.port}"
+    on_endpoint = live.get(endpoint) or []
+    if any((p.get("proxy") or {}).get("username") for p in on_endpoint):
+        return live.get(f"{endpoint}:{proxy.username or ''}") or []
+    return on_endpoint
 
 
 def _in_the_farms_group(phone: dict) -> bool:

@@ -573,7 +573,8 @@ def _typed_exit(book, raw: str) -> tuple[str, str, str]:
     except (validate.AccountError, validate.ProxyError) as exc:
         return "", "", str(exc)
     endpoint = f"{checked['host']}:{checked['port']}"
-    have = book.proxies.find_proxy(endpoint)
+    have = book.proxies.find_exact(checked["host"], checked["port"],
+                                   checked["username"])
     if have is not None:
         return (have.name or have.label), "", ""
     return endpoint, raw, ""
@@ -614,7 +615,12 @@ def add_proxies(book, ledger, settings, payload, client):
         except (validate.AccountError, validate.ProxyError) as exc:
             refused.append(f"{raw or '?'}: {exc}")
             continue
-        if book.proxies.find_proxy(f"{checked['host']}:{checked['port']}"):
+        # All three of what makes a proxy, not the endpoint alone: a vendor
+        # that multiplexes hands out ten on one host:port, told apart by
+        # the username, and nine of them were called "already in the pool"
+        # (2026-09-28).
+        if book.proxies.find_exact(checked["host"], checked["port"],
+                                   checked["username"]):
             skipped.append(f"{checked['host']}:{checked['port']}")
             continue
         name = checked["proxy_name"] or _next_name(book)

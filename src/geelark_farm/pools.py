@@ -1353,6 +1353,21 @@ class ProxyPool(Pool):
                      and r.proxy.host == host and str(r.proxy.port) == port),
                     None)
 
+    def find_exact(self, host: str, port, username: str) -> Resource | None:
+        """The row for this proxy, matched on all three of what makes one:
+        host, port and username. `find_proxy` stops at the endpoint, which
+        is one row short of the truth for a vendor that multiplexes - ten
+        proxies on one `79.127.168.43:50101`, told apart by the username,
+        and the add door called nine of them "already in the pool"
+        (2026-09-28)."""
+        want = (str(host or "").strip(), str(port or "").strip(),
+                str(username or "").strip())
+        if not want[0] or not want[1]:
+            return None
+        return next((r for r in self._rows if r.proxy
+                     and (r.proxy.host, str(r.proxy.port),
+                          str(r.proxy.username or "")) == want), None)
+
     def reclaim(self, in_use: set[str]) -> list[Resource]:
         """Free proxies held by a phone that no longer exists.
 
