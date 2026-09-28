@@ -2167,17 +2167,42 @@ def test_set_aside_keeps_a_free_exit_off_the_shelf_until_freed():
     assert ProxyPool.shelved_status not in ProxyPool.held_back_statuses, (
         "Free all is the answer to the jobs list, not to a person's shelf")
 
-    for name in ("SX0", "SX1", "SX2", "SX3"):
+    # Just taken by a build, or already set aside: no. Dead, or under a
+    # phone: yes - the dead one stops being retested and freed, the
+    # phone keeps its exit and never passes it on (2026-09-28).
+    for name, why in (("SX0", "just taken"), ("SX3", "already set aside")):
         status, said, _ = verbs.shelve_proxy(
             book, None, None, {"name": name}, None)
-        assert status == "refused" and "only a free exit" in said, (name, said)
+        assert status == "refused" and why in said, (name, said)
+    status, said, _ = verbs.shelve_proxy(
+        book, None, None, {"name": "SX1", "by": "mehdi"}, None)
+    assert status == "done", said
+    assert book.proxies.status_of(rows[1]) == "set aside"
+    assert rows[1].values["Used By"] == "1601", "the phone keeps it"
+    assert "phone on it stays" in rows[1].values["Note"]
 
     status, said, detail = verbs.shelve_all_proxies(
         book, None, None, {"by": "mehdi"}, None)
-    assert status == "done" and said.startswith("1 free exit set aside"), said
-    assert detail["shelved"] == ["SX4"]
+    assert status == "done" and said.startswith("2 exits set aside"), said
+    assert sorted(detail["shelved"]) == ["SX2", "SX4"]
     assert book.proxies.available == []
     assert [book.proxies.status_of(r) for r in rows] == [
-        "claimed", "on a phone", "dead", "set aside", "set aside"]
+        "claimed", "set aside", "set aside", "set aside", "set aside"]
     status, said, _ = verbs.shelve_all_proxies(book, None, None, {}, None)
-    assert status == "done" and said.startswith("no free exit"), said
+    assert status == "done" and said.startswith("no exit"), said
+
+    # The phone goes: the exit comes off it and stays on the shelf, both
+    # by the build's own release and by the sync's reclaim.
+    book.proxies.release(rows[1], note="phone 1601 deleted")
+    assert book.proxies.status_of(rows[1]) == "set aside"
+    assert rows[1].values["Used By"] == ""
+    book.proxies.spend(rows[2], serial="1602")       # a phone put on it by hand
+    assert book.proxies.status_of(rows[2]) == "on a phone"
+    book.proxies.shelve(rows[2], note="kept")
+    assert book.proxies.reclaim(set()) == [], "a shelved exit is not freed"
+    assert book.proxies.status_of(rows[2]) == "set aside"
+    assert rows[2].values["Used By"] == ""
+    # And the sync that reads which phone is really on it keeps the shelf.
+    book.proxies.attach(rows[2], "1603")
+    assert book.proxies.status_of(rows[2]) == "set aside"
+    assert rows[2].values["Used By"] == "1603"

@@ -5704,10 +5704,12 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     # Free: Test and Remove, nothing to free.
     assert "/pools/proxy/test" in row("SX1") and "/pools/proxy/remove" in row("SX1")
     assert "/pools/proxy/free" not in row("SX1")
-    # On a phone: the phone, since when on the pill's hover, and no doors
-    # - the phone decides.
+    # On a phone: the phone, since when on the pill's hover, and one
+    # door - Set aside, which the phone keeps; Free, Test and Remove are
+    # the phone's to decide (2026-09-28).
     assert "<td>2013</td>" in row("SX2") and 'title="since 40m ago"' in row("SX2")
-    assert "/pools/proxy/" not in row("SX2")
+    assert row("SX2").count("/pools/proxy/") == 1
+    assert "/pools/proxy/aside" in row("SX2")
     # Starting: in play - that is where it is going - says a build took
     # it, Free only.
     assert 'data-group="free / on a phone"' in row("SX3")
@@ -10391,16 +10393,23 @@ def test_the_proxy_sheet_sets_exits_aside_one_or_all():
 
     assert 'action="/pools/proxy/aside"' in row("SX1")
     assert "Set aside</button>" in row("SX1")
-    assert "/pools/proxy/aside" not in row("SX3")
+    # Under a phone: Set aside and nothing else - the phone keeps it.
+    assert "/pools/proxy/aside" in row("SX3") and "the phone keeps it" in row("SX3")
+    assert "/pools/proxy/test" not in row("SX3")
+    assert "/pools/proxy/remove" not in row("SX3")
+    # Dead: Set aside too, so it stops being retested and freed.
+    assert "/pools/proxy/aside" in row("SX5")
     assert "/pools/proxy/aside" not in row("SX4")
     assert "/pools/proxy/free" in row("SX4") and "/pools/proxy/test" in row("SX4")
     assert "/pools/proxy/remove" in row("SX4")
 
     head = sheet[:sheet.index("<table")]
     assert 'action="/pools/proxy/aside-all"' in head
-    assert f'data-for-group="{pages.IN_PLAY}"' in head
-    assert "Set aside all · 2" in head
-    assert 'data-ask="Set aside all 2 free exits?' in head
+    aside_all = head[head.index('action="/pools/proxy/aside-all"'):]
+    aside_all = aside_all[:aside_all.index("</form>")]
+    assert "data-for-group" not in aside_all, "under every chip"
+    assert "Set aside all · 5" in head, "two free, one on a phone, dead, held"
+    assert 'data-ask="Set aside all 5 exits?' in head
     assert "Free all · 2" in head, "dead and needs new IP; the shelf is not a job"
     assert pages._aside_all_door("proxy", rows, dict(
         user, role="operator", is_admin=False, may_change_proxy=False)) == ""

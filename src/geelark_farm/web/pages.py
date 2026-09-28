@@ -2149,13 +2149,25 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
         #   set aside     Free (tested first), Test, Remove - a person put
         #                 it on the shelf, and nothing frees it but them
         #                 (2026-09-28)
-        #   free          Set aside as well: off the shelf, kept
+        #   Set aside     on everything but `starting` and `set aside`: a
+        #                 free exit comes off the shelf; a dead or a held
+        #                 one stops being retested and freed; one under a
+        #                 phone keeps its phone and is never handed on
         #   starting      Free - only for one a dead run left behind; a
         #                 live build's is freed by nobody but that build,
         #                 and the pass frees a stale one on its own.
         #   on a phone    nothing: the phone decides.
+        aside = (f'<form method="post" action="{meta["aside"]}">{_csrf(user)}'
+                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
+                 f'<input type="hidden" name="back" value="/">'
+                 f'<button class="quiet" data-busy="Setting aside…" title="'
+                 + ("the phone keeps it; once that phone is gone no build "
+                    "ever gets it" if state == "on a phone" else
+                    "off the shelf, kept: no build takes it until Free puts "
+                    "it back")
+                 + '">Set aside</button></form>') if meta.get("aside") else ""
         if state == "on a phone":
-            return ""
+            return f'<div class="doors">{aside}</div>' if aside else ""
         if state in ("needs new IP", "starting", "suspect", "set aside"):
             doors.append(
                 f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
@@ -2167,14 +2179,8 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                    "back on the shelf - only if the build that took it is "
                    "gone; a stale one is freed on its own within minutes")
                 + '">Free</button></form>')
-        if state == "free" and meta.get("aside"):
-            doors.append(
-                f'<form method="post" action="{meta["aside"]}">{_csrf(user)}'
-                f'<input type="hidden" name="{field}" value="{esc(address)}">'
-                f'<input type="hidden" name="back" value="/">'
-                f'<button class="quiet" data-busy="Setting aside…" title="'
-                f'off the shelf, kept: no build takes it until Free puts '
-                f'it back">Set aside</button></form>')
+        if aside and state not in ("starting", "set aside"):
+            doors.append(aside)
         if state != "starting":
             doors.append(
                 f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
@@ -2459,24 +2465,29 @@ def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
 
 
 def _aside_all_door(kind: str, rows: list[dict], user: dict) -> str:
-    """Every free exit off the shelf in one press, under the in-play chip
-    (the operator, 2026-09-28: the old batch set aside, a new one poured
-    in). Asked once beside the button; Free on a row is the way back."""
+    """Every exit the builds could ever reach again off the shelf in one
+    press (the operator, 2026-09-28: the old batch set aside, a new one
+    poured in): the free ones, the dead and held ones, and the ones under
+    a phone, which keep their phone and are never handed on. Under every
+    chip, since it takes from both lists; asked once beside the button;
+    Free on a row is the way back."""
     meta = _POOL_KINDS[kind]
     if not meta.get("aside_all") or not _may(user, meta["manage"]):
         return ""
-    n = sum(1 for r in rows if str(r.get("state") or "") == "free")
+    n = sum(1 for r in rows
+            if str(r.get("state") or "") not in ("starting", "set aside"))
     noun = "exit" if n == 1 else "exits"
-    ask = (f"Set aside all {n} free {noun}? No build takes them until "
-           f"Free on a row puts one back; exits under a phone stay.")
+    ask = (f"Set aside all {n} {noun}? No build takes them again; one under "
+           f"a phone keeps that phone until it goes. Free on a row puts one "
+           f"back.")
     return (f'<form method="post" action="{meta["aside_all"]}" '
-            f'class="inline" data-for-group="{esc(IN_PLAY)}" hidden '
+            f'class="inline" '
             f'data-ask="{esc(ask)}" data-yes="Set aside all {n}">'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
             f'<input type="hidden" name="n" value="{n}">'
             f'<button class="quiet" data-busy="Setting aside…" '
-            f'title="every free exit off the shelf, kept - for pouring in '
-            f'a new batch that is then the only stock"'
+            f'title="every exit off the shelf, kept - for pouring in a '
+            f'new batch that is then the only stock"'
             f'{"" if n else " disabled"}>'
             f'Set aside all{f" · {n}" if n else ""}</button></form>')
 

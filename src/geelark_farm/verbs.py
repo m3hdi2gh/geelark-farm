@@ -800,44 +800,73 @@ def mark_proxy_free(book, ledger, settings, payload, client):
 
 
 def _shelve(book, resource, payload) -> None:
-    book.proxies.shelve(resource, note=(
-        f"Set aside from the web by {_by(payload)} on {_stamp()}: kept out "
-        f"of the builds until freed by hand. The cloud still holds it."))
+    pool = book.proxies
+    on_phone = pool.status_of(resource) == pool.spent_status
+    pool.shelve(resource, note=(
+        f"Set aside from the web by {_by(payload)} on {_stamp()}: "
+        + ("the phone on it stays; once that phone is gone the exit is "
+           "never handed to another build."
+           if on_phone else
+           "kept out of the builds until freed by hand.")
+        + " The cloud still holds it."))
+
+
+def _shelvable(pool, resource) -> str:
+    """Why this row cannot be set aside, or "" when it can. A build that
+    has just taken one is the only holder that says no: the exit is on
+    its way onto a phone that does not exist yet, and a one-off is that
+    build's own. A phone already on one is fine - the phone keeps it and
+    nothing else ever gets it."""
+    status = pool.status_of(resource)
+    if status == pool.shelved_status:
+        return "is already set aside"
+    if status == pool.claimed_status:
+        return "was just taken by a build - set it aside once its phone is up"
+    if status == pool.one_off_status:
+        return "is a one-off typed for a build that is still on its way"
+    return ""
 
 
 def shelve_proxy(book, ledger, settings, payload, client):
-    """Set aside: one free exit off the shelf, kept, until Free puts it
-    back (the operator, 2026-09-28). Nothing is tested and nothing is
-    judged - it is a person's choice, not a verdict."""
+    """Set aside: one exit off the shelf, kept, until Free puts it back
+    (the operator, 2026-09-28). Free, dead, wanting an address, suspect -
+    or under a phone, which keeps it and never passes it on. Nothing is
+    tested and nothing is judged: a person's choice, not a verdict."""
     resource, refused = _named(book, payload)
     if refused:
         return refused
-    status = book.proxies.status_of(resource)
-    if resource.error or status not in book.proxies.available_statuses:
-        return ("refused", f"{resource.name} is {status or 'unreadable'} - "
-                           f"only a free exit is set aside", None)
+    why = _shelvable(book.proxies, resource)
+    if why:
+        return "refused", f"{resource.name} {why}", None
     _shelve(book, resource, payload)
     return ("done", f"{resource.name} is set aside - Free on its row puts "
                     f"it back", None)
 
 
 def shelve_all_proxies(book, ledger, settings, payload, client):
-    """Set aside all: every free exit off the shelf in one press, so a
-    fresh batch can be poured in and be the only stock (the operator,
-    2026-09-28). An exit under a phone, one a build has just taken, and
-    everything already out of play stay as they are."""
+    """Set aside all: every exit the builds could ever reach again off
+    the shelf in one press - free, dead, wanting an address, suspect, and
+    the ones under a phone, which keep their phone and are never handed
+    on - so a fresh batch can be poured in and be the only stock (the
+    operator, 2026-09-28). Only what a build has just taken, a one-off,
+    and what is already set aside stay as they are."""
     pool = book.proxies
-    named = []
+    named, kept = [], 0
     for resource in list(pool._rows):
-        if resource.error or pool.status_of(resource) not in pool.available_statuses:
+        if _shelvable(pool, resource):
             continue
+        if pool.status_of(resource) == pool.spent_status:
+            kept += 1
         _shelve(book, resource, payload)
         named.append(resource.name or resource.label)
     if not named:
-        return "done", "no free exit to set aside", {"shelved": []}
-    return ("done", f"{len(named)} free exit{'' if len(named) == 1 else 's'} "
-                    f"set aside by {_by(payload)} - Free on a row puts it "
-                    f"back", {"shelved": named})
+        return "done", "no exit to set aside", {"shelved": []}
+    said = (f"{len(named)} exit{'' if len(named) == 1 else 's'} set aside "
+            f"by {_by(payload)} - Free on a row puts one back")
+    if kept:
+        said += (f"; {kept} of them {'stays' if kept == 1 else 'stay'} under "
+                 f"{'its' if kept == 1 else 'their'} phone until it goes")
+    return "done", said, {"shelved": named}
 
 
 def test_proxy(book, ledger, settings, payload, client):

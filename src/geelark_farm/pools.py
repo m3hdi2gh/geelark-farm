@@ -1176,12 +1176,23 @@ class ProxyPool(Pool):
     def release(self, resource: Resource, *, note: str = "") -> None:
         if self._gone_if_one_off(resource, "released"):
             return
+        # A person's shelf outlives the phone that was on it: the exit
+        # comes off the phone and stays set aside (2026-09-28).
+        if self.status_of(resource) == self.shelved_status:
+            self._set(resource, self._off_a_phone(self.shelved_status, note))
+            return
         # `free` rather than blank: this column is also the record of whether a
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
 
     def shelve(self, resource: Resource, *, note: str = "") -> None:
-        """A person's set-aside: off the shelf until they free it."""
+        """A person's set-aside: off the shelf until they free it. One a
+        phone is on keeps its serial - the phone stays where it is, and
+        the exit is simply never handed to another (2026-09-28)."""
+        if self.status_of(resource) == self.spent_status:
+            self._set(resource, {self.status_column: self.shelved_status,
+                                 self.note_column: note})
+            return
         self._set(resource, self._off_a_phone(self.shelved_status, note))
 
     def set_aside(self, resource: Resource, *, reason: str = "",
@@ -1298,10 +1309,12 @@ class ProxyPool(Pool):
         # instruction waiting for somebody to change an address in the
         # vendor's panel, and a phone being on it does not make that done.
         # The serial is still recorded, so the tab says both true things.
-        keep = self.status_of(resource) == self.needs_new_ip
+        # So does a person's shelf: the phone on it is recorded, and the
+        # exit is still not for the next build (2026-09-28).
+        status = self.status_of(resource)
+        keep = status in (self.needs_new_ip, self.shelved_status)
         self._set(resource, {
-            self.status_column: (self.needs_new_ip if keep
-                                 else self.spent_status),
+            self.status_column: (status if keep else self.spent_status),
             self.serial_column: serials,
             self.note_column: (
                 f"Shared by phones {serials} - a build ran out of free exits "
@@ -1357,10 +1370,19 @@ class ProxyPool(Pool):
         """
         freed = []
         for resource in self._rows:
-            if (self.status_of(resource) != self.spent_status
-                    or not resource.proxy):
+            status = self.status_of(resource)
+            if not resource.proxy or status not in (self.spent_status,
+                                                    self.shelved_status):
                 continue
             if f"{resource.proxy.host}:{resource.proxy.port}" in in_use:
+                continue
+            if status == self.shelved_status:
+                # Set aside while a phone was on it: the phone is gone,
+                # the serial comes off, and the shelf stays (2026-09-28).
+                if (resource.values.get(self.serial_column) or "").strip():
+                    self.release(resource, note=(
+                        "Set aside; the phone that was on it no longer "
+                        "exists."))
                 continue
             self.release(resource, note=(
                 "Free again - the phone that was behind it no longer exists."))
