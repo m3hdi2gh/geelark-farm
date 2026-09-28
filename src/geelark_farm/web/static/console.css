@@ -388,17 +388,45 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);
  box-shadow:inset 0 0 0 2px currentColor}
 .carries.claude{color:#c9905c}
 .carries.claude::before{border-radius:2px;transform:rotate(45deg)}
-.byhand label.field select{min-width:230px;height:38px}
+/* One line: the boxes share the width and Build closes it. The Exit box
+   had pushed the button under the row (the operator, 2026-09-28); it
+   wraps only where the card is too narrow for all of them. */
+.byhand label.field{flex:1 1 190px;min-width:0}
+.byhand label.field select{width:100%;min-width:0;height:38px;
+ text-overflow:ellipsis}
+.byhand button.go{flex:none;height:38px}
 dialog.editor .or{font-size:12.5px;color:var(--muted);padding-top:6px;
- border-top:1px solid var(--line2)}
-dialog.editor .pick{max-height:170px;overflow:auto;border:1px solid var(--line2);
- border-radius:7px;background:var(--panel2)}
-dialog.editor .pick label{display:flex;gap:10px;align-items:center;padding:7px 11px;
- font-family:var(--mono);font-size:12.5px;border-top:1px solid var(--line2);
- cursor:pointer}
-dialog.editor .pick label:first-child{border-top:0}
-dialog.editor .pick label:hover{background:#141d2f}
-dialog.editor .pick .none{padding:10px 11px;font-size:12.5px;color:var(--dim)}
+ border-top:1px solid var(--line2);display:flex;align-items:baseline;gap:8px}
+dialog.editor .or b{font:500 11px var(--mono);color:var(--dim)}
+/* `.picklist`, not `.pick`: a page-wide `.pick` rule (the tick rows
+   elsewhere) made this list a two-column grid - the ragged second
+   column in every choose dialog. */
+dialog.editor .picklist{max-height:170px;overflow:auto;
+ border:1px solid var(--line2);border-radius:7px;background:var(--panel2)}
+dialog.editor .picklist label{display:flex;gap:10px;align-items:center;
+ padding:7px 11px;font-family:var(--mono);font-size:12.5px;
+ border-top:1px solid var(--line2);cursor:pointer}
+dialog.editor .picklist label:first-child{border-top:0}
+dialog.editor .picklist label:hover{background:#141d2f}
+dialog.editor .picklist .none{padding:10px 11px;font-size:12.5px;color:var(--dim)}
+/* The exits as names side by side: a grid of chips, the radio kept for
+   the keyboard but drawn as the chip itself. */
+dialog.editor .picklist.chips{display:grid;gap:6px;padding:8px;
+ grid-template-columns:repeat(auto-fill,minmax(76px,1fr));max-height:206px}
+dialog.editor .picklist.chips label.chip{position:relative;justify-content:center;
+ height:32px;padding:0 6px;border:1px solid var(--line);border-radius:7px;
+ background:var(--panel);color:var(--ink);font:500 12.5px/1 var(--mono)}
+dialog.editor .picklist.chips label.chip:hover{border-color:#3a5c96;
+ background:#16213a}
+dialog.editor .picklist.chips label.chip input{position:absolute;opacity:0;
+ width:1px;height:1px;pointer-events:none}
+dialog.editor .picklist.chips label.chip:has(input:checked){
+ border-color:var(--accent-hi);background:#16284a;color:var(--bright);
+ box-shadow:inset 0 0 0 1px var(--accent-hi)}
+dialog.editor .picklist.chips label.chip:has(input:focus-visible){
+ outline:2px solid var(--focus);outline-offset:1px}
+dialog.editor .picklist.chips .none{grid-column:1/-1}
+dialog.editor .dlgnote{margin:-6px 0 0;font-size:12px;color:var(--dim)}
 dialog.editor .dlg{display:flex;flex-direction:column;gap:12px;padding:16px 18px}
 dialog.editor .dlg .field input{width:100%;height:36px;font-family:var(--mono);
  font-size:12.5px}

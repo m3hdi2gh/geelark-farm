@@ -3695,10 +3695,12 @@ def test_building_by_hand_asks_for_what_was_chosen(web, monkeypatch):
     assert 'action="/phones/build"' in body
     assert "pick@example.com" in body, "a free Gmail is offered in the dialog"
     assert "gpt@example.com" in body, "a free account too"
-    assert '<input type="radio" name="pick-proxy-new" value="SX9"> SX9' in body, (
+    chip = ('<label class="chip"><input type="radio" name="pick-proxy-new"'
+            ' value="SX9"><span>SX9</span></label>')
+    assert chip in body, (
         "a free exit is offered in the exit dialog (back 2026-09-28)")
     assert '<select name="proxy_name" data-new="proxy-new"' in body
-    assert body.count("auto &mdash; the next free one") == 2, (
+    assert body.count('<option value="">auto &mdash; ') == 2, (
         "blank means the pool decides - the Gmail and the exit")
     assert 'value="none">none &mdash; no Google account' in body
     assert 'select name="app"' not in body, "which app is not a choice"
@@ -3846,7 +3848,7 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     assert card.count("choose&hellip;</option>") == 3
     assert card.index('name="app_account"') < card.index('name="proxy_name"')
     assert "type a new one" not in card
-    assert '<option value="">auto &mdash; the next free one (1 free)</option>' in card
+    assert '<option value="">auto &mdash; 1 free</option>' in card
     assert '<option value="none">none &mdash; no Google account</option>' in card
     # "none" moved to the kind box, which is the question it answers.
     assert 'data-bare="1" data-gmail="1">none &mdash; sign in later' in card
@@ -3865,9 +3867,17 @@ def test_one_box_per_credential_and_the_free_rows_drop_down(web, monkeypatch):
     # of the free exits to pick.
     pdlg = body[body.index('id="proxy-new"'):]
     pdlg = pdlg[:pdlg.index("</dialog>")]
-    assert 'data-field="proxy_address"' in pdlg and 'data-field="proxy_label"' in pdlg
-    assert '<input type="radio" name="pick-proxy-new" value="SX1"> SX1' in pdlg
-    assert '<input type="hidden" name="proxy_label" value="">' in body
+    assert 'data-field="proxy_address"' in pdlg
+    assert "proxy_label" not in body, "a proxy typed here is not named"
+    assert "never joins the pool" in pdlg, "and it says it is for one build"
+    assert 'data-mask="endpoint"' in pdlg, "the card never shows its password"
+    # The free exits as chips, by name - not a list of radio rows.
+    assert '<div class="picklist chips">' in pdlg
+    assert ('<label class="chip"><input type="radio" name="pick-proxy-new"'
+            ' value="SX1"><span>SX1</span></label>') in pdlg
+    # The choose dialogs' list is `.picklist`: the page-wide `.pick` rule
+    # split it into two ragged columns (the operator, 2026-09-28).
+    assert 'class="pick"' not in body
     # The dialog: the boxes, then the free rows to pick from.
     gdlg = body[body.index('id="gmail-new"'):body.index('id="account-new"')]
     assert 'data-field="gmail_secret"' in gdlg
@@ -3907,17 +3917,16 @@ def test_a_typed_exit_is_told_apart_from_a_picked_one(web, monkeypatch):
     client.login()
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), gmail="", account_kind="",
-                         proxy_name="US7", proxy_label=""))
+                         proxy_name="US7"))
     assert got[-1]["payload"]["proxy_name"] == "US7"
     assert got[-1]["payload"]["proxy_typed"] is False
 
     client.request("POST", "/phones/build",
                    _form(csrf=client.csrf(), gmail="", account_kind="",
-                         proxy_name="socks5://u:p@10.0.0.9:1080",
-                         proxy_label="US99"))
+                         proxy_name="socks5://u:p@10.0.0.9:1080"))
     assert got[-1]["payload"]["proxy_name"] == "socks5://u:p@10.0.0.9:1080"
     assert got[-1]["payload"]["proxy_typed"] is True
-    assert got[-1]["payload"]["proxy_label"] == "US99"
+    assert "proxy_label" not in got[-1]["payload"]
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -10249,3 +10258,20 @@ def test_journey_pictures_are_served_only_from_the_phones_own_folder(
     status, _, _ = narrow.request(
         "GET", f"/phones/4435/wire/{folder}/180404-captcha.xml")
     assert status == 200
+
+
+def test_the_exits_are_ordered_by_name_in_the_dialog():
+    """The read hands the free exits least-used first - the auto order.
+    A person looks for a name, so the dialog sorts them as names: US9
+    before US10."""
+    from geelark_farm.web import pages
+
+    card = pages._build_card(
+        {"choose": {"proxies": [{"label": "US10"}, {"label": "US9"},
+                                {"label": "SX2"}]},
+         "stock": {"gmail": {"free": 0}, "proxy": {"free": 3}}},
+        {"id": 1, "role": "operator", "csrf": "c", "mutations": True,
+         "may_login_accounts": True})
+    drawn = card[card.index('id="proxy-new"'):]
+    assert drawn.index('value="SX2"') < drawn.index('value="US9"') \
+        < drawn.index('value="US10"')

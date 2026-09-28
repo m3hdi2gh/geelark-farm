@@ -2806,17 +2806,19 @@ def _build_card(data: dict, user: dict) -> str:
                  "for here is still built.")
     gmails = _label_list(choose.get("gmails"))
     apps = _label_list(choose.get("apps"))
-    proxies = _label_list(choose.get("proxies"))
+    # By name, so an exit is found where the eye looks for it; the read
+    # hands them least-used first, which is the auto order, not a finding
+    # order.
+    proxies = sorted(_label_list(choose.get("proxies")), key=_natural)
     account_kinds = _account_kinds(choose.get("apps"))
-    # Two boxes. The exit is not one of them: the build picks one and
-    # swaps it whenever an install or a sign-in shows it is bad - a
-    # choice made here was a choice the build had to undo (the operator,
-    # 2026-09-10). Nor is the app: all three go on every phone (the
+    # Three boxes: the Gmail, the account and the exit (back since
+    # 2026-09-28). The app is not one: all three go on every phone (the
     # operator, 2026-09-12). A Gmail is the pool's next, none at all, or
     # one chosen in the dialog - typed, or picked from the free ones.
     if gmails:
-        first = (f'<option value="">auto &mdash; the next free one '
-                 f'({len(gmails)} free)</option>'
+        # Short, so three boxes and the button share one line: "auto" is
+        # the pool's next, and the count says how many it has.
+        first = (f'<option value="">auto &mdash; {len(gmails)} free</option>'
                  '<option value="none">none &mdash; no Google account</option>')
     else:
         first = ('<option value="" disabled>auto &mdash; the pool is empty'
@@ -2859,14 +2861,13 @@ def _build_card(data: dict, user: dict) -> str:
                    '</select></label>')
     # The exit, back by the operator's ask (2026-09-28): auto - the build
     # picks one and still swaps it when an install or a sign-in shows it
-    # is bad - or "choose...", a dialog to type a proxy string (it joins
-    # the pool, untested until the build) or pick a free exit by name.
+    # is bad - or "choose...", a dialog to type a proxy string for this
+    # build only (it never becomes stock) or pick a free exit by name.
     # The value is a name when picked and a proxy string when typed; the
     # route tells them apart by the colon a name never carries.
     exit_box = (f'<label class="field"><span>Exit</span>'
                 f'<select name="proxy_name" data-new="proxy-new">'
-                f'<option value="">auto &mdash; the next free one '
-                f'({exits} free)</option>'
+                f'<option value="">auto &mdash; {exits} free</option>'
                 f'<option value="__new__">choose&hellip;</option>'
                 f'</select></label>')
     return (
@@ -2880,7 +2881,7 @@ def _build_card(data: dict, user: dict) -> str:
         # the choice's value.
         + "".join(f'<input type="hidden" name="{name}" value="">'
                   for name in ("gmail_password", "gmail_secret",
-                               "app_password", "app_secret", "proxy_label"))
+                               "app_password", "app_secret"))
         + '</form>'
         + _new_dialog("gmail-new", "Choose a Gmail", [
             ("gmail_address", "Address", ""),
@@ -2893,9 +2894,10 @@ def _build_card(data: dict, user: dict) -> str:
             ("app_secret", "2FA secret", "optional")], rows=apps)
         + _new_dialog("proxy-new", "Choose an exit", [
             ("proxy_address", "Proxy",
-             "socks5://user:pass@host:port, or host:port:user:pass"),
-            ("proxy_label", "Name", "optional - the next SX number if empty")],
-            rows=proxies)
+             "socks5://user:pass@host:port  or  host:port:user:pass")],
+            rows=proxies, chips=True, mask="endpoint",
+            note="For this build only \u2014 a typed proxy never joins the "
+                 "pool.")
         # The dialog's rows are the free ones of the chosen kind, swapped
         # in by the script; `rows=apps` above is what it starts with.
         + '</div>')
@@ -2905,33 +2907,58 @@ def _label_list(rows) -> list[str]:
     return [str(r.get("label") or "") for r in rows or [] if r.get("label")]
 
 
+def _natural(text: str) -> list:
+    """US9 before US10: digits compared as numbers."""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower())
+            for t in re.split(r"(\d+)", text or "") if t]
+
+
 def _new_dialog(ident: str, title: str,
                 fields: list[tuple[str, str, str]],
-                rows: list[str] | None = None) -> str:
+                rows: list[str] | None = None, *, chips: bool = False,
+                mask: str = "", note: str = "") -> str:
     """The dialog "choose..." opens: the credential's boxes to type one,
     and under them the free rows of its pool to pick one instead, then
     Cancel and Use. Nothing here is a form field of the card - the
     script copies what was typed into the card's hidden boxes and shows
     the address as the choice; a picked row carries nothing but its
-    address, since the pool has the rest."""
+    address, since the pool has the rest.
+
+    `chips` draws the free rows as a grid of names rather than a list of
+    addresses - short names read better side by side. `mask` tells the
+    script what of a typed value the card may show: `endpoint` keeps a
+    proxy's password off the page. `note` is one line under the boxes."""
     boxes = "".join(
         f'<label class="field"><span>{esc(label)}</span>'
         f'<input data-field="{name}" autocomplete="off" spellcheck="false"'
         + (f' placeholder="{esc(hint)}"' if hint else "")
         + (' autofocus' if name.endswith("_address") else "")
         + '></label>' for name, label, hint in fields)
+    if note:
+        boxes += f'<p class="dlgnote">{esc(note)}</p>'
     pick = ""
     if rows is not None:
-        if rows:
+        if rows and chips:
+            pick = "".join(
+                f'<label class="chip"><input type="radio" name="pick-{ident}" '
+                f'value="{esc(r)}"><span>{esc(r)}</span></label>' for r in rows)
+        elif rows:
             pick = "".join(
                 f'<label><input type="radio" name="pick-{ident}" '
                 f'value="{esc(r)}"> {esc(r)}</label>' for r in rows)
         else:
             pick = ('<div class="none">The pool has nothing free - type '
                     'one above.</div>')
-        pick = (f'<div class="or">or one of the free ones</div>'
-                f'<div class="pick">{pick}</div>')
-    return (f'<dialog class="editor" id="{ident}" aria-labelledby="{ident}-h">'
+        if chips:
+            pick = (f'<div class="or"><span>or pick a free one</span>'
+                    f'<b>{len(rows)}</b></div>'
+                    f'<div class="picklist chips">{pick}</div>')
+        else:
+            pick = (f'<div class="or">or one of the free ones</div>'
+                    f'<div class="picklist">{pick}</div>')
+    shown = f' data-mask="{esc(mask)}"' if mask else ""
+    return (f'<dialog class="editor" id="{ident}" aria-labelledby="{ident}-h"'
+            f'{shown}>'
             f'<div class="dlg"><header><h4 id="{ident}-h">{esc(title)}</h4>'
             f'</header>{boxes}{pick}'
             f'<div class="row"><button type="button" class="quiet" '

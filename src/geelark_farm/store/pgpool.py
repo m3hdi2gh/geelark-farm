@@ -387,11 +387,12 @@ class _PgPool(Pool):
                 self._held.pop(resource.store_id, None)
 
     # ------------------------------------------------------------ claiming
-    def claim_this(self, resource: Resource, serial: str = "") -> bool:
+    def claim_this(self, resource: Resource, serial: str = "",
+                   also: tuple[str, ...] = ()) -> bool:
         if resource.store_id is None:
             return False
         row = self._table.claim(
-            self.kind, free=tuple(self.available_statuses),
+            self.kind, free=tuple(self.available_statuses) + tuple(also),
             claimed=self.claimed_status,
             count_use=isinstance(self, ProxyPool), serial=serial,
             row_id=resource.store_id, count_attempt=self.COUNTS_ATTEMPTS)
@@ -852,6 +853,9 @@ class PgProxyPool(_PgPool, ProxyPool):
         "Password": "proxy_pass", "Last Exit IP": "last_exit_ip",
         "Used By": "serial", "Status": "status", "Note": "note",
         "Times Used": "times_used", "Last Used": "claimed_at",
+        # Where the row came from; `one-off` marks a proxy typed on the
+        # build card for one build (ProxyPool.one_off_status).
+        "Source": "source",
     }
 
     def _values_of(self, row: dict) -> dict[str, str]:

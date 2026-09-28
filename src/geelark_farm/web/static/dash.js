@@ -198,7 +198,7 @@
           if (box) box.value = '';
         });
         // The dialog's own list of free rows follows the kind too.
-        var pick = dlg.querySelector('.pick');
+        var pick = dlg.querySelector('.picklist');
         if (pick) {
           while (pick.firstChild) pick.removeChild(pick.firstChild);
           if (!rows.length) {
@@ -1665,6 +1665,13 @@
   // "type a new one" on the build card: the dialog `pick` names, filled
   // in, copied into the card's hidden boxes; the address becomes the
   // choice. Cancel puts the choice back where it was.
+  // host:port out of socks5://user:pass@host:port or host:port:user:pass.
+  function endpointOf(raw){
+    var s = String(raw || '').trim().replace(/^[a-z0-9]+:\/\//i, '');
+    if (s.indexOf('@') >= 0) return s.slice(s.lastIndexOf('@') + 1);
+    return s.split(':').slice(0, 2).join(':');
+  }
+
   function openNew(pick, was){
     var dlg = document.getElementById(pick.dataset.new);
     var form = pick.closest('form');
@@ -1695,8 +1702,12 @@
         });
         var old = pick.querySelector('option[data-typed]');
         if (old) old.remove();
-        var opt = new Option(addr + (row ? ' (from the pool)' : ' (new)'),
-                             addr, true, true);
+        // A typed proxy carries its password; the card shows only where
+        // it goes (data-mask="endpoint"), and says it is for this build.
+        var shown = row ? addr + ' (from the pool)'
+          : dlg.dataset.mask === 'endpoint'
+            ? endpointOf(addr) + ' (this build only)' : addr + ' (new)';
+        var opt = new Option(shown, addr, true, true);
         opt.setAttribute('data-typed', '1');
         pick.insertBefore(opt, pick.querySelector('option[value="__new__"]'));
         pick.value = addr;

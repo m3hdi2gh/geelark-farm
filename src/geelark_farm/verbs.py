@@ -251,14 +251,13 @@ def build_by_hand(book, ledger, settings, payload, client):
                     f"that account was not usable - {refused}", None)
         book.reload()
 
-    # A typed exit (the card's dialog, 2026-09-28): validated and put in
-    # the pool the way a pasted one is - named as typed, or given the next
-    # name - and the wish names that row. One the pool already holds by
-    # host:port is that row, not a second copy of it.
+    # A typed exit (the card's dialog, 2026-09-28). One the pool already
+    # holds by host:port is that row, free or not like any named one;
+    # anything else is for this build only, and goes in - last, once
+    # nothing else can refuse the wish - as a one-off.
+    one_off = ""
     if proxy_name and payload.get("proxy_typed"):
-        proxy_name, refused = _typed_exit(
-            book, ledger, settings, payload, proxy_name,
-            str(payload.get("proxy_label") or "").strip())
+        proxy_name, one_off, refused = _typed_exit(book, proxy_name)
         if refused:
             return "refused", f"that exit was not usable - {refused}", None
 
@@ -268,7 +267,8 @@ def build_by_hand(book, ledger, settings, payload, client):
     # the dashboard's own main button do nothing at all, under a green
     # tick (the operator, 2026-09-07).
     for what, name, pool in (("Gmail", gmail, book.gmails),
-                             ("exit", proxy_name, book.proxies)):
+                             ("exit", "" if one_off else proxy_name,
+                              book.proxies)):
         if not name:
             continue
         # The same question `builder._pick` asks a pass later, asked now:
@@ -301,6 +301,12 @@ def build_by_hand(book, ledger, settings, payload, client):
         return ("refused", f"{going} is already on its way to a phone being "
                            f"built - see the Phones table", None)
 
+    if one_off:
+        try:
+            _one_off_exit(book, payload, one_off, proxy_name)
+        except ValueError:
+            return ("refused", f"the exit {proxy_name} is already in the "
+                               f"pool", None)
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
                              app_account=app_account,
@@ -552,35 +558,47 @@ def _next_name(book) -> str:
     return f"SX{highest + 1}"
 
 
-def _typed_exit(book, ledger, settings, payload, raw: str,
-                label: str) -> tuple[str, str]:
-    """The pool row a typed proxy string stands for: the one already
-    there by host:port, else the one `add_proxies` makes of it. Returns
-    (name, "") or ("", why not).
+def _typed_exit(book, raw: str) -> tuple[str, str, str]:
+    """What a proxy string typed on the build card stands for, as
+    (the name the wish carries, the string to add as a one-off or "",
+    why it is no use or "").
 
-    Untested on arrival, on purpose: `build_by_hand` answers inside the
-    request that pressed Build (`runs_inline`), and a proxy test is
-    seconds of somebody else's network. The build itself is the test - a
-    dead exit fails the phone the way any dead exit does, and the Exits
-    page can test it by hand."""
+    One the pool already holds by host and port is that row. Anything
+    else is for this one build (the operator, 2026-09-28: "it is not
+    meant to join the pool and stay"), named by its host and port."""
     from .store import validate
 
     try:
-        checked = validate.proxy_row(raw=raw, name=label)
+        checked = validate.proxy_row(raw=raw)
     except (validate.AccountError, validate.ProxyError) as exc:
-        return "", str(exc)
-    have = book.proxies.find_proxy(f"{checked['host']}:{checked['port']}")
+        return "", "", str(exc)
+    endpoint = f"{checked['host']}:{checked['port']}"
+    have = book.proxies.find_proxy(endpoint)
     if have is not None:
-        return have.name, ""
-    status, said, detail = add_proxies(
-        book, ledger, settings,
-        dict(payload, rows=[{"raw": raw, "name": label}]), None)
-    added = (detail or {}).get("added") or []
-    if not added:
-        why = ((detail or {}).get("refused") or [said])[0]
-        return "", str(why)
-    book.reload()
-    return str(added[0]), ""
+        return (have.name or have.label), "", ""
+    return endpoint, raw, ""
+
+
+def _one_off_exit(book, payload, raw: str, endpoint: str) -> None:
+    """Put a typed proxy in for the one build that names it.
+
+    Under `one-off`, which `available` never offers, so no other build
+    and no count of free exits sees it; it leaves the pool the moment it
+    is let go (ProxyPool.one_off_status). Untested here, on purpose:
+    `build_by_hand` answers inside the request that pressed Build, and a
+    proxy test is seconds of somebody else's network - the build is the
+    test, and a dead exit fails its phone the way any dead exit does."""
+    pool = book.proxies
+    row = pool.append(**{
+        "Name": endpoint, "Proxy String": raw,
+        "Status": pool.one_off_status, "Source": pool.ONE_OFF_SOURCE,
+        "Note": (f"Typed on the build card by {_by(payload)} on {_stamp()} "
+                 f"for one build; it leaves the pool when that build or "
+                 f"its phone lets it go."),
+        "Times Used": "0"})
+    # A sheet pool has no Source column; the mark still has to hold for
+    # the rest of this process.
+    row.values["Source"] = pool.ONE_OFF_SOURCE
 
 
 def add_proxies(book, ledger, settings, payload, client):

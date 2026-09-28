@@ -548,7 +548,6 @@ class _Handler(BaseHTTPRequestHandler):
                     "gmail_secret": field.get("gmail_secret") or "",
                     "proxy_name": exit_,
                     "proxy_typed": ":" in exit_,
-                    "proxy_label": (field.get("proxy_label") or "").strip(),
                     "app": which,
                     "install_app": bool(which),
                     "app_account": account,

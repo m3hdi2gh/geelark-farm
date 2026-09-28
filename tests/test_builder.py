@@ -7382,3 +7382,70 @@ def test_a_named_exit_is_found_by_its_name():
         builder._pick(book.proxies, "SX9", "exit")
     with pytest.raises(builder.Aborted, match="not there at all"):
         builder._pick(book.proxies, "SX8", "exit")
+
+
+def _one_off(book, endpoint="10.0.0.9:1080"):
+    pool = book.proxies
+    row = pool.append(**{"Name": endpoint, "Proxy String": endpoint + ":u:p",
+                         "Status": pool.one_off_status})
+    row.values["Source"] = pool.ONE_OFF_SOURCE
+    return row
+
+
+def test_a_one_off_exit_is_claimed_only_by_the_build_that_names_it():
+    """A proxy typed on the build card waits under `one-off`: the auto
+    claim never takes it, and `_pick` takes it for the build that names
+    it (2026-09-28)."""
+    book = make_book(gmails=1, proxies=0)
+    row = _one_off(book)
+    assert book.proxies.claim() is None, "not stock"
+    picked = builder._pick(book.proxies, "10.0.0.9:1080", "exit")
+    assert picked is row
+    assert book.proxies.status_of(row) == "claimed"
+
+
+@pytest.mark.parametrize("let_go", ["release", "set_aside", "fail", "retire"])
+def test_a_one_off_exit_let_go_leaves_the_pool(let_go):
+    """Every way out but `on a phone` archives a one-off: let go, it is
+    gone, never stock (the operator, 2026-09-28)."""
+    book = make_book(gmails=1, proxies=1)
+    row = _one_off(book)
+    builder._pick(book.proxies, "10.0.0.9:1080", "exit")
+    if let_go == "fail":
+        book.proxies.fail(row, "dead")
+    else:
+        getattr(book.proxies, let_go)(row)
+    assert row not in book.proxies._rows
+    assert book.proxies.find_proxy("10.0.0.9:1080") is None
+    assert len(book.proxies._rows) == 1, "the pool's own exit is untouched"
+
+
+def test_a_one_off_exit_stays_while_a_phone_carries_it():
+    book = make_book(gmails=1, proxies=0)
+    row = _one_off(book)
+    builder._pick(book.proxies, "10.0.0.9:1080", "exit")
+    book.proxies.spend(row, serial="4900")
+    assert row in book.proxies._rows
+    assert book.proxies.status_of(row) == book.proxies.spent_status
+    book.proxies.release(row)                  # the phone is gone
+    assert row not in book.proxies._rows
+
+
+def test_a_pool_exit_let_go_is_still_stock():
+    book = make_book(gmails=1, proxies=1)
+    row = book.proxies.claim()
+    book.proxies.release(row)
+    assert row in book.proxies._rows and row in book.proxies.available
+
+
+def test_a_one_off_its_build_never_reached_is_dropped_at_the_end():
+    """A build that ended before claiming its typed exit - its Gmail
+    refused first - drops it rather than leave it waiting for nobody."""
+    book = make_book(gmails=1, proxies=1)
+    row = _one_off(book)
+    assert builder._waiting_one_offs(book.proxies, "10.0.0.9:1080") == [row]
+    assert builder._waiting_one_offs(book.proxies, "SX1") == []
+    import inspect
+
+    src = inspect.getsource(builder._let_the_build_go)
+    assert "_waiting_one_offs(book.proxies" in src

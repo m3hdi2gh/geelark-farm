@@ -1062,8 +1062,25 @@ def _pick(pool, wanted: str, what: str):
                 return resource
             raise Aborted(f"the {what} {wanted} was taken while this was "
                           f"being asked for")
+    # A proxy typed on the build card waits for exactly this build, under
+    # a status `available` never offers (ProxyPool.one_off_status).
+    one_off = getattr(pool, "one_off_status", "")
+    for resource in _waiting_one_offs(pool, wanted) if one_off else ():
+        if pool.claim_this(resource, also=(one_off,)):
+            return resource
+        raise Aborted(f"the {what} {wanted} was taken while this was "
+                      f"being asked for")
     raise Aborted(f"the {what} {wanted} is not free in the tab - it is "
                   f"already on a phone, set aside, or not there at all")
+
+
+def _waiting_one_offs(pool, wanted: str) -> list:
+    """The typed-for-one-build exits named `wanted` still waiting."""
+    status = getattr(pool, "one_off_status", "")
+    if not status or not wanted:
+        return []
+    return [r for r in list(getattr(pool, "_rows", []) or [])
+            if pool.status_of(r) == status and is_called(r, wanted)]
 
 
 @dataclass
@@ -1717,6 +1734,13 @@ def _let_the_build_go(st: _BuildState) -> None:
     """The end of a build, whatever ended it: what it held settled, an empty
     phone discarded, the row written, the phone let go."""
     book, build, session = st.book, st.build, st.session
+    # A proxy typed on the build card for this build, never claimed - the
+    # build ended first, its Gmail refused, say - would wait for nobody.
+    wish = getattr(st, "want", None)
+    for resource in _waiting_one_offs(book.proxies,
+                                      getattr(wish, "proxy_name", "") or ""):
+        book.proxies.delete_row(resource, by="one-off exit, its build "
+                                              "ended before using it")
     # Once the app phase starts, the session is what holds the claims - it
     # swaps proxies and claims accounts as it goes. Read them back from it
     # here rather than from the state, because an Aborted raised inside it

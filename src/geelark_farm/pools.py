@@ -470,7 +470,8 @@ class Pool:
         # with the account that arrived. That is a wait, not a loss.
         return None
 
-    def claim_this(self, resource: Resource, serial: str = "") -> bool:
+    def claim_this(self, resource: Resource, serial: str = "",
+                   also: tuple[str, ...] = ()) -> bool:
         """Take one named row rather than the first free one.
 
         The web's "Log in selected" (C6) is a person choosing accounts, and
@@ -479,12 +480,16 @@ class Pool:
         `claim`; only the choosing is the caller's. False when the row is
         not free any more, which the caller reports rather than papers over
         with the next one down.
+
+        `also` are statuses that count as free for this one claim only - a
+        proxy typed on the build card waits under `one-off` for the build
+        that names it, and for nothing else.
         """
         with self._claim_lock:
             if resource.error or self.status_of(resource) not in \
-                    self.available_statuses:
+                    self.available_statuses | set(also):
                 return False
-            if not self._still_free(resource):
+            if not self._still_free(resource, also):
                 return False
             self._set(resource, self._claim_fields(resource, serial))
             log.info("claimed %s from %s%s (chosen by hand)", resource.label,
@@ -502,7 +507,8 @@ class Pool:
         if serial and self.serial_column:
             self._set(resource, {self.serial_column: serial})
 
-    def _still_free(self, resource: Resource) -> bool:
+    def _still_free(self, resource: Resource,
+                    also: tuple[str, ...] = ()) -> bool:
         """Ask the sheet, not the snapshot, whether this row is still free.
 
         `_rows` is a picture taken when the Book was opened, and `serve` opens
@@ -543,7 +549,7 @@ class Pool:
             log.warning("could not check whether %s is still free (%s); "
                         "leaving it alone", resource.label, exc)
             return False
-        if fresh.strip().lower() in self.available_statuses:
+        if fresh.strip().lower() in self.available_statuses | set(also):
             return True
         # Someone else took it while this snapshot aged. Record what the sheet
         # actually says, so `available` stops offering it.
@@ -1138,7 +1144,31 @@ class ProxyPool(Pool):
             raw = ":".join(p for p in (host, port, user, password) if p)
         resource.proxy = parse_proxy(raw)
 
+    #: A proxy typed on the build card (the operator, 2026-09-28: "it is
+    #: not meant to join the pool and stay"). It waits for the one build
+    #: that names it under `one_off_status`, which `available` never
+    #: offers, so no other build and no count of free exits sees it. It is
+    #: `on a phone` while a phone carries it, like any exit, and every
+    #: other way out - released, set aside, failed, retired - archives it
+    #: instead: a one-off let go is gone, never stock.
+    one_off_status = "one-off"
+    #: Where the mark lives: the store's `source` column.
+    ONE_OFF_SOURCE = "one-off"
+
+    def is_one_off(self, resource: Resource) -> bool:
+        return (resource.values.get("Source") or "") == self.ONE_OFF_SOURCE
+
+    def _gone_if_one_off(self, resource: Resource, why: str) -> bool:
+        if not self.is_one_off(resource):
+            return False
+        log.info("%s was typed for one build and is let go (%s); it leaves "
+                 "the pool", resource.label, why)
+        self.delete_row(resource, by=f"one-off exit, {why}")
+        return True
+
     def release(self, resource: Resource, *, note: str = "") -> None:
+        if self._gone_if_one_off(resource, "released"):
+            return
         # `free` rather than blank: this column is also the record of whether a
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
@@ -1150,7 +1180,20 @@ class ProxyPool(Pool):
         The reason is not written: whichever refusal it was, the remedy on
         this tab is the same one - `change ip` - and that is what the column
         answers."""
+        if self._gone_if_one_off(resource, "set aside"):
+            return
         self._set(resource, self._off_a_phone(self.needs_new_ip, note))
+
+    def fail(self, resource: Resource, reason: str, *, note: str = "",
+             host: str = "", settings=None) -> None:
+        if self._gone_if_one_off(resource, reason or "failed"):
+            return
+        super().fail(resource, reason, note=note, host=host, settings=settings)
+
+    def retire(self, resource: Resource, *, note: str = "") -> None:
+        if self._gone_if_one_off(resource, "retired"):
+            return
+        super().retire(resource, note=note)
 
     def spend(self, resource: Resource, *, serial: str = "",
               note: str = "") -> None:

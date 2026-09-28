@@ -264,10 +264,13 @@ def test_every_column_the_pools_read_is_required_or_optional_on_purpose():
     # read by `AppPool.kind_of`. Optional on purpose: a tab without them
     # has no Spotify rows on it, `kind_of` answers "" for every row, and
     # the failed-phone rule it feeds simply does not fire (2026-09-19).
+    # `Source` marks a proxy typed on the build card for one build
+    # (`ProxyPool.is_one_off`); a tab without it has no such rows, and
+    # every row is stock as before (2026-09-28).
     optional = {"Host", "Port", "Username", "Name", "Last Exit IP",
                 "Claimed", "Times Used", "Last Used",
                 "Used Date", "App", "Email code", "Phone ID", "Seller",
-                "Product", "Category"}
+                "Product", "Category", "Source"}
 
     assert not (read - required - optional), (
         f"the pools read {sorted(read - required - optional)} and nothing "
