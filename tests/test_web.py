@@ -4248,8 +4248,15 @@ def test_every_page_wears_the_iranspoty_brand(web, monkeypatch):
     rail = body[body.index("<nav>"):body.index("</nav>")]
     assert 'class="brand"' in rail and "<b>IranSpoty</b>" in rail
     assert "geelark farm" not in rail
-    # The tab icon is the mark, not the mockup's phone.
-    assert "rect x=" not in pages._FAVICON and "linearGradient" in pages._FAVICON
+    # The tab icon is the mark, not the mockup's phone - and in one
+    # colour, black on light and white on dark, never the gradient: the
+    # coloured one was taken for another service (2026-09-28).
+    assert "rect x=" not in pages._FAVICON
+    assert "linearGradient" not in pages._FAVICON_SVG
+    assert 'fill="#15181e"' in pages._FAVICON_SVG
+    assert "prefers-color-scheme:dark" in pages._FAVICON_SVG
+    assert "<path" in pages._FAVICON_SVG and pages._FAVICON.startswith(
+        "data:image/svg+xml,")
 
     boot = pages.live_page("1862", {"username": "sara", "role": "operator",
                                     "csrf": "c"}, said="queued:70", row={})

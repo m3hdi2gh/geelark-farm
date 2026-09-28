@@ -7618,10 +7618,19 @@ def _account_margin(account: dict) -> str:
             f'{note}')
 
 
-# The tab icon, from the mark: the same path and gradient the pages draw,
-# as a data URI. Chrome and Firefox draw an SVG favicon with its gradient.
+# The tab icon, from the mark's path - in one colour, not the gradient:
+# coloured, it was taken for another of the operator's services in a row
+# of tabs (2026-09-28). Near-black on a light tab strip, near-white on a
+# dark one: browsers honour a colour-scheme media query inside an SVG
+# favicon.
 import urllib.parse as _urlq  # noqa: E402
 
-_FAVICON = "data:image/svg+xml," + _urlq.quote(
-    BRAND_MARK.replace(' aria-hidden="true" focusable="false"', ""),
-    safe="/:=,'()")
+_FAVICON_SVG = re.sub(
+    r"<defs>.*?</defs>", "",
+    BRAND_MARK.replace(' aria-hidden="true" focusable="false"', "")
+    .replace('fill="url(#gf-mark-g)"', 'fill="#15181e"')
+    .replace(
+        'xmlns="http://www.w3.org/2000/svg">',
+        'xmlns="http://www.w3.org/2000/svg"><style>'
+        '@media(prefers-color-scheme:dark){path{fill:#f2f4f8}}</style>', 1))
+_FAVICON = "data:image/svg+xml," + _urlq.quote(_FAVICON_SVG, safe="/:=,'()")
