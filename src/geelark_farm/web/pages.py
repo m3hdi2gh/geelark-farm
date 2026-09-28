@@ -44,7 +44,7 @@ _FAVICON = (
 _PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — geelark</title>
+<title>{title} — IranSpoty</title>
 <link rel="icon" href="{favicon}">
 <link rel="stylesheet"
  href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -296,20 +296,27 @@ def _alert_strip(user: dict) -> str:
 
 
 def login(error: str = "") -> str:
-    body = f'<p class="err">{esc(error)}</p>' if error else ""
-    body = (f'<div class="card"><div class="brand">{_BRAND_ICON}geelark farm'
-            f'</div><h2>Sign in</h2>{body}'
-            '<form method="post" action="/login" class="field" '
-            'style="gap:12px">'
+    """The page every operator and admin opens first: the IranSpoty mark,
+    the name over CLOUD FARM, the form, and one line about the lockout -
+    no heading, since the button says Sign in (the operator's design,
+    2026-09-28)."""
+    err = f'<p class="err" role="alert">{esc(error)}</p>' if error else ""
+    body = (f'<div class="signin"><div class="card">'
+            f'<div class="signin-brand">{BRAND_MARK}'
+            f'<div class="signin-name"><b>IranSpoty</b>'
+            f'<span>Cloud Farm</span></div></div>'
+            f'<hr>'
+            f'<form method="post" action="/login" class="field" '
+            f'style="gap:14px">{err}'
             '<label class="field"><span>Username</span>'
             '<input name="username" autofocus autocomplete="username"></label>'
             '<label class="field"><span>Password</span>'
             '<input name="password" type="password" '
             'autocomplete="current-password"></label>'
             '<button>Sign in</button></form>'
-            '<p class="hint">Five wrong tries lock the name for a while. '
-            'Your first sign-in with a one-time password asks you to choose '
-            'your own.</p></div>')
+            '<p class="hint">Five wrong tries lock the name for a while.</p>'
+            '</div><p class="signin-foot">IranSpoty Cloud Farm '
+            '\u00b7 team access only</p></div>')
     return page("Sign in", body)
 
 

@@ -224,6 +224,28 @@ def test_five_failures_buy_a_lockout(web):
     assert status == 429, "the right password bypassed the lockout"
 
 
+def test_the_sign_in_page_wears_the_iranspoty_name(web):
+    """The page every operator and admin opens first said "geelark farm"
+    in its card and "— geelark" in the tab (the operator, 2026-09-28):
+    now the IranSpoty mark, the name over CLOUD FARM, the form, one line
+    about the lockout, and the name again under the card."""
+    status, _, body = web().request("GET", "/login")
+    assert status == 200
+    assert "geelark" not in body.lower()
+    assert "<title>Sign in — IranSpoty</title>" in body
+    card = body[body.index('class="signin"'):]
+    assert card.index("<svg") < card.index("<b>IranSpoty</b>")
+    assert "<span>Cloud Farm</span>" in card
+    assert "Five wrong tries lock the name for a while." in card
+    assert "one-time password" not in card, "the second sentence is gone"
+    assert "<h2>" not in card, "the button says Sign in; no heading"
+    assert "IranSpoty Cloud Farm · team access only" in card
+    assert 'name="username"' in card and 'name="password"' in card
+
+    _, _, wrong = web().login(password="nope")
+    assert 'class="err" role="alert"' in wrong
+
+
 def test_what_people_typed_into_the_sheet_cannot_script_the_page(web):
     """The mirror carries spreadsheet text; a Note or a Gmail cell is
     exactly where a <script> would sit."""

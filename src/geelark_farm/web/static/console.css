@@ -661,6 +661,22 @@ label{display:flex;gap:8px;align-items:center;font-size:13px}
 .card .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
  color:#eef3fa;letter-spacing:.4px;margin-bottom:6px}
 .card input{width:100%}
+.signin{display:flex;flex-direction:column;align-items:center;gap:22px;width:100%}
+.signin .card{padding:36px 32px 28px;gap:22px;border-radius:14px}
+.signin-brand{display:flex;flex-direction:column;align-items:center;gap:12px;
+ text-align:center}
+.signin-brand svg{width:52px;height:auto}
+.signin-name{display:flex;flex-direction:column;gap:4px}
+.signin-name b{font-size:26px;font-weight:600;color:var(--bright);line-height:1.1}
+.signin-name span{font-size:12px;font-weight:500;color:#6fd3e8;letter-spacing:3px;
+ text-transform:uppercase}
+.signin hr{border:0;height:1px;background:var(--line);margin:0;width:100%}
+.signin .card input{height:42px}
+.signin .card button{height:44px;margin-top:4px;font-weight:600}
+.signin .hint{margin:0;text-align:center;font-size:12.5px}
+.signin-foot{margin:0;font-size:12px;color:#5d6a80;letter-spacing:.3px}
+@media (max-width:480px){.signin .card{padding:30px 22px 24px}
+ .signin-name b{font-size:24px}}
 .card button{width:100%;justify-content:center;height:42px;font-size:14px}
 .field{display:flex;flex-direction:column;gap:5px;align-items:stretch}
 label.field{align-items:stretch}
