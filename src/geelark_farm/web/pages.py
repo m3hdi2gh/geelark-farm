@@ -3626,8 +3626,6 @@ VIEWER_BOX = (VIEWER_WIDTH + 56, 2 * VIEWER_WIDTH + 32)
 #: drawn in its place (the operator, 2026-09-28). Measured off the live
 #: tab; if GeeLark changes the bar, this is the one number to move.
 VIEWER_BAR = 32
-#: Our bar's own height, in the page's pixels.
-BRAND_BAR_PX = 40
 
 #: The IranSpoty mark, as the operator sent it (spotylogomark.svg), with
 #: its gradient given an id of its own so a page can carry it once.
@@ -3712,7 +3710,7 @@ def viewer_page(serial: str, user: dict, url: str,
         "var brand=document.getElementById('gf-brand');"
         "var live=document.getElementById('gf-state');"
         f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]},"
-        f" BAR={VIEWER_BAR}, TOP={BRAND_BAR_PX};"
+        f" BAR={VIEWER_BAR};"
         # Connecting until the viewer's page has loaded; the frame is
         # somebody else's, so its load is the one thing it tells us.
         "function mark(state,said){ live.className=state;"
@@ -3726,12 +3724,15 @@ def viewer_page(serial: str, user: dict, url: str,
         # GeeLark's own title bar is cropped off the top - the frame moves
         # up by its height - and ours stands above the box instead.
         "function fit(){"
-        " var h=(stage.clientHeight||window.innerHeight)-TOP,"
+        " var h=stage.clientHeight||window.innerHeight,"
         "     w=stage.clientWidth||window.innerWidth;"
-        " var k=Math.min(h/(BOX_H-BAR),w/BOX_W);"
+        " var k=Math.min(h/BOX_H,w/BOX_W);"
         " box.style.width=Math.floor(BOX_W*k)+'px';"
         " box.style.height=Math.floor((BOX_H-BAR)*k)+'px';"
+        # Exactly the room GeeLark's own bar had, scaled with it: a fixed
+        # 40 px stood taller than the bar it replaced (2026-09-28).
         " brand.style.width=box.style.width;"
+        " brand.style.height=Math.round(BAR*k)+'px';"
         " frame.style.transform='translateY('+(-BAR*k)+'px) scale('+k+')';"
         "}"
         "fit(); window.addEventListener('resize',fit);"
@@ -3817,11 +3818,11 @@ def viewer_page(serial: str, user: dict, url: str,
         '#gf-box{position:relative;overflow:hidden}'
         # Our bar, where GeeLark's was: the mark beside the name, the
         # phone, and whether it is live (the operator, 2026-09-28).
-        f'#gf-brand{{height:{BRAND_BAR_PX}px;box-sizing:border-box;'
-        'display:flex;align-items:center;gap:10px;padding:0 14px;'
+        f'#gf-brand{{height:{VIEWER_BAR}px;box-sizing:border-box;'
+        'display:flex;align-items:center;gap:9px;padding:0 12px;'
         'background:#0b1019;border-bottom:1px solid var(--line2);'
         'white-space:nowrap;overflow:hidden}'
-        '#gf-brand svg{height:22px;width:auto;flex:none}'
+        '#gf-brand svg{height:64%;width:auto;flex:none}'
         '#gf-brand b{font-size:15px;font-weight:600;color:var(--bright);'
         'letter-spacing:.01em}'
         '#gf-brand .sep{width:1px;height:16px;background:var(--line2)}'

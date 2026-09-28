@@ -2650,7 +2650,9 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     # One fixed width for the viewer, and its box scaled to the window:
     # the phone fits any monitor, Back and Home included (2026-09-16).
     assert "u.searchParams.set('w',String(W))" in body
-    assert "var k=Math.min(h/(BOX_H-BAR),w/BOX_W);" in body
+    assert "var k=Math.min(h/BOX_H,w/BOX_W);" in body
+    # Our bar takes exactly the room GeeLark's had (2026-09-28).
+    assert "brand.style.height=Math.round(BAR*k)+'px';" in body
     assert ("frame.style.transform='translateY('+(-BAR*k)+'px) "
             "scale('+k+')'") in body
     assert "window.addEventListener('resize',fit)" in body
@@ -7116,7 +7118,7 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     # stage is the window's whole height (the operator, 2026-09-16).
     assert '<div class="viewbar">' not in body
     assert '<aside id="gf-side"><div class="gf-head"><b>1500</b>' in body
-    assert "var h=(stage.clientHeight||window.innerHeight)-TOP," in body
+    assert "var h=stage.clientHeight||window.innerHeight," in body
     assert 'data-value="pa$$w&lt;rd"' in body, "escaped, and hidden"
     assert "\u2022" * 8 in body and "pa$$w<rd" not in body
     assert 'data-secret="JBSWY3DPEHPK3PXP"' in body
