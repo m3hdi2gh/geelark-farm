@@ -85,7 +85,7 @@ from . import artifacts as archive
 # the code that uses it is in kit/exits and keeper now (2026-09-23).
 from . import proxy as proxy_mod  # noqa: F401
 from .accounts import Account
-from .api import Client, TransportError
+from .api import CLOUD, Client, TransportError
 
 # What a build produced and how it is said - build_result since the
 # builder review (2026-09-23) - and the Phones tab it is written to
@@ -661,7 +661,7 @@ def _may_be_on_it(session: _Session | None, build: Build) -> Build:
         build.detail = (f"{build.detail.rstrip('.')}. "
                         f"{session.app_row.credentials.email} may be signed "
                         f"in on this phone - its password went in before "
-                        f"GeeLark stopped answering; the account is held. "
+                        f"{CLOUD} stopped answering; the account is held. "
                         f"Send it here again to sign it in and record it.")
     return build
 
@@ -951,7 +951,7 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
             break
         if remaining() <= 0:
             log.warning("no time left for %s on %s", APPS[app], build.serial)
-            build.tried.append((app, "budget_exhausted", "GeeLark"))
+            build.tried.append((app, "budget_exhausted", CLOUD))
             continue
         taken = bool(ordered.get(app))
         if not taken and settings.app_install_api:
@@ -971,7 +971,7 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
         else:
             log.warning("%s did not install on %s (%s); the phone goes on "
                         "without it", APPS[app], build.serial, got.reason)
-            build.tried.append((app, got.reason, "Play" if play else "GeeLark"))
+            build.tried.append((app, got.reason, "Play" if play else CLOUD))
     build.app = "+".join(on)
 
 

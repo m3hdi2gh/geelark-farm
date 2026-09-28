@@ -111,7 +111,7 @@ def _error(handler, code: int, kind: str, message: str, *,
     and `**extra` lands inside the error object where a header cannot be
     seen (2026-09-12).
     """
-    headers = ((("WWW-Authenticate", 'Bearer realm="geelark farm"'),)
+    headers = ((("WWW-Authenticate", 'Bearer realm="iranspoty cloud farm"'),)
                if code == 401 else ())
     if retry_after is not None:
         headers = (*headers, ("Retry-After", str(max(1, int(retry_after)))))

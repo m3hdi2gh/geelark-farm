@@ -702,7 +702,7 @@ def _test(book, client, resource, *, tries: int = 1,
     and refused, and answered at 16:37 - the gateway takes a minute or
     two to carry the new address (2026-09-13)."""
     if client is None:
-        return False, "", "no GeeLark client on this pass"
+        return False, "", "no IranSpoty Cloud client on this pass"
     why = ""
     for n in range(max(1, int(tries))):
         if n:
@@ -826,7 +826,7 @@ def test_all_proxies(book, ledger, settings, payload, client):
     from . import keeper
 
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     dead, revived = keeper.check_proxies(client, book)
     return ("done", f"tested every exit no build is holding: {len(dead)} "
                     f"newly dead, {len(revived)} revived", None)
@@ -843,7 +843,7 @@ def free_all_proxies(book, ledger, settings, payload, client):
     rather than setting the exit straight back aside.
     """
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     from .pools import ProxyPool
 
     held = (ProxyPool.held_back_statuses + (book.proxies.dead_status,))
@@ -905,8 +905,9 @@ def remove_proxy(book, ledger, settings, payload, client):
             "raw": (resource.values.get("Proxy String") or str(resource.proxy)),
             "status": status, "note": resource.values.get("Note", "")}
     book.proxies.delete_row(resource, by=_by(payload))
-    return ("done", f"{resource.name} removed from the pool (GeeLark still "
-                    f"holds it - remove it there by hand)", {"removed": kept})
+    return ("done", f"{resource.name} removed from the pool (IranSpoty Cloud "
+                    f"still holds it - remove it there by hand)",
+            {"removed": kept})
 
 
 # ------------------------------------------------------- the phones (C6)
@@ -1538,11 +1539,11 @@ def power_off_phone(book, ledger, settings, payload, client):
     if not serial:
         return "refused", "no phone named", None
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     live = next((p for p in phones_mod.listing(client)
                  if str(p.get("serialNo")) == serial), None)
     if live is None:
-        return "failed", f"phone {serial} is not in GeeLark's list", None
+        return "failed", f"phone {serial} is not in the cloud's phone list", None
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
@@ -1584,11 +1585,11 @@ def change_proxy(book, ledger, settings, payload, client):
     if row.get("Status") == book.phones.BUILDING:
         return "refused", f"phone {serial} is being worked on right now", None
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     live = next((p for p in phones_mod.listing(client)
                  if str(p.get("serialNo")) == serial), None)
     if live is None:
-        return "failed", f"phone {serial} is not in GeeLark's list", None
+        return "failed", f"phone {serial} is not in the cloud's phone list", None
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
@@ -1609,7 +1610,7 @@ def change_proxy(book, ledger, settings, payload, client):
         book.proxies.release(fresh, note=(
             f"Phone {serial} would not take it on {_stamp()}: "
             f"{str(exc)[:120]}"))
-        return ("failed", f"GeeLark refused the change: {str(exc)[:160]}",
+        return ("failed", f"IranSpoty Cloud refused the change: {str(exc)[:160]}",
                 {"off": off} if boot else None)
     old = book.proxies.find_by_name((row.get("Proxy") or "").strip())
     if old is not None and old is not fresh:
@@ -1630,15 +1631,15 @@ def change_proxy(book, ledger, settings, payload, client):
         # offer Boot again in a minute.
         url = phones_mod.start(client, live["id"], attempts=1)
     except phones_mod.PhoneCapacityError:
-        return ("failed", f"phone {serial} is on {name} now but GeeLark has "
-                          f"no machine free to start it - press Boot again "
+        return ("failed", f"phone {serial} is on {name} now but IranSpoty Cloud "
+                          f"has no machine free to start it - press Boot again "
                           f"in a minute", dict(moved, off=True))
     except (PhoneError, ApiError) as exc:
         return ("failed", f"phone {serial} is on {name} now but would not "
                           f"start: {exc}", dict(moved, off=True))
     if not url:
         return ("done", f"phone {serial} is on {name} now and started again "
-                        f"- GeeLark gave no live-view link back", moved)
+                        f"- IranSpoty Cloud gave no live-view link back", moved)
     return ("done", f"phone {serial} is on {name} now and started again",
             dict(moved, url=url))
 
@@ -1725,11 +1726,11 @@ def boot_phone(book, ledger, settings, payload, client):
     if row.get("Status") == book.phones.BUILDING:
         return "refused", f"phone {serial} is being worked on right now", None
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     live = next((p for p in phones_mod.listing(client)
                  if str(p.get("serialNo")) == serial), None)
     if live is None:
-        return "failed", f"phone {serial} is not in GeeLark's list", None
+        return "failed", f"phone {serial} is not in the cloud's phone list", None
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
@@ -1739,7 +1740,7 @@ def boot_phone(book, ledger, settings, payload, client):
         # watching a tab that can simply be pressed again.
         url = phones_mod.start(client, live["id"], attempts=1)
     except phones_mod.PhoneCapacityError:
-        return ("failed", f"GeeLark has no machine free for {serial} right "
+        return ("failed", f"IranSpoty Cloud has no machine free for {serial} right "
                           f"now - press Boot again in a minute", None)
     except (PhoneError, ApiError) as exc:
         return "failed", f"phone {serial} would not start: {exc}", None
@@ -1747,7 +1748,7 @@ def boot_phone(book, ledger, settings, payload, client):
     _stamp_owner(settings, serial, payload.get("by_id"))
     if not url:
         return ("done", f"phone {serial} started and taken by "
-                        f"{_by(payload)} - GeeLark gave no live-view link "
+                        f"{_by(payload)} - IranSpoty Cloud gave no live-view link "
                         f"back", {"state": "taken"})
     return ("done", f"phone {serial} started and taken by {_by(payload)}",
             {"state": "taken", "url": url})
@@ -1811,13 +1812,13 @@ def run_task(book, ledger, settings, payload, client, action_id=None):
         return "refused", f"a job for phone {serial} is already queued", None
     if store_jobs.open_count(settings, "task") >= TASKS_AT_ONCE:
         return ("refused", "another task is running - one at a time, so the "
-                           "builds keep their share of GeeLark", None)
+                           "builds keep their share of the cloud", None)
     if client is None:
-        return "failed", "no GeeLark client on this pass", None
+        return "failed", "no IranSpoty Cloud client on this pass", None
     live = next((p for p in phones_mod.listing(client)
                  if str(p.get("serialNo")) == serial), None)
     if live is None:
-        return "failed", f"phone {serial} is not in GeeLark's list", None
+        return "failed", f"phone {serial} is not in the cloud's phone list", None
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
@@ -1916,7 +1917,7 @@ def ignore_proxy(book, ledger, settings, payload, client):
     with store_db.connect(settings) as conn:
         store_state.put(conn, "ignored_proxies", kept)
         conn.commit()
-    return "done", f"{who} is ignored - it stays in GeeLark, unreported", None
+    return "done", f"{who} is ignored - it stays in IranSpoty Cloud, unreported", None
 
 
 def _stamp_test(settings, name: str, ok: bool, exit_ip: str) -> None:

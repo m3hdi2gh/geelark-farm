@@ -124,7 +124,7 @@ def test_remove_proxy_refuses_a_row_a_phone_is_behind_and_drops_a_free_one():
 
     status, said, _ = verbs.remove_proxy(book, None, None, {"name": "SX2"},
                                          None)
-    assert status == "done" and "GeeLark still holds it" in said
+    assert status == "done" and "IranSpoty Cloud still holds it" in said
     assert book.proxies.find_by_name("SX2") is None
     assert book.proxies._ws.deleted_rows == [free.sheet_row]
 

@@ -93,7 +93,7 @@ def _fresh_proxy(client: Client, book: Book, *,
             log.warning("proxy %s is dead: %s", resource.name or resource.label,
                         exc)
             book.proxies.fail(resource, "dead", note=(
-                f"GeeLark could not reach it when a phone was put behind it: "
+                f"The cloud could not reach it when a phone was put behind it: "
                 f"{exc}"))
             skipped += 1
             continue
@@ -268,7 +268,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # borrowed exit is exactly the kind that draws one.
         if not borrowed:
             book.proxies.release(replacement, note=(
-                f"Free again - GeeLark would not move a phone onto it: {exc}"))
+                f"Free again - the cloud would not move a phone onto it: {exc}"))
         raise Aborted("proxy_change_refused") from exc
     # `current` is deliberately NOT released here. Releasing it put it straight
     # back on the shelf as `unused`, where the very next swap could claim it

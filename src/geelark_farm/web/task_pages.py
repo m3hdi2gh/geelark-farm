@@ -115,7 +115,7 @@ def tasks_page(data: dict, user: dict, said: str = "",
             + '<p class="sub">What somebody used to do to a phone by hand: '
               'read whether an account is still signed in, see what an '
               'app draws first. A task is run from the command line for '
-              'now - <span class="mono">geelark task &lt;name&gt;</span> - '
+              'now - by an admin, from the farm\'s own command line - '
               'and everything it did shows up here.</p>')
     if not data.get("counted"):
         body += ('<p class="hint">The store is off on this host, so the '
@@ -160,7 +160,7 @@ def task_page(data: dict, user: dict, said: str = "",
             f'<p class="sub">{esc(spec.summary)}</p>'
             + _said(said, _TASK_SAID, user, said_note)
             + (_run_form(spec, user, phones, serial) if may_run
-               else _how_to_run(spec)))
+               else _how_to_run(spec, user)))
     if reasons:
         body += (f'<div class="panel"><h3>When it did not work</h3>'
                  f'<table>{reasons}</table>'
@@ -185,9 +185,10 @@ def _run_form(spec, user: dict, phones, serial: str = "") -> str:
     typed on the command line and forgotten, never sent to a queue.
     """
     if spec.secrets():
-        return (_how_to_run(spec, why="It asks for a secret, which is typed "
-                                      "on the command line and never sent "
-                                      "through the console."))
+        return (_how_to_run(spec, user,
+                            why="It asks for a secret, which is typed on "
+                                "the command line and never sent through "
+                                "the console."))
     known = "".join(
         f'<option value="{esc(str(p.get("serial") or ""))}">'
         f'{esc(_phone_line(p))}</option>'
@@ -236,14 +237,18 @@ def _command(spec) -> str:
             f'--phone &lt;ID&gt;')
 
 
-def _how_to_run(spec, why: str = "Only an admin runs one from here.") -> str:
+def _how_to_run(spec, user: dict,
+                why: str = "Only an admin runs one from here.") -> str:
     """The line to type, until the Run button exists. Its required
     fields in the order the spec lists them, because that is the order
-    somebody reading the page above has just seen them in."""
+    somebody reading the page above has just seen them in.
+
+    The line itself is an admin's: it names the farm's own command,
+    which is not for an operator to see (2026-09-28)."""
+    line = (f'<pre class="mono" style="margin:0;overflow-x:auto">'
+            f'{_command(spec)}</pre>' if user.get("role") == "admin" else "")
     return (f'<div class="panel"><h3>How to run it</h3>'
-            f'<p class="hint">{esc(why)}</p>'
-            f'<pre class="mono" style="margin:0;overflow-x:auto">'
-            f'{_command(spec)}</pre></div>')
+            f'<p class="hint">{esc(why)}</p>{line}</div>')
 
 
 def _serial(row: dict) -> str:

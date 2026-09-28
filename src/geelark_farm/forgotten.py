@@ -140,7 +140,7 @@ def _sentence(row: dict, *, off: bool, released: bool) -> str:
     if row.get("state") == "taken":
         return f"switched off after {since} on{with_whom}"
     return (f"switched off after {since} on with nobody here holding it "
-            f"- booted by hand in GeeLark, or released while still up")
+            f"- booted by hand in the cloud panel, or released while still up")
 
 
 def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:

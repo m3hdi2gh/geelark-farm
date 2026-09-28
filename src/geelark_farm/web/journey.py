@@ -34,7 +34,9 @@ MARKS = {
     "settle": ("phone running; settling for", "geelark_farm/phones.py"),
     "google": ("signing in as ", "geelark_farm/builder.py"),
     "app": ("signing into ", "geelark_farm/builder.py"),
-    "installed": (" is on, from GeeLark's installer", "geelark_farm/kit/install.py"),
+    # The tail is not matched: the installer's name changed on 2026-09-28
+    # (it was the vendor's) and the archived logs keep the old line.
+    "installed": (" is on, from ", "geelark_farm/kit/install.py"),
 }
 #: `phone 4435 FAIL: phone_distrusted (406s)` - builder.py's closing line.
 END = re.compile(r"^phone (\d+) (OK|WARM|FAIL): (\w+) \((\d+)s\)")

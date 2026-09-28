@@ -159,9 +159,9 @@ def _condemn(book: Book, build: Build) -> None:
     later and forgot (2026-09-16). Nothing ever tried the delete again.
     Never fatal, like every row write in this `finally`.
     """
-    note = (f"{_phone_note(build)} Nothing was signed into it and GeeLark "
-            f"would not delete it when asked; marked failed so the sync "
-            f"deletes it once GeeLark answers.")
+    note = (f"{_phone_note(build)} Nothing was signed into it and the "
+            f"cloud would not delete it when asked; marked failed so the "
+            f"sync deletes it once the cloud answers.")
     try:
         if not book.phones.write(build.serial, State="failed", Note=note):
             log.warning("phone %s has no row left to mark failed", build.serial)

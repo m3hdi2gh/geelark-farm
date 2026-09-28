@@ -98,7 +98,7 @@ def test_every_mark_is_still_written_by_the_code_that_writes_it(stage):
     if stage == "boot":
         probe = "- starting it (billing is per minute)"
     if stage == "installed":
-        probe = "is on, from GeeLark's installer"
+        probe = "is on, from the cloud installer"
     assert probe in source, f"{where} no longer writes {probe!r}"
 
 

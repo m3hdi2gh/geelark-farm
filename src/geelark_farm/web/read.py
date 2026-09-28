@@ -636,7 +636,7 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict,
             # GeeLark's own words, short enough to print under the
             # reading they explain rather than only in the paragraph.
             "detail": why,
-            "text": (f"GeeLark will not start phones - {why}. Nothing can "
+            "text": (f"IranSpoty Cloud will not start phones - {why}. Nothing can "
                      f"be built or signed in until the account is topped "
                      f"up; the API does not report the balance, so this "
                      f"refusal is the only warning there is.")})
@@ -655,9 +655,9 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict,
             "code": refused.get("code"),
             "text": ((f"Building has stopped: the breaker is up on "
                       f"refusals no pool can fix, and the last thing "
-                      f"GeeLark said was {told}. Deal with that, then "
+                      f"IranSpoty Cloud said was {told}. Deal with that, then "
                       f"clear the breaker.") if stalled else
-                     (f"GeeLark turned a phone down - {told}. Nothing "
+                     (f"IranSpoty Cloud turned a phone down - {told}. Nothing "
                       f"has been created since, so this is still the "
                       f"last word on it; the next phone that comes up "
                       f"clears it."))})
@@ -673,7 +673,7 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict,
             "level": "bad" if int(free) == 0 else "warn", "href": "/phones",
             "short": ("no phone slots left" if int(free) == 0
                       else f"{free} phone slots left"),
-            "text": (f"GeeLark has {free} of {total} phone "
+            "text": (f"IranSpoty Cloud has {free} of {total} phone "
                      f"{'slot' if int(free) == 1 else 'slots'} left. "
                      f"Creating another fails with [44002]; delete phones "
                      f"that are done, or raise the plan.")})
@@ -691,7 +691,7 @@ def geelark_trouble(plan: dict, refused: dict, pulse: dict,
                 "kind": "plan",
                 "level": "bad" if days <= 2 else "warn", "href": "/",
                 "short": f"the subscription {gone}",
-                "text": (f"The GeeLark subscription {gone}. Every phone "
+                "text": (f"The IranSpoty Cloud subscription {gone}. Every phone "
                          f"goes with it.")})
     return found
 
@@ -792,6 +792,13 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
         "               WHERE m.serial = l.serial"
         "                 AND m.at >= p.created_at)", (list(serials),))
     return {str(r["serial"]): r for r in lines}
+
+
+def live_link(settings: Settings, serial: str) -> str:
+    """The live-view link of one phone being built, or "" - for the
+    dashboard's Watch live, which frames it under the farm's bar."""
+    with Store(settings) as store:
+        return _live_links(store, [serial]).get(str(serial), "")
 
 
 def _live_links(store, serials: list[str]) -> dict[str, str]:

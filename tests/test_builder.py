@@ -4858,7 +4858,7 @@ def test_a_bare_phone_carries_the_apps_and_nothing_else(device, settings,
     assert [app for app, _, _ in build.tried] == ["chatgpt", "spotify",
                                                   "claude"]
     assert all(reason == "install_failed" for _, reason, _ in build.tried)
-    assert {service for _, _, service in build.tried} == {"GeeLark"}, (
+    assert {service for _, _, service in build.tried} == {"IranSpoty Cloud"}, (
         "it was the center that did not deliver, not Play")
 
 

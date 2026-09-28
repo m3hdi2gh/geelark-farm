@@ -9,8 +9,8 @@ on a machine that has never seen the cluster.
 from __future__ import annotations
 
 import http.client
-import pathlib
 import inspect
+import pathlib
 import re
 import threading
 import time
@@ -5365,11 +5365,11 @@ def test_done_and_failed_ask_beside_the_button(web, monkeypatch):
 
     start = body.index('href="/phones/1856"')
     row = body[start:body.index("</tr>", start)]
-    assert ('data-ask="Phone 1856 failed? The phone is deleted in GeeLark '
-            'within a few seconds') in row
+    assert ('data-ask="Phone 1856 failed? The phone is deleted in IranSpoty '
+            'Cloud within a few seconds') in row
     assert 'data-yes="Yes, phone 1856 is failed"' in row
-    assert ('data-ask="Phone 1856 done? The phone is deleted in GeeLark '
-            'within a few seconds') in row
+    assert ('data-ask="Phone 1856 done? The phone is deleted in IranSpoty '
+            'Cloud within a few seconds') in row
     assert row.count("data-ask=") == 2, "Release asks nothing"
     script = pages._DASH_SCRIPT
     assert "askFirst(form, form.dataset.ask, form.dataset.yes || 'Yes')" in script
@@ -5443,13 +5443,13 @@ def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
     user = {"id": 1, "username": "test", "role": "operator", "csrf": "c"}
     waiting = pages.live_page("1862", user, said="queued:70", row={})
     assert "setTimeout(function(){ location.reload(); }, 3000)" in waiting
-    assert "GeeLark is starting it" in waiting
+    assert "IranSpoty Cloud is starting it" in waiting
     started = pages.live_page("1862", user, said="queued:70",
                               row={"status": "done", "result": "started"})
     assert "location.reload()" not in started, "nothing left to wait for"
     script = pages._DASH_SCRIPT
     assert "toast('Starting ' + (which || 'the phone')" in script
-    assert "in the new tab as soon as GeeLark hands the link back" in script
+    assert "in the new tab as soon as the cloud hands the link back" in script
     assert "var waiting = /[?&]said=queued/.test(got.url);" in script, (
         "queued is not done: look again shortly")
     assert "if (waiting) climb([2500, 5000, 10000, 20000]);" in script
@@ -5639,7 +5639,7 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
          "claimed_at": now - dt.timedelta(seconds=20)},
         {"id": 4, "address": "SX4", "status": "dead", "host": "1.1.1.4",
          "port": 10, "exit_ip": "", "times_used": 8, "serial": "",
-         "note": "GeeLark could not reach it when a phone was put behind "
+         "note": "The cloud could not reach it when a phone was put behind "
                  "it: socks5://u:***@1.1.1.4:10 - Proxy connection failed",
          "error": None, "updated_at": now - dt.timedelta(hours=2),
          "claimed_at": None},
@@ -5818,10 +5818,86 @@ def test_a_building_row_offers_watch_live_beside_cancel():
         "live": {"2241": "https://phone.geelark.com/x?id=1&a=b"}}, user)
     r1 = rows[:rows.index("</tr>")]
     r2 = rows[rows.index("</tr>"):]
+    # Through our own page, never the viewer's own address, whose host
+    # names the vendor (2026-09-28).
     assert ('<a class="btn quiet live" target="_blank" rel="noopener" '
-            'href="https://phone.geelark.com/x?id=1&amp;a=b"') in r1
+            'href="/phones/2241/watch"') in r1
+    assert "geelark" not in r1.lower()
     assert "Watch live</a>" in r1 and "Cancel" in r1
     assert "Watch live" not in r2 and "Cancel" in r2, "no link yet: no dead button"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_watch_live_frames_the_screen_under_our_bar_and_holds_nothing(
+        web, monkeypatch):
+    """The dashboard's Watch live on a phone being built opens the same
+    framed screen the Live tab has - the mark, IranSpoty, the phone - and
+    nothing that acts on the phone: no beat (the build holds it, and a
+    beat would say "close this tab to switch the phone off"), no Change
+    IP, no Done or Failed. Without a link the page says so in words."""
+    links = {"2241": "https://phone.geelark.com/x?id=1&a=b"}
+    monkeypatch.setattr(app_mod.read, "live_link",
+                        lambda s, serial: links.get(serial, ""))
+    client = web()
+    client.login()
+    status, _, body = client.request("GET", "/phones/2241/watch")
+    assert status == 200
+    assert 'id="gf-brand"' in body and "<b>IranSpoty</b>" in body
+    assert 'data-src="https://phone.geelark.com/x?id=1&amp;a=b"' in body
+    assert "being built - watching only" in body
+    for held in ("/watching", "/closing", 'id="gf-ip"', 'id="gf-boot"',
+                 'class="gf-acts"', "data-ask", "switch the phone off"):
+        assert held not in body, held
+    assert "geelark" not in body.lower().replace("phone.geelark.com", "")
+
+    status, _, body = client.request("GET", "/phones/2242/watch")
+    assert status == 200 and "no live screen for this phone" in body
+
+
+def test_nothing_a_person_reads_names_the_vendor():
+    """The farm is IranSpoty Cloud Farm and the phone service is
+    IranSpoty Cloud, in every sentence an operator can read: page text,
+    toasts, verdicts, the notes written onto rows, the tab-icon and the
+    script's own words (the operator, 2026-09-28). Docstrings and
+    comments may still say who the vendor is; strings may not, bar the
+    store keys and the module's own name."""
+    import io
+    import pathlib
+    import re
+    import tokenize
+
+    from geelark_farm import api, failures, forgotten, keeper, rows, verbs
+    from geelark_farm.kit import exits, install
+    from geelark_farm.web import api_v1, journey, live, pages, read, task_pages
+
+    allowed = re.compile(
+        r"geelark_(farm|plan|refusal|wallet|run|build|serial|actions|jobs)"
+        r"|[a-z]+\.geelark\.com|/geelark/|geelark\.py"
+        r"|\bgeelark\b(?![ '])",
+        re.I)
+    found = []
+    for module in (pages, read, task_pages, journey, live, api_v1, verbs,
+                   failures, api, rows, exits, install, forgotten, keeper):
+        src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+        for i, tok in enumerate(toks):
+            if tok.type != tokenize.STRING or "geelark" not in tok.string.lower():
+                continue
+            j = i - 1
+            while j >= 0 and toks[j].type in (tokenize.NL, tokenize.COMMENT):
+                j -= 1
+            if j < 0 or toks[j].type in (tokenize.INDENT, tokenize.NEWLINE,
+                                         tokenize.DEDENT, tokenize.ENCODING):
+                continue                      # a docstring
+            if allowed.sub("", tok.string).lower().find("geelark") < 0:
+                continue
+            found.append(f"{module.__name__}:{tok.start[0]}: "
+                         f"{tok.string.strip()[:70]}")
+    assert not found, chr(10).join(found)
+    script = pathlib.Path(pages.__file__).with_name("static") / "dash.js"
+    code = re.sub(r"//[^\n]*", "", script.read_text(encoding="utf-8"))
+    assert "geelark" not in code.lower().replace("phone.geelark.com", ""), (
+        "the script's own words name the vendor")
 
 
 # --------------------------------------- the login-rate work (2026-09-10)
@@ -7359,8 +7435,9 @@ def test_the_live_tab_changes_the_ip_without_leaving_the_page(web,
     _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
     assert 'data-src="https://phone.geelark.com/i?t=new"' in body
 
-    row.update(status="failed", result="phone 1500 is on SX2 now but GeeLark "
-                                       "has no machine free to start it",
+    row.update(status="failed", result="phone 1500 is on SX2 now but "
+                                       "IranSpoty Cloud has no machine free "
+                                       "to start it",
                detail={"was": "SX1", "now": "SX2", "off": True})
     _, _, body = client.request("GET", "/phones/1500/live?said=queued:72")
     assert "1500 is off" in body and "no machine free" in body
@@ -7964,7 +8041,7 @@ def test_the_foot_keeps_every_critical_reading_in_sight():
     shown = re.sub(r"<[^>]*>", "\x00", line)
 
     for reading in (
-            "GeeLark", "read 5m ago",
+            "IranSpoty Cloud", "read 5m ago",
             # The money question, and the honest answer to it.
             "Balance", "unavailable", "waiting for wallet reading",
             # The [44002] ceiling, and whose phones are under it.
@@ -8764,6 +8841,7 @@ def test_the_assets_ride_in_the_wheel():
     """An editable install reads them off the tree; a wheel has to carry
     them or the console renders as plain text with dead buttons."""
     import pathlib
+
     import tomllib
 
     here = pathlib.Path(assets.__file__).resolve()

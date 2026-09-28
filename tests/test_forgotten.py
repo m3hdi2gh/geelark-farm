@@ -138,7 +138,7 @@ def test_a_phone_on_with_nobody_holding_it_is_switched_off(farm):
     assert farm.events[0][1]["status"] == "switched off"
     assert farm.events[0][1]["detail"] == (
         "switched off after 1 h 1 min on with nobody here holding it - "
-        "booted by hand in GeeLark, or released while still up")
+        "booted by hand in the cloud panel, or released while still up")
 
 
 def test_a_taken_phone_seen_on_says_whose_it_was_even_when_not_put_back(

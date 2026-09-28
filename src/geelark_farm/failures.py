@@ -619,7 +619,7 @@ VERDICTS: dict[str, Verdict] = {
     "screen_unreadable": Verdict(
         DEVICE, "the device stopped answering screen dumps",
         "The device returned empty screen dumps a dozen times in a row, "
-        "usually a GeeLark shell error underneath. The phone is let go of; "
+        "usually a cloud shell error underneath. The phone is let go of; "
         "the credentials were not judged and go back on the shelf."),
     "unknown_screen": Verdict(
         DEVICE, "the app showed a page the run did not recognise",
@@ -632,13 +632,14 @@ VERDICTS: dict[str, Verdict] = {
         "screen says which."),
     "phone_is_gone": Verdict(
         DEVICE, "the phone was deleted while the build was working on it",
-        "GeeLark answered `env not found`, so the phone this build was driving "
+        "IranSpoty Cloud answered `env not found`, so the phone this build was "
+        "driving "
         "no longer exists. Something else removed it mid-run - a second "
         "process, or a hand in the panel. Nothing is wrong with the "
         "credentials; they go back to the pool untouched."),
     "phone_would_not_start": Verdict(
-        DEVICE, "GeeLark never brought the phone up",
-        "GeeLark kept reporting the phone as starting and it never came up. "
+        DEVICE, "IranSpoty Cloud never brought the phone up",
+        "IranSpoty Cloud kept reporting the phone as starting and it never came up. "
         "Nothing about the credentials; the device is the problem. It is "
         "deleted rather than kept, since nothing was signed into it."),
     "budget_exhausted": Verdict(
@@ -681,15 +682,15 @@ VERDICTS: dict[str, Verdict] = {
         "created. These are rented monthly and often answer again the next "
         "day; the rows are marked `dead` and retested on the next run."),
     "proxy_change_refused": Verdict(
-        NOBODY, "GeeLark would not move the phone to another exit",
-        "GeeLark refused the swap, so the phone kept the exit it had and the "
+        NOBODY, "IranSpoty Cloud would not move the phone to another exit",
+        "IranSpoty Cloud refused the swap, so the phone kept the exit it had and the "
         "build stopped rather than go on through an address that had already "
         "refused it. Nothing is wrong with the credentials."),
     MAY_BE_SIGNED_IN: Verdict(
-        DEVICE, "GeeLark stopped answering after the account's password "
+        DEVICE, "IranSpoty Cloud stopped answering after the account's password "
         "went in, so it may be signed in on that phone",
         "The sign-in got as far as the password (or the emailed code) and "
-        "then GeeLark sat on the read that would have confirmed it, so the "
+        "then IranSpoty Cloud sat on the read that would have confirmed it, so the "
         "run ended as a lost connection with nothing checked. The account "
         "is held rather than offered again, because it may already be on "
         "that phone. Send it to the same phone again - that signs it in "
@@ -697,15 +698,14 @@ VERDICTS: dict[str, Verdict] = {
         "status."),
     "network_unreachable": Verdict(
         NOBODY, "this machine lost its connection",
-        "The network went away mid-build - GeeLark, Google Sheets and Google's "
-        "own token endpoint all stopped resolving at once, which is this "
-        "machine and not any of them. Nothing was judged and nothing was "
-        "spent. Check the connection, run `geelark verify`, and if the run "
-        "died holding rows they are freed with `geelark pools "
-        "--release-stuck`."),
+        "The network went away mid-build - IranSpoty Cloud, Google Sheets and "
+        "Google's own token endpoint all stopped resolving at once, which is "
+        "this machine and not any of them. Nothing was judged and nothing "
+        "was spent. Check the connection; rows a dead run was holding are "
+        "put back by the keeper on its next pass."),
     "no_capacity": Verdict(
-        NOBODY, "GeeLark had no free machine of this Android version",
-        "GeeLark ran out of machines of the Android version this account asks "
+        NOBODY, "IranSpoty Cloud had no free machine of this Android version",
+        "IranSpoty Cloud ran out of machines of the Android version this account asks "
         "for, which it does for minutes at a time and which says nothing about "
         "the phone, the account or the row. `phones.start` already asked "
         "several times before giving up, so this is the answer after those. "

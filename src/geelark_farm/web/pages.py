@@ -563,7 +563,7 @@ CONTROLS = {
              "text": "The service stops at its next pass: nothing is "
                      "synced, built, finished or drained until Start is "
                      "pressed (or the tick removed on the Service tab). "
-                     "Phones GeeLark is running keep running and keep "
+                     "Phones IranSpoty Cloud is running keep running and keep "
                      "being billed."},
     "start": {"label": "Start", "klass": "quiet",
               "text": "Stop everything is unticked at the next pass and "
@@ -583,12 +583,12 @@ PHONE_STATES = {
                "text": "", "said": "released"},
     "done": {"label": "Done", "klass": "quiet ok", "sure": True,
              "said": "closed",
-             "text": "The phone is deleted in GeeLark within a few "
+             "text": "The phone is deleted in IranSpoty Cloud within a few "
                      "seconds and the gmail and the account on it retired "
                      "as delivered. There is no undo: the phone is gone."},
     "failed": {"label": "Failed", "klass": "quiet bad", "sure": True,
                "said": "written-off",
-               "text": "The phone is deleted in GeeLark within a few "
+               "text": "The phone is deleted in IranSpoty Cloud within a few "
                        "seconds, its gmail marked used and the account "
                        "freed for another phone. There is no undo: the "
                        "phone is gone."},
@@ -1081,9 +1081,11 @@ def _phone_rows(data: dict, user: dict) -> str:
                 badge = ('<span class="badge manual" title="Cancel was '
                          'pressed; the build gives up at its next step and '
                          'puts back what it held">Stopping</span>')
+            # Through our own page, which frames the screen under the
+            # farm's bar: the viewer's own address names the vendor.
             watch = (f'<a class="btn quiet live" target="_blank" '
-                     f'rel="noopener" href="{esc(url)}" title="its '
-                     f'screen, in a new tab">Watch live</a> '
+                     f'rel="noopener" href="/phones/{esc(serial)}/watch" '
+                     f'title="its screen, in a new tab">Watch live</a> '
                      if url else "")
             lines.append(
                 f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
@@ -2166,10 +2168,10 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
                 f'<button class="quiet" data-busy="Asking…" title="'
-                + ("ask GeeLark whether it answers; one that does is free "
-                   "again" if state != "free" else
-                   "ask GeeLark whether it answers; one that does not is "
-                   "marked dead")
+                + ("ask IranSpoty Cloud whether it answers; one that does is "
+                   "free again" if state != "free" else
+                   "ask IranSpoty Cloud whether it answers; one that does not "
+                   "is marked dead")
                 + '">Test</button></form>')
             doors.append(
                 f'<form method="post" action="{meta["remove"]}">{_csrf(user)}'
@@ -3027,7 +3029,7 @@ def _geelark_line(data: dict, user: dict) -> str:
     return (f'<footer class="glfoot{" " + worst if worst else ""}">'
             f'<p class="glhead"><span class="gldot"></span>'
             f'<span class="gltag" title="{esc(_gl_source(plan))}">'
-            f'GeeLark</span>'
+            f'IranSpoty Cloud</span>'
             f'<span class="glage{" warn" if stale else ""}"'
             f' title="{esc(_gl_freshness(stale))}">{esc(age)}</span></p>'
             f'<dl class="glstats">'
@@ -3195,7 +3197,7 @@ def _gl_subscription(plan: dict, trouble: list) -> dict:
     return {"cap": "Subscription", "kinds": ("plan",),
             "value": f"{when.day} {when.strftime('%b %Y')}",
             "tone": _gl_level(trouble, "plan"), "note": note,
-            "title": ("When the GeeLark subscription runs out. Every "
+            "title": ("When the IranSpoty Cloud subscription runs out. Every "
                       "phone on the account goes with it.")}
 
 
@@ -3216,7 +3218,7 @@ def _gl_age(found: dict) -> tuple[str, bool]:
 def _gl_source(plan: dict) -> str:
     """Where every number above came from, and the caveat under all of
     them - carried on the one word that is always there."""
-    return (f"The GeeLark account as the keeper last read it. Plan "
+    return (f"The IranSpoty Cloud account as the keeper last read it. Plan "
             f"{int(plan.get('plan') or 0)}: "
             f"{int(plan.get('profiles') or 0)} profile slots, "
             f"{int(plan.get('parallels') or 0)} parallel phone(s) "
@@ -3626,8 +3628,8 @@ def live_page(serial: str, user: dict, said: str = "",
                                "red")
     elif status == "done":
         title, note, colour = (f"{serial} started",
-                               result or "GeeLark gave no live-view link "
-                               "back for it", "green")
+                               result or "IranSpoty Cloud gave no live-view "
+                               "link back for it", "green")
     elif changing:
         title, note, colour, wait = (
             f"Changing the IP of {serial}",
@@ -3638,8 +3640,8 @@ def live_page(serial: str, user: dict, said: str = "",
     else:
         title, note, colour, wait = (
             f"Starting {serial}",
-            "GeeLark is starting it - usually ten to twenty seconds. This "
-            "tab goes to the screen by itself; keep it open.",
+            "IranSpoty Cloud is starting it - usually ten to twenty seconds. "
+            "This tab goes to the screen by itself; keep it open.",
             "amber", 3)
     # Its own refresh. The browser's went inside <noscript> for the
     # dashboard's sake, and this page has no script - so it never asked
@@ -3716,9 +3718,16 @@ BRAND_MARK = (
 
 def viewer_page(serial: str, user: dict, url: str,
                 creds: dict | None = None,
-                account: dict | None = None) -> str:
-    """The Live tab once the phone is up: GeeLark's viewer inside this
+                account: dict | None = None, *,
+                watch: bool = False) -> str:
+    """The Live tab once the phone is up: the cloud's viewer inside this
     page, and a beat every fifteen seconds that says the tab is open.
+
+    `watch` is the dashboard's "Watch live" on a phone being built: the
+    same framed screen under our own bar, and nothing else - no beat
+    (the build holds the phone, not this tab), no Change IP, no Done or
+    Failed, no credentials. It used to send the tab straight to the
+    vendor's page, whose address said who the vendor was (2026-09-28).
 
     `creds` is the Gmail signed into the phone - address, password and
     authenticator key - drawn in the margin for whoever holds the phone,
@@ -3789,6 +3798,9 @@ def viewer_page(serial: str, user: dict, url: str,
         "document.getElementById('gf-reload').addEventListener('click',"
         " function(){ frame.setAttribute('src','about:blank');"
         "  setTimeout(show,300); });"
+        + ("word.textContent='being built - watching only';"
+           "})();" if watch else "")
+        + ("" if watch else
         "var form='csrf='+encodeURIComponent(csrf);"
         "var gone=false;"
         + _CHANGE_IP_SCRIPT +
@@ -3823,14 +3835,14 @@ def viewer_page(serial: str, user: dict, url: str,
         "window.addEventListener('pagehide',closing);"
         "document.addEventListener('visibilitychange',function(){"
         " if(document.visibilityState==='visible') beat();});"
-        "})();"
+        "})();")
     )
     rows = (_gmail_margin(creds) if creds else "") + (
         _account_margin(account) if account else "")
     if rows:
         rows += f'<script>{_TOTP_SCRIPT}</script>'
     ends = ""
-    if _may(user, "may_take_phones"):
+    if _may(user, "may_take_phones") and not watch:
         # Done and Failed, as the dashboard's row offers them (the
         # operator, 2026-09-16: "beside the other buttons"). Both delete
         # the phone, so both ask first - here, in the page, by the same
@@ -3841,7 +3853,7 @@ def viewer_page(serial: str, user: dict, url: str,
                 f'{_state_form(user, serial, "done", "/")}'
                 f'{_state_form(user, serial, "failed", "/")}</div>')
     change_ip = ""
-    if _may(user, "may_change_proxy"):
+    if _may(user, "may_change_proxy") and not watch:
         # Beside Reload: the phone is stopped, moved to the next free
         # exit and started again, and the screen swaps in place - the
         # tab never leaves this page, so its beat never stops and the
@@ -3935,9 +3947,9 @@ def viewer_page(serial: str, user: dict, url: str,
         f'<a class="dim" href="/">Dashboard</a></div>'
         f'<span id="gf-watch">connecting</span>'
         f'<button type="button" class="quiet" id="gf-reload" title="Loads '
-        f'GeeLark&#39;s viewer again without closing the tab - for when it says '
+        f'the phone viewer again without closing the tab - for when it says '
         f'the connection timed out; that is the route from your network to '
-        f'phone.geelark.com, not the phone">Reload viewer</button>'
+        f'the viewer, not the phone">Reload viewer</button>'
         f'{change_ip}{ends}{rows}</aside></div>'
         f'<script>{beat}{_ASK_SCRIPT if ends else ""}</script>')
     return page(f"Phone {serial}", body, user=user, here="/",
@@ -5003,7 +5015,7 @@ _POOL_SAID = {
     "off": "Actions are not switched on yet.",
     "bad": "That account was refused at the form - check the address, the "
            "password and the secret.",
-    "gone": "That exit is no longer in GeeLark's list - nothing to adopt.",
+    "gone": "That exit is no longer in IranSpoty Cloud's list - nothing to adopt.",
     "already": "Already asked - that request is still pending.",
     "twice": "That press already went through the first time; the page "
              "shows what it did.",

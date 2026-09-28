@@ -1806,7 +1806,7 @@
       if (/[/]boot$/.test(form.action)) {
         var which = (form.action.split('/phones/')[1] || '').split('/')[0];
         toast('Starting ' + (which || 'the phone') + ' - its screen opens '
-          + 'in the new tab as soon as GeeLark hands the link back.');
+          + 'in the new tab as soon as the cloud hands the link back.');
       }
       return;
     }

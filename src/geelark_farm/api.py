@@ -51,19 +51,25 @@ PLAN_RATE_LIMITED = 40007
 
 # Failure codes worth explaining in the exception message. Only codes actually
 # observed are listed - a guessed mapping is worse than none.
+#: What the phone service is called in anything a person reads: the
+#: farm is IranSpoty Cloud Farm, and the vendor is nobody's business
+#: (the operator, 2026-09-28).
+CLOUD = "IranSpoty Cloud"
+
+
 KNOWN_CODES = {
     20002: "the phone is already running another task "
            "(only one RPA task per phone at a time)",
     20008: "an element was not found, commonly because the phone's UI is not "
            "in English (mobileLanguage must be 'default')",
-    40003: "signature rejected - check GEELARK_APP_ID and GEELARK_API_KEY",
+    40003: "signature rejected - the cloud API credentials are wrong",
     PLAN_RATE_LIMITED:
         "too many requests to this endpoint - some, like /pay/plan/info, "
         "allow only one a minute, separate from the 200/min account limit",
-    44002: "the GeeLark plan is full: no slots left for another phone. "
+    44002: "the IranSpoty Cloud plan is full: no slots left for another phone. "
            "Delete phones you have finished with, or raise the plan. Rows "
            "already done are unaffected; re-run to pick up the rest.",
-    43043: "GeeLark has no free machine of this Android version right now. "
+    43043: "IranSpoty Cloud has no free machine of this Android version right now. "
            "Nothing is wrong with the phone, the account or the plan - it "
            "clears in minutes. `phones.start` asks again a few times before "
            "giving up, and a run that gives up says so as `no_capacity`.",

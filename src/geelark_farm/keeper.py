@@ -271,7 +271,7 @@ STEP_NAMES = {
     "abandoned": "settling phones a killed run left behind",
     "proxies": "matching the Proxy tab to the panel",
     "repointed": "checking which exit each phone is really on",
-    "renamed": "naming the phones in GeeLark",
+    "renamed": "naming the phones in the cloud",
     "stranded": "looking for phones and accounts that lost each other",
     "unclaimed": "putting back what a dead run was holding",
     "pruned": "clearing out archived pages nothing needs",
@@ -590,7 +590,7 @@ def sync_proxies(client: Client, book: Book,
         # Never worth failing a sync over - but `held = []` makes every proxy
         # look like one the tab already knows, so the report says there is
         # nothing unlisted when what happened is that it could not look.
-        log.warning("could not list GeeLark's own proxies (%s), so nothing is "
+        log.warning("could not list the cloud's own proxies (%s), so nothing is "
                     "reported as unlisted this run", exc)
         held = []
     unlisted = [item for item in held
@@ -725,7 +725,7 @@ def sync_phone_names(client: Client, book: Book) -> list[str]:
             continue
         renamed.append(wanted)
     if renamed:
-        log.info("renamed %d phone(s) in GeeLark", len(renamed))
+        log.info("renamed %d phone(s) in the cloud", len(renamed))
     return renamed
 
 

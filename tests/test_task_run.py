@@ -388,6 +388,11 @@ def test_only_an_admin_on_a_switched_on_console_gets_the_form(make_settings):
     assert "Run it" in task_pages.task_page(data, ADMIN, may_run=True)
     shown = task_pages.task_page(data, ADMIN, may_run=False)
     assert "Run it" not in shown and "geelark task app_probe" in shown
+    # An operator gets the sentence and not the line: the farm's own
+    # command is an admin's to know (2026-09-28).
+    shown = task_pages.task_page(data, OPERATOR, may_run=False)
+    assert "Only an admin runs one from here." in shown
+    assert "geelark" not in shown.lower(), "the vendor's name stays out"
 
 
 def test_every_banner_a_run_can_come_back_with_is_drawn():

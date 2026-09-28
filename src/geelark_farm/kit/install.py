@@ -135,10 +135,11 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
         wait = min(API_INSTALL_WAIT_SECONDS, budget)
         if apps.wait_installed(client, phone_id, package, budget_seconds=wait,
                                cancelled=cancelled):
-            log.info("%s is on, from GeeLark's installer", name)
+            log.info("%s is on, from the cloud installer", name)
             return play_install.Outcome("success", "installed",
-                                        f"{name} installed by GeeLark")
-        log.warning("%s has not landed from GeeLark's installer in %.0fs",
+                                        f"{name} installed by the cloud "
+                                        f"installer")
+        log.warning("%s has not landed from the cloud installer in %.0fs",
                     name, wait)
         budget = max(0.0, budget - wait)
     if not play:

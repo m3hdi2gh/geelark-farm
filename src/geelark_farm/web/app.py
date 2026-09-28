@@ -353,6 +353,22 @@ class _Handler(BaseHTTPRequestHandler):
                     user, level=level, before=before, **filters,
                     capture=_capture_health(),
                     log_db=bool(self.settings.log_db)))
+            if path.startswith("/phones/") and path.endswith("/watch"):
+                # The dashboard's Watch live on a phone being built: the
+                # screen the builder logged, framed under our own bar
+                # (pages.viewer_page, watch=True). Nothing to hold and
+                # nothing to do - the build owns the phone.
+                serial = path[len("/phones/"):-len("/watch")]
+                url = read.live_link(self.settings, serial)
+                if not url:
+                    return self._html(200, pages.live_page(
+                        serial, user, said="", row={
+                            "status": "failed",
+                            "result": "no live screen for this phone right "
+                                      "now - it is not being built, or its "
+                                      "link is gone"}))
+                return self._html(200, pages.viewer_page(
+                    serial, user, url, watch=True))
             if path.startswith("/phones/") and path.endswith("/live"):
                 # Boot's new tab. The live-view URL is the answer to the
                 # start call, so it can only exist once the pass has made
