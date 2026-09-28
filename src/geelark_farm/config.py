@@ -576,6 +576,13 @@ class Settings:
     host_gate_min: int = 8
     host_gate_rate: float = 0.5
     host_gate_relative: float = 0.5
+    #: How long an exit rests before it comes back on its own, tested:
+    #: one a service refused a phone through (`change ip`), and one set
+    #: aside as suspect. The exits' addresses are fixed now - nothing at
+    #: the vendor changes one - so waiting for a hand meant waiting for
+    #: ever (the operator, 2026-09-29). Zero turns the rule off.
+    exit_rest_hours: int = 12
+    suspect_rest_hours: int = 24
 
     @classmethod
     def load(cls) -> Settings:
@@ -662,6 +669,8 @@ class Settings:
             bad_models=_models("BAD_MODELS"),
             model_retries=_int("MODEL_RETRIES", 3, minimum=0),
             host_gate_min=_int("HOST_GATE_MIN", 8, minimum=1),
+            exit_rest_hours=_int("EXIT_REST_HOURS", 12, minimum=0),
+            suspect_rest_hours=_int("SUSPECT_REST_HOURS", 24, minimum=0),
             host_gate_rate=_ratio("HOST_GATE_RATE", 0.5),
             host_gate_relative=_ratio("HOST_GATE_RELATIVE", 0.5),
             wake_on_action=_str("WAKE_ON_ACTION", "0").strip()

@@ -1585,7 +1585,7 @@ def test_free_tests_with_patience_then_forgives_the_host(monkeypatch,
     monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
     forgiven = []
     monkeypatch.setattr(builder.exit_health, "forgive_host",
-                        lambda s, host, by="": forgiven.append((host, by)))
+                        lambda s, host, by="", exit_key="": forgiven.append((host, by)))
 
     status, msg, _ = verbs.mark_proxy_free(
         book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
@@ -1618,7 +1618,7 @@ def test_a_test_that_revives_a_dead_exit_forgives_its_host_too(
     monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
     forgiven = []
     monkeypatch.setattr(builder.exit_health, "forgive_host",
-                        lambda s, host, by="": forgiven.append(host))
+                        lambda s, host, by="", exit_key="": forgiven.append(host))
 
     status, _, _ = verbs.test_proxy(book, None, settings,
                                     {"name": "SX1", "by": "mehdi"}, object())
@@ -1679,7 +1679,7 @@ def test_free_all_tests_the_whole_set_aside_list_and_frees_what_answers(
     monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
     forgiven = []
     monkeypatch.setattr(builder.exit_health, "forgive_host",
-                        lambda s, host, by="": forgiven.append(host))
+                        lambda s, host, by="", exit_key="": forgiven.append(host))
 
     status, said, _ = verbs.free_all_proxies(
         book, None, settings, {"by": "mehdi"}, object())

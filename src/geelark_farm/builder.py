@@ -124,8 +124,8 @@ from .exit_health import HOST_GATE_NOTE as HOST_GATE_NOTE
 from .exit_health import SUSPECT as SUSPECT
 from .exit_health import _bump_captcha_host as _bump_captcha_host
 from .exit_health import _captcha_hosts_memory as _captcha_hosts_memory
-from .exit_health import _strike_captcha_host as _strike_captcha_host
-from .exit_health import _struck_hosts
+from .exit_health import _strike_captcha_exit as _strike_captcha_exit
+from .exit_health import _struck_exits
 from .exit_health import forgive_host as forgive_host
 from .exit_health import gate_hosts as gate_hosts
 from .exit_health import gate_threshold as gate_threshold
@@ -1472,10 +1472,10 @@ def _google_phase(st: _BuildState) -> Build | None:
                  or outcome.reason == "captcha_shown")
         if heavy and st.proxy_row is not None:
             try:
-                exit_health._strike_captcha_host(st.settings, st.book, st.proxy_row)
+                exit_health._strike_captcha_exit(st.settings, st.book, st.proxy_row)
             except Exception as exc:                           # noqa: BLE001
                 log.warning("could not count the captcha against the "
-                            "exit's host (%s)", exc)
+                            "exit (%s)", exc)
         if (failures.verdict(outcome.reason).needs_a_new_exit
                 and st.proxy_row is not None and st.text_captchas < 1
                 and not outcome.ok):
@@ -1765,7 +1765,7 @@ def _let_the_build_go(st: _BuildState) -> None:
         held += _refused_holds(book, st.lease.refused)
     else:
         held += _session_holds(book, session, proxy_spent=bool(st.phone_id))
-    _release(book, build, held, suspect_hosts=_struck_hosts(st.settings))
+    _release(book, build, held, suspect_exits=_struck_exits(st.settings))
     # A phone with no Google account on it is not a phone. Nothing can be
     # done with it - `finish` refuses it by name, since there is nothing to
     # build on - so it is deleted rather than left occupying a plan slot and
@@ -2005,7 +2005,7 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
         # 2026-09-23).
         _release(book, build,
                  _session_holds(book, session, proxy_spent=True),
-                 suspect_hosts=_struck_hosts(settings))
+                 suspect_exits=_struck_exits(settings))
         # One more attempt on the tally, but only for a finish that says
         # something about the phone.
         #

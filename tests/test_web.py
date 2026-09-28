@@ -2141,7 +2141,7 @@ def test_the_work_list_is_one_table_of_every_kind_of_trouble(web, monkeypatch):
     assert "IP changed — free it" in body and "Test again" in body
     assert "Add to pool" in body and ">Ignore<" in body
     assert "Google refused it on 1528" in body, "the row's own note"
-    assert "change the IP in the vendor" in body, "and what to do about it"
+    assert "comes back on its own once tested" in body, "and what happens next"
     assert "SX1" not in body, "a free exit is not a job"
 
 

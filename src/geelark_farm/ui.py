@@ -1523,9 +1523,9 @@ def needs_you(book: Book, outcome: dict[str, list[str]]) -> list[tuple]:
     waiting = [r for r in book.proxies.flagged
                if book.proxies.status_of(r) == book.proxies.needs_new_ip]
     if waiting:
-        items.append((len(waiting), "proxies waiting on a new exit address",
-                      "change each in the vendor's panel, then set its cell "
-                      "to `free`"))
+        items.append((len(waiting), "proxies resting after a refusal",
+                      "each comes back on its own once its rest is over; "
+                      "Free brings one back sooner"))
 
     # These two the sync found and left alone on purpose: which way each goes
     # is a judgement, and History is where the answer is.

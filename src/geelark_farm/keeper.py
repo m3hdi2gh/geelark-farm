@@ -26,7 +26,7 @@ from . import failures, phones
 from . import proxy as proxy_mod
 from .api import ApiError, Client, TransportError
 from .config import Settings
-from .exit_health import HELD_BACK, gate_hosts
+from .exit_health import HELD_BACK, gate_hosts, rest_exits
 from .gsheet import SheetError
 from .ledger import Ledger
 from .phones import FARM_GROUP, _in_the_farms_group, _live_exits
@@ -278,6 +278,7 @@ STEP_NAMES = {
     "checked": "testing every free proxy",
     "retried": "putting back the Gmails whose wait on the ladder is over",
     "hosts": "setting aside exits on hosts that sign in rarely",
+    "rested": "putting back the exits whose rest is over",
 }
 
 
@@ -379,6 +380,10 @@ def sync_sheet(client: Client, book: Book, ledger: Ledger, *,
     if getattr(settings, "store_enabled", False) and getattr(
             settings, "pools_in_pg", False):
         step("retried", lambda: _revive_ladder(settings))
+        # Before the gate: a rested exit's host is cleared as it comes
+        # back, and the gate then judges it from that clear onwards
+        # rather than setting it straight back aside on the old week.
+        step("rested", lambda: rest_exits(client, book, settings))
         step("hosts", lambda: gate_hosts(book, settings))
     if stale_claim_seconds:
         step("unclaimed", lambda: free_abandoned_claims(book,

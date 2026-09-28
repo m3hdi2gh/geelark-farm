@@ -11,7 +11,7 @@ import logging
 
 from .. import failures
 from ..build_result import Build
-from ..exit_health import CAPTCHA_STRIKES_PER_HOST, SUSPECT
+from ..exit_health import CAPTCHA_STRIKES_PER_EXIT, SUSPECT, exit_key
 from ..pools import Book
 from ..runctx import _record_event, _run
 
@@ -40,18 +40,19 @@ def _refused_holds(book: Book, refused: list[tuple]) -> list[tuple]:
     today = failures.today()
     return [(book.proxies, resource, SET_ASIDE,
              f"On {today} {failures.verdict(why).seen}. The proxy is fine; "
-             f"the exit address is the thing that was turned down. Change it "
-             f"in the vendor's panel, then set this cell to `free`.", why)
+             f"the exit address is the thing that was turned down. It rests, "
+             f"then comes back on its own, tested; Free brings it back "
+             f"sooner.", why)
             for resource, why in refused]
 
 
 def _release(book: Book, build: Build, held: list[tuple], *,
-             suspect_hosts: frozenset | set = frozenset()) -> None:
+             suspect_exits: frozenset | set = frozenset()) -> None:
     """Hand every still-claimed resource its outcome.
 
-    `suspect_hosts` are the exit hosts Google challenged enough today (see
-    `_struck_hosts`): an exit going back as stock onto one of them goes
-    back as `suspect` instead, with Free on the row as the way back.
+    `suspect_exits` are the exit keys Google challenged enough today (see
+    `_struck_exits`): one of them going back as stock goes back as
+    `suspect` instead, to rest; Free on the row is the way back sooner.
 
     `spent` is what the resource ended up on a device as, not whether the build
     as a whole succeeded. A Gmail that signed in is on that phone whatever
@@ -87,18 +88,16 @@ def _release(book: Book, build: Build, held: list[tuple], *,
                     if build.ok else
                     f"On phone {build.serial}, which stopped short of ready - "
                     f"see that row in the Phones tab.{sold}"))
-            elif (pool is book.proxies and suspect_hosts
-                  and str(getattr(getattr(resource, "proxy", None), "host", ""))
-                  in suspect_hosts):
-                host = resource.proxy.host
+            elif (pool is book.proxies and suspect_exits
+                  and exit_key(resource) in suspect_exits):
                 pool.fail(resource, SUSPECT, note=(
-                    f"Suspect - Google challenged {CAPTCHA_STRIKES_PER_HOST} "
-                    f"or more sign-ins on {host} today ({failures.today()}); "
-                    f"set aside on its own as this build let go of it. Press "
-                    f"Free to use it again."))
-                log.warning("%s goes back as suspect, not stock: %s is a host "
-                            "Google kept challenging today", resource.label,
-                            host)
+                    f"Suspect - Google challenged {CAPTCHA_STRIKES_PER_EXIT} "
+                    f"or more sign-ins on this exit today ({failures.today()}); "
+                    f"set aside on its own to rest as this build let go of "
+                    f"it. It comes back on its own, tested; Free brings it "
+                    f"back sooner."))
+                log.warning("%s goes back as suspect, not stock: Google kept "
+                            "challenging this exit today", resource.label)
             else:
                 # Claimed but never put on a device - the Gmail fetched just as
                 # the budget ran out, the app account nothing was tried with,

@@ -5851,8 +5851,8 @@ def _trouble_row(user: dict, r: dict, tests: dict, back: str) -> str:
     else:
         seen = (str(r.get("note") or "") or
                 "a build asked for a new IP on this exit")
-        advice = ("change the IP in the vendor's panel, then free it here - "
-                  "it is re-tested before any build takes it")
+        advice = ("it rests, then comes back on its own once tested - or "
+                  "free it here now; it is re-tested before any build takes it")
         buttons = _proxy_button(user, "/pools/proxy/free", name,
                                 "IP changed — free it", "warn", back=back)
     phone = (f' <span class="dim">on</span> {_serial_link(r.get("serial"))}'

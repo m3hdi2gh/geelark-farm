@@ -685,7 +685,7 @@ def test_an_exit_only_the_vendor_can_change_is_raised():
     text = rendered_needs(items)
 
     assert [count for count, _, _ in items] == [2]     # `dead` is retested
-    assert "vendor" in text
+    assert "resting after a refusal" in text and "on its own" in text
 
 
 def test_the_two_judgements_the_sync_refuses_are_raised():

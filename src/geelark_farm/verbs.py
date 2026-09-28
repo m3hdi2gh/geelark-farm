@@ -755,7 +755,7 @@ def _forgive(settings, resource, by: str) -> None:
 
     exit_health.forgive_host(
         settings, str(getattr(getattr(resource, "proxy", None), "host", "")
-                      or ""), by=by)
+                      or ""), by=by, exit_key=exit_health.exit_key(resource))
 
 
 def _named(book, payload):

@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 #: arrives from the pool as the string the sheet would have held.
 _INTS = frozenset({"times_used", "port"})
 _BOOLS = frozenset({"email_code_only", "customer_ready"})
-_STAMPS = frozenset({"claimed_at"})
+_STAMPS = frozenset({"claimed_at", "updated_at"})
 
 
 def _to_db(column: str, value):
@@ -856,6 +856,9 @@ class PgProxyPool(_PgPool, ProxyPool):
         # Where the row came from; `one-off` marks a proxy typed on the
         # build card for one build (ProxyPool.one_off_status).
         "Source": "source",
+        # When the row last changed - read by the rest rule, never written
+        # from here (exit_health.rest_exits).
+        "Updated": "updated_at",
     }
 
     def _values_of(self, row: dict) -> dict[str, str]:

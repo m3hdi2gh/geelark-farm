@@ -347,7 +347,8 @@ def test_a_refused_exit_waits_for_its_address_to_be_changed(device, settings,
     note = first.values["Note"]
     assert failures.verdict("request_rejected").seen in note
     assert "the exit address is the thing that was turned down" in note
-    assert "set this cell to `free`" in note
+    # It rests and comes back on its own (2026-09-29); Free is sooner.
+    assert "comes back on its own" in note and "Free" in note
 
 
 # The exit refusals are OpenAI's, so they only ever arrive in the app phase -
@@ -5075,45 +5076,46 @@ def test_no_exit_to_move_to_is_not_a_failed_build(device, settings, drive,
 
 
 # ------------------------------------------ a host Google keeps challenging
-def test_three_challenges_on_one_host_in_a_day_set_its_free_exits_aside(
+def test_three_challenges_on_one_exit_in_a_day_mark_that_exit_alone(
         make_settings, monkeypatch):
-    """The vendor sells several ports on one address, and Google's opinion
-    is of the address: on 190.2.143.20 one phone ate forty-three captcha
-    rounds while phones on 212.8.248.20 met three or none (the operator,
-    2026-09-09). At the third challenge in a day, every free exit on that
-    host is set aside as suspect; the other host is untouched."""
+    """Counted against the exit, not its host (2026-09-29): a vendor that
+    multiplexes puts ten exits on one host, told apart by the username,
+    and three challenges on two of them used to set the other eight aside
+    for the day. Google sees the exit's own address; so does the tally.
+    Nothing is set aside here - the struck exit goes back as suspect when
+    the build lets go of it (`_struck_exits`, read at the release)."""
     from types import SimpleNamespace
 
     builder._captcha_hosts_memory.clear()
     monkeypatch.setattr(builder.failures, "today", lambda: "2026-09-09")
 
-    def exit_(name, host):
+    def exit_(name, host, user):
         return SimpleNamespace(name=name, label=name,
-                               proxy=SimpleNamespace(host=host))
+                               proxy=SimpleNamespace(host=host, port=50101,
+                                                     username=user))
 
     failed = []
-    free = [exit_("SX4", "190.2.143.20"), exit_("SX10", "190.2.143.20"),
-            exit_("SX1", "212.8.248.20")]
+    free = [exit_("PS4", "79.127.168.43", "u_4"),
+            exit_("PS10", "79.127.168.43", "u_10")]
     book = SimpleNamespace(proxies=SimpleNamespace(
         available=free,
         fail=lambda r, status, note="": failed.append((r.name, status, note))))
     settings = make_settings()            # no store: the day lives in memory
-    held = exit_("SX44", "190.2.143.20")  # the one the build is on
+    held = exit_("PS1", "79.127.168.43", "u_1")  # the one the build is on
+    key = builder.exit_health.exit_key(held)
+    assert key == "79.127.168.43:50101:u_1"
 
-    assert builder._strike_captcha_host(settings, book, held) == []
-    assert builder._strike_captcha_host(settings, book, held) == []
-    assert failed == [], "two challenges are a bad day, not a verdict"
-    assert builder._strike_captcha_host(settings, book, held) == ["SX4", "SX10"]
-    assert [(n, s) for n, s, _ in failed] == [("SX4", "suspect"),
-                                              ("SX10", "suspect")]
-    assert "3 Google challenges on 190.2.143.20" in failed[0][2]
-    assert "Press Free" in failed[0][2]
+    assert builder._strike_captcha_exit(settings, book, held) == 1
+    assert builder._strike_captcha_exit(settings, book, held) == 2
+    assert builder._struck_exits(settings) == set(), "two are a bad day"
+    assert builder._strike_captcha_exit(settings, book, held) == 3
+    assert builder._struck_exits(settings) == {key}
+    assert failed == [], "the siblings on the host are nobody's business"
 
     # Another day starts the count again.
     monkeypatch.setattr(builder.failures, "today", lambda: "2026-09-10")
-    failed.clear()
-    assert builder._strike_captcha_host(settings, book, held) == []
-    assert failed == []
+    assert builder._strike_captcha_exit(settings, book, held) == 1
+    assert builder._struck_exits(settings) == set()
 
 
 def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_host(
@@ -5122,8 +5124,8 @@ def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_hos
     still thirteen rounds that host cost (the operator, 2026-09-09)."""
     settings = _many_gmails_per_phone(settings)
     struck = []
-    monkeypatch.setattr(builder.exit_health, "_strike_captcha_host",
-                        lambda s, b, row: struck.append(row.proxy.host) or [])
+    monkeypatch.setattr(builder.exit_health, "_strike_captcha_exit",
+                        lambda s, b, row: struck.append(row.proxy.host) or 1)
     heavy = Outcome("success", "signed_in",
                     trail=["email_entry"] + ["captcha"] * 6
                     + ["password_entry", "2fa_code_entry"])
@@ -5153,10 +5155,10 @@ def test_a_sign_in_that_met_a_captcha_on_the_way_in_still_counts_against_the_hos
     assert build.ok and struck == [], "no captcha, no strike"
 
 
-def test_an_exit_handed_back_onto_a_struck_host_goes_back_as_suspect():
-    """The tally only sets aside what is free the moment it fills; the two
-    exits a build was holding would otherwise be the first two the next
-    build takes (2026-09-09)."""
+def test_a_struck_exit_handed_back_goes_back_as_suspect():
+    """The tally fills while the build still holds the exit, so the
+    release is where the verdict lands (2026-09-09); on the exit alone,
+    never its siblings on the host (2026-09-29)."""
     from types import SimpleNamespace
 
     freed, failed = [], []
@@ -5164,19 +5166,19 @@ def test_an_exit_handed_back_onto_a_struck_host_goes_back_as_suspect():
         release=lambda r, note="": freed.append(r.label),
         fail=lambda r, status, note="": failed.append((r.label, status, note)))
     book = SimpleNamespace(proxies=pool, apps=None, gmails=None)
-    bad = SimpleNamespace(label="SX44",
-                          proxy=SimpleNamespace(host="190.2.143.20"))
-    good = SimpleNamespace(label="SX1",
-                           proxy=SimpleNamespace(host="212.8.248.20"))
+    bad = SimpleNamespace(label="PS1", proxy=SimpleNamespace(
+        host="79.127.168.43", port=50101, username="u_1"))
+    sibling = SimpleNamespace(label="PS2", proxy=SimpleNamespace(
+        host="79.127.168.43", port=50101, username="u_2"))
 
     builder._release(book, builder.Build(index=1), [
         (pool, bad, builder.RELEASE, "", ""),
-        (pool, good, builder.RELEASE, "", ""),
-    ], suspect_hosts={"190.2.143.20"})
+        (pool, sibling, builder.RELEASE, "", ""),
+    ], suspect_exits={"79.127.168.43:50101:u_1"})
 
-    assert freed == ["SX1"]
-    assert [(n, s) for n, s, _ in failed] == [("SX44", "suspect")]
-    assert "Press Free" in failed[0][2]
+    assert freed == ["PS2"], "same host, its own exit: stock"
+    assert [(n, s) for n, s, _ in failed] == [("PS1", "suspect")]
+    assert "comes back on its own" in failed[0][2]
 
 
 # ----------------------------------------------- the operator's Play recipe
@@ -6043,6 +6045,14 @@ def test_forgiving_a_host_stamps_the_clear_and_forgets_the_days_strikes(
     assert "10.0.0.0" not in kept["captcha_hosts"], "the day's strikes go"
     assert kept["captcha_hosts"]["10.0.0.1"]["count"] == 1, "others stay"
     assert builder.host_clears(settings) == {"10.0.0.0": 5_000.0}
+    # The tally is per exit now: Free on one exit forgets that exit's
+    # strikes and leaves its siblings' on the same host (2026-09-29).
+    kept["captcha_hosts"] = {"10.0.0.1:1:a": {"day": "2026-09-13", "count": 3},
+                             "10.0.0.1:1:b": {"day": "2026-09-13", "count": 3}}
+    builder.forgive_host(settings, "10.0.0.1", by="mehdi",
+                         exit_key="10.0.0.1:1:a")
+    assert "10.0.0.1:1:a" not in kept["captcha_hosts"]
+    assert kept["captcha_hosts"]["10.0.0.1:1:b"]["count"] == 3
     # Without a store there is nothing to write, and nothing breaks.
     builder.forgive_host(make_settings(store_enabled=False), "10.0.0.0")
 
@@ -7084,7 +7094,7 @@ def test_a_finish_installs_the_app_of_its_accounts_product(
     import inspect
 
     finish = inspect.getsource(builder.finish_one)
-    assert "suspect_hosts=_struck_hosts(settings)" in finish
+    assert "suspect_exits=_struck_exits(settings)" in finish
 
 
 # --------------------------------- phase 4.3: the run's shutdown is a stop
@@ -7498,3 +7508,109 @@ def test_the_sync_tells_phones_on_one_gateway_apart_by_username(monkeypatch):
     assert corrected == ["phone 4003"]
     row = [r for r in book.phones.rows() if str(r.get("Serial")) == "4003"][0]
     assert row["Proxy"] == "PS3"
+
+
+# ----------------------------------------------------- the rest rule
+def _rested_book(statuses, ages_hours):
+    """A pool of exits in the given statuses, each last changed that
+    many hours ago (the store's Updated stamp)."""
+    from geelark_farm.pools import Pool
+
+    book = make_book(proxies=len(statuses))
+    now = time.time()
+    for row, status, age in zip(book.proxies._rows, statuses, ages_hours,
+                                strict=True):
+        row.values["Status"] = status
+        row.values["Updated"] = time.strftime(
+            Pool.CLAIM_FORMAT, time.gmtime(now - age * 3600))
+    return book
+
+
+def test_the_rest_rule_puts_back_a_refused_exit_after_its_hours(
+        make_settings, monkeypatch):
+    """`change ip` rests exit_rest_hours, `suspect` suspect_rest_hours;
+    then each is tested as Free tests it: one that answers is free again
+    with its host judged afresh, one that does not is dead - and retested
+    with the dead ones. Not a minute early, and never a shelved, free or
+    on-phone exit (the operator, 2026-09-29: the addresses are fixed, so
+    a refused exit waited for a hand for ever)."""
+    from geelark_farm import exit_health
+
+    settings = make_settings(exit_rest_hours=12, suspect_rest_hours=24)
+    book = _rested_book(
+        ["change ip", "change ip", "suspect", "suspect", "set aside", "free",
+         "dead", "change ip"],
+        [13, 11, 25, 23, 100, 100, 100, 30])
+    rows = book.proxies._rows
+    for i, r in enumerate(rows):
+        r.values["Name"] = f"PS{i}"
+    checked = []
+
+    def check(client, proxy):
+        checked.append(proxy.host)
+        if proxy.host == rows[7].proxy.host:      # every fixture row shares a user
+            raise builder.proxy_mod.ProxyError("no answer")
+        return {"outboundIP": "8.8.8.8"}
+
+    monkeypatch.setattr(exit_health.proxy_mod, "check", check)
+    forgiven = []
+    monkeypatch.setattr(exit_health, "forgive_host",
+                        lambda s, host, by="", exit_key="": forgiven.append(
+                            (host, by, exit_key)))
+
+    outcome = exit_health.rest_exits(object(), book, settings)
+
+    assert outcome == {"back": ["PS0", "PS2"], "dead": ["PS7"]}
+    assert [book.proxies.status_of(r) for r in rows] == [
+        "free", "change ip", "free", "suspect", "set aside", "free", "dead",
+        "dead"]
+    assert exit_health.REST_NOTE in rows[0].values["Note"]
+    assert "12 h" in rows[0].values["Note"] or "13 h" in rows[0].values["Note"]
+    assert rows[0].values["Last Exit IP"] == "8.8.8.8"
+    assert "did not answer" in rows[7].values["Note"]
+    assert len(checked) == 3, "only the rested ones are tested"
+    assert [f[1] for f in forgiven] == ["the rest rule"] * 2
+    assert forgiven[0][2] == exit_health.exit_key(rows[0])
+
+    # Zero hours turns that rule off; no client, nothing happens at all.
+    book = _rested_book(["change ip", "suspect"], [100, 100])
+    for i, r in enumerate(book.proxies._rows):
+        r.values["Name"] = f"Q{i}"
+    assert exit_health.rest_exits(object(), book, make_settings(
+        exit_rest_hours=0, suspect_rest_hours=24)) == {"back": ["Q1"],
+                                                       "dead": []}
+    assert book.proxies.status_of(book.proxies._rows[0]) == "change ip"
+    book = _rested_book(["change ip"], [100])
+    assert exit_health.rest_exits(None, book, settings) == {"back": [],
+                                                            "dead": []}
+    assert book.proxies.status_of(book.proxies._rows[0]) == "change ip"
+    # A row with no stamp (a sheet row) is left alone rather than guessed.
+    book = _rested_book(["change ip"], [100])
+    book.proxies._rows[0].values["Updated"] = ""
+    assert exit_health.rest_exits(object(), book, settings)["back"] == []
+
+
+def test_the_rest_rule_runs_in_the_sync_before_the_gate():
+    """The sync's step, placed before the host gate: a rested exit's host
+    is cleared as it comes back, and the gate then judges it from that
+    clear onwards rather than setting it straight back aside."""
+    import inspect
+
+    from geelark_farm import keeper
+
+    src = inspect.getsource(keeper.sync_sheet)
+    rested = src.index('step("rested"')
+    assert rested < src.index('step("hosts"')
+    assert "rest_exits(client, book, settings)" in src
+    assert keeper.STEP_NAMES["rested"]
+
+
+def test_the_rest_hours_are_settings(make_settings, monkeypatch):
+    from geelark_farm import config
+
+    s = make_settings()
+    assert (s.exit_rest_hours, s.suspect_rest_hours) == (12, 24)
+    monkeypatch.setenv("EXIT_REST_HOURS", "6")
+    monkeypatch.setenv("SUSPECT_REST_HOURS", "0")
+    loaded = config.Settings.load()
+    assert (loaded.exit_rest_hours, loaded.suspect_rest_hours) == (6, 0)
