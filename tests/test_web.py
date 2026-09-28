@@ -7273,9 +7273,34 @@ def test_the_live_tabs_closing_beacon_is_noted_and_the_next_beat_clears_it(
                          "sees": "all", "may_take_phones": True})
     client = web()
     client.login(username="sara")
+    # And the sweep is asked for once the grace is up, not left to the
+    # next pass (the operator, 2026-09-29).
+    import geelark_farm.store.actions as actions_mod
+    from geelark_farm.web import app as app_mod
+
+    armed, queued = [], []
+
+    class Timer:
+        def __init__(self, seconds, fn):
+            armed.append(seconds)
+            self.fn = fn
+            self.daemon = False
+
+        def start(self):
+            self.fn()
+
+    monkeypatch.setattr(app_mod.threading, "Timer", Timer)
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: queued.append(k) or 5)
     status, _, body = client.request("POST", "/phones/1500/closing",
                                      _form(csrf=client.csrf()))
     assert status == 200 and body == "noted" and seen == ["1500"]
+    from geelark_farm import forgotten
+
+    assert armed == [forgotten.TAB_CLOSED_SECONDS + 3]
+    assert queued[-1]["verb"] == "sweep_forgotten"
+    assert queued[-1]["payload"] == {"serial": "1500"}
+    assert queued[-1]["idem_key"].startswith("sweep:1500:")
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

@@ -2229,3 +2229,25 @@ def test_add_proxies_tells_ten_on_one_gateway_apart(monkeypatch):
     assert said == "0 proxies added, 10 already in the pool", said
     assert book.proxies.find_exact("79.127.168.43", 50101, "user_3").name == "PS3"
     assert book.proxies.find_exact("79.127.168.43", 50101, "user_99") is None
+
+
+def test_sweep_forgotten_runs_the_sweep_on_a_fresh_listing(monkeypatch):
+    """The closing beacon's follow-up: the same sweep the pass runs, on a
+    listing fetched now (the operator, 2026-09-29)."""
+    from geelark_farm import forgotten
+    from geelark_farm import phones as phones_mod
+
+    seen = {}
+    monkeypatch.setattr(phones_mod, "listing", lambda c: [{"serialNo": "1"}])
+    monkeypatch.setattr(forgotten, "sweep",
+                        lambda c, s, led, listing: seen.update(listing=listing)
+                        or {"off": ["1"], "released": ["1"], "held": []})
+    status, said, _ = verbs.sweep_forgotten(None, None, None, {"serial": "1"},
+                                            object())
+    assert status == "done" and said == "1 phone(s) put back, 1 switched off"
+    assert seen["listing"] == [{"serialNo": "1"}]
+    monkeypatch.setattr(forgotten, "sweep",
+                        lambda c, s, led, listing: {"off": [], "released": []})
+    assert verbs.sweep_forgotten(None, None, None, {}, object())[1] == \
+        "nothing to put back yet"
+    assert verbs.sweep_forgotten(None, None, None, {}, None)[0] == "failed"

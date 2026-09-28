@@ -636,6 +636,12 @@ class _Handler(BaseHTTPRequestHandler):
                     person.tab_closed(self.settings, serial)
                 except Exception as exc:                          # noqa: BLE001
                     log.debug("closing of %s not written (%s)", serial, exc)
+                # And the sweep is asked for the moment the twenty seconds
+                # are up, rather than left to the next pass - which could
+                # be minutes away with a build in it (the operator,
+                # 2026-09-29). A reload's beat clears the stamp first, and
+                # the sweep then finds nothing to do.
+                self._sweep_soon(user, serial)
                 return self._text(200, "noted")
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/boot"):
@@ -1136,6 +1142,29 @@ class _Handler(BaseHTTPRequestHandler):
                          idem=self._minute_key(user, "remove_delivered",
                                                kind),
                          back=back)
+
+    def _sweep_soon(self, user: dict, serial: str) -> None:
+        """Queue the forgotten-phones sweep once the closing grace is up.
+        A timer in this process; lost on a restart, when the pass still
+        catches the phone as it always did."""
+        from .. import forgotten
+        from ..store import actions as store_actions
+
+        settings = self.settings
+        who = int(user.get("id") or 0)
+        key = f"sweep:{serial}:{int(time.time()) // 60}"
+
+        def ask():
+            try:
+                store_actions.enqueue(settings, verb="sweep_forgotten",
+                                      payload={"serial": serial},
+                                      requested_by=who, idem_key=key)
+            except Exception as exc:                          # noqa: BLE001
+                log.debug("sweep for %s not queued (%s)", serial, exc)
+
+        timer = threading.Timer(forgotten.TAB_CLOSED_SECONDS + 3, ask)
+        timer.daemon = True
+        timer.start()
 
     def _remove_gmail_group(self, user: dict, field: dict) -> None:
         """"Remove all" under the Gmail pool's spent or errored chip:

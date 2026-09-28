@@ -986,6 +986,25 @@ def remove_proxy(book, ledger, settings, payload, client):
             {"removed": kept})
 
 
+def sweep_forgotten(book, ledger, settings, payload, client):
+    """The forgotten-phones sweep, now: a Live tab said it was closing,
+    and the pass that would have switched its phone off could be minutes
+    away (the operator, 2026-09-29). The same sweep, on a fresh listing,
+    so a reload's beat in the meantime still spares the phone."""
+    if client is None:
+        return "failed", "no IranSpoty Cloud client on this pass", None
+    from . import forgotten
+    from . import phones as phones_mod
+
+    outcome = forgotten.sweep(client, settings, ledger,
+                              listing=phones_mod.listing(client))
+    off, back = outcome.get("off") or [], outcome.get("released") or []
+    if not off and not back:
+        return "done", "nothing to put back yet", outcome
+    return ("done", f"{len(back)} phone(s) put back"
+                    + (f", {len(off)} switched off" if off else ""), outcome)
+
+
 # ------------------------------------------------------- the phones (C6)
 def login_accounts(book, ledger, settings, payload, client, launch=None):
     """"Log in selected": N chosen accounts onto N warm phones, at once.
@@ -2087,6 +2106,7 @@ VERBS = {
     "ignore_proxy": ignore_proxy,
     "change_proxy": change_proxy,
     "stop_phone": stop_phone,
+    "sweep_forgotten": sweep_forgotten,
     "power_off_phone": power_off_phone,
     "add_gmails": add_gmails,
     "build_by_hand": build_by_hand,
