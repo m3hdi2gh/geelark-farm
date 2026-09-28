@@ -2650,8 +2650,9 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     # One fixed width for the viewer, and its box scaled to the window:
     # the phone fits any monitor, Back and Home included (2026-09-16).
     assert "u.searchParams.set('w',String(W))" in body
-    assert "var k=Math.min(h/BOX_H,w/BOX_W);" in body
-    assert "frame.style.transform='scale('+k+')'" in body
+    assert "var k=Math.min(h/(BOX_H-BAR),w/BOX_W);" in body
+    assert ("frame.style.transform='translateY('+(-BAR*k)+'px) "
+            "scale('+k+')'") in body
     assert "window.addEventListener('resize',fit)" in body
     assert "width:416px;height:752px" in body
     assert "gf-live" not in body and "addEventListener('submit'" not in body
@@ -7115,7 +7116,7 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
     # stage is the window's whole height (the operator, 2026-09-16).
     assert '<div class="viewbar">' not in body
     assert '<aside id="gf-side"><div class="gf-head"><b>1500</b>' in body
-    assert "var h=stage.clientHeight||window.innerHeight," in body
+    assert "var h=(stage.clientHeight||window.innerHeight)-TOP," in body
     assert 'data-value="pa$$w&lt;rd"' in body, "escaped, and hidden"
     assert "\u2022" * 8 in body and "pa$$w<rd" not in body
     assert 'data-secret="JBSWY3DPEHPK3PXP"' in body
@@ -7153,6 +7154,29 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
                               creds={"address": "a@b.com", "password": "",
                                      "totp_secret": ""})
     assert "none on the row" in drawn and 'id="gf-totp"' not in drawn
+
+
+def test_the_live_tab_wears_our_bar_over_the_viewers_own():
+    """GeeLark's viewer opens with a title bar of its own - its logo and
+    "GeeLark Phone|4860 - ..." - above the phone's screen. The frame is
+    cropped by that bar's height and our own is drawn above it: the
+    IranSpoty mark beside the name, the phone, and whether it is live
+    (the operator, 2026-09-28)."""
+    from geelark_farm.web import pages
+
+    drawn = pages.viewer_page("4860", {"csrf": "c"}, "https://x/",
+                              creds=None)
+    bar = drawn[drawn.index('id="gf-brand"'):]
+    bar = bar[:bar.index("</header>")]
+    assert "IranSpoty" in bar and "Phone 4860" in bar
+    assert "<svg" in bar and "#00E7FF" in bar, "the mark, beside the name"
+    assert bar.index("<svg") < bar.index("IranSpoty")
+    assert 'id="gf-state"' in bar
+    # Cropped, not covered: the frame moves up by the bar's height, so
+    # nothing of ours lies over the phone and every tap still reaches it.
+    assert pages.VIEWER_BAR > 0
+    assert f"BAR={pages.VIEWER_BAR}" in drawn
+    assert "translateY(" in drawn
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

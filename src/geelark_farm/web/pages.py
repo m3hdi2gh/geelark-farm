@@ -3620,6 +3620,50 @@ LIVE_BEAT_MS = 15000
 #: scaled to the window, so these only fix the drawing's resolution.
 VIEWER_WIDTH = 360
 VIEWER_BOX = (VIEWER_WIDTH + 56, 2 * VIEWER_WIDTH + 32)
+#: The height of the title bar GeeLark's viewer draws above the phone -
+#: its logo and "GeeLark Phone|4860 - ..." - at VIEWER_WIDTH, in the
+#: viewer's own pixels. The frame is cropped by this much and our bar is
+#: drawn in its place (the operator, 2026-09-28). Measured off the live
+#: tab; if GeeLark changes the bar, this is the one number to move.
+VIEWER_BAR = 32
+#: Our bar's own height, in the page's pixels.
+BRAND_BAR_PX = 40
+
+#: The IranSpoty mark, as the operator sent it (spotylogomark.svg), with
+#: its gradient given an id of its own so a page can carry it once.
+BRAND_MARK = (
+    '<svg viewBox="0 0 80 84" fill="none" xmlns="http://www.w3.org/2000/svg"'
+    ' aria-hidden="true" focusable="false"><path d="M78.1909 33.269C75.8859'
+    ' 29.4497 71.6686 27.601 67.4854 26.8685C58.863 25.3338 46.3476 28.3161'
+    ' 37.6398 32.2226C36.2056 29.781 34.686 27.3743 33.1322 25.0025C38.0154'
+    ' 20.032 47.6623 16.9452 56.6604 16.9452C56.5638 15.8121 56.2467 14.7102'
+    ' 55.7277 13.704C55.2088 12.6978 54.4984 11.8075 53.6383 11.0853C46.4842'
+    ' 9.34129 33.1493 12.184 25.8074 20.9564L34.3445 33.7748C31.1132 35.436'
+    ' 28.0084 37.3423 25.0561 39.4777L24.4415 39.9137C23.724 40.4314 23.1146'
+    ' 41.0896 22.6485 41.8501C22.1824 42.6106 21.8691 43.4581 21.7267'
+    ' 44.3435C21.6126 45.3865 21.6703 46.4417 21.8974 47.4653C22.1687 48.7441'
+    ' 22.6293 49.9732 23.2634 51.1102C24.6976 53.4646 25.8586 56.3422 28.3856'
+    ' 57.6328C31.2028 59.1327 34.3445 57.6328 36.769 56.0283C39.1819 54.7787'
+    ' 41.2885 52.9905 42.9328 50.7963C45.8866 46.2444 42.1815 40.6462 39.8936'
+    ' 36.3036C54.3042 28.2463 86.5402 24.7583 71.7198 45.9828C66.8417 52.6357'
+    ' 60.7549 58.2667 53.792 62.5683C44.3693 68.9964 33.6479 73.1694 22.4267'
+    ' 74.7764C17.663 75.3519 11.892 75.4217 7.55512 72.9277C3.8671 70.7303'
+    ' 3.88418 66.2656 7.11119 59.9C3.9354 63.3183 0.810827 67.748 0.110786'
+    ' 72.4045C-1.46004 83.0953 14.0775 84.351 21.112 83.9324C30.166 83.3088'
+    ' 39.0178 80.9108 47.1843 76.8692C54.6585 73.2912 61.5651 68.5882 67.6733'
+    ' 62.9171C72.9663 57.9467 77.6275 51.8601 79.4032 44.6225C79.949 42.7426'
+    ' 80.1229 40.7705 79.9148 38.8213C79.7066 36.872 79.1206 34.9846 78.1909'
+    ' 33.269ZM54.6457 0.237579C34.0372 -1.62851 22.4779 7.98096 18.4826'
+    ' 12.2015L22.4779 17.6776C24.5268 15.1837 35.4543 3.42911 57.4458'
+    ' 6.30672C57.408 5.15369 57.1402 4.02069 56.6587 2.9771C56.1772 1.9335'
+    ' 55.4922 1.0013 54.6457 0.237579Z" fill="url(#gf-mark-g)"/><defs>'
+    '<linearGradient id="gf-mark-g" x1="39.9619" y1="-0.00658178"'
+    ' x2="39.9619" y2="84.0022" gradientUnits="userSpaceOnUse">'
+    '<stop stop-color="#00E7FF"/><stop offset="0.18" stop-color="#1BBCE3"/>'
+    '<stop offset="0.42" stop-color="#3C85C0"/>'
+    '<stop offset="0.63" stop-color="#555DA6"/>'
+    '<stop offset="0.8" stop-color="#634597"/>'
+    '<stop offset="0.9" stop-color="#693C91"/></linearGradient></defs></svg>')
 
 
 def viewer_page(serial: str, user: dict, url: str,
@@ -3665,18 +3709,30 @@ def viewer_page(serial: str, user: dict, url: str,
         "var box=document.getElementById('gf-box');"
         "var stage=document.getElementById('gf-stage');"
         "var word=document.getElementById('gf-watch');"
-        f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]};"
+        "var brand=document.getElementById('gf-brand');"
+        "var live=document.getElementById('gf-state');"
+        f"var W={VIEWER_WIDTH}, BOX_W={VIEWER_BOX[0]}, BOX_H={VIEWER_BOX[1]},"
+        f" BAR={VIEWER_BAR}, TOP={BRAND_BAR_PX};"
+        # Connecting until the viewer's page has loaded; the frame is
+        # somebody else's, so its load is the one thing it tells us.
+        "function mark(state,said){ live.className=state;"
+        " live.lastChild.textContent=said; }"
+        "frame.addEventListener('load',function(){"
+        " if(frame.getAttribute('src')!=='about:blank') mark('on','Live'); });"
         "var u=new URL(base); u.searchParams.set('w',String(W));"
         "function show(){ u=new URL(base); u.searchParams.set('w',String(W));"
-        " frame.setAttribute('src',u.href); }"
+        " mark('wait','Connecting'); frame.setAttribute('src',u.href); }"
         "show();"
+        # GeeLark's own title bar is cropped off the top - the frame moves
+        # up by its height - and ours stands above the box instead.
         "function fit(){"
-        " var h=stage.clientHeight||window.innerHeight,"
+        " var h=(stage.clientHeight||window.innerHeight)-TOP,"
         "     w=stage.clientWidth||window.innerWidth;"
-        " var k=Math.min(h/BOX_H,w/BOX_W);"
+        " var k=Math.min(h/(BOX_H-BAR),w/BOX_W);"
         " box.style.width=Math.floor(BOX_W*k)+'px';"
-        " box.style.height=Math.floor(BOX_H*k)+'px';"
-        " frame.style.transform='scale('+k+')';"
+        " box.style.height=Math.floor((BOX_H-BAR)*k)+'px';"
+        " brand.style.width=box.style.width;"
+        " frame.style.transform='translateY('+(-BAR*k)+'px) scale('+k+')';"
         "}"
         "fit(); window.addEventListener('resize',fit);"
         "document.getElementById('gf-reload').addEventListener('click',"
@@ -3699,6 +3755,7 @@ def viewer_page(serial: str, user: dict, url: str,
         "}"
         "function released(){"
         " word.textContent='released - this phone is no longer yours';"
+        " mark('off','Off');"
         " document.getElementById('gf-stage').innerHTML="
         "  '<div class=\"gf-gone\"><h2>This phone was put back</h2>"
         "<p>It is no longer yours - switched off after its tab closed, "
@@ -3756,7 +3813,31 @@ def viewer_page(serial: str, user: dict, url: str,
         '#gf-wrap{position:fixed;inset:0;display:flex;background:var(--bg)}'
         '#gf-stage{flex:1;min-width:0;display:flex;justify-content:center;'
         'align-items:flex-start;overflow:hidden}'
+        '#gf-col{display:flex;flex-direction:column}'
         '#gf-box{position:relative;overflow:hidden}'
+        # Our bar, where GeeLark's was: the mark beside the name, the
+        # phone, and whether it is live (the operator, 2026-09-28).
+        f'#gf-brand{{height:{BRAND_BAR_PX}px;box-sizing:border-box;'
+        'display:flex;align-items:center;gap:10px;padding:0 14px;'
+        'background:#0b1019;border-bottom:1px solid var(--line2);'
+        'white-space:nowrap;overflow:hidden}'
+        '#gf-brand svg{height:22px;width:auto;flex:none}'
+        '#gf-brand b{font-size:15px;font-weight:600;color:var(--bright);'
+        'letter-spacing:.01em}'
+        '#gf-brand .sep{width:1px;height:16px;background:var(--line2)}'
+        '#gf-brand .ph{color:var(--muted);font-size:13px;'
+        'font-variant-numeric:tabular-nums}'
+        '#gf-state{margin-left:auto;display:flex;align-items:center;gap:6px;'
+        'font-size:12px;color:var(--muted)}'
+        '#gf-state i{width:8px;height:8px;border-radius:50%;'
+        'background:var(--dim)}'
+        '#gf-state.on{color:#9ff3ff}'
+        '#gf-state.on i{background:#00E7FF;box-shadow:0 0 6px #00E7FF}'
+        '#gf-state.wait i{background:#3C85C0;animation:gf-pulse 1.2s '
+        'ease-in-out infinite}'
+        '@keyframes gf-pulse{50%{opacity:.25}}'
+        '@media (prefers-reduced-motion:reduce){#gf-state.wait i'
+        '{animation:none}}'
         f'#gf-view{{border:0;width:{VIEWER_BOX[0]}px;height:{VIEWER_BOX[1]}px;'
         'background:#000;display:block;transform-origin:0 0}'
         '.gf-gone{max-width:420px;margin:80px auto;text-align:center}'
@@ -3789,10 +3870,16 @@ def viewer_page(serial: str, user: dict, url: str,
         '@media (max-width:820px){#gf-wrap{flex-direction:column}'
         '#gf-side{width:auto;border-left:0;border-top:1px solid var(--line)}}'
         '</style>'
-        f'<div id="gf-wrap"><div id="gf-stage"><div id="gf-box">'
+        f'<div id="gf-wrap"><div id="gf-stage"><div id="gf-col">'
+        f'<header id="gf-brand">{BRAND_MARK}<b>IranSpoty</b>'
+        f'<span class="sep"></span>'
+        f'<span class="ph">Phone {esc(serial)}</span>'
+        f'<span id="gf-state" class="wait" role="status"><i></i>'
+        f'<span>Connecting</span></span></header>'
+        f'<div id="gf-box">'
         f'<iframe id="gf-view" data-src="{esc(url)}" '
         f'allow="clipboard-read; clipboard-write; fullscreen"></iframe>'
-        f'</div></div>'
+        f'</div></div></div>'
         f'<aside id="gf-side"><div class="gf-head"><b>{esc(serial)}</b>'
         f'<a class="dim" href="/">Dashboard</a></div>'
         f'<span id="gf-watch">connecting</span>'
