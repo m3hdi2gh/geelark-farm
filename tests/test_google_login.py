@@ -2292,7 +2292,7 @@ def test_the_second_code_comes_from_the_next_window_and_only_once(
         phone, monkeypatch):
     """The same window would give the same six digits back and prove
     nothing; a third would be the incident this was fatal for."""
-    device = phone(taps_that_work={"Next"})
+    phone(taps_that_work={"Next"})
     monkeypatch.setattr(login.shell, "pause", lambda lo, hi: None)
     ctx = context_from("google-wrong-2fa-code.xml")
     windows = []

@@ -24,8 +24,7 @@ from urllib.parse import quote
 # raised as an alert, and two copies of an answer drift.
 from .. import products
 from . import assets
-from .read import (PLAN_WARN_DAYS, READING_STALE_AFTER,
-                   REFUSAL_SHOWN_FOR, SLOTS_LOW)
+from .read import READING_STALE_AFTER
 
 #: The console's shell - the "Direction A" the owner chose on the design
 #: canvas (2026-09-01): a dark ops console, a rail of links on the left with
@@ -1428,6 +1427,7 @@ _POOL_KINDS = {
         "test_all": "/pools/proxy/test-all",
         "free_all": "/pools/proxy/free-all",
         "aside": "/pools/proxy/aside", "aside_all": "/pools/proxy/aside-all",
+        "free_shelved": "/pools/proxy/free-shelved",
         "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone"),
     },
 }
@@ -2492,6 +2492,27 @@ def _aside_all_door(kind: str, rows: list[dict], user: dict) -> str:
             f'Set aside all{f" · {n}" if n else ""}</button></form>')
 
 
+def _free_shelved_door(kind: str, rows: list[dict], user: dict) -> str:
+    """Free all set aside: the exits a person put on the shelf, back in
+    one press, tested first (the operator, 2026-09-29). Under the chip
+    they are listed under, beside Free all - which is the jobs list's
+    door and leaves the shelf alone."""
+    meta = _POOL_KINDS[kind]
+    if not meta.get("free_shelved") or not _may(user, meta["manage"]):
+        return ""
+    n = sum(1 for r in rows if str(r.get("state") or "") == "set aside")
+    return (f'<form method="post" action="{meta["free_shelved"]}" '
+            f'class="inline" data-for-group="{esc(SET_ASIDE)}" hidden '
+            f'data-ask="Free all {n} set-aside exit{"" if n == 1 else "s"}? '
+            f'Each is tested first; the ones that answer are stock again." '
+            f'data-yes="Free all {n}">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<button class="quiet ok" data-busy="Testing {n}…" '
+            f'title="test every exit you set aside by hand and put back the '
+            f'ones that answer"{"" if n else " disabled"}>'
+            f'Free all set aside{f" · {n}" if n else ""}</button></form>')
+
+
 def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
     """The press that answers the whole set-aside list at once.
 
@@ -2654,6 +2675,14 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
     every response - see `_pool_manager`.
     """
     meta = _POOL_KINDS[kind]
+    # Built here rather than inside the f-string: a call broken over two
+    # lines inside the braces is Python 3.12 syntax, and the suite runs
+    # on 3.10 as well (2026-09-29).
+    group_doors = (
+        _remove_group_door(kind, "spent", rows, user,
+                           _group_total(totals, kind, "spent"))
+        + _remove_group_door(kind, "errored", rows, user,
+                             _group_total(totals, kind, "errored")))
     return (
         f'<section class="sheet" data-sheet="{kind}" hidden>'
         f'<header><h3>{esc(meta["name"])}</h3>'
@@ -2668,12 +2697,10 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'{_seller_filter(kind, rows)}'
         f'{_test_all_door(kind, rows, user)}'
         f'{_free_all_door(kind, rows, user)}'
+        f'{_free_shelved_door(kind, rows, user)}'
         f'{_aside_all_door(kind, rows, user)}'
         f'{_remove_delivered_door(kind, rows, user)}'
-        f'{_remove_group_door(kind, "spent", rows, user,
-                              _group_total(totals, kind, "spent"))}'
-        f'{_remove_group_door(kind, "errored", rows, user,
-                              _group_total(totals, kind, "errored"))}'
+        f'{group_doors}'
         # The script has always written "12 of 190 shown" into this,
         # and the CSS has always reserved the space for it, and it was
         # never rendered - so the count nobody could see is how you
@@ -2861,7 +2888,6 @@ def _build_card(data: dict, user: dict) -> str:
     # hands them least-used first, which is the auto order, not a finding
     # order.
     proxies = sorted(_label_list(choose.get("proxies")), key=_natural)
-    account_kinds = _account_kinds(choose.get("apps"))
     # Three boxes: the Gmail, the account and the exit (back since
     # 2026-09-28). The app is not one: all three go on every phone (the
     # operator, 2026-09-12). A Gmail is the pool's next, none at all, or
@@ -4887,13 +4913,17 @@ def api_clients_page(data: dict, user: dict, said: str = "",
     if refused:
         after = int(data.get("locked_after") or 5)
         mins = int(data.get("locked_for") or 600) // 60
+        def locked(r: dict) -> str:
+            return ('<span class="badge bad">locked out</span>'
+                    if int(r["tries"]) >= after else "")
+
         rows_r = "".join(
             f'<tr><td class="muted">{esc(str(r["prefix"]))}&hellip;</td>'
             f'<td>{int(r["tries"])} wrong '
             f'{"try" if int(r["tries"]) == 1 else "tries"}</td>'
             f'<td class="muted">'
             f'{_ago(r["last"]) if r.get("last") else "just now"}</td>'
-            f'<td>{"<span class=\"badge bad\">locked out</span>" if int(r["tries"]) >= after else ""}</td>'
+            f'<td>{locked(r)}</td>'
             f'</tr>' for r in refused[:8])
         body += (
             f'<div class="panel"><h3>Keys that were refused</h3>'
@@ -6737,12 +6767,18 @@ def _day_chips(day: str, kind: str, q: str) -> str:
 
 #: The dimensions of the Login rate page, in reading order, with the
 #: word each key is called.
-_LOGIN_TABLES = (("seller", "By seller", "sold by"),
-                 ("model", "By phone model", "brand and model"),
-                 ("host", "By exit host", "host address"),
-                 ("position", "By position on the phone", "Gmail #"),
-                 ("reason", "By how it ended", "outcome"),
-                 ("day", "By day", "date"))
+_LOGIN_TABLES = (("seller", "By seller", "sold by", "signed in"),
+                 ("model", "By phone model", "brand and model", "signed in"),
+                 ("host", "By exit host", "host address", "signed in"),
+                 ("position", "By position on the phone", "Gmail #",
+                  "signed in"),
+                 ("reason", "By how it ended", "outcome", "signed in"),
+                 ("day", "By day", "date", "signed in"),
+                 # The operators' own verdicts, by exit (2026-09-29): what
+                 # the Done and Failed buttons on the Live tab said, which
+                 # is the number a purchase of exits is judged by.
+                 ("judged_host", "Done by exit host", "host address", "Done"),
+                 ("judged_exit", "Done by exit", "exit", "Done"))
 
 
 def logins_page(data: dict, user: dict) -> str:
@@ -6763,7 +6799,7 @@ def logins_page(data: dict, user: dict) -> str:
     def pct(rate: float) -> str:
         return f"{round(float(rate or 0) * 100)}%"
 
-    def table(key: str, title: str, word: str) -> str:
+    def table(key: str, title: str, word: str, count: str) -> str:
         rows = by.get(key) or []
         if not rows:
             return (f'<div class="panel"><h3>{esc(title)}</h3>'
@@ -6786,7 +6822,7 @@ def logins_page(data: dict, user: dict) -> str:
                 + '</td></tr>')
         return (f'<div class="panel"><h3>{esc(title)} '
                 f'<span class="n">{len(rows)}</span></h3>'
-                f'<table><thead><tr><th>{esc(word)}</th><th>signed in</th>'
+                f'<table><thead><tr><th>{esc(word)}</th><th>{esc(count)}</th>'
                 f'<th>rate</th></tr></thead><tbody>{"".join(lines)}</tbody>'
                 f'</table></div>')
 
@@ -6801,7 +6837,9 @@ def logins_page(data: dict, user: dict) -> str:
             f'<p class="dim">One row per Google sign-in the builder made. '
             f'Rows with fewer than {least} attempts are too few to judge; '
             f'the host gate reads the exit-host table, the model gate the '
-            f'phone-model one.</p>'
+            f'phone-model one. The two Done tables at the end are the '
+            f'operators&#x27; own verdicts on the Live tab - Done against '
+            f'Failed - by the exit each phone was built on.</p>'
             f'<form method="get" action="/logins" class="row">'
             f'<label class="field"><span>Days</span>'
             f'<select name="days" onchange="this.form.submit()">'

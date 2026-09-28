@@ -1775,6 +1775,11 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
                              back=_proxy_back(field))
+        if path == "/pools/proxy/free-shelved":
+            # The shelf back in one press, tested first (2026-09-29).
+            return self._act(user, "may_change_proxy", "free_shelved_proxies",
+                             {}, idem=self._minute_key(user, "free_shelved", "-"),
+                             back=_proxy_back(field))
         if path == "/pools/proxy/aside-all":
             # Every free exit off the shelf, kept: a person's choice, not a
             # verdict, and Free on a row undoes it (2026-09-28).
@@ -1871,7 +1876,6 @@ class _Handler(BaseHTTPRequestHandler):
                 back=_add_back(field, "/pools/gpt"), category=category))
         if path == "/pools/gpt/add":
             from ..store import validate
-
             from ..verbs import GPT_CATEGORIES
 
             category = (field.get("category") or "").strip().lower()
@@ -2773,7 +2777,7 @@ def _digest(payload: dict) -> str:
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
 _SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",
-                     "shelve_all_proxies",
+                     "shelve_all_proxies", "free_shelved_proxies",
                      "remove_delivered_apps", "remove_gmail_group"})
 
 
@@ -3045,6 +3049,7 @@ _OPERATOR_POSTS = (
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
     "/pools/proxy/free-all", "/pools/proxy/aside", "/pools/proxy/aside-all",
+    "/pools/proxy/free-shelved",
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",

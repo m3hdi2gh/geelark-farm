@@ -83,9 +83,15 @@ def _release(book: Book, build: Build, held: list[tuple], *,
                 # the spend: it is the one place the sold address is kept.
                 sold = str((resource.values or {}).get("Note") or "")
                 sold = f" {sold}" if sold.startswith("Sold as ") else ""
+                # A warm phone is a product, not a build that stopped
+                # short: its exit's note said the second and read as a
+                # failure on every new exit (the operator, 2026-09-29).
                 pool.spend(resource, serial=build.serial, note=(
                     f"On phone {build.serial}.{sold}"
                     if build.ok else
+                    f"On phone {build.serial}, kept warm for an operator."
+                    f"{sold}"
+                    if build.status == failures.WARM_FOR_OPERATOR else
                     f"On phone {build.serial}, which stopped short of ready - "
                     f"see that row in the Phones tab.{sold}"))
             elif (pool is book.proxies and suspect_exits

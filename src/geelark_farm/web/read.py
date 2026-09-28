@@ -1754,6 +1754,10 @@ def logins(settings: Settings, days: int = 7) -> dict:
     by["day"] = sorted(by["day"], key=lambda r: r["key"])
     by["position"] = sorted(by["position"],
                             key=lambda r: int(r["key"] or 0))
+    # And the operators' own verdicts - Done against Failed on the Live
+    # tab - by the exit the phone was built on (2026-09-29).
+    by["judged_host"] = store_signins.judged(settings, "host", days)
+    by["judged_exit"] = store_signins.judged(settings, "exit", days)
     return {"days": days, "totals": store_signins.totals(settings, days),
             "by": by, "min_sample": store_signins.MIN_SAMPLE}
 

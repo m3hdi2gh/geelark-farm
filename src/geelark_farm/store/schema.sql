@@ -948,3 +948,10 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check
 ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS stage text NOT NULL DEFAULT '';
 ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS live_url text NOT NULL DEFAULT '';
 ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+-- rev 39: the exit's outbound address, per sign-in and per phone. It was
+-- only on the proxy row as "last seen", and the row's name stood for a
+-- run of addresses - reading which address a phone was really built
+-- behind meant grepping the logs (2026-09-29).
+ALTER TABLE signins ADD COLUMN IF NOT EXISTS exit_ip text NOT NULL DEFAULT '';
+ALTER TABLE phones  ADD COLUMN IF NOT EXISTS exit_ip text NOT NULL DEFAULT '';

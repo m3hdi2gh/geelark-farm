@@ -90,6 +90,17 @@ def _phone_note(build: Build) -> str:
     return f"{opening} {lead}: {attempts}."
 
 
+def _exit_of(book: Book, build: Build) -> str:
+    """The exit's outbound address the phone is behind, as the pool last
+    saw it - written onto the phone's row, because the exit's name stands
+    for a run of addresses and the row's name alone said nothing about
+    which one (2026-09-29)."""
+    name = str(build.proxy_name or "").strip()
+    row = book.proxies.find_by_name(name) if name else None
+    values = getattr(row, "values", None) or {}
+    return str(values.get("Last Exit IP") or "").strip()
+
+
 def _note_on_row(book: Book, serial: str, **fields: str) -> None:
     """Say on a phone's row what has just become true of it.
 
@@ -243,6 +254,7 @@ def _record(book: Book, build: Build) -> None:
             build.serial,
             Proxy=build.proxy_name or build.proxy,
             Gmail=said(build.gmail), Note=note,
+            **{"Exit IP": _exit_of(book, build)},
             **{"GPT Account": said(build.app_account)}, **device, **shelf,
         )
         if not wrote:

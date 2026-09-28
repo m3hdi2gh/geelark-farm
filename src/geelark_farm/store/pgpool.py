@@ -20,6 +20,7 @@ same shape, and the adapter's few statements are the only SQL here.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import threading
 import time
@@ -37,7 +38,7 @@ log = logging.getLogger(__name__)
 #: arrives from the pool as the string the sheet would have held.
 _INTS = frozenset({"times_used", "port"})
 _BOOLS = frozenset({"email_code_only", "customer_ready"})
-_STAMPS = frozenset({"claimed_at", "updated_at"})
+_STAMPS = frozenset({"claimed_at", "updated_at", "state_changed_at"})
 
 
 def _to_db(column: str, value):
@@ -369,6 +370,15 @@ class _PgPool(Pool):
             payload[column] = _to_db(column, value)
             resource.values[name] = "" if value is None else str(value)
         payload = self._split_secret(fields, payload)
+        # An exit's status change is stamped, so the rest rule counts
+        # from it rather than from whatever last touched the row - a Test
+        # writes the exit's address and would have restarted the clock
+        # (2026-09-29). The app pool stamps its own, from `touch`.
+        if isinstance(self, ProxyPool) and "status" in payload:
+            payload["state_changed_at"] = datetime.datetime.now(
+                datetime.timezone.utc)
+            resource.values["Status changed"] = _stamp(
+                payload["state_changed_at"])
         if payload and resource.store_id is not None:
             self._table.update(resource.store_id, payload)
         self._note_held(resource, fields)
@@ -856,9 +866,12 @@ class PgProxyPool(_PgPool, ProxyPool):
         # Where the row came from; `one-off` marks a proxy typed on the
         # build card for one build (ProxyPool.one_off_status).
         "Source": "source",
-        # When the row last changed - read by the rest rule, never written
-        # from here (exit_health.rest_exits).
+        # When the row last changed, and when its status last did - the
+        # rest rule reads the second and falls back to the first
+        # (exit_health.rest_exits); neither is written from the pool's
+        # fields.
         "Updated": "updated_at",
+        "Status changed": "state_changed_at",
     }
 
     def _values_of(self, row: dict) -> dict[str, str]:

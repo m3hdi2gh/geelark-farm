@@ -20,7 +20,7 @@ import time
 
 from . import pools
 from . import proxy as proxy_mod
-from .api import ApiError
+from .api import ApiError, TransportError
 
 log = logging.getLogger(__name__)
 
@@ -171,10 +171,12 @@ def build_by_hand(book, ledger, settings, payload, client):
             wanted = "normal" if no_gmail else "error"
             given = str(payload.get("app_category") or "").strip().lower()
             if given != wanted:
+                which = ("with no Google account" if no_gmail
+                         else "that has a Gmail")
                 return ("refused",
-                        f"a phone {'with no Google account' if no_gmail else 'that has a Gmail'} "
-                        f"takes a {wanted} Spotify account, and this one "
-                        f"was typed as {given or 'unlabelled'}", None)
+                        f"a phone {which} takes a {wanted} Spotify account, "
+                        f"and this one was typed as {given or 'unlabelled'}",
+                        None)
         else:
             refused = _spotify_fits(book, app_account, no_gmail)
             if refused:
@@ -508,8 +510,8 @@ def _cannot_sign_in(resource) -> str:
     if kind in BY_HAND_KINDS:
         return ""
     if kind == domain.ASKS_A_PERSON and not ready:
-        return (f"its customer has not said they are at their keyboard "
-                f"yet - the panel presses /ready")
+        return ("its customer has not said they are at their keyboard "
+                "yet - the panel presses /ready")
     return (f"no sign-in flow exists for a {product} account of kind "
             f"`{kind}` yet, so a phone would be spent on it for nothing")
 
@@ -604,10 +606,19 @@ def _one_off_exit(book, payload, raw: str, endpoint: str) -> None:
 
 def add_proxies(book, ledger, settings, payload, client):
     """Each is tested before it joins: a proxy that does not answer goes
-    in as `dead` rather than as free stock a build then discovers."""
+    in as `dead` rather than as free stock a build then discovers.
+
+    All of them at once, the way Free all tests (`_test_many`): one at a
+    time, ten exits on a slow gateway took minutes to land, and the
+    operator read "three added" while the rest were still being asked
+    (2026-09-29). The rows go in in the order they were pasted, whatever
+    order the answers came back in."""
+    from types import SimpleNamespace
+
     from .store import validate
 
     added, skipped, refused = [], [], []
+    probes: list = []
     for row in payload.get("rows") or []:
         raw = (row.get("raw") or "").strip()
         try:
@@ -623,21 +634,22 @@ def add_proxies(book, ledger, settings, payload, client):
                                    checked["username"]):
             skipped.append(f"{checked['host']}:{checked['port']}")
             continue
+        probes.append(SimpleNamespace(raw=raw, checked=checked,
+                                      proxy=proxy_mod.parse(raw)))
+    answers = _test_many(client, probes) if client is not None else {}
+    for probe in probes:
+        checked = probe.checked
         name = checked["proxy_name"] or _next_name(book)
         status, note = "free", f"Added from the web by {_by(payload)} on " \
                                f"{_stamp()}."
-        exit_ip = ""
-        if client is not None:
-            try:
-                result = proxy_mod.check(client, proxy_mod.parse(raw))
-                exit_ip = str(result.get("outboundIP") or "")
-            except (proxy_mod.ProxyError, ApiError) as exc:
-                log.info("%s did not answer on arrival: %s", name, exc)
-                status = book.proxies.dead_status
-                note = f"Added from the web, but it did not answer: {exc}"
+        ok, exit_ip, why = answers.get(id(probe), (True, "", ""))
+        if not ok:
+            log.info("%s did not answer on arrival: %s", name, why)
+            status = book.proxies.dead_status
+            note = f"Added from the web, but it did not answer: {why}"
         try:
             book.proxies.append(**{
-                "Name": name, "Proxy String": raw, "Status": status,
+                "Name": name, "Proxy String": probe.raw, "Status": status,
                 "Note": note, "Last Exit IP": exit_ip, "Times Used": "0"})
         except ValueError:                 # see add_gmails
             skipped.append(f"{checked['host']}:{checked['port']}")
@@ -740,7 +752,7 @@ def _test_many(client, rows) -> dict:
         try:
             got = proxy_mod.check(client, resource.proxy)
             return id(resource), (True, str(got.get("outboundIP") or ""), "")
-        except (proxy_mod.ProxyError, ApiError) as exc:
+        except (proxy_mod.ProxyError, ApiError, TransportError) as exc:
             return id(resource), (False, "", str(exc)[:200])
 
     if not rows:
@@ -960,6 +972,48 @@ def free_all_proxies(book, ledger, settings, payload, client):
     said = f"{len(freed)} exit(s) are free again"
     if silent:
         said += (f"; {len(silent)} still did not answer and stay dead "
+                 f"({', '.join(silent[:6])}"
+                 f"{' and more' if len(silent) > 6 else ''})")
+    return "done", said, None
+
+
+def free_shelved_proxies(book, ledger, settings, payload, client):
+    """Free all set aside: every exit a person put on the shelf, back in
+    one press - tested first, like Free all; one that answers is stock
+    again with its host judged afresh, one that does not is dead and is
+    retested with the dead ones (the operator, 2026-09-29: the old batch
+    parked, then wanted back)."""
+    if client is None:
+        return "failed", "no IranSpoty Cloud client on this pass", None
+    pool = book.proxies
+    rows = [r for r in pool._rows
+            if not r.error and r.proxy
+            and pool.status_of(r) == pool.shelved_status]
+    if not rows:
+        return "done", "nothing is set aside by hand", None
+    answers = _test_many(client, rows)
+    freed, silent = [], []
+    for resource in rows:
+        name = str(getattr(resource, "name", "") or resource.label)
+        ok, exit_ip, why = answers[id(resource)]
+        if not ok:
+            pool.fail(resource, pool.dead_status, note=(
+                f"Taken off the shelf by {_by(payload)} on {_stamp()}, but "
+                f"it did not answer: {why}. Retested with the dead ones."))
+            silent.append(name)
+            _stamp_test(settings, name, False, "")
+            continue
+        pool.unshelve(resource, note=(
+            f"Taken off the shelf by {_by(payload)} on {_stamp()} - it "
+            f"answers, and its host is judged afresh from here."))
+        if exit_ip:
+            pool.record_exit(resource, exit_ip)
+        _stamp_test(settings, name, True, exit_ip)
+        _forgive(settings, resource, _by(payload))
+        freed.append(name)
+    said = f"{len(freed)} exit(s) are back in the pool"
+    if silent:
+        said += (f"; {len(silent)} did not answer and are dead until they do "
                  f"({', '.join(silent[:6])}"
                  f"{' and more' if len(silent) > 6 else ''})")
     return "done", said, None
@@ -2132,6 +2186,7 @@ VERBS = {
     "free_all_proxies": free_all_proxies,
     "shelve_proxy": shelve_proxy,
     "shelve_all_proxies": shelve_all_proxies,
+    "free_shelved_proxies": free_shelved_proxies,
     "remove_proxy": remove_proxy,
 }
 

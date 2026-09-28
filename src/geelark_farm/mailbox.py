@@ -44,7 +44,7 @@ import imaplib
 import logging
 import re
 import time
-from typing import Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime

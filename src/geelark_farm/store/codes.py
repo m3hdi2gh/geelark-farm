@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from ..config import Settings
 from .db import Store

@@ -1185,6 +1185,12 @@ class ProxyPool(Pool):
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
 
+    def unshelve(self, resource: Resource, *, note: str = "") -> None:
+        """A person's set-aside undone: stock again. `release` keeps the
+        shelf on purpose (the phone that was on it going is not the
+        person changing their mind), so this is the one way off it."""
+        self._set(resource, self._off_a_phone("free", note))
+
     def shelve(self, resource: Resource, *, note: str = "") -> None:
         """A person's set-aside: off the shelf until they free it. One a
         phone is on keeps its serial - the phone stays where it is, and

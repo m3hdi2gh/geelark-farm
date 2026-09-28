@@ -872,6 +872,7 @@ def _record_signin(settings: Settings, build: Build, *, gmail: str,
                              position=position, reason=reason, ok=ok,
                              seconds=seconds, captcha_rounds=captcha_rounds,
                              age_seconds=age_seconds,
+                             exit_ip=exit_ip,
                              exit_country=geo.country_for(settings, exit_ip)
                              if exit_ip else "",
                              touch=touch, dumps=dumps,
@@ -1330,6 +1331,7 @@ def _acquire(st: _BuildState) -> Build | None:
         st.build.built_for = int(st.want.requested_by)
     st.log_row = st.book.phones.start(Serial=st.build.serial,
                                 Proxy=st.build.proxy_name or st.build.proxy,
+                                **{"Exit IP": rows._exit_of(st.book, st.build)},
                                 **theirs)
     # The Gmail was claimed inside `_starting`, before this phone existed -
     # it has to be, or a phone can be created with no address to sign in.

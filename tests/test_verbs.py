@@ -2251,3 +2251,91 @@ def test_sweep_forgotten_runs_the_sweep_on_a_fresh_listing(monkeypatch):
     assert verbs.sweep_forgotten(None, None, None, {}, object())[1] == \
         "nothing to put back yet"
     assert verbs.sweep_forgotten(None, None, None, {}, None)[0] == "failed"
+
+
+def test_add_proxies_tests_the_whole_paste_at_once(monkeypatch):
+    """Ten exits on a slow gateway landed one by one over minutes; the
+    arrival test is one parallel pass now, like Free all, and the rows
+    still go in in the order pasted (2026-09-29)."""
+    book = make_book(proxies=0)
+    asked = []
+
+    def check(client, proxy):
+        asked.append(proxy.username)
+        if proxy.username == "u_3":
+            raise verbs.proxy_mod.ProxyError("no answer")
+        return {"outboundIP": f"8.8.8.{proxy.username[-1]}"}
+
+    monkeypatch.setattr(verbs.proxy_mod, "check", check)
+    seen = []
+    real = verbs._test_many
+
+    def spy(client, rows):
+        seen.append(len(rows))
+        return real(client, rows)
+
+    monkeypatch.setattr(verbs, "_test_many", spy)
+    rows = [{"raw": f"79.127.168.43:50101:u_{i}:pw", "name": f"PS{i}"}
+            for i in range(1, 6)]
+    status, said, detail = verbs.add_proxies(
+        book, None, None, {"by": "mehdi", "rows": rows}, object())
+    assert status == "done" and said == "5 proxies added", said
+    assert seen == [5], "one pass for the whole paste"
+    assert detail["added"] == ["PS1", "PS2", "PS3", "PS4", "PS5"], "in order"
+    assert sorted(asked) == ["u_1", "u_2", "u_3", "u_4", "u_5"]
+    dead = book.proxies.find_by_name("PS3")
+    assert book.proxies.status_of(dead) == "dead"
+    assert "did not answer" in dead.values["Note"]
+    live = book.proxies.find_by_name("PS4")
+    assert book.proxies.status_of(live) == "free"
+    assert live.values["Last Exit IP"] == "8.8.8.4"
+    # No client: nothing is asked, and every row goes in free.
+    status, said, _ = verbs.add_proxies(
+        book, None, None, {"by": "mehdi", "rows": [
+            {"raw": "1.2.3.4:9999:u:p", "name": "Q1"}]}, None)
+    assert status == "done" and seen == [5]
+    assert book.proxies.status_of(book.proxies.find_by_name("Q1")) == "free"
+
+
+def test_free_all_set_aside_takes_the_shelf_back_tested(monkeypatch,
+                                                        make_settings):
+    """The shelf back in one press: tested first, stock again when it
+    answers, dead until it does otherwise; the jobs list and the rest
+    of the pool are not touched (the operator, 2026-09-29)."""
+    from geelark_farm import builder
+
+    settings = make_settings(store_enabled=True)
+    book = make_book(gmails=1, proxies=5)
+    rows = book.proxies._rows
+    for i, r in enumerate(rows):
+        r.values["Name"] = f"SX{i}"
+    book.proxies.shelve(rows[0], note="parked")
+    book.proxies.shelve(rows[1], note="parked")
+    book.proxies.fail(rows[2], "dead")
+    book.proxies.set_aside(rows[3])                  # change ip
+    # rows[4] free
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    forgiven = []
+    monkeypatch.setattr(builder.exit_health, "forgive_host",
+                        lambda s, host, by="", exit_key="": forgiven.append(host))
+
+    def check(client, proxy):
+        if proxy.host == rows[1].proxy.host:
+            raise verbs.proxy_mod.ProxyError("no answer")
+        return {"outboundIP": "9.9.9.9"}
+
+    monkeypatch.setattr(verbs.proxy_mod, "check", check)
+
+    status, said, _ = verbs.free_shelved_proxies(
+        book, None, settings, {"by": "mehdi"}, object())
+    assert status == "done", said
+    assert said.startswith("1 exit(s) are back in the pool; 1 did not answer")
+    assert [book.proxies.status_of(r) for r in rows] == [
+        "free", "dead", "dead", "change ip", "free"]
+    assert rows[0].values["Last Exit IP"] == "9.9.9.9"
+    assert "off the shelf" in rows[0].values["Note"]
+    assert forgiven == [rows[0].proxy.host]
+    assert verbs.free_shelved_proxies(book, None, settings, {}, object())[1] \
+        == "nothing is set aside by hand"
+    assert verbs.free_shelved_proxies(book, None, settings, {}, None)[0] \
+        == "failed"

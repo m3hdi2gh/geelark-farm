@@ -13,8 +13,6 @@ that grows past one of them is a page somebody has to think about.
 """
 from __future__ import annotations
 
-import re
-
 from geelark_farm.web import pages
 
 USER = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,

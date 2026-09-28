@@ -33,7 +33,6 @@ claiming success is not evidence. Failures are named, so a run can act on them:
 from __future__ import annotations
 
 import logging
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -314,21 +313,17 @@ def _fatal_reason(ctx: Context) -> str | None:
 #: when Spotify's challenge page turned out to serve the same one (3644,
 #: 2026-09-19). Bound back to the names this file has always used, so
 #: what changed here is where the code lives and nothing else.
-from .recaptcha import (                                         # noqa: E402
-    GRID_PIXELS as _GRID_PIXELS,
-    TILE_LABEL as _TILE_LABEL,
-    TILE_LOOK_SECONDS,
-    box_of as _box,
-    challenge_button as _challenge_button,
-    grab_grid_b64 as _grab_grid_b64,
-    grid_rect as _grid_rect,
-    half_drawn as _half_drawn,
-    instruction_on as _grid_instruction,
-    robot_checkbox as _robot_checkbox,
-    tile_buttons as _tile_buttons,
-    tile_points as _tile_points,
-    tiles_box as _tiles_box,
-)
+from .recaptcha import TILE_LOOK_SECONDS  # noqa: E402
+from .recaptcha import box_of as _box  # noqa: E402,F401 - the tests patch it
+from .recaptcha import challenge_button as _challenge_button  # noqa: E402
+from .recaptcha import grab_grid_b64 as _grab_grid_b64  # noqa: E402
+from .recaptcha import grid_rect as _grid_rect  # noqa: E402
+from .recaptcha import half_drawn as _half_drawn  # noqa: E402
+from .recaptcha import instruction_on as _grid_instruction  # noqa: E402
+from .recaptcha import robot_checkbox as _robot_checkbox  # noqa: E402
+from .recaptcha import tile_buttons as _tile_buttons  # noqa: E402
+from .recaptcha import tile_points as _tile_points  # noqa: E402
+from .recaptcha import tiles_box as _tiles_box  # noqa: E402
 
 _CAPTCHA_NEEDLES = ("confirm you're not a robot", "i'm not a robot",
                     "select all images", "select all squares")

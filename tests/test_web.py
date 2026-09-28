@@ -5884,8 +5884,7 @@ def test_nothing_a_person_reads_names_the_vendor():
     import re
     import tokenize
 
-    from geelark_farm import (api, apps, failures, forgotten, keeper, rows,
-                              verbs)
+    from geelark_farm import api, apps, failures, forgotten, keeper, rows, verbs
     from geelark_farm.kit import exits, install, phone
     from geelark_farm.web import api_v1, journey, live, pages, read, task_pages
 
@@ -5979,10 +5978,17 @@ def test_the_login_rate_reader_asks_the_store_for_each_dimension(monkeypatch):
     monkeypatch.setattr(store_signins, "totals",
                         lambda s, days: {"ok": 4, "n": 6, "gmails": 5,
                                          "rate": 4 / 6})
+    judged = []
+    monkeypatch.setattr(store_signins, "judged",
+                        lambda s, by, days: judged.append((by, days)) or [
+                            {"key": "1.2.3.4", "ok": 3, "n": 5, "rate": 0.6}])
     got = read.logins(None, days=400)
     assert got["days"] == 90, "capped"
     assert {name for name, _ in asked} == {"seller", "model", "host", "day",
                                            "reason", "position"}
+    assert judged == [("host", 90), ("exit", 90)], "the verdicts too"
+    assert got["by"]["judged_host"] == [{"key": "1.2.3.4", "ok": 3, "n": 5,
+                                         "rate": 0.6}]
     assert [r["key"] for r in got["by"]["position"]] == ["1", "2"], "in order"
     assert got["totals"]["gmails"] == 5 and got["min_sample"] == 5
 
@@ -6699,7 +6705,6 @@ def test_the_proxy_manager_is_ordered_by_the_number_in_the_name():
     a person works down when they are changing addresses. It was by
     `times_used`, the builder's order, which shuffled the list under the
     hand using it (the operator, 2026-09-14)."""
-    import inspect
 
     from geelark_farm.web import read as read_mod
 
@@ -6897,7 +6902,6 @@ def test_a_press_says_what_it_is_doing_and_to_what():
     assert "pressed.dataset.busy" in script
     assert "function actOn(form, sheet)" in script
     assert "tr.classList.add('acting')" in script
-    drawn = pages.page("x", "", user={"username": "a", "role": "admin"})
     assert "tr.acting{opacity:.45" in assets.CSS, (
         "the dimmed rows are styled")
 
@@ -8275,10 +8279,10 @@ def test_a_money_refusal_outlives_the_clock():
     and the foot went grey while the farm was stopped dead."""
     import time
 
-    from geelark_farm.web import pages, read
+    from geelark_farm.web import read
 
     plan = {"profiles": 40, "availableProfiles": 40}
-    old = time.time() - pages.REFUSAL_SHOWN_FOR - 7200
+    old = time.time() - read.REFUSAL_SHOWN_FOR - 7200
     refused = {"said": "start failed [41001] balance not enough",
                "code": 41001, "msg": "balance not enough", "at": old}
     line = _glark(plan=plan, at=time.time(), refusal=refused["said"],
@@ -8330,7 +8334,6 @@ def test_a_row_written_before_the_code_was_kept_apart_still_reads():
 
     from geelark_farm.web import read
 
-    plan = {"profiles": 40, "availableProfiles": 32}
     legacy = {"said": "start failed [41001] balance not enough",
               "at": time.time() - 120}
     assert read._is_about_money(legacy)
@@ -10482,3 +10485,69 @@ def test_an_open_pool_sheet_is_refreshed_by_the_tick_itself():
     waiting = script[script.index("function reloadWhenSettled(){"):]
     waiting = waiting[:waiting.index("function climb(")]
     assert "refreshSheet(openKind)" in waiting
+
+
+def test_the_login_rate_page_draws_the_operators_verdicts_by_exit():
+    """Two tables at the end (2026-09-29): Done against Failed on the Live
+    tab, by exit host and by exit - the same shape as the sign-in tables,
+    headed "Done" rather than "signed in"."""
+    from geelark_farm.web import pages
+
+    data = {"days": 7, "min_sample": 5,
+            "totals": {"ok": 1, "n": 2, "gmails": 2, "rate": 0.5},
+            "by": {"judged_host": [{"key": "62.93.164.201", "ok": 6, "n": 6,
+                                    "rate": 1.0}],
+                   "judged_exit": [{"key": "ISP3", "ok": 2, "n": 3,
+                                    "rate": 0.67}]}}
+    body = pages.logins_page(data, {"id": 1, "username": "m", "role": "admin",
+                                    "sees": "all", "csrf": "c"})
+    host = body[body.index("Done by exit host"):]
+    assert "<th>host address</th><th>Done</th>" in host
+    assert "62.93.164.201" in host and "6/6" in host
+    exit_ = body[body.rindex("Done by exit "):]
+    assert "<th>exit</th><th>Done</th>" in exit_ and "ISP3" in exit_
+    assert "2/3" in exit_
+    assert "operators&#x27; own verdicts" in body
+
+
+def test_the_proxy_sheet_offers_free_all_for_the_shelf():
+    """Free all is the jobs list's door and leaves the shelf alone; the
+    shelf gets a door of its own under the same chip, counting what a
+    person set aside by hand (2026-09-29)."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_change_proxy": True}
+    rows = [{"address": "SX1", "state": "set aside"},
+            {"address": "SX2", "state": "set aside"},
+            {"address": "SX3", "state": "dead"},
+            {"address": "SX4", "state": "free"}]
+    sheet = pages._pool_sheet("proxy", rows, {}, user)
+    head = sheet[:sheet.index("<table")]
+    door = head[head.index('action="/pools/proxy/free-shelved"'):]
+    door = door[:door.index("</form>")]
+    assert f'data-for-group="{pages.SET_ASIDE}"' in door
+    assert "Free all set aside · 2" in door
+    assert 'data-ask="Free all 2 set-aside exits?' in door
+    assert "Free all · 1" in head, "the jobs list counts the dead one alone"
+    assert pages._free_shelved_door("proxy", rows, dict(
+        user, role="operator", is_admin=False, may_change_proxy=False)) == ""
+    assert "disabled" in pages._free_shelved_door("proxy", [], user)
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_free_all_set_aside_queues_one_command(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 75)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, _, _ = client.request(
+        "POST", "/pools/proxy/free-shelved",
+        _form(csrf=client.csrf(), back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "free_shelved_proxies"

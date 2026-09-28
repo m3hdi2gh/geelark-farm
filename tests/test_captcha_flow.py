@@ -10,6 +10,7 @@ import pytest
 from geelark_farm import screen
 from geelark_farm.accounts import Account
 from geelark_farm.flows import google_login as g
+
 # The pixel machinery moved to the shared module when Spotify's
 # challenge turned out to serve the same widget (2026-09-19); these
 # three read it directly, so they follow it there.

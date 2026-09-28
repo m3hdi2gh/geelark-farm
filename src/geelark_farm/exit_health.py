@@ -332,7 +332,10 @@ def rest_exits(client, book: Book, settings: Settings) -> dict[str, list[str]]:
         limit = hours.get(status) or 0
         if limit <= 0:
             continue
-        since = _seconds_of(resource.values.get("Updated"))
+        # When the status was set; a row from before the stamp existed
+        # (2026-09-29) counts from its last change of any kind.
+        since = (_seconds_of(resource.values.get("Status changed"))
+                 or _seconds_of(resource.values.get("Updated")))
         if since is None or now - since < limit * 3600:
             continue
         name = str(getattr(resource, "name", "") or resource.label)

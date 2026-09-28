@@ -64,6 +64,8 @@ _COLUMNS = {
     "Status": "status", "State": "state", "Phone ID": "phone_id",
     "Gmail": "gmail", "GPT Account": "app_account", "Proxy": "proxy_name",
     "Note": "note", "Serial": "serial", "App name": "app",
+    # The exit's own address the phone was built behind (rev 39).
+    "Exit IP": "exit_ip",
     # Who asked for it by hand, and who holds it - user ids, as text in
     # the tab's words and as numbers in the table.
     "Built by": "built_by", "Owner": "owner_id",

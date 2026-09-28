@@ -26,22 +26,24 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
            reason: str = "", ok: bool = False, seconds: float | None = None,
            captcha_rounds: int = 0, age_seconds: float | None = None,
            exit_country: str = "", touch: str = "", dumps: int = 0,
-           proxy_name: str = "") -> bool:
+           proxy_name: str = "", exit_ip: str = "") -> bool:
     try:
         with connect(settings) as conn:
             conn.execute(
                 "INSERT INTO signins (machine, serial, gmail, seller, host,"
                 " model, position, reason, ok, seconds, captcha_rounds,"
-                " age_seconds, exit_country, touch, dumps, proxy_name)"
+                " age_seconds, exit_country, touch, dumps, proxy_name,"
+                " exit_ip)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
-                " %s, %s, %s, %s, %s)",
+                " %s, %s, %s, %s, %s, %s)",
                 (machine(), str(serial or ""), str(gmail or "").lower(),
                  str(seller or "")[:80], str(host or "")[:80],
                  str(model or "")[:80], int(position or 1),
                  str(reason or "")[:80], bool(ok), seconds,
                  int(captcha_rounds or 0), age_seconds,
                  str(exit_country or "")[:8], str(touch or "")[:16],
-                 int(dumps or 0), str(proxy_name or "")[:80]))
+                 int(dumps or 0), str(proxy_name or "")[:80],
+                 str(exit_ip or "")[:45]))
             conn.commit()
         return True
     except Exception as exc:                                      # noqa: BLE001
@@ -53,7 +55,8 @@ def record(settings: Settings, *, serial: str, gmail: str, seller: str = "",
 _BY = {"host": "host", "model": "model", "seller": "seller",
        "reason": "reason", "position": "position::text",
        "day": "to_char(at, 'YYYY-MM-DD')", "touch": "touch",
-       "exit_country": "exit_country", "proxy": "proxy_name"}
+       "exit_country": "exit_country", "proxy": "proxy_name",
+       "exit_ip": "exit_ip"}
 
 
 def rates(settings: Settings, by: str, days: int = 7) -> list[dict]:
@@ -159,3 +162,30 @@ def totals(settings: Settings, days: int = 7) -> dict:
         conn.rollback()
     return {"ok": int(ok or 0), "n": int(n or 0), "gmails": int(gmails or 0),
             "rate": (int(ok or 0) / int(n)) if n else 0.0}
+
+
+def judged(settings: Settings, by: str, days: int = 7) -> list[dict]:
+    """[{key, ok, n, rate}] of the operators' own verdicts - Done against
+    Done + Failed on the Live tab - by the exit the phone was built on:
+    `host` for the gateway, `exit` for the row's name. The same shape as
+    `rates`, so the page draws it with the same table (2026-09-29).
+    Judged by state_at: when the verdict was given, not when the phone
+    was made."""
+    column = {"host": "coalesce(r.host, '')", "exit": "p.proxy_name"}[by]
+    try:
+        with connect(settings) as conn:
+            rows = conn.execute(
+                f"SELECT {column} AS key,"
+                " count(*) FILTER (WHERE p.state = 'done') AS ok, count(*) AS n"
+                " FROM phones p LEFT JOIN resources r"
+                "   ON r.kind = 'proxy' AND r.proxy_name = p.proxy_name"
+                " WHERE p.state IN ('done', 'failed')"
+                "   AND coalesce(p.proxy_name, '') <> ''"
+                "   AND p.state_at > now() - make_interval(days => %s)"
+                " GROUP BY 1 ORDER BY n DESC, 1", (int(days),)).fetchall()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the verdicts by %s could not be read (%s)", by, exc)
+        return []
+    return [{"key": str(key or ""), "ok": int(ok or 0), "n": int(n or 0),
+             "rate": (int(ok or 0) / int(n)) if n else 0.0}
+            for key, ok, n in rows]

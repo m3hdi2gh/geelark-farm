@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable
 
 from .. import screen, shell
 from .router import Context
