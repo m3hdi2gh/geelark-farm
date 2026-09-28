@@ -542,6 +542,14 @@
   }
   function reloadWhenSettled(){
     if (settled()) { reload(); return; }
+    // The page waits for the sheet to close, but the sheet itself does
+    // not: a press inside it is queued and carried out a moment later,
+    // and the only redraw that showed the result ran on a page swap -
+    // which an open sheet holds off. So three Frees sat on "Freeing..."
+    // for as long as the drawer stayed open (the operator, 2026-09-29).
+    // Ask the open pool sheet for itself, with its stamp: 304 costs
+    // nothing, and a moved row is merged in place.
+    if (openKind && POOL_SHEETS.indexOf(openKind) >= 0) refreshSheet(openKind);
     lookAgain(5000);
   }
   // Looks that arm each other: the first is taken now, the rest as each

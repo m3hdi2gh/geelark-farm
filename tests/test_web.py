@@ -10438,3 +10438,17 @@ def test_set_aside_queues_the_verb_for_one_row_or_all(web, monkeypatch):
         _form(csrf=client.csrf(), n="80", back="/"))
     assert status == 303
     assert got[-1]["verb"] == "shelve_all_proxies"
+
+
+def test_an_open_pool_sheet_is_refreshed_by_the_tick_itself():
+    """A press inside the drawer is queued and carried out a moment later;
+    the redraw that showed the result ran only on a page swap, which an
+    open sheet holds off - so three Frees sat on "Freeing..." until the
+    drawer was closed (the operator, 2026-09-29). The look-again asks the
+    open pool sheet for itself, with its stamp."""
+    from geelark_farm.web import pages
+
+    script = pages._DASH_SCRIPT
+    waiting = script[script.index("function reloadWhenSettled(){"):]
+    waiting = waiting[:waiting.index("function climb(")]
+    assert "refreshSheet(openKind)" in waiting
