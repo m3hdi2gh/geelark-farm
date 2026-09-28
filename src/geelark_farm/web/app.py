@@ -1718,9 +1718,10 @@ class _Handler(BaseHTTPRequestHandler):
                              idem=field.get("idem") or secrets.token_urlsafe(12),
                              back=_add_back(field, "/pools/proxy"))
         if path in ("/pools/proxy/free", "/pools/proxy/test",
-                    "/pools/proxy/remove"):
+                    "/pools/proxy/remove", "/pools/proxy/aside"):
             verb = {"free": "mark_proxy_free", "test": "test_proxy",
-                    "remove": "remove_proxy"}[path.rsplit("/", 1)[1]]
+                    "remove": "remove_proxy",
+                    "aside": "shelve_proxy"}[path.rsplit("/", 1)[1]]
             name = (field.get("name") or "").strip()
             back = _proxy_back(field)
             if verb == "remove_proxy" and field.get("sure") != "1":
@@ -1744,6 +1745,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/pools/proxy/test-all":
             return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
+                             back=_proxy_back(field))
+        if path == "/pools/proxy/aside-all":
+            # Every free exit off the shelf, kept: a person's choice, not a
+            # verdict, and Free on a row undoes it (2026-09-28).
+            return self._act(user, "may_change_proxy", "shelve_all_proxies",
+                             {}, idem=self._minute_key(user, "aside_all", "-"),
                              back=_proxy_back(field))
         if path == "/pools/proxy/free-all":
             # The whole set-aside list, after their addresses were changed
@@ -2737,6 +2744,7 @@ def _digest(payload: dict) -> str:
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
 _SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",
+                     "shelve_all_proxies",
                      "remove_delivered_apps", "remove_gmail_group"})
 
 
@@ -3007,7 +3015,7 @@ _OPERATOR_POSTS = (
     "/pools/gmail/free", "/pools/gmail/refund",
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
-    "/pools/proxy/free-all",
+    "/pools/proxy/free-all", "/pools/proxy/aside", "/pools/proxy/aside-all",
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",

@@ -1427,6 +1427,7 @@ _POOL_KINDS = {
                 "one exit per line"),
         "test_all": "/pools/proxy/test-all",
         "free_all": "/pools/proxy/free-all",
+        "aside": "/pools/proxy/aside", "aside_all": "/pools/proxy/aside-all",
         "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone"),
     },
 }
@@ -2145,23 +2146,35 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
         #   suspect       Free (tested first), Test, Remove - a host Google
         #                 kept challenging, set aside by the farm or by
         #                 hand (2026-09-09)
+        #   set aside     Free (tested first), Test, Remove - a person put
+        #                 it on the shelf, and nothing frees it but them
+        #                 (2026-09-28)
+        #   free          Set aside as well: off the shelf, kept
         #   starting      Free - only for one a dead run left behind; a
         #                 live build's is freed by nobody but that build,
         #                 and the pass frees a stale one on its own.
         #   on a phone    nothing: the phone decides.
         if state == "on a phone":
             return ""
-        if state in ("needs new IP", "starting", "suspect"):
+        if state in ("needs new IP", "starting", "suspect", "set aside"):
             doors.append(
                 f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
                 f'<input type="hidden" name="{field}" value="{esc(address)}">'
                 f'<input type="hidden" name="back" value="/">'
                 f'<button class="quiet ok" data-busy="Testing…" title="'
                 + ("tested, and back on the shelf if it answers"
-                   if state in ("needs new IP", "suspect") else
+                   if state in ("needs new IP", "suspect", "set aside") else
                    "back on the shelf - only if the build that took it is "
                    "gone; a stale one is freed on its own within minutes")
                 + '">Free</button></form>')
+        if state == "free" and meta.get("aside"):
+            doors.append(
+                f'<form method="post" action="{meta["aside"]}">{_csrf(user)}'
+                f'<input type="hidden" name="{field}" value="{esc(address)}">'
+                f'<input type="hidden" name="back" value="/">'
+                f'<button class="quiet" data-busy="Setting aside…" title="'
+                f'off the shelf, kept: no build takes it until Free puts '
+                f'it back">Set aside</button></form>')
         if state != "starting":
             doors.append(
                 f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
@@ -2424,7 +2437,8 @@ def _set_aside_rows(rows: list[dict]) -> list[dict]:
     """The exits that are somebody's job: dead, wanting a new address, or
     set aside by the host gate."""
     return [r for r in rows
-            if _proxy_group(str(r.get("state") or "")) == SET_ASIDE]
+            if _proxy_group(str(r.get("state") or "")) == SET_ASIDE
+            and str(r.get("state") or "") != "set aside"]
 
 
 def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
@@ -2442,6 +2456,29 @@ def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
             f'dead one that answers is free again">'
             f'Test all{f" · {aside} set aside" if aside else ""}</button>'
             f'</form>')
+
+
+def _aside_all_door(kind: str, rows: list[dict], user: dict) -> str:
+    """Every free exit off the shelf in one press, under the in-play chip
+    (the operator, 2026-09-28: the old batch set aside, a new one poured
+    in). Asked once beside the button; Free on a row is the way back."""
+    meta = _POOL_KINDS[kind]
+    if not meta.get("aside_all") or not _may(user, meta["manage"]):
+        return ""
+    n = sum(1 for r in rows if str(r.get("state") or "") == "free")
+    noun = "exit" if n == 1 else "exits"
+    ask = (f"Set aside all {n} free {noun}? No build takes them until "
+           f"Free on a row puts one back; exits under a phone stay.")
+    return (f'<form method="post" action="{meta["aside_all"]}" '
+            f'class="inline" data-for-group="{esc(IN_PLAY)}" hidden '
+            f'data-ask="{esc(ask)}" data-yes="Set aside all {n}">'
+            f'{_csrf(user)}<input type="hidden" name="back" value="/">'
+            f'<input type="hidden" name="n" value="{n}">'
+            f'<button class="quiet" data-busy="Setting aside…" '
+            f'title="every free exit off the shelf, kept - for pouring in '
+            f'a new batch that is then the only stock"'
+            f'{"" if n else " disabled"}>'
+            f'Set aside all{f" · {n}" if n else ""}</button></form>')
 
 
 def _free_all_door(kind: str, rows: list[dict], user: dict) -> str:
@@ -2620,6 +2657,7 @@ def _pool_sheet(kind: str, rows: list[dict], totals: dict, user: dict,
         f'{_seller_filter(kind, rows)}'
         f'{_test_all_door(kind, rows, user)}'
         f'{_free_all_door(kind, rows, user)}'
+        f'{_aside_all_door(kind, rows, user)}'
         f'{_remove_delivered_door(kind, rows, user)}'
         f'{_remove_group_door(kind, "spent", rows, user,
                               _group_total(totals, kind, "spent"))}'

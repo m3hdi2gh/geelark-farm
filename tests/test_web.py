@@ -10366,3 +10366,66 @@ def test_the_exits_are_ordered_by_name_in_the_dialog():
     drawn = card[card.index('id="proxy-new"'):]
     assert drawn.index('value="SX2"') < drawn.index('value="US9"') \
         < drawn.index('value="US10"')
+
+
+def test_the_proxy_sheet_sets_exits_aside_one_or_all():
+    """Set aside (the operator, 2026-09-28): a door on every free row, one
+    under the in-play chip for all of them at once, and a set-aside row
+    offers Free (tested first), Test and Remove like any row off the
+    shelf. Free all counts the jobs list and leaves the shelf alone."""
+    from geelark_farm.web import pages
+
+    user = {"id": 1, "role": "admin", "csrf": "c", "mutations": True,
+            "is_admin": True, "may_change_proxy": True}
+    rows = [{"address": "SX1", "state": "free"},
+            {"address": "SX2", "state": "free"},
+            {"address": "SX3", "state": "on a phone"},
+            {"address": "SX4", "state": "set aside"},
+            {"address": "SX5", "state": "dead"},
+            {"address": "SX6", "state": "needs new IP"}]
+    sheet = pages._pool_sheet("proxy", rows, {}, user)
+
+    def row(name):
+        start = sheet.index(f">{name}<")
+        return sheet[start:sheet.index("</tr>", start)]
+
+    assert 'action="/pools/proxy/aside"' in row("SX1")
+    assert "Set aside</button>" in row("SX1")
+    assert "/pools/proxy/aside" not in row("SX3")
+    assert "/pools/proxy/aside" not in row("SX4")
+    assert "/pools/proxy/free" in row("SX4") and "/pools/proxy/test" in row("SX4")
+    assert "/pools/proxy/remove" in row("SX4")
+
+    head = sheet[:sheet.index("<table")]
+    assert 'action="/pools/proxy/aside-all"' in head
+    assert f'data-for-group="{pages.IN_PLAY}"' in head
+    assert "Set aside all · 2" in head
+    assert 'data-ask="Set aside all 2 free exits?' in head
+    assert "Free all · 2" in head, "dead and needs new IP; the shelf is not a job"
+    assert pages._aside_all_door("proxy", rows, dict(
+        user, role="operator", is_admin=False, may_change_proxy=False)) == ""
+    assert pages._aside_all_door("gmail", rows, user) == ""
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_set_aside_queues_the_verb_for_one_row_or_all(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch)
+    got = []
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.append(k) or 74)
+    monkeypatch.setattr("geelark_farm.verbs.runs_inline", lambda v: False)
+    client = web()
+    client.login()
+    status, _, _ = client.request(
+        "POST", "/pools/proxy/aside",
+        _form(csrf=client.csrf(), name="SX1", back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "shelve_proxy"
+    assert got[-1]["payload"]["name"] == "SX1"
+    status, _, _ = client.request(
+        "POST", "/pools/proxy/aside-all",
+        _form(csrf=client.csrf(), n="80", back="/"))
+    assert status == 303
+    assert got[-1]["verb"] == "shelve_all_proxies"

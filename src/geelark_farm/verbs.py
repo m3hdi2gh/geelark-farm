@@ -799,6 +799,47 @@ def mark_proxy_free(book, ledger, settings, payload, client):
                     f"host is judged afresh from now", None)
 
 
+def _shelve(book, resource, payload) -> None:
+    book.proxies.shelve(resource, note=(
+        f"Set aside from the web by {_by(payload)} on {_stamp()}: kept out "
+        f"of the builds until freed by hand. The cloud still holds it."))
+
+
+def shelve_proxy(book, ledger, settings, payload, client):
+    """Set aside: one free exit off the shelf, kept, until Free puts it
+    back (the operator, 2026-09-28). Nothing is tested and nothing is
+    judged - it is a person's choice, not a verdict."""
+    resource, refused = _named(book, payload)
+    if refused:
+        return refused
+    status = book.proxies.status_of(resource)
+    if resource.error or status not in book.proxies.available_statuses:
+        return ("refused", f"{resource.name} is {status or 'unreadable'} - "
+                           f"only a free exit is set aside", None)
+    _shelve(book, resource, payload)
+    return ("done", f"{resource.name} is set aside - Free on its row puts "
+                    f"it back", None)
+
+
+def shelve_all_proxies(book, ledger, settings, payload, client):
+    """Set aside all: every free exit off the shelf in one press, so a
+    fresh batch can be poured in and be the only stock (the operator,
+    2026-09-28). An exit under a phone, one a build has just taken, and
+    everything already out of play stay as they are."""
+    pool = book.proxies
+    named = []
+    for resource in list(pool._rows):
+        if resource.error or pool.status_of(resource) not in pool.available_statuses:
+            continue
+        _shelve(book, resource, payload)
+        named.append(resource.name or resource.label)
+    if not named:
+        return "done", "no free exit to set aside", {"shelved": []}
+    return ("done", f"{len(named)} free exit{'' if len(named) == 1 else 's'} "
+                    f"set aside by {_by(payload)} - Free on a row puts it "
+                    f"back", {"shelved": named})
+
+
 def test_proxy(book, ledger, settings, payload, client):
     resource, refused = _named(book, payload)
     if refused:
@@ -2034,6 +2075,8 @@ VERBS = {
     "test_proxy": test_proxy,
     "test_all_proxies": test_all_proxies,
     "free_all_proxies": free_all_proxies,
+    "shelve_proxy": shelve_proxy,
+    "shelve_all_proxies": shelve_all_proxies,
     "remove_proxy": remove_proxy,
 }
 

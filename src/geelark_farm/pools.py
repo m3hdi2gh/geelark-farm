@@ -1118,6 +1118,13 @@ class ProxyPool(Pool):
     #: reads them; only a person's press frees them. Owned here since
     #: 2026-09-23 (builder.SUSPECT/HELD_BACK are these).
     held_back_statuses = (suspect_status, needs_new_ip)
+    #: An exit a person put on the shelf: not dead, not a job, just not
+    #: for the builds until that person frees it (the operator,
+    #: 2026-09-28: "set the old ones aside and pour new ones in"). Not in
+    #: `available_statuses`, so nothing claims it; not in the held-back
+    #: list either, so Free all - the answer to the jobs list - and the
+    #: keeper's retests leave it be. Free on the row is the way back.
+    shelved_status = "set aside"
 
     # A proxy is not spent by being used - it keeps working, and the column
     # says where it is rather than whether it is gone.
@@ -1172,6 +1179,10 @@ class ProxyPool(Pool):
         # `free` rather than blank: this column is also the record of whether a
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
+
+    def shelve(self, resource: Resource, *, note: str = "") -> None:
+        """A person's set-aside: off the shelf until they free it."""
+        self._set(resource, self._off_a_phone(self.shelved_status, note))
 
     def set_aside(self, resource: Resource, *, reason: str = "",
                   note: str = "") -> None:
@@ -2559,6 +2570,7 @@ class Book:
             "Proxy Statuses": ["free", ProxyPool.claimed_status,
                                ProxyPool.spent_status,
                                ProxyPool.needs_new_ip,
+                               ProxyPool.shelved_status,
                                ProxyPool.dead_status, IMPORTED],
             # A phone's status is what a build ended on, which is the builder's
             # vocabulary rather than any one flow's.

@@ -2122,7 +2122,7 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         "free_gmail", "free_app", "refund_gmail", "offer_again",
         "withdraw_panel_account",
         # Exits, where the answer needs no word from GeeLark.
-        "ignore_proxy", "remove_proxy",
+        "ignore_proxy", "remove_proxy", "shelve_proxy", "shelve_all_proxies",
         # The buttons an operator presses all day.
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
     }, "a verb changed sides - say so on purpose or put it back"
@@ -2139,3 +2139,45 @@ def test_a_verb_that_reaches_geelark_never_answers_in_the_request():
                  "free_all_proxies", "login_accounts", "control",
                  "mark_proxy_free", "add_proxies"):
         assert not verbs.runs_inline(verb), verb
+
+
+def test_set_aside_keeps_a_free_exit_off_the_shelf_until_freed():
+    """A person's set-aside (the operator, 2026-09-28): the exit stays in
+    the pool under `set aside`, no claim takes it, Free all and the
+    retests leave it be, and only a free exit can be set aside. Set
+    aside all does it to every free exit and nothing else."""
+    from geelark_farm.pools import ProxyPool
+
+    book = make_book(gmails=1, proxies=5)
+    rows = book.proxies._rows
+    for i, r in enumerate(rows):
+        r.values["Name"] = f"SX{i}"
+    book.proxies.claim("1600")                       # SX0 claimed
+    book.proxies.spend(rows[1], serial="1601")       # SX1 on a phone
+    book.proxies.fail(rows[2], "dead")               # SX2 dead
+
+    status, said, _ = verbs.shelve_proxy(
+        book, None, None, {"name": "SX3", "by": "mehdi"}, None)
+    assert status == "done" and "set aside" in said, said
+    assert book.proxies.status_of(rows[3]) == "set aside"
+    assert rows[3] not in book.proxies.available
+    assert rows[3] in book.proxies._rows, "kept, not archived"
+    assert book.proxies.claim() is rows[4], "the claim walks past it"
+    book.proxies.release(rows[4])
+    assert ProxyPool.shelved_status not in ProxyPool.held_back_statuses, (
+        "Free all is the answer to the jobs list, not to a person's shelf")
+
+    for name in ("SX0", "SX1", "SX2", "SX3"):
+        status, said, _ = verbs.shelve_proxy(
+            book, None, None, {"name": name}, None)
+        assert status == "refused" and "only a free exit" in said, (name, said)
+
+    status, said, detail = verbs.shelve_all_proxies(
+        book, None, None, {"by": "mehdi"}, None)
+    assert status == "done" and said.startswith("1 free exit set aside"), said
+    assert detail["shelved"] == ["SX4"]
+    assert book.proxies.available == []
+    assert [book.proxies.status_of(r) for r in rows] == [
+        "claimed", "on a phone", "dead", "set aside", "set aside"]
+    status, said, _ = verbs.shelve_all_proxies(book, None, None, {}, None)
+    assert status == "done" and said.startswith("no free exit"), said
