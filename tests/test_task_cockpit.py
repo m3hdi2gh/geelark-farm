@@ -226,18 +226,61 @@ def test_the_run_form_is_sent_by_the_browser_not_the_fetch_layer():
     assert 'target="_self"' in form
 
 
+class _Store:
+    """The store, answering one row the way Postgres does - the columns
+    the query named, and nothing it did not. Faking `actions.one` with a
+    payload it never returns is how every live Run came to a 404
+    (2026-09-28)."""
+
+    table = {}
+
+    def __init__(self, *a):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def _rows(self, sql, params=()):
+        named = [c.strip() for c in
+                 sql.split("SELECT", 1)[1].split("FROM", 1)[0].split(",")]
+        row = self.table.get(params[0])
+        return [{c: row[c] for c in named if c in row}] if row else []
+
+
+def a_request(monkeypatch, **row):
+    from geelark_farm.store import db as store_db
+
+    full = {"id": 6443, "verb": "run_task", "status": "running",
+            "result": "queued", "requested_by": 1,
+            "payload": '{"task": "app_probe", "serial": "4813"}'}
+    full.update(row)
+    monkeypatch.setattr(_Store, "table", {6443: full})
+    monkeypatch.setattr(store_db, "Store", _Store)
+
+
+def test_a_live_request_is_matched_to_its_task_by_its_payload(
+        make_settings, monkeypatch):
+    a_request(monkeypatch)
+    monkeypatch.setattr(task_runs, "by_action", lambda s, i: None)
+    got = task_read.request(make_settings(store_enabled=True),
+                            "app_probe", 6443)
+    assert got is not None, "the press must land on its page, not a 404"
+    assert got["action"]["payload"]["serial"] == "4813"
+    assert got["run"] is None
+
+
 def test_a_request_of_another_verb_or_task_is_not_shown(make_settings,
                                                         monkeypatch):
-    from geelark_farm.store import actions as store_actions
-
-    monkeypatch.setattr(store_actions, "one", lambda s, i: {
-        "verb": "boot_phone", "payload": {"serial": "1"}})
     s = make_settings(store_enabled=True)
-    assert task_read.request(s, "app_probe", 1) is None
+    a_request(monkeypatch, verb="boot_phone")
+    assert task_read.request(s, "app_probe", 6443) is None
 
-    monkeypatch.setattr(store_actions, "one", lambda s, i: {
-        "verb": "run_task", "payload": {"task": "other"}})
-    assert task_read.request(s, "app_probe", 1) is None
+    a_request(monkeypatch, payload='{"task": "other"}')
+    assert task_read.request(s, "app_probe", 6443) is None
+    assert task_read.request(s, "app_probe", 1) is None, "no such request"
 
 
 def test_the_farms_stream_moves_for_a_run():

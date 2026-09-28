@@ -105,10 +105,9 @@ def request(settings: Settings, task: str, action_id: int) -> dict | None:
     one, at the same address."""
     if not settings.store_enabled:
         return None
-    from ..store import actions as store_actions
     from ..store import task_runs
 
-    action = store_actions.one(settings, int(action_id))
+    action = _action(settings, int(action_id))
     if not action or action.get("verb") != "run_task":
         return None
     if str((action.get("payload") or {}).get("task") or "") != task:
@@ -116,6 +115,29 @@ def request(settings: Settings, task: str, action_id: int) -> dict | None:
     found = task_runs.by_action(settings, int(action_id))
     return {"action": action,
             "run": one(settings, found["id"]) if found else None}
+
+
+def _action(settings: Settings, action_id: int) -> dict | None:
+    """One request with its payload. `store.actions.one` leaves the
+    payload out - the Requests page never needed it - and without it no
+    request could be matched to its task, so every Run on the live farm
+    landed on a 404 (2026-09-28, the tests had faked `one` with a payload
+    it does not return)."""
+    from ..store.db import Store
+
+    with Store(settings) as store:
+        rows = store._rows(
+            "SELECT id, verb, status, result, payload FROM actions"
+            " WHERE id = %s", (int(action_id),))
+    if not rows:
+        return None
+    row = dict(rows[0])
+    if isinstance(row.get("payload"), str):
+        import json
+
+        row["payload"] = json.loads(row["payload"])
+    row["payload"] = row.get("payload") or {}
+    return row
 
 
 def phones(settings: Settings, limit: int = 400) -> list[dict]:
