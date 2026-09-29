@@ -54,6 +54,8 @@ def _cells(row: dict) -> dict[str, str]:
         # by `unfinished` and `stock`, which must not offer either
         # (2026-09-18).
         "Owner": str(row.get("owner_id") or ""),
+        # Which lane it was built for (purposes.py); blank is GPT.
+        "Purpose": str(row.get("purpose") or ""),
     }
 
 
@@ -66,6 +68,8 @@ _COLUMNS = {
     "Note": "note", "Serial": "serial", "App name": "app",
     # The exit's own address the phone was built behind (rev 39).
     "Exit IP": "exit_ip",
+    # The lane it was built for: gpt or spotify (rev 41).
+    "Purpose": "purpose",
     # Who asked for it by hand, and who holds it - user ids, as text in
     # the tab's words and as numbers in the table.
     "Built by": "built_by", "Owner": "owner_id",

@@ -25,7 +25,7 @@ from ..pools import Book, Resource
 log = logging.getLogger("geelark_farm.builder")
 
 
-def _any_exit_free(book: Book) -> bool:
+def _any_exit_free(book: Book, purpose: str = "") -> bool:
     """Whether the exit pool could hand anything out at all right now.
 
     Asked of the store when it can answer, because the Book's own rows
@@ -35,15 +35,17 @@ def _any_exit_free(book: Book) -> bool:
     counted = getattr(book.proxies, "free_now", None)
     if counted is not None:
         try:
-            return counted() > 0
+            return (counted(purpose) if purpose else counted()) > 0
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not count the free exits (%s)", exc)
+    if purpose and hasattr(book.proxies, "for_lane"):
+        return bool(book.proxies.for_lane(purpose))
     return bool(book.proxies.available)
 
 
 def _fresh_proxy(client: Client, book: Book, *,
                  settings: Settings | None = None,
-                 avoid_host: str = "") -> Resource:
+                 avoid_host: str = "", purpose: str = "") -> Resource:
     """Claim a proxy GeeLark can actually reach.
 
     Checked before it is used, because an unreachable proxy is the one failure
@@ -66,15 +68,18 @@ def _fresh_proxy(client: Client, book: Book, *,
     """
     skipped = 0
     wanted_elsewhere = avoid_host
+    # The lane only when one was asked for: a pool that predates lanes
+    # takes the call it always took.
+    lane = {"purpose": purpose} if purpose else {}
     while True:
-        resource = book.proxies.claim(avoid_host=wanted_elsewhere)
+        resource = book.proxies.claim(avoid_host=wanted_elsewhere, **lane)
         if resource is None and wanted_elsewhere:
             # Nothing came back, and two different things look like this:
             # every free exit is on the host this address was refused on,
             # or there are no free exits at all. Saying the first when it
             # is the second sends the reader looking at hosts over a pool
             # that is simply empty (2026-09-13).
-            if not _any_exit_free(book):
+            if not _any_exit_free(book, purpose):
                 raise Aborted("no_working_proxy" if skipped
                               else "no_usable_proxy")
             # Every one of them is where this address has already been

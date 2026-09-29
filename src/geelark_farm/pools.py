@@ -428,7 +428,8 @@ class Pool:
                 if not r.error and self.status_of(r) not in settled]
 
     # ------------------------------------------------------------ claiming
-    def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
+    def claim(self, serial: str = "", avoid_host: str = "",
+              purpose: str = "") -> Resource | None:
         """Take the first usable row, marking it so nothing else can.
 
         `avoid_host` is an exit host the caller would rather not have -
@@ -448,14 +449,20 @@ class Pool:
         difference between a tab you can read and a tab you can only count
         (2026-08-29).
         """
+        # `purpose` is the lane the row is wanted for (purposes.py): a
+        # row kept for that lane first, then one kept for neither, and
+        # never one kept for the other lane. Only the exits carry a
+        # lane; every other pool fits everything (`_fits`).
         with self._claim_lock:
-            for resource in self.available:
-                if not self._still_free(resource):
-                    continue
-                self._set(resource, self._claim_fields(resource, serial))
-                log.info("claimed %s from %s%s", resource.label, self.tab,
-                         f" for phone {serial}" if serial else "")
-                return resource
+            for lane in ((purpose, "") if purpose else (None,)):
+                for resource in self.available:
+                    if not self._still_free(resource) \
+                            or not self._fits(resource, lane):
+                        continue
+                    self._set(resource, self._claim_fields(resource, serial))
+                    log.info("claimed %s from %s%s", resource.label, self.tab,
+                             f" for phone {serial}" if serial else "")
+                    return resource
         # Deliberately NOT re-read here. Looking again would find a row pasted
         # in since the snapshot - which is the thing a service wants and a
         # `geelark build` at a terminal never needed. But `load` replaces every
@@ -469,6 +476,11 @@ class Pool:
         # `no_usable_gpt`, becomes a warm phone, and the next pass finishes it
         # with the account that arrived. That is a wait, not a loss.
         return None
+
+    def _fits(self, resource: Resource, lane: str | None) -> bool:
+        """Whether a row may go to a build for `lane`; None asks for
+        anything. Every pool but the exits says yes."""
+        return True
 
     def claim_this(self, resource: Resource, serial: str = "",
                    also: tuple[str, ...] = ()) -> bool:
@@ -1191,6 +1203,32 @@ class ProxyPool(Pool):
         person changing their mind), so this is the one way off it."""
         self._set(resource, self._off_a_phone("free", note))
 
+    #: Which lane an exit is kept for: gpt, spotify, or blank for either
+    #: (purposes.py, rev 41).
+    purpose_column = "Purpose"
+
+    def purpose_of(self, resource: Resource) -> str:
+        from . import purposes
+
+        return purposes.normal(resource.values.get(self.purpose_column))
+
+    def _fits(self, resource: Resource, lane: str | None) -> bool:
+        """An exit kept for `lane` exactly - "" is one kept for neither,
+        which serves either lane; None asks for anything."""
+        return lane is None or self.purpose_of(resource) == lane
+
+    def for_lane(self, purpose: str) -> list[Resource]:
+        """The free exits a build for `purpose` could take: its own
+        lane's and the unlabelled ones, least used first."""
+        from . import purposes
+
+        return [r for r in self.available
+                if purposes.fits(r.values.get(self.purpose_column), purpose)]
+
+    def keep_for(self, resource: Resource, purpose: str) -> None:
+        """Label an exit with its lane, or blank it for either."""
+        self._set(resource, {self.purpose_column: purpose})
+
     def shelve(self, resource: Resource, *, note: str = "") -> None:
         """A person's set-aside: off the shelf until they free it. One a
         phone is on keeps its serial - the phone stays where it is, and
@@ -1684,6 +1722,7 @@ class PhoneLog:
             found.append({"sheet_row": offset, "serial": cell("Serial"),
                           "gmail": self.said(cell("Gmail")),
                           "proxy": cell("Proxy"),
+                          "purpose": cell("Purpose").strip().lower(),
                           "app": self.said(cell(self.APP_COLUMN)),
                           "status": reason})
         # The ones that already have the app come first. Both cost the same

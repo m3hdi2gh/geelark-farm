@@ -18,7 +18,7 @@ import logging
 import re
 import time
 
-from . import pools
+from . import pools, purposes
 from . import proxy as proxy_mod
 from .api import ApiError, TransportError
 
@@ -156,6 +156,11 @@ def build_by_hand(book, ledger, settings, payload, client):
         if not (app == "spotify" and named):
             app = ""
     install_app = bool(app)
+    # Which lane the phone is for. An account decides it by itself - a
+    # Spotify account wants a Spotify phone whatever the card said -
+    # and the card's box speaks for a phone with no account on it.
+    purpose = (purposes.of_product(app) if app
+               else purposes.normal(payload.get("purpose")) or purposes.GPT)
     # An account is signed into ChatGPT or Spotify; Claude's come from
     # the panel.
     app_account = named if app in ("chatgpt", "spotify") else ""
@@ -313,8 +318,9 @@ def build_by_hand(book, ledger, settings, payload, client):
                              install_app=install_app,
                              app_account=app_account,
                              requested_by=payload.get("by_id"), app=app,
-                             no_gmail=no_gmail)
-    where = f" on {proxy_name}" if proxy_name else ""
+                             no_gmail=no_gmail, purpose=purpose)
+    where = (f" on {proxy_name}" if proxy_name
+             else f" behind a {purposes.word(purpose)} exit")
     # Every phone carries all three apps, so what is worth saying back is
     # the account, not the apps (the operator, 2026-09-12).
     named = {"": "", "chatgpt": "ChatGPT", "spotify": "Spotify",
@@ -637,6 +643,7 @@ def add_proxies(book, ledger, settings, payload, client):
         probes.append(SimpleNamespace(raw=raw, checked=checked,
                                       proxy=proxy_mod.parse(raw)))
     answers = _test_many(client, probes) if client is not None else {}
+    lane = purposes.normal(payload.get("purpose"))
     for probe in probes:
         checked = probe.checked
         name = checked["proxy_name"] or _next_name(book)
@@ -650,7 +657,10 @@ def add_proxies(book, ledger, settings, payload, client):
         try:
             book.proxies.append(**{
                 "Name": name, "Proxy String": probe.raw, "Status": status,
-                "Note": note, "Last Exit IP": exit_ip, "Times Used": "0"})
+                "Note": note, "Last Exit IP": exit_ip, "Times Used": "0",
+                # The lane it is kept for, when the paste said one; a
+                # pool that predates lanes has no column to put it in.
+                **({"Purpose": lane} if lane else {})})
         except ValueError:                 # see add_gmails
             skipped.append(f"{checked['host']}:{checked['port']}")
             continue
@@ -815,6 +825,23 @@ def mark_proxy_free(book, ledger, settings, payload, client):
     _forgive(settings, resource, _by(payload))
     return ("done", f"{resource.name} is free again (exit {exit_ip}); its "
                     f"host is judged afresh from now", None)
+
+
+def keep_proxy_for(book, ledger, settings, payload, client):
+    """Label one exit with the lane it is kept for - gpt, spotify, or
+    blank for either (purposes.py). A person's choice; nothing is
+    tested. The row keeps its status and its phone."""
+    resource, refused = _named(book, payload)
+    if refused:
+        return refused
+    said = str(payload.get("purpose") or "").strip()
+    lane = purposes.normal(said)
+    if said and not lane:
+        return "refused", f"{said!r} is not a lane - GPT or Spotify", None
+    book.proxies.keep_for(resource, lane)
+    return ("done", f"{resource.name} is kept for "
+                    f"{purposes.word(lane) if lane else 'either lane'}",
+            {"purpose": lane})
 
 
 def _shelve(book, resource, payload) -> None:
@@ -1122,10 +1149,22 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
         if why:
             refused.append(f"{address}: {why}")
             continue
-        if not warm:
+        # Only a phone of the account's lane: a Spotify account never
+        # spends a GPT phone, nor the other way round. A phone with no
+        # lane on it - built before there were lanes - takes either.
+        lane = purposes.of_product(resource.values.get("Product"))
+        fit = next((i for i, p in enumerate(warm)
+                    if purposes.fits(p.get("purpose"), lane)), None)
+        if fit is None:
+            if chosen and warm:
+                other = purposes.word(warm[0].get("purpose"))
+                refused.append(f"{address}: phone {chosen} is a {other} "
+                               f"phone, and this is a {purposes.word(lane)} "
+                               f"account")
+                continue
             unpaired.append(address)
             continue
-        phone = warm.pop(0)
+        phone = warm.pop(fit)
         if not book.apps.claim_this(resource, str(phone["serial"])):
             refused.append(f"{address}: taken by another run meanwhile")
             warm.insert(0, phone)
@@ -2199,6 +2238,7 @@ VERBS = {
     "test_all_proxies": test_all_proxies,
     "free_all_proxies": free_all_proxies,
     "shelve_proxy": shelve_proxy,
+    "keep_proxy_for": keep_proxy_for,
     "shelve_all_proxies": shelve_all_proxies,
     "free_shelved_proxies": free_shelved_proxies,
     "remove_proxy": remove_proxy,

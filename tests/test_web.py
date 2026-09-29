@@ -5720,8 +5720,11 @@ def test_the_proxy_sheet_reads_like_the_proxy_tab(web, monkeypatch):
     # door - Set aside, which the phone keeps; Free, Test and Remove are
     # the phone's to decide (2026-09-28).
     assert "<td>2013</td>" in row("SX2") and 'title="since 40m ago"' in row("SX2")
-    assert row("SX2").count("/pools/proxy/") == 1
+    # ...and since the lanes (2026-09-29) the two lane doors, which every
+    # row has: the label says who gets the exit next.
+    assert row("SX2").count("/pools/proxy/") == 3
     assert "/pools/proxy/aside" in row("SX2")
+    assert row("SX2").count('action="/pools/proxy/for"') == 2
     # Starting: in play - that is where it is going - says a build took
     # it, Free only.
     assert 'data-group="free / on a phone"' in row("SX3")
@@ -10168,7 +10171,8 @@ def test_the_pool_page_doors_ask_for_a_row():
     assert src.count('row_of="gpt"') == 3, "edit, remove, offer"
     assert src.count('row_of="spotify"') == 2, "edit, remove"
     assert src.count("row_of=kind)") == 1, "the shared Free door"
-    assert src.count('row_of="proxy"') == 1, "free, test, remove share one"
+    assert src.count('row_of="proxy"') == 2, (
+        "free, test, remove share one; the lane door is the other")
     assert 'payload.get("address") or payload.get("name")' in \
         inspect.getsource(app_mod._Handler._act)
 
@@ -10613,3 +10617,159 @@ def test_decline_and_or_land_as_failed_with_the_button_on_the_request(
                    _form(csrf=client.csrf(), state="failed", sure="1", back="/"))
     assert got["payload"]["button"] == "failed"
     assert "where" not in got["payload"], "an unknown surface is not recorded"
+
+
+# ------------------------------------------------------------ the lanes
+def test_every_phone_row_says_its_lane_loudly_and_the_table_sifts_by_it(
+        web, monkeypatch):
+    """An operator boots by this word: GPT or Spotify beside the serial,
+    a lane on the row for the sift, a lane count beside the tally, and
+    the two lane buttons beside the views (the operator, 2026-09-29)."""
+    from geelark_farm.web import pages
+
+    _dash(monkeypatch, phones=[
+        {"serial": "1501", "status": "app_only", "state": "", "purpose": "spotify"},
+        {"serial": "1500", "status": "ready", "state": "", "purpose": "gpt"},
+        {"serial": "1502", "status": "ready", "state": "", "purpose": ""},
+        {"serial": "1503", "status": "building", "state": "", "purpose": "spotify"}])
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    assert "<th>serial</th><th>for</th><th>status</th>" in body
+    assert 'colspan="8"' in body
+
+    def row(serial):
+        start = body.rindex("<tr", 0, body.index(f'href="/phones/{serial}"'))
+        return body[start:body.index("</tr>", start)]
+
+    assert 'data-lane="spotify"' in row("1501")
+    assert '<span class="lane spotify" title="kept for Spotify' in row("1501")
+    assert ">Spotify</span>" in row("1501")
+    assert 'data-lane="gpt"' in row("1500") and ">GPT</span>" in row("1500")
+    assert 'data-lane="gpt"' in row("1502"), "no lane on it: a GPT phone"
+    assert 'data-lane="spotify"' in row("1503"), "a build under way says it too"
+    assert '<span class="lanes"><span class="lane gpt">GPT<b>2</b></span>' in body
+    assert '<span class="lane spotify">Spotify<b>1</b></span>' in body, (
+        "the shelf, not the phone still being built")
+    assert 'id="laneseg" role="group" aria-label="Lane" hidden' in body
+    assert ('data-lane="gpt" aria-pressed="false" class="lane gpt">GPT</button>'
+            in body)
+    assert ('data-lane="spotify" aria-pressed="false" class="lane spotify">'
+            'Spotify</button>' in body)
+    script = pages._DASH_SCRIPT
+    assert "tr.dataset.lane === lane" in script and "gf.lane" in script
+
+
+def test_the_phone_page_and_the_live_tab_wear_the_lane(web, monkeypatch):
+    from geelark_farm.web import pages
+
+    me = {"csrf": "c", "mutations": True, "role": "admin", "username": "m",
+          "id": 1}
+    live = pages.viewer_page("1500", me, "https://x/view", lane="spotify")
+    assert '<span class="ph">Phone 1500</span><span class="lane spotify"' in live
+    bare = pages.viewer_page("1500", me, "https://x/view")
+    assert 'class="lane' not in bare, "no lane known: nothing invented"
+    # The Live tab's route reads the lane off the phone and hands it on.
+    asked, handed = [], {}
+    monkeypatch.setattr(app_mod.read, "lane_of",
+                        lambda s, serial: asked.append(serial) or "gpt")
+    monkeypatch.setattr(app_mod.pages, "live_page",
+                        lambda serial, user, **kw: handed.update(kw) or "<p>x</p>")
+    client = web()
+    client.login()
+    client.request("GET", "/phones/1500/live")
+    assert asked == ["1500"] and handed["lane"] == "gpt"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_proxy_sheet_shows_each_exits_lane_sifts_by_it_and_changes_it(
+        web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    def exit_(id_, name, purpose=None):
+        row = {"id": id_, "address": name, "status": "", "host": f"1.1.1.{id_}",
+               "port": 1080, "exit_ip": "", "times_used": 0, "serial": "",
+               "note": "", "error": None, "state": "free"}
+        if purpose is not None:
+            row["purpose"] = purpose
+        return row
+
+    _dash(monkeypatch, pool_rows={
+        "gmail": [], "gpt": [],
+        "proxy": [exit_(1, "S1", "spotify"), exit_(2, "G1", "gpt"),
+                  exit_(3, "E1")]})
+    client = web()
+    client.login()
+    body = _sheets(client, ("proxy",))
+    assert "<th>For</th>" in body
+
+    def row(name):
+        start = body.rindex("<tr", 0, body.index(f'data-key="proxy:{name}"'))
+        return body[start:body.index("</tr>", start)]
+
+    assert '<span class="lane spotify">Spotify</span>' in row("S1")
+    assert 'data-cat="spotify"' in row("S1")
+    assert '<span class="lane gpt">GPT</span>' in row("G1")
+    assert '<span class="lane either">either</span>' in row("E1")
+    assert 'data-cat=""' in row("E1")
+    # The chips: both, GPT, Spotify, with their counts.
+    assert 'data-cat="gpt" aria-pressed="false">gpt<b>1</b>' in body
+    assert 'data-cat="spotify" aria-pressed="false">spotify<b>1</b>' in body
+    # The door to the other lane: one on a labelled row, two on a bare one.
+    assert row("S1").count('action="/pools/proxy/for"') == 1
+    assert 'name="purpose" value="gpt"' in row("S1")
+    assert "&rarr; GPT</button>" in row("S1") and "&rarr; Spotify" not in row("S1")
+    assert row("E1").count('action="/pools/proxy/for"') == 2
+    # The add forms say which lane the new exits are for.
+    assert body.count('<select name="purpose" class="lanepick"') == 1, (
+        "the sheet's one paste box")
+    assert '<option value="gpt" selected>for GPT</option>' in body
+
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 90)
+    status, headers, _ = client.request(
+        "POST", "/pools/proxy/for",
+        _form(csrf=client.csrf(), name="S1", purpose="gpt", back="/pools/proxy"))
+    assert status == 303
+    assert got["verb"] == "keep_proxy_for"
+    assert got["payload"] == {"name": "S1", "purpose": "gpt",
+                              "by": "mehdi", "by_id": 7}
+    # ...and the paste carries the lane through the preview to the add.
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
+    _, _, preview = client.request(
+        "POST", "/pools/proxy/preview",
+        _form(csrf=client.csrf(), pasted="1.2.3.4:9999:u:p", purpose="spotify"))
+    assert '<input type="hidden" name="purpose" value="spotify">' in preview
+    assert "kept for Spotify builds" in preview
+    client.request("POST", "/pools/proxy/add",
+                   _form(csrf=client.csrf(), rows="1.2.3.4:9999:u:p",
+                         purpose="spotify", idem="k"))
+    assert got["verb"] == "add_proxies" and got["payload"]["purpose"] == "spotify"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_build_card_asks_which_lane_and_the_routes_carry_it(web, monkeypatch):
+    import geelark_farm.store.actions as actions_mod
+
+    _dash(monkeypatch, choose={
+        "gmails": [{"label": "pick@example.com"}],
+        "proxies": [{"label": "SX9"}],
+        "apps": [{"label": "gpt@example.com"}]})
+    got = {}
+    monkeypatch.setattr(actions_mod, "enqueue",
+                        lambda s, **k: got.update(k) or 88)
+    client = web()
+    client.login()
+    _, _, body = client.request("GET", "/")
+    card = body[body.index('<form method="post" action="/phones/build"'):]
+    card = card[:card.index("</form>")]
+    assert '<label class="field"><span>For</span><select name="purpose"' in card
+    assert card.index('name="purpose"') < card.index('name="proxy_name"')
+    client.request("POST", "/phones/build",
+                   _form(csrf=client.csrf(), gmail="none", account_kind="",
+                         purpose="spotify"))
+    assert got["payload"]["purpose"] == "spotify"
+    client.request("POST", "/accounts/spotify/build",
+                   _form(csrf=client.csrf(), address="nova@x.com", back="/"))
+    assert got["payload"]["purpose"] == "spotify"

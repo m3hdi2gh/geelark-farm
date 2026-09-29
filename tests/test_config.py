@@ -608,3 +608,18 @@ def test_the_live_tab_grace_comes_from_the_environment(tmp_path, monkeypatch):
         "minutes: a hidden tab's clock runs once a minute (2026-09-16)")
     monkeypatch.setenv("LIVE_TAB_GRACE_SECONDS", "90")
     assert Settings.load().live_tab_grace_seconds == 90
+
+
+def test_the_spotify_share_of_the_warm_stock_is_read(monkeypatch):
+    from geelark_farm import purposes
+    from geelark_farm.config import Settings
+
+    monkeypatch.setenv("GEELARK_APP_ID", "id")
+    monkeypatch.setenv("GEELARK_API_KEY", "key")
+    monkeypatch.setenv("WARM_STOCK", "8")
+    monkeypatch.setenv("WARM_STOCK_SPOTIFY", "4")
+    s = Settings.load()
+    assert (s.warm_stock, s.warm_stock_spotify) == (8, 4)
+    assert purposes.targets(s) == {"gpt": 4, "spotify": 4}
+    monkeypatch.delenv("WARM_STOCK_SPOTIFY")
+    assert Settings.load().warm_stock_spotify == 0, "no share: as it always ran"

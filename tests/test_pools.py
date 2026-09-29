@@ -2519,3 +2519,68 @@ def test_an_owner_id_is_matched_whole_and_not_by_its_digits():
     # Blank and whitespace mean "nobody is asking", not "match a blank owner".
     assert log.unfinished(for_owner="") == []
     assert log.unfinished(for_owner="  ") == []
+
+
+# ------------------------------------------------------------ the lanes
+PROXY_HEADERS_LANED = PROXY_HEADERS + ["Purpose"]
+
+
+def _laned(string, purpose, name):
+    row = proxy_row(string, headers=PROXY_HEADERS_LANED, name=name)
+    row[PROXY_HEADERS_LANED.index("Purpose")] = purpose
+    return row
+
+
+def test_a_claim_for_a_lane_takes_its_own_exits_then_the_unlabelled_never_the_others():
+    """An exit kept for Spotify is never spent on a GPT phone (2026-09-29).
+    Its own lane first, an exit kept for neither after, the other lane's
+    not at all - and a claim with no lane takes the first free row, as
+    every claim did before."""
+    pool = proxy_pool([_laned("1.1.1.1:1:u:p", "spotify", "S1"),
+                       _laned("1.1.1.2:1:u:p", "", "E1"),
+                       _laned("1.1.1.3:1:u:p", "gpt", "G1"),
+                       _laned("1.1.1.4:1:u:p", "", "E2")],
+                      headers=PROXY_HEADERS_LANED)
+    assert pool.claim(purpose="gpt").name == "G1", "its own lane first"
+    assert pool.claim(purpose="gpt").name == "E1", "then one kept for neither"
+    assert pool.claim(purpose="gpt").name == "E2"
+    assert pool.claim(purpose="gpt") is None, "S1 is Spotify's, not GPT's"
+    assert pool.claim(purpose="spotify").name == "S1"
+    assert pool.claim() is None
+
+    fresh = proxy_pool([_laned("1.1.1.1:1:u:p", "spotify", "S1"),
+                        _laned("1.1.1.2:1:u:p", "gpt", "G1")],
+                       headers=PROXY_HEADERS_LANED)
+    assert fresh.claim().name == "S1", "no lane asked: the first free row"
+    assert [r.name for r in fresh.for_lane("gpt")] == ["G1"]
+    assert fresh.for_lane("spotify") == []
+
+
+def test_an_exit_can_be_kept_for_a_lane_after_the_fact():
+    pool = proxy_pool([_laned("1.1.1.1:1:u:p", "", "E1")],
+                      headers=PROXY_HEADERS_LANED)
+    row = pool._rows[0]
+    assert pool.purpose_of(row) == ""
+    pool.keep_for(row, "spotify")
+    assert pool.purpose_of(row) == "spotify"
+    assert pool.claim(purpose="gpt") is None
+    pool.keep_for(row, "")
+    assert pool.claim(purpose="gpt") is row
+
+
+def test_a_pool_without_the_column_still_claims_for_a_lane():
+    """The sheet-era tab has no Purpose column: every exit is unlabelled,
+    so a claim for either lane takes what is there."""
+    pool = proxy_pool([proxy_row("1.2.3.4:9999:u:p", name="SX1")])
+    assert pool.claim(purpose="spotify").name == "SX1"
+
+
+def test_unfinished_carries_the_lane_a_phone_was_built_for():
+    headers = PHONE_HEADERS + ["Purpose"]
+    ws = FakeWorksheet(headers, [])
+    log = PhoneLog(ws, headers, threading.Lock())
+    log.start(Serial="1500", Gmail="g@x.com", Status="incomplete",
+              Purpose="spotify")
+    log.start(Serial="1501", Gmail="h@x.com", Status="incomplete")
+    assert [(r["serial"], r["purpose"]) for r in log.unfinished()] == [
+        ("1500", "spotify"), ("1501", "")]

@@ -425,13 +425,16 @@ class _PgPool(Pool):
     #: (2026-09-12).
     COUNTS_ATTEMPTS = False
 
-    def free_now(self) -> int:
+    def free_now(self, purpose: str = "") -> int:
         """What the store says is claimable, rather than what this Book's
         snapshot said when the pass began. Counted the way the claim
         picks, so a keeper sizing a batch by it never orders a build for
-        a row the claim would hold back."""
+        a row the claim would hold back. `purpose` counts what a build
+        for that lane could take: its own rows and the unlabelled."""
+        held = (self._lane(purpose, either=True)
+                if purpose and isinstance(self, ProxyPool) else self.held_back())
         return self._table.free_count(
-            self.kind, held_back=self.held_back(), free=tuple(self.available_statuses),
+            self.kind, held_back=held, free=tuple(self.available_statuses),
             hold_tries_from=self._held_from())
 
     def held_now(self) -> int:
@@ -454,10 +457,32 @@ class _PgPool(Pool):
         every pool but the app pool's - see `PgAppPool.held_back`."""
         return "", ()
 
-    def claim(self, serial: str = "", avoid_host: str = "") -> Resource | None:
+    def claim(self, serial: str = "", avoid_host: str = "",
+              purpose: str = "") -> Resource | None:
         """One statement. The lock and the re-read `Pool.claim` needs are
-        the sheet's problem; here the engine hands two racers two rows."""
+        the sheet's problem; here the engine hands two racers two rows.
+
+        `purpose` is the lane the row is wanted for: its own lane's rows
+        first, then the unlabelled ones, never the other lane's - two
+        statements, each atomic, rather than one with a parameter in
+        its ORDER BY."""
+        if purpose and isinstance(self, ProxyPool):
+            for lane in (purpose, ""):
+                row = self._claim(serial, avoid_host, self._lane(lane))
+                if row is not None:
+                    return row
+            return None
         return self._claim(serial, avoid_host, self.held_back())
+
+    def _lane(self, lane: str, either: bool = False) -> tuple[str, tuple]:
+        """The pool's condition plus the lane's: rows kept for `lane`
+        exactly, or with `either` those and the unlabelled ones."""
+        aside, params = self.held_back()
+        if either:
+            return (aside + " AND lower(coalesce(purpose, '')) IN (%s, '')",
+                    (*params, lane))
+        return (aside + " AND lower(coalesce(purpose, '')) = %s",
+                (*params, lane))
 
     def _claim(self, serial: str, avoid_host: str,
                held_back: tuple[str, tuple]) -> Resource | None:
@@ -872,6 +897,9 @@ class PgProxyPool(_PgPool, ProxyPool):
         # fields.
         "Updated": "updated_at",
         "Status changed": "state_changed_at",
+        # Which lane the exit is kept for: gpt, spotify, or blank for
+        # either (purposes.py, rev 41).
+        "Purpose": "purpose",
     }
 
     def _values_of(self, row: dict) -> dict[str, str]:

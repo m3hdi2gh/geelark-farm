@@ -1986,3 +1986,19 @@ def test_a_verdict_row_copies_the_phone_and_its_exit_at_that_moment(monkeypatch,
     src = schema_text()
     assert "CREATE TABLE IF NOT EXISTS verdicts" in src
     assert "-- rev 40:" in src
+
+
+def test_the_lanes_are_columns_on_phones_exits_and_wishes():
+    import inspect
+
+    from geelark_farm.store import wanted
+
+    src = schema_text()
+    assert "-- rev 41:" in src
+    for table in ("phones", "resources", "wanted_builds"):
+        assert f"ALTER TABLE {table}" in src
+    assert "purpose text NOT NULL DEFAULT ''" in src
+    ask = inspect.getsource(wanted.ask)
+    assert "no_gmail, purpose)" in ask, "a wish is written with its lane"
+    take = inspect.getsource(wanted.take)
+    assert "requested_by, no_gmail, purpose" in take, "and read back with it"

@@ -984,3 +984,13 @@ CREATE TABLE IF NOT EXISTS verdicts (
 );
 CREATE INDEX IF NOT EXISTS verdicts_at ON verdicts (at);
 CREATE INDEX IF NOT EXISTS verdicts_exit ON verdicts (exit_ip);
+
+-- rev 41: two lanes of stock (2026-09-29). A phone is built for GPT or
+-- for Spotify and an exit is kept for one or the other; a build takes
+-- only an exit of its own lane (or an unlabelled one), a Send pairs an
+-- account only with a phone of its lane, and the keeper keeps each
+-- lane's own count of warm phones (WARM_STOCK_SPOTIFY). Blank is the
+-- GPT lane on a phone and "either" on an exit. purposes.py has the words.
+ALTER TABLE phones        ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';
+ALTER TABLE resources     ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';

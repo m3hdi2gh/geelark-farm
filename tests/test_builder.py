@@ -7616,3 +7616,51 @@ def test_the_rest_hours_are_settings(make_settings, monkeypatch):
     monkeypatch.setenv("SUSPECT_REST_HOURS", "0")
     loaded = config.Settings.load()
     assert (loaded.exit_rest_hours, loaded.suspect_rest_hours) == (6, 0)
+
+
+# ------------------------------------------------------------ the lanes
+def test_the_lane_a_build_is_for_comes_from_the_job_the_wish_or_the_app():
+    assert builder._lane_for(None) == "gpt", "a keeper build with no word"
+    assert builder._lane_for(None, "spotify") == "spotify", "the job's word"
+    assert builder._lane_for(builder.Wanted(purpose="spotify")) == "spotify"
+    assert builder._lane_for(builder.Wanted(app="spotify")) == "spotify", (
+        "a Spotify account wants a Spotify phone")
+    assert builder._lane_for(builder.Wanted(app="claude")) == "gpt"
+    assert builder._lane_for(builder.Wanted(app="")) == "gpt", "a bare phone"
+    assert builder._lane_for(builder.Wanted(app="spotify", purpose="gpt")) == "gpt", (
+        "a lane said outright wins over the app's")
+    assert builder._lane_for(None, "nonsense") == "gpt"
+
+
+def test_the_exit_is_claimed_for_the_builds_lane(make_settings, tmp_path, monkeypatch):
+    """The lane rides from the build to the claim, and only when there is
+    one: a pool that predates lanes takes the call it always took."""
+    from types import SimpleNamespace
+
+    settings = make_settings(state_dir=tmp_path)
+    monkeypatch.setattr(builder.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "1.1.1.1"})
+    asked = []
+
+    class Proxies:
+        def claim(self, serial="", avoid_host="", **kw):
+            asked.append((avoid_host, kw))
+            return SimpleNamespace(proxy=SimpleNamespace(host="h"), name="G1",
+                                   label="G1", values={})
+
+        def record_exit(self, resource, ip):
+            pass
+
+    book = SimpleNamespace(proxies=Proxies())
+    builder.kit_exits._fresh_proxy(None, book, settings=settings, purpose="spotify")
+    builder.kit_exits._fresh_proxy(None, book, settings=settings)
+    assert asked == [("", {"purpose": "spotify"}), ("", {})]
+
+    # _pair_up hands the lane on to the same door.
+    seen = []
+    monkeypatch.setattr(builder.kit_exits, "_fresh_proxy",
+                        lambda client, book_, **kw: seen.append(kw) or "exit")
+    gmails = _Queue(["10.0.0.1"])
+    row, exit_row = builder._pair_up(None, SimpleNamespace(gmails=gmails),
+                                     settings, purpose="gpt")
+    assert exit_row == "exit" and seen[0]["purpose"] == "gpt"

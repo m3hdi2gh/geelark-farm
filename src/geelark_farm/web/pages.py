@@ -22,7 +22,7 @@ from urllib.parse import quote
 # takes judgements rather than data: when a number is worth a colour is
 # the same question whether it is being drawn at the foot of a page or
 # raised as an alert, and two copies of an answer drift.
-from .. import products
+from .. import products, purposes
 from . import assets
 from .read import READING_STALE_AFTER
 
@@ -391,6 +391,35 @@ _PHONE_WORD = {"app_only": "App only", "ready": "Ready",
 
 #: What a table cell shows for a row that names no phone.
 _NO_SERIAL = "<span class=dim>&mdash;</span>"
+
+
+def _lane_of(row: dict) -> str:
+    """The lane a phone row is on: its own word, or GPT for a phone
+    built before there were lanes (purposes.py)."""
+    return purposes.normal(row.get("purpose")) or purposes.GPT
+
+
+def _lane_badge(row: dict) -> str:
+    """GPT or Spotify, loud: the one word an operator boots by, so a
+    phone kept for Spotify is not spent on a GPT account (the
+    operator, 2026-09-29)."""
+    lane = _lane_of(row)
+    word = purposes.word(lane)
+    return (f'<span class="lane {lane}" title="kept for {word} - boot it '
+            f'for {word} work only">{word}</span>')
+
+
+def _lane_tally(phones: list[dict]) -> str:
+    """How many of the phones on the shelf are on each lane, beside
+    the count, in the lanes' own colours."""
+    counts = {lane: 0 for lane in purposes.ALL}
+    for row in phones:
+        # The shelf: a phone still being built is not on it yet.
+        if (row.get("status") or "") != "building":
+            counts[_lane_of(row)] += 1
+    return ('<span class="lanes">' + "".join(
+        f'<span class="lane {lane}">{purposes.word(lane)}<b>{counts[lane]}</b>'
+        f'</span>' for lane in purposes.ALL) + "</span>")
 
 
 def _phone_word(status: str) -> str:
@@ -1117,7 +1146,8 @@ def _phone_rows(data: dict, user: dict) -> str:
                      f'title="its screen, in a new tab">Watch live</a> '
                      if url else "")
             lines.append(
-                f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
+                f'<tr data-view="{view}" data-lane="{_lane_of(r)}">'
+                f'<td>{_serial_link(serial)}</td><td>{_lane_badge(r)}</td>'
                 f'<td>{badge}</td>'
                 f'<td colspan="4" class="progress">'
                 f'{_progress(progress.get(serial))}</td>'
@@ -1149,7 +1179,8 @@ def _phone_rows(data: dict, user: dict) -> str:
             badge += (f'<span class="dim maker" title="asked for on the '
                       f'build card">built by {esc(maker)}</span>')
         lines.append(
-            f'<tr data-view="{view}"><td>{_serial_link(serial)}</td>'
+            f'<tr data-view="{view}" data-lane="{_lane_of(r)}">'
+            f'<td>{_serial_link(serial)}</td><td>{_lane_badge(r)}</td>'
             f'<td>{badge}</td>'
             f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}'
             f'{_seller_line(r)}</td>'
@@ -1458,7 +1489,8 @@ _POOL_KINDS = {
         "free_all": "/pools/proxy/free-all",
         "aside": "/pools/proxy/aside", "aside_all": "/pools/proxy/aside-all",
         "free_shelved": "/pools/proxy/free-shelved",
-        "columns": ("Name", "State", "Address", "Exit IP", "Used", "Phone"),
+        "columns": ("Name", "State", "For", "Address", "Exit IP", "Used",
+                    "Phone"),
     },
 }
 
@@ -1541,7 +1573,13 @@ def _group_chips(kind: str, rows: list[dict]) -> str:
 #: held - so its chip needs a word of its own: the empty string is
 #: already taken by `both` (the operator, 2026-09-19).
 _SIFT_KINDS = {"spotify": ("normal", "error"),
-               "gpt": ("standard", "eco")}
+               "gpt": ("standard", "eco"),
+               # The exits, by the lane they are kept for (rev 41).
+               "proxy": purposes.ALL}
+
+#: Which cell a pool's kind is read from; the exits keep theirs in
+#: `purpose`, the accounts in `category`.
+_SIFT_FIELD = {"proxy": "purpose"}
 
 #: The one chip whose word is not what its rows carry in the cell.
 _SIFT_CELL = {"standard": ""}
@@ -1552,7 +1590,7 @@ def _sift_word(kind: str, row: dict) -> str:
     whose cell holds a word this pool does not sift by - which shows
     under `both` and under neither chip, rather than being filed wrong.
     """
-    cell = str(row.get("category") or "").strip().lower()
+    cell = str(row.get(_SIFT_FIELD.get(kind, "category")) or "").strip().lower()
     for word in _SIFT_KINDS.get(kind, ()):
         if _SIFT_CELL.get(word, word) == cell:
             return word
@@ -1626,8 +1664,9 @@ def _pool_cells(kind: str, row: dict) -> list[str]:
         host = str(row.get("host") or "")
         port = row.get("port")
         where = f"{host}:{port}" if host and port else host
-        return [str(row.get("address") or where or "?"), state, where or "-",
-                str(row.get("exit_ip") or "-"),
+        return [str(row.get("address") or where or "?"), state,
+                purposes.word(row.get("purpose")) or "either",
+                where or "-", str(row.get("exit_ip") or "-"),
                 str(row.get("times_used") if row.get("times_used") is not None
                     else "-"),
                 str(row.get("serial") or "-")]
@@ -1653,6 +1692,10 @@ def _cell_html(kind: str, index: int, cell: str, note: str) -> str:
         return _state_pill(cell, note)
     if kind == "spotify" and index == 2:
         return _category_pill(cell)
+    if kind == "proxy" and index == 2:
+        # Which lane the exit is kept for, in the lane's own colour.
+        lane = purposes.normal(cell)
+        return f'<span class="lane {lane or "either"}">{esc(cell)}</span>'
     return esc(cell)
 
 
@@ -2063,6 +2106,8 @@ def _pool_add_box(kind: str, user: dict, rows: list[dict] | None = None) -> str:
             f'autocomplete="off" '
             f'spellcheck="false" placeholder="{esc(meta["how"])}"></textarea>'
             f'<div class="addrow">{_seller_field(kind, rows or [])}'
+            # New exits say which lane they are kept for (purposes.py).
+            f'{_lane_select() if kind == "proxy" else ""}'
             f'<button class="go">Preview</button>'
             f'<span class="dim">{_add_note(kind)}</span></div></form>')
 
@@ -2196,8 +2241,21 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                     "off the shelf, kept: no build takes it until Free puts "
                     "it back")
                  + '">Set aside</button></form>') if meta.get("aside") else ""
+        # Which lane it is kept for: the other lane is one press away
+        # (purposes.py, 2026-09-29). On every row, a phone under it or
+        # not - the label says who gets it next.
+        kept = purposes.normal(row.get("purpose"))
+        lanes = "".join(
+            f'<form method="post" action="/pools/proxy/for">{_csrf(user)}'
+            f'<input type="hidden" name="{field}" value="{esc(address)}">'
+            f'<input type="hidden" name="purpose" value="{lane}">'
+            f'<input type="hidden" name="back" value="/">'
+            f'<button class="quiet lanedoor {lane}" data-busy="Keeping…" '
+            f'title="keep this exit for {purposes.word(lane)} builds">'
+            f'&rarr; {purposes.word(lane)}</button></form>'
+            for lane in purposes.ALL if lane != kept)
         if state == "on a phone":
-            return f'<div class="doors">{aside}</div>' if aside else ""
+            return f'<div class="doors">{lanes}{aside}</div>'
         if state in ("needs new IP", "starting", "suspect", "set aside"):
             doors.append(
                 f'<form method="post" action="{meta["free"]}">{_csrf(user)}'
@@ -2211,6 +2269,7 @@ def _pool_row_doors(kind: str, row: dict, user: dict,
                 + '">Free</button></form>')
         if aside and state not in ("starting", "set aside"):
             doors.append(aside)
+        doors.append(lanes)
         if state != "starting":
             doors.append(
                 f'<form method="post" action="{meta["test"]}">{_csrf(user)}'
@@ -2977,12 +3036,17 @@ def _build_card(data: dict, user: dict) -> str:
                 f'<option value="">auto &mdash; {exits} free</option>'
                 f'<option value="__new__">choose&hellip;</option>'
                 f'</select></label>')
+    # Which lane the phone is for. An account decides it by itself - a
+    # Spotify account wants a Spotify phone - so the box speaks for a
+    # phone with no account on it, which is most of what the card asks.
+    lane_box = (f'<label class="field"><span>For</span>'
+                f'{_lane_select()}</label>')
     return (
         f'<div class="panel"><h3>Build one now</h3>'
         f'<p class="dim" style="margin:-6px 0 0">{hint}</p>'
         f'<form method="post" action="/phones/build" class="byhand">'
         f'{_csrf(user)}'
-        + gmail_box + kind_box + account_box + exit_box
+        + gmail_box + kind_box + account_box + lane_box + exit_box
         + '<button class="go">Build</button>'
         # What the three dialogs typed rides here; the address itself is
         # the choice's value.
@@ -3583,11 +3647,12 @@ def dashboard(data: dict, user: dict, said: str = "",
     # purpose: the sheets under it are fetched, and replacing its
     # children would throw them away every tick.
     table = (f'<div data-live="phones">'
-             f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
+             f'<table id="phones"><thead><tr><th>serial</th><th>for</th>'
+             f'<th>status</th>'
              f'<th>gmail</th><th>account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
-             f'<tr class="none" id="nohits" hidden><td colspan="7">'
+             f'<tr class="none" id="nohits" hidden><td colspan="8">'
              f'Nothing here matches that.</td></tr></tbody></table></div>'
              if rows else '<div data-live="phones"><p class="empty">'
                           'No phones yet - the keeper builds the '
@@ -3613,13 +3678,24 @@ def dashboard(data: dict, user: dict, said: str = "",
     tools = (f'<div class="row"><h3>Phones</h3>'
              f'<span class="dim mono" id="tally" data-live="tally">'
              f'{_plural(len(on_the_shelf), "phone")}</span>'
+             f'{_lane_tally(on_the_shelf)}'
              f'<span class="seg" id="seg" role="group" aria-label="Show" hidden>'
              f'<button type="button" data-show="" aria-pressed="true">All'
              f'</button>'
              f'<button type="button" data-show="free" aria-pressed="false">'
              f'Free</button>'
              f'<button type="button" data-show="mine" aria-pressed="false">'
-             f'With me</button></span></div>')
+             f'With me</button></span>'
+             # The lanes, sifted with the views: an operator on Spotify
+             # work wants the Spotify shelf and nothing else on it.
+             f'<span class="seg" id="laneseg" role="group" aria-label="Lane" '
+             f'hidden><button type="button" data-lane="" aria-pressed="true">'
+             f'Both</button>'
+             + "".join(
+                 f'<button type="button" data-lane="{lane}" '
+                 f'aria-pressed="false" class="lane {lane}">'
+                 f'{purposes.word(lane)}</button>' for lane in purposes.ALL)
+             + '</span></div>')
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
     main = (_said(said, _DASH_SAID, user, said_note) + warning + tools
@@ -3695,7 +3771,7 @@ def dashboard(data: dict, user: dict, said: str = "",
 def live_page(serial: str, user: dict, said: str = "",
               creds: dict | None = None,
               row: dict | None = None,
-              account: dict | None = None) -> str:
+              account: dict | None = None, lane: str = "") -> str:
     """The tab Boot opens.
 
     The live-view URL is the answer to a call only the pass makes, so
@@ -3709,7 +3785,8 @@ def live_page(serial: str, user: dict, said: str = "",
     detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
     url = str(detail.get("url") or "")
     if status == "done" and url:
-        return viewer_page(serial, user, url, creds=creds, account=account)
+        return viewer_page(serial, user, url, creds=creds, account=account,
+                           lane=lane)
     # The Live tab's Change IP waits on a change_proxy request the same
     # way Boot's tab waits on its boot - and reads these titles to know
     # whether to keep waiting, swap screens, or offer Boot (2026-09-16).
@@ -3824,7 +3901,7 @@ BRAND_MARK = (
 def viewer_page(serial: str, user: dict, url: str,
                 creds: dict | None = None,
                 account: dict | None = None, *,
-                watch: bool = False) -> str:
+                watch: bool = False, lane: str = "") -> str:
     """The Live tab once the phone is up: the cloud's viewer inside this
     page, and a beat every fifteen seconds that says the tab is open.
 
@@ -4052,6 +4129,8 @@ def viewer_page(serial: str, user: dict, url: str,
         f'<header id="gf-brand">{BRAND_MARK}<b>IranSpoty</b>'
         f'<span class="sep"></span>'
         f'<span class="ph">Phone {esc(serial)}</span>'
+        + (_lane_badge({"purpose": lane}) if purposes.normal(lane) else "")
+        +
         f'<span id="gf-state" class="wait" role="status"><i></i>'
         f'<span>Connecting</span></span></header>'
         f'<div id="gf-box">'
@@ -5836,7 +5915,7 @@ def _proxy_add(user: dict) -> str:
         f'<input name="username" placeholder="user" autocomplete="off">'
         f'<input name="password" placeholder="pass" autocomplete="off">'
         f'<input name="name" placeholder="name (optional)" '
-        f'autocomplete="off" size="12">'
+        f'autocomplete="off" size="12">{_lane_select()}'
         f'<button class="quiet">Preview</button></form></details>')
     return (
         f'<form method="post" action="/pools/proxy/preview" class="field">'
@@ -5846,8 +5925,29 @@ def _proxy_add(user: dict) -> str:
         f'<div class="row"><span class="dim">names are handed out in order '
         f'(SX43, SX44 …) unless a name column is pasted, and each one is '
         f'tested before it joins the pool</span>'
-        f'<span class="right"></span><button>Preview</button></div>'
+        f'<span class="right"></span>{_lane_select()}'
+        f'<button>Preview</button></div>'
         f'</form>{one}')
+
+
+def _lane_select(chosen: str = "", name: str = "purpose") -> str:
+    """GPT or Spotify: which lane a new exit - or a phone asked for on
+    the card - is kept for. GPT first, as every exit was before."""
+    chosen = purposes.normal(chosen) or purposes.GPT
+    return (f'<select name="{name}" class="lanepick" title="which lane it '
+            f'is kept for">'
+            + "".join(
+                f'<option value="{lane}"{" selected" if lane == chosen else ""}>'
+                f'for {purposes.word(lane)}</option>' for lane in purposes.ALL)
+            + "</select>")
+
+
+def _exit_lane(row: dict) -> str:
+    """The lane an exit is kept for, beside its name on the pool page;
+    nothing for one kept for either."""
+    lane = purposes.normal(row.get("purpose"))
+    return (f' <span class="lane {lane}">{purposes.word(lane)}</span>'
+            if lane else "")
 
 
 def _back_field(back: str) -> str:
@@ -5934,17 +6034,17 @@ def _proxy_view_row(view: str, r: dict, user: dict, here: str,
     where = (f'<td class="muted">{esc(str(r.get("host") or ""))}:'
              f'{esc(str(r.get("port") or ""))}</td>')
     if view == "on_phone":
-        return (f'<tr{key}><td>{esc(name)}</td>{where}'
+        return (f'<tr{key}><td>{esc(name)}{_exit_lane(r)}</td>{where}'
                 f'<td>{_serial_link(r.get("serial"))}</td>'
                 f'<td>{_proxy_word(r)}</td>'
                 f'<td class="muted">{_when(r.get("updated_at"))}</td></tr>')
     if view == "all":
-        return (f'<tr{key}><td>{esc(name)}</td>{where}'
+        return (f'<tr{key}><td>{esc(name)}{_exit_lane(r)}</td>{where}'
                 f'<td>{_proxy_word(r)}</td>'
                 f'<td>{_serial_link(r.get("serial"))}</td>'
                 f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
                 f'</td><td>{_test_words(tests, name)}</td></tr>')
-    return (f'<tr{key}><td>{esc(name)}</td>{where}'
+    return (f'<tr{key}><td>{esc(name)}{_exit_lane(r)}</td>{where}'
             f'<td class="muted mono">{esc(str(r.get("last_exit_ip") or ""))}'
             f'</td><td class="muted num">{esc(str(r.get("times_used") or 0))}'
             f'</td><td>{_test_words(tests, name)}</td>'
@@ -6644,7 +6744,7 @@ def gpt_preview(rows: list[dict], user: dict, idem: str, *,
 
 
 def proxy_preview(rows: list[dict], user: dict, idem: str, *,
-                  back: str = "/pools/proxy") -> str:
+                  back: str = "/pools/proxy", purpose: str = "") -> str:
     """The same one card the other two previews are; `back` is where the
     paste came from - the dashboard's sheet, or the pool page."""
     good = [r for r in rows if not r.get("error") and not r.get("duplicate")]
@@ -6659,8 +6759,12 @@ def proxy_preview(rows: list[dict], user: dict, idem: str, *,
             '</div>'
             + _preview_card("/pools/proxy/add", rows, good, user, idem, back,
                             lines, carried,
-                            note="each is tested before it joins; one that "
-                                 "does not answer goes in as dead"))
+                            hidden=(f'<input type="hidden" name="purpose" '
+                                    f'value="{esc(purposes.normal(purpose))}">'),
+                            note=(f"kept for {purposes.word(purposes.normal(purpose))} "
+                                  f"builds; " if purposes.normal(purpose) else "")
+                                 + "each is tested before it joins; one that "
+                                   "does not answer goes in as dead"))
     return page("Proxy Pool — preview", body, user=user, here="/pools/proxy")
 
 
@@ -7380,7 +7484,8 @@ def phone_story_page(story: dict, user: dict, *, explain=None,
     # which is a plain navigation to this page (2026-09-07).
     body = (f'<div class="narrow">{_said(said, _DASH_SAID, user)}'
             f'<div class="top"><a href="/" class="dim">← Dashboard</a>'
-            f'<h2>Phone {esc(serial)}</h2>{head}'
+            f'<h2>Phone {esc(serial)}</h2>{_lane_badge(phone) if phone else ""}'
+            f'{head}'
             f'<span class="status">{" ".join(actions)}</span></div>'
             + (_phone_facts(serial, phone) if phone else "")
             + _journey_panel(journey or [], serial, user)

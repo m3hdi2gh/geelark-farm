@@ -394,7 +394,8 @@ class _Handler(BaseHTTPRequestHandler):
                     account = self._account_for_the_holder(user, serial)
                 return self._html(200, pages.live_page(
                     serial, user, said=said, row=row, creds=creds,
-                    account=account))
+                    account=account,
+                    lane=read.lane_of(self.settings, serial)))
             if path.startswith("/phones/") and "/screens/" in path:
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -564,6 +565,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "gmail_secret": field.get("gmail_secret") or "",
                     "proxy_name": exit_,
                     "proxy_typed": ":" in exit_,
+                    # Which lane, for a phone no account decides for.
+                    "purpose": (field.get("purpose") or "").strip().lower(),
                     "app": which,
                     "install_app": bool(which),
                     "app_account": account,
@@ -593,6 +596,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "gmail": "", "no_gmail": True, "gmail_typed": False,
                     "gmail_password": "", "gmail_secret": "",
                     "proxy_name": "", "app": "spotify", "install_app": True,
+                    "purpose": "spotify",
                     "app_account": address, "app_typed": False,
                     "app_password": "", "app_secret": "",
                 }
@@ -1746,12 +1750,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._mark_twice(rows, "raw")
             return self._html(200, pages.proxy_preview(
                 rows, user, idem=secrets.token_urlsafe(12),
-                back=_add_back(field, "/pools/proxy")))
+                back=_add_back(field, "/pools/proxy"),
+                purpose=(field.get("purpose") or "").strip().lower()))
         if path == "/pools/proxy/add":
             rows = [{"raw": r["raw"], "name": r["name"]}
                     for r in paste.proxies(field.get("rows", ""))]
             return self._act(user, "may_change_proxy", "add_proxies",
-                             {"rows": rows},
+                             {"rows": rows,
+                              "purpose": (field.get("purpose") or "")
+                              .strip().lower()},
                              idem=field.get("idem") or secrets.token_urlsafe(12),
                              back=_add_back(field, "/pools/proxy"))
         if path in ("/pools/proxy/free", "/pools/proxy/test",
@@ -1779,6 +1786,14 @@ class _Handler(BaseHTTPRequestHandler):
             return self._act(user, "may_change_proxy", verb, {"name": name},
                              idem=self._minute_key(user, verb, name),
                              back=back, row_of="proxy")
+        if path == "/pools/proxy/for":
+            # Which lane an exit is kept for (purposes.py, 2026-09-29).
+            name = (field.get("name") or "").strip()
+            purpose = (field.get("purpose") or "").strip().lower()
+            return self._act(user, "may_change_proxy", "keep_proxy_for",
+                             {"name": name, "purpose": purpose},
+                             idem=self._minute_key(user, f"for-{purpose}", name),
+                             back=_proxy_back(field), row_of="proxy")
         if path == "/pools/proxy/test-all":
             return self._act(user, "may_change_proxy", "test_all_proxies", {},
                              idem=self._minute_key(user, "test_all", "-"),
@@ -3057,7 +3072,7 @@ _OPERATOR_POSTS = (
     "/pools/proxy/preview", "/pools/proxy/add", "/pools/proxy/free",
     "/pools/proxy/test", "/pools/proxy/remove", "/pools/proxy/test-all",
     "/pools/proxy/free-all", "/pools/proxy/aside", "/pools/proxy/aside-all",
-    "/pools/proxy/free-shelved",
+    "/pools/proxy/free-shelved", "/pools/proxy/for",
     "/pools/gpt/preview", "/pools/gpt/add",
     "/pools/gpt/edit", "/pools/gpt/remove", "/pools/gpt/undo",
     "/pools/gpt/free",

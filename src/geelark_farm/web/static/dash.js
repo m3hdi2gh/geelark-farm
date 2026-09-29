@@ -41,9 +41,13 @@
   // whenever the next tick happened to run `init` again - up to thirty
   // seconds later (2026-09-21, found by audit).
   var viewWant = null;
+  // The lane, sifted with the view: an operator on Spotify work sees
+  // the Spotify shelf and nothing else on it (2026-09-29).
+  var laneWant = null;
   function sift(){
     if (viewWant === null) viewWant = (store && store.getItem('gf.view')) || '';
-    var want = viewWant;
+    if (laneWant === null) laneWant = (store && store.getItem('gf.lane')) || '';
+    var want = viewWant, lane = laneWant;
     // Not the "nothing matches" row: it lives in the same tbody and would
     // otherwise count itself as a phone.
     var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
@@ -51,7 +55,8 @@
     var none = document.getElementById('nohits');
     var shown = 0;
     rows.forEach(function(tr){
-      var hit = !want || tr.dataset.view === want;
+      var hit = (!want || tr.dataset.view === want)
+             && (!lane || tr.dataset.lane === lane);
       tr.hidden = !hit;
       if (hit) shown++;
     });
@@ -69,7 +74,7 @@
           : 'Nothing here matches that.';
       none.hidden = shown > 0;
     }
-    if (tally) tally.textContent = want
+    if (tally) tally.textContent = (want || lane)
       ? shown + ' of ' + rows.length + ' shown'
       : rows.length + (rows.length === 1 ? ' phone' : ' phones');
   }
@@ -86,6 +91,23 @@
           viewWant = b.dataset.show;
           if (store) store.setItem('gf.view', viewWant);
           seg.querySelectorAll('button').forEach(function(o){
+            o.setAttribute('aria-pressed', String(o === b));
+          });
+          sift();
+        });
+      });
+    }
+    var laneseg = document.getElementById('laneseg');
+    if (laneseg) {
+      laneseg.hidden = false;
+      sift();
+      laneseg.querySelectorAll('button').forEach(function(b){
+        b.setAttribute('aria-pressed', String(b.dataset.lane === laneWant));
+        if (!once(b, 'laneseg')) return;
+        b.addEventListener('click', function(){
+          laneWant = b.dataset.lane;
+          if (store) store.setItem('gf.lane', laneWant);
+          laneseg.querySelectorAll('button').forEach(function(o){
             o.setAttribute('aria-pressed', String(o === b));
           });
           sift();

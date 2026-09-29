@@ -620,7 +620,8 @@ class ControlLane:
                                 install_app=r["install_app"],
                                 app_account=r["app_account"], wanted_id=r["id"],
                                 app=_app_of(r), requested_by=r.get("requested_by"),
-                                no_gmail=bool(r.get("no_gmail")))
+                                no_gmail=bool(r.get("no_gmail")),
+                                purpose=str(r.get("purpose") or ""))
                  for r in rows]
         settings, client = self.settings, self.client
         if settings.build_queue:
@@ -1224,7 +1225,7 @@ def _free_gmails(book: Book) -> int:
 
 def _look(client: Client, settings: Settings, book: Book,
           listing: list[dict] | None = None
-          ) -> tuple[int, int, int, int, dict, int]:
+          ) -> tuple[int, int, int, int, dict, int, dict]:
     """Warm phones, accounts with nowhere to go yet, and how deep the pools are.
 
     Not the free slots. Those cost a call to an endpoint with a limit of one a
@@ -1257,7 +1258,51 @@ def _look(client: Client, settings: Settings, book: Book,
             # The three Pools only - `PhoneLog` is not a `Pool`, has no
             # `_rows` and no `broken`, and inventing one on it is the same
             # mistake a fake made with CLAIM_FORMAT (2026-08-28).
-            sum(len(p.broken) for p in (book.proxies, book.gmails, book.apps)))
+            sum(len(p.broken) for p in (book.proxies, book.gmails, book.apps)),
+            # The same two numbers by lane: what each shelf holds and
+            # what each could build with (purposes.py).
+            _lanes(book, warm))
+
+
+def _lanes(book: Book, warm: list[dict]) -> dict[str, dict[str, int]]:
+    """{lane: {warm, exits}}. A warm phone with no lane on it is a GPT
+    phone, as every phone was before there were lanes; an exit with no
+    lane counts for both."""
+    from . import purposes
+
+    lanes = {p: {"warm": 0, "exits": 0} for p in purposes.ALL}
+    for phone in warm:
+        lane = purposes.normal(phone.get("purpose")) or purposes.GPT
+        lanes[lane]["warm"] += 1
+    for_lane = getattr(book.proxies, "for_lane", None)
+    for lane in purposes.ALL:
+        lanes[lane]["exits"] = (len(for_lane(lane)) if for_lane is not None
+                                else len(book.proxies.available))
+    return lanes
+
+
+def _lanes_to_build(total: int, lanes: dict, targets: dict,
+                    coming: dict | None = None) -> dict[str, int]:
+    """How many of `total` builds go to each lane: the shorter shelf
+    first, never past what its exits can serve, GPT on a tie. `coming`
+    is what the queue already holds for each lane."""
+    from . import purposes
+
+    coming = coming or {}
+    out = {lane: 0 for lane in purposes.ALL}
+
+    def room(lane: str) -> int:
+        short = (int(targets.get(lane, 0)) - int(lanes.get(lane, {}).get("warm", 0))
+                 - int(coming.get(lane, 0)) - out[lane])
+        exits = int(lanes.get(lane, {}).get("exits", 0)) - out[lane]
+        return min(short, exits)
+
+    for _ in range(max(0, int(total or 0))):
+        best = max(purposes.ALL, key=lambda lane: (room(lane), lane == purposes.GPT))
+        if room(best) <= 0:
+            break
+        out[best] += 1
+    return out
 
 
 def beat(settings: Settings) -> None:
@@ -1775,8 +1820,20 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     # One listing a pass, for the warm count and for what is on.
     listed = _listing(client)
-    warm, waiting, gmails, exits, stock, broken = _look(client, settings, book,
-                                                        listing=listed)
+    looked = _look(client, settings, book, listing=listed)
+    warm, waiting, gmails, exits, stock, broken = looked[:6]
+    # A look that says nothing about lanes - an older fake of it - is a
+    # farm with one shelf: every warm phone GPT, every exit for both.
+    lanes = (looked[6] if len(looked) > 6 else
+             {"gpt": {"warm": warm, "exits": exits},
+              "spotify": {"warm": 0, "exits": exits}})
+    # Each lane keeps its own shelf: a surplus of Spotify phones does not
+    # stand in for the GPT phones that are short, so the count `decide`
+    # works from is each lane's warm phones up to its own target.
+    from . import purposes
+
+    targets = purposes.targets(settings)
+    shelved = sum(min(lanes[lane]["warm"], targets[lane]) for lane in lanes)
     if settings.build_queue:
         _take_results(settings, fuse)
     tripped = fuse.reason()
@@ -1789,12 +1846,15 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
         try:
             coming, claimed = store_jobs.counts(settings)
+            coming_by = store_jobs.lanes(settings)
         except Exception as exc:                                   # noqa: BLE001
             log.warning("could not count the queue (%s); ordering nothing "
                         "this pass", exc)
             coming, claimed = 10 ** 6, 0
+            coming_by = {}
     else:
         coming, claimed = flight.counts() if flight is not None else (0, 0)
+        coming_by = {}
     waiting = max(0, waiting - claimed)
     # With manual login on (C6) nobody is "waiting" as far as the decision
     # is concerned: an account sits in the pool until a person picks it on
@@ -1829,12 +1889,12 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # What `decide` is told, which is unchanged: the count matters only
     # on a pass with room to build, and `None` is how it says "not asked".
     free = (looked
-            if needs_slots(tripped=tripped, warm=warm,
+            if needs_slots(tripped=tripped, warm=shelved,
                            target=settings.warm_stock,
                            accounts_waiting=auto_waiting, cap=cap,
                            paused=paused)
             else None)
-    decision = decide(tripped=tripped, warm=warm,
+    decision = decide(tripped=tripped, warm=shelved,
                       target=settings.warm_stock,
                       free_slots=(free if free is None
                                   else max(0, free - coming)),
@@ -1848,14 +1908,19 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     from . import signin_gate
 
     decision, sign_in_gate = signin_gate.throttle(settings, decision)
+    # Which shelf each build is for, the shorter one first.
+    by_lane = _lanes_to_build(decision.build, lanes, targets, coming_by)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
     # "the stock has been short for an hour" possible at all.
-    log.info("%d warm of %d, %s free slot(s), %d account(s) waiting",
+    log.info("%d warm of %d (%s), %s free slot(s), %d account(s) waiting",
              warm, settings.warm_stock,
+             ", ".join(f"{purposes.word(lane)} {lanes[lane]['warm']} of "
+                       f"{targets[lane]}" for lane in lanes),
              free if free is not None else "not asked about", waiting,
              extra={"warm": warm, "target": settings.warm_stock,
+                    "lanes": lanes, "by_lane": by_lane,
                     "free_slots": free, "accounts_waiting": waiting,
                     "gmails_free": gmails, "exits_free": exits,
                     "to_finish": decision.finish, "to_build": decision.build,
@@ -1877,6 +1942,11 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
             running=_running(client, listed),
             pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,
+        # Each lane's shelf: warm, target, exits it could build with,
+        # and what the queue already holds for it (purposes.py).
+        "lanes": {lane: {**lanes[lane], "target": targets[lane],
+                         "coming": int(coming_by.get(lane, 0))}
+                  for lane in lanes},
         "coming": coming, "claimed": claimed, "tripped": tripped,
         "free_slots": free, "manual_login": settings.manual_login,
         "paused": paused, "at": time.time(),
@@ -1923,7 +1993,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                     install_app=row["install_app"],
                     app_account=row["app_account"], wanted_id=row["id"],
                     app=_app_of(row), requested_by=row.get("requested_by"),
-                    no_gmail=bool(row.get("no_gmail"))))
+                    no_gmail=bool(row.get("no_gmail")),
+                    purpose=str(row.get("purpose") or "")))
         except Exception as exc:                                  # noqa: BLE001
             # The same rule as every other store read in a pass: the farm
             # keeps building without the console.
@@ -1934,7 +2005,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     if settings.build_queue and (decision.jobs or wishes):
         try:
-            _order(settings, client, book, decision, wishes)
+            _order(settings, client, book, decision, wishes, by_lane)
         except Exception as exc:                                   # noqa: BLE001
             log.warning("could not order into the queue (%s)", exc)
         return decision
@@ -2086,7 +2157,8 @@ def _job_dict(book: Book, job: dict):
         return {"kind": "finish", "phone": phone}
     want = payload.get("want")
     return {"kind": "build",
-            "want": wishes.Wanted.from_payload(want) if want else None}
+            "want": wishes.Wanted.from_payload(want) if want else None,
+            "purpose": str(payload.get("purpose") or "")}
 
 
 def _wish_worked(build) -> bool:
@@ -2372,9 +2444,12 @@ def serve_builder(settings: Settings, *, stop: threading.Event | None = None,
     return 0
 
 
-def _order(settings: Settings, client, book: Book, decision, wishes) -> int:
+def _order(settings: Settings, client, book: Book, decision, wishes,
+           by_lane: dict | None = None) -> int:
     """The keeper's side of the queue: rows for what this pass decided,
-    instead of threads. Returns how many were ordered."""
+    instead of threads. Returns how many were ordered. `by_lane` says
+    which shelf each build is for; without it every build is what a
+    build always was, a GPT phone."""
     from dataclasses import asdict
 
     from . import keeper
@@ -2387,8 +2462,10 @@ def _order(settings: Settings, client, book: Book, decision, wishes) -> int:
         for phone in waiting[:decision.finish]:
             store_jobs.queue(settings, "finish", {"phone": dict(phone)})
             ordered += 1
-    for _ in range(int(decision.build or 0)):
-        store_jobs.queue(settings, "build", {})
+    lanes = ([lane for lane, n in (by_lane or {}).items() for _ in range(int(n))]
+             if by_lane else [""] * int(decision.build or 0))
+    for lane in lanes:
+        store_jobs.queue(settings, "build", {"purpose": lane} if lane else {})
         ordered += 1
     for want in wishes or []:
         store_jobs.queue(settings, "build", {"want": asdict(want)})

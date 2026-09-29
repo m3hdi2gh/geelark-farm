@@ -710,7 +710,10 @@ def test_the_numbers_it_decides_from_come_from_the_panel_and_the_sheet(
                         lambda c: pytest.fail("the plan was read for nothing"))
 
     assert serve_mod._look(object(), settings, book) == (
-        2, 3, 4, 1, {"ready": 1, "app_only": 2, "taken": 0}, 1)
+        2, 3, 4, 1, {"ready": 1, "app_only": 2, "taken": 0}, 1,
+        # By lane: a warm phone with no lane on it is GPT, an exit
+        # pool with no lanes serves both (purposes.py).
+        {"gpt": {"warm": 2, "exits": 1}, "spotify": {"warm": 0, "exits": 1}})
 
 
 # ----------------------------------------------------- saying it is still alive
@@ -2780,7 +2783,7 @@ def test_a_queue_row_becomes_the_job_the_runner_takes(make_settings):
     assert isinstance(made["want"], builder.Wanted)
     assert made["want"].wanted_id == 9 and made["want"].requested_by == 4
     assert serve_mod._job_dict(book, {"kind": "build", "payload": {}}) == {
-        "kind": "build", "want": None}
+        "kind": "build", "want": None, "purpose": ""}
 
 
 def test_the_builders_results_feed_the_breaker(make_settings, tmp_path,
@@ -3359,3 +3362,74 @@ def test_a_builder_takes_only_the_kinds_it_carries_out():
     # before `_job_dict` - which would still refuse it - is reached.
     assert serve_mod.HANDLED_KINDS == ("build", "finish", "task")
 
+
+
+# ------------------------------------------------------------ the lanes
+def test_builds_go_to_the_shorter_shelf_never_past_its_exits():
+    """WARM_STOCK=8 with four kept for Spotify: each lane is short by its
+    own count, the shorter one is served first, GPT on a tie, and a lane
+    with no exits of its own gets nothing however short it is."""
+    targets = {"gpt": 4, "spotify": 4}
+    lanes = {"gpt": {"warm": 1, "exits": 10}, "spotify": {"warm": 3, "exits": 10}}
+    assert serve_mod._lanes_to_build(4, lanes, targets) == {"gpt": 3, "spotify": 1}
+    assert serve_mod._lanes_to_build(1, lanes, targets) == {"gpt": 1, "spotify": 0}
+    # What the queue already holds for a lane counts as on its shelf.
+    assert serve_mod._lanes_to_build(4, lanes, targets, {"gpt": 3}) \
+        == {"gpt": 0, "spotify": 1}
+    # No GPT exits: the GPT shortfall cannot be built, and is not.
+    dry = {"gpt": {"warm": 0, "exits": 0}, "spotify": {"warm": 0, "exits": 2}}
+    assert serve_mod._lanes_to_build(8, dry, targets) == {"gpt": 0, "spotify": 2}
+    # A tie goes to GPT; nothing is ordered past the total asked for.
+    even = {"gpt": {"warm": 2, "exits": 9}, "spotify": {"warm": 2, "exits": 9}}
+    assert serve_mod._lanes_to_build(1, even, targets) == {"gpt": 1, "spotify": 0}
+    assert serve_mod._lanes_to_build(0, even, targets) == {"gpt": 0, "spotify": 0}
+
+
+def test_the_look_counts_each_lane_and_an_unlabelled_phone_is_gpt(make_settings):
+    from types import SimpleNamespace
+
+    class Exits:
+        available = [1, 2, 3]
+
+        @staticmethod
+        def for_lane(lane):
+            return {"gpt": [1], "spotify": [2, 3]}[lane]
+
+    book = SimpleNamespace(proxies=Exits())
+    warm = [{"serial": "1", "purpose": "spotify"}, {"serial": "2", "purpose": ""},
+            {"serial": "3", "purpose": "GPT"}]
+    assert serve_mod._lanes(book, warm) == {
+        "gpt": {"warm": 2, "exits": 1}, "spotify": {"warm": 1, "exits": 2}}
+
+
+def test_ordered_builds_carry_their_lane_into_the_queue(make_settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from geelark_farm.store import jobs as store_jobs
+
+    ordered = []
+    monkeypatch.setattr(store_jobs, "queue",
+                        lambda s, kind, payload=None, action_id=None:
+                        ordered.append((kind, payload or {})) or 1)
+    decision = SimpleNamespace(build=3, finish=0, jobs=3)
+    n = serve_mod._order(make_settings(build_queue=True), None, None, decision,
+                         [], {"gpt": 1, "spotify": 2})
+    assert n == 3
+    assert ordered == [("build", {"purpose": "gpt"}), ("build", {"purpose": "spotify"}),
+                       ("build", {"purpose": "spotify"})]
+    # And a queue row with a lane becomes a job the builder reads it off.
+    made = serve_mod._job_dict(SimpleNamespace(), {"kind": "build",
+                                                   "payload": {"purpose": "spotify"}})
+    assert made == {"kind": "build", "want": None, "purpose": "spotify"}
+
+
+def test_the_queue_is_counted_by_lane(make_settings, monkeypatch):
+    from geelark_farm.store import jobs as store_jobs
+    from tests.test_store import _ScriptedConn
+
+    conn = _ScriptedConn([[("gpt", 2), ("spotify", 1)]])
+    monkeypatch.setattr(store_jobs, "connect", lambda s: conn)
+    assert store_jobs.lanes(make_settings()) == {"gpt": 2, "spotify": 1}
+    assert "payload->>'purpose'" in conn.sql[0]
+    assert "payload->'want'->>'purpose'" in conn.sql[0], "a wish's lane too"
+    assert "kind = 'build'" in conn.sql[0]

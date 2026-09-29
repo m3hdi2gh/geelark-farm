@@ -509,6 +509,10 @@ class Settings:
     #: farm makes no Sheets call of any kind. Needs the pools in the store,
     #: because a Book without a workbook is a Book of Postgres pools.
     sheet_closed: bool = False
+    #: How many of the WARM_STOCK phones are kept for Spotify; the rest
+    #: are the GPT lane's (purposes.targets). 0 is how the farm ran
+    #: before there were lanes: every warm phone is a GPT phone.
+    warm_stock_spotify: int = 0
     capsolver_key: str = ""
     #: 2Captcha, the second door for the same grid: people rather than
     #: a model, slower and dearer, for the grids the model gets wrong.
@@ -610,6 +614,7 @@ class Settings:
             max_concurrent_phones=_int("MAX_CONCURRENT_PHONES", 1,
                                        minimum=0),
             warm_stock=_int("WARM_STOCK", 10),
+            warm_stock_spotify=_int("WARM_STOCK_SPOTIFY", 0, minimum=0),
             # `SERVE_WORKERS=N` is the setting; `SERVE_CONCURRENT=1` with
             # no count is what it always meant, four workers.
             kernel_touch=_str("KERNEL_TOUCH", "1").strip().lower()

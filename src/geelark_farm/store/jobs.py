@@ -165,6 +165,22 @@ def counts(settings: Settings) -> tuple[int, int]:
     return int(builds or 0), int(finishes or 0)
 
 
+def lanes(settings: Settings) -> dict[str, int]:
+    """Builds queued or running, by the lane they are for - what the
+    keeper counts as already on its way to each shelf. A build with no
+    lane on it (queued before there were lanes) is counted as GPT."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT coalesce(nullif(payload->>'purpose', ''),"
+            "                nullif(payload->'want'->>'purpose', ''), 'gpt'),"
+            " count(*) FROM jobs"
+            " WHERE status IN ('queued', 'running') AND kind = 'build'"
+            " GROUP BY 1")
+        rows = cur.fetchall()
+        conn.rollback()
+    return {str(lane): int(n or 0) for lane, n in rows}
+
+
 def unseen(settings: Settings) -> list[dict]:
     """Finished jobs the keeper has not yet taken into account - for the
     breaker and the events. Marked seen with `mark_seen`."""

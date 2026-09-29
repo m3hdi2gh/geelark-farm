@@ -2122,7 +2122,8 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         "free_gmail", "free_app", "refund_gmail", "offer_again",
         "withdraw_panel_account",
         # Exits, where the answer needs no word from GeeLark.
-        "ignore_proxy", "remove_proxy", "shelve_proxy", "shelve_all_proxies",
+        "ignore_proxy", "remove_proxy", "shelve_proxy", "keep_proxy_for",
+        "shelve_all_proxies",
         # The buttons an operator presses all day.
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
     }, "a verb changed sides - say so on purpose or put it back"
@@ -2339,3 +2340,116 @@ def test_free_all_set_aside_takes_the_shelf_back_tested(monkeypatch,
         == "nothing is set aside by hand"
     assert verbs.free_shelved_proxies(book, None, settings, {}, None)[0] \
         == "failed"
+
+
+# ------------------------------------------------------------ the lanes
+def test_send_pairs_an_account_only_with_a_phone_of_its_lane(monkeypatch):
+    """A Spotify account never spends a GPT phone, nor the other way
+    round; a phone with no lane on it takes either (2026-09-29)."""
+    from geelark_farm import builder
+
+    book = make_book(apps=3)
+    a0, a1, a2 = book.apps._rows
+    a1.values["Product"] = "spotify"
+    a1.values["Category"] = "error"
+    a2.values["Product"] = "claude"
+    warm = _warm("1500", "1501", "1502")
+    warm[0]["purpose"] = "spotify"
+    warm[1]["purpose"] = "gpt"
+    warm[2]["purpose"] = ""
+    monkeypatch.setattr(builder.keeper, "_unfinished",
+                        lambda client, book_, **k: ([dict(p) for p in warm], []))
+    launched = []
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"by": "mehdi", "addresses": [
+            "a0@example.com", "a1@example.com", "a2@example.com"]},
+        object(), launch=launched.append)
+    assert status == "running"
+    assert [(j["phone"]["serial"], j["phone"]["account"].label)
+            for j in launched[0]] == [
+        ("1501", "a0@example.com"), ("1500", "a1@example.com"),
+        ("1502", "a2@example.com")], (
+        "GPT to the GPT phone, Spotify to the Spotify phone, Claude to the "
+        "unlabelled one")
+
+    # Named: a phone of the wrong lane is a refusal in words, not the next.
+    book = make_book(apps=1)
+    book.apps._rows[0].values["Product"] = "spotify"
+    monkeypatch.setattr(builder.keeper, "_unfinished",
+                        lambda client, book_, **k: (
+                            [dict(_warm("1600")[0], purpose="gpt")], []))
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"addresses": ["a0@example.com"], "serial": "1600"},
+        object(), launch=launched.append)
+    assert status == "failed"
+    assert detail["refused"] == [
+        "a0@example.com: phone 1600 is a GPT phone, and this is a Spotify account"]
+    # Not named and none of its lane: left free for the keeper to build.
+    status, said, detail = verbs.login_accounts(
+        book, None, None, {"addresses": ["a0@example.com"]},
+        object(), launch=launched.append)
+    assert detail["unpaired"] == ["a0@example.com"]
+
+
+def test_a_hand_built_phone_carries_its_lane(monkeypatch):
+    from geelark_farm.store import wanted as store_wanted
+
+    asked = []
+    monkeypatch.setattr(store_wanted, "ask",
+                        lambda settings, **kw: asked.append(kw) or 7)
+    book = make_book(gmails=2, proxies=1)
+    status, said, _ = verbs.build_by_hand(
+        book, None, None, {"gmail": "", "app": "", "purpose": "spotify",
+                           "by_id": 4}, None)
+    assert status == "done" and asked[-1]["purpose"] == "spotify"
+    assert "behind a Spotify exit" in said
+    verbs.build_by_hand(book, None, None, {"gmail": "", "app": ""}, None)
+    assert asked[-1]["purpose"] == "gpt", "no word: a GPT phone, as always"
+    # The account decides over the box: a Spotify account wants a Spotify
+    # phone whatever the card said.
+    monkeypatch.setattr(verbs, "_spotify_fits", lambda *a, **k: "")
+    verbs.build_by_hand(book, None, None, {
+        "gmail": "", "no_gmail": True, "app": "spotify", "purpose": "gpt",
+        "app_account": "s@x.com", "app_typed": True, "app_password": "pw",
+        "app_category": "normal"}, None)
+    assert asked[-1]["purpose"] == "spotify"
+
+
+def test_added_exits_are_kept_for_the_lane_the_paste_named(monkeypatch):
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=0, proxy_headers=PROXY_HEADERS + ["Purpose"])
+    monkeypatch.setattr(verbs, "_test_many", lambda client, rows: {})
+    status, said, _ = verbs.add_proxies(
+        book, None, None, {"rows": [{"raw": "1.2.3.4:9999:u:p", "name": "S1"}],
+                           "purpose": "spotify"}, None)
+    assert status == "done"
+    row = book.proxies.find_by_name("S1")
+    assert book.proxies.purpose_of(row) == "spotify"
+    verbs.add_proxies(book, None, None,
+                      {"rows": [{"raw": "1.2.3.5:9999:u:p", "name": "E1"}]}, None)
+    assert book.proxies.purpose_of(book.proxies.find_by_name("E1")) == ""
+
+
+def test_an_exit_is_kept_for_a_lane_by_name():
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=1, proxy_headers=PROXY_HEADERS + ["Purpose"])
+    row = book.proxies._rows[0]
+    row.values["Name"] = "SX1"
+    status, said, detail = verbs.keep_proxy_for(
+        book, None, None, {"name": "SX1", "purpose": "Spotify"}, None)
+    assert status == "done" and detail == {"purpose": "spotify"}
+    assert "kept for Spotify" in said
+    assert book.proxies.purpose_of(row) == "spotify"
+    status, said, detail = verbs.keep_proxy_for(
+        book, None, None, {"name": "SX1", "purpose": ""}, None)
+    assert status == "done" and "either lane" in said
+    assert book.proxies.purpose_of(row) == ""
+    assert verbs.keep_proxy_for(book, None, None,
+                                {"name": "SX1", "purpose": "tiktok"}, None)[0] \
+        == "refused"
+    assert verbs.keep_proxy_for(book, None, None,
+                                {"name": "nope", "purpose": "gpt"}, None)[0] \
+        == "failed"
+    assert verbs.runs_inline("keep_proxy_for"), "pools only: the web runs it"

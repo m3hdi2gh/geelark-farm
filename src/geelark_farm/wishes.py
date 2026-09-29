@@ -55,6 +55,10 @@ class Wanted:
     #: (the operator, 2026-09-12) - and it is ready the moment they are
     #: on it.
     no_gmail: bool = False
+    #: Which lane the phone is for - gpt or spotify (purposes.py) - and
+    #: so which exits it may take. Blank follows the app: a Spotify
+    #: account asks for a Spotify phone, everything else for GPT.
+    purpose: str = ""
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> Wanted:

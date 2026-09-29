@@ -1077,3 +1077,32 @@ tr.now td:last-child{border-radius:0 8px 8px 0}
  display:block}
 .jmore>summary{cursor:pointer;color:var(--muted);font-size:13px}
 .jmore[open]>summary{margin-bottom:8px}
+
+/* The two lanes of stock (purposes.py): a phone or an exit kept for GPT
+   or for Spotify. Loud on purpose - an operator boots by this word, and
+   a Spotify phone spent on a GPT account is a phone lost (2026-09-29). */
+.lane{display:inline-block;padding:2px 10px;border-radius:6px;
+ font:700 11px/1.7 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+ white-space:nowrap;border:1px solid transparent;vertical-align:middle}
+.lane.gpt{background:#16324f;color:#9ec7ff;border-color:#2a5a8f}
+.lane.spotify{background:#0f3a2c;color:#5fe3a1;border-color:#1f7a55}
+.lane.either{background:#1d2636;color:#9aa7ba;border-color:#2c3850;
+ text-transform:none;font-weight:500;letter-spacing:0}
+td .lane{margin-right:2px}
+.lanes{margin-left:10px;display:inline-flex;gap:6px;vertical-align:middle}
+.lanes .lane b{font-weight:800;margin-left:6px}
+.seg button.lane{text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.seg button.lane.gpt[aria-pressed=true]{background:#16324f;color:#9ec7ff;
+ border-color:#2a5a8f}
+.seg button.lane.spotify[aria-pressed=true]{background:#0f3a2c;color:#5fe3a1;
+ border-color:#1f7a55}
+.filters .pill.kind.gpt{color:#9ec7ff}
+.filters .pill.kind.gpt::before{border-radius:2px}
+.filters .pill.kind.spotify{color:#5fe3a1}
+.filters .pill.kind.spotify::before{border-radius:50%}
+.filters .pill.kind.gpt[aria-pressed=true]{background:#16324f;border-color:#2a5a8f}
+.filters .pill.kind.spotify[aria-pressed=true]{background:#0f3a2c;
+ border-color:#1f7a55}
+button.quiet.lanedoor.gpt{color:#9ec7ff}
+button.quiet.lanedoor.spotify{color:#5fe3a1}
+select.lanepick{font-weight:600}

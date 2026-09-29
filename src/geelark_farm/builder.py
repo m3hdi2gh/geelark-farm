@@ -75,6 +75,7 @@ from . import (
     mailbox,
     phones,
     products,
+    purposes,
     rows,
     runctx,
     shell,
@@ -790,7 +791,19 @@ def _held_note(book: Book) -> str:
             f"the hours Google lets these exits in (SIGNIN_GOOD_HOURS_UTC)")
 
 
-def _pair_up(client: Client, book: Book, settings: Settings):
+def _lane_for(want: Wanted | None, purpose: str = "") -> str:
+    """The lane a build is for: the job's word, else the wish's, else
+    what the wish's app implies - a Spotify account wants a Spotify
+    phone - and a keeper build with no word is a GPT phone, as every
+    build was before there were lanes (purposes.py)."""
+    return (purposes.normal(purpose)
+            or (purposes.normal(want.purpose) if want else "")
+            or (purposes.of_product(want.app) if want and want.app
+                else purposes.GPT))
+
+
+def _pair_up(client: Client, book: Book, settings: Settings,
+             purpose: str = ""):
     """A free Gmail, and an exit that is not on the host it was refused on.
 
     The address is claimed first - a phone must never be created with
@@ -818,7 +831,8 @@ def _pair_up(client: Client, book: Book, settings: Settings):
                         .get("Last Host") or "")
             try:
                 return row, kit_exits._fresh_proxy(client, book, settings=settings,
-                                         avoid_host=avoid)
+                                                   avoid_host=avoid,
+                                                   purpose=purpose)
             except Aborted as refused:
                 held.append(row)
                 if str(refused) != "no_other_exit":
@@ -1111,6 +1125,9 @@ class _BuildState:
     want: Wanted | None = None
     #: A bare phone claims no address and signs nothing in.
     bare: bool = False
+    #: Which lane the phone is for (purposes.py): decides which exits
+    #: it may take and which shelf it is counted on.
+    purpose: str = ""
     phone_id: str = ""
     #: The exit the phone is on right now; a borrow makes it one the build
     #: does not own - the lease knows which it owns.
@@ -1185,7 +1202,7 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
               on_ready: Callable[[str], None] | None = None,
               cancelled: Callable[[], bool] | None = None,
               codes_source: codes.CodeSource | None = None,
-              want: Wanted | None = None) -> Build:
+              want: Wanted | None = None, purpose: str = "") -> Build:
     """Take pooled resources to one stopped, ready phone.
 
     `want` is somebody choosing instead of the pool: a Gmail, an exit,
@@ -1201,6 +1218,10 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                      deadline=started + settings.build_budget_seconds,
                      on_phone=on_phone,
                      on_ready=on_ready, codes_source=codes_source, want=want)
+    # The lane: the job's word, else the wish's, else what the wish's
+    # app implies - a Spotify account wants a Spotify phone - and a
+    # keeper build with no word is a GPT phone, as every build was.
+    st.purpose = _lane_for(want, purpose)
     # From here on, `cancelled` is the wired one: it is what every wait
     # underneath takes, and the console's Cancel has to reach those too.
     st.cancelled = _hand_stop_wired(settings, build, cancelled)
@@ -1278,7 +1299,8 @@ def _acquire(st: _BuildState) -> Build | None:
             # 2026-09-12). The two are chosen together, and an address
             # the exits cannot serve is looked past rather than handed
             # back for the next pass to pick up again (2026-09-13).
-            st.gmail_row, st.proxy_row = _pair_up(st.client, st.book, st.settings)
+            st.gmail_row, st.proxy_row = _pair_up(st.client, st.book, st.settings,
+                                                  purpose=st.purpose)
         if st.gmail_row is None and not st.bare:
             return st.finish("no_usable_gmail",
                           "the Gmails tab has no unused address left, so "
@@ -1289,7 +1311,8 @@ def _acquire(st: _BuildState) -> Build | None:
             st.proxy_row = kit_exits._fresh_proxy(
                 st.client, st.book, settings=st.settings,
                 avoid_host=str((getattr(st.gmail_row, "values", None) or {})
-                               .get("Last Host") or ""))
+                               .get("Last Host") or ""),
+                purpose=st.purpose)
         st.build.proxy = str(st.proxy_row.proxy)
         st.build.proxy_name = st.proxy_row.name
         st.lease.current = st.proxy_row
@@ -1333,6 +1356,7 @@ def _acquire(st: _BuildState) -> Build | None:
     st.log_row = st.book.phones.start(Serial=st.build.serial,
                                 Proxy=st.build.proxy_name or st.build.proxy,
                                 **{"Exit IP": rows._exit_of(st.book, st.build)},
+                                **({"Purpose": st.purpose} if st.purpose else {}),
                                 **theirs)
     # The Gmail was claimed inside `_starting`, before this phone existed -
     # it has to be, or a phone can be created with no address to sign in.
@@ -2289,7 +2313,7 @@ def _run_jobs(client: Client, settings: Settings, book: Book,
                               on_phone=note_phone, on_ready=on_ready,
                               cancelled=shutting_down.is_set,
                               codes_source=codes_source,
-                              want=want)
+                              want=want, purpose=str(job.get("purpose") or ""))
             if want is not None:
                 build.wanted_id = want.wanted_id
         # Nothing else in the archive says how the build went: a

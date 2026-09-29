@@ -304,7 +304,8 @@ def dashboard(settings: Settings, owner_id: int | None = None) -> dict:
         phone_rows = store._rows(
             "SELECT p.serial, p.status, p.state, p.app_installed, p.gmail,"
             " p.app_account, p.proxy_name, p.tries, p.note, p.updated_at,"
-            " p.created_at, p.running, p.app, u.username AS owner,"
+            " p.created_at, p.running, p.app, p.purpose,"
+            " u.username AS owner,"
             " bu.username AS built_by,"
             # Which product the account on it belongs to, and for a
             # Spotify one which category - read off the pool row rather
@@ -800,6 +801,20 @@ def _latest_lines(store, serials: list[str]) -> dict[str, dict]:
     return {str(r["serial"]): r for r in lines}
 
 
+def lane_of(settings: Settings, serial: str) -> str:
+    """Which lane a live phone was built for (purposes.py), for the
+    Live tab's bar; "" when the store cannot say. Never raises."""
+    try:
+        with Store(settings) as store:
+            rows = store._rows(
+                "SELECT purpose FROM phones WHERE serial = %s"
+                " AND done_at IS NULL ORDER BY id DESC LIMIT 1", (serial,))
+    except Exception as exc:                                      # noqa: BLE001
+        log.debug("the lane of %s was not read (%s)", serial, exc)
+        return ""
+    return str(rows[0].get("purpose") or "") if rows else ""
+
+
 def live_link(settings: Settings, serial: str) -> str:
     """The live-view link of one phone being built, or "" - for the
     dashboard's Watch live, which frames it under the farm's bar."""
@@ -1079,6 +1094,7 @@ _SPOTIFY_Q = ("SELECT id, address, status, coalesce(serial, '') AS serial,"
 _PROXY_Q = ("SELECT id, coalesce(proxy_name, '') AS address, status,"
             " coalesce(host, '') AS host, port,"
             " coalesce(last_exit_ip, '') AS exit_ip, times_used,"
+            " coalesce(purpose, '') AS purpose,"
             " coalesce(serial, '') AS serial, coalesce(note, '') AS note,"
             " error, updated_at, claimed_at"
             " FROM resources WHERE kind = 'proxy'{more}"
@@ -1151,7 +1167,7 @@ def phone_holder(settings: Settings, serial: str) -> dict | None:
         rows = store._rows(
             "SELECT p.serial, p.status, p.state, p.gmail, p.app_account,"
             " p.proxy_name, p.tries, p.note, p.created_at, p.updated_at,"
-            " p.done_at, u.username AS owner"
+            " p.done_at, p.purpose, u.username AS owner"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.serial = %s ORDER BY p.id DESC LIMIT 1", (serial,))
     return dict(rows[0]) if rows else None
@@ -2087,7 +2103,7 @@ def phone_story(settings: Settings, serial: str) -> dict | None:
         phone = store._rows(
             "SELECT p.serial, p.status, p.state, p.gmail, p.app_account,"
             " p.proxy_name, p.tries, p.note, p.created_at, p.updated_at,"
-            " p.done_at, u.username AS owner"
+            " p.done_at, p.purpose, u.username AS owner"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.serial = %s ORDER BY p.id DESC LIMIT 1", (serial,))
         events = store._rows(

@@ -29,7 +29,7 @@ STATES = ("queued", "running", "done", "failed")
 def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
         install_app: bool = True, app_account: str = "",
         requested_by: int | None = None, app: str | None = None,
-        no_gmail: bool = False) -> int:
+        no_gmail: bool = False, purpose: str = "") -> int:
     """Write one wish. Returns its id, which is what the page says back.
 
     `app` is which app the phone gets - '' for none, 'chatgpt', 'spotify',
@@ -48,10 +48,11 @@ def ask(settings: Settings, *, gmail: str = "", proxy_name: str = "",
         rows = store._write(
             "INSERT INTO wanted_builds"
             " (gmail, proxy_name, install_app, app_account, requested_by,"
-            "  app, no_gmail)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "  app, no_gmail, purpose)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (gmail.strip(), proxy_name.strip(), bool(app),
-             app_account.strip(), requested_by, app, bool(no_gmail)))
+             app_account.strip(), requested_by, app, bool(no_gmail),
+             str(purpose or "").strip().lower()))
     return int(rows[0]["id"])
 
 
@@ -96,7 +97,7 @@ def take(settings: Settings, limit: int = 2) -> list[dict]:
             "              ORDER BY created_at, id LIMIT %s"
             "              FOR UPDATE SKIP LOCKED)"
             " RETURNING id, gmail, proxy_name, install_app, app_account, app,"
-            " requested_by, no_gmail",
+            " requested_by, no_gmail, purpose",
             (max(1, int(limit)),))
 
 
