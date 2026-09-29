@@ -393,10 +393,13 @@
         if (listed[s] || c.closing) return;
         var v = newToday[s];
         if (v && VICON[v]){ pendingV[s] = v; if (tally[v] > 0){ tally[v]--; tally.all--; } closeCard(c, v, true); }
-        // Gone from the list: should it come back one day (the line, a build),
-        // it arrives with its own words again.
-        else { delete everSeen[s]; drop(c); }
+        else drop(c);
       });
+      // Gone from the farm's list: should it come back one day (the line, a
+      // build), it arrives with its own words again. A phone given back stays
+      // listed until the keeper has put it back, so a card that shows again
+      // before that (its tomb ran out) comes back quietly.
+      Object.keys(everSeen).forEach(function(s){ if (!listed[s]) delete everSeen[s]; });
       Object.keys(ipPress).forEach(function(s){ ipSettled(s, listed[s]); });
       ghostsApply(st, isFirst);
       (Array.isArray(st.notes) ? st.notes : []).slice().reverse().forEach(function(n){
@@ -867,8 +870,6 @@
       say('Phone ' + s + ' is back on ' + home(l) + '.', l);
       send('/station/phones/' + s + '/back', {where: 'station'}, function(a){
         if (!a.ok) delete tomb[s];
-        // Back on the shelf: served to this page again later, it is new again.
-        else delete everSeen[s];
       }).then(function(a){
         if (!a.ok){ say(a.note || BROKE, true); if (!a.state) schedulePull(); }
       });

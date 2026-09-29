@@ -1016,7 +1016,10 @@ ALTER TABLE phones ADD COLUMN IF NOT EXISTS live_url text NOT NULL DEFAULT '';
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS last_owner_id bigint REFERENCES users(id);
 -- A Station hold is always a taken, owned phone. The self-heal runs first,
 -- on every start: a rollback to rev 41 code leaves `taken_at` on rows its
--- writers never clear, and the constraint below would refuse them.
+-- writers never clear, and the constraint below would refuse them. While
+-- rev 41 code runs on this schema those writers fail on such rows (Done,
+-- Back, the hourly release), so a rollback first drops this constraint and
+-- the one-press index and clears taken_at; a later start rebuilds them.
 UPDATE phones SET taken_at = NULL
  WHERE taken_at IS NOT NULL
    AND (state <> 'taken' OR owner_id IS NULL OR done_at IS NOT NULL);

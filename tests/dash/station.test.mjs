@@ -1262,6 +1262,28 @@ test('a refused Give back puts the card back quietly', async () => {
   assert.equal(toast(p), 'nope', 'and it does not say it was built');
 });
 
+test('a given-back card the keeper has not put back yet shows again quietly', async () => {
+  // The give-back is queued for the keeper: until it runs, the farm still
+  // lists the phone, and once the card's tomb runs out the card shows again.
+  // It was this page's all along, so it never says it was just built.
+  const held = () => state({phones: [phone('5073', {arrived: 'build'}), state().phones[1]]});
+  const p = pageIn('station', held(), {answer: (c) =>
+    c.url === '/station/phones/5073/back' ? ok({said: 'gave-back', state: held()})
+    : c.url === '/station/state' ? {status: 200, body: held()} : null});
+  await settle();
+  primeStream(p);
+  click(p.$('#p-5073 [data-a="back"]'));
+  await settle();
+  assert.equal(toast(p), 'Phone 5073 is back on the GPT shelf.');
+  await pullNow(p);
+  assert.equal(p.$('#p-5073'), null, 'held back while its tomb lasts');
+  await p.advance(61000);
+  await pullNow(p);
+  assert.ok(p.$('#p-5073'), 'still listed after a minute: it shows again');
+  await p.advance(8000);
+  assert.equal(toast(p), 'Phone 5073 is back on the GPT shelf.', 'and never says it was built');
+});
+
 test('a Build refused after its dialog was closed is said on the page', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });

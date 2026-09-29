@@ -375,6 +375,15 @@ class _Handler(BaseHTTPRequestHandler):
                 # (pages.viewer_page, watch=True). Nothing to hold and
                 # nothing to do - the build owns the phone.
                 serial = path[len("/phones/"):-len("/watch")]
+                # The link is the phone's interactive viewer, and it
+                # outlives the build on a phone nobody has restarted
+                # since: somebody else's hold - a Station one included -
+                # is not watched from here (2026-09-29, beside web-2).
+                if self._held_by_somebody_else(user, serial):
+                    log.info("watch %s: held by somebody else - not framed "
+                             "for %s", serial, user.get("username"))
+                    return self._html(200, pages.live_page(
+                        serial, user, said="refused"))
                 url = read.live_link(self.settings, serial)
                 if not url:
                     return self._html(200, pages.live_page(

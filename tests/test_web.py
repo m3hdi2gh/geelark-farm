@@ -1441,6 +1441,12 @@ def test_retry_queues_a_failed_request_again(web, monkeypatch):
                                    f"csrf={client.csrf()}")
     assert dict(headers)["Location"] == "/requests?said=not_failed"
 
+    # A Station build is never replayed (web-7): the page says why.
+    monkeypatch.setattr(actions_mod, "retry", lambda s, **k: "station_build")
+    _, headers, _ = client.request("POST", "/requests/240/retry",
+                                   f"csrf={client.csrf()}")
+    assert dict(headers)["Location"] == "/requests?said=station_build"
+
 
 @pytest.mark.parametrize("web", [True], indirect=True)
 def test_stop_this_one_is_one_queued_command_for_that_phone(web,

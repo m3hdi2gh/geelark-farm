@@ -1896,6 +1896,33 @@ def test_the_boot_tab_frames_only_the_askers_own_request(
     assert status == 200 and url in body, "an admin's is any"
 
 
+@pytest.mark.parametrize("web", [FLAG_ON], indirect=True)
+def test_watch_live_frames_no_screen_of_a_phone_somebody_else_holds(
+        web, desk, monkeypatch):
+    """The builder's link outlives the build on a phone nobody restarted,
+    and /phones/<s>/watch is an operator door: another person's hold - a
+    Station one included - is not framed from there. A phone being built
+    (nobody's), one's own hold and an admin still are."""
+    url = "https://viewer.example.test/SECRET-98001"
+    monkeypatch.setattr(app_mod.read, "live_link", lambda s, serial: url)
+    held = {"98001": {"serial": "98001", "state": "taken", "owner": "ali"},
+            "98002": {"serial": "98002", "state": "", "owner": None},
+            "98003": {"serial": "98003", "state": "taken", "owner": "sara"}}
+    monkeypatch.setattr(app_mod.read, "phone_holder",
+                        lambda s, serial: held.get(serial))
+    _as(monkeypatch, OPERATOR)
+    client = _signed(web, "sara")
+    status, _, body = _get(client, "/phones/98001/watch")
+    assert status == 200 and url not in body and "Not allowed" in body
+    for serial in ("98002", "98003"):
+        status, _, body = _get(client, f"/phones/{serial}/watch")
+        assert status == 200 and url in body, serial
+    _as(monkeypatch, ADMIN)
+    client = _signed(web)
+    status, _, body = _get(client, "/phones/98001/watch")
+    assert status == 200 and url in body, "an admin watches any"
+
+
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_a_profile_change_that_committed_answers_saved_whatever_its_record(
         web, desk, monkeypatch):
