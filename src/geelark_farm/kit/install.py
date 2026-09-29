@@ -145,7 +145,7 @@ def _install(client: Client, phone_id: str, package: str, *, name: str,
     if not play:
         return play_install.Outcome(
             "fatal", "install_failed",
-            f"{name} did not come from GeeLark's installer, and there is no "
+            f"{name} did not come from the cloud installer, and there is no "
             f"Google account on this phone to walk the Play Store with")
     log.info("the Play Store is walked for %s", name)
     got = play_install.install(client, phone_id, package,

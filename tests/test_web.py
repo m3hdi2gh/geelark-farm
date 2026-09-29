@@ -5891,7 +5891,8 @@ def test_nothing_a_person_reads_names_the_vendor():
     allowed = re.compile(
         r"geelark_(farm|plan|refusal|wallet|run|build|serial|actions|jobs)"
         r"|[a-z]+\.geelark\.com|/geelark/|geelark\.py"
-        r"|\bgeelark\b(?![ '])",
+        # ...and the admin's own command line on the Tasks page.
+        r"|geelark task |\bgeelark\b(?![ '])",
         re.I)
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
@@ -5899,7 +5900,17 @@ def test_nothing_a_person_reads_names_the_vendor():
                    keeper, apps):
         src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+        # On 3.12+ an f-string is FSTRING_START/MIDDLE/END tokens, not one
+        # STRING - and the sweep's own guard read past every f-string on
+        # 3.13 until 3.10's tokenizer caught five of them (2026-09-29).
+        middle = getattr(tokenize, "FSTRING_MIDDLE", None)
         for i, tok in enumerate(toks):
+            if tok.type == middle:
+                text = tok.string.lower()
+                if "geelark" in text and "geelark" in allowed.sub("", text):
+                    found.append(f"{module.__name__}:{tok.start[0]}: "
+                                 f"{tok.string.strip()[:70]}")
+                continue
             if tok.type != tokenize.STRING or "geelark" not in tok.string.lower():
                 continue
             j = i - 1
@@ -8890,7 +8901,7 @@ def test_the_assets_ride_in_the_wheel():
     them or the console renders as plain text with dead buttons."""
     import pathlib
 
-    import tomllib
+    tomllib = pytest.importorskip("tomllib")   # 3.11+; the wheel is 3.13's
 
     here = pathlib.Path(assets.__file__).resolve()
     conf = tomllib.loads(

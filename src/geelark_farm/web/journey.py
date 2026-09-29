@@ -67,6 +67,10 @@ def _utc(value) -> datetime:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     text = str(value).replace(" ", "T")
+    # Postgres writes "+00" for UTC; Python 3.10's fromisoformat wants
+    # the minutes too, and the suite runs on 3.10 as well (2026-09-29).
+    if re.search(r"[+-]\d\d$", text):
+        text += ":00"
     parsed = datetime.fromisoformat(text)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 

@@ -7610,6 +7610,8 @@ def test_the_rest_hours_are_settings(make_settings, monkeypatch):
 
     s = make_settings()
     assert (s.exit_rest_hours, s.suspect_rest_hours) == (12, 24)
+    monkeypatch.setenv("GEELARK_APP_ID", "x")      # CI has no .env
+    monkeypatch.setenv("GEELARK_API_KEY", "y")
     monkeypatch.setenv("EXIT_REST_HOURS", "6")
     monkeypatch.setenv("SUSPECT_REST_HOURS", "0")
     loaded = config.Settings.load()

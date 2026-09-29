@@ -420,8 +420,8 @@ def _phone_badge(row: dict, me: str | None = None) -> str:
             # in GeeLark, or taken and released while still up. It is
             # billing, and it read as free (the operator, 2026-09-08).
             return (f'<span class="badge manual" '
-                    f'title="{esc(_phone_word(status))} - on in GeeLark, '
-                    f'nobody here holds it">Running</span>')
+                    f'title="{esc(_phone_word(status))} - on in IranSpoty '
+                    f'Cloud, nobody here holds it">Running</span>')
         return pill
     if status == "building":
         # A phone ordered from the card is reserved for whoever asked for
@@ -2458,8 +2458,8 @@ def _test_all_door(kind: str, rows: list[dict], user: dict) -> str:
     return (f'<form method="post" action="{meta["test_all"]}" class="inline">'
             f'{_csrf(user)}<input type="hidden" name="back" value="/">'
             f'<button class="quiet" data-busy="Testing…" '
-            f'title="ask GeeLark about every exit no build is holding; a '
-            f'dead one that answers is free again">'
+            f'title="ask IranSpoty Cloud about every exit no build is '
+            f'holding; a dead one that answers is free again">'
             f'Test all{f" · {aside} set aside" if aside else ""}</button>'
             f'</form>')
 
@@ -5930,8 +5930,9 @@ def _proxy_view_row(view: str, r: dict, user: dict, here: str,
 def _stray_row(user: dict, u: dict, back: str) -> str:
     return (f'<tr><td><span class="dim">not in the pool</span></td>'
             f'<td class="mono muted">{esc(_stray_who(u))}</td>'
-            f'<td>GeeLark holds this exit and the pool has never heard of '
-            f'it<br><span class="dim">yours to decide: add it, or ignore it '
+            f'<td>IranSpoty Cloud holds this exit and the pool has never '
+            f'heard of it<br><span class="dim">yours to decide: add it, or '
+            f'ignore it '
             f'so it stops being reported</span></td>'
             f'<td class="right">{_stray_buttons(user, u, back)}</td></tr>')
 
@@ -6032,7 +6033,8 @@ def proxy_pool_page(data: dict, user: dict, said: str = "", *,
         return page("Proxy Pool", body + (
             f'<div class="panel wrap"><h3>Ignored <span class="n">'
             f'{len(ignored)}</span></h3>{table}<p class="dim">held by '
-            f'GeeLark and left there unreported (host:port:user); the list '
+            f'IranSpoty Cloud and left there unreported (host:port:user); '
+            f'the list '
             f'lives in service_state under ignored_proxies. '
             f'<a href="/pools/proxy?view=needs_hand">Back to the work list'
             f'</a></p></div></div>'), user=user, here="/pools/proxy")
