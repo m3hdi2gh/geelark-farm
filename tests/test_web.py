@@ -5891,8 +5891,10 @@ def test_nothing_a_person_reads_names_the_vendor():
     allowed = re.compile(
         r"geelark_(farm|plan|refusal|wallet|run|build|serial|actions|jobs)"
         r"|[a-z]+\.geelark\.com|/geelark/|geelark\.py"
-        # ...and the admin's own command line on the Tasks page.
-        r"|geelark task |\bgeelark\b(?![ '])",
+        # ...the page's own helper names, which 3.10 reads inside an
+        # f-string's braces, and the admin's own command line on the
+        # Tasks page.
+        r"|_geelark_\w+|geelark task |\bgeelark\b(?![ '])",
         re.I)
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
