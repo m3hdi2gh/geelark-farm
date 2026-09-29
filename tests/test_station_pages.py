@@ -507,7 +507,32 @@ def test_the_pages_carry_the_build_they_were_drawn_by(monkeypatch):
     from geelark_farm import config
     monkeypatch.setattr(config, "revision", lambda: "")
     body = station_pages.station_page(_state(), USER)
-    assert f'<meta name="gf-rev" content="{assets.REV}">' in body
+    assert f'<meta name="gf-rev" content="station-{assets.REV}">' in body
     monkeypatch.setattr(config, "revision", lambda: "1ad334c-dirty")
     body = station_pages.live_page(_live(), USER)
-    assert '<meta name="gf-rev" content="1ad334c-dirty">' in body
+    assert '<meta name="gf-rev" content="station-1ad334c-dirty">' in body
+
+
+def test_the_station_names_its_build_apart_from_the_dashboards(monkeypatch):
+    """With STATION_FOR_OPERATORS on, an operator's `/` is the Station. A
+    dashboard left open across the switch fetches `/` for its next swap,
+    and dash.js pours the answer's `<main>` into its own shell unless the
+    answer's `gf-rev` differs - then it reloads the tab whole. So the
+    Station's documents name the build apart from the console's pages,
+    and its state answers with the same name the page carries (the
+    script reloads when the two differ)."""
+    from geelark_farm import config
+    from geelark_farm.web import pages, station_read
+
+    rev = re.compile(r'<meta name="gf-rev" content="([^"]*)">')
+    for revision in ("", "292543f"):
+        monkeypatch.setattr(config, "revision", lambda r=revision: r)
+        station = rev.search(station_pages.station_page(_state(), USER))
+        live = rev.search(station_pages.live_page(_live(), USER))
+        console = rev.search(pages.page("Dashboard", "<p>x</p>", user=dict(
+            USER, user_admin=False, mutations=False, nav={})))
+        assert station and live and console
+        assert station.group(1) == live.group(1) == station_pages.station_rev()
+        assert console.group(1) and station.group(1) != console.group(1)
+        assert station.group(1).startswith("station-")
+        assert station_read._rev() == station.group(1)

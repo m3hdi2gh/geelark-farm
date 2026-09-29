@@ -667,3 +667,31 @@ test('an open sheet takes its doors and its cap line along with its rows',
   assert.equal(sheet.querySelector('.capped'), null,
                'a cap line for rows that are gone goes with them');
 });
+
+test('a dashboard handed the Station for its swap reloads whole instead',
+     async () => {
+  // STATION_FOR_OPERATORS turns an operator's `/` into the Station. A
+  // dashboard left open across the switch fetches `/` for its next swap
+  // and gets the Station's document: poured into the dashboard's shell
+  // it would be a page of neither. The Station names its build apart
+  // (`station-<rev>`), so the swap reloads the tab, which comes back as
+  // the Station.
+  const station = '<html><head><meta name="gf-rev" content="station-test">'
+    + '</head><body><header class="bar" id="bar"></header><main>'
+    + '<div class="empty" id="empty"></div><section class="bench" id="bench">'
+    + '</section></main></body></html>';
+  const win = consoleIn(regioned(ONE), {
+    answer: () => ({status: 200, url: '/', body: station}),
+  });
+  const doc = win.document;
+  const table = doc.querySelector('#phones');
+
+  fire(doc.querySelector('form.press'), 'submit',
+       {submitter: doc.querySelector('form.press button')});
+  await settle();
+
+  assert.deepEqual(win.__went, ['reload'], 'the tab reloads whole');
+  assert.equal(doc.querySelector('#phones'), table,
+               'and nothing of the Station was poured into the dashboard');
+  assert.equal(doc.querySelector('#bench'), null);
+});

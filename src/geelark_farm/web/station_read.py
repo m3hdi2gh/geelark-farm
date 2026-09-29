@@ -63,16 +63,16 @@ def _now_ms() -> int:
 
 
 def _rev() -> str:
-    from .. import config
-
+    """The build the page was drawn by, named as the page names it
+    (`station_pages.station_rev`), so the script reloads only on a real
+    new build."""
     try:
-        from . import assets
+        from .station_pages import station_rev
 
-        fallback = assets.REV
+        return station_rev()
     except Exception as exc:                                      # noqa: BLE001
         log.warning("the station could not read the build's assets (%s)", exc)
-        fallback = ""
-    return config.revision() or fallback
+        return ""
 
 
 def _minutes(seconds) -> int:

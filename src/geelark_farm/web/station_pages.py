@@ -29,6 +29,19 @@ _ICONS = (_HERE / "station_icons.html").read_text(encoding="utf-8").strip()
 _LANES = ("gpt", "spotify", "other")
 _SLOT = re.compile(r"\{\{([A-Z]+)\}\}")
 
+#: What the Station's build is called, apart from the console's. The two
+#: share one build, but an operator's dashboard left open when `/` became
+#: the Station (STATION_FOR_OPERATORS) fetches `/` for its next swap: with
+#: the same `gf-rev` it would pour the Station's `<main>` into the
+#: dashboard's shell. A name of its own makes that dashboard reload whole
+#: and come back as the Station (dash.js swapMain).
+REV_PREFIX = "station-"
+
+
+def station_rev() -> str:
+    """The build the Station's documents and its state answer carry."""
+    return REV_PREFIX + (config.revision() or assets.REV)
+
 
 def _island(obj) -> str:
     """The state as JSON that cannot close the script element it sits in.
@@ -62,7 +75,7 @@ def _common(state: dict, user: dict, title: str) -> dict:
         "FAVICON": _esc(pages._FAVICON),
         "CSS": _esc(assets.STATION_CSS_PATH),
         "JS": _esc(assets.STATION_JS_PATH),
-        "REV": _esc(config.revision() or assets.REV),
+        "REV": _esc(station_rev()),
         "CSRF": _esc(user.get("csrf") or ""),
         "BRAND": _BRAND,
         "ICONS": _ICONS,
