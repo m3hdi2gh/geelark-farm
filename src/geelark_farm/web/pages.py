@@ -1147,7 +1147,7 @@ def _phone_rows(data: dict, user: dict) -> str:
                      if url else "")
             lines.append(
                 f'<tr data-view="{view}" data-lane="{_lane_of(r)}">'
-                f'<td>{_serial_link(serial)}</td><td>{_lane_badge(r)}</td>'
+                f'<td class="who">{_serial_link(serial)}{_lane_badge(r)}</td>'
                 f'<td>{badge}</td>'
                 f'<td colspan="4" class="progress">'
                 f'{_progress(progress.get(serial))}</td>'
@@ -1180,7 +1180,7 @@ def _phone_rows(data: dict, user: dict) -> str:
                       f'build card">built by {esc(maker)}</span>')
         lines.append(
             f'<tr data-view="{view}" data-lane="{_lane_of(r)}">'
-            f'<td>{_serial_link(serial)}</td><td>{_lane_badge(r)}</td>'
+            f'<td class="who">{_serial_link(serial)}{_lane_badge(r)}</td>'
             f'<td>{badge}</td>'
             f'<td>{_addr_cell(r.get("gmail"), "no Gmail on it")}'
             f'{_seller_line(r)}</td>'
@@ -3647,12 +3647,11 @@ def dashboard(data: dict, user: dict, said: str = "",
     # purpose: the sheets under it are fetched, and replacing its
     # children would throw them away every tick.
     table = (f'<div data-live="phones">'
-             f'<table id="phones"><thead><tr><th>serial</th><th>for</th>'
-             f'<th>status</th>'
+             f'<table id="phones"><thead><tr><th>serial</th><th>status</th>'
              f'<th>gmail</th><th>account</th><th>ip</th>'
              f'<th>age</th><th></th></tr></thead>'
              f'<tbody>{rows}'
-             f'<tr class="none" id="nohits" hidden><td colspan="8">'
+             f'<tr class="none" id="nohits" hidden><td colspan="7">'
              f'Nothing here matches that.</td></tr></tbody></table></div>'
              if rows else '<div data-live="phones"><p class="empty">'
                           'No phones yet - the keeper builds the '

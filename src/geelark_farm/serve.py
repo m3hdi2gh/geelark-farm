@@ -1281,6 +1281,22 @@ def _lanes(book: Book, warm: list[dict]) -> dict[str, dict[str, int]]:
     return lanes
 
 
+def _on_its_way(coming: int, coming_by: dict, lanes: dict,
+                targets: dict) -> int:
+    """What the queue already holds, counted against each lane's own
+    shortfall: three Spotify builds in flight do not stand in for the
+    GPT phones that are short - counted whole, they held the GPT
+    shelf at one build a pass (2026-09-29). Without a by-lane count
+    (no queue, or a queue that could not be read) the whole number
+    stands, as it always did."""
+    if not coming_by:
+        return coming
+    return sum(min(int(coming_by.get(lane, 0)),
+                   max(0, int(targets.get(lane, 0))
+                       - int(lanes.get(lane, {}).get("warm", 0))))
+               for lane in lanes)
+
+
 def _lanes_to_build(total: int, lanes: dict, targets: dict,
                     coming: dict | None = None) -> dict[str, int]:
     """How many of `total` builds go to each lane: the shorter shelf
@@ -1899,7 +1915,8 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
                       free_slots=(free if free is None
                                   else max(0, free - coming)),
                       accounts_waiting=auto_waiting, cap=cap, paused=paused,
-                      gmails=gmails, exits=exits, coming=coming)
+                      gmails=gmails, exits=exits,
+                      coming=_on_its_way(coming, coming_by, lanes, targets))
     # After the arithmetic and before the order: Google's own verdicts,
     # which the breaker leaves out on purpose, and which ordered ten
     # builds a pass into an hour that let none of fifty-nine in

@@ -3433,3 +3433,19 @@ def test_the_queue_is_counted_by_lane(make_settings, monkeypatch):
     assert "payload->>'purpose'" in conn.sql[0]
     assert "payload->'want'->>'purpose'" in conn.sql[0], "a wish's lane too"
     assert "kind = 'build'" in conn.sql[0]
+
+
+def test_builds_on_their_way_count_only_against_their_own_lanes_shortfall():
+    """Three Spotify builds in flight, the Spotify shelf already full, the
+    GPT shelf empty: counted whole they cut the GPT order to one a pass
+    (2026-09-29). Counted per lane, they count for nothing."""
+    targets = {"gpt": 4, "spotify": 4}
+    lanes = {"gpt": {"warm": 0, "exits": 9}, "spotify": {"warm": 6, "exits": 9}}
+    assert serve_mod._on_its_way(3, {"spotify": 3}, lanes, targets) == 0
+    assert serve_mod._on_its_way(3, {"gpt": 3}, lanes, targets) == 3
+    assert serve_mod._on_its_way(5, {"gpt": 5}, lanes, targets) == 4, (
+        "never more than the lane is short by")
+    short = {"gpt": {"warm": 2, "exits": 9}, "spotify": {"warm": 1, "exits": 9}}
+    assert serve_mod._on_its_way(4, {"gpt": 1, "spotify": 3}, short, targets) == 4
+    assert serve_mod._on_its_way(7, {}, lanes, targets) == 7, (
+        "no by-lane count: the whole number, as it always was")

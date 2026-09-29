@@ -10635,15 +10635,18 @@ def test_every_phone_row_says_its_lane_loudly_and_the_table_sifts_by_it(
     client = web()
     client.login()
     _, _, body = client.request("GET", "/")
-    assert "<th>serial</th><th>for</th><th>status</th>" in body
-    assert 'colspan="8"' in body
+    assert "<th>serial</th><th>status</th>" in body, (
+        "no column of its own: it pushed the table past the page (2026-09-29)")
+    assert 'colspan="7"' in body
 
     def row(serial):
         start = body.rindex("<tr", 0, body.index(f'href="/phones/{serial}"'))
         return body[start:body.index("</tr>", start)]
 
     assert 'data-lane="spotify"' in row("1501")
-    assert '<span class="lane spotify" title="kept for Spotify' in row("1501")
+    assert ('<td class="who"><a href="/phones/1501">1501</a>'
+            '<span class="lane spotify" title="kept for Spotify') in row("1501"), (
+        "beside the serial, in the same cell")
     assert ">Spotify</span>" in row("1501")
     assert 'data-lane="gpt"' in row("1500") and ">GPT</span>" in row("1500")
     assert 'data-lane="gpt"' in row("1502"), "no lane on it: a GPT phone"

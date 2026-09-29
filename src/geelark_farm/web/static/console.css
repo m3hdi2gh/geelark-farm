@@ -1088,7 +1088,8 @@ tr.now td:last-child{border-radius:0 8px 8px 0}
 .lane.spotify{background:#0f3a2c;color:#5fe3a1;border-color:#1f7a55}
 .lane.either{background:#1d2636;color:#9aa7ba;border-color:#2c3850;
  text-transform:none;font-weight:500;letter-spacing:0}
-td .lane{margin-right:2px}
+td.who{white-space:nowrap}
+td.who .lane{margin-left:9px;padding:1px 8px;font-size:10.5px}
 .lanes{margin-left:10px;display:inline-flex;gap:6px;vertical-align:middle}
 .lanes .lane b{font-weight:800;margin-left:6px}
 .seg button.lane{text-transform:uppercase;letter-spacing:.06em;font-weight:700}
