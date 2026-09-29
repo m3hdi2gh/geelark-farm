@@ -737,8 +737,8 @@ def test_the_builder_hands_the_solver_key_to_the_app_flow():
     from geelark_farm import builder
 
     source = inspect.getsource(builder._sign_in_flow)
-    assert "solver_key=s.settings.capsolver_key" in source, (
-        "the app sign-in must hand the flow the CapSolver key, or a "
+    assert "solver_key=solvers.of(s.settings)" in source, (
+        "the app sign-in must hand the flow the captcha doors, or a "
         "Spotify challenge that opens a grid cannot be answered")
     # And the flow must put it somewhere act_grid can read.
     assert "solver_key=solver_key" in inspect.getsource(sl.sign_in)

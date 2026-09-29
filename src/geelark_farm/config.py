@@ -510,6 +510,13 @@ class Settings:
     #: because a Book without a workbook is a Book of Postgres pools.
     sheet_closed: bool = False
     capsolver_key: str = ""
+    #: 2Captcha, the second door for the same grid: people rather than
+    #: a model, slower and dearer, for the grids the model gets wrong.
+    #: With both keys set the doors are tried in turn (solvers.py);
+    #: CAPTCHA_SOLVER names which goes first ("2captcha" or
+    #: "capsolver"), and left empty 2Captcha leads when it has a key.
+    twocaptcha_key: str = ""
+    captcha_solver: str = ""
     captcha_max_attempts: int = 3
     #: The mailbox every `eco` account's address forwards into, and the
     #: app password to read it with (mailbox.py). Empty is how the farm
@@ -650,6 +657,8 @@ class Settings:
             stale_claim_seconds=_int("STALE_CLAIM_SECONDS",
                                      STALE_CLAIM_DEFAULT),
             capsolver_key=_str("CAPSOLVER_KEY", ""),
+            twocaptcha_key=_str("TWOCAPTCHA_KEY", ""),
+            captcha_solver=_str("CAPTCHA_SOLVER", "").strip().lower(),
             mail_imap_host=_str("MAIL_IMAP_HOST", "imap.gmail.com"),
             mail_imap_user=_str("MAIL_IMAP_USER", ""),
             mail_imap_password=_str("MAIL_IMAP_PASSWORD", ""),

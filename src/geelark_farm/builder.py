@@ -78,6 +78,7 @@ from . import (
     rows,
     runctx,
     shell,
+    solvers,
 )
 from . import artifacts as archive
 
@@ -640,7 +641,7 @@ def _sign_in_flow(s: _Session, flow, package: str, source):
         # for pictures there rather than taking the tick - five
         # exits running (3644, 2026-09-19). Taken and ignored by the
         # other two flows, exactly as `codes` above is by Spotify's.
-        solver_key=s.settings.capsolver_key,
+        solver_key=solvers.of(s.settings),
         # As above: a press on Cancel is felt at the next screen, not
         # at the end of this login.
         watch=s.check_cancelled,
@@ -1435,7 +1436,7 @@ def _google_phase(st: _BuildState) -> Build | None:
             st.client, st.phone_id, account,
             budget_seconds=min(st.settings.login_budget_seconds, st.remaining()),
             artifact_dir=st.artifacts,
-            solver_key=st.settings.capsolver_key,
+            solver_key=solvers.of(st.settings),
             captcha_max=st.settings.captcha_max_attempts,
             # "Cancel" reaches inside the sign-in. Checked only here,
             # between build steps, it could not: a sign-in walking a

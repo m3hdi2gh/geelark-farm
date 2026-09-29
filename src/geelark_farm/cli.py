@@ -45,6 +45,7 @@ from . import (
     replay,
     screen,
     shell,
+    solvers,
 )
 from .accounts import AccountError
 from .api import ApiError, Client, TransportError, build_client
@@ -1021,7 +1022,7 @@ def cmd_flow(settings: Settings, args) -> int:
             package=spec.package_for(settings),
             budget_seconds=settings.app_login_budget_seconds,
             artifact_dir=artifact_dir, fresh=bool(args.fresh),
-            codes=source, solver_key=settings.capsolver_key)
+            codes=source, solver_key=solvers.of(settings))
         print(f"\noutcome: {outcome}")
         for path in outcome.artifacts:
             print(f"  saved: {path}")

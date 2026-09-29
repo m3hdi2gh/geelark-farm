@@ -687,10 +687,11 @@ def act_grid(ctx: Context, visit: int) -> Outcome | None:
     image, rect = got
     ctx.grids += 1
     try:
-        from .. import capsolver
+        from .. import solvers
 
-        answer, read = capsolver.solve_grid(ctx.solver_key, image,
-                                            instruction, watch=ctx.check)
+        answer, read = solvers.solve_grid(ctx.solver_key, image,
+                                          instruction, size=size,
+                                          watch=ctx.check)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None

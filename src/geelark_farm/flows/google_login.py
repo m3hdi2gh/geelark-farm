@@ -528,9 +528,10 @@ def act_captcha(ctx: Context) -> Outcome | None:
     ctx.captcha_tries += 1
     ctx.captcha_solved += 1
     try:
-        from .. import capsolver
-        answer, read = capsolver.solve_grid(ctx.solver_key, image,
-                                            instruction, watch=ctx.check)
+        from .. import solvers
+        answer, read = solvers.solve_grid(ctx.solver_key, image,
+                                          instruction, size=size,
+                                          watch=ctx.check)
     except Exception as exc:                                       # noqa: BLE001
         log.warning("captcha not solved (%s)", exc)
         return None
