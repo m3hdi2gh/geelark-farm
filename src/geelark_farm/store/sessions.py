@@ -61,6 +61,13 @@ def find(settings: Settings, token: str) -> dict | None:
     An expired seat, a deleted one, and a user who has since been
     deactivated all answer the same None - the caller sends them to the
     login page and has nothing further to decide.
+
+    A store that cannot be reached **raises**: it is not a missing seat.
+    It answered None until 2026-09-29, and the caller then told every
+    signed-in person they were signed out - the Station sent its page to
+    /login and each Live tab stopped beating for good, so one blip of the
+    cluster switched every held phone off after the grace. Raised, the
+    error reaches the web's own store-down answer (503 `down`).
     """
     if not token:
         return None
@@ -71,12 +78,9 @@ def find(settings: Settings, token: str) -> dict | None:
                 " ON u.id = s.user_id"
                 " WHERE s.token_hash = %s AND s.until > now() AND u.active",
                 (_digest(token),))
-    except Exception as exc:                                      # noqa: BLE001
-        # A store that cannot be reached is not a forged cookie. Say so
-        # and refuse the request rather than logging the person out, which
-        # would be a second, wrong story about what went wrong.
+    except Exception as exc:
         log.warning("could not read the session (%s)", exc)
-        return None
+        raise
     if not rows:
         return None
     row = rows[0]
@@ -108,22 +112,39 @@ def end_all_of(settings: Settings, user_id: int, *, keep: str = "") -> int:
     return len(rows)
 
 
+#: How long this browser's old seat outlives a password change. The new
+#: cookie reaches the browser one round trip after the commit, and a Live
+#: tab's beat or the page's pull already in flight still carries the old
+#: one: deleted at once, that request read "signed out" and the tab
+#: stopped beating for good (2026-09-29). Every other browser is still
+#: put out at once.
+OLD_SEAT_GRACE_SECONDS = 60
+
+
 def rotate(conn, token: str, user_id: int, *, hours: float) -> str | None:
     """A new seat for this browser, on the caller's connection and inside
     its transaction (it does not commit): the same csrf, so the Live tabs
     this browser opened keep working, and every other seat of this person
-    ended. Returns the new raw token, or None when the old seat was already
-    gone - every seat of the person is then ended. The raw tokens never
-    reach SQL; only their digests do."""
+    ended. This browser's old seat is not ended but cut to
+    `OLD_SEAT_GRACE_SECONDS`, for the requests already on their way with
+    the old cookie. Returns the new raw token, or None when the old seat
+    was already gone - every seat of the person is then ended. The raw
+    tokens never reach SQL; only their digests do."""
     new = secrets.token_urlsafe(32)
+    old = _digest(token)
     row = conn.execute(
         "INSERT INTO sessions (token_hash, user_id, csrf, until)"
         " SELECT %s, user_id, csrf, now() + %s * interval '1 hour' FROM sessions"
         " WHERE token_hash = %s AND user_id = %s AND until > now()"
         " RETURNING token_hash",
-        (_digest(new), float(hours), _digest(token), int(user_id))).fetchone()
-    conn.execute("DELETE FROM sessions WHERE user_id = %s AND token_hash <> %s",
-                 (int(user_id), _digest(new)))
+        (_digest(new), float(hours), old, int(user_id))).fetchone()
+    conn.execute("DELETE FROM sessions WHERE user_id = %s"
+                 " AND token_hash NOT IN (%s, %s)",
+                 (int(user_id), _digest(new), old))
+    conn.execute("UPDATE sessions SET until = least(until, now()"
+                 " + %s * interval '1 second')"
+                 " WHERE token_hash = %s AND user_id = %s",
+                 (int(OLD_SEAT_GRACE_SECONDS), old, int(user_id)))
     return new if row is not None else None
 
 

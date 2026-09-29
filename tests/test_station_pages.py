@@ -256,7 +256,9 @@ _APPENDED = [
     ".lt-box{position:relative;overflow:hidden}",
     "#lt-view{flex:none;border:0;display:block;transform-origin:0 0;"
     "background:#000}",
+    ".lt-col{box-sizing:content-box;flex:none}",
     "@media (max-width:900px){.lt-stage{height:auto;overflow:visible}}",
+    "@media (max-width:900px){.lt{scrollbar-gutter:stable}}",
     ".col.ghost.failed .g-ring,.col.ghost.failed .g-orb::after"
     "{animation:none;opacity:0}",
     ".col.ghost.failed .app{filter:saturate(.45) brightness(.66)}",
@@ -301,6 +303,48 @@ def test_the_station_css_is_the_prototypes():
         assert re.search(rf"(@keyframes {moment}\b|\.{moment}\b)", css), moment
 
 
+#: The Results capsule's steps, read on the width of its own column.
+_DAY_QUERIES = [
+    "@container day (max-width:344.98px){.day .ttl{display:none}}",
+    "@container day (max-width:289.98px){.day{gap:10px;padding:0 15px 0 10px}"
+    ".day .sep{margin:0 2px}.day .n small{font-size:9px;letter-spacing:.06em}}",
+    "@container day (max-width:249.98px){.day .ttl{display:flex}.day .sep,"
+    ".day .n{display:none}.day{padding:0 16px 0 9px}}",
+    "@container day (max-width:83.98px){.day .ttl{display:none}"
+    ".day{padding:0 9px}}",
+]
+
+
+def test_results_is_shaped_by_its_own_column_not_the_window():
+    """front-visual-1/-2: a scrollbar, a long name or a waiting Take once
+    pushed the capsule over the logo, because the steps read the window.
+    The capsule sits in its own container, the steps read that, and the
+    phone-width rule still has the last word."""
+    css = assets.STATION_CSS
+    page = station_pages.station_page(_state(), USER)
+    assert re.search(r'<div class="dayc">\s*<div class="day" aria-label="Results '
+                     r'today">', page), "the capsule has a column of its own"
+    rules = dict(re.findall(r"^(\.dayc?)\{([^}]*)\}", css, flags=re.M))
+    assert "container:day/inline-size" in rules[".dayc"]
+    assert "grid-area:day" in rules[".dayc"]
+    assert "grid-area" not in rules[".day"] and "justify-self" not in rules[".day"]
+    at = css.index("@media (max-width:1040px)")
+    for q in _DAY_QUERIES:
+        found = css.find(q, at)
+        assert found >= 0, q
+        at = found + len(q)
+    assert css.find("@media (max-width:560px){.day .ttl,.day .sep,.day .n"
+                    "{display:none}.day{padding:0 9px}", at) > at
+    # No window-width rule shapes the capsule any more, but for the height
+    # rule at 1320px and the phone-width ones.
+    shaped = [m.group(1) for m in re.finditer(
+        r"@media \(max-width:(\d+)px\)\{((?:[^{}]*\{[^{}]*\})*)\}", css)
+        if re.search(r"\.day[ .{]", m.group(2))]
+    assert shaped == ["1320", "560"], shaped
+    assert "@media (max-width:340px){.dayc{display:none}}" in css
+    assert "@media (max-width:1440px){.who .nm{display:none}" in css
+
+
 def test_the_station_css_keeps_every_prototype_rule_when_the_prototype_is_here():
     """The full check, run where the prototype's source can be read
     (`STATION_PROTOTYPE=<path to desk9.src.html>`): every selector of its
@@ -309,6 +353,8 @@ def test_the_station_css_keeps_every_prototype_rule_when_the_prototype_is_here()
     if not proto or not pathlib.Path(proto).is_file():
         pytest.skip("the prototype's source is not on this machine")
     lines = pathlib.Path(proto).read_text(encoding="utf-8").split("\n")
+    for n, (was, _) in _BAR_REWRITE.items():
+        assert lines[n - 1] == was, f"prototype line {n} is not what was rewritten"
     kept = []
     for n in range(8, 689):
         if 589 <= n <= 614 or 647 <= n <= 650 or 652 <= n <= 655:
@@ -316,9 +362,66 @@ def test_the_station_css_keeps_every_prototype_rule_when_the_prototype_is_here()
         line = lines[n - 1]
         if n == 675:
             line = line.replace(".proto,.lt-proto{display:none}", "")
+        if n in _BAR_REWRITE:
+            kept.extend(_BAR_REWRITE[n][1])
+            continue
         kept.append(line)
     assert assets.STATION_CSS.startswith("\n".join(kept) + "\n"), (
-        "the prototype's rules, verbatim and in order")
+        "the prototype's rules, verbatim and in order, but for the bar's")
+
+
+# The only lines of the prototype the stylesheet rewrites: the Results capsule
+# is shaped by the width of its own column (the lead's measured fix, review
+# 2026-09-29), not by the window's. Each prototype line -> what stands in its
+# place (none: deleted).
+_BAR_REWRITE = {
+    75: (".day{grid-area:day;justify-self:center;display:flex;align-items:center;"
+         "gap:12px;height:56px;padding:0 18px 0 11px;border-radius:14px;",
+         [".dayc{grid-area:day;min-width:0;container:day/inline-size;display:flex;"
+          "justify-content:center}",
+          ".day{display:flex;align-items:center;gap:12px;height:56px;"
+          "padding:0 18px 0 11px;border-radius:14px;"]),
+    659: ("   its ring and title, then its ring alone. Under 1000px the bar takes two",
+          ["   its ring and title, then its ring alone. Under 1040px the bar takes "
+           "two"]),
+    662: ("@media (max-width:1439px){.day .ttl{display:none}}", []),
+    663: ("@media (max-width:1400px){.day{gap:10px;padding:0 15px 0 10px}"
+          ".day .sep{margin:0 2px}.day .n small{font-size:9px;letter-spacing:.06em}}",
+          []),
+    664: ("@media (max-width:1360px){.who .nm{display:none}.who .me{padding:4px}}",
+          ["@media (max-width:1440px){.who .nm{display:none}.who .me{padding:4px}}"]),
+    667: ("@media (max-width:1240px){.day .ttl{display:flex}.day .sep,.day .n"
+          "{display:none}.day{padding:0 16px 0 9px}}", []),
+    668: ("@media (max-width:1120px){.day .ttl{display:none}.day{padding:0 9px}}",
+          []),
+    669: ("@media (max-width:1000px){.bar,.bar.tight{grid-template-columns:auto "
+          "minmax(0,1fr) auto;grid-template-areas:\"brand day who\" "
+          "\"takes takes takes\";row-gap:12px}",
+          ["@media (max-width:1040px){.bar,.bar.tight{grid-template-columns:auto "
+           "minmax(0,1fr) auto;grid-template-areas:\"brand day who\" "
+           "\"takes takes takes\";row-gap:12px}"]),
+    670: (" .who{justify-self:end;padding-left:0;border-left:0}.takes{width:100%}"
+          ".take{flex:1}.take .n{margin-left:auto;padding-left:6px}",
+          [" .who{justify-self:end;padding-left:0;border-left:0}.takes{width:100%}"
+           ".take{flex:1}.take .n{margin-left:auto;padding-left:6px}}"]),
+    671: (" .day .sep{display:block}.day .n{display:flex}"
+          ".day{padding:0 15px 0 10px}}", []),
+    672: ("@media (max-width:680px){.day .ttl{display:flex}.day .sep,.day .n"
+          "{display:none}.day{padding:0 16px 0 9px}}",
+          ["/* Results is shaped by the room its own column has, not by the "
+           "window: the",
+           "   names, the Takes and a scrollbar all take from it. Its widths "
+           "as drawn:",
+           "   full 381, no title 326, tight 286, title only 120, ring alone "
+           "58. */",
+           *_DAY_QUERIES]),
+    676: ("@media (max-width:560px){.day .ttl{display:none}.day{padding:0 9px}"
+          ".bar,.bar.tight{column-gap:14px}",
+          ["@media (max-width:560px){.day .ttl,.day .sep,.day .n{display:none}"
+           ".day{padding:0 9px}.bar,.bar.tight{column-gap:14px}"]),
+    682: ("@media (max-width:340px){.day{display:none}}",
+          ["@media (max-width:340px){.dayc{display:none}}"]),
+}
 
 
 # ------------------------------------------------------------ the vendor

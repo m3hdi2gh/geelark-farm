@@ -9,6 +9,7 @@ must not raise until something actually asks for a connection.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from importlib import resources as importlib_resources
@@ -185,6 +186,64 @@ def schema_sql() -> str:
         encoding="utf-8")
 
 
+#: How many times the schema is tried before a start gives up, and the
+#: longest one statement of it waits for a lock held by live traffic.
+SCHEMA_ATTEMPTS = 5
+SCHEMA_LOCK_TIMEOUT = "5s"
+#: Every process that applies the schema takes this lock first, so two
+#: containers starting together apply it one after the other.
+SCHEMA_LOCK_KEY = 4242042
+
+#: What this revision cannot run without: checked after the commit.
+_SCHEMA_PRESENT = (
+    "SELECT to_regclass('station_line') IS NOT NULL"
+    " AND EXISTS (SELECT 1 FROM information_schema.columns"
+    "             WHERE table_schema = current_schema()"
+    "               AND table_name = 'phones' AND column_name = 'taken_at')")
+
+
+class SchemaError(RuntimeError):
+    """The schema could not be brought to this version's shape."""
+
+
+def _retryable() -> tuple:
+    import psycopg
+
+    return (psycopg.errors.DeadlockDetected, psycopg.errors.LockNotAvailable,
+            psycopg.OperationalError)
+
+
+def _apply_once(settings: Settings) -> None:
+    """One attempt, in one transaction: all of the file or none of it."""
+    with connect(settings) as conn:
+        try:
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (SCHEMA_LOCK_KEY,))
+            conn.execute("SET LOCAL lock_timeout = '" + SCHEMA_LOCK_TIMEOUT + "'")
+            conn.execute(schema_sql())
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('schema_rev', %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (SCHEMA_REV,))
+            conn.commit()
+        except BaseException:
+            _roll_back(conn)
+            raise
+
+
+def _roll_back(conn) -> None:
+    try:
+        conn.rollback()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the schema attempt would not roll back (%s)", exc)
+
+
+def _schema_present(settings: Settings) -> bool:
+    with connect(settings) as conn:
+        row = conn.execute(_SCHEMA_PRESENT).fetchone()
+        conn.rollback()
+    return bool(row and row[0])
+
+
 def ensure_schema(settings: Settings) -> None:
     """Bring the cluster to this version's schema. Safe to run every start.
 
@@ -193,14 +252,31 @@ def ensure_schema(settings: Settings) -> None:
     half-applied schema from a killed process must converge on the next
     one rather than wedge it. The applied marker is written last, so its
     presence means the whole file ran.
+
+    The file is one transaction, so live traffic can make it lose: a
+    deadlock (Postgres picks the schema as the victim), a lock held longer
+    than SCHEMA_LOCK_TIMEOUT, a dropped connection. Each of those is tried
+    again, up to SCHEMA_ATTEMPTS times, and a schema that is still not
+    there after the commit raises - this code must never serve on the
+    previous revision's tables. Raises SchemaError when it gives up.
     """
-    with connect(settings) as conn:
-        conn.execute(schema_sql())
-        conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('schema_rev', %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            (SCHEMA_REV,))
-        conn.commit()
+    retryable = _retryable()
+    for attempt in range(1, SCHEMA_ATTEMPTS + 1):
+        try:
+            _apply_once(settings)
+            break
+        except retryable as exc:
+            if attempt >= SCHEMA_ATTEMPTS:
+                raise SchemaError(
+                    f"the store schema (rev {SCHEMA_REV}) did not apply after "
+                    f"{attempt} attempts: {exc}") from exc
+            log.warning("the store schema lost attempt %d of %d (%s: %s) - "
+                        "trying again", attempt, SCHEMA_ATTEMPTS,
+                        type(exc).__name__, exc)
+            time.sleep(1.0 + random.random())
+    if not _schema_present(settings):
+        raise SchemaError(f"the store schema (rev {SCHEMA_REV}) committed but "
+                          f"station_line or phones.taken_at is missing")
     log.info("store schema ensured (rev %s) on %s/%s",
              SCHEMA_REV, settings.store_host, settings.store_db)
 

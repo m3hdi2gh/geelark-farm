@@ -1844,12 +1844,21 @@ def power_off_phone(book, ledger, settings, payload, client):
     if client is None:
         return "failed", "no IranSpoty Cloud client on this pass", None
     why = str(payload.get("why") or "")
-    live = next((p for p in phones_mod.listing(client)
-                 if str(p.get("serialNo")) == serial), None)
-    if live is None:
-        return "failed", f"phone {serial} is not in the cloud's phone list", None
     station = _store_station()
     with phones_mod.power_lock(serial):
+        if why in ("given back", "alone") and _guarded(
+                settings, None, station.station_holder, serial) is not None:
+            # The give-back's own power-off, run after somebody took the
+            # phone from the shelf again: it is theirs now, and so is its
+            # power.
+            return ("done", f"phone {serial} was taken again - left on", None)
+        # Listed inside the lock: a Boot or a stop that held the lock a
+        # moment ago has changed what the cloud says.
+        live = next((p for p in phones_mod.listing(client)
+                     if str(p.get("serialNo")) == serial), None)
+        if live is None:
+            return ("failed", f"phone {serial} is not in the cloud's phone list",
+                    None)
         held = ledger.get(live["id"]) if ledger is not None else None
         if held is not None and held.is_claimed and not held.is_stale:
             return ("refused", f"phone {serial} is held by a run ({held.label})",
@@ -1865,10 +1874,18 @@ def power_off_phone(book, ledger, settings, payload, client):
             return "done", f"phone {serial} was already off", None
         try:
             phones_mod.stop(client, live["id"])
-        except (PhoneError, ApiError) as exc:
-            return "failed", f"phone {serial} would not stop: {exc}", None
+        except (PhoneError, ApiError, TransportError) as exc:
+            log.warning("phone %s would not stop: %s", serial, exc)
+            return ("failed", f"phone {serial} would not stop - it is tried "
+                              f"again", _code(exc))
         _guarded(settings, False, station.powered_off, serial)
     return "done", f"phone {serial} is off - it stops billing", {"off": True}
+
+
+def _code(exc) -> dict | None:
+    """The vendor's error code for a page that needs it, never its words."""
+    code = getattr(exc, "code", None)
+    return {"code": code} if code is not None else None
 
 
 def _grace(settings) -> int:
@@ -1934,13 +1951,6 @@ def change_proxy(book, ledger, settings, payload, client):
         return "refused", f"phone {serial} is being worked on right now", None
     if client is None:
         return "failed", "no IranSpoty Cloud client on this pass", None
-    live = next((p for p in phones_mod.listing(client)
-                 if str(p.get("serialNo")) == serial), None)
-    if live is None:
-        return "failed", f"phone {serial} is not in the cloud's phone list", None
-    held = ledger.get(live["id"]) if ledger is not None else None
-    if held is not None and held.is_claimed and not held.is_stale:
-        return "refused", f"phone {serial} is held by a run ({held.label})", None
     lane = purposes.phone_lane(row.get("Purpose"))
     was = (row.get("Proxy") or "").strip()
     store_station = _store_station()
@@ -1954,6 +1964,17 @@ def change_proxy(book, ledger, settings, payload, client):
             refused = _refused_by_holder(settings, serial, uid)
             if refused:
                 return "refused", refused, None
+        # Listed inside the lock: whether the phone is on is read after
+        # any other power press on it has finished.
+        live = next((p for p in phones_mod.listing(client)
+                     if str(p.get("serialNo")) == serial), None)
+        if live is None:
+            return ("failed", f"phone {serial} is not in the cloud's phone list",
+                    None)
+        held = ledger.get(live["id"]) if ledger is not None else None
+        if held is not None and held.is_claimed and not held.is_stale:
+            return ("refused", f"phone {serial} is held by a run ({held.label})",
+                    None)
         was_on = live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING)
         # Off stays off as the operator saw it: a card whose tab just
         # closed reads Ready while the cloud still runs the phone, and a
@@ -1961,13 +1982,23 @@ def change_proxy(book, ledger, settings, payload, client):
         boot = bool(payload.get("boot")) or (
             bool(payload.get("keep_power")) and was_on
             and payload.get("was_on_page") == "on")
+        kept = was or "its IP"
         try:
             fresh = kit_exits._fresh_proxy(client, book, settings=settings,
                                            purpose=lane)
         except Aborted:
             word = "" if lane == purposes.OTHER else purposes.WORDS[lane] + " "
-            kept = was or "its IP"
             return ("failed", f"there is no free {word}IP left - phone "
+                              f"{serial} kept {kept}",
+                    {"off": not was_on, **marked} if (boot or station)
+                    else None)
+        except (PhoneError, ApiError, TransportError) as exc:
+            # The check of the new exit did not come back (the cloud's
+            # hangs): `_fresh_proxy` put the exit it claimed back, and
+            # nothing on the phone was touched.
+            log.warning("phone %s kept its exit: the new one was not checked "
+                        "(%s)", serial, exc)
+            return ("failed", f"the IP could not be changed right now - phone "
                               f"{serial} kept {kept}",
                     {"off": not was_on, **marked} if (boot or station)
                     else None)
@@ -1977,22 +2008,26 @@ def change_proxy(book, ledger, settings, payload, client):
         try:
             if not off:
                 phones_mod.stop(client, live["id"])
-                phones_mod.wait_until_stopped(client, live["id"])
+                # Asked to stop is as good as off for what the store says:
+                # a wait that does not come back must not leave it On.
                 off = True
+                phones_mod.wait_until_stopped(client, live["id"])
             phones_mod.set_proxy(client, live["id"], fresh.proxy)
-        except (PhoneError, ApiError) as exc:
+        except (PhoneError, ApiError, TransportError) as exc:
             log.warning("phone %s kept its exit: %s", serial, exc)
+            code = getattr(exc, "code", None)
             book.proxies.release(fresh, note=(
-                f"Phone {serial} would not take it on {_stamp()}: "
-                f"{str(exc)[:120]}"))
+                f"Phone {serial} would not take it on {_stamp()}"
+                + (f" (code {code})." if code is not None else ".")))
             if off and was_on:
                 _guarded(settings, False, store_station.powered_off, serial)
+            said = f"the new IP was refused - phone {serial} kept {kept}"
             if station:
-                return ("failed", f"IranSpoty Cloud refused the new IP: "
-                                  f"{str(exc)[:160]}", {"off": off, **marked})
-            return ("failed", f"IranSpoty Cloud refused the change: "
-                              f"{str(exc)[:160]}",
-                    {"off": off} if boot else None)
+                return ("failed", said,
+                        {"off": off, **marked, **(_code(exc) or {})})
+            return ("failed", said,
+                    dict({"off": off}, **(_code(exc) or {})) if boot
+                    else _code(exc))
         old = book.proxies.find_by_name(was)
         if old is not None and old is not fresh:
             if _exit_still_shared(settings, was, serial):
@@ -2031,10 +2066,13 @@ def change_proxy(book, ledger, settings, payload, client):
                               f"Cloud has no machine free to start it - press "
                               f"Boot again in a minute",
                     dict(moved, off=True, **marked))
-        except (PhoneError, ApiError) as exc:
+        except (PhoneError, ApiError, TransportError) as exc:
+            log.warning("phone %s would not start on its new IP: %s", serial,
+                        exc)
             _guarded(settings, False, store_station.powered_off, serial)
             return ("failed", f"phone {serial} is on {name} now but would not "
-                              f"start: {exc}", dict(moved, off=True, **marked))
+                              f"start - press Boot again in a minute",
+                    dict(moved, off=True, **marked, **(_code(exc) or {})))
         if station:
             if not _guarded(settings, True, store_station.booted, serial,
                             url or "", owner_id=uid, started=True):
@@ -2169,13 +2207,6 @@ def boot_phone(book, ledger, settings, payload, client):
         return "refused", f"phone {serial} is being worked on right now", None
     if client is None:
         return "failed", "no IranSpoty Cloud client on this pass", None
-    live = next((p for p in phones_mod.listing(client)
-                 if str(p.get("serialNo")) == serial), None)
-    if live is None:
-        return "failed", f"phone {serial} is not in the cloud's phone list", None
-    held = ledger.get(live["id"]) if ledger is not None else None
-    if held is not None and held.is_claimed and not held.is_stale:
-        return "refused", f"phone {serial} is held by a run ({held.label})", None
     station = bool(payload.get("station"))
     uid = _uid(payload)
     store_station = _store_station()
@@ -2191,6 +2222,18 @@ def boot_phone(book, ledger, settings, payload, client):
             refused = _refused_by_holder(settings, serial, uid)
             if refused:
                 return "refused", refused, None
+        # Listed inside the lock: a stop that held the lock a moment ago
+        # has changed what the cloud says, and a phone read on from before
+        # it would be handed back with a dead link and never started.
+        live = next((p for p in phones_mod.listing(client)
+                     if str(p.get("serialNo")) == serial), None)
+        if live is None:
+            return ("failed", f"phone {serial} is not in the cloud's phone list",
+                    None)
+        held = ledger.get(live["id"]) if ledger is not None else None
+        if held is not None and held.is_claimed and not held.is_stale:
+            return ("refused", f"phone {serial} is held by a run ({held.label})",
+                    None)
         was_on = live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING)
         url = (_guarded(settings, "", store_station.stored_link, serial)
                if was_on else "")
@@ -2205,8 +2248,15 @@ def boot_phone(book, ledger, settings, payload, client):
                 return ("failed", f"IranSpoty Cloud has no machine free for "
                                   f"{serial} right now - press Boot again in a "
                                   f"minute", None)
+            except TransportError as exc:
+                log.warning("phone %s: the start did not come back (%s)",
+                            serial, exc)
+                return ("failed", f"phone {serial} did not answer - press Boot "
+                                  f"again in a minute", None)
             except (PhoneError, ApiError) as exc:
-                return "failed", f"phone {serial} would not start: {exc}", None
+                log.warning("phone %s would not start: %s", serial, exc)
+                return ("failed", f"phone {serial} would not start - press Boot "
+                                  f"again in a minute", _code(exc))
         if station:
             if not _guarded(settings, True, store_station.booted, serial,
                             url or "", owner_id=uid, started=started):
@@ -2432,6 +2482,9 @@ def give_back(book, ledger, settings, payload, client):
     if not _store_on(settings):
         return "failed", "no store to give it back to", None
     store_station = _store_station()
+    # A power press a restart orphaned (older than the Station's three
+    # minutes) is closed first, so it never runs after the phone is back.
+    _guarded(settings, 0, store_station.expire_power, serial)
     # Not guarded: a store that will not answer leaves the row queued.
     row = store_station.give_back(settings, serial=serial,
                                   owner_id=_uid(payload), by=_by(payload))
@@ -2446,6 +2499,14 @@ def give_back(book, ledger, settings, payload, client):
         if st.get("busy") == "boot_phone":
             return "refused", f"phone {serial} is booting - wait for it", None
         return "refused", f"phone {serial} is not yours any more", None
+    if row.get("off_id") is None and _guarded(
+            settings, {}, store_station.power_pending_of, serial,
+            ("power_off_phone",)) is None:
+        # The statement queues its power-off with the give-back; a phone
+        # back on the shelf with no power-off behind it bills until the
+        # legacy hour catches it.
+        log.error("phone %s was given back but no power-off was queued",
+                  serial)
     return ("done", f"Phone {serial} is back on "
                     f"{store_station.home(row['lane'])}.",
             {"serial": serial, "lane": row["lane"], "off": row.get("off_id")})
@@ -2474,33 +2535,52 @@ def call_off_build(book, ledger, settings, payload, client):
         return "refused", "That build has already ended.", None
     if stage == "landed":
         return "refused", "That build has already landed on your station.", None
-    if stage == "already":
-        return ("done", "The build is already being called off.",
-                {"wanted_id": wid, "stage": "already"})
     if stage in ("queued", "job_cancelled"):
         _archive_one_off(book, settings, str(w.get("proxy_name") or ""), wid)
         return ("done", "The build was called off.",
                 {"wanted_id": wid, "stage": stage})
     serial = str(w.get("serial") or "")
     if serial:
-        st = _store_station().hold_state(settings, serial)
-        if st is None or st.get("status") != "building":
+        # Also on a second press ('already'): the first one wrote the
+        # call-off and may have stumbled before its stop was asked, and
+        # past its phone a build hears only the stop.
+        stopped = _stop_the_build(settings, serial)
+        if stopped == "landed" and stage != "already":
             return ("refused", "That build has already landed on your station.",
                     None)
-        # Asked only of a phone still building: a stop request lives for
-        # two hours and would end the next job on a landed phone.
-        from .store import stops as store_stops
-
-        try:
-            store_stops.ask(settings, serial)
-        except Exception as exc:                                  # noqa: BLE001
-            return ("failed", f"the stop for phone {serial} could not be "
-                              f"written where the builders read it ({exc})",
-                    None)
+        if stopped not in ("asked", "landed"):
+            return "failed", stopped, None
+    if stage == "already":
+        return ("done", "The build is already being called off.",
+                {"wanted_id": wid, "stage": "already"})
     return ("done", "The build was called off. It stops at its next step; its "
                     "Gmail and IP go back to the pool unless the Gmail is "
                     "already signed in - then the phone is kept and lands on "
                     "your station.", {"wanted_id": wid, "stage": "running"})
+
+
+def _stop_the_build(settings, serial: str) -> str:
+    """Ask the build on `serial` to stop, only while its phone is still
+    building: a stop request lives for two hours and would end the next
+    job on a landed phone. 'asked', 'landed', or the sentence of what
+    could not be reached. Asking twice is harmless."""
+    from .store import stops as store_stops
+
+    try:
+        st = _store_station().hold_state(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("call-off of phone %s: the phone was not read (%s)",
+                    serial, exc)
+        return "could not reach the builders - press Call off again"
+    if st is None or st.get("status") != "building":
+        return "landed"
+    try:
+        store_stops.ask(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("call-off of phone %s: the stop was not written (%s)",
+                    serial, exc)
+        return "could not reach the builders - press Call off again"
+    return "asked"
 
 
 def _archive_one_off(book, settings, name: str, wanted_id: int) -> None:

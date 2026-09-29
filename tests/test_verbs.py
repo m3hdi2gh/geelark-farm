@@ -742,7 +742,9 @@ def test_boot_says_so_when_geelark_will_not_start_the_phone(monkeypatch):
     status, said, detail = verbs.boot_phone(
         book, None, None, {"serial": "1500", "by": "mehdi"}, object())
 
-    assert status == "failed" and "no capacity" in said
+    # In fixed words: the cloud's own message stays in the log.
+    assert (status, said) == ("failed", "phone 1500 would not start - press "
+                                        "Boot again in a minute")
     assert detail is None
     row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
     assert row["State"] != "taken", "a phone that never started is not taken"
@@ -824,7 +826,8 @@ def test_change_proxy_gives_the_exit_back_when_geelark_refuses(monkeypatch):
     status, said, _ = verbs.change_proxy(
         book, None, None, {"serial": "1500", "by": "alireza"}, object())
 
-    assert status == "failed" and "45004" in said
+    assert (status, said) == ("failed", "the new IP was refused - phone 1500 "
+                                        "kept SX1")
     assert book.proxies.status_of(sx2) == "free", "given back"
     assert book.proxies.status_of(sx1) == "on a phone", "kept"
     row = next(r for r in book.phones.rows() if r["Serial"] == "1500")
@@ -1803,7 +1806,8 @@ def test_change_proxy_from_the_live_tab_starts_the_phone_again(monkeypatch):
     status, said, detail = verbs.change_proxy(
         book, None, None, {"serial": "1500", "by": "sara", "boot": True},
         object())
-    assert status == "failed" and "45004" in said
+    assert (status, said) == ("failed", "the new IP was refused - phone 1500 "
+                                        "kept SX1")
     assert detail == {"off": True}
     assert book.proxies.status_of(sx2) == "free", "given back"
 

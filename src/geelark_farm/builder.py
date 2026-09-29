@@ -1816,19 +1816,27 @@ def _land_on_station(settings: Settings, serial: str, wanted_id: int) -> None:
         log.warning("phone %s did not land on the station (%s)", serial, exc)
 
 
-def _reserve_for_finish(settings: Settings, phones_: list[dict]) -> list[dict]:
+def _reserve_for_finish(settings: Settings, phones_: list[dict],
+                        limit: int | None = None) -> list[dict]:
     """The warm phones a finish may pair an account with, each reserved
     first (store.station.reserve_warm), so a Take and a pairing never
     both have one. A phone somebody took meanwhile is left out; the
     status each had rides with the job as `status_before`, for
     `finish_one` to put back. With the store off, or when it cannot
-    answer, every phone goes as before."""
+    answer, every phone goes as before.
+
+    `limit` stops at that many reserved, walking on past the ones left
+    out, so a phone taken meanwhile is replaced by the next one waiting."""
+    if limit is not None and limit <= 0:
+        return []
     if not getattr(settings, "store_enabled", False):
-        return list(phones_)
+        return list(phones_ if limit is None else phones_[:limit])
     from .store import station as store_station
 
     kept: list[dict] = []
     for phone in phones_:
+        if limit is not None and len(kept) >= limit:
+            break
         serial = str(phone.get("serial") or "")
         try:
             before = store_station.reserve_warm(settings, serial)
@@ -2768,7 +2776,11 @@ def run(client: Client, settings: Settings, *, count: int,
         log.info("%d phone(s) need only an app account; finishing those first",
                  len(to_finish))
 
-    to_finish = _reserve_for_finish(settings, to_finish)
+    # Reserved from every waiting phone, up to the finishes decided: one
+    # taken meanwhile is replaced by the next one waiting, and when none
+    # is left the finish it would have been is built instead.
+    to_finish = _reserve_for_finish(settings, waiting, limit=len(to_finish))
+    to_build = count - len(to_finish)
     jobs = ([{"kind": "finish", "phone": p} for p in to_finish]
             + [{"kind": "build", "phone": None, "want": w}
                for w in (wanted or [])]

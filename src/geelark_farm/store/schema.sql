@@ -1007,8 +1007,10 @@ ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT
 -- are read by (by_id, at). A person has a display name and knows when their
 -- password last changed. A wish from the Station is marked, can be called
 -- off, and may carry an app account for an Other phone that no flow signs in.
--- One pending power press per phone: Boot, Change IP and Power off never
--- run two at once on one serial.
+-- One pending Boot or Change IP per phone: never two at once on one serial.
+-- A power-off is not in that rule: a give-back, the hour and a closed tab
+-- always queue theirs, and a Boot still pending after a give-back is
+-- refused by its own holder check when it runs.
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS taken_at timestamptz;
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS live_url text NOT NULL DEFAULT '';
 ALTER TABLE phones ADD COLUMN IF NOT EXISTS last_owner_id bigint REFERENCES users(id);
@@ -1065,19 +1067,39 @@ CREATE INDEX IF NOT EXISTS jobs_wish
     ON jobs ((payload->'want'->>'wanted_id')) WHERE kind = 'build';
 CREATE INDEX IF NOT EXISTS actions_phone_power
     ON actions ((payload->>'serial'), id) WHERE verb IN ('boot_phone', 'change_proxy');
--- Before the unique index: a second pending power press on one phone (an
--- orphan a restart left `running`) would make the index refuse to build
--- and roll the whole schema back. The oldest one stays.
+-- The first draft of the index also held power_off_phone, and a give-back
+-- whose power-off met a pending press lost it; a database that has that
+-- draft gets it rebuilt without it.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND indexname = 'actions_one_power_press'
+                  AND indexdef LIKE '%power_off_phone%') THEN
+        DROP INDEX actions_one_power_press;
+    END IF;
+END $$;
+-- Before the unique index: a second pending Boot or Change IP on one phone
+-- (an orphan a restart left `running`) would make the index refuse to
+-- build and roll the whole schema back. The fresh one stays - the newest
+-- when both are fresh or both are orphans - and the others are closed.
 UPDATE actions SET status = 'failed', finished_at = now(),
        result = 'closed by rev 42: a second pending power press on one phone'
  WHERE id IN (SELECT id FROM (
-         SELECT id, row_number() OVER (PARTITION BY payload->>'serial'
-                                       ORDER BY id) AS n
+         SELECT id, row_number() OVER (
+                    PARTITION BY payload->>'serial'
+                    ORDER BY (coalesce(executed_at, requested_at)
+                              > now() - interval '180 seconds') DESC,
+                             id DESC) AS n
            FROM actions
-          WHERE status IN ('queued', 'running')
-            AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone')) t
+          WHERE status IN ('queued', 'running') AND payload ? 'serial'
+            AND verb IN ('boot_phone', 'change_proxy')) t
         WHERE t.n > 1);
 CREATE UNIQUE INDEX IF NOT EXISTS actions_one_power_press
     ON actions ((payload->>'serial'))
  WHERE status IN ('queued', 'running')
-   AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone');
+   AND verb IN ('boot_phone', 'change_proxy');
+-- A person's own build presses and give-backs, read on every Station poll
+-- (the scrub of settled builds and the notes).
+CREATE INDEX IF NOT EXISTS actions_mine
+    ON actions (requested_by, verb, id) WHERE verb IN ('build_by_hand', 'give_back');

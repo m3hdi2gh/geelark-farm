@@ -6,7 +6,9 @@
 // must drive, is shimmed here and only here: `document.activeElement`,
 // timers on a clock the test moves, `Date.now`, `fetch`, `EventSource`,
 // `window.open`, `navigator.clipboard` and `sendBeacon`, `Element.animate`
-// and the layout calls (`getBoundingClientRect`, `scrollIntoView`).
+// and the layout calls (`getBoundingClientRect`, `scrollIntoView`). A fetch
+// honours its AbortSignal, as a browser's does, and a disabled button takes
+// no focus.
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, join} from 'node:path';
@@ -43,8 +45,17 @@ export function documentFor(page, state, {rev = 'test'} = {}) {
   return tpl.replace(/\{\{([A-Z]+)\}\}/g, (_, k) => values[k]);
 }
 
-/** Answers a fake fetch hands back, from `{status, body, headers}`. */
-function reply({status = 200, body = '', headers = {}, type = 'basic'}) {
+/** An abort, named as a browser names it. */
+function aborted() {
+  const e = new Error('The operation was aborted.');
+  e.name = 'AbortError';
+  return e;
+}
+
+/** Answers a fake fetch hands back, from `{status, body, headers}`. With
+ * `hang`, the headers come and the body never does, until the fetch's
+ * signal gives up on it. */
+function reply({status = 200, body = '', headers = {}, type = 'basic', hang = false}, signal = null) {
   const text = typeof body === 'string' ? body : JSON.stringify(body);
   const h = Object.assign(
     typeof body === 'string' ? {} : {'Content-Type': 'application/json; charset=utf-8'},
@@ -56,7 +67,9 @@ function reply({status = 200, body = '', headers = {}, type = 'basic'}) {
       return null;
     }},
     text: () => Promise.resolve(text),
-    json: () => Promise.resolve().then(() => JSON.parse(text)),
+    json: () => (hang ? new Promise((resolve, reject) => {
+      if (signal) signal.addEventListener('abort', () => reject(aborted()));
+    }) : Promise.resolve().then(() => JSON.parse(text))),
   };
 }
 
@@ -88,7 +101,7 @@ export function pageIn(page, state, opts = {}) {
   // --- focus, which linkedom does not track.
   let focused = null;
   Object.defineProperty(doc, 'activeElement', {configurable: true, get: () => focused});
-  window.HTMLElement.prototype.focus = function () { focused = this; };
+  window.HTMLElement.prototype.focus = function () { if (!this.disabled) focused = this; };
   window.HTMLElement.prototype.blur = function () { if (focused === this) focused = null; };
   const scrolled = [];
   window.HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this); };
@@ -110,10 +123,19 @@ export function pageIn(page, state, opts = {}) {
     const call = {url: String(url), init, body, headers: init.headers || {}};
     fetches.push(call);
     const answer = opts.answer ? opts.answer(call) : null;
-    if (answer instanceof Error) return Promise.reject(answer);
-    if (!answer) return Promise.resolve(reply({status: 204, body: ''}));
-    if (answer.after) return answer.after.then(() => (answer.error ? Promise.reject(answer.error) : reply(answer)));
-    return Promise.resolve(reply(answer));
+    let got;
+    if (answer instanceof Error) got = Promise.reject(answer);
+    else if (!answer) got = Promise.resolve(reply({status: 204, body: ''}));
+    else if (answer.after) got = answer.after.then(() => (answer.error ? Promise.reject(answer.error) : reply(answer, init.signal)));
+    else got = Promise.resolve(reply(answer, init.signal));
+    const signal = init.signal;
+    if (!signal) return got;
+    return new Promise((resolve, reject) => {
+      const abort = () => { call.aborted = true; reject(aborted()); };
+      if (signal.aborted) { abort(); return; }
+      signal.addEventListener('abort', abort);
+      got.then(resolve, reject);
+    });
   }
   const streams = [];
   function FakeEventSource(url) {
@@ -147,7 +169,8 @@ export function pageIn(page, state, opts = {}) {
     console,
     setTimeout: (fn, ms) => addTimer(fn, ms, 0), clearTimeout: clearTimer,
     setInterval: (fn, ms) => addTimer(fn, ms, ms || 1), clearInterval: clearTimer,
-    fetch: fakeFetch, URLSearchParams, URL, EventSource: opts.noStream ? undefined : FakeEventSource,
+    fetch: fakeFetch, AbortController: opts.noAbort ? undefined : AbortController,
+    URLSearchParams, URL, EventSource: opts.noStream ? undefined : FakeEventSource,
     Event: window.Event, matchMedia: (q) => ({matches: !!(opts.media && opts.media[q]), addEventListener() {}}),
     crypto: opts.noSubtle ? {getRandomValues: (b) => webcrypto.getRandomValues(b)} : webcrypto,
     getSelection: () => ({removeAllRanges() {}, addRange(r) { selections.push(r); }}),
@@ -160,6 +183,7 @@ export function pageIn(page, state, opts = {}) {
       opened.push({url, name});
       const w = windows[name] || (windows[name] = {name,
         location: {href: 'about:blank', pathname: 'blank', hash: ''}, focused: 0,
+        document: {body: {getAttribute: () => null}},
         focus() { this.focused++; }});
       return w;
     },

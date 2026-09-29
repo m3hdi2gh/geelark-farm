@@ -327,9 +327,29 @@ test('a Change IP override ends for good once the server moves on', async () => 
   assert.equal(p.$('#p-5073 [data-k="st"]').textContent, 'Ready', 'not Changing IP again');
   assert.equal(p.$('#p-5073 [data-k="exit"]').textContent, 'PC8');
   assert.ok(p.$('#p-5073 [data-k="ip"]').classList.contains('new'), 'the chip lights');
-  assert.equal(toast(p), '5073 moved from PC2 to PC8. It stays ready to boot.');
+  assert.equal(toast(p), '5073 moved from PC2 to PC8.', 'the card\'s own sentence (prototype 1190)');
   await pullNow(p);
   assert.equal(p.$('#p-5073 [data-k="st"]').textContent, 'Ready');
+});
+
+test('Change IP on an On card says the prototype\'s card sentences, start and end', async () => {
+  let pulled = state();
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/phones/5061/proxy' ? ok({said: 'queued', req: 901, pending: true, state: state()})
+    : c.url === '/station/state' ? {status: 200, body: pulled} : null});
+  await settle();
+  primeStream(p);
+  click(p.$('#p-5061 [data-a="ip"]'));
+  assert.equal(toast(p), 'Changing the IP of 5061. Its screen comes back by itself.');
+  await settle();
+  assert.equal(posts(p, '/phones/5061/proxy')[0].body.was, 'on');
+  // It came back off: the card still ends in its one sentence, in its lane's colour.
+  pulled = state({phones: [state().phones[0], phone('5061', {lane: 'spotify', exit: 'PC9',
+    last: {id: 901, verb: 'change_proxy', ok: true, note: '', was: 'PC2', now: 'PC9', started: false}})]});
+  await pullNow(p);
+  assert.equal(toast(p), '5061 moved from PC2 to PC9.');
+  assert.equal(p.$('#said').classList.contains('no'), false);
+  assert.equal(p.$('#said').style.getPropertyValue('--tc'), 'var(--spot)');
 });
 
 // ------------------------------------------------------------ boot
@@ -611,7 +631,7 @@ test('the build dialog refuses in the prototype\'s words and posts the mapped fi
   assert.equal(p.$('#scrim').hidden, false);
   assert.equal(p.$('main').hasAttribute('inert'), true);
   click(p.$('.dlg [data-pick="spotify"]'));
-  assert.equal(p.$('[data-dlg="eta"]').textContent, 'about 7 minutes');
+  assert.equal(p.$('[data-dlg="eta"]').textContent, 'about 7 min', 'the footer\'s words (prototype 762)');
   click(p.$('[data-row="acct"] [data-m="manual"]'));
   const acct = p.$('#f-acct');
   acct.value = 'x@y.com:pw1';
@@ -822,14 +842,18 @@ test('pagehide sends the closing beacon', async () => {
   assert.equal(await p.beacons[0].body.text(), 'csrf=tok&station=1');
 });
 
+/** A tab holding a page of the farm: `data-page` on its body. */
+const tabOf = (path, page) => ({location: {href: 'https://farm.test' + path, pathname: path, hash: ''},
+  document: {body: {getAttribute: (k) => (k === 'data-page' ? page : null)}},
+  focused: 0, focus() { this.focused++; }});
+
 test('Back to station opens gf-station, sets only its hash when it is open, and never leaves', async () => {
   const p = pageIn('live', liveState());
   await settle();
   click(p.$('[data-lt-a="station"]'));
   assert.deepEqual(p.opened.map((o) => o.name), ['gf-station']);
   assert.equal(p.windows['gf-station'].location.href, '/station#p-5073', 'no Station was open: one opens');
-  const open = {location: {href: 'https://farm.test/station', pathname: '/station', hash: ''},
-    focused: 0, focus() { this.focused++; }};
+  const open = tabOf('/station', 'station');
   const q = pageIn('live', liveState(), {windows: {'gf-station': open}});
   await settle();
   click(q.$('[data-lt-a="station"]'));
@@ -837,11 +861,48 @@ test('Back to station opens gf-station, sets only its hash when it is open, and 
   assert.equal(open.location.href, 'https://farm.test/station', 'a fragment move, no reload');
   assert.equal(open.focused, 1);
   assert.deepEqual(q.went, [], 'the Live tab stays where it is');
-  const root = {location: {href: 'https://farm.test/', pathname: '/', hash: ''}, focus() {}};
+  const root = tabOf('/', 'station');
   const r = pageIn('live', liveState(), {windows: {'gf-station': root}});
   await settle();
   click(r.$('[data-lt-a="station"]'));
   assert.equal(root.location.hash, 'p-5073', 'an operator\'s Station at / is found too');
+  assert.equal(root.location.href, 'https://farm.test/');
+});
+
+test('Back to station from a gf-station tab gone back to the dashboard opens the Station there', async () => {
+  const dash = tabOf('/', 'dash');
+  const p = pageIn('live', liveState(), {windows: {'gf-station': dash}});
+  await settle();
+  click(p.$('[data-lt-a="station"]'));
+  assert.equal(dash.location.href, '/station#p-5073', 'the dashboard at / is not the Station');
+  assert.equal(dash.location.hash, '');
+  assert.equal(dash.focused, 1);
+});
+
+/** A tab gone to another site: only its address can be set. */
+function foreignTab() {
+  const w = {set: [], focused: 0, focus() { this.focused++; }};
+  const deny = () => { throw new Error('SecurityError: cross-origin'); };
+  w.location = {get href() { return deny(); }, set href(u) { w.set.push(u); },
+    get pathname() { return deny(); }, get hash() { return deny(); }, set hash(u) { w.set.push('#' + u); }};
+  Object.defineProperty(w, 'document', {get: deny});
+  return w;
+}
+
+test('a named tab gone to another site is sent home, never thrown on', async () => {
+  const st = foreignTab();
+  const p = pageIn('live', liveState(), {windows: {'gf-station': st}});
+  await settle();
+  click(p.$('[data-lt-a="station"]'));
+  assert.deepEqual(st.set, ['/station#p-5073']);
+  assert.equal(st.focused, 1);
+  const lt = foreignTab();
+  const q = pageIn('station', state(), {windows: {'gf-live-5061': lt}});
+  await settle();
+  const ev = fire(q.$('#p-5061 form.boot'), 'submit');
+  assert.equal(ev.defaultPrevented, true);
+  assert.deepEqual(lt.set, ['/station/phones/5061'], 'Boot on an On card still brings its tab');
+  assert.equal(lt.focused, 1);
 });
 
 test('Change IP that ends off shows Boot again', async () => {
@@ -974,4 +1035,301 @@ test('a tab that opens on a phone no longer theirs shows nothing of it', async (
   assert.equal(sideState(p), 'released');
   assert.equal(p.$$('.lt-side .step').length, 0);
   assert.equal(posts(p, WATCH).length, 0, 'no beat for a phone that is gone');
+});
+
+// ================================================ review round (2026-09-29)
+test('a signed-out beat alone is a blip: asked again, and only two in a row release', async () => {
+  let n = 0;
+  const p = pageIn('live', liveState(), {answer: (c) => {
+    if (c.url !== WATCH) return null;
+    n++;
+    return n === 1 ? {status: 401, body: {ok: false, said: 'signed-out', note: 'You are signed out.', go: '/login'}}
+      : {status: 200, body: 'watching'};
+  }});
+  await settle();
+  assert.equal(posts(p, WATCH).length, 1);
+  await p.advance(3100);
+  assert.equal(posts(p, WATCH).length, 2, 'asked again three seconds on');
+  assert.equal(sideState(p), 'off', 'one 401 does not release the tab');
+  await p.advance(40000);
+  assert.equal(sideState(p), 'off');
+  assert.deepEqual(p.went, [], 'a beat never follows go');
+  // Two in a row mean it.
+  const q = pageIn('live', liveState(), {answer: (c) => c.url === WATCH
+    ? {status: 403, body: {ok: false, said: 'stale', note: 'Your session changed - reload the page.', go: null}} : null});
+  await settle();
+  assert.equal(sideState(q), 'off');
+  await q.advance(3100);
+  assert.equal(sideState(q), 'released');
+  assert.equal(q.$('[data-lt="note"]').textContent, 'signed out – sign in again in the station');
+});
+
+test('a beat or a poll that never answers is given up on, and never releases the tab', async () => {
+  const p = pageIn('live', liveState(), {answer: (c) =>
+    c.url === WATCH || c.url === LIVE_STATE ? {after: new Promise(() => {}), status: 200, body: 'x'} : null});
+  await settle();
+  await p.advance(21000);
+  assert.ok(p.fetches.filter((f) => f.url === WATCH).some((f) => f.aborted), 'the hung beat was aborted');
+  await p.advance(60000);
+  assert.equal(sideState(p), 'off');
+  assert.ok(posts(p, WATCH).length >= 5, 'it keeps beating');
+  assert.ok(gets(p, LIVE_STATE).length >= 2, 'and polling');
+});
+
+test('a signed-out poll alone is a blip too', async () => {
+  let n = 0;
+  const p = pageIn('live', liveState(), {answer: (c) => {
+    if (c.url === LIVE_STATE){ n++; return n === 1 ? {status: 401, body: {ok: false, said: 'signed-out', go: '/login'}}
+      : {status: 200, body: liveState()}; }
+    return c.url === WATCH ? {status: 200, body: 'watching'} : null;
+  }});
+  await settle();
+  await p.advance(15100);
+  assert.equal(gets(p, LIVE_STATE).length, 1);
+  assert.equal(sideState(p), 'off');
+  await p.advance(3100);
+  assert.equal(gets(p, LIVE_STATE).length, 2, 'polled again three seconds on');
+  assert.equal(sideState(p), 'off');
+  assert.deepEqual(p.went, []);
+});
+
+test('a Station pull answered 401 once stays; a second one goes to /login', async () => {
+  let n = 0;
+  const out = {status: 401, body: {ok: false, said: 'signed-out', note: 'You are signed out.', go: '/login'}};
+  const p = pageIn('station', state(), {answer: (c) => {
+    if (c.url !== '/station/state') return null;
+    n++;
+    return n === 1 ? out : {status: 200, body: state()};
+  }});
+  await settle();
+  primeStream(p);
+  await p.advance(100);
+  assert.equal(gets(p, '/station/state').length, 1);
+  assert.deepEqual(p.went, [], 'one 401 pull is not followed');
+  await p.advance(2100);
+  assert.equal(gets(p, '/station/state').length, 2, 'asked again');
+  assert.deepEqual(p.went, []);
+  const q = pageIn('station', state(), {answer: (c) => c.url === '/station/state' ? out : null});
+  await settle();
+  primeStream(q);
+  await q.advance(4200);
+  assert.deepEqual(q.went, ['/login'], 'two in a row are followed');
+  // A store that is down is never a sign-out.
+  const r = pageIn('station', state(), {answer: (c) => c.url === '/station/state'
+    ? {status: 503, body: {ok: false, said: 'down', note: 'The store is not answering.'}} : null});
+  await settle();
+  primeStream(r);
+  await pullNow(r); await pullNow(r); await pullNow(r);
+  assert.deepEqual(r.went, []);
+  assert.ok(r.$('#p-5073'), 'the station stays drawn');
+});
+
+test('a press whose answer never comes is given up on, and the pulls come back', async () => {
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/station/phones/5073/back' ? {after: new Promise(() => {}), status: 200, body: {}}
+    : c.url === '/station/state' ? {status: 200, body: state()} : null});
+  await settle();
+  primeStream(p);
+  click(p.$('#p-5073 [data-a="back"]'));
+  await p.advance(2100);
+  const before = gets(p, '/station/state').length;
+  await p.advance(20000);
+  assert.equal(posts(p, '/station/phones/5073/back').length, 2, 'tried once more after the first timed out');
+  const sent = posts(p, '/station/phones/5073/back');
+  assert.equal(sent[0].body.press, sent[1].body.press, 'with the same press');
+  await p.advance(22000);
+  assert.equal(toast(p), 'The farm did not answer - press it again.');
+  assert.ok(p.$('#said').classList.contains('no'));
+  await pullNow(p);
+  assert.ok(gets(p, '/station/state').length > before, 'the page hears the farm again');
+  assert.ok(p.$('#p-5073'), 'and the card the farm still lists is back');
+});
+
+test('a press whose body never finishes is a farm that did not answer, never a break', async () => {
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/station/phones/5073/back' ? {status: 200, body: {ok: true}, hang: true}
+    : c.url === '/station/state' ? {status: 200, body: state()} : null});
+  await settle();
+  click(p.$('#p-5073 [data-a="back"]'));
+  await p.advance(20100);
+  assert.equal(posts(p, '/station/phones/5073/back').length, 1);
+  await p.advance(1600);
+  const sent = posts(p, '/station/phones/5073/back');
+  assert.equal(sent.length, 2, 'tried once more, as a lost answer is');
+  assert.equal(sent[0].body.press, sent[1].body.press, 'with the same press');
+  await p.advance(21000);
+  assert.equal(toast(p), 'The farm did not answer - press it again.');
+  assert.equal(posts(p, '/clienterror').length, 0, 'nothing broke, so nothing is reported');
+});
+
+test('a pull answered 304 is still signed in: a later lone 401 is a blip again', async () => {
+  let n = 0;
+  const out = {status: 401, body: {ok: false, said: 'signed-out', note: 'You are signed out.', go: '/login'}};
+  const p = pageIn('station', state(), {answer: (c) => {
+    if (c.url !== '/station/state') return null;
+    n++;
+    return n === 1 || n === 3 ? out : n === 2 ? {status: 304, body: ''} : {status: 200, body: state()};
+  }});
+  await settle();
+  primeStream(p);
+  await p.advance(2200);
+  assert.equal(gets(p, '/station/state').length, 2, 'a 401, then a 304');
+  await pullNow(p);
+  assert.equal(gets(p, '/station/state').length, 3);
+  await p.advance(2200);
+  assert.equal(gets(p, '/station/state').length, 4, 'the lone 401 is asked again');
+  assert.deepEqual(p.went, [], 'and never followed to the sign-in');
+});
+
+test('a press that names another serial with the same digits still lets a landing speak', async () => {
+  const landed = state({phones: state().phones.concat([phone('50741', {taken_at: T0}),
+    phone('5074', {arrived: 'line', taken_at: T0})])});
+  const p = pageIn('station', state(), {answer: (c) => c.url === '/station/take'
+    ? ok({said: 'took', note: 'Phone 50741 is yours. Press Boot to switch it on.', state: landed}) : null});
+  await settle();
+  click(p.$('#take-gpt'));
+  await settle();
+  assert.ok(p.$('#p-50741') && p.$('#p-5074'));
+  assert.equal(toast(p), 'Phone 50741 is yours. Press Boot to switch it on.');
+  await p.advance(4000);
+  assert.equal(toast(p), 'Your GPT phone is here: 5074. Press Boot to switch it on.');
+});
+
+test('a Boot pressed on the card that the keeper fails later says why in its tab', async () => {
+  const note = 'IranSpoty Cloud has no machine free for 5073 right now - press Boot again in a minute';
+  const failed = liveState({conn: 'off', last: {id: 50, verb: 'boot_phone', ok: false, note, was: '', now: '',
+    started: false}});
+  const p = pageIn('live', liveState({conn: 'booting', last: {id: 40, verb: 'change_proxy', ok: true, note: '',
+    was: 'PC1', now: 'PC2', started: false}, arrival: {said: 'queued', req: 50, note: ''}}), {answer: (c) =>
+    c.url === LIVE_STATE ? {status: 200, body: failed} : c.url === WATCH ? {status: 200, body: 'watching'} : null});
+  await settle();
+  assert.equal(sideState(p), 'booting');
+  assert.equal(toast(p), '', 'a queued Boot is not a refusal');
+  await p.advance(1600);
+  assert.equal(sideState(p), 'off');
+  assert.equal(toast(p), note);
+  assert.ok(p.$('#said').classList.contains('no'));
+});
+
+test('a phone that lands in a press\'s answer still says it is built', async () => {
+  const b = {id: 123, lane: 'gpt', stage: 'building', eta_at: T0 + 3 * MIN, late: false, typical_min: 6,
+    bare: false, called_off: false, reason: '', chips: ['next free Gmail', 'GPT IP']};
+  const landed = state({builds: [], phones: state().phones.concat([phone('5090', {arrived: 'build', wish: 123}),
+    phone('5074', {taken_at: T0})])});
+  const p = pageIn('station', state({builds: [b]}), {answer: (c) => c.url === '/station/take'
+    ? ok({said: 'took', note: 'Phone 5074 is yours. Press Boot to switch it on.', state: landed}) : null});
+  await settle();
+  click(p.$('#take-gpt'));
+  await settle();
+  assert.ok(p.$('#p-5090') && p.$('#p-5074'));
+  assert.equal(toast(p), 'Phone 5074 is yours. Press Boot to switch it on.', 'the press speaks first');
+  await p.advance(4000);
+  assert.equal(toast(p), 'Your GPT phone 5090 is built. Press Boot to switch it on.');
+  await p.advance(6000);
+  assert.equal(toast(p), 'Your GPT phone 5090 is built. Press Boot to switch it on.', 'and the Take\'s card is not said twice');
+});
+
+test('a phone this page held before is announced again when the line serves it', async () => {
+  const lineSt = state({phones: [state().phones[1]], shelves: Object.assign(state().shelves, {gpt: {ready: 0, building: 1,
+    eta_at: T0 + 5 * MIN, etas: [T0 + 5 * MIN], late: 0, typical_min: 6, line: {id: 4, position: 1, joined_at: T0}}})});
+  let next = lineSt;
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/station/phones/5073/back' ? ok({said: 'gave-back', state: without(state(), '5073')})
+    : c.url === '/station/state' ? {status: 200, body: next} : null});
+  await settle();
+  primeStream(p);
+  click(p.$('#p-5073 [data-a="back"]'));
+  await p.advance(1000);
+  await pullNow(p);
+  assert.ok(p.$('#l-gpt'), 'in line');
+  next = state({phones: [phone('5073', {arrived: 'line', taken_at: T0 + 11 * MIN}), state().phones[1]]});
+  await pullNow(p);
+  assert.ok(p.$('#p-5073'), 'served');
+  await p.advance(5000);
+  assert.equal(toast(p), 'Your GPT phone is here: 5073. Press Boot to switch it on.');
+});
+
+test('a refused Give back puts the card back quietly', async () => {
+  const held = () => state({phones: [phone('5073', {arrived: 'build'}), state().phones[1]]});
+  const p = pageIn('station', held(), {answer: (c) => c.url === '/station/phones/5073/back'
+    ? {status: 200, body: {ok: false, said: 'no', note: 'nope', state: held()}} : null});
+  await settle();
+  click(p.$('#p-5073 [data-a="back"]'));
+  await settle();
+  assert.ok(p.$('#p-5073'), 'the card is back');
+  assert.equal(toast(p), 'nope');
+  await p.advance(8000);
+  assert.equal(toast(p), 'nope', 'and it does not say it was built');
+});
+
+test('a Build refused after its dialog was closed is said on the page', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const p = pageIn('station', state(), {answer: (c) => c.url === '/station/build' ? {after: gate, status: 200,
+    body: {ok: false, said: 'no', note: 'No free GPT IP – type one under Manual.', field: 'ip'}} : null});
+  await settle();
+  click(p.$('#build'));
+  await p.advance(50);
+  fire(p.$('#dlg'), 'submit');
+  await settle();
+  fire(p.doc, 'keydown', {key: 'Escape'});
+  assert.equal(p.$('#scrim').hidden, true);
+  release();
+  await settle();
+  assert.equal(toast(p), 'No free GPT IP – type one under Manual.');
+  assert.ok(p.$('#said').classList.contains('no'));
+  assert.equal(p.$('#scrim').hidden, true, 'the dialog stays closed');
+});
+
+test('a late Build answer never closes or marks a dialog opened again', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const after = state({builds: [{id: 56, lane: 'gpt', stage: 'queued', eta_at: null, late: false, typical_min: 6,
+    bare: false, called_off: false, reason: '', chips: ['next free Gmail', 'GPT IP']}]});
+  const p = pageIn('station', state(), {answer: (c) => c.url === '/station/build'
+    ? {after: gate, status: 200, body: {ok: true, said: 'asked', state: after}} : null});
+  await settle();
+  click(p.$('#build'));
+  fire(p.$('#dlg'), 'submit');
+  await settle();
+  fire(p.doc, 'keydown', {key: 'Escape'});
+  click(p.$('#build'));
+  await p.advance(50);
+  assert.equal(p.$('#scrim').hidden, false);
+  assert.equal(p.$('.dlg .go').disabled, true, 'Build it waits for the first answer');
+  const had = p.focused();
+  release();
+  await settle();
+  assert.equal(p.$('#scrim').hidden, false, 'the dialog opened again stays open');
+  assert.equal(p.focused(), had, 'and keeps the focus');
+  assert.equal(p.$('.dlg .go').disabled, false);
+  assert.equal(toast(p), 'Building a GPT phone for you – about 6 minutes.');
+  assert.ok(p.$('#w-56'));
+});
+
+test('Back to station on a booting phone focuses a button that can take it', async () => {
+  const p = pageIn('station', state({phones: [phone('5073', {power: 'starting'}), state().phones[1]]}),
+    {hash: '#p-5073'});
+  await settle();
+  assert.ok(p.$('#p-5073.active'));
+  assert.equal(p.$('#p-5073 .open').disabled, true);
+  assert.ok(p.focused(), 'something is focused');
+  assert.ok(p.$('#p-5073').contains(p.focused()), 'on the card');
+  assert.equal(p.focused().disabled, false);
+});
+
+test('the stream\'s first message pulls what changed since the page was drawn', async () => {
+  const later = state({phones: state().phones.concat([phone('5090', {arrived: 'build', taken_at: T0})])});
+  const p = pageIn('station', state(), {answer: (c) => c.url === '/station/state' ? {status: 200, body: later} : null});
+  await settle();
+  p.streams[0].emit(100);
+  await p.advance(100);
+  assert.equal(gets(p, '/station/state').length, 1);
+  assert.ok(p.$('#p-5090'));
+});
+
+test('a Live tab names itself, however it was opened', async () => {
+  const p = pageIn('live', liveState());
+  await settle();
+  assert.equal(p.win.name, 'gf-live-5073');
 });

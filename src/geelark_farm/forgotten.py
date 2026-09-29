@@ -143,6 +143,34 @@ def _mark_off(settings, serial: str) -> None:
                     serial, exc)
 
 
+def _close_orphans(settings, serial: str) -> None:
+    """Close the power presses on the phone that a restart orphaned (older
+    than the Station's three minutes), so none of them runs after the
+    phone is given back or switched off. Never fatal."""
+    from .store import station as store_station
+
+    try:
+        store_station.expire_power(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s: stale power presses were not closed (%s)",
+                    serial, exc)
+
+
+def _off_pending(settings, serial: str) -> bool:
+    """Whether a power-off of the phone is already queued or running. A
+    store that will not answer reads no: a second power-off only finds
+    the phone already off."""
+    from .store import station as store_station
+
+    try:
+        return store_station.power_pending_of(
+            settings, serial, ("power_off_phone",)) is not None
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s: pending power-offs were not read (%s)",
+                    serial, exc)
+        return False
+
+
 def _span(seconds) -> str:
     """"1 h 12 min", or "48 min"."""
     whole = max(0, int(float(seconds or 0)))
@@ -235,12 +263,15 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
             try:
                 with phones_mod.power_lock(serial):
                     phones_mod.stop(client, phone_id)
+                    # Inside the lock: a Boot waiting on it must read the
+                    # link gone, and start the phone rather than hand back
+                    # the dead one.
+                    _mark_off(settings, serial)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("forgotten phone %s would not stop (%s); "
                             "tried again next pass", serial, exc)
                 continue
             outcome["off"].append(serial)
-            _mark_off(settings, serial)
         released = False
         if row.get("state") == "taken":
             try:
@@ -281,6 +312,7 @@ def _station_sweep(settings, live: dict, minutes: int, grace: int) -> dict:
         serial = str(row["serial"])
         owner = str(row.get("owner") or "") or "nobody"
         if row.get("why") == "alone":
+            _close_orphans(settings, serial)
             back = store_station.give_back_idle(settings, serial, minutes, grace)
             if back:
                 # Its power-off was queued by the same statement.
@@ -295,6 +327,10 @@ def _station_sweep(settings, live: dict, minutes: int, grace: int) -> dict:
         if phone is None or phone.get("status") not in ON:
             # The running flag was stale: it is off already.
             _mark_off(settings, serial)
+            continue
+        _close_orphans(settings, serial)
+        if _off_pending(settings, serial):
+            # Queued by an earlier pass and not run yet: one is enough.
             continue
         if store_station.queue_off_closed(settings, serial, grace,
                                           TAB_CLOSED_SECONDS):

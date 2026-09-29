@@ -25,12 +25,16 @@ import pytest
 # The store modules the Station reads, imported here, at collection: one
 # first imported inside a test that fakes `store.db.Store` would keep the
 # fake for the rest of the run (they bind `Store` when they load).
+import geelark_farm.store.sessions
 import geelark_farm.store.station  # noqa: F401
 import geelark_farm.store.verdicts  # noqa: F401
 import geelark_farm.web.app as app_mod
 from geelark_farm.web import live, pages, station_read
 from tests import test_web as _test_web
 from tests.test_web import MUTATIONS_ON, FakeStore, _form
+
+#: The real session read, kept before the `web` fixture fakes the seats.
+_REAL_FIND = geelark_farm.store.sessions.find
 
 #: The live-server fixture, by assignment so each test may name it.
 web = _test_web.web
@@ -315,6 +319,22 @@ def test_the_state_answers_json_no_store_and_a_304_for_its_etag(web, desk):
     desk.state_extra = {station_read.PARTIAL: True}
     status, _, body = _get(client, "/station/state", headers=PAGE)
     assert status == 503 and json.loads(body)["said"] == "down"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_station_page_is_never_drawn_empty_from_a_partial_state(web, desk):
+    """A vital read that failed makes the page the store-down page, the
+    way the Live tab's document does - never a Station that says "No
+    phone yet" with an open Build over a farm that did not answer."""
+    client = _signed(web)
+    status, _, body = _get(client, "/station")
+    assert status == 200 and "<!--station-->" in body
+    desk.state_extra = {station_read.PARTIAL: True}
+    status, hdrs, body = _get(client, "/station")
+    assert status == 503, status
+    assert "<!--station-->" not in body
+    assert "Location" not in hdrs
+    assert body == pages.store_down_page()
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
@@ -688,6 +708,30 @@ def test_a_second_verdict_with_another_button_is_refused_and_the_same_one_is_pen
 
 
 # ============================================================ power
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_release_waits_for_a_pending_boot_or_change_ip(web, desk):
+    """D1 took the power-off out of the one-press index: a dashboard
+    Release beside a pending Boot could switch the phone off first, and
+    the Boot then started it again and marked it taken."""
+    client = _signed(web)
+    for verb, words in (("boot_phone", "phone 1500 is booting - wait for it"),
+                        ("change_proxy",
+                         "phone 1500 is changing its IP - wait for it")):
+        desk.pending = {"id": 5, "verb": verb, "stale": False}
+        status, hdrs, _ = _post(client, "/phones/1500/state", headers=None,
+                                state="unused", where="dash")
+        assert status == 303 and "said=no:" in hdrs["Location"], verb
+        assert desk.rows[desk.next_id]["result"] == words
+        assert desk.queued == [], verb
+        assert desk.pend_calls[-1] == ("1500", ("boot_phone", "change_proxy"))
+    # A pending power-off is no reason to wait: the Release goes through
+    # and queues its own.
+    desk.pending = None
+    _post(client, "/phones/1500/state", headers=None, state="unused",
+          where="dash")
+    assert [q["verb"] for q in desk.queued][:1] == ["power_off_phone"]
+
+
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
 def test_boot_and_change_ip_refuse_each_other_while_one_is_pending(web, desk):
     client = _signed(web)
@@ -1730,3 +1774,384 @@ def test_a_retry_the_power_index_refuses_answers_already_not_a_500(web,
     status, _, _ = client.request("POST", "/requests/241/retry",
                                   f"csrf={client.csrf()}")
     assert status == 500
+
+
+# ================================================= review round (2026-09-29)
+def _store_goes_down(monkeypatch):
+    """From here on the session read cannot reach the store, the way
+    psycopg says so - through the real `sessions.find`, not the web
+    fixture's fake seats."""
+    from geelark_farm.store import sessions as store_sessions
+
+    class Down:
+        def __init__(self, settings):
+            raise OperationalError("connection timeout expired")
+
+    monkeypatch.setattr(store_sessions, "find", _REAL_FIND)
+    monkeypatch.setattr(store_sessions, "Store", Down)
+
+
+_DOWN = {"ok": False, "said": "down",
+         "note": "The farm's store is not answering - try again in a moment."}
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_store_that_does_not_answer_is_down_never_signed_out(
+        web, desk, monkeypatch):
+    """web-1 / front-behaviour-1: a blip of the cluster answered 401
+    signed-out, which sent every Station to /login and released every Live
+    tab for good. It is the 503 `down` the script waits out."""
+    client = _signed(web)
+    _store_goes_down(monkeypatch)
+    for path, headers in (("/station/state", PAGE),
+                          ("/station/phones/1500/state", LIVE)):
+        status, _, body = _get(client, path, headers=headers)
+        assert status == 503 and json.loads(body) == _DOWN, path
+    for path, fields in (("/phones/1500/watching", {"station": "1"}),
+                         ("/station/take", {"lane": "gpt"}),
+                         ("/phones/1500/boot", {"station": "1"})):
+        status, _, body = _post(client, path, headers=LIVE, **fields)
+        assert status == 503 and json.loads(body) == _DOWN, path
+    # Without the header: the store-down page, not the sign-in page.
+    status, hdrs, body = _get(client, "/station")
+    assert status == 503 and "The store is not answering" in body
+    assert "Location" not in hdrs
+    status, hdrs, _ = _post(client, "/phones/1500/state", headers=None,
+                            state="unused")
+    assert status == 503 and "Location" not in hdrs
+    assert desk.queued == [] and desk.states == []
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_store_down_page_never_echoes_a_password(web, desk, monkeypatch):
+    """web-m1: the retry form writes every posted field back into the
+    page. A door whose form carries a password gets no retry at all."""
+    client = _signed(web)
+    _store_goes_down(monkeypatch)
+    for path in ("/password", "/station/me/password"):
+        status, _, body = _post(client, path, headers=None,
+                                current="Old-Secret-1", password="New-Secret-2",
+                                again="New-Secret-2")
+        assert status == 503 and "The store is not answering" in body, path
+        assert "Secret" not in body and "<form" not in body, path
+    status, _, body = _post(client, "/phones/build", headers=None,
+                            gmail="x@gmail.com", gmail_password="Gm-Secret-3")
+    assert status == 503 and "Secret" not in body
+    # A form with nothing secret in it is still kept for a second press.
+    status, _, body = _post(client, "/phones/1500/state", headers=None,
+                            state="unused")
+    assert 'name="state" value="unused"' in body
+    # And the page itself drops a secret whatever door it came from.
+    got = pages.store_down_page(("/pools/gmail/add", {
+        "address": ["a@gmail.com"], "password": ["Pool-Secret-4"]}))
+    assert "Pool-Secret-4" not in got and "<form" not in got
+    got = pages.store_down_page(("/pools/gmail/add", {
+        "address": ["a@gmail.com"], "password": [""]}))
+    assert 'name="address" value="a@gmail.com"' in got
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_store_down_pages_try_again_is_not_a_stale_session(web, desk):
+    """The kept form left out `csrf`, so pressing Try again once the store
+    was back could only ever answer 403 "Stale session"."""
+    client = _signed(web)
+    with pytest.MonkeyPatch.context() as down:
+        _store_goes_down(down)
+        status, _, body = _post(client, "/phones/1500/state", headers=None,
+                                state="unused")
+    assert status == 503
+    action = re.search(r'<form method="post" action="([^"]+)"', body).group(1)
+    kept = dict(re.findall(
+        r'<input type="hidden" name="([^"]+)" value="([^"]*)">', body))
+    assert kept.get("csrf") == client.token
+    status, _, body = client.request("POST", action, _form(**kept))
+    assert status != 403 and "Stale session" not in body, (status, body)
+
+
+@pytest.mark.parametrize("web", [FLAG_ON], indirect=True)
+def test_the_boot_tab_frames_only_the_askers_own_request(
+        web, desk, monkeypatch):
+    """web-2: `?said=done:<id>` framed any request's viewer link for any
+    operator - ids are sequential. Only who asked, or an admin."""
+    monkeypatch.setattr(app_mod._Handler, "_gmail_for_the_holder",
+                        lambda self, user, serial: None)
+    monkeypatch.setattr(app_mod._Handler, "_account_for_the_holder",
+                        lambda self, user, serial: None)
+    monkeypatch.setattr(app_mod.read, "lane_of", lambda s, serial: "gpt")
+    url = "https://viewer.example.test/SECRET-98001"
+    desk.rows[500] = {"id": 500, "verb": "boot_phone", "status": "done",
+                      "result": "on", "detail": {"url": url, "station": True},
+                      "requested_by": 7}
+    desk.rows[501] = dict(desk.rows[500], id=501, requested_by=9)
+    _as(monkeypatch, OPERATOR)
+    client = _signed(web, "sara")
+    for serial in ("98001", "12345"):
+        status, _, body = _get(client, f"/phones/{serial}/live?said=done:500")
+        assert status == 200 and url not in body, serial
+    status, _, body = _get(client, "/phones/98001/live?said=done:501")
+    assert status == 200 and url in body, "the asker's own is framed"
+    _as(monkeypatch, ADMIN)
+    client = _signed(web)
+    status, _, body = _get(client, "/phones/98001/live?said=done:501")
+    assert status == 200 and url in body, "an admin's is any"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_profile_change_that_committed_answers_saved_whatever_its_record(
+        web, desk, monkeypatch):
+    """web-4: the actions row is written after the change committed. A
+    store blip there answered "broke" - for the password with no new
+    cookie, so the person was signed out and told it failed."""
+    from geelark_farm.store import station as store_station
+    from geelark_farm.store import users as store_users
+
+    def record(settings, **kw):
+        raise OperationalError("gone for a moment")
+
+    monkeypatch.setattr(store_station, "record", record)
+    monkeypatch.setattr(store_users, "set_name", lambda s, uid, name: name)
+    monkeypatch.setattr(store_users, "set_username",
+                        lambda s, uid, name: name.strip().lower())
+    monkeypatch.setattr(store_users, "change_password",
+                        lambda s, uid, cur, new, *, token, hours: "t-new")
+    client = _signed(web)
+    status, _, body = _post(client, "/station/me/name", name="Sara")
+    assert status == 200 and json.loads(body)["note"] == "Name saved."
+    status, _, body = _post(client, "/station/me/username", username="sara.k")
+    assert status == 200 and json.loads(body)["ok"] is True
+    status, hdrs, body = _post(client, "/station/me/password",
+                               current="old-one", password="new-password",
+                               again="new-password")
+    assert status == 200 and json.loads(body)["ok"] is True
+    assert hdrs["Set-Cookie"].startswith("gf=t-new;")
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_the_header_opens_no_station_for_an_operator_while_the_flag_is_off(
+        web, desk, monkeypatch):
+    """web-5: the shared doors answered the Station's whole state - and ran
+    its writing read - to an operator the trial keeps off the Station."""
+    from geelark_farm.store import wanted as store_wanted
+
+    monkeypatch.setattr(store_wanted, "dismiss",
+                        lambda s, wid, *, user_id, admin=False: True)
+    _as(monkeypatch, OPERATOR)
+    client = _signed(web, "sara")
+    status, _, body = _post(client, "/phones/1500/boot", station="1")
+    got = json.loads(body)
+    assert status == 200 and "state" not in got
+    status, _, body = _post(client, "/wishes/1/dismiss")
+    got = json.loads(body)
+    assert status == 200 and "state" not in got
+    assert got["note"] == "Taken off your station."
+    assert desk.states == [], "the state read (and its writes) never ran"
+    assert not [r for r in desk.recorded if r["verb"] == "dismiss_build"]
+    # A Live tab still gets its own phone's state.
+    status, _, body = _post(client, "/phones/1500/boot", headers=LIVE,
+                            station="1")
+    assert json.loads(body)["live"]["serial"] == "1500"
+
+
+@pytest.mark.parametrize("web", [FLAG_ON], indirect=True)
+def test_with_the_flag_on_the_operators_presses_carry_the_state(
+        web, desk, monkeypatch):
+    from geelark_farm.store import wanted as store_wanted
+
+    monkeypatch.setattr(store_wanted, "dismiss",
+                        lambda s, wid, *, user_id, admin=False: True)
+    _as(monkeypatch, OPERATOR)
+    client = _signed(web, "sara")
+    got = json.loads(_post(client, "/wishes/1/dismiss")[2])
+    assert got["state"]["v"] == 1
+    assert [r["verb"] for r in desk.recorded] == ["dismiss_build"]
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_poll_that_is_refused_or_down_leaves_its_line_in_the_log(
+        web, desk, monkeypatch, caplog):
+    """web-6: only the polls' 200s and 304s are kept out of the log."""
+    client = _signed(web)
+    with caplog.at_level(logging.INFO, logger="geelark_farm.web.app"):
+        _get(client, "/station/state", headers=PAGE)
+        _store_goes_down(monkeypatch)
+        _get(client, "/station/state", headers=PAGE)
+        _get(client, "/station/phones/1500/state", headers=LIVE)
+        time.sleep(0.3)
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("web ")]
+    assert not [x for x in lines if "/state 200" in x], lines
+    assert any("/station/state 503" in x for x in lines), lines
+    assert any("/station/phones/1500/state 503" in x for x in lines), lines
+
+
+def test_a_failed_station_build_offers_no_retry():
+    """web-7: its row lost the typed passwords once it ran, so a Retry
+    replayed a Gmail with no password or an exit cut to host:port."""
+    user = {"id": 7, "username": "mehdi", "role": "admin", "sees": "all",
+            "csrf": "c", "nav": {}}
+    base = {"status": "failed", "result": "no free IP", "requested_by": 7,
+            "requested_at": None, "detail": None}
+    rows = [dict(base, id=1, verb="build_by_hand",
+                 payload={"station": True, "gmail": "x@gmail.com"}),
+            dict(base, id=2, verb="build_by_hand", payload={"gmail": ""}),
+            dict(base, id=3, verb="boot_phone", payload={"serial": "1"})]
+    got = pages.requests_page(rows, user)
+    assert 'action="/requests/1/retry"' not in got
+    assert 'action="/requests/2/retry"' in got
+    assert 'action="/requests/3/retry"' in got
+    said = pages.requests_page([], user, said="station_build")
+    assert "Press Build again on the Station." in said
+
+
+def _no_writes(monkeypatch):
+    from geelark_farm.store import station as store_station
+
+    def writer(*a, **k):
+        raise AssertionError("a read-only state wrote")
+
+    for name in ("scrub_mine", "stamp_line", "serve_lines"):
+        monkeypatch.setattr(store_station, name, writer)
+
+
+def test_the_smokes_read_only_state_writes_nothing(monkeypatch, make_settings,
+                                                   caplog):
+    """deploy-M2: `state(write=False)` is the smoke's read - HEAD's too -
+    and runs none of the three writers."""
+    _fake_store(monkeypatch)
+    _no_writes(monkeypatch)
+    with caplog.at_level(logging.WARNING):
+        got = station_read.state(make_settings(store_enabled=True),
+                                 dict(ADMIN, mutations=True), write=False)
+    assert station_read.PARTIAL not in got and got["phones"]
+    assert "did not run" not in caplog.text
+
+
+@needs_cluster
+def test_the_smoke_reads_the_real_store_and_writes_nothing(
+        farm, monkeypatch, caplog):
+    """deploy-M2 against a real Postgres: what smoke_station.py runs - the
+    user by id, the read-only state, the page, one Live tab - with the
+    person waiting in a line. Nothing is served or written, and no read
+    logs a warning."""
+    from geelark_farm.store import users as store_users
+    from geelark_farm.web import station_pages
+    from tests.test_station_store import Raw
+
+    _no_writes(monkeypatch)
+    a = farm.user("a", role="admin")
+    farm.wait(a, "spotify", joined_at=Raw("now() - interval '5 minutes'"))
+    on = farm.hold(a, running=True, live_url="https://view.example/s")
+    user = dict(store_users.get(farm.s, a), csrf="smoke")
+    with caplog.at_level(logging.WARNING):
+        st = station_read.state(farm.s, user, write=False)
+        html = station_pages.station_page(st, user)
+        lv = station_read.live(farm.s, user, on)
+        station_pages.live_page(lv, user)
+    assert station_read.PARTIAL not in st and station_read.PARTIAL not in lv
+    assert [p["serial"] for p in st["phones"]] == [on]
+    assert "{{" not in html and lv["conn"] == "on"
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert farm.one("SELECT ended_at FROM station_line WHERE user_id = %s",
+                    (a,))["ended_at"] is None
+    assert farm.sql("SELECT 1 FROM actions WHERE requested_by = %s",
+                    (a,)) == []
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_power_clash_is_read_as_a_boot_or_change_ip_never_a_power_off(
+        web, desk):
+    """D1: the unique index holds Boot and Change IP only, so the press
+    that refused this one is looked for among those two - an older
+    pending power-off (which never clashes) is not named as the cause."""
+    rows = [{"id": 70, "verb": "power_off_phone", "stale": False},
+            {"id": 71, "verb": "change_proxy", "stale": False}]
+    calls = {"n": 0}
+
+    def pending():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None            # the pre-check raced past both
+        want = desk.pend_calls[-1][1] or ("boot_phone", "change_proxy",
+                                          "power_off_phone")
+        return next((r for r in rows if r["verb"] in want), None)
+
+    desk.pending = pending
+    desk.enqueue_raises = [UniqueViolation("actions_one_power_press")]
+    client = _signed(web)
+    got = json.loads(_post(client, "/phones/1500/boot", headers=LIVE,
+                           station="1")[2])
+    assert desk.pend_calls[-1] == ("1500", ("boot_phone", "change_proxy"))
+    assert got["ok"] is False
+    assert got["note"] == "phone 1500 is changing its IP - wait for it"
+
+
+# ============================================ skeptic round (2026-09-29)
+@pytest.mark.parametrize("raised", ["ConnectionTimeout", "AdminShutdown",
+                                    "OperationalError"])
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_real_psycopg_outage_is_down_not_broke(web, desk, monkeypatch,
+                                                 raised):
+    """The outage web-1 was found with is a connect that timed out, and
+    psycopg raises `ConnectionTimeout` for it - a subclass whose own name
+    is not OperationalError. Matched by name alone it answered 500
+    `broke`; a cluster restart (`AdminShutdown`) did the same."""
+    import psycopg
+
+    kind = getattr(psycopg.errors, raised, None) or psycopg.OperationalError
+    from geelark_farm.store import sessions as store_sessions
+
+    class Down:
+        def __init__(self, settings):
+            raise kind("connection timeout expired")
+
+    client = _signed(web)
+    monkeypatch.setattr(store_sessions, "find", _REAL_FIND)
+    monkeypatch.setattr(store_sessions, "Store", Down)
+    status, _, body = _get(client, "/station/state", headers=PAGE)
+    assert status == 503 and json.loads(body) == _DOWN
+    status, _, body = _post(client, "/phones/1500/watching", headers=LIVE,
+                            station="1")
+    assert status == 503 and json.loads(body) == _DOWN
+    status, hdrs, body = _get(client, "/station")
+    assert status == 503 and "The store is not answering" in body
+    assert "Location" not in hdrs
+
+
+def test_the_store_is_down_for_every_operational_error_by_ancestry():
+    import psycopg
+
+    for exc in (psycopg.errors.ConnectionTimeout("t"),
+                psycopg.errors.AdminShutdown("a"), psycopg.OperationalError("o"),
+                OperationalError("fake")):
+        assert app_mod._store_down(exc), type(exc).__name__
+    wrapped = RuntimeError("wrapped")
+    wrapped.__cause__ = psycopg.errors.ConnectionTimeout("t")
+    assert app_mod._store_down(wrapped)
+    assert not app_mod._store_down(ValueError("no"))
+    assert not app_mod._store_down(psycopg.errors.UniqueViolation("u"))
+
+
+@pytest.mark.parametrize("web", [FLAG_ON], indirect=True)
+def test_somebody_elses_boot_tab_says_not_allowed_and_stops_reloading(
+        web, desk, monkeypatch):
+    """web-2, second half: a request that is not the reader's is not
+    framed - and not left reading "Starting" and reloading for ever."""
+    monkeypatch.setattr(app_mod.read, "lane_of", lambda s, serial: "gpt")
+    desk.rows[502] = {"id": 502, "verb": "boot_phone", "status": "done",
+                      "result": "phone 98001 started and taken by ali",
+                      "detail": {"url": "https://viewer.example.test/S"},
+                      "requested_by": 7}
+    _as(monkeypatch, OPERATOR)
+    client = _signed(web, "sara")
+    status, _, body = _get(client, "/phones/98001/live?said=done:502")
+    assert status == 200 and "Not allowed" in body
+    assert "viewer.example.test" not in body and "taken by ali" not in body
+    assert "location.reload" not in body
+
+
+def test_the_store_down_page_keeps_no_pasted_preview_rows():
+    """A paste's preview carries its accounts - passwords and keys - in
+    `rows`; the store-down page must not write them back."""
+    got = pages.store_down_page(("/pools/gmail/confirm", {
+        "rows": ["a@gmail.com:Pw-Secret-5:JBSWY3DP"], "idem": ["x"]}))
+    assert "Pw-Secret-5" not in got and "<form" not in got

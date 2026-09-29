@@ -401,6 +401,16 @@ class _Handler(BaseHTTPRequestHandler):
                         row = store_actions.one(self.settings, int(req))
                     except Exception as exc:                      # noqa: BLE001
                         log.debug("boot %s: request not read (%s)", req, exc)
+                # Only the person who asked, or an admin: the row's
+                # detail carries the phone's interactive viewer, and ids
+                # are sequential - anybody could walk them (2026-09-29).
+                # Said "not allowed", not left waiting: with no row the
+                # tab read "Starting" and reloaded itself for ever.
+                if row is not None and user.get("role") != "admin" and (
+                        str(row.get("requested_by")) != str(user.get("id"))):
+                    log.info("boot tab: request %s is not %s's - not framed",
+                             req, user.get("username"))
+                    row, said = None, "refused"
                 # Once the link is there the page frames GeeLark's viewer
                 # rather than sending the tab to it: the tab's closing is
                 # the phone's off switch (pages.viewer_page, 2026-09-16).
@@ -799,8 +809,15 @@ class _Handler(BaseHTTPRequestHandler):
                             self.path, exc)
                 if self._station_asked():
                     return self._station_error("down")
+                # The retry form echoes every field it was sent, so a
+                # door whose form carries a password or a typed secret
+                # gets the page without it (pages.store_down_page drops
+                # such fields as well).
+                bare = self.path.split("?")[0]
+                echo = not (bare == "/password" or bare == "/phones/build"
+                            or bare.startswith("/station/"))
                 return self._html(503, pages.store_down_page(
-                    retry=(self.path, form)))
+                    retry=(self.path, form) if echo else None))
             log.exception("web: POST %s failed", self.path)
             if self._station_asked():
                 return self._station_error("broke")
@@ -834,8 +851,9 @@ class _Handler(BaseHTTPRequestHandler):
                                       is_admin=user["role"] == "admin")
         except Exception as exc:                                  # noqa: BLE001
             # One pending power press per phone (rev 42): a failed Boot
-            # retried while another Boot, Change IP or power-off is
-            # pending on that phone is refused by the index, not a 500.
+            # retried while another Boot or Change IP is pending on that
+            # phone is refused by the index, not a 500. A power-off is
+            # not in the index - a give-back always gets its own.
             if type(exc).__name__ != "UniqueViolation":
                 raise
             log.info("web: retry of request %s refused - a power press is "
@@ -990,7 +1008,10 @@ class _Handler(BaseHTTPRequestHandler):
                     raise
                 log.info("%s on %s: another power press is pending (%s)",
                          verb, payload.get("serial"), exc)
-                clash = self._power_pending(str(payload.get("serial") or ""))
+                # Only Boot and Change IP are in the index (a power-off
+                # never clashes), so only they can be what refused it.
+                clash = self._power_pending(str(payload.get("serial") or ""),
+                                            _INDEXED_POWER)
                 if clash is None:
                     continue
                 if clash["verb"] == verb:
@@ -1428,6 +1449,12 @@ class _Handler(BaseHTTPRequestHandler):
         value = str(headers.get(self.STATION_ASKED) or "").strip().lower()
         return value if value in ("page", "live") else ""
 
+    def _station_open_to(self, user: dict | None) -> bool:
+        """Whether the Station is this person's: an admin's always, an
+        operator's with STATION_FOR_OPERATORS on."""
+        return bool(user) and (user.get("role") == "admin"
+                               or bool(self.settings.station_for_operators))
+
     def _station_opened(self, path: str) -> bool:
         """With STATION_FOR_OPERATORS on, the Station's pages join the
         operator's: `/station` and everything under it."""
@@ -1489,6 +1516,14 @@ class _Handler(BaseHTTPRequestHandler):
         if user is None or not asked:
             return
         if asked == "page":
+            # The page's state is the Station's - and its read writes
+            # (scrub, stamp, serve the line). Not for an operator while
+            # the Station is not theirs: the header alone must not open
+            # it through the shared doors (2026-09-29). A Live tab's own
+            # phone state below stays, so a tab already open when the
+            # flag goes off keeps its footing.
+            if not self._station_open_to(user):
+                return
             try:
                 got = station_read.state(self.settings, user)
                 if not got.pop(station_read.PARTIAL, False):
@@ -1536,16 +1571,22 @@ class _Handler(BaseHTTPRequestHandler):
         """The pending power press on this phone - Boot, Change IP or
         Power off - as `{"id", "verb", "words"}`, or None. One older than
         three minutes is an orphan a restart left behind, and is closed
-        first so it blocks nothing (decision 40). With `verbs`, a pending
-        press of another verb reads as None. Raises."""
+        first so it blocks nothing (decision 40). With `verbs`, only a
+        pending press of those verbs is looked for. Raises."""
         from ..store import station as store_station
 
-        pend = store_station.power_pending_of(self.settings, serial)
+        def pending():
+            if verbs:
+                return store_station.power_pending_of(self.settings, serial,
+                                                      tuple(verbs))
+            return store_station.power_pending_of(self.settings, serial)
+
+        pend = pending()
         if pend is not None and pend.get("stale"):
             closed = store_station.expire_power(self.settings, serial)
             log.info("phone %s: %d power press(es) nobody answered for three "
                      "minutes closed", serial, closed)
-            pend = store_station.power_pending_of(self.settings, serial)
+            pend = pending()
         if pend is None or pend.get("stale"):
             return None
         verb = str(pend.get("verb") or "")
@@ -1595,7 +1636,10 @@ class _Handler(BaseHTTPRequestHandler):
         write = self.command != "HEAD"
         if path == "/station":
             state = station_read.state(self.settings, user, write=write)
-            state.pop(station_read.PARTIAL, None)
+            # A store that did not answer is said as down, never drawn as
+            # an empty Station ("No phone yet", a Build that looks open).
+            if state.pop(station_read.PARTIAL, False):
+                return self._html(503, pages.store_down_page())
             return self._html(200, station_pages.station_page(state, user))
         if path == "/station/state":
             state = station_read.state(self.settings, user, write=write)
@@ -1882,8 +1926,25 @@ class _Handler(BaseHTTPRequestHandler):
         return (_locked_out(str(user["username"]))
                 or _locked_out(f"id:{user['id']}"))
 
-    def _profile_name(self, user: dict, field: dict) -> None:
+    def _profile_record(self, user: dict, key: str, *, verb: str,
+                        payload: dict, result: str) -> None:
+        """The profile press's row on the actions list. Written after the
+        change has committed, so it is never fatal: a store blip here
+        used to answer "broke" for a name that was saved - and, for a
+        password, without the new seat's cookie, so the person was
+        signed out everywhere and told the change failed (2026-09-29)."""
         from ..store import station as store_station
+
+        try:
+            store_station.record(
+                self.settings, verb=verb, payload=payload,
+                requested_by=user["id"], status="done", result=result,
+                idem_key=self._minute_key(user, key, str(user["id"])))
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the %s press of %s was not recorded (%s)", verb,
+                        user.get("username"), exc)
+
+    def _profile_name(self, user: dict, field: dict) -> None:
         from ..store import users as store_users
         from . import station_read
 
@@ -1893,10 +1954,9 @@ class _Handler(BaseHTTPRequestHandler):
                 store_users.clean_name(field.get("name") or ""))
         except ValueError as exc:
             return self._profile_reply(False, str(exc), field="name")
-        store_station.record(
-            self.settings, verb="profile_name", payload={"name": new},
-            requested_by=user["id"], status="done", result="Name saved.",
-            idem_key=self._minute_key(user, "name", str(user["id"])))
+        self._profile_record(
+            user, "name", verb="profile_name", payload={"name": new},
+            result="Name saved.")
         return self._profile_reply(
             True, "Name saved.",
             me=station_read.me(dict(user, display_name=new)))
@@ -1905,7 +1965,6 @@ class _Handler(BaseHTTPRequestHandler):
         """A person renaming themselves. No current password (the
         prototype's one field, the lead's call); the lockout still holds,
         and nothing here forgives it."""
-        from ..store import station as store_station
         from ..store import users as store_users
         from . import station_read
 
@@ -1919,11 +1978,9 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._profile_reply(False, str(exc), field="user")
         said = "Username saved. Use it the next time you sign in."
-        store_station.record(
-            self.settings, verb="profile_username",
-            payload={"username": new, "was": user["username"]},
-            requested_by=user["id"], status="done", result=said,
-            idem_key=self._minute_key(user, "username", str(user["id"])))
+        self._profile_record(
+            user, "username", verb="profile_username",
+            payload={"username": new, "was": user["username"]}, result=said)
         log.info("user %s is %s now", user["username"], new)
         return self._profile_reply(
             True, said, me=station_read.me(dict(user, username=new)))
@@ -1932,7 +1989,6 @@ class _Handler(BaseHTTPRequestHandler):
         """A person changing their own password: the current one first,
         then the new hash and this browser's new seat in one transaction,
         which signs every other browser out."""
-        from ..store import station as store_station
         from ..store import users as store_users
         from . import station_read
 
@@ -1973,10 +2029,8 @@ class _Handler(BaseHTTPRequestHandler):
             _failures.pop(str(user["username"]), None)
             _failures.pop(f"id:{user['id']}", None)
         said = "Password changed. Your other browsers are signed out."
-        store_station.record(
-            self.settings, verb="profile_password", payload={},
-            requested_by=user["id"], status="done", result=said,
-            idem_key=self._minute_key(user, "password", str(user["id"])))
+        self._profile_record(user, "password", verb="profile_password",
+                             payload={}, result=said)
         log.info("user %s changed their password", user["username"])
         me = station_read.me(user)
         me["pw"] = "Changed today"
@@ -2112,6 +2166,15 @@ class _Handler(BaseHTTPRequestHandler):
                         **({"where": where} if where else {})},
                 button=f"Yes, phone {serial} is {word}", back=back))
         if state == "unused":
+            # A power-off is not in the one-press index (rev 42), so a
+            # Release beside a pending Boot or Change IP could run its
+            # power-off first and the Boot would then start the phone
+            # again and mark it taken. Wait for that press instead.
+            busy = self._power_busy(serial, ("boot_phone", "change_proxy"))
+            if busy:
+                return self._refuse(
+                    user, "set_phone_state",
+                    {"serial": serial, "state": state}, busy, back=back)
             self._power_off(user, serial)
         return self._act(user, "may_take_phones", "set_phone_state", payload,
                          idem=self._minute_key(user, f"state-{state}", serial),
@@ -3285,7 +3348,7 @@ class _Handler(BaseHTTPRequestHandler):
             gone = False
         said = ("Taken off your station." if gone
                 else "That build cannot be dismissed.")
-        if self._station_asked():
+        if self._station_asked() and self._station_open_to(user):
             # A press the Station made is recorded (brief B10); the
             # dashboard's Dismiss stays the direct write it always was.
             from ..store import station as store_station
@@ -3354,8 +3417,11 @@ class _Handler(BaseHTTPRequestHandler):
         if not path or bare == "/live":
             return
         # The Station's two polls, every few seconds per open page: a line
-        # each would bury every other request (2026-09-29).
-        if bare.startswith("/station/") and bare.endswith("/state"):
+        # each would bury every other request (2026-09-29). Their good
+        # answers only - a run of 401s, 403s or 503s is exactly what the
+        # log is for.
+        if bare.startswith("/station/") and bare.endswith("/state") and \
+                getattr(self, "_code", "-") in (200, 304):
             return
         spent = (time.perf_counter() - getattr(self, "_began", 0.0)) * 1000
         log.info("web %s %s %s %.0fms %s bytes",
@@ -3366,6 +3432,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 # ------------------------------------------------------------ the Station
+#: The verbs rev 42's unique index `actions_one_power_press` holds to one
+#: pending press per phone. A power-off is not one of them: a give-back,
+#: the hour's and a closed tab's switch-off always get their own row, and
+#: a Boot queued behind one is refused by its holder check.
+_INDEXED_POWER = ("boot_phone", "change_proxy")
+
 #: The Station's fixed answers, by the word the script reads (§5.1): the
 #: gates, the lockout, a crash. `go` is where the script sends the page.
 _STATION_ERRORS = {
@@ -3664,10 +3736,19 @@ def _phone_back(field: dict, serial: str) -> str:
 
 def _store_down(exc: BaseException) -> bool:
     """psycopg's OperationalError, without importing psycopg here: a
-    connection refused or timed out is a page, not a traceback."""
-    return type(exc).__name__ == "OperationalError" or any(
-        type(c).__name__ == "OperationalError"
-        for c in (exc.__cause__, exc.__context__) if c is not None)
+    connection refused or timed out is a page, not a traceback.
+
+    Its subclasses too, by the class's ancestry rather than its own name:
+    a connect that times out raises `ConnectionTimeout` and a cluster
+    restart `AdminShutdown`, and matched by name alone both read as a
+    crash - 500 `broke`, not the 503 `down` the Station waits out
+    (2026-09-29)."""
+    def down(err: BaseException) -> bool:
+        return any(k.__name__ == "OperationalError"
+                   for k in type(err).__mro__)
+
+    return down(exc) or any(
+        down(c) for c in (exc.__cause__, exc.__context__) if c is not None)
 
 
 def _ticks(field: dict) -> dict:

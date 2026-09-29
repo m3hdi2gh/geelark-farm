@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from .. import phones, shell
 from .. import proxy as proxy_mod
-from ..api import ApiError, Client
+from ..api import ApiError, Client, TransportError
 from ..build_result import Build
 from ..cancel import Aborted
 from ..config import Settings
@@ -89,6 +89,15 @@ def _fresh_proxy(client: Client, book: Book, *,
             raise Aborted("no_working_proxy" if skipped else "no_usable_proxy")
         try:
             result = proxy_mod.check(client, resource.proxy)
+        except TransportError:
+            # The cloud did not answer: nothing was learned about the
+            # exit, so it goes back as it was rather than waiting claimed
+            # for the abandoned-claims sweep, and the caller hears why.
+            log.warning("proxy %s was not checked: the cloud did not answer; "
+                        "put back", resource.name or "?")
+            book.proxies.release(resource, note=(
+                "Put back: the cloud did not answer when it was checked."))
+            raise
         except (proxy_mod.ProxyError, ApiError) as exc:
             # The name, not the label: the label carries the whole address,
             # and so does the error after it, so the line printed one

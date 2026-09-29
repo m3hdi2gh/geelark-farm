@@ -4505,6 +4505,8 @@ _SAID = {
     "too_late": "Too late - a pass had already taken it; see its row below.",
     "not_yours": "That request is not yours to touch.",
     "not_failed": "Only a failed request can be retried.",
+    "station_build": "A Station build is not retried here - its typed "
+                     "passwords are gone. Press Build again on the Station.",
     "refused": "You may not do that - ask an admin for the permission.",
     "already": "Already asked - that request is still pending.",
     "twice": "That press already went through the first time; the page "
@@ -4713,6 +4715,15 @@ def _put_back(user: dict, row: dict) -> str:
             f'<button class="quiet">Put it back</button></form>')
 
 
+def _station_build(row: dict) -> bool:
+    """A Station build: its row loses the typed passwords once it has
+    run, so a Retry would replay a Gmail without its password, or an
+    exit cut to host:port (2026-09-29). Built again on the Station."""
+    payload = row.get("payload") or {}
+    return (str(row.get("verb")) == "build_by_hand"
+            and isinstance(payload, dict) and bool(payload.get("station")))
+
+
 def requests_page(rows: list[dict], user: dict, said: str = "", *,
                   counts: dict | None = None, view: str = "",
                   mine: bool = False, page: int = 1, pages: int = 1,
@@ -4760,7 +4771,7 @@ def requests_page(rows: list[dict], user: dict, said: str = "", *,
             action = (f'<form method="post" class="inline" '
                       f'action="/requests/{r["id"]}/cancel">{_csrf(user)}'
                       f'<button class="quiet">Cancel</button></form>')
-        elif status == "failed":
+        elif status == "failed" and not _station_build(r):
             action = (f'<form method="post" class="inline" '
                       f'action="/requests/{r["id"]}/retry">{_csrf(user)}'
                       f'<button class="quiet">Retry</button></form>')
@@ -7725,16 +7736,34 @@ def confirm_page(user: dict, *, title: str, text: str, action: str,
 
 
 # ---------------------------------------------------------- store is down
+#: Posted fields the store-down page never writes back into itself: a
+#: password, a key, a pasted list of accounts (and the preview's carried
+#: `rows` of one), a typed exit (whose line carries its user and password). A form that held any of them gets no
+#: retry at all - half a form sent again would be a different press
+#: (2026-09-29).
+_NEVER_ECHOED = frozenset({
+    "password", "current", "again", "secret", "pasted", "raw",
+    "gmail_password", "gmail_secret", "app_password", "app_secret",
+    "carry_password", "proxy", "proxy_name", "gmail_line", "acct_line",
+    "ip_line", "rows"})
+
+
 def store_down_page(retry: tuple | None = None) -> str:
     """The cluster did not answer. Nothing was read or queued; say so,
-    keep what the person typed, and try again in half a minute."""
+    keep what the person typed, and try again in half a minute. A form
+    that carried a secret is not kept (`_NEVER_ECHOED`)."""
     again = ""
+    if retry and any(k in _NEVER_ECHOED and any(vs or [])
+                     for k, vs in (retry[1] or {}).items()):
+        retry = None
     if retry:
         path, form = retry
+        # The csrf field rides along: it is this browser's own token,
+        # already in every page it was served, and without it "Try again"
+        # could only ever answer "Stale session" (2026-09-29).
         hidden = "".join(
             f'<input type="hidden" name="{esc(k)}" value="{esc(str(v))}">'
-            for k, vs in (form or {}).items() for v in (vs or [])
-            if k != "csrf")
+            for k, vs in (form or {}).items() for v in (vs or []))
         again = (f'<form method="post" action="{esc(path)}">{hidden}'
                  f'<p class="hint">Your form is kept here - press to send '
                  f'it again once the store is back.</p>'

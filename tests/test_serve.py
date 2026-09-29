@@ -2538,8 +2538,9 @@ def test_a_pass_lists_the_phones_once(monkeypatch, settings):
                         lambda c, s, b, **k: looked.update(k)
                         or recorder.numbers)
     monkeypatch.setattr(serve_mod, "_shadow",
-                        lambda s, b, d, o, pulse=None, running=None:
-                        shadowed.update(running=running))
+                        lambda s, b, d, o, pulse=None, running=None,
+                        listed_at=None:
+                        shadowed.update(running=running, listed_at=listed_at))
 
     serve_mod.once(object(), settings, Fuse(), serve_mod.Slots())
 
@@ -3449,3 +3450,156 @@ def test_builds_on_their_way_count_only_against_their_own_lanes_shortfall():
     assert serve_mod._on_its_way(4, {"gpt": 1, "spotify": 3}, short, targets) == 4
     assert serve_mod._on_its_way(7, {}, lanes, targets) == 7, (
         "no by-lane count: the whole number, as it always was")
+
+
+# ------------------------------------------- review fixes, 2026-09-29
+def test_a_schema_that_will_not_apply_ends_the_process(make_settings, tmp_path,
+                                                        monkeypatch, caplog):
+    """D2: rev 42's code on a rev 41 schema breaks the sync, the Take and
+    every hand build, so a schema that did not apply exits the process
+    (non-zero) for its container to start again, loudly."""
+    import logging
+
+    from geelark_farm import runctx
+    from geelark_farm.store import db as store_db
+    from geelark_farm.store import logdb as store_logdb
+
+    def fails(settings):
+        raise RuntimeError("deadlock detected")
+
+    attached = []
+    monkeypatch.setattr(store_db, "ensure_schema", fails)
+    monkeypatch.setattr(runctx, "set_event_sink",
+                        lambda sink: attached.append("events"))
+    monkeypatch.setattr(store_logdb, "install", lambda s: attached.append("logs"))
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as out:
+        serve_mod._attach_store(make_settings(state_dir=tmp_path,
+                                              store_enabled=True))
+    assert out.value.code == 1
+    assert attached == [], "nothing is served on the old schema"
+    assert any(r.levelno == logging.ERROR
+               and "could not ensure the store schema" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_a_power_press_runs_only_if_still_open_and_is_stamped_as_it_starts(
+        monkeypatch, make_settings):
+    """keeper-2, without a cluster: the stamp answers nothing (closed while
+    it waited) and the handler is not called; an open press runs; a store
+    that will not stamp runs it as claimed; other verbs are not stamped."""
+    from geelark_farm.store import actions as store_actions
+
+    class Conn:
+        def __init__(self, answer):
+            self.answer, self.sql, self.rolled_back = answer, [], 0
+
+        def execute(self, sql, params=None):
+            self.sql.append((" ".join(sql.split()), params))
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return SimpleNamespace(fetchone=lambda: self.answer)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            self.rolled_back += 1
+
+    ran, finished = [], []
+    for verb in ("boot_phone", "change_proxy", "power_off_phone", "noop"):
+        monkeypatch.setitem(serve_mod.ACTION_VERBS, verb,
+                            lambda *a, v=verb: ran.append(v) or ("done", "", None))
+    monkeypatch.setattr(store_actions, "finish",
+                        lambda conn, aid, **k: finished.append(aid) or True)
+    monkeypatch.setattr(serve_mod, "_event", lambda *a, **k: None)
+    settings = make_settings()
+
+    def run(conn, verb, aid=9):
+        return serve_mod._run_action(
+            settings, conn, {"id": aid, "verb": verb, "payload": {},
+                             "requested_by": 1},
+            book=None, ledger=None, client=None)
+
+    closed = Conn(None)
+    assert run(closed, "power_off_phone") == 1
+    assert ran == [] and finished == [], "closed while it waited: not run"
+    assert closed.sql == [("UPDATE actions SET executed_at = now() WHERE id = %s"
+                           " AND status = 'running' RETURNING id", (9,))]
+    for verb in ("boot_phone", "change_proxy", "power_off_phone"):
+        run(Conn((9,)), verb)
+    assert ran == ["boot_phone", "change_proxy", "power_off_phone"]
+    broken = Conn(RuntimeError("down"))
+    run(broken, "boot_phone")
+    assert ran[-1] == "boot_phone" and broken.rolled_back == 1
+    quiet = Conn(None)
+    run(quiet, "noop")
+    assert ran[-1] == "noop" and quiet.sql == [], "only power presses"
+
+
+def test_a_finish_whose_phone_was_taken_goes_to_the_next_one_waiting(
+        make_settings, monkeypatch):
+    """builder-5: the pass orders the finishes it decided, walking past a
+    phone somebody took between the read and the reservation."""
+    from geelark_farm import keeper
+    from geelark_farm.store import jobs as store_jobs
+    from geelark_farm.store import station as store_station
+
+    ordered, asked = [], []
+    monkeypatch.setattr(store_jobs, "queue",
+                        lambda s, kind, payload=None, action_id=None:
+                        ordered.append((kind, payload)) or 1)
+    monkeypatch.setattr(keeper, "_unfinished", lambda client, book, **k: (
+        [{"serial": "7"}, {"serial": "8"}, {"serial": "9"}, {"serial": "10"}],
+        []))
+    monkeypatch.setattr(keeper, "_busy_serials", lambda s: set())
+    monkeypatch.setattr(store_station, "reserve_warm",
+                        lambda s, serial, **k: asked.append(serial) or (
+                            None if serial == "7" else ""))
+    n = serve_mod._order(make_settings(store_enabled=True, build_queue=True),
+                         None, None, SimpleNamespace(build=0, finish=2, jobs=2),
+                         [])
+    assert n == 2
+    assert [p["phone"]["serial"] for _k, p in ordered] == ["8", "9"]
+    assert asked == ["7", "8", "9"], "no phone reserved past the two decided"
+
+
+def test_the_pass_judges_what_is_on_from_when_it_listed(make_settings,
+                                                        monkeypatch):
+    """builder-4, keeper-8: the time of the listing rides to mark_running,
+    taken before the listing itself."""
+    import inspect
+    from datetime import datetime, timezone
+
+    from geelark_farm.store import db as store_db
+    from geelark_farm.store import shadow as store_shadow
+    from geelark_farm.store import state as store_state
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def cursor(self):
+            return self
+
+        def commit(self):
+            pass
+
+    seen = {}
+    monkeypatch.setattr(store_db, "connect", lambda s: Conn())
+    monkeypatch.setattr(store_shadow, "write_shadow",
+                        lambda conn, book, **k: {"closed": 0})
+    monkeypatch.setattr(store_state, "put", lambda *a, **k: None)
+    monkeypatch.setattr(store_shadow, "mark_running",
+                        lambda cur, running, **k: seen.update(k, on=running))
+    at = datetime(2026, 9, 29, 20, 0, tzinfo=timezone.utc)
+    serve_mod._shadow(make_settings(store_enabled=True), object(),
+                      serve_mod.Decision(), {}, running=["1500"], listed_at=at)
+    assert seen == {"listed_at": at, "on": ["1500"]}
+
+    source = inspect.getsource(serve_mod.once)
+    assert (source.index("listed_at = datetime.now(timezone.utc)")
+            < source.index("listed = _listing(client)")
+            < source.index("listed_at=listed_at"))

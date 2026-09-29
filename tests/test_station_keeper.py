@@ -108,7 +108,8 @@ class Station:
                         "stored_link": "", "booted": True, "powered_off": True,
                         "exit_shared": False, "is_watched": False,
                         "reserve_warm": "incomplete", "unreserve_warm": True,
-                        "give_back": None, "hold_state": None}
+                        "give_back": None, "hold_state": None,
+                        "expire_power": 0, "power_pending_of": None}
         self.answers.update(answers)
         for name in self.answers:
             monkeypatch.setattr(store_station, name, self._fake(name))
@@ -230,7 +231,8 @@ def test_calling_off_a_running_build_asks_its_serial_to_stop_only_while_it_build
     monkeypatch.setattr(store_stops, "ask",
                         lambda s, serial: (_ for _ in ()).throw(OSError("down")))
     status, said, _ = verbs.call_off_build(None, None, on, {"wanted_id": 12}, None)
-    assert status == "failed" and "could not be written" in said
+    assert (status, said) == ("failed", "could not reach the builders - press "
+                                        "Call off again")
 
     for stage, words in (("ended", "That build has already ended."),
                          ("landed", "That build has already landed on your station.")):
@@ -547,10 +549,45 @@ def test_change_ip_says_ip_and_names_no_vendor_when_the_cloud_refuses(
     monkeypatch.setattr(phones_mod, "set_proxy", refuse)
     status, said, detail = _change(book, on, was_on_page="on")
     assert status == "failed"
-    assert said == "IranSpoty Cloud refused the new IP: [45004] proxy check failed"
+    assert said == "the new IP was refused - phone 1500 kept SX0"
     assert detail == {"off": True, "station": True}
     assert book.proxies.status_of(book.proxies.find_by_name("SX1")) == "free"
+    assert "45004" not in book.proxies.find_by_name("SX1").values["Note"]
     assert fake.asked("powered_off") == [(("1500",), {})], "it was stopped"
+
+    # The vendor's own words, path and trace id never reach a sentence;
+    # its code rides in the detail for a page that needs it.
+    from geelark_farm.api import ApiError
+
+    def vendor_refuses(client, pid, proxy):
+        raise ApiError(45004, "GeeLark says no", path="/v1/phone/detail/update",
+                       trace_id="t-1")
+
+    monkeypatch.setattr(phones_mod, "set_proxy", vendor_refuses)
+    status, said, detail = _change(_book(), on, was_on_page="on")
+    assert said == "the new IP was refused - phone 1500 kept SX0"
+    assert detail == {"off": True, "station": True, "code": 45004}
+    status, said, detail = verbs.change_proxy(
+        _book(), None, on, {"serial": "1500", "by": "ali"}, object())
+    assert (status, said, detail) == (
+        "failed", "the new IP was refused - phone 1500 kept SX0",
+        {"code": 45004})
+
+    def no_start(client, pid, **k):
+        raise ApiError(43043, "GeeLark start failed", path="/v1/phone/start",
+                       trace_id="t-2")
+
+    monkeypatch.setattr(phones_mod, "set_proxy", lambda *a: None)
+    monkeypatch.setattr(phones_mod, "start", no_start)
+    status, said, detail = _change(_book(), on, was_on_page="on")
+    assert said == ("phone 1500 is on SX1 now but would not start - press "
+                    "Boot again in a minute")
+    assert detail["code"] == 43043 and detail["off"] is True
+    status, said, detail = verbs.boot_phone(
+        _book(), None, on, {"serial": "1500", **STATION}, object())
+    assert (status, said, detail) == (
+        "failed", "phone 1500 would not start - press Boot again in a minute",
+        {"code": 43043})
 
 
 def test_a_dashboard_change_ip_never_moves_somebodys_station_hold(
@@ -1104,6 +1141,279 @@ def test_the_verbs_name_no_vendor():
             assert "geelark" not in text.lower(), (fn.__name__, text)
 
 
+# ------------------------------------------- review fixes, 2026-09-29
+def test_give_back_closes_orphaned_presses_first_and_says_so_when_no_off_is_queued(
+        monkeypatch, on, caplog):
+    """keeper-1, store-3: an orphaned power press is closed before the
+    give-back, and a give-back with no power-off behind it is an error in
+    the log, not a silence."""
+    import logging
+
+    fake = Station(monkeypatch, give_back={"id": 1, "lane": "gpt",
+                                           "running": True, "off_id": 77})
+    verbs.give_back(None, None, on, {"serial": "1500", "by_id": UID}, None)
+    names = [n for n, _a, _k in fake.said]
+    assert names.index("expire_power") < names.index("give_back")
+    assert fake.asked("expire_power") == [(("1500",), {})]
+    assert fake.asked("power_pending_of") == [], "an off was queued"
+
+    fake.answers["give_back"] = {"id": 1, "lane": "gpt", "running": True,
+                                 "off_id": None}
+    with caplog.at_level(logging.ERROR):
+        assert verbs.give_back(None, None, on, {"serial": "1500", "by_id": UID},
+                               None)[0] == "done"
+    assert "given back but no power-off was queued" in caplog.text
+    assert fake.asked("power_pending_of") == [(("1500", ("power_off_phone",)),
+                                               {})]
+    # One already pending (an earlier give-back's): nothing to say.
+    caplog.clear()
+    fake.answers["power_pending_of"] = {"id": 5, "verb": "power_off_phone",
+                                        "stale": False}
+    with caplog.at_level(logging.ERROR):
+        verbs.give_back(None, None, on, {"serial": "1500", "by_id": UID}, None)
+    assert "no power-off" not in caplog.text
+    # A store that cannot close the orphans still gives the phone back.
+    fake.answers["expire_power"] = RuntimeError("down")
+    assert verbs.give_back(None, None, on, {"serial": "1500", "by_id": UID},
+                           None)[0] == "done"
+
+
+def test_a_give_backs_power_off_leaves_a_phone_somebody_took_again(
+        monkeypatch, on):
+    """keeper-2: the give-back's power-off, run after the phone was taken
+    from the shelf again, never switches off the new holder's phone."""
+    vendor = Vendor(monkeypatch, status=phones_mod.RUNNING)
+    fake = Station(monkeypatch, station_holder=9)
+    for why in ("given back", "alone"):
+        assert verbs.power_off_phone(None, FakeLedger(), on,
+                                     {"serial": "1500", "why": why},
+                                     object()) == (
+            "done", "phone 1500 was taken again - left on", None)
+    assert vendor.calls == [] and fake.asked("powered_off") == []
+    # A closed tab's power-off and the dashboard's are not give-backs.
+    for why in ("closed", ""):
+        vendor.calls.clear()
+        verbs.power_off_phone(None, FakeLedger(), on,
+                              {"serial": "1500", "why": why}, object())
+        assert vendor.names() == ["stop"], why
+    # Still on the shelf: switched off.
+    fake.answers["station_holder"] = None
+    vendor.calls.clear()
+    said = verbs.power_off_phone(None, FakeLedger(), on,
+                                 {"serial": "1500", "why": "given back"},
+                                 object())[1]
+    assert said == "phone 1500 is off - it stops billing"
+    assert vendor.names() == ["stop"]
+
+
+def test_every_power_verb_reads_the_phone_inside_its_lock(monkeypatch, on):
+    """keeper-4: the listing a power verb decides from is taken under the
+    phone's lock, never before it."""
+    vendor = Vendor(monkeypatch, status=phones_mod.RUNNING)
+    Station(monkeypatch)
+    listing = vendor.listing
+
+    def listed(client, **k):
+        vendor.calls.append(("list",))
+        return listing(client, **k)
+
+    monkeypatch.setattr(phones_mod, "listing", listed)
+    monkeypatch.setattr(phones_mod, "power_lock", Lock(vendor.calls))
+    verbs.boot_phone(_book(), None, on, {"serial": "1500", **STATION}, object())
+    _change(_book(), on, was_on_page="on")
+    verbs.power_off_phone(None, FakeLedger(), on, {"serial": "1500"}, object())
+    assert _inside(vendor.calls, ("list",)) == ["list", "list", "list"]
+
+    # The sweep stopped the phone while a Boot waited on the lock: the Boot
+    # reads it off and starts it, never handing back the dead link.
+    vendor.calls.clear()
+    vendor.status = phones_mod.STOPPED
+    fake = Station(monkeypatch, stored_link="https://v/dead")
+    status, said, detail = verbs.boot_phone(
+        _book(), None, on, {"serial": "1500", **STATION}, object())
+    assert detail["url"] == "https://v/1" and "start" in vendor.names()
+    assert fake.asked("stored_link") == []
+
+
+def test_the_legacy_sweep_clears_the_link_inside_the_power_lock(monkeypatch, on):
+    """keeper-m1: the stored link is gone before the lock is let go."""
+    calls: list = []
+    monkeypatch.setattr(phones_mod, "power_lock", Lock(calls))
+    monkeypatch.setattr(phones_mod, "stop",
+                        lambda client, pid: calls.append(("stop", pid)))
+    monkeypatch.setattr(store_station, "powered_off",
+                        lambda s, serial: calls.append(("off", serial)) or True)
+    monkeypatch.setattr(forgotten, "_station_sweep",
+                        lambda *a, **k: {"off": [], "given_back": []})
+    monkeypatch.setattr(forgotten, "overdue", lambda s, m, g=45: [
+        {"serial": "1500", "status": "ready", "state": "", "owner": "",
+         "on_seconds": 4000}])
+    monkeypatch.setattr(forgotten, "_still_legacy", lambda s, serial: True)
+    monkeypatch.setattr(store_events, "emit", lambda *a, **k: True)
+    out = forgotten.sweep(object(), on, FakeLedger(),
+                          [{"serialNo": "1500", "id": "P1500",
+                            "status": phones_mod.RUNNING}])
+    assert _inside(calls, ("stop", "off")) == ["stop", "off"]
+    assert out["off"] == ["1500"]
+
+    # A stop that fails writes nothing off.
+    calls.clear()
+
+    def broken(client, pid):
+        raise phones_mod.PhoneError("no")
+
+    monkeypatch.setattr(phones_mod, "stop", broken)
+    out = forgotten.sweep(object(), on, FakeLedger(),
+                          [{"serialNo": "1500", "id": "P1500",
+                            "status": phones_mod.RUNNING}])
+    assert ("off", "1500") not in calls and out["off"] == []
+
+
+def test_the_power_verbs_survive_the_clouds_hangs_in_words(monkeypatch, on):
+    """keeper-5: a call that never came back is an answer in words, the
+    exit it claimed goes back, and the store says off once a stop went
+    through."""
+    from geelark_farm.api import TransportError
+
+    def hang(*a, **k):
+        raise TransportError("no answer after 3 tries")
+
+    # The check of the new exit hangs: nothing touched, the exit put back.
+    book = _book()
+    vendor = Vendor(monkeypatch, status=phones_mod.RUNNING)
+    fake = Station(monkeypatch)
+    monkeypatch.setattr(verbs.proxy_mod, "check", hang)
+    status, said, detail = _change(book, on, was_on_page="on")
+    assert (status, said) == ("failed", "the IP could not be changed right now "
+                                        "- phone 1500 kept SX0")
+    assert detail == {"off": False, "station": True}
+    assert vendor.calls == []
+    assert book.proxies.status_of(book.proxies.find_by_name("SX1")) == "free"
+    assert _row(book)["Proxy"] == "SX0"
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
+
+    # The wait after the stop, or the move itself, hangs: the phone was
+    # asked to stop, so the store says off and the page offers Boot.
+    for where in ("wait_until_stopped", "set_proxy"):
+        book = _book()
+        vendor.calls.clear()
+        fake.said.clear()
+        with monkeypatch.context() as m:
+            m.setattr(phones_mod, where, hang)
+            status, said, detail = _change(book, on, was_on_page="on")
+        assert (status, said) == ("failed", "the new IP was refused - phone "
+                                            "1500 kept SX0"), where
+        assert detail == {"off": True, "station": True}, where
+        assert fake.asked("powered_off") == [(("1500",), {})], where
+        sx1 = book.proxies.find_by_name("SX1")
+        assert book.proxies.status_of(sx1) == "free", where
+
+    # The start on the new exit hangs.
+    book = _book()
+    fake.said.clear()
+    monkeypatch.setattr(phones_mod, "start", hang)
+    status, said, detail = _change(book, on, was_on_page="on")
+    assert said == ("phone 1500 is on SX1 now but would not start - press "
+                    "Boot again in a minute")
+    assert detail["off"] is True and fake.asked("powered_off")
+
+    # Boot and Power off.
+    vendor.status = phones_mod.STOPPED
+    assert verbs.boot_phone(_book(), None, on, {"serial": "1500", **STATION},
+                            object()) == (
+        "failed", "phone 1500 did not answer - press Boot again in a minute",
+        None)
+    vendor.status = phones_mod.RUNNING
+    monkeypatch.setattr(phones_mod, "stop", hang)
+    assert verbs.power_off_phone(None, FakeLedger(), on, {"serial": "1500"},
+                                 object()) == (
+        "failed", "phone 1500 would not stop - it is tried again", None)
+
+
+def test_a_second_call_off_asks_the_stop_again_while_the_phone_builds(
+        monkeypatch, on):
+    """keeper-7: the first press wrote the call-off and stumbled before
+    its stop; the second one ('already') asks the stop again."""
+    from geelark_farm.store import stops as store_stops
+
+    stops = []
+    monkeypatch.setattr(store_stops, "ask", lambda s, serial: stops.append(serial))
+    fake = Station(monkeypatch, hold_state={"status": "building", "state": ""})
+    _call_off(monkeypatch, {"stage": "already", "serial": "1500",
+                            "proxy_name": "", "status": "running", "id": 12})
+    assert verbs.call_off_build(None, None, on, {"wanted_id": 12}, None) == (
+        "done", "The build is already being called off.",
+        {"wanted_id": 12, "stage": "already"})
+    assert stops == ["1500"]
+
+    # Landed meanwhile: no stop, and the same answer as before.
+    fake.answers["hold_state"] = {"status": "ready", "state": "taken"}
+    said = verbs.call_off_build(None, None, on, {"wanted_id": 12}, None)[1]
+    assert said == "The build is already being called off."
+    assert stops == ["1500"]
+
+    # The phone cannot be read, on either press: said, never a traceback.
+    fake.answers["hold_state"] = RuntimeError("down")
+    for stage in ("already", "running"):
+        _call_off(monkeypatch, {"stage": stage, "serial": "1500",
+                                "proxy_name": "", "status": "running", "id": 12})
+        assert verbs.call_off_build(None, None, on, {"wanted_id": 12},
+                                    None) == (
+            "failed", "could not reach the builders - press Call off again",
+            None)
+    assert stops == ["1500"]
+
+
+def test_the_station_sweep_closes_orphans_and_queues_one_power_off(
+        sweep, monkeypatch):
+    """store-3 and rev 42's narrower index: orphaned presses are closed
+    before the hour's give-back and the closed tab's power-off, and a
+    power-off already queued is not queued again."""
+    order: list = []
+    pending: list = [None]
+    monkeypatch.setattr(store_station, "expire_power",
+                        lambda s, serial: order.append(("expire", serial)) or 0)
+    monkeypatch.setattr(store_station, "power_pending_of",
+                        lambda s, serial, verbs=None:
+                        order.append(("pending", serial, verbs)) or pending[0])
+    monkeypatch.setattr(store_station, "give_back_idle",
+                        lambda s, serial, m, g: order.append(("give", serial))
+                        or None)
+    monkeypatch.setattr(store_station, "queue_off_closed",
+                        lambda s, serial, g, c: order.append(("queue", serial))
+                        or 91)
+    sweep.rows = [_hold(why="alone")]
+    forgotten.sweep(object(), sweep.settings, FakeLedger(), _listed())
+    assert order == [("expire", "1500"), ("give", "1500")]
+
+    order.clear()
+    sweep.rows = [_hold(why="closed")]
+    assert forgotten.sweep(object(), sweep.settings, FakeLedger(),
+                           _listed())["off"] == ["1500"]
+    assert order == [("expire", "1500"),
+                     ("pending", "1500", ("power_off_phone",)),
+                     ("queue", "1500")]
+
+    order.clear()
+    sweep.events.clear()
+    pending[0] = {"id": 91, "verb": "power_off_phone", "stale": False}
+    assert forgotten.sweep(object(), sweep.settings, FakeLedger(),
+                           _listed())["off"] == []
+    assert ("queue", "1500") not in order and sweep.events == []
+
+    # A store that will not answer either question: the power-off is
+    # still queued.
+    def broken(*a, **k):
+        raise RuntimeError("down")
+
+    order.clear()
+    monkeypatch.setattr(store_station, "expire_power", broken)
+    monkeypatch.setattr(store_station, "power_pending_of", broken)
+    assert forgotten.sweep(object(), sweep.settings, FakeLedger(),
+                           _listed())["off"] == ["1500"]
+
+
 # ========================================================== the cluster
 DSN = os.environ.get("GEELARK_TEST_DSN", "")
 needs_cluster = pytest.mark.skipif(
@@ -1299,3 +1609,159 @@ def test_give_back_and_a_station_verdict_run_end_to_end_on_the_cluster(cluster):
     row = cluster.row(mine)
     assert (row["state"], row["owner_id"], row["taken_at"]) == ("failed", None,
                                                                 None)
+
+
+def _press(cluster, verb, serial, *, status="queued", age=0, by=None):
+    """A power press on the cluster, `age` seconds old."""
+    return cluster.sql(
+        "INSERT INTO actions (verb, payload, requested_by, status,"
+        " requested_at, executed_at)"
+        " VALUES (%s, %s, %s, %s, now() - %s * interval '1 second',"
+        " CASE WHEN %s = 'running' THEN now() - %s * interval '1 second' END)"
+        " RETURNING id",
+        (verb, json.dumps({"serial": serial}), by, status, age, status,
+         age))[0]["id"]
+
+
+def _status(cluster, action_id):
+    return cluster.sql("SELECT status, result FROM actions WHERE id = %s",
+                       (action_id,))[0]
+
+
+@needs_cluster
+def test_a_power_press_closed_while_it_waited_in_its_batch_never_runs(
+        cluster, monkeypatch):
+    """keeper-2: freshness starts when a press really starts. A press the
+    web closed as an orphan while it waited down a slow batch is skipped,
+    and one still open is stamped fresh before it runs."""
+    from geelark_farm import serve as serve_mod
+    from geelark_farm.store.db import connect
+
+    serial = cluster.phone()
+    ran = []
+    monkeypatch.setitem(serve_mod.ACTION_VERBS, "power_off_phone",
+                        lambda *a: ran.append(a[3]) or ("done", "off", None))
+    monkeypatch.setattr(serve_mod, "_event", lambda *a, **k: None)
+    closed = _press(cluster, "power_off_phone", serial, status="running",
+                    age=400)
+    assert store_station.expire_power(cluster.s, serial) == 1
+    with connect(cluster.s) as conn:
+        assert serve_mod._run_action(
+            cluster.s, conn, {"id": closed, "verb": "power_off_phone",
+                              "payload": {"serial": serial},
+                              "requested_by": None},
+            book=None, ledger=None, client=None) == 1
+    assert ran == [], "a press closed while it waited is not run"
+    assert _status(cluster, closed)["result"].startswith("closed: no answer")
+
+    waiting = _press(cluster, "power_off_phone", serial, status="running",
+                     age=170)
+    with connect(cluster.s) as conn:
+        serve_mod._run_action(
+            cluster.s, conn, {"id": waiting, "verb": "power_off_phone",
+                              "payload": {"serial": serial},
+                              "requested_by": None},
+            book=None, ledger=None, client=None)
+    assert ran == [{"serial": serial}]
+    row = cluster.sql("SELECT status, executed_at > now() - interval '1 minute'"
+                      " AS fresh FROM actions WHERE id = %s", (waiting,))[0]
+    assert row == {"status": "done", "fresh": True}
+
+
+@needs_cluster
+def test_a_give_back_over_an_orphaned_press_still_switches_the_phone_off(
+        cluster, monkeypatch):
+    """keeper-1, store-3: a Boot a restart left `running` four minutes ago
+    neither blocks the give-back nor swallows its power-off, and it is
+    closed so it never runs after the phone is back."""
+    a = cluster.user("a")
+    who = {"by": "sara", "by_id": a, "where": "station"}
+    hold = cluster.phone(owner=a, station=True, state="taken", running=True)
+    orphan = _press(cluster, "boot_phone", hold, status="running", age=240,
+                    by=a)
+    status, said, detail = verbs.give_back(None, None, cluster.s,
+                                           {"serial": hold, **who}, None)
+    assert status == "done" and detail["off"] is not None
+    assert _status(cluster, orphan)["status"] == "failed"
+    off = cluster.sql("SELECT status FROM actions WHERE id = %s",
+                      (detail["off"],))
+    assert off == [{"status": "queued"}]
+
+    # The hour's give-back, over the same kind of orphan.
+    idle = cluster.phone(owner=a, station=True, state="taken", running=True)
+    cluster.sql("UPDATE phones SET taken_at = now() - interval '2 hours'"
+                " WHERE serial = %s", (idle,))
+    orphan = _press(cluster, "change_proxy", idle, status="running", age=240,
+                    by=a)
+    forgotten._close_orphans(cluster.s, idle)
+    back = store_station.give_back_idle(cluster.s, idle, 60, 45)
+    assert back is not None and back["off_id"] is not None
+    assert _status(cluster, orphan)["status"] == "failed"
+
+    # A closed tab's power-off, queued once however many passes see it.
+    closed = cluster.phone(owner=a, station=True, state="taken", running=True)
+    cluster.sql("UPDATE phones SET tab_closed_at = now() - interval '1 minute'"
+                " WHERE serial = %s", (closed,))
+    _press(cluster, "boot_phone", closed, status="running", age=240, by=a)
+    live = {closed: {"serialNo": closed, "id": "PH" + closed,
+                     "status": phones_mod.RUNNING}}
+    everyone = store_station.overdue
+    monkeypatch.setattr(store_station, "overdue", lambda *a, **k: [
+        r for r in everyone(*a, **k) if r["serial"] == closed])
+    for _ in range(3):
+        forgotten._station_sweep(cluster.s, live, 60, 45)
+    offs = cluster.sql("SELECT status FROM actions WHERE verb = 'power_off_phone'"
+                       " AND payload->>'serial' = %s", (closed,))
+    assert offs == [{"status": "queued"}]
+
+
+@needs_cluster
+def test_a_boot_queued_before_a_give_back_is_refused_by_its_holder_check(
+        cluster, monkeypatch):
+    """D1: a Station Boot that runs after its phone was given back finds
+    no hold and starts nothing."""
+    a = cluster.user("a")
+    hold = cluster.phone(owner=a, station=True, state="taken")
+    book = _book(phone=hold, on="")
+    started = []
+    monkeypatch.setattr(phones_mod, "listing", lambda client, **k: [
+        {"id": "PH" + hold, "serialNo": hold, "status": phones_mod.STOPPED}])
+    monkeypatch.setattr(phones_mod, "start",
+                        lambda *a, **k: started.append(1) or "https://v/1")
+    assert store_station.give_back(cluster.s, serial=hold, owner_id=a,
+                                   by="sara") is not None
+    status, said, _ = verbs.boot_phone(book, None, cluster.s,
+                                       {"serial": hold, "by": "sara",
+                                        "by_id": a, "station": True}, object())
+    assert (status, said) == ("refused", f"phone {hold} is not yours any more "
+                                         f"- it went back to the shelf")
+    assert started == []
+
+
+@needs_cluster
+def test_a_power_off_is_queued_beside_a_pending_boot_but_two_boots_are_not(
+        cluster):
+    """D1 (keeper-3, deploy-5): the one-press index covers Boot and Change
+    IP only, so a Release's or a give-back's power-off is always queued,
+    while a second Boot or Change IP on one phone is still refused."""
+    from psycopg.errors import UniqueViolation
+
+    from geelark_farm.store import actions as store_actions
+
+    a = cluster.user("a")
+    serial = cluster.phone(owner=a, state="taken")
+    tag = uuid.uuid4().hex[:8]
+    store_actions.enqueue(cluster.s, verb="boot_phone",
+                          payload={"serial": serial}, requested_by=a,
+                          idem_key=f"b1:{tag}")
+    off = store_actions.enqueue(cluster.s, verb="power_off_phone",
+                                payload={"serial": serial}, requested_by=a,
+                                idem_key=f"o1:{tag}")
+    assert off is not None
+    store_actions.enqueue(cluster.s, verb="power_off_phone",
+                          payload={"serial": serial}, requested_by=a,
+                          idem_key=f"o2:{tag}")
+    with pytest.raises(UniqueViolation):
+        store_actions.enqueue(cluster.s, verb="change_proxy",
+                              payload={"serial": serial}, requested_by=a,
+                              idem_key=f"c1:{tag}")

@@ -65,7 +65,8 @@ button:focus-visible,[role="button"]:focus-visible{outline:2px solid var(--blue)
    beside it, a hairline, then each count as a small stack - the number in its
    colour over its name - so the five read without a legend. One capsule, the
    height of the Take cards; hovering a count lights its arc in the ring. */
-.day{grid-area:day;justify-self:center;display:flex;align-items:center;gap:12px;height:56px;padding:0 18px 0 11px;border-radius:14px;
+.dayc{grid-area:day;min-width:0;container:day/inline-size;display:flex;justify-content:center}
+.day{display:flex;align-items:center;gap:12px;height:56px;padding:0 18px 0 11px;border-radius:14px;
  background:linear-gradient(180deg,rgba(24,33,52,.78),rgba(16,23,38,.78));border:1px solid var(--line2);
  box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 14px 34px -26px rgba(0,0,0,.9);transition:height .25s var(--ease)}
 .day .donut{position:relative;width:38px;height:38px;flex:none;transition:width .25s var(--ease),height .25s var(--ease)}
@@ -615,30 +616,31 @@ body.on-live{overflow:hidden}
 
 /* One line at every desktop width. As it narrows, the Results title goes
    first, then your name, the small line under each Take, then Results keeps
-   its ring and title, then its ring alone. Under 1000px the bar takes two
+   its ring and title, then its ring alone. Under 1040px the bar takes two
    rows - the brand, Results and you on top, the three buttons under them -
    and at phone width the Take buttons drop their first word and Build its. */
-@media (max-width:1439px){.day .ttl{display:none}}
-@media (max-width:1400px){.day{gap:10px;padding:0 15px 0 10px}.day .sep{margin:0 2px}.day .n small{font-size:9px;letter-spacing:.06em}}
-@media (max-width:1360px){.who .nm{display:none}.who .me{padding:4px}}
+@media (max-width:1440px){.who .nm{display:none}.who .me{padding:4px}}
 @media (max-width:1320px){.take .t small{display:none}.take{height:48px}.take .ic{width:32px;height:32px}
  .day{height:48px}.day .donut{width:32px;height:32px}.day .donut b{font-size:11px}}
-@media (max-width:1240px){.day .ttl{display:flex}.day .sep,.day .n{display:none}.day{padding:0 16px 0 9px}}
-@media (max-width:1120px){.day .ttl{display:none}.day{padding:0 9px}}
-@media (max-width:1000px){.bar,.bar.tight{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand day who" "takes takes takes";row-gap:12px}
- .who{justify-self:end;padding-left:0;border-left:0}.takes{width:100%}.take{flex:1}.take .n{margin-left:auto;padding-left:6px}
- .day .sep{display:block}.day .n{display:flex}.day{padding:0 15px 0 10px}}
-@media (max-width:680px){.day .ttl{display:flex}.day .sep,.day .n{display:none}.day{padding:0 16px 0 9px}}
+@media (max-width:1040px){.bar,.bar.tight{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand day who" "takes takes takes";row-gap:12px}
+ .who{justify-self:end;padding-left:0;border-left:0}.takes{width:100%}.take{flex:1}.take .n{margin-left:auto;padding-left:6px}}
+/* Results is shaped by the room its own column has, not by the window: the
+   names, the Takes and a scrollbar all take from it. Its widths as drawn:
+   full 381, no title 326, tight 286, title only 120, ring alone 58. */
+@container day (max-width:344.98px){.day .ttl{display:none}}
+@container day (max-width:289.98px){.day{gap:10px;padding:0 15px 0 10px}.day .sep{margin:0 2px}.day .n small{font-size:9px;letter-spacing:.06em}}
+@container day (max-width:249.98px){.day .ttl{display:flex}.day .sep,.day .n{display:none}.day{padding:0 16px 0 9px}}
+@container day (max-width:83.98px){.day .ttl{display:none}.day{padding:0 9px}}
 @media (max-width:760px){.bn{display:none}}
 @media (max-width:640px){.who .out{width:32px;padding:0;justify-content:center}.who .out span{display:none}
  .col{width:min(100%,440px)}.hd .s{font-size:30px}.bench{padding-top:22px}}
-@media (max-width:560px){.day .ttl{display:none}.day{padding:0 9px}.bar,.bar.tight{column-gap:14px}
+@media (max-width:560px){.day .ttl,.day .sep,.day .n{display:none}.day{padding:0 9px}.bar,.bar.tight{column-gap:14px}
  .takes{gap:8px}.take{flex:1 1 auto;min-width:0;height:46px;gap:8px;padding:0 10px 0 7px}.take .t{overflow:hidden}
  .take .t b{overflow:hidden;text-overflow:ellipsis}.take .tk{display:none}.take .n{margin-left:auto;font-size:22px}
  .take.build{flex:0 0 auto;padding:0 7px}.take.build .t{display:none}}
 @media (max-width:420px){.brand,.bar.tight .brand{--lh:32px}}
 @media (max-width:380px){.take:not(.build) .t{display:none}.take{justify-content:center}.take .n{margin-left:2px;padding-left:0}}
-@media (max-width:340px){.day{display:none}}
+@media (max-width:340px){.dayc{display:none}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
  .verdict .armed .rim circle{animation:none}
  /* What is waiting still shows it is alive - by a slow fade instead of motion. */
@@ -656,8 +658,14 @@ body.on-live{overflow:hidden}
 .lt-bar,.lt-box{flex:none}
 .lt-box{position:relative;overflow:hidden}
 #lt-view{flex:none;border:0;display:block;transform-origin:0 0;background:#000}
+/* The width the script gives the column is the viewer's own: its hairline
+   border sits outside it, so the frame's right edge is never clipped. */
+.lt-col{box-sizing:content-box;flex:none}
 /* Stacked, the phone is fitted to the width and the stage grows with it. */
 @media (max-width:900px){.lt-stage{height:auto;overflow:visible}}
+/* Stacked, the page's scrollbar is kept in its place from the start, so the
+   width the phone was fitted to is still there once the margin fills in. */
+@media (max-width:900px){.lt{scrollbar-gutter:stable}}
 /* A build that failed: its orb stops, its tile dims like an off phone's. */
 .col.ghost.failed .g-ring,.col.ghost.failed .g-orb::after{animation:none;opacity:0}
 .col.ghost.failed .app{filter:saturate(.45) brightness(.66)}

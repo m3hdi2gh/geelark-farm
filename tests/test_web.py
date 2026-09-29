@@ -7411,6 +7411,12 @@ def test_the_live_tab_writes_the_phones_gmail_in_the_margin_for_its_holder(
                          "sees": "all", "may_take_phones": True})
     other = web()
     other.login(username="sara")
+    # Another person's request is not framed at all - its detail is the
+    # phone's interactive viewer (2026-09-29).
+    _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
+    assert "phone.geelark.com" not in body and 'id="gf-reload"' not in body
+    # Her own Boot of a phone that is now ali's: framed, and no margin.
+    row["requested_by"] = 9
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
     assert "On this phone" not in body and "JBSWY3DPEHPK3PXP" not in body
     assert 'id="gf-reload"' in body, "the margin still carries the controls"
@@ -7547,7 +7553,7 @@ def test_the_live_tab_changes_the_ip_without_leaving_the_page(web,
                          "may_change_proxy": False})
     other = web()
     other.login(username="sara")
-    row.update(status="done", result="ok",
+    row.update(status="done", result="ok", requested_by=9,
                detail={"state": "taken",
                        "url": "https://phone.geelark.com/i?t=abc"})
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
@@ -7614,6 +7620,7 @@ def test_the_live_tab_offers_done_and_failed_beside_its_controls(web,
                          "sees": "all", "may_take_phones": False})
     other = web()
     other.login(username="sara")
+    row["requested_by"] = 9          # her own Boot: only that is framed
     _, _, body = other.request("GET", "/phones/1500/live?said=queued:71")
     assert 'class="gf-acts"' not in body and "window.confirm" not in body
     assert 'id="gf-reload"' in body

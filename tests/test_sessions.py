@@ -8,6 +8,7 @@ out (2026-09-05). These are about the table that replaced it.
 from __future__ import annotations
 
 import hashlib
+import os
 
 import pytest
 
@@ -122,10 +123,13 @@ def test_an_unknown_cookie_is_simply_nobody(store, make_settings):
 def test_a_store_that_cannot_be_reached_does_not_forge_a_logout(
         store, make_settings, caplog):
     """Refusing the request is right; saying "you are logged out" is a
-    second, wrong story about what went wrong."""
+    second, wrong story about what went wrong. It raises, so the web
+    answers its store-down 503 rather than a 401 that sends the Station
+    to /login and stops every Live tab's beat (2026-09-29)."""
     store(raises=RuntimeError("no route to host"))
 
-    assert sessions.find(make_settings(), "tok") is None
+    with pytest.raises(RuntimeError, match="no route to host"):
+        sessions.find(make_settings(), "tok")
     assert "could not read the session" in caplog.text
 
 
@@ -209,3 +213,95 @@ def test_no_session_is_kept_in_the_web_process():
     assert not re.search(r"\b_sessions\b", source), (
         "a session dict is back in the web process; it will be emptied by "
         "the next deploy")
+
+
+class _Conn:
+    """The caller's connection, as `rotate` uses it: statements in order."""
+
+    def __init__(self, found=True):
+        self.found = found
+        self.sql: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, params=()):
+        self.sql.append((sql, params))
+        conn = self
+
+        class _Cur:
+            def fetchone(self):
+                return ("h",) if conn.found else None
+        return _Cur()
+
+
+def test_rotate_keeps_this_browsers_old_seat_for_a_minute_and_ends_the_rest():
+    """A beat already on its way with the old cookie must not read as
+    signed out (web-3): the old seat is cut to a minute, not deleted;
+    every other seat of the person goes at once."""
+    conn = _Conn()
+
+    new = sessions.rotate(conn, "old-tok", 9, hours=12)
+
+    assert new and new != "old-tok"
+    (_ins, ins_params), (delete, del_params), (update, up_params) = conn.sql
+    assert ins_params[2] == _sha("old-tok")
+    assert "NOT IN (%s, %s)" in delete
+    assert del_params == (9, _sha(new), _sha("old-tok"))
+    assert update.startswith("UPDATE sessions SET until = least(until")
+    assert up_params == (sessions.OLD_SEAT_GRACE_SECONDS, _sha("old-tok"), 9)
+    assert sessions.OLD_SEAT_GRACE_SECONDS == 60
+    assert sessions.rotate(_Conn(found=False), "gone", 9, hours=12) is None
+
+
+# ====================================================== against a cluster
+DSN = os.environ.get("GEELARK_TEST_DSN", "")
+needs_cluster = pytest.mark.skipif(
+    not DSN, reason="set GEELARK_TEST_DSN to run store integration tests")
+
+
+@needs_cluster
+def test_a_rotated_seat_lives_a_minute_and_the_others_end_at_once(
+        make_settings):
+    import uuid
+
+    from geelark_farm.store import auth
+    from geelark_farm.store import db as store_db
+
+    parts = dict(p.split("=", 1) for p in DSN.split())
+    s = make_settings(
+        store_enabled=True, store_host=parts["host"],
+        store_port=int(parts.get("port", 5432)), store_db=parts["dbname"],
+        store_user=parts["user"], store_password=parts["password"])
+    store_db.ensure_schema(s)
+    hashed = auth.hash_password("pw-12345678")
+    with store_db.connect(s) as conn:
+        uid = conn.execute(
+            "INSERT INTO users (username, role, sees, active, password_hash,"
+            " password_salt, scrypt_n, scrypt_r, scrypt_p)"
+            " VALUES (%s, 'operator', 'own', true, %s, %s, %s, %s, %s)"
+            " RETURNING id",
+            ("ss_" + uuid.uuid4().hex[:10], hashed["password_hash"],
+             hashed["password_salt"], hashed["scrypt_n"], hashed["scrypt_r"],
+             hashed["scrypt_p"])).fetchone()[0]
+        conn.commit()
+    try:
+        mine, csrf = sessions.start(s, uid, hours=12)
+        other, _ = sessions.start(s, uid, hours=12)
+        with store_db.connect(s) as conn:
+            fresh = sessions.rotate(conn, mine, uid, hours=12)
+            conn.commit()
+        assert fresh and sessions.find(s, fresh)["csrf"] == csrf
+        assert sessions.find(s, other) is None, "another browser is out"
+        assert sessions.find(s, mine)["csrf"] == csrf, "the old seat lingers"
+        with store_db.connect(s) as conn:
+            left = conn.execute(
+                "SELECT extract(epoch FROM until - now()) FROM sessions"
+                " WHERE token_hash = %s", (_sha(mine),)).fetchone()[0]
+            conn.execute("UPDATE sessions SET until = now() - interval"
+                         " '1 second' WHERE token_hash = %s", (_sha(mine),))
+            conn.commit()
+        assert 0 < float(left) <= 60
+        assert sessions.find(s, mine) is None, "and then it is gone"
+    finally:
+        with store_db.connect(s) as conn:
+            conn.execute("DELETE FROM sessions WHERE user_id = %s", (uid,))
+            conn.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()

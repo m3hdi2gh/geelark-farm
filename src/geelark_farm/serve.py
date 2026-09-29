@@ -45,6 +45,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from . import phones, verbs
 from .api import Client, build_client
@@ -725,6 +726,8 @@ def _run_action(settings: Settings, conn, action: dict, *, book: Book,
         store_actions.finish(conn, action["id"], status="refused",
                              result=f"unknown verb: {action['verb']}")
         return 1
+    if action["verb"] in _POWER_VERBS and not _still_pending(conn, action):
+        return 1
     try:
         # A verb that starts phone work (C6's login) gets the pass's
         # launcher, so its jobs run under the same fuse and flight as the
@@ -768,6 +771,45 @@ def _run_action(settings: Settings, conn, action: dict, *, book: Book,
            serial=str((action["payload"] or {}).get("serial") or ""),
            detail=f"#{action['id']} {action['verb']}: {result}")
     return 1
+
+
+#: The presses that switch a phone on or off. Their freshness is judged
+#: by `executed_at` (store.station.POWER_STALE_SECONDS), so it is stamped
+#: again when one really starts, not when its batch was claimed.
+_POWER_VERBS = ("boot_phone", "change_proxy", "power_off_phone")
+
+
+def _still_pending(conn, action: dict) -> bool:
+    """Stamp a power press as starting now, only if it is still `running`.
+
+    `take_batch` stamps a whole batch at the claim, so a press far down a
+    slow batch can pass the Station's three minutes before its turn. The
+    web then closes it as an orphan and lets a new press in - and the old
+    one, run anyway, would switch off a phone somebody else has just
+    booted. The row lock settles the race: either the close came first and
+    this press is skipped, or this stamp came first and the web reads a
+    fresh press and says busy. A store that will not answer runs it."""
+    try:
+        got = conn.execute(
+            "UPDATE actions SET executed_at = now()"
+            " WHERE id = %s AND status = 'running' RETURNING id",
+            (action["id"],)).fetchone()
+        conn.commit()
+    except Exception as exc:                                      # noqa: BLE001
+        # Run as before this guard: a press dropped for a store hiccup
+        # is worse than the rare race the stamp is for.
+        log.warning("%s #%s was not stamped (%s); run as claimed",
+                    action["verb"], action["id"], exc)
+        try:
+            conn.rollback()
+        except Exception as also:                                 # noqa: BLE001
+            log.warning("the rollback failed too (%s)", also)
+        return True
+    if got is None:
+        log.info("%s #%s was closed while it waited; not run",
+                 action["verb"], action["id"])
+        return False
+    return True
 
 
 def _drain_actions(settings: Settings, book: Book, ledger,
@@ -1081,7 +1123,8 @@ class Housekeeper:
 
 def _shadow(settings: Settings, book: Book, decision: Decision,
             outcome: dict, pulse: dict | None = None,
-            running: list[str] | None = None) -> None:
+            running: list[str] | None = None,
+            listed_at: datetime | None = None) -> None:
     """Mirror this pass into the store, and say what the pass did.
 
     Sheet stays authoritative; this is the read-model the web will serve
@@ -1117,7 +1160,8 @@ def _shadow(settings: Settings, book: Book, decision: Decision,
             # the machine's half of the row, like status (2026-09-08).
             if running is not None:
                 with conn.cursor() as cur:
-                    store_shadow.mark_running(cur, running)
+                    store_shadow.mark_running(cur, running,
+                                              listed_at=listed_at)
             if pulse is not None:
                 # The numbers the pass decided from, for the dashboard's
                 # actor bar (C6): warm of target, who is waiting, whether
@@ -1835,6 +1879,9 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     book.reload()
 
     # One listing a pass, for the warm count and for what is on.
+    # When the listing was taken: a row the lane changed after it (a Boot,
+    # a power-off) is not judged from it (store.shadow.mark_running).
+    listed_at = datetime.now(timezone.utc)
     listed = _listing(client)
     looked = _look(client, settings, book, listing=listed)
     warm, waiting, gmails, exits, stock, broken = looked[:6]
@@ -1956,7 +2003,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     streak = fuse.seen() if callable(getattr(fuse, "seen", None)) else (0, [])
     _shadow(settings, book, decision, outcome,
-            running=_running(client, listed),
+            running=_running(client, listed), listed_at=listed_at,
             pulse={
         "warm": warm, "target": settings.warm_stock, "waiting": waiting,
         # Each lane's shelf: warm, target, exits it could build with,
@@ -2476,15 +2523,20 @@ def _order(settings: Settings, client, book: Book, decision, wishes,
     if decision.finish:
         waiting, _gone = keeper._unfinished(
             client, book, busy=keeper._busy_serials(settings))
-        for phone in waiting[:decision.finish]:
+        finishes = 0
+        for phone in waiting:
+            if finishes >= decision.finish:
+                break
             # Reserved before it is paired, so a Take in the seconds
             # between this read and the finish never hands out a phone
             # an account is about to go into (store.station.reserve_warm).
+            # One taken meanwhile is replaced by the next one waiting.
             before = _reserve_warm(settings, str(phone.get("serial") or ""))
             if before is None:
                 continue
             store_jobs.queue(settings, "finish", {"phone": (
                 dict(phone, status_before=before) if before else dict(phone))})
+            finishes += 1
             ordered += 1
     lanes = ([lane for lane, n in (by_lane or {}).items() for _ in range(int(n))]
              if by_lane else [""] * int(decision.build or 0))
@@ -2688,8 +2740,9 @@ def _attach_store(settings: Settings) -> None:
     until 2026-09-10: the block lived in the keeper's half of `run`, below
     the role dispatch, so a builder wrote no events and no log rows - and
     with LOG_FILE=0 its `docker logs` were the only record of a build.
-    Warn-not-fatal on the schema, like every store touch: a cluster that
-    is down at boot must not stop the farm.
+    The schema is the one fatal store touch: code that expects columns a
+    failed migration left out breaks everywhere at once, so the process
+    exits and its container starts it again (rev 42).
     """
     if not settings.store_enabled:
         return
@@ -2702,8 +2755,13 @@ def _attach_store(settings: Settings) -> None:
     try:
         store_db.ensure_schema(settings)
     except Exception as exc:                                      # noqa: BLE001
-        log.warning("could not ensure the store schema at startup (%s); "
-                    "store writes will keep failing until it is back", exc)
+        # Fatal since rev 42: the code of this revision reads columns the
+        # old schema does not have, so serving on it breaks the sync, the
+        # dashboard's Take and every hand build. Exiting lets the
+        # container's `restart: always` try the schema again.
+        log.error("could not ensure the store schema at startup (%s); "
+                  "exiting so the container starts again", exc)
+        raise SystemExit(1) from exc
     runctx.set_event_sink(
         lambda kind, **kw: store_events.emit(settings, kind, **kw))
     # C8: the process's own log lines, batched into the store off a

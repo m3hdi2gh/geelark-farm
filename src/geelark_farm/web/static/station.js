@@ -129,6 +129,9 @@
   }
   function wait(ms){ return new Promise(function(done){ setTimeout(done, ms); }); }
   var BROKE = 'Something broke - it is in the server log.';
+  // What readJSON answers when the body was given up on (api's timer): the
+  // farm did not answer, which api says in its own words - never 'broke'.
+  var LOST = 'lost';
   var toldBroke = false;
   function readJSON(r){
     var type = (r && r.headers && r.headers.get && r.headers.get('Content-Type')) || '';
@@ -141,13 +144,17 @@
       if (typeof a.go === 'string') location.assign(a.go);
       return a;
     }, function(err){
+      if (err && err.name === 'AbortError') return {ok: false, said: LOST, note: ''};
       if (!toldBroke){ toldBroke = true; report(err, 'api'); }
       return {ok: false, said: 'broke', note: BROKE};
     });
   }
   // The one door to the farm. JSON in, JSON out; a network error is tried
   // once more with the same press, except on the profile, where a lost answer
-  // may have changed the password already.
+  // may have changed the password already. An answer that has not come in
+  // TIMEOUT_MS is given up on as a network error, so one hung press can never
+  // hold back the pulls for good.
+  var TIMEOUT_MS = 20000;
   function api(path, fields, opts){
     opts = opts || {};
     var method = opts.method || 'POST', headers = {'X-GF-Station': HEADER};
@@ -166,12 +173,24 @@
     }
     var mine = path.indexOf('/station/me/') === 0;
     function go(again){
-      return fetch(path, init).then(function(r){ return opts.raw ? r : readJSON(r); }, function(){
+      // A fresh controller each try: an aborted signal cannot be used again.
+      var ac = window.AbortController ? new window.AbortController() : null, t = null;
+      if (ac){
+        init.signal = ac.signal;
+        t = setTimeout(function(){ ac.abort(); }, opts.timeout || TIMEOUT_MS);
+      }
+      // No answer - a network error, or headers or a body that never came.
+      function lost(){
         if (opts.raw) return null;
         if (mine) return {ok: false, said: 'down', note: 'The farm did not answer - reload to see whether it changed.'};
         if (again) return wait(1500).then(function(){ return go(false); });
         return {ok: false, said: 'down', note: 'The farm did not answer - press it again.'};
-      });
+      }
+      return fetch(path, init).then(function(r){
+        // A raw answer's body is read by the caller: the timer still guards it.
+        if (opts.raw) return r;
+        return readJSON(r).then(function(a){ clearTimeout(t); return a && a.said === LOST ? lost() : a; });
+      }, function(){ clearTimeout(t); return lost(); });
     }
     return go(method !== 'GET' && !opts.raw);
   }
@@ -332,7 +351,7 @@
     }
 
     // ------------------------------------------------------- applying
-    function apply(st, how){
+    function apply(st, how, note){
       if (!st || typeof st !== 'object' || !st.me) return;
       var isFirst = first;
       first = false;
@@ -367,14 +386,16 @@
         if (tomb[p.serial]) return;
         var c = cards[p.serial];
         if (c){ if (!c.closing){ c.d = p; paint(c); tickOne(c, codeSec()); } return; }
-        addCard(p, i, isFirst, how);
+        addCard(p, i, isFirst, how, note);
       });
       Object.keys(cards).forEach(function(s){
         var c = cards[s];
         if (listed[s] || c.closing) return;
         var v = newToday[s];
         if (v && VICON[v]){ pendingV[s] = v; if (tally[v] > 0){ tally[v]--; tally.all--; } closeCard(c, v, true); }
-        else drop(c);
+        // Gone from the list: should it come back one day (the line, a build),
+        // it arrives with its own words again.
+        else { delete everSeen[s]; drop(c); }
       });
       Object.keys(ipPress).forEach(function(s){ ipSettled(s, listed[s]); });
       ghostsApply(st, isFirst);
@@ -416,9 +437,22 @@
         h('div', {class: 'steps'}),
         verdictRow(false));
     }
+    // Whether a sentence names that serial as a word of its own: 5073 is not
+    // named by 'Phone 50731 is yours'.
+    function names(note, serial){
+      if (!serial) return false;
+      var t = String(note || ''), at = t.indexOf(serial);
+      for (; at >= 0; at = t.indexOf(serial, at + 1)){
+        var before = t.charAt(at - 1), after = t.charAt(at + serial.length);
+        if (!/[0-9A-Za-z]/.test(before) && !/[0-9A-Za-z]/.test(after)) return true;
+      }
+      return false;
+    }
     // A new card takes the place of the card that was waiting for it when that
-    // one leads the waiting cards, and rings once as it lands.
-    function addCard(p, i, isFirst, how){
+    // one leads the waiting cards, and rings once as it lands. It says how it
+    // came - built, or from the line - whether a pull or a press's answer
+    // brought it, unless that press's own answer already names it.
+    function addCard(p, i, isFirst, how, note){
       var c = {serial: String(p.serial), lane: laneOf(p.lane), d: p, el: null};
       var seen = everSeen[c.serial];
       everSeen[c.serial] = true;
@@ -440,7 +474,7 @@
       paint(c); tickOne(c, codeSec());
       if (isFirst) return;
       setActive(c); scrollTo(c.el);
-      if (seen || how !== 'pull') return;
+      if (seen || (how === 'press' && names(note, c.serial))) return;
       var WL = c.lane === 'other' ? '' : W(c.lane) + ' ';
       if (p.arrived === 'build'){
         if (p.called_off) sayLater('Your ' + WL + 'phone ' + c.serial + ' was already signed in, so it was kept. Press Boot to switch it on.', c.lane);
@@ -762,7 +796,7 @@
         lastPressApplied = Math.max(lastPressApplied, turn);
         try { if (pre) pre(a); } catch (e) { report(e, 'press'); }
         if (a && a.state){
-          try { apply(a.state, 'press'); } catch (e) { report(e, 'apply'); }
+          try { apply(a.state, 'press', a.note); } catch (e) { report(e, 'apply'); }
         } else pullWanted = true;
         if (!pressing && pullWanted) schedulePull();
         return a;
@@ -795,7 +829,8 @@
       var w = window.open('', 'gf-live-' + s);
       var path = '';
       try { path = w ? w.location.pathname : ''; } catch (e) { path = ''; }
-      if (w && (w.location.href === 'about:blank' || path !== '/station/phones/' + s)) w.location.href = '/station/phones/' + s;
+      // about:blank reads as 'blank', and a tab gone to another site as ''.
+      if (w && path !== '/station/phones/' + s) w.location.href = '/station/phones/' + s;
       if (w) w.focus();
     }
     function changeIp(c){
@@ -813,18 +848,17 @@
         if (!a.ok){ say(a.note || BROKE, true); if (cards[s]) paint(cards[s]); }
       });
     }
-    // Change IP pressed here: said once, when the phone's last press is it.
+    // Change IP pressed here: said once, when the phone's last press is it,
+    // in the card's own sentence (the Live tab has its longer ones).
     function ipSettled(s, p){
       var ip = ipPress[s];
       if (!p){ delete ipPress[s]; return; }
       if (!ip.pressId || !p.last || p.last.id < ip.pressId) return;
       delete ipPress[s];
-      var last = p.last, l = laneOf(p.lane);
+      var last = p.last;
       if (last.verb && last.verb !== 'change_proxy') return;
       if (!last.ok) say(last.note || 'The IP of ' + s + ' did not change.', true);
-      else if (last.started) say(s + ' moved from ' + last.was + ' to ' + last.now + '.', l);
-      else if (ip.then === 'off') say(s + ' moved from ' + last.was + ' to ' + last.now + '. It stays ready to boot.', l);
-      else say(s + ' moved from ' + last.was + ' to ' + last.now + ' but did not start.', true);
+      else say(s + ' moved from ' + last.was + ' to ' + last.now + '.', laneOf(p.lane));
     }
     function giveBack(c){
       var s = c.serial, l = c.lane;
@@ -833,6 +867,8 @@
       say('Phone ' + s + ' is back on ' + home(l) + '.', l);
       send('/station/phones/' + s + '/back', {where: 'station'}, function(a){
         if (!a.ok) delete tomb[s];
+        // Back on the shelf: served to this page again later, it is new again.
+        else delete everSeen[s];
       }).then(function(a){
         if (!a.ok){ say(a.note || BROKE, true); if (!a.state) schedulePull(); }
       });
@@ -893,7 +929,7 @@
     }
 
     // ---------------------------------------------------- hearing the farm
-    var es = null, lastRev, pullAt = 0, pullT = null, pulling = false, pullWanted = false, etag = '';
+    var es = null, lastRev, pullAt = 0, pullT = null, pulling = false, pullWanted = false, etag = '', outStrikes = 0;
     function schedulePull(){
       pullWanted = true;
       if (pullT || pulling || pressing) return;
@@ -905,7 +941,13 @@
       var turn = ++seq, hd = {};
       if (etag) hd['If-None-Match'] = etag;
       api('/station/state', null, {method: 'GET', raw: true, headers: hd}).then(function(r){
-        if (!r || r.status === 304) return null;
+        if (!r) return null;
+        // A 200 or a 304 is a pull still signed in.
+        if (r.status === 200 || r.status === 304) outStrikes = 0;
+        if (r.status === 304) return null;
+        // One signed-out pull may be a blip: asked once more before the page
+        // follows it to the sign-in.
+        if (r.status === 401 && ++outStrikes < 2){ pullWanted = true; return null; }
         return readJSON(r).then(function(st){
           if (r.status !== 200 || !st || !st.me) return null;
           var tag = r.headers && r.headers.get ? r.headers.get('ETag') : '';
@@ -927,7 +969,9 @@
       es.onmessage = function(e){
         var n = parseInt(e.data, 10);
         if (isNaN(n)) return;
-        if (lastRev === undefined){ lastRev = n; return; }
+        // The first message is the revision at connect time, later than the
+        // page's own state: one pull covers what changed in between.
+        if (lastRev === undefined){ lastRev = n; schedulePull(); return; }
         if (n !== lastRev){ lastRev = n; schedulePull(); }
       };
     }
@@ -960,6 +1004,9 @@
     // Each setting is one small choice: what it means is said under it, and
     // Manual opens a field in its place, with the format to type.
     var mode = {gmail: 'auto', acct: 'none', ip: 'auto'}, buildLane = 'gpt', building = false, downOnScrim = false;
+    // Each opening of the dialog is its own: a late answer to a Build pressed
+    // in an earlier one never closes or marks this one.
+    var dlgGen = 0;
     var FORM = {gmail: [/^[^\s:@]+@[^\s:@]+\.[^\s:@]+:[^\s:]+(:.+)?$/, 'Type it as email:password:2FA key.'],
       acct: [/^[^\s:@]+@[^\s:@]+\.[^\s:@]+(:\S+)?$/, 'Type it as email:password, or the email alone.'],
       ip: [/^[A-Za-z0-9.-]+:\d{2,5}(:[^\s:]+:[^\s:]+)?$/, 'Type it as host:port:user:password.']};
@@ -1011,15 +1058,16 @@
       return false;
     }
     function typicalMin(l){ var t = bf().typical_min; return t && typeof t[l] === 'number' ? t[l] : 6; }
-    function minutes(m){ return m + (m === 1 ? ' minute' : ' minutes'); }
     function pickLane(l){
       buildLane = l; $('dlg').dataset.lane = l;
       document.querySelectorAll('.dlg [data-pick]').forEach(function(b){ b.setAttribute('aria-checked', String(b.getAttribute('data-pick') === l)); });
-      document.querySelector('[data-dlg="eta"]').textContent = 'about ' + minutes(typicalMin(l));
+      document.querySelector('[data-dlg="eta"]').textContent = 'about ' + typicalMin(l) + ' min';
       if (mode.ip === 'auto') tell('ip', meaning('ip'));
     }
     function openBuild(){
       showProfile(false); disarm();
+      dlgGen++;
+      document.querySelector('.dlg .go').disabled = building;
       document.querySelectorAll('.dlg [data-logo]').forEach(function(t){ if (!t.firstChild) t.appendChild(icon('logo-' + t.getAttribute('data-logo'))); });
       document.querySelectorAll('.dlg .typed').forEach(function(i){ i.value = ''; i.parentNode.classList.remove('good'); });
       fill(document.querySelector('[data-dlg="said"]'));
@@ -1050,20 +1098,23 @@
       if (mode.ip === 'auto' && freeIps(l) === 0)
         return refuse('ip', l === 'other' ? 'No free IP – type one under Manual.' : 'No free ' + W(l) + ' IP – type one under Manual.');
       building = true;
-      var go = document.querySelector('.dlg .go');
+      var go = document.querySelector('.dlg .go'), gen = dlgGen;
       go.disabled = true;
       send('/station/build', {kind: l,
         gmail_mode: mode.gmail, gmail_line: mode.gmail === 'manual' ? typed.gmail : '',
         acct_mode: mode.acct, acct_line: mode.acct === 'manual' ? typed.acct : '',
         ip_mode: mode.ip, ip_line: mode.ip === 'manual' ? typed.ip : ''}).then(function(a){
         building = false; go.disabled = false;
+        var open = !$('scrim').hidden && gen === dlgGen;
         if (a.ok){
-          closeBuild();
+          if (open) closeBuild();
           var m = typicalMin(l);
           say((l === 'other' ? 'Building a phone for you' : 'Building a ' + W(l) + ' phone for you') +
             ' – about ' + m + (m === 1 ? ' minute.' : ' minutes.'), l);
           return;
         }
+        // Closed while the answer was out: the refusal is said on the page.
+        if (!open){ say(a.note || BROKE, true); return; }
         if (a.field && setting(a.field)) refuse(a.field, a.note || BROKE);
         else fill(document.querySelector('[data-dlg="said"]'), a.note || BROKE);
       });
@@ -1201,7 +1252,9 @@
       if (!c || !c.el || c.closing) return;
       setActive(c);
       try { c.el.scrollIntoView({block: 'nearest'}); } catch (e) { /* no scroll */ }
-      focusQuiet(c.el.querySelector('.open'));
+      // Boot is disabled while the phone boots or changes IP, and a disabled
+      // button takes no focus: then the card's first one that can.
+      focusQuiet(c.el.querySelector('.open:not([disabled])') || c.el.querySelector('button:not([disabled])'));
     }
 
     // ------------------------------------------------------- listeners
@@ -1315,6 +1368,10 @@
   function liveTab(){
     var st0 = readState() || {};
     var s = document.body.getAttribute('data-serial') || String(st0.serial || '');
+    // The tab's own name, however it was opened (a pasted address, a restored
+    // tab): Boot and the Station's openTab then find it instead of opening a
+    // second tab that beats the same phone.
+    if (s && window.name !== 'gf-live-' + s) window.name = 'gf-live-' + s;
     var L = null, conn = '', noteNow = '', screenSig = '';
     var live = $('live'), side = $('lt-side'), frame = $('lt-view'), screen = $('lt-screen'), tools = $('lt-tools');
     var stage = $('lt-stage'), col = $('lt-col'), ltBar = $('lt-bar'), box = $('lt-box');
@@ -1322,7 +1379,11 @@
     var VW = num(V.w, 360), BOX_W = num(V.box_w, 416), BOX_H = num(V.box_h, 752), BAR = num(V.bar, 32);
     var frameBase = '', frameLoaded = false, connNote = '', onNote = '';
     var pend = null, exitShown, sideSig = null, busySince = 0;
-    var beatT = null, pollT = null, clockT = null, pressBusy = false;
+    var beatT = null, pollT = null, clockT = null, rebeatT = null, pressBusy = false;
+    // Signed-out answers in a row, a beat's and a poll's apart: one alone may
+    // be a blip, two mean it.
+    var beatStrikes = 0, pollStrikes = 0;
+    var SIGNED_OUT = 'signed out – sign in again in the station';
 
     function may(k){ return !!(L && L.may && L.may[k]); }
     function q(sel){ return side.querySelector(sel); }
@@ -1473,8 +1534,8 @@
       if (c === 'released') stopAll();
     }
     function stopAll(){
-      clearInterval(beatT); clearTimeout(pollT); clearInterval(clockT);
-      beatT = pollT = clockT = null;
+      clearInterval(beatT); clearTimeout(pollT); clearInterval(clockT); clearTimeout(rebeatT);
+      beatT = pollT = clockT = rebeatT = null;
       disarm();
     }
     function clock(){
@@ -1617,13 +1678,18 @@
       setTimeout(function(){ if (conn === 'connecting' && frameBase === url) loadFrame(url); }, 300);
     }
     // Back to the Station's own tab, wherever it lives, without reloading it
-    // and without leaving this one.
+    // and without leaving this one. Whether that tab holds a Station is read
+    // from its document, not its path: a tab named gf-station that went back
+    // to the dashboard at '/' is not one, and a tab on another site cannot be
+    // read, so both are sent to /station.
     function toStation(serial){
       var w = window.open('', 'gf-station');
       if (!w) return;
-      var p = '';
-      try { p = w.location.pathname; } catch (e) { p = ''; }
-      if (w.location.href === 'about:blank' || (p !== '/station' && p !== '/')) w.location.href = '/station#p-' + serial;
+      var isSt = false;
+      try {
+        isSt = !!(w.document && w.document.body && w.document.body.getAttribute('data-page') === 'station');
+      } catch (e) { isSt = false; }
+      if (!isSt) w.location.href = '/station#p-' + serial;
       else w.location.hash = 'p-' + serial;
       w.focus();
     }
@@ -1636,13 +1702,20 @@
     }
 
     // ------------------------------------------------ beats and polls
+    // A 503, a network error or a beat that timed out says nothing about the
+    // phone. A signed-out answer is asked once more, three seconds on, before
+    // the tab lets the phone go.
     function beat(){
       if (conn === 'released') return;
+      clearTimeout(rebeatT); rebeatT = null;
       api('/phones/' + s + '/watching', {station: 1}, {raw: true, redirect: 'manual', keepalive: true, noPress: true}).then(function(r){
         if (!r || conn === 'released') return;
+        if (r.status === 200){ beatStrikes = 0; return; }
         if (r.status === 410){ setConn('released'); return; }
-        if (r.type === 'opaqueredirect' || r.status === 0 || r.status === 401 || r.status === 403)
-          setConn('released', 'signed out – sign in again in the station');
+        if (r.type === 'opaqueredirect' || r.status === 0 || r.status === 401 || r.status === 403){
+          if (++beatStrikes >= 2) setConn('released', SIGNED_OUT);
+          else rebeatT = setTimeout(beat, 3000);
+        }
       });
     }
     function nextPoll(){
@@ -1663,10 +1736,16 @@
       var turn = ++seq;
       api('/station/phones/' + s + '/state', null, {method: 'GET', raw: true}).then(function(r){
         if (!r) return null;
-        if (r.status === 401 || r.status === 403){ setConn('released', 'signed out – sign in again in the station'); return null; }
+        if (r.status === 401 || r.status === 403){
+          if (++pollStrikes >= 2) setConn('released', SIGNED_OUT);
+          else { schedulePoll(3000); return 'again'; }
+          return null;
+        }
         if (r.status !== 200) return null;
+        pollStrikes = 0;
         return readJSON(r);
       }).then(function(st){
+        if (st === 'again') return;
         if (st && st.conn && !pressing && turn > lastPressApplied) applyLive(st);
         schedulePoll();
       }, function(err){ report(err, 'poll'); schedulePoll(); });
@@ -1721,6 +1800,11 @@
     L = st0;
     sideSig = sigOf(st0);
     buildSide(st0);
+    // A Boot pressed on the Station's card arrives here as its queued press:
+    // held as this tab's own, so a boot the keeper fails later says why.
+    var arr0 = st0.arrival;
+    if (arr0 && arr0.req && (arr0.said === 'queued' || arr0.said === 'twice' || arr0.said === 'already'))
+      pend = {kind: 'boot', id: arr0.req, until: Date.now() + 200000};
     applyLive(st0);
     if (!conn) setConn('off');
     var arrival = st0.arrival;

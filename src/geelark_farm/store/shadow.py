@@ -188,40 +188,48 @@ def _when(stamp: str | None):
     return text.rstrip("Zz") + "+00"
 
 
-def mark_running(cur, running) -> int:
+def mark_running(cur, running, *, listed_at=None) -> int:
     """Which live phones GeeLark has on, from this pass's listing: `running`
     is the serials that are on. Every other live row is off. One statement,
     touching only rows whose answer changed, so a quiet pass writes nothing.
     None means the listing could not be read - then nothing is said, and the
-    last true picture stands rather than every phone reading off."""
+    last true picture stands rather than every phone reading off.
+
+    `listed_at` is when the listing was taken (the keeper's clock). It was
+    taken near the start of the pass and this runs near its end: a row
+    changed after it - a Boot (`store.station.booted`: running, a fresh
+    `running_since`, the viewer link) or a power-off (`powered_off`) - is
+    left for the next pass to judge, in both directions, rather than
+    flipped back by a picture older than it. Five seconds of margin cover
+    a keeper clock ahead of the cluster's. Without it every row is judged,
+    as before the Station."""
     if running is None:
         return 0
     on = [str(s) for s in running]
     # `running_since` rides with the flip: set when a phone is first seen
     # on, cleared when it is seen off. Only changed rows are touched, so
-    # it is the moment the change was seen and never "this pass".
-    #
-    # The listing was taken near the start of the pass and this runs near
-    # its end. A Boot that ran in between (`store.station.booted`: running,
-    # a fresh `running_since`, the viewer link) must not be flipped back to
-    # off by that stale listing, so a phone marked running in the last
-    # 120 s is left for the next pass to judge. A phone seen off loses its
-    # viewer link (in a SET list `running` is the old value): the link
-    # died with the phone. The Station, 2026-09-29. A running row with no
-    # `running_since` (older than the column) is judged as before: the
-    # coalesce keeps a NULL from hiding it from every pass.
-    cur.execute(
-        "UPDATE phones SET running = (serial = ANY(%s)),"
-        " running_since = CASE WHEN serial = ANY(%s) THEN now() END,"
-        " live_url = CASE WHEN running THEN '' ELSE live_url END,"
-        # Stamped only on the rows whose answer changed, which is all
-        # this WHERE selects: a quiet pass still moves nothing.
-        " updated_at = now() WHERE done_at IS NULL"
-        " AND running <> (serial = ANY(%s))"
-        " AND NOT (running AND coalesce("
-        "running_since > now() - interval '120 seconds', false))",
-        (on, on, on))
+    # it is the moment the change was seen and never "this pass". A phone
+    # seen off loses its viewer link (in a SET list `running` is the old
+    # value): the link died with the phone.
+    sql = ("UPDATE phones SET running = (serial = ANY(%s)),"
+           " running_since = CASE WHEN serial = ANY(%s) THEN now() END,"
+           " live_url = CASE WHEN running THEN '' ELSE live_url END,"
+           # Stamped only on the rows whose answer changed, which is all
+           # this WHERE selects: a quiet pass still moves nothing.
+           " updated_at = now() WHERE done_at IS NULL"
+           " AND running <> (serial = ANY(%s))")
+    params: tuple = (on, on, on)
+    if listed_at is not None:
+        sql += (" AND updated_at <= %s::timestamptz"
+                " - interval '" + str(LISTED_AT_MARGIN_SECONDS) + " seconds'")
+        params = (*params, listed_at)
+    cur.execute(sql, params)
     return int(cur.rowcount or 0)
+
+
+#: How far the keeper's clock may run ahead of the cluster's before a row
+#: changed just after the listing is judged from it anyway.
+LISTED_AT_MARGIN_SECONDS = 5
 
 
 def _upsert_phones(cur, book) -> list[str]:

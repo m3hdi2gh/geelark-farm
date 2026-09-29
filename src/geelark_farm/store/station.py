@@ -638,7 +638,34 @@ _GIVE_BACK_IDLE = _give_back_sql(
     "alone", "off:hour:")
 
 
+#: Close the stale pending power presses of one serial (orphans a restart
+#: left `running`, or presses that waited in a batch past the three
+#: minutes): the web, the give-backs and the closed-tab switch-off all go
+#: through it, and the keeper runs no press that was closed while it waited.
+_EXPIRE_STALE = (
+    "UPDATE actions SET status = 'failed', finished_at = now(),"
+    " result = 'closed: no answer for three minutes - a restart took it'"
+    " WHERE status IN ('queued', 'running') AND payload->>'serial' = %(serial)s"
+    "   AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone')"
+    "   AND coalesce(executed_at, requested_at)"
+    "       <= now() - %(stale)s * interval '1 second'"
+    " RETURNING id")
+
+
+def _expire_stale(conn, serial: str) -> int:
+    """`_EXPIRE_STALE` on this connection, as its own statement before the
+    write that follows it: a sibling CTE would have no order against the
+    write, and the write must never meet a press that is only an orphan."""
+    rows = conn.execute(_EXPIRE_STALE, {"serial": str(serial),
+                                        "stale": POWER_STALE_SECONDS}).fetchall()
+    if rows:
+        log.info("phone %s: %d power press(es) nobody answered for three "
+                 "minutes closed", serial, len(rows))
+    return len(rows)
+
+
 def _given(conn, sql: str, params: dict) -> dict | None:
+    _expire_stale(conn, params["serial"])
     row = conn.execute(sql, params).fetchone()
     if row is None:
         conn.commit()
@@ -687,6 +714,7 @@ _QUEUE_OFF_CLOSED = (
     "    AND (p.tab_closed_at IS NULL"
     "         OR p.tab_closed_at < now() - %(closed)s * interval '1 second')"
     "    AND NOT " + power_pending("p") +
+    "    AND NOT " + power_pending("p", ("power_off_phone",)) +
     " ON CONFLICT DO NOTHING"
     " RETURNING id")
 
@@ -695,8 +723,11 @@ def queue_off_closed(settings: Settings, serial: str, grace: int,
                      closed: int) -> int | None:
     """Queue the power-off of a Station hold whose tab closed, only if the
     rule still holds in the statement that queues it. The action id, or
-    None (the rule no longer holds, or a power-off is already pending)."""
+    None (the rule no longer holds, or a power-off is already pending). A
+    stale press on the phone is closed first: an orphan never holds the
+    switch-off back."""
     with connect(settings) as conn:
+        _expire_stale(conn, serial)
         row = conn.execute(_QUEUE_OFF_CLOSED,
                            {"serial": str(serial), "grace": int(grace),
                             "closed": int(closed)}).fetchone()
@@ -857,16 +888,10 @@ def power_pending_of(settings: Settings, serial: str,
 def expire_power(settings: Settings, serial: str) -> int:
     """Close the stale pending power presses of that serial (an orphan a
     restart left `running`). Returns how many."""
-    with Store(settings) as store:
-        rows = store._write(
-            "UPDATE actions SET status = 'failed', finished_at = now(),"
-            " result = 'closed: no answer for three minutes - a restart took it'"
-            " WHERE status IN ('queued', 'running') AND payload->>'serial' = %s"
-            "   AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone')"
-            "   AND coalesce(executed_at, requested_at)"
-            "       <= now() - %s * interval '1 second'"
-            " RETURNING id", (str(serial), POWER_STALE_SECONDS))
-    return len(rows)
+    with connect(settings) as conn:
+        closed = _expire_stale(conn, serial)
+        conn.commit()
+    return closed
 
 
 def press_of(settings: Settings, action_id: int) -> dict | None:

@@ -263,7 +263,10 @@ def retry(settings: Settings, *, action_id: int, user_id: int,
     """Queue a failed command again, as a new row that names the old one.
 
     Only `failed`: a refused one needs a permission, not a retry, and a
-    done one is done. Returns the new id, or 'not_failed' / 'not_yours'.
+    done one is done. A Station build is never replayed: its typed
+    passwords were scrubbed from the payload once it ended (rev 42), so
+    a retry would build without them. Returns the new id, or
+    'not_failed' / 'not_yours' / 'station_build'.
     """
     with connect(settings) as conn:
         cur = conn.execute(
@@ -275,6 +278,8 @@ def retry(settings: Settings, *, action_id: int, user_id: int,
         verb, payload, _by, status = row
         if status != "failed":
             return "not_failed"
+        if verb == "build_by_hand" and (payload or {}).get("station"):
+            return "station_build"
         payload = dict(payload or {}, retry_of=action_id)
         cur = conn.execute(
             "INSERT INTO actions (verb, payload, requested_by, idem_key)"

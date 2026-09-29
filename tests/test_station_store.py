@@ -151,8 +151,20 @@ def test_rev_42_names_every_column_the_station_reads():
             "wanted_builds ADD COLUMN IF NOT EXISTS carry_password",
             "wanted_builds ADD COLUMN IF NOT EXISTS updated_at",
             "wanted_station", "jobs_wish", "actions_phone_power",
-            "actions_one_power_press"):
+            "actions_one_power_press", "actions_mine"):
         assert piece in block, piece
+    # One pending Boot or Change IP per phone; a power-off is never refused
+    # (the dedupe and the index name the same two verbs, and no other).
+    index = block[block.index("CREATE UNIQUE INDEX IF NOT EXISTS "
+                              "actions_one_power_press"):]
+    index = index[:index.index(";")]
+    assert "verb IN ('boot_phone', 'change_proxy')" in index
+    assert "power_off_phone" not in index
+    dedupe = block[block.index("closed by rev 42"):]
+    dedupe = dedupe[:dedupe.index(";")]
+    assert "verb IN ('boot_phone', 'change_proxy')" in dedupe
+    assert "power_off_phone" not in dedupe
+    assert "payload ? 'serial'" in dedupe and "id DESC" in dedupe
     # The backfill comes before the default, or every user reads "today".
     assert (block.index("UPDATE users SET password_changed_at")
             < block.index("ALTER COLUMN password_changed_at SET DEFAULT now()"))
@@ -449,7 +461,12 @@ def test_one_phone_has_one_pending_power_press(farm):
     with pytest.raises(psycopg.errors.UniqueViolation):
         farm.action("boot_phone", one, a)
     with pytest.raises(psycopg.errors.UniqueViolation):
-        farm.action("power_off_phone", one, a)
+        farm.action("change_proxy", one, a)
+    # A power-off always goes in: a Release, a give-back or a closed tab
+    # never loses its switch-off to a pending Boot (lead decision D1).
+    offs = [farm.action("power_off_phone", one, a),
+            farm.action("power_off_phone", one, a)]
+    farm.sql("UPDATE actions SET status = 'done' WHERE id = ANY(%s)", (offs,))
     farm.action("change_proxy", two, a)
     farm.action("login_accounts", one, a)           # not a power press
     assert st.power_pending_of(farm.s, one) == {"id": first, "verb": "boot_phone",
@@ -469,6 +486,72 @@ def test_one_phone_has_one_pending_power_press(farm):
     press = st.press_of(farm.s, first)
     assert press["verb"] == "boot_phone" and press["requested_by"] == a
     assert st.press_of(farm.s, 0) is None
+
+
+@needs_cluster
+def test_rev_42_keeps_the_fresh_press_and_rebuilds_the_first_draft_index(farm):
+    """store-4 / D1: the dedupe keeps the fresh press (else the newest) of
+    Boot and Change IP, never touches a power-off or a press with no
+    serial, and a database with the draft that held power_off_phone gets
+    the index rebuilt without it."""
+    from geelark_farm.store import db as store_db
+
+    a = farm.user("a")
+    one, two = farm.phone(), farm.phone()
+    try:
+        farm.sql("DROP INDEX actions_one_power_press")
+        orphan = farm.action("boot_phone", one, a, status="running",
+                             executed_at=Raw("now() - interval '2 hours'"))
+        real = farm.action("change_proxy", one, a)
+        off = farm.action("power_off_phone", one, a)
+        older = farm.action("boot_phone", two, a,
+                            requested_at=Raw("now() - interval '1 hour'"))
+        newer = farm.action("boot_phone", two, a,
+                            requested_at=Raw("now() - interval '30 minutes'"))
+        bare = [farm.insert("actions", verb="boot_phone", requested_by=a,
+                            payload={"tag": farm.tag}) for _ in range(2)]
+        store_db.ensure_schema(farm.s)
+        status = {r["id"]: r["status"] for r in farm.sql(
+            "SELECT id, status FROM actions WHERE id = ANY(%s)",
+            ([orphan, real, off, older, newer] + bare,))}
+        assert status == {orphan: "failed", real: "queued", off: "queued",
+                          older: "failed", newer: "queued",
+                          bare[0]: "queued", bare[1]: "queued"}
+
+        farm.sql("UPDATE actions SET status = 'done' WHERE id = ANY(%s)",
+                 ([real, off, newer] + bare,))
+        farm.sql("DROP INDEX actions_one_power_press")
+        farm.sql("CREATE UNIQUE INDEX actions_one_power_press"
+                 " ON actions ((payload->>'serial'))"
+                 " WHERE status IN ('queued', 'running')"
+                 " AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone')")
+        store_db.ensure_schema(farm.s)
+    finally:
+        store_db.ensure_schema(farm.s)
+    made = farm.one("SELECT indexdef FROM pg_indexes"
+                    " WHERE indexname = 'actions_one_power_press'")["indexdef"]
+    assert "boot_phone" in made and "power_off_phone" not in made
+
+
+@needs_cluster
+def test_the_station_reads_of_a_persons_presses_have_an_index(farm):
+    """store-5: the scrub and the notes run on every Station poll."""
+    from geelark_farm.store.db import connect
+
+    a = farm.user("a")
+    with connect(farm.s) as conn:
+        conn.execute("SET LOCAL enable_seqscan = off")
+        notes = " / ".join(r[0] for r in conn.execute(
+            "EXPLAIN SELECT a.id FROM actions a"
+            " WHERE a.verb = 'give_back' AND a.requested_by = %s"
+            "   AND a.status = 'done' ORDER BY a.id DESC LIMIT 10", (a,)))
+        scrub = " / ".join(r[0] for r in conn.execute(
+            "EXPLAIN UPDATE actions SET payload = payload"
+            " WHERE verb = 'build_by_hand' AND requested_by = %s"
+            "   AND status IN ('done', 'failed')", (a,)))
+        conn.rollback()
+    assert "actions_mine" in notes, notes
+    assert "actions_mine" in scrub, scrub
 
 
 # ---------------------------------------------------------- take and line
@@ -779,9 +862,14 @@ def test_give_back_goes_to_the_back_of_the_shelf_and_queues_its_power_off(farm):
     assert st.hold_state(farm.s, "0") is None
 
     closing = farm.hold(a, running=True)
-    farm.action("power_off_phone", closing, a, payload={"why": "closed"})
+    pending = farm.action("power_off_phone", closing, a, payload={"why": "closed"})
     got = st.give_back(farm.s, serial=closing, owner_id=a, by="a")
-    assert got is not None and got["off_id"] is None, "the pending one runs"
+    assert got is not None and isinstance(got["off_id"], int), "its own, always"
+    offs = farm.sql("SELECT id, status, payload->>'why' AS why FROM actions"
+                    " WHERE verb = 'power_off_phone' AND payload->>'serial' = %s"
+                    " ORDER BY id", (closing,))
+    assert offs == [{"id": pending, "status": "queued", "why": "closed"},
+                    {"id": got["off_id"], "status": "queued", "why": "given back"}]
 
     other = farm.hold(a, purpose="other")
     wid = farm.wish(a, serial=other, purpose="other", carry_address="m@p.me",
@@ -795,6 +883,52 @@ def test_give_back_goes_to_the_back_of_the_shelf_and_queues_its_power_off(farm):
     farm.sql("UPDATE actions SET status = 'done' WHERE payload->>'serial' = %s",
              (other,))
     assert st.shelves(farm.s)["gpt"]["ready"] == 1, "an Other phone is on none"
+
+
+@needs_cluster
+def test_a_stale_press_never_swallows_a_give_back_or_a_closed_tab_power_off(farm):
+    """keeper-1 / store-3: an orphan Boot or Change IP (a restart left it
+    `running`, or it waited in a batch past three minutes) is closed in the
+    same transaction, and the switch-off is queued all the same."""
+    a = farm.user("a")
+    old = Raw("now() - interval '4 minutes'")
+
+    given = farm.hold(a, running=True)
+    orphan = farm.action("boot_phone", given, a, status="running", executed_at=old)
+    got = st.give_back(farm.s, serial=given, owner_id=a, by="a")
+    assert got is not None and isinstance(got["off_id"], int)
+    closed = farm.one("SELECT status, result FROM actions WHERE id = %s", (orphan,))
+    assert closed["status"] == "failed" and "three minutes" in closed["result"]
+    assert farm.row(given)["owner_id"] is None
+
+    alone = farm.hold(a, running=True, taken_at=Raw("now() - interval '2 hours'"),
+                      watched_at=Raw("now() - interval '90 minutes'"))
+    waited = farm.action("change_proxy", alone, a, requested_at=old)
+    back = st.give_back_idle(farm.s, alone, 60, 180)
+    assert back is not None and isinstance(back["off_id"], int)
+    assert farm.one("SELECT status FROM actions WHERE id = %s",
+                    (waited,))["status"] == "failed"
+
+    tab = farm.hold(a, running=True, taken_at=Raw("now() - interval '10 minutes'"),
+                    tab_closed_at=Raw("now() - interval '30 seconds'"))
+    stuck = farm.action("boot_phone", tab, a, status="running", executed_at=old)
+    first = st.queue_off_closed(farm.s, tab, 180, 20)
+    assert isinstance(first, int)
+    assert farm.one("SELECT status FROM actions WHERE id = %s",
+                    (stuck,))["status"] == "failed"
+    # One switch-off at a time: the sweep asks every pass.
+    assert st.queue_off_closed(farm.s, tab, 180, 20) is None
+    # One that waited past three minutes is closed and a new one queued.
+    farm.sql("UPDATE actions SET requested_at = now() - interval '4 minutes'"
+             " WHERE id = %s", (first,))
+    second = st.queue_off_closed(farm.s, tab, 180, 20)
+    assert isinstance(second, int) and second != first
+    assert farm.one("SELECT status FROM actions WHERE id = %s",
+                    (first,))["status"] == "failed"
+    # A fresh Boot still holds the give-back back.
+    fresh = farm.hold(a, running=True)
+    farm.action("boot_phone", fresh, a)
+    assert st.give_back(farm.s, serial=fresh, owner_id=a, by="a") is None
 
 
 @needs_cluster
@@ -1332,7 +1466,12 @@ def test_a_password_change_checks_the_current_one_and_rotates_the_seats_in_one_g
     assert fresh and fresh != mine
     seat = sessions.find(farm.s, fresh)
     assert seat["user"]["id"] == a and seat["csrf"] == csrf, "the csrf is kept"
-    assert sessions.find(farm.s, mine) is None
+    # This browser's old seat outlives the change for the requests already
+    # on their way with the old cookie (web-3), and no longer.
+    assert sessions.find(farm.s, mine) is not None
+    left = farm.one("SELECT extract(epoch FROM until - now()) AS s FROM sessions"
+                    " WHERE token_hash = %s", (sessions._digest(mine),))["s"]
+    assert 0 < float(left) <= sessions.OLD_SEAT_GRACE_SECONDS + 1
     assert sessions.find(farm.s, other) is None
     assert sessions.find(farm.s, theirs) is not None
     row = farm.one("SELECT * FROM users WHERE id = %s", (a,))

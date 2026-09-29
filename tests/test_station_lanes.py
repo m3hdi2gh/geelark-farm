@@ -337,8 +337,21 @@ def test_the_builders_own_batches_reserve_each_phone_first(settings,
     finishes = [j for j in ran[-1] if j["kind"] == "finish"]
     assert finishes == [{"kind": "finish", "phone": {
         "serial": "8", "status_before": "incomplete"}}]
-    assert len([j for j in ran[-1] if j["kind"] == "build"]) == 0, (
-        "a phone taken meanwhile is not replaced by a build here")
+    assert len([j for j in ran[-1] if j["kind"] == "build"]) == 1, (
+        "a phone taken meanwhile, with nobody waiting behind it, is "
+        "replaced by a build")
+
+    # A phone taken meanwhile is replaced by the next one waiting, and the
+    # finishes decided stay the finishes run.
+    monkeypatch.setattr(keeper, "_unfinished", lambda client, book, **k: (
+        [{"serial": "7"}, {"serial": "8"}, {"serial": "9"}], []))
+    builder.run(None, on, count=3, finish_limit=2, book=book,
+                ledger=FakeLedger())
+    finished = [j["phone"]["serial"] for j in ran[-1] if j["kind"] == "finish"]
+    assert finished == ["8", "9"]
+    assert len([j for j in ran[-1] if j["kind"] == "build"]) == 1
+    monkeypatch.setattr(keeper, "_unfinished", lambda client, book, **k: (
+        [{"serial": "7"}, {"serial": "8"}], []))
 
     monkeypatch.setattr(store_station, "reserve_warm",
                         lambda s, serial, **k: None)
@@ -652,30 +665,48 @@ def test_an_other_claim_takes_unlabelled_first_then_the_fuller_lane(cluster):
 
 
 @needs_cluster
-def test_mark_running_spares_a_fresh_boot_and_blanks_the_link_of_a_phone_seen_off(
+def test_mark_running_leaves_a_row_changed_after_the_listing_for_the_next_pass(
         cluster):
+    """The listing is taken at the top of the pass and judged at its end.
+    A Boot or a power-off written in between is newer than it and is left
+    alone, in both directions; every row older than it is judged as rev 41
+    judged it. Before this, a 120 s clock kept a power-off that a stale
+    listing had undone reading On for two more passes."""
+    from datetime import datetime, timedelta, timezone
+
     from geelark_farm.store import db as store_db
     from geelark_farm.store import shadow
 
     base = uuid.uuid4().int % 1_000_000
     serials = {k: f"9{base:06d}{n:02d}" for n, k in enumerate(
-        ("fresh", "old", "never", "on", "nulled", "listed_on"))}
+        ("booted", "old", "never", "on", "nulled", "listed_on", "powered_off",
+         "fresh_on"))}
+    hour = "now() - interval '1 hour'"
     with store_db.connect(cluster) as conn:
         try:
-            for key, running, since, url in (
-                    ("fresh", True, "now()", "https://v/fresh"),
-                    ("old", True, "now() - interval '5 minutes'", "https://v/old"),
-                    ("never", False, "NULL", ""),
-                    ("on", False, "NULL", "https://v/stale"),
-                    ("nulled", True, "NULL", "https://v/nulled"),
+            for key, running, since, url, updated in (
+                    # Booted after the listing, which still says off.
+                    ("booted", True, "now()", "https://v/fresh", "now()"),
+                    ("old", True, "now() - interval '5 minutes'",
+                     "https://v/old", hour),
+                    ("never", False, "NULL", "", hour),
+                    ("on", False, "NULL", "https://v/stale", hour),
+                    ("nulled", True, "NULL", "https://v/nulled", hour),
                     ("listed_on", True, "now() - interval '5 minutes'",
-                     "https://v/kept")):
+                     "https://v/kept", hour),
+                    # Switched off after the listing, which still says on.
+                    ("powered_off", False, "NULL", "", "now()"),
+                    # Seen on less than 120 s ago, off in this listing.
+                    ("fresh_on", True, "now() - interval '30 seconds'",
+                     "https://v/gone", "now() - interval '30 seconds'")):
                 conn.execute(
                     "INSERT INTO phones (serial, phone_id, status, state,"
                     " purpose, running, running_since, live_url, updated_at)"
                     f" VALUES (%s, %s, 'ready', '', 'gpt', %s, {since}, %s,"
-                    " now() - interval '1 hour')",
+                    f" {updated})",
                     (serials[key], "PH" + serials[key], running, url))
+            listed_at = conn.execute(
+                "SELECT now() - interval '10 seconds'").fetchone()[0]
             with conn.cursor() as cur:
                 # Only these rows' answers are judged; every other live row
                 # in the database is left where it was by listing it as it
@@ -684,26 +715,47 @@ def test_mark_running_spares_a_fresh_boot_and_blanks_the_link_of_a_phone_seen_of
                             " AND running AND NOT (serial = ANY(%s))",
                             (list(serials.values()),))
                 others_on = [r[0] for r in cur.fetchall()]
-                listed = others_on + [serials["on"], serials["listed_on"]]
-                changed = shadow.mark_running(cur, listed)
+                listed = others_on + [serials[k] for k in (
+                    "on", "listed_on", "powered_off")]
+                changed = shadow.mark_running(cur, listed, listed_at=listed_at)
                 cur.execute("SELECT serial, running, running_since IS NOT NULL,"
-                            " live_url, updated_at > now() - interval '1 minute'"
+                            " live_url, updated_at > now() - interval '1 second'"
                             " FROM phones WHERE serial = ANY(%s)",
                             (list(serials.values()),))
                 got = {r[0]: r[1:] for r in cur.fetchall()}
-            by = {k: got[s] for k, s in serials.items()}
-            assert by["fresh"] == (True, True, "https://v/fresh", False), (
-                "a Boot in the last 120 s is not flipped off by a stale listing")
-            assert by["old"] == (False, False, "", True), (
-                "seen off: off, its clock and its link gone")
-            assert by["never"] == (False, False, "", False), "untouched"
-            assert by["on"] == (True, True, "https://v/stale", True), (
-                "seen on: running with a fresh clock; the link is not the "
-                "mirror's to write")
-            assert by["nulled"] == (False, False, "", True), (
-                "a running row with no clock is still judged")
-            assert by["listed_on"] == (True, True, "https://v/kept", False), (
-                "an unchanged row is not touched")
-            assert changed >= 3
+                by = {k: got[s] for k, s in serials.items()}
+                assert by["booted"] == (True, True, "https://v/fresh", True), (
+                    "a Boot after the listing is not flipped off by it")
+                assert by["powered_off"] == (False, False, "", True), (
+                    "a power-off after the listing is not flipped back on")
+                assert by["old"] == (False, False, "", True), (
+                    "seen off: off, its clock and its link gone")
+                assert by["fresh_on"] == (False, False, "", True), (
+                    "seen off is off at once, however recently it came on")
+                assert by["never"] == (False, False, "", False), "untouched"
+                assert by["on"] == (True, True, "https://v/stale", True), (
+                    "seen on: running with a fresh clock; the link is not "
+                    "the mirror's to write")
+                assert by["nulled"] == (False, False, "", True), (
+                    "a running row with no clock is still judged")
+                assert by["listed_on"] == (True, True, "https://v/kept",
+                                           False), "an unchanged row is untouched"
+                assert changed >= 4
+
+                # The keeper's clock a little ahead of the cluster's: a row
+                # written just after the listing is still left alone.
+                cur.execute("UPDATE phones SET running = false,"
+                            " running_since = NULL, updated_at = now()"
+                            " WHERE serial = %s", (serials["listed_on"],))
+                ahead = datetime.now(timezone.utc) + timedelta(seconds=3)
+                shadow.mark_running(cur, listed, listed_at=ahead)
+                cur.execute("SELECT running FROM phones WHERE serial = %s",
+                            (serials["listed_on"],))
+                assert cur.fetchone()[0] is False
+                # And with no time given, every row is judged as before.
+                shadow.mark_running(cur, listed)
+                cur.execute("SELECT running FROM phones WHERE serial = %s",
+                            (serials["listed_on"],))
+                assert cur.fetchone()[0] is True
         finally:
             conn.rollback()

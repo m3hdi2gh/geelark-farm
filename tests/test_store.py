@@ -196,6 +196,85 @@ def test_the_users_table_hashes_with_scrypt_parameters_beside_the_hash():
         assert column in sql
 
 
+# ------------------------------------------- applying the schema (store-1)
+def _deadlock():
+    import psycopg
+
+    return psycopg.errors.DeadlockDetected("deadlock detected")
+
+
+def test_the_schema_is_tried_again_when_live_traffic_makes_it_lose(monkeypatch,
+                                                                   make_settings):
+    """One transaction for the whole file: a deadlock with live traffic
+    rolls all of it back. It is tried again rather than left at the last
+    revision."""
+    import psycopg
+
+    from geelark_farm.store import db as store_db
+
+    tries: list[int] = []
+    naps: list[float] = []
+    fails = [_deadlock(), psycopg.errors.LockNotAvailable("lock timeout"),
+             psycopg.OperationalError("server closed the connection")]
+
+    def once(settings):
+        tries.append(1)
+        if fails:
+            raise fails.pop(0)
+
+    monkeypatch.setattr(store_db, "_apply_once", once)
+    monkeypatch.setattr(store_db, "_schema_present", lambda s: True)
+    monkeypatch.setattr(store_db.time, "sleep", naps.append)
+    store_db.ensure_schema(make_settings(store_enabled=True))
+    assert len(tries) == 4
+    assert len(naps) == 3 and all(1.0 <= n <= 2.0 for n in naps)
+
+
+def test_the_schema_gives_up_after_five_attempts_and_raises(monkeypatch,
+                                                            make_settings):
+    from geelark_farm.store import db as store_db
+
+    tries: list[int] = []
+
+    def once(settings):
+        tries.append(1)
+        raise _deadlock()
+
+    monkeypatch.setattr(store_db, "_apply_once", once)
+    monkeypatch.setattr(store_db.time, "sleep", lambda s: None)
+    with pytest.raises(store_db.SchemaError, match="after 5 attempts"):
+        store_db.ensure_schema(make_settings(store_enabled=True))
+    assert len(tries) == store_db.SCHEMA_ATTEMPTS == 5
+
+
+def test_a_schema_error_that_is_no_accident_is_not_tried_again(monkeypatch,
+                                                              make_settings):
+    import psycopg
+
+    from geelark_farm.store import db as store_db
+
+    tries: list[int] = []
+
+    def once(settings):
+        tries.append(1)
+        raise psycopg.errors.SyntaxError("syntax error at or near")
+
+    monkeypatch.setattr(store_db, "_apply_once", once)
+    with pytest.raises(psycopg.errors.SyntaxError):
+        store_db.ensure_schema(make_settings(store_enabled=True))
+    assert len(tries) == 1
+
+
+def test_a_schema_that_committed_without_its_tables_raises(monkeypatch,
+                                                           make_settings):
+    from geelark_farm.store import db as store_db
+
+    monkeypatch.setattr(store_db, "_apply_once", lambda s: None)
+    monkeypatch.setattr(store_db, "_schema_present", lambda s: False)
+    with pytest.raises(store_db.SchemaError, match="station_line"):
+        store_db.ensure_schema(make_settings(store_enabled=True))
+
+
 # ------------------------------------------------ against a real cluster
 needs_cluster = pytest.mark.skipif(
     "GEELARK_TEST_DSN" not in __import__("os").environ,
@@ -562,8 +641,13 @@ def test_a_store_enabled_start_ensures_the_schema(monkeypatch, make_settings):
     assert ensured, "a store-enabled start did not ensure the schema"
 
 
-def test_a_dead_cluster_at_boot_does_not_stop_the_farm(monkeypatch,
-                                                       make_settings, caplog):
+def test_a_schema_that_does_not_apply_at_boot_stops_the_process(monkeypatch,
+                                                                make_settings,
+                                                                caplog):
+    """store-1 / D2: this revision's code reads columns the last schema
+    does not have, so a start whose schema did not apply exits non-zero and
+    its container starts it again, rather than serving on the old tables."""
+    import logging
     import threading
 
     import geelark_farm.serve as serve_mod
@@ -575,10 +659,11 @@ def test_a_dead_cluster_at_boot_does_not_stop_the_farm(monkeypatch,
                              store_password="p")
     stop = threading.Event()
     stop.set()
-    serve_mod.run(settings, stop=stop, passes=0)      # no raise
-
+    with pytest.raises(SystemExit) as out:
+        serve_mod.run(settings, stop=stop, passes=0)
+    assert out.value.code == 1
     assert any("could not ensure the store schema" in r.message
-               for r in caplog.records)
+               and r.levelno == logging.ERROR for r in caplog.records)
 
 
 # ---------------------------------------------------------- the actions queue
@@ -843,6 +928,29 @@ def test_retry_copies_a_failed_command_into_a_new_row(monkeypatch,
     monkeypatch.setattr(actions, "connect", lambda s: conn)
     assert actions.retry(make_settings(store_enabled=True), action_id=1,
                          user_id=7, is_admin=False) == "not_yours"
+
+
+def test_a_failed_station_build_is_never_replayed_by_a_retry(monkeypatch,
+                                                            make_settings):
+    """Its typed passwords were scrubbed once it ended: a hand-typed POST
+    to /requests/<id>/retry must not queue it again without them."""
+    from geelark_farm.store import actions
+
+    conn = _ScriptedConn([("build_by_hand",
+                           {"station": True, "gmail_password": ""}, 7,
+                           "failed")])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+    assert actions.retry(make_settings(store_enabled=True), action_id=41,
+                         user_id=7, is_admin=False) == "station_build"
+    assert not any("INSERT" in sql for sql in conn.sql)
+    assert conn.committed == 0
+
+    # A dashboard build by hand is still retried as before.
+    conn = _ScriptedConn([("build_by_hand", {"serial": ""}, 7, "failed"),
+                          (79,)])
+    monkeypatch.setattr(actions, "connect", lambda s: conn)
+    assert actions.retry(make_settings(store_enabled=True), action_id=42,
+                         user_id=7, is_admin=False) == 79
 
 
 def test_listing_pages_fifty_at_a_time_with_one_row_of_lookahead(
@@ -2003,3 +2111,118 @@ def test_the_lanes_are_columns_on_phones_exits_and_wishes():
     assert "no_gmail, purpose)" in ask, "a wish is written with its lane"
     take = inspect.getsource(wanted.take)
     assert "requested_by, no_gmail, purpose" in take, "and read back with it"
+
+
+def _cluster_settings(make_settings):
+    import os
+
+    parts = dict(p.split("=", 1) for p in os.environ["GEELARK_TEST_DSN"].split())
+    return make_settings(
+        store_enabled=True, store_host=parts["host"],
+        store_port=int(parts.get("port", 5432)), store_db=parts["dbname"],
+        store_user=parts["user"], store_password=parts["password"])
+
+
+@needs_cluster
+def test_a_schema_that_waits_on_live_traffic_gives_up_the_attempt_and_retries(
+        monkeypatch, make_settings):
+    """store-1: a live transaction holding phones makes the attempt wait
+    for its lock; the attempt gives up after the lock timeout, rolls back,
+    and the next one applies once the traffic has moved on."""
+    import psycopg
+
+    from geelark_farm.store import db as store_db
+
+    s = _cluster_settings(make_settings)
+    store_db.ensure_schema(s)
+    live = psycopg.connect(**store_db.dsn_kwargs(s))
+    tries: list[str] = []
+    real = store_db._apply_once
+
+    def once(settings):
+        try:
+            real(settings)
+        except Exception as exc:
+            tries.append(type(exc).__name__)
+            raise
+        tries.append("applied")
+
+    def nap(seconds):
+        assert 1.0 <= seconds <= 2.0
+        live.commit()                     # the live traffic moves on
+
+    try:
+        live.execute("SELECT 1 FROM phones LIMIT 1")        # holds its lock
+        monkeypatch.setattr(store_db, "SCHEMA_LOCK_TIMEOUT", "300ms")
+        monkeypatch.setattr(store_db, "_apply_once", once)
+        monkeypatch.setattr(store_db.time, "sleep", nap)
+        store_db.ensure_schema(s)
+    finally:
+        live.close()
+    assert tries == ["LockNotAvailable", "applied"]
+
+
+@needs_cluster
+def test_two_starts_at_once_apply_the_schema_one_after_the_other(make_settings):
+    import threading
+
+    from geelark_farm.store import db as store_db
+
+    s = _cluster_settings(make_settings)
+    errors: list[BaseException] = []
+
+    def start():
+        try:
+            store_db.ensure_schema(s)
+        except BaseException as exc:      # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=start) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert errors == []
+
+
+@needs_cluster
+def test_a_start_waits_for_the_one_already_applying_the_schema(make_settings):
+    """store-1 / D2: every attempt takes the schema's advisory lock first, so
+    a second container waits for the first rather than racing it on the
+    same tables."""
+    import threading
+    import time
+
+    import psycopg
+
+    from geelark_farm.store import db as store_db
+
+    s = _cluster_settings(make_settings)
+    store_db.ensure_schema(s)
+    first = psycopg.connect(**store_db.dsn_kwargs(s))
+    done = threading.Event()
+    errors: list[BaseException] = []
+
+    def start():
+        try:
+            store_db.ensure_schema(s)
+        except BaseException as exc:      # noqa: BLE001 - reported below
+            errors.append(exc)
+        done.set()
+
+    try:
+        first.execute("SELECT pg_advisory_xact_lock(%s)",
+                      (store_db.SCHEMA_LOCK_KEY,))
+        second = threading.Thread(target=start)
+        second.start()
+        time.sleep(1.5)
+        assert not done.is_set(), "the second start did not wait for the lock"
+        waiting = first.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"
+            " AND NOT granted").fetchone()[0]
+        assert waiting >= 1
+        first.commit()
+        second.join(60)
+    finally:
+        first.close()
+    assert done.is_set() and errors == []
