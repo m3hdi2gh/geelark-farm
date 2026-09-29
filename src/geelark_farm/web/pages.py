@@ -3847,9 +3847,14 @@ def live_page(serial: str, user: dict, said: str = "",
     # dashboard's sake, and this page has no script - so it never asked
     # again, and Boot looked wired to nothing while the link sat in the
     # request's row (the operator, 2026-09-08).
+    # Every second and a half while it waits: the boot itself takes the
+    # cloud five to fifteen seconds, and a whole three seconds of asking
+    # again sat on top of it (the operator, 2026-09-29). `margin:auto`
+    # centres the card in the page's column, which stretched it to the
+    # left edge.
     again = (f'<script>setTimeout(function(){{ location.reload(); }}, '
-             f'{int(wait) * 1000});</script>' if wait else "")
-    body = (f'<div class="card" style="width:min(520px,100%);'
+             f'{int(wait * 500)});</script>' if wait else "")
+    body = (f'<div class="card" style="width:min(520px,100%);margin:auto;'
             f'text-align:center">'
             f'<div class="brand" style="justify-content:center">'
             f'{_brand()}</div>'

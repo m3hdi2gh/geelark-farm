@@ -5465,7 +5465,9 @@ def test_the_live_tab_asks_again_by_itself_and_the_dashboard_says_so():
 
     user = {"id": 1, "username": "test", "role": "operator", "csrf": "c"}
     waiting = pages.live_page("1862", user, said="queued:70", row={})
-    assert "setTimeout(function(){ location.reload(); }, 3000)" in waiting
+    assert "setTimeout(function(){ location.reload(); }, 1500)" in waiting, (
+        "every second and a half, not three (2026-09-29)")
+    assert 'style="width:min(520px,100%);margin:auto;' in waiting, "centred"
     assert "IranSpoty Cloud is starting it" in waiting
     started = pages.live_page("1862", user, said="queued:70",
                               row={"status": "done", "result": "started"})
