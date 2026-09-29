@@ -2525,9 +2525,11 @@ def test_take_back_done_and_failed_are_gated_and_the_deleting_ones_ask(
     assert 'value="unused"' in body and "Release" in body, \
         "a taken phone can be let go"
     assert body.count('value="done"') == 1, "only the taken phone closes here"
-    assert body.count('value="failed"') == 1
+    assert body.count('value="failed"') == 0, "Failed went (2026-09-29)"
+    assert body.count('value="decline"') == 1
+    assert body.count('value="or"') == 1
     # Only on the free phone: a phone you hold comes back first - Done,
-    # Failed, Release - and its exit is changed once it is back.
+    # Decline, OR, Release - and its exit is changed once it is back.
     assert body.count("Change IP") == 1, "on the free phone only"
     shelf = body.index('/phones/1500/boot')
     assert shelf < body.index('/phones/1501/state'), \
@@ -2729,7 +2731,8 @@ def test_each_button_wears_the_colour_of_what_it_does(web, monkeypatch):
     # button on a free row since Take went (2026-09-16), and the one
     # filled one: a power sign and no outline.
     for klass, label in (("quiet", "Release"), ("quiet ok", "Done"),
-                         ("quiet bad", "Failed"), ("quiet", "Change IP")):
+                         ("quiet bad", "Decline"), ("quiet bad", "OR"),
+                         ("quiet", "Change IP")):
         assert f'class="{klass}">{label}<' in body, label
     assert '<button class="boot" title=' in body
     assert "</svg>Boot</button>" in body
@@ -2755,7 +2758,8 @@ def test_a_phone_somebody_else_holds_offers_only_their_name(web, monkeypatch):
     start = body.index('href="/phones/1501"')
     row = body[start:body.index("</tr>", start)]
     assert '<span class="age">with ali</span>' in row
-    for label in ("Release", "Done", "Failed", "Boot", "Take", "Change IP"):
+    for label in ("Release", "Done", "Decline", "OR", "Boot", "Take",
+                  "Change IP"):
         assert f">{label}<" not in row, label
     assert 'class="badge manual" title="Ready">With ali</span>' in row
 
@@ -2779,7 +2783,7 @@ def test_an_admin_may_end_anybody_s_hold_from_the_table(web, monkeypatch):
     _, _, body = client.request("GET", "/")
     start = body.index('href="/phones/1501"')
     row = body[start:body.index("</tr>", start)]
-    for label in ("Release", "Done", "Failed"):
+    for label in ("Release", "Done", "Decline", "OR"):
         assert f">{label}<" in row, label
     for label in ("Boot", "Take", "Change IP"):
         assert f">{label}<" not in row, label
@@ -2824,7 +2828,7 @@ def test_a_taken_phone_offers_no_boot_until_it_is_released(web, monkeypatch):
     assert ">Boot<" not in body, "it is already taken"
     # The three ways being taken ends are still there, so the row is not
     # simply emptier - it is the right shape for where the phone is.
-    for label in ("Release", "Done", "Failed"):
+    for label in ("Release", "Done", "Decline", "OR"):
         assert f">{label}<" in body, label
 
 
@@ -5381,12 +5385,15 @@ def test_done_and_failed_ask_beside_the_button(web, monkeypatch):
 
     start = body.index('href="/phones/1856"')
     row = body[start:body.index("</tr>", start)]
-    assert ('data-ask="Phone 1856 failed? The phone is deleted in IranSpoty '
+    assert ('data-ask="Phone 1856 declined? The phone is deleted in IranSpoty '
             'Cloud within a few seconds') in row
-    assert 'data-yes="Yes, phone 1856 is failed"' in row
+    assert 'data-yes="Yes, phone 1856 is declined"' in row
+    assert ('data-ask="Phone 1856 OR? The phone is deleted in IranSpoty '
+            'Cloud within a few seconds') in row
+    assert 'data-yes="Yes, phone 1856 is OR"' in row
     assert ('data-ask="Phone 1856 done? The phone is deleted in IranSpoty '
             'Cloud within a few seconds') in row
-    assert row.count("data-ask=") == 2, "Release asks nothing"
+    assert row.count("data-ask=") == 3, "Release asks nothing"
     script = pages._DASH_SCRIPT
     assert "askFirst(form, form.dataset.ask, form.dataset.yes || 'Yes')" in script
     assert "function askFirst(form, question, answer)" in script
@@ -7551,12 +7558,16 @@ def test_the_live_tab_offers_done_and_failed_beside_its_controls(web,
     _, _, body = client.request("GET", "/phones/1500/live?said=queued:71")
     acts = body[body.index('<div class="gf-acts">'):]
     acts = acts[:acts.index("</div>") + 6]
-    assert acts.count('action="/phones/1500/state"') == 2
+    assert acts.count('action="/phones/1500/state"') == 3
     assert 'name="state" value="done"' in acts
-    assert 'name="state" value="failed"' in acts
-    assert acts.count('name="back" value="/"') == 2, "the phone is gone"
-    assert acts.count("data-ask=") == 2
-    assert 'class="quiet ok">Done<' in acts and 'class="quiet bad">Failed<' in acts
+    assert 'name="state" value="decline"' in acts
+    assert 'name="state" value="or"' in acts
+    assert 'value="failed"' not in acts, "Failed went (2026-09-29)"
+    assert acts.count('name="where" value="live"') == 3, "the surface, for the record"
+    assert acts.count('name="back" value="/"') == 3, "the phone is gone"
+    assert acts.count("data-ask=") == 3
+    assert 'class="quiet ok">Done<' in acts and 'class="quiet bad">Decline<' in acts
+    assert 'class="quiet bad">OR<' in acts
     assert body.index('id="gf-ip"') < body.index('<div class="gf-acts">')
     assert body.index('<div class="gf-acts">') < body.index("</aside>")
     assert "window.confirm(f.getAttribute('data-ask'))" in body
@@ -7610,7 +7621,7 @@ def test_take_is_gone_and_boot_is_the_one_door_onto_a_free_phone(web,
     free, taken = row("1500"), row("1501")
     assert ">Take<" not in body and 'value="taken"' not in body
     assert "</svg>Boot</button>" in free and ">Change IP<" in free
-    for label in ("Release", "Done", "Failed"):
+    for label in ("Release", "Done", "Decline", "OR"):
         assert f">{label}<" not in free and f">{label}<" in taken, label
     assert "</svg>Boot</button>" not in taken
 
@@ -7619,7 +7630,8 @@ def test_take_is_gone_and_boot_is_the_one_door_onto_a_free_phone(web,
             "username": "mehdi", "id": 1}
     assert pages._state_forms(user, {"serial": "1500", "state": ""}) == []
     assert len(pages._state_forms(user, {"serial": "1500",
-                                         "state": "taken"})) == 3
+                                         "state": "taken"})) == 4, (
+        "Release, Done, Decline, OR")
 
 
 def test_a_swap_keeps_the_manager_somebody_is_reading(web, monkeypatch):
@@ -7714,7 +7726,7 @@ def test_a_hand_built_phone_waits_on_its_makers_shelf_with_boot_on_the_row(
     row = body[start:body.index("</tr>", start)]
 
     assert 'action="/phones/1502/boot"' in row
-    for label in ("Boot", "Done", "Failed"):
+    for label in ("Boot", "Done", "Decline", "OR"):
         assert f">{label}<" in row, label
     for label in ("Release", "Change IP", "Take"):
         assert f">{label}<" not in row, f"{label} is on the phone's own page"
@@ -7762,7 +7774,7 @@ def test_nobody_else_boots_a_phone_kept_for_its_maker_not_even_an_admin(
     start = body.index('href="/phones/1503"')
     row = body[start:body.index("</tr>", start)]
     assert '<span class="age">built for ali</span>' in row
-    for label in ("Boot", "Release", "Done", "Failed", "Change IP"):
+    for label in ("Boot", "Release", "Done", "Decline", "OR", "Change IP"):
         assert f">{label}<" not in row, label
 
     # The admin: no Boot drawn, and the press refused if one is forged.
@@ -7775,7 +7787,7 @@ def test_nobody_else_boots_a_phone_kept_for_its_maker_not_even_an_admin(
     start = body.index('href="/phones/1503"')
     row = body[start:body.index("</tr>", start)]
     assert 'action="/phones/1503/boot"' not in row, "not theirs to start"
-    assert ">Done<" in row and ">Failed<" in row, "ending it still is"
+    assert ">Done<" in row and ">Decline<" in row, "ending it still is"
     monkeypatch.setattr("geelark_farm.store.actions.record_refused",
                         lambda *a, **k: 88)
     status, headers, _ = admin.request(
@@ -7806,7 +7818,7 @@ def test_the_phones_own_page_is_where_a_kept_phone_is_given_back(
 
     for door in ("boot", "state", "proxy"):
         assert f'action="/phones/1504/{door}"' in body, door
-    for label in ("Boot", "Release", "Done", "Failed", "Change IP"):
+    for label in ("Boot", "Release", "Done", "Decline", "OR", "Change IP"):
         assert f">{label}<" in body, label
     assert "on the shelf, kept for mehdi" in body
 
@@ -10564,3 +10576,40 @@ def test_free_all_set_aside_queues_one_command(web, monkeypatch):
         _form(csrf=client.csrf(), back="/"))
     assert status == 303
     assert got[-1]["verb"] == "free_shelved_proxies"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_decline_and_or_land_as_failed_with_the_button_on_the_request(
+        web, monkeypatch):
+    """Failed went on 2026-09-29: Decline and OR both write the phone off,
+    and which one was pressed rides on the request as the operator's own
+    reason, with the surface it was pressed on."""
+    got = {}
+    monkeypatch.setattr("geelark_farm.store.actions.enqueue",
+                        lambda settings, **kw: got.update(kw) or 51)
+    client = web()
+    client.login()
+    for button, word in (("decline", "declined"), ("or", "OR")):
+        got.clear()
+        status, headers, _ = client.request(
+            "POST", "/phones/1501/state",
+            _form(csrf=client.csrf(), state=button, sure="1", back="/",
+                  where="live"))
+        assert status == 303, button
+        assert {k: got["payload"][k] for k in ("serial", "state", "button",
+                                               "where")} == {
+            "serial": "1501", "state": "failed", "button": button,
+            "where": "live"}, button
+        # The confirm page, without the script, asks in the same word.
+        _, _, page = client.request(
+            "POST", "/phones/1501/state",
+            _form(csrf=client.csrf(), state=button, back="/", where="dash"))
+        assert f"Mark phone 1501 {word}?" in page
+        assert f"Yes, phone 1501 is {word}" in page
+        assert 'name="where" value="dash"' in page, "carried through the ask"
+    # A form that only says the state still lands, as Failed always did.
+    got.clear()
+    client.request("POST", "/phones/1501/state",
+                   _form(csrf=client.csrf(), state="failed", sure="1", back="/"))
+    assert got["payload"]["button"] == "failed"
+    assert "where" not in got["payload"], "an unknown surface is not recorded"

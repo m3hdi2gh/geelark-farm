@@ -368,6 +368,10 @@ _DASH_SAID = {
               "on it retired.",
     "written-off": "Marked failed - the phone is deleted in a moment and "
                    "the account that was on it freed.",
+    "declined": "Marked declined - the phone is deleted in a moment and "
+                "the account that was on it freed.",
+    "marked-or": "Marked OR - the phone is deleted in a moment and the "
+                 "account that was on it freed.",
     "cancelled": "The build gives up at its next step and puts back what "
                  "it held.",
     "dismissed": "Taken off the list.",
@@ -585,13 +589,35 @@ PHONE_STATES = {
              "text": "The phone is deleted in IranSpoty Cloud within a few "
                      "seconds and the gmail and the account on it retired "
                      "as delivered. There is no undo: the phone is gone."},
+    # Failed is no longer drawn - Decline and OR took its place on
+    # 2026-09-29, both meaning failed to the farm and each the
+    # operator's own reason - but the word is still taken, so a form
+    # that says it lands as it always did.
     "failed": {"label": "Failed", "klass": "quiet bad", "sure": True,
                "said": "written-off",
                "text": "The phone is deleted in IranSpoty Cloud within a few "
                        "seconds, its gmail marked used and the account "
                        "freed for another phone. There is no undo: the "
                        "phone is gone."},
+    "decline": {"label": "Decline", "klass": "quiet bad", "sure": True,
+                "said": "declined", "word": "declined", "state": "failed",
+                "text": "The phone is deleted in IranSpoty Cloud within a "
+                        "few seconds, its gmail marked used and the "
+                        "account freed for another phone. There is no "
+                        "undo: the phone is gone."},
+    "or": {"label": "OR", "klass": "quiet bad", "sure": True,
+           "said": "marked-or", "word": "OR", "state": "failed",
+           "text": "The phone is deleted in IranSpoty Cloud within a few "
+                   "seconds, its gmail marked used and the account "
+                   "freed for another phone. There is no undo: the "
+                   "phone is gone."},
 }
+
+#: The buttons that end a phone, in the order they are drawn. Decline
+#: and OR replaced Failed on 2026-09-29: both write the phone off, and
+#: which one was pressed is recorded (store.verdicts) as the operator's
+#: own reason, to be queried later by Gmail, exit and operator.
+ENDINGS = ("done", "decline", "or")
 
 #: Order of the phones table: what can be handed over first, then what is
 #: waiting for an account, then what needs a look, then what is still
@@ -762,20 +788,25 @@ def _controls(data: dict, user: dict) -> str:
         f'{esc(CONTROLS[what]["label"])}</button></form>' for what in wanted)
 
 
-def _state_form(user: dict, serial: str, state: str, back: str = "/") -> str:
-    """One Take / Back / Done / Failed button; `back` is the page the
-    press returns to (the dashboard, or the phone's own story)."""
+def _state_form(user: dict, serial: str, state: str, back: str = "/",
+                where: str = "") -> str:
+    """One Take / Back / Done / Decline / OR button; `back` is the page
+    the press returns to (the dashboard, or the phone's own story) and
+    `where` names the surface it was pressed on, for the record."""
     plan = PHONE_STATES[state]
+    word = plan.get("word", state)
     # The two that delete the phone carry their question on the form, so
     # the script asks it beside the button rather than on a page of its
     # own (the operator, 2026-09-08); without the script the server still
     # asks on that page.
-    ask = (f' data-ask="Phone {esc(serial)} {state}? {esc(plan["text"])}"'
-           f' data-yes="Yes, phone {esc(serial)} is {state}"'
+    ask = (f' data-ask="Phone {esc(serial)} {word}? {esc(plan["text"])}"'
+           f' data-yes="Yes, phone {esc(serial)} is {word}"'
            if plan["sure"] else "")
+    where = where or ("story" if back.startswith("/phones/") else "dash")
     return (f'<form method="post" class="inline" '
             f'action="/phones/{esc(serial)}/state"{ask}>{_csrf(user)}'
             f'<input type="hidden" name="state" value="{state}">'
+            f'<input type="hidden" name="where" value="{where}">'
             f'<input type="hidden" name="back" value="{esc(back)}">'
             f'<button class="{plan["klass"]}">{esc(plan["label"])}'
             f'</button></form>')
@@ -884,8 +915,8 @@ def _boot_form(user: dict, serial: str) -> str:
 
 def _state_forms(user: dict, row: dict, back: str = "/", *,
                  release: bool = True) -> list[str]:
-    """The phone-state buttons a taken row offers: Release, Done and
-    Failed. Empty for a phone nobody holds - Boot is how one is taken,
+    """The phone-state buttons a taken row offers: Release, Done,
+    Decline and OR. Empty for a phone nobody holds - Boot is how one is taken,
     since the Live tab's closing became how it is released and Take was
     the one door left with no way back (the operator, 2026-09-16) - and
     while it is being built, and for someone who may not.
@@ -903,8 +934,7 @@ def _state_forms(user: dict, row: dict, back: str = "/", *,
     forms = []
     if release:
         forms.append(_state_form(user, serial, "unused", back))
-    return forms + [_state_form(user, serial, "done", back),
-                    _state_form(user, serial, "failed", back)]
+    return forms + [_state_form(user, serial, end, back) for end in ENDINGS]
 
 
 def _holder(row: dict) -> str:
@@ -3924,15 +3954,15 @@ def viewer_page(serial: str, user: dict, url: str,
         rows += f'<script>{_TOTP_SCRIPT}</script>'
     ends = ""
     if _may(user, "may_take_phones") and not watch:
-        # Done and Failed, as the dashboard's row offers them (the
-        # operator, 2026-09-16: "beside the other buttons"). Both delete
-        # the phone, so both ask first - here, in the page, by the same
+        # Done, Decline and OR, as the dashboard's row offers them (the
+        # operator, 2026-09-16: "beside the other buttons"). All three
+        # delete the phone, so all ask first - here, in the page, by the same
         # data-ask the dashboard's script reads; answered yes, the form
         # carries the server's own `sure` and the tab goes home, since
         # the phone it was showing is gone.
-        ends = (f'<div class="gf-acts">'
-                f'{_state_form(user, serial, "done", "/")}'
-                f'{_state_form(user, serial, "failed", "/")}</div>')
+        ends = ('<div class="gf-acts">'
+                + "".join(_state_form(user, serial, end, "/", where="live")
+                          for end in ENDINGS) + '</div>')
     change_ip = ""
     if _may(user, "may_change_proxy") and not watch:
         # Beside Reload: the phone is stopped, moved to the next free

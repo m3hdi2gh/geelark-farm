@@ -2020,11 +2020,23 @@ def set_phone_state(book, ledger, settings, payload, client):
     state = str(payload.get("state") or "").strip().lower()
     if state not in ("taken", "done", "failed", "", "unused"):
         return "refused", f"{state!r} is not a State word", None
-    from .store import person
+    from .store import person, verdicts
 
     word = "" if state == "unused" else state
+    # Which button ended it - done, decline or or - is the operator's
+    # own reason; a form that only says the state pressed that word.
+    button = str(payload.get("button") or word).strip().lower()
+    if word in ("done", "failed") and verdicts.BUTTONS.get(button) != word:
+        return "refused", f"{button!r} is not a button that means {word}", None
     if word in ("done", "failed") and _is_building(settings, serial):
         return "refused", f"phone {serial} is being worked on right now", None
+    if word in ("done", "failed"):
+        # Written before the state, while the phone row still says
+        # what was on it: the lane deletes the phone seconds later.
+        verdicts.record(settings, serial=serial, button=button, state=word,
+                        by=str(payload.get("by") or ""),
+                        by_id=payload.get("by_id"),
+                        where=str(payload.get("where") or ""))
     if not person.set_state(settings, serial, word):
         return "failed", f"phone {serial or '?'} is not on the farm", None
     _stamp_owner(settings, serial,
@@ -2035,8 +2047,10 @@ def set_phone_state(book, ledger, settings, payload, client):
                "failed": "the phone is deleted in a moment and its account "
                          "freed",
                "": "back on the shelf"}[word]
-    return ("done", f"phone {serial} marked {word or 'unused'} by "
-                    f"{_by(payload)}: {meaning}", {"state": word})
+    pressed = f" ({button})" if button != word else ""
+    return ("done", f"phone {serial} marked {word or 'unused'}{pressed} by "
+                    f"{_by(payload)}: {meaning}",
+            {"state": word, **({"button": button} if pressed else {})})
 
 
 def clear_tries(book, ledger, settings, payload, client):

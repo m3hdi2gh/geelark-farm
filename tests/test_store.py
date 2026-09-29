@@ -1942,3 +1942,47 @@ def test_a_sweep_has_a_twin_whatever_it_names(monkeypatch, make_settings):
     assert "verb = %s" in sql and "address" not in sql
     assert params == ("test_all_proxies",)
 
+
+
+def test_a_verdict_row_copies_the_phone_and_its_exit_at_that_moment(monkeypatch,
+                                                                    make_settings):
+    """The phone row is gone seconds after the press, so the verdict
+    carries its Gmail, app account and exit - by name, by
+    host:port:username and by outbound address - and the operator and
+    the button. Never raises: a press is not lost to a store hiccup."""
+    from geelark_farm.store import verdicts
+
+    conn = _ScriptedConn([("PH1", "G@Example.com", "gpt1", "PS3", "5.6.7.8",
+                           "gw.example", 10001, "u-ps3")])
+    monkeypatch.setattr(verdicts, "connect", lambda s: conn)
+    assert verdicts.record(make_settings(), serial="1500", button="decline",
+                           state="failed", by="sara", by_id=4, where="live")
+    assert conn.committed == 1
+    assert "FROM phones p LEFT JOIN resources r" in conn.sql[0]
+    assert "p.done_at IS NULL" in conn.sql[0]
+    assert conn.sql[1].startswith("INSERT INTO verdicts (machine, by_name, by_id,"
+                                  " button, state, serial, phone_id, gmail,"
+                                  " app_account, proxy_name, proxy_host,"
+                                  " proxy_port, proxy_username, exit_ip,"
+                                  " pressed_on)")
+    assert conn.params[1][1:] == ("sara", 4, "decline", "failed", "1500", "PH1",
+                                  "g@example.com", "gpt1", "PS3", "gw.example",
+                                  10001, "u-ps3", "5.6.7.8", "live")
+
+    # A phone the store no longer has still gets its row - blanks, not a
+    # crash - and a store that is down costs a warning, not the press.
+    gone = _ScriptedConn([None])
+    monkeypatch.setattr(verdicts, "connect", lambda s: gone)
+    assert verdicts.record(make_settings(), serial="9", button="or",
+                           state="failed", by="ali", by_id="x")
+    assert gone.params[1][1:6] == ("ali", None, "or", "failed", "9")
+    down = _ScriptedConn([RuntimeError("no store")])
+    monkeypatch.setattr(verdicts, "connect", lambda s: down)
+    assert verdicts.record(make_settings(), serial="9", button="done",
+                           state="done") is False
+
+    assert verdicts.BUTTONS == {"done": "done", "failed": "failed",
+                                "decline": "failed", "or": "failed"}
+    src = schema_text()
+    assert "CREATE TABLE IF NOT EXISTS verdicts" in src
+    assert "-- rev 40:" in src

@@ -377,3 +377,49 @@ def test_the_sweep_still_has_one_clock_when_nothing_is_named_quick():
     conn = _ScriptedConn([None], rowcounts=[0])
     assert actions_mod.expire_running(conn, older_than=7200) == 0
     assert "make_interval" in conn.sql[0]
+
+
+def test_a_verdict_is_recorded_with_its_button_before_the_phone_goes(monkeypatch):
+    """Done, Decline and OR each write one verdicts row - who, which
+    button, which phone - before the state is set, since the lane deletes
+    the phone seconds after. A button that does not mean the state is
+    refused, and Take and Release record nothing."""
+    from geelark_farm.store import person, verdicts
+
+    recorded, states = [], []
+    monkeypatch.setattr(verdicts, "record",
+                        lambda settings, **kw: recorded.append(kw) or True)
+    monkeypatch.setattr(person, "set_state",
+                        lambda settings, serial, state: states.append(state) or True)
+    monkeypatch.setattr(verbs, "_is_building", lambda settings, serial: False)
+    book = make_book()
+    by = {"by": "sara", "by_id": 4, "where": "live"}
+
+    status, said, detail = verbs.set_phone_state(
+        book, None, None, {"serial": "1500", "state": "failed",
+                           "button": "decline", **by}, None)
+    assert status == "done" and detail == {"state": "failed",
+                                           "button": "decline"}
+    assert "(decline)" in said
+    assert recorded == [{"serial": "1500", "button": "decline",
+                         "state": "failed", "by": "sara", "by_id": 4,
+                         "where": "live"}]
+    assert states == ["failed"]
+
+    status, _, detail = verbs.set_phone_state(
+        book, None, None, {"serial": "1500", "state": "done", **by}, None)
+    assert status == "done" and detail == {"state": "done"}
+    assert recorded[-1]["button"] == "done", "no button word: the state is it"
+
+    status, said, _ = verbs.set_phone_state(
+        book, None, None, {"serial": "1500", "state": "done",
+                           "button": "or", **by}, None)
+    assert status == "refused" and "does not mean done" not in said
+    assert "not a button that means done" in said
+    assert len(recorded) == 2, "a refused press records nothing"
+
+    verbs.set_phone_state(book, None, None,
+                          {"serial": "1500", "state": "taken", **by}, None)
+    verbs.set_phone_state(book, None, None,
+                          {"serial": "1500", "state": "unused", **by}, None)
+    assert len(recorded) == 2, "Take and Release are not verdicts"

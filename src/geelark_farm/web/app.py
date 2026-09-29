@@ -1369,7 +1369,14 @@ class _Handler(BaseHTTPRequestHandler):
                 f"phone {serial} is with {theirs} - the three ways a phone "
                 f"comes back belong to whoever is holding it",
                 back=_phone_back(field, serial))
-        payload = {"serial": serial, "state": state}
+        # Decline and OR are failed to the farm; the button pressed
+        # rides along as the operator's reason (store.verdicts).
+        word = plan.get("word", state)
+        payload = {"serial": serial, "state": plan.get("state", state),
+                   "button": state}
+        where = str(field.get("where") or "")
+        if where in ("live", "dash", "story"):
+            payload["where"] = where
         if held and held != user.get("username"):
             # An admin ending somebody else's hold (2026-09-15): said on
             # the request, so whoever comes back to find their phone
@@ -1378,10 +1385,11 @@ class _Handler(BaseHTTPRequestHandler):
         back = _phone_back(field, serial)
         if plan["sure"] and field.get("sure") != "1":
             return self._html(200, pages.confirm_page(
-                user, title=f"Mark phone {serial} {state}?",
+                user, title=f"Mark phone {serial} {word}?",
                 text=plan["text"], action=f"/phones/{serial}/state",
-                fields={"state": state, "sure": "1", "back": back},
-                button=f"Yes, phone {serial} is {state}", back=back))
+                fields={"state": state, "sure": "1", "back": back,
+                        **({"where": where} if where else {})},
+                button=f"Yes, phone {serial} is {word}", back=back))
         if state == "unused":
             self._power_off(user, serial)
         return self._act(user, "may_take_phones", "set_phone_state", payload,

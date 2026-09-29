@@ -955,3 +955,32 @@ ALTER TABLE task_runs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL D
 -- behind meant grepping the logs (2026-09-29).
 ALTER TABLE signins ADD COLUMN IF NOT EXISTS exit_ip text NOT NULL DEFAULT '';
 ALTER TABLE phones  ADD COLUMN IF NOT EXISTS exit_ip text NOT NULL DEFAULT '';
+
+-- rev 40: what an operator pressed on a phone (2026-09-29). Done, Decline
+-- and OR end a phone; Decline and OR both mean failed to the farm, and
+-- which was pressed is the operator's own reason. One row a press, with
+-- the phone's Gmail, app account and exit - by name, by
+-- host:port:username and by outbound address - copied in at the moment,
+-- since the phone row is gone a few seconds later. `pressed_on` is the
+-- surface: the Live tab, the dashboard's table or the phone's own page.
+CREATE TABLE IF NOT EXISTS verdicts (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at             timestamptz NOT NULL DEFAULT now(),
+    machine        text NOT NULL DEFAULT '',
+    by_name        text NOT NULL DEFAULT '',
+    by_id          bigint,
+    button         text NOT NULL,
+    state          text NOT NULL,
+    serial         text NOT NULL DEFAULT '',
+    phone_id       text NOT NULL DEFAULT '',
+    gmail          text NOT NULL DEFAULT '',
+    app_account    text NOT NULL DEFAULT '',
+    proxy_name     text NOT NULL DEFAULT '',
+    proxy_host     text NOT NULL DEFAULT '',
+    proxy_port     integer,
+    proxy_username text NOT NULL DEFAULT '',
+    exit_ip        text NOT NULL DEFAULT '',
+    pressed_on     text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS verdicts_at ON verdicts (at);
+CREATE INDEX IF NOT EXISTS verdicts_exit ON verdicts (exit_ip);
