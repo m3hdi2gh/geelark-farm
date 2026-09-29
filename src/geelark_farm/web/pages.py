@@ -50,6 +50,7 @@ _PAGE = """<!doctype html>
 #: count-key names a number in `user["nav"]`; the Requests one is "hot"
 #: (amber) when anything is pending.
 _RAIL = (("/", "Dashboard", ""), ("/station", "Station", ""),
+         ("/stock", "Stock", ""),
          ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/proxy", "Proxy Pool", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
@@ -71,6 +72,9 @@ _ICONS = {
     # A phone: the operator Station (2026-09-29).
     "/station": '<rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/>'
                 '<path d="M11 18.5h2"/>',
+    # Three layers: the stock the planner keeps (2026-09-30).
+    "/stock": ('<path d="M12 3l8 4.5-8 4.5-8-4.5z"/><path d="M4 12l8 4.5 8-4.5"/>'
+               '<path d="M4 16.5l8 4.5 8-4.5"/>'),
     "/pools/gmail": '<path d="M4 6l8 6 8-6"/><rect x="3" y="5" width="18" '
                     'height="14" rx="2"/>',
     # A tick in a box: a job done, which is what a task run is.

@@ -125,7 +125,7 @@ def test_rev_42_names_every_column_the_station_reads():
     from geelark_farm.store import db
 
     sql = (SRC / "store" / "schema.sql").read_text(encoding="utf-8")
-    assert db.SCHEMA_REV == "42"
+    assert int(db.SCHEMA_REV) >= 42
     block = sql[sql.index("-- rev 42:"):]
     for piece in (
             "phones ADD COLUMN IF NOT EXISTS taken_at timestamptz",
@@ -389,7 +389,7 @@ def test_rev_42_is_one_block_and_re_runs(farm):
     sql = store_db.schema_sql()
     assert sql.count("-- rev 42:") == 1
     revs = [int(n) for n in re.findall(r"^-- rev (\d+):", sql, re.M)]
-    assert max(revs) == 42 and revs[-1] == 42
+    assert max(revs) == revs[-1] == int(store_db.SCHEMA_REV) >= 42
     a = farm.user("a")
     serial = farm.hold(a, watched_at=Raw("now() - interval '5 minutes'"))
     vid = farm.insert("verdicts", button="done", state="done", serial=serial,
@@ -400,7 +400,7 @@ def test_rev_42_is_one_block_and_re_runs(farm):
     store_db.ensure_schema(farm.s)
     store_db.ensure_schema(farm.s)
     assert farm.one("SELECT value FROM schema_meta"
-                    " WHERE key = 'schema_rev'")["value"] == "42"
+                    " WHERE key = 'schema_rev'")["value"] == store_db.SCHEMA_REV
     assert farm.one("SELECT password_changed_at FROM users WHERE id = %s",
                     (a,)) == before_user
     assert before_user["password_changed_at"] is not None

@@ -341,6 +341,16 @@ class _Handler(BaseHTTPRequestHandler):
                     user, said=said, said_note=self._said_note(said),
                     phones=task_read.phones(self.settings) if runner else (),
                     serial=first.get("serial", ""), may_run=runner))
+            if path == "/stock":
+                # The stock planner's page (2026-09-30): an admin's.
+                if user.get("role") != "admin":
+                    return self._html(403, pages.forbidden(user))
+                from . import stock_pages, stock_read
+
+                query = parse_qs(self.path.partition("?")[2])
+                said = (query.get("said") or [""])[0]
+                return self._html(200, stock_pages.stock_page(
+                    stock_read.state(self.settings), user, said=said))
             if path == "/logins":
                 if user["sees"] != "all":
                     return self._html(403, pages.forbidden(user))
@@ -542,6 +552,8 @@ class _Handler(BaseHTTPRequestHandler):
             # a redirect to a plain form (2026-09-29).
             if self.path.startswith("/station/"):
                 return self._station_post(user, field)
+            if self.path == "/stock":
+                return self._stock_post(user, field)
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path.startswith("/tasks/") and \
@@ -1437,6 +1449,28 @@ class _Handler(BaseHTTPRequestHandler):
         unlisted = [u for u in held if isinstance(u, dict)
                     and _proxy_key(u) not in set(ignored)]
         return unlisted, ignored, tests
+
+    def _stock_post(self, user: dict, field: dict) -> None:
+        """The stock planner's settings, from its page (an admin's). Saved
+        with an actions row that says who changed what."""
+        if user.get("role") != "admin":
+            return self._html(403, pages.forbidden(user))
+        from ..store import stockplan as store_stockplan
+
+        lanes = store_stockplan.LANES
+        typed = {"mode": field.get("mode") or "watch",
+                 "risk_pct": field.get("risk_pct"),
+                 "min": {lane: field.get(f"min_{lane}") for lane in lanes},
+                 "max": {lane: field.get(f"max_{lane}") for lane in lanes},
+                 "stale_hours": field.get("stale_hours")}
+        try:
+            store_stockplan.set_knobs(self.settings, typed,
+                                      by=str(user.get("username") or ""),
+                                      by_id=int(user["id"]))
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not save the stock planner's settings (%s)", exc)
+            return self._redirect("/stock?said=no")
+        return self._redirect("/stock?said=saved")
 
     def _switches(self) -> dict:
         """The flags the admin's footer line lists, off Settings."""

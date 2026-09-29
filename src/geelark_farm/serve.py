@@ -1342,13 +1342,17 @@ def _on_its_way(coming: int, coming_by: dict, lanes: dict,
 
 
 def _lanes_to_build(total: int, lanes: dict, targets: dict,
-                    coming: dict | None = None) -> dict[str, int]:
+                    coming: dict | None = None, *,
+                    urgent: dict | None = None) -> dict[str, int]:
     """How many of `total` builds go to each lane: the shorter shelf
     first, never past what its exits can serve, GPT on a tie. `coming`
-    is what the queue already holds for each lane."""
+    is what the queue already holds for each lane. `urgent` is who waits
+    in each lane's line (the stock planner, steering): a lane somebody
+    is waiting on is served first."""
     from . import purposes
 
     coming = coming or {}
+    urgent = urgent or {}
     out = {lane: 0 for lane in purposes.ALL}
 
     def room(lane: str) -> int:
@@ -1357,8 +1361,12 @@ def _lanes_to_build(total: int, lanes: dict, targets: dict,
         exits = int(lanes.get(lane, {}).get("exits", 0)) - out[lane]
         return min(short, exits)
 
+    def owed(lane: str) -> bool:
+        return int(urgent.get(lane, 0)) > out[lane] and room(lane) > 0
+
     for _ in range(max(0, int(total or 0))):
-        best = max(purposes.ALL, key=lambda lane: (room(lane), lane == purposes.GPT))
+        best = max(purposes.ALL, key=lambda lane: (owed(lane), room(lane),
+                                                   lane == purposes.GPT))
         if room(best) <= 0:
             break
         out[best] += 1
@@ -1918,6 +1926,16 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     else:
         coming, claimed = flight.counts() if flight is not None else (0, 0)
         coming_by = {}
+    # How many each lane keeps: WARM_STOCK's split, or - with the stock
+    # planner steering (the admin's Stock page) - its targets from how the
+    # operators use each lane, and who is waiting in each line. Any failure
+    # of the planner answers WARM_STOCK's split (stockplan.for_pass).
+    from . import stockplan
+
+    targets, urgent = stockplan.for_pass(settings, lanes=lanes,
+                                         coming_by=coming_by, fixed=targets)
+    shelved = sum(min(lanes[lane]["warm"], targets[lane]) for lane in lanes)
+    stock_target = sum(targets[lane] for lane in lanes)
     waiting = max(0, waiting - claimed)
     # With manual login on (C6) nobody is "waiting" as far as the decision
     # is concerned: an account sits in the pool until a person picks it on
@@ -1953,12 +1971,12 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     # on a pass with room to build, and `None` is how it says "not asked".
     free = (looked
             if needs_slots(tripped=tripped, warm=shelved,
-                           target=settings.warm_stock,
+                           target=stock_target,
                            accounts_waiting=auto_waiting, cap=cap,
                            paused=paused)
             else None)
     decision = decide(tripped=tripped, warm=shelved,
-                      target=settings.warm_stock,
+                      target=stock_target,
                       free_slots=(free if free is None
                                   else max(0, free - coming)),
                       accounts_waiting=auto_waiting, cap=cap, paused=paused,
@@ -1973,17 +1991,18 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
 
     decision, sign_in_gate = signin_gate.throttle(settings, decision)
     # Which shelf each build is for, the shorter one first.
-    by_lane = _lanes_to_build(decision.build, lanes, targets, coming_by)
+    by_lane = _lanes_to_build(decision.build, lanes, targets, coming_by,
+                              urgent=urgent)
     # The numbers go beside the sentence as well as inside it. On the console
     # this reads as prose; in a JSON log file they are fields something can
     # count without matching on the wording, which is what makes an alarm on
     # "the stock has been short for an hour" possible at all.
     log.info("%d warm of %d (%s), %s free slot(s), %d account(s) waiting",
-             warm, settings.warm_stock,
+             warm, stock_target,
              ", ".join(f"{purposes.word(lane)} {lanes[lane]['warm']} of "
                        f"{targets[lane]}" for lane in lanes),
              free if free is not None else "not asked about", waiting,
-             extra={"warm": warm, "target": settings.warm_stock,
+             extra={"warm": warm, "target": stock_target,
                     "lanes": lanes, "by_lane": by_lane,
                     "free_slots": free, "accounts_waiting": waiting,
                     "gmails_free": gmails, "exits_free": exits,
@@ -2005,7 +2024,7 @@ def once(client: Client, settings: Settings, fuse: Breaker, slots: Slots, *,
     _shadow(settings, book, decision, outcome,
             running=_running(client, listed), listed_at=listed_at,
             pulse={
-        "warm": warm, "target": settings.warm_stock, "waiting": waiting,
+        "warm": warm, "target": stock_target, "waiting": waiting,
         # Each lane's shelf: warm, target, exits it could build with,
         # and what the queue already holds for it (purposes.py).
         "lanes": {lane: {**lanes[lane], "target": targets[lane],

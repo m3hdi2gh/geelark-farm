@@ -1106,3 +1106,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS actions_one_power_press
 -- (the scrub of settled builds and the notes).
 CREATE INDEX IF NOT EXISTS actions_mine
     ON actions (requested_by, verb, id) WHERE verb IN ('build_by_hand', 'give_back');
+
+-- rev 43: the stock planner (2026-09-30). Each lane's warm target follows
+-- how fast the operators take phones: the keeper reads the demand and how
+-- long a build takes, and once a minute writes one row per lane of what it
+-- read and what it set - so the admin's Stock page can draw the day, and a
+-- planner that is only watching can be judged against what happened.
+-- `planned` is the planner's target, `fixed` WARM_STOCK's split, `used`
+-- what the keeper built toward (the one or the other, by the mode).
+CREATE TABLE IF NOT EXISTS stock_plans (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at         timestamptz NOT NULL DEFAULT now(),
+    lane       text NOT NULL,
+    mode       text NOT NULL DEFAULT '',
+    demand_h   double precision NOT NULL DEFAULT 0,
+    recent_h   double precision NOT NULL DEFAULT 0,
+    profile_h  double precision NOT NULL DEFAULT 0,
+    lead_min   double precision NOT NULL DEFAULT 0,
+    success    double precision NOT NULL DEFAULT 0,
+    planned    integer NOT NULL DEFAULT 0,
+    fixed      integer NOT NULL DEFAULT 0,
+    used       integer NOT NULL DEFAULT 0,
+    warm       integer NOT NULL DEFAULT 0,
+    coming     integer NOT NULL DEFAULT 0,
+    waiting    integer NOT NULL DEFAULT 0,
+    held       integer NOT NULL DEFAULT 0,
+    people     integer NOT NULL DEFAULT 0,
+    why        text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS stock_plans_at ON stock_plans (at);

@@ -5902,9 +5902,19 @@ def test_nothing_a_person_reads_names_the_vendor():
     import re
     import tokenize
 
-    from geelark_farm import api, apps, failures, forgotten, keeper, rows, verbs
+    from geelark_farm import (
+        api,
+        apps,
+        failures,
+        forgotten,
+        keeper,
+        rows,
+        stockplan,
+        verbs,
+    )
     from geelark_farm.kit import exits, install, phone
     from geelark_farm.store import station as store_station
+    from geelark_farm.store import stockplan as store_stockplan
     from geelark_farm.web import (
         api_v1,
         journey,
@@ -5913,6 +5923,8 @@ def test_nothing_a_person_reads_names_the_vendor():
         read,
         station_pages,
         station_read,
+        stock_pages,
+        stock_read,
         task_pages,
     )
 
@@ -5927,7 +5939,8 @@ def test_nothing_a_person_reads_names_the_vendor():
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
                    failures, api, rows, exits, install, phone, forgotten,
-                   keeper, apps, station_pages, station_read, store_station):
+                   keeper, apps, station_pages, station_read, store_station,
+                   stockplan, store_stockplan, stock_pages, stock_read):
         src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
         # On 3.12+ an f-string is FSTRING_START/MIDDLE/END tokens, not one
