@@ -550,6 +550,11 @@ def test_two_threads_claiming_one_free_row_get_one_row_and_one_none(
         store_port=int(parts.get("port", 5432)), store_db=parts["dbname"],
         store_user=parts["user"], store_password=parts["password"],
         pools_in_pg=True)
+    # A fresh database has no tables until something applies the schema,
+    # and the suite's order put this test first on one (2026-09-29).
+    from geelark_farm.store.db import ensure_schema
+
+    ensure_schema(settings)
     table = ResourceTable(settings)
     tag = uuid.uuid4().hex[:10]
     row_id = table.insert(dict(kind="proxy", host=f"race-{tag}.test",

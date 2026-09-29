@@ -77,6 +77,7 @@ def overdue(settings, minutes: int, grace: int = 45) -> list[dict]:
             " extract(epoch FROM now() - p.tab_closed_at) AS closed_seconds"
             " FROM phones p LEFT JOIN users u ON u.id = p.owner_id"
             " WHERE p.done_at IS NULL AND p.status <> 'building'"
+            "   AND p.taken_at IS NULL"
             "   AND ((p.state = 'taken'"
             "         AND p.state_at < now() - %s * interval '1 minute'"
             f"        AND {quiet})"
@@ -94,16 +95,52 @@ def overdue(settings, minutes: int, grace: int = 45) -> list[dict]:
 
 def _release(settings, serial: str) -> bool:
     """Put the phone back: nobody's, and the clock restarted. True if the
-    row was still taken to be put back."""
+    row was still taken to be put back.
+
+    The Live-tab clocks go with the hold: left behind, a beat from the
+    last holder read as the next one watching. A Station hold is never
+    put back here - the Station branch gives those back."""
     from .store.db import Store
 
     with Store(settings) as store:
         rows = store._write(
-            "UPDATE phones SET state = '', owner_id = NULL,"
-            " state_at = now(), updated_at = now()"
+            "UPDATE phones SET state = '', owner_id = NULL, last_owner_id = owner_id,"
+            " state_at = now(), updated_at = now(), watched_at = NULL,"
+            " tab_closed_at = NULL, live_url = ''"
             " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
+            " AND taken_at IS NULL"
             " RETURNING id", (str(serial),))
     return bool(rows)
+
+
+def _still_legacy(settings, serial: str) -> bool:
+    """Whether the phone is still no Station hold - it may have become one
+    after `overdue` read it. An error reads as False: skipped, next pass."""
+    from .store.db import Store
+
+    try:
+        with Store(settings) as store:
+            rows = store._rows(
+                "SELECT 1 AS ok FROM phones"
+                " WHERE serial = %s AND done_at IS NULL AND taken_at IS NULL",
+                (str(serial),))
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("forgotten phone %s was not re-checked (%s); tried again "
+                    "next pass", serial, exc)
+        return False
+    return bool(rows)
+
+
+def _mark_off(settings, serial: str) -> None:
+    """Say in the store that the phone is off, and its link gone. Never
+    fatal: the next pass's mirror says it too."""
+    from .store import station as store_station
+
+    try:
+        store_station.powered_off(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s: the store was not told it is off (%s)",
+                    serial, exc)
 
 
 def _span(seconds) -> str:
@@ -151,6 +188,10 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
     None (GeeLark would not list) means nothing is touched. Never raises:
     a phone that would not stop is logged and tried again next pass, and
     is not put back while it is still billing.
+
+    The Station's holds have a branch of their own (`_station_sweep`),
+    run on every pass whatever the legacy rows are: the legacy rules
+    leave Station holds out, so the usual case there is nothing at all.
     """
     # Inside, like every other store import outside the store package.
     from .store import events as store_events
@@ -160,17 +201,22 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
     if (minutes <= 0 or not getattr(settings, "store_enabled", False)
             or listing is None):
         return outcome
+    grace = int(getattr(settings, "live_tab_grace_seconds", 45) or 45)
+    live = {str(p.get("serialNo")): p for p in listing}
     try:
-        rows = overdue(settings, minutes,
-                       int(getattr(settings, "live_tab_grace_seconds", 45)
-                           or 45))
+        back = _station_sweep(settings, live, minutes, grace)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the station sweep did not run (%s)", exc)
+        back = {"off": [], "given_back": []}
+    outcome["off"].extend(back.get("off") or [])
+    if back.get("given_back"):
+        outcome["given_back"] = list(back["given_back"])
+    try:
+        rows = overdue(settings, minutes, grace)
     except Exception as exc:                                      # noqa: BLE001
         log.warning("could not read the forgotten phones (%s)", exc)
-        return outcome
-    if not rows:
-        return outcome
-    live = {str(p.get("serialNo")): p for p in listing}
-    for row in rows:
+        rows = []
+    for row in rows or []:
         serial = str(row["serial"])
         phone = live.get(serial)
         phone_id = str(phone.get("id") or "") if phone else ""
@@ -182,13 +228,19 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
             continue
         on = phone is not None and phone.get("status") in ON
         if on:
+            # Read again first: taken from a Station shelf since `overdue`
+            # read it, it is somebody's hold with its own rules now.
+            if not _still_legacy(settings, serial):
+                continue
             try:
-                phones_mod.stop(client, phone_id)
+                with phones_mod.power_lock(serial):
+                    phones_mod.stop(client, phone_id)
             except Exception as exc:                              # noqa: BLE001
                 log.warning("forgotten phone %s would not stop (%s); "
                             "tried again next pass", serial, exc)
                 continue
             outcome["off"].append(serial)
+            _mark_off(settings, serial)
         released = False
         if row.get("state") == "taken":
             try:
@@ -208,3 +260,51 @@ def sweep(client, settings, ledger, listing: list[dict] | None) -> dict:
                           status="released" if released else "switched off",
                           detail=detail)
     return outcome
+
+
+def _station_sweep(settings, live: dict, minutes: int, grace: int) -> dict:
+    """The Station's holds: given back after an hour left alone, and
+    switched off - still theirs - once their Live tab has closed.
+
+    It never calls the vendor. A power-off is always a queued
+    `power_off_phone`, which takes the phone's power lock and asks the
+    ledger itself, and which a beat that came back meanwhile cancels.
+    Returns `{"off": [serials], "given_back": [serials]}`."""
+    from .store import events as store_events
+    from .store import station as store_station
+
+    off: list[str] = []
+    given_back: list[str] = []
+    rows = store_station.overdue(settings, minutes, grace,
+                                 closed=TAB_CLOSED_SECONDS)
+    for row in rows:
+        serial = str(row["serial"])
+        owner = str(row.get("owner") or "") or "nobody"
+        if row.get("why") == "alone":
+            back = store_station.give_back_idle(settings, serial, minutes, grace)
+            if back:
+                # Its power-off was queued by the same statement.
+                detail = f"given back after an hour left alone with {owner}"
+                store_events.emit(settings, "phone", serial=serial,
+                                  status="given back",
+                                  user_id=back.get("owner_id"), detail=detail)
+                log.info("phone %s: %s", serial, detail)
+                given_back.append(serial)
+            continue
+        phone = live.get(serial)
+        if phone is None or phone.get("status") not in ON:
+            # The running flag was stale: it is off already.
+            _mark_off(settings, serial)
+            continue
+        if store_station.queue_off_closed(settings, serial, grace,
+                                          TAB_CLOSED_SECONDS):
+            since = _span(row.get("closed_seconds")
+                          or row.get("unwatched_seconds"))
+            detail = (f"switched off {since} after its live tab closed with "
+                      f"{owner} - it stays theirs for an hour")
+            store_events.emit(settings, "phone", serial=serial,
+                              status="switched off",
+                              user_id=row.get("owner_id"), detail=detail)
+            log.info("phone %s: %s", serial, detail)
+            off.append(serial)
+    return {"off": off, "given_back": given_back}

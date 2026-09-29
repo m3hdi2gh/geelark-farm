@@ -5898,7 +5898,17 @@ def test_nothing_a_person_reads_names_the_vendor():
 
     from geelark_farm import api, apps, failures, forgotten, keeper, rows, verbs
     from geelark_farm.kit import exits, install, phone
-    from geelark_farm.web import api_v1, journey, live, pages, read, task_pages
+    from geelark_farm.store import station as store_station
+    from geelark_farm.web import (
+        api_v1,
+        journey,
+        live,
+        pages,
+        read,
+        station_pages,
+        station_read,
+        task_pages,
+    )
 
     allowed = re.compile(
         r"geelark_(farm|plan|refusal|wallet|run|build|serial|actions|jobs)"
@@ -5911,7 +5921,7 @@ def test_nothing_a_person_reads_names_the_vendor():
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
                    failures, api, rows, exits, install, phone, forgotten,
-                   keeper, apps):
+                   keeper, apps, station_pages, station_read, store_station):
         src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
         toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
         # On 3.12+ an f-string is FSTRING_START/MIDDLE/END tokens, not one
@@ -6747,20 +6757,23 @@ def test_the_pulse_bumps_only_when_the_fingerprint_moves():
 
     pulse = live.Pulse()
     assert pulse.revision == 0 and pulse.everything == 0
-    # Seven columns of the farm's own since 2026-09-28: task_runs joined
-    # so a run's page follows its stages.
-    farm = ("p", "ph", "e", "a", "w", "s", "t")
+    # Ten columns of the farm's own since rev 42: task_runs joined so a
+    # run's page follows its stages (2026-09-28), and the Station's
+    # verdicts, line and build jobs (2026-09-29).
+    farm = ("p", "ph", "e", "a", "w", "s", "t", "v", "ln", "j")
     # The first fingerprint is where the farm is, not a change - it must
     # not wake a page that has just loaded.
     assert pulse.bump(farm + ("l1",)) is False and pulse.revision == 1
     assert pulse.bump(farm + ("l1",)) is False, "the same mark is not news"
     assert pulse.revision == 1
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "l1")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "v", "ln", "j",
+                       "l1")) is True
     assert pulse.revision == 2 and pulse.everything == 2
     # A log line alone moves `everything` and not the farm's own count:
     # the dashboard does not redraw for a build's chatter, the Logs page
     # does (2026-09-14).
-    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "l2")) is True
+    assert pulse.bump(("p", "ph", "e2", "a", "w", "s", "t", "v", "ln", "j",
+                       "l2")) is True
     assert pulse.revision == 2 and pulse.everything == 3
     assert pulse.count() == 2 and pulse.count(logs=True) == 3
     # Waiting: past the number you have, or nothing before the timeout.
@@ -6809,23 +6822,27 @@ def test_the_fingerprint_asks_about_every_table_a_page_draws(monkeypatch,
             asked.append(sql)
             return [{"pools": "2026-09-14", "phones": None, "events": 7,
                      "actions": 3, "wanted": None, "state": "2026-09-21",
-                     "tasks": "2026-09-28", "logs": 900}]
+                     "tasks": "2026-09-28", "verdicts": 41,
+                     "line": None, "jobs": "2026-09-29", "logs": 900}]
 
     monkeypatch.setattr(store_db, "Store", _Store)
     mark = live.take(make_settings(store_enabled=True))
 
     assert mark == ("2026-09-14", "", "7", "3", "", "2026-09-21",
-                    "2026-09-28", "900")
+                    "2026-09-28", "41", "", "2026-09-29", "900")
     # service_state too: the keeper's pulse, the GeeLark strip, the
     # breaker and a Cancel that has landed are drawn from it, and none of
     # them could move the revision (2026-09-21, found by audit).
     # task_runs since 2026-09-28: a running task's page follows it.
+    # The Station's since rev 42: a verdict, the line, a build job.
     for table in ("resources", "phones", "events", "actions", "wanted_builds",
-                  "service_state", "task_runs", "logs"):
+                  "service_state", "task_runs", "verdicts", "station_line",
+                  "jobs", "logs"):
         assert table in asked[0], table
     # The log lines are the last column, apart from the farm's own.
     assert mark[:live.FARM_COLUMNS] == ("2026-09-14", "", "7", "3", "",
-                                        "2026-09-21", "2026-09-28")
+                                        "2026-09-21", "2026-09-28", "41", "",
+                                        "2026-09-29")
 
     # A store that will not answer is not a crash and not a change.
     monkeypatch.setattr(store_db, "Store",
@@ -7260,7 +7277,7 @@ def test_the_live_tabs_beat_stamps_the_phone_and_says_when_it_is_over(
     assert "AND state = 'taken'" in src, "a beat on a phone put back is nothing"
     seen = []
     monkeypatch.setattr(person, "watch",
-                        lambda s, serial: seen.append(serial) or True)
+                        lambda s, serial, uid=None: seen.append(serial) or True)
     monkeypatch.setattr(FakeStore, "user",
                         {"id": 9, "username": "sara", "role": "operator",
                          "sees": "all", "may_take_phones": True})
@@ -7270,7 +7287,7 @@ def test_the_live_tabs_beat_stamps_the_phone_and_says_when_it_is_over(
                                      _form(csrf=client.csrf()))
     assert status == 200 and body == "watching" and seen == ["1500"]
 
-    monkeypatch.setattr(person, "watch", lambda s, serial: False)
+    monkeypatch.setattr(person, "watch", lambda s, serial, uid=None: False)
     status, _, body = client.request("POST", "/phones/1500/watching",
                                      _form(csrf=client.csrf()))
     assert status == 410 and body == "released"
@@ -7296,7 +7313,7 @@ def test_the_live_tabs_closing_beacon_is_noted_and_the_next_beat_clears_it(
     assert "AND state = 'taken'" in closed
     seen = []
     monkeypatch.setattr(person, "tab_closed",
-                        lambda s, serial: seen.append(serial) or True)
+                        lambda s, serial, uid=None: seen.append(serial) or True)
     monkeypatch.setattr(FakeStore, "user",
                         {"id": 9, "username": "sara", "role": "operator",
                          "sees": "all", "may_take_phones": True})
@@ -9702,7 +9719,8 @@ def test_the_press_key_carries_the_words_and_not_only_the_press():
     assert app_mod._digest({"a": 1}) != app_mod._digest({"a": 2})
     assert len(app_mod._digest({})) == 10
     src = inspect.getsource(app_mod._Handler._act)
-    assert 'idem_key=f"{idem}:{_digest(payload)}"' in src
+    # A Station build leaves its typed secrets out of the key (rev 42).
+    assert 'idem_key=f"{idem}:{_digest(payload, digest_skip)}"' in src
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

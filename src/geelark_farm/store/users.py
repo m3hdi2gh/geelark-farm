@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import unicodedata
 
 from ..config import Settings
 from .db import connect
@@ -43,6 +44,18 @@ USERNAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,31}$")
 
 #: The floor store-init sets for the first admin, applied to everyone.
 PASSWORD_MIN = 8
+
+#: The longest display name the Station's profile takes.
+NAME_MAX = 24
+#: A username a person chooses for themselves: 3-20 of a-z 0-9 . _,
+#: starting with a letter or a digit. Admin create keeps USERNAME.
+SELF_USERNAME = re.compile(r"^[a-z0-9][a-z0-9._]{2,19}$")
+#: The shape alone, so a name that only starts wrong is told so.
+_SELF_SHAPE = re.compile(r"^[a-z0-9._]{3,20}$")
+#: Bidi controls that would turn the rest of a line around: U+202A-202E and
+#: U+2066-2069. ZWNJ and ZWJ are not among them - Persian names use them.
+_BIDI = frozenset(chr(c) for c in (*range(0x202A, 0x202F),
+                                   *range(0x2066, 0x206A)))
 
 #: Length of a minted one-time password, in random bytes before encoding -
 #: twelve url-safe characters, enough to be unguessable and short enough
@@ -71,6 +84,29 @@ def may(user: dict | None, permission: str) -> bool:
 
 def mint_password() -> str:
     return secrets.token_urlsafe(_ONE_TIME_BYTES)
+
+
+class WrongPassword(ValueError):
+    """The current password was not right."""
+
+
+def shown_name(user: dict) -> str:
+    """The name a page greets a person by: theirs, or their username."""
+    return (str(user.get("display_name") or "").strip()
+            or str(user.get("username") or "") or "?")
+
+
+def clean_name(text: str) -> str:
+    """Stripped; 1-24 characters; no control or bidi-control characters
+    (ZWNJ and ZWJ are allowed - Persian names use them)."""
+    name = str(text or "").strip()
+    if not name:
+        raise ValueError("Your name cannot be empty.")
+    if len(name) > NAME_MAX:
+        raise ValueError("Your name is at most 24 characters.")
+    if any(unicodedata.category(ch) == "Cc" or ch in _BIDI for ch in name):
+        raise ValueError("Your name has a character that cannot be shown.")
+    return name
 
 
 # ------------------------------------------------------------------- reads
@@ -179,7 +215,8 @@ def reset_password(settings: Settings, user_id: int) -> str:
         conn.execute(
             "UPDATE users SET password_hash = %s, password_salt = %s,"
             " scrypt_n = %s, scrypt_r = %s, scrypt_p = %s,"
-            " must_change_password = true WHERE id = %s",
+            " must_change_password = true, password_changed_at = now()"
+            " WHERE id = %s",
             (hashed["password_hash"], hashed["password_salt"],
              hashed["scrypt_n"], hashed["scrypt_r"], hashed["scrypt_p"],
              user_id))
@@ -199,8 +236,109 @@ def set_password(settings: Settings, user_id: int, password: str) -> None:
         conn.execute(
             "UPDATE users SET password_hash = %s, password_salt = %s,"
             " scrypt_n = %s, scrypt_r = %s, scrypt_p = %s,"
-            " must_change_password = false WHERE id = %s",
+            " must_change_password = false, password_changed_at = now()"
+            " WHERE id = %s",
             (hashed["password_hash"], hashed["password_salt"],
              hashed["scrypt_n"], hashed["scrypt_r"], hashed["scrypt_p"],
              user_id))
         conn.commit()
+
+
+# ----------------------------------------------------- the person's own
+def set_name(settings: Settings, user_id: int, name: str) -> str:
+    """Save the name a person is greeted by. Returns the saved name."""
+    with connect(settings) as conn:
+        row = conn.execute(
+            "UPDATE users SET display_name = %s WHERE id = %s AND active"
+            " RETURNING display_name", (name, int(user_id))).fetchone()
+        conn.commit()
+    if row is None:
+        raise ValueError("Your account is not active.")
+    return str(row[0])
+
+
+def _verified(settings: Settings, user_id: int, current: str) -> dict:
+    """The person's password columns, once `current` has matched them."""
+    from . import auth
+
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT password_hash, password_salt, scrypt_n, scrypt_r, scrypt_p"
+            " FROM users WHERE id = %s AND active", (int(user_id),))
+        row = cur.fetchone()
+        names = [d.name for d in cur.description]
+        conn.rollback()
+    found = dict(zip(names, row, strict=True)) if row is not None else None
+    if found is None or not auth.verify_password(str(current or ""), found):
+        raise WrongPassword("That is not your current password.")
+    return found
+
+
+def set_username(settings: Settings, user_id: int, username: str) -> str:
+    """A person renaming themselves. Unique whatever its case; no current
+    password is asked (the prototype's one-field form, the lead's call).
+    Returns the saved username."""
+    new = str(username or "").strip().lower()
+    if not _SELF_SHAPE.match(new):
+        raise ValueError("3 to 20 small letters, digits, dots or underscores.")
+    if not SELF_USERNAME.match(new):
+        raise ValueError("Start it with a letter or a digit.")
+    with connect(settings) as conn:
+        now = conn.execute("SELECT username FROM users WHERE id = %s AND active",
+                           (int(user_id),)).fetchone()
+        if now is not None and now[0] == new:
+            conn.rollback()
+            return new
+        try:
+            row = conn.execute(
+                "UPDATE users SET username = %s WHERE id = %s AND active"
+                "   AND NOT EXISTS (SELECT 1 FROM users o"
+                "                    WHERE lower(o.username) = %s AND o.id <> %s)"
+                " RETURNING username",
+                (new, int(user_id), new, int(user_id))).fetchone()
+        except Exception as exc:
+            conn.rollback()
+            if type(exc).__name__ == "UniqueViolation":
+                raise ValueError("That username is taken.") from exc
+            raise
+        if row is None:
+            conn.rollback()
+            raise ValueError("That username is taken.")
+        conn.commit()
+    return str(row[0])
+
+
+def change_password(settings: Settings, user_id: int, current: str, new: str,
+                    *, token: str, hours: float) -> str | None:
+    """A person changing their own password: the current one first, then
+    the new hash and this browser's new seat in one transaction, which
+    ends every other seat. Returns the new raw token, or None when this
+    browser's seat was already gone (every seat is then ended, and the
+    password is still changed). Any failure changes nothing."""
+    from . import auth, sessions
+
+    row = _verified(settings, user_id, current)
+    if len(new) < PASSWORD_MIN:
+        raise ValueError("The new password needs at least 8 characters.")
+    if new == current:
+        raise ValueError("The new password is the same as the current one.")
+    if len(new) > 256:
+        raise ValueError("The new password is at most 256 characters.")
+    hashed = auth.hash_password(new)
+    with connect(settings) as conn:
+        changed = conn.execute(
+            "UPDATE users SET password_hash = %s, password_salt = %s,"
+            " scrypt_n = %s, scrypt_r = %s, scrypt_p = %s,"
+            " must_change_password = false, password_changed_at = now()"
+            " WHERE id = %s AND password_hash = %s"
+            " RETURNING id",
+            (hashed["password_hash"], hashed["password_salt"],
+             hashed["scrypt_n"], hashed["scrypt_r"], hashed["scrypt_p"],
+             int(user_id), row["password_hash"])).fetchone()
+        if changed is None:
+            conn.rollback()
+            raise ValueError("Your password was changed somewhere else a moment"
+                             " ago - reload and try again.")
+        seat = sessions.rotate(conn, token, int(user_id), hours=hours)
+        conn.commit()
+    return seat

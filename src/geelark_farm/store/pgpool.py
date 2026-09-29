@@ -430,9 +430,12 @@ class _PgPool(Pool):
         snapshot said when the pass began. Counted the way the claim
         picks, so a keeper sizing a batch by it never orders a build for
         a row the claim would hold back. `purpose` counts what a build
-        for that lane could take: its own rows and the unlabelled."""
+        for that lane could take: its own rows and the unlabelled. An
+        Other build (purposes.OTHER) may take any lane's, so it counts
+        every row, as a blank purpose does."""
         held = (self._lane(purpose, either=True)
-                if purpose and isinstance(self, ProxyPool) else self.held_back())
+                if purpose and purpose != "other" and isinstance(self, ProxyPool)
+                else self.held_back())
         return self._table.free_count(
             self.kind, held_back=held, free=tuple(self.available_statuses),
             hold_tries_from=self._held_from())
@@ -465,7 +468,25 @@ class _PgPool(Pool):
         `purpose` is the lane the row is wanted for: its own lane's rows
         first, then the unlabelled ones, never the other lane's - two
         statements, each atomic, rather than one with a parameter in
-        its ORDER BY."""
+        its ORDER BY.
+
+        An Other build (purposes.OTHER, a hand build for another app)
+        belongs to no lane: the unlabelled rows first, then whichever of
+        the two lanes has more free rows, then the other one - so it
+        takes from the lane that can spare it. `sorted` is stable, so GPT
+        wins a tie."""
+        if purpose == "other" and isinstance(self, ProxyPool):
+            counts = {name: self._table.free_count(
+                          self.kind, held_back=self._lane(name),
+                          free=tuple(self.available_statuses))
+                      for name in ("gpt", "spotify")}
+            order = ("",) + tuple(sorted(("gpt", "spotify"),
+                                         key=lambda name: -counts[name]))
+            for lane in order:
+                row = self._claim(serial, avoid_host, self._lane(lane))
+                if row is not None:
+                    return row
+            return None
         if purpose and isinstance(self, ProxyPool):
             for lane in (purpose, ""):
                 row = self._claim(serial, avoid_host, self._lane(lane))

@@ -452,9 +452,14 @@ class Pool:
         # `purpose` is the lane the row is wanted for (purposes.py): a
         # row kept for that lane first, then one kept for neither, and
         # never one kept for the other lane. Only the exits carry a
-        # lane; every other pool fits everything (`_fits`).
+        # lane; every other pool fits everything (`_fits`). An Other build
+        # (purposes.OTHER) belongs to no lane: the unlabelled rows, then
+        # either lane's, as the store's pool orders them (pgpool).
+        lanes = ((purpose, "") if purpose else (None,))
+        if purpose == "other":
+            lanes = ("", "gpt", "spotify")
         with self._claim_lock:
-            for lane in ((purpose, "") if purpose else (None,)):
+            for lane in lanes:
                 for resource in self.available:
                     if not self._still_free(resource) \
                             or not self._fits(resource, lane):
@@ -1219,9 +1224,12 @@ class ProxyPool(Pool):
 
     def for_lane(self, purpose: str) -> list[Resource]:
         """The free exits a build for `purpose` could take: its own
-        lane's and the unlabelled ones, least used first."""
+        lane's and the unlabelled ones, least used first. An Other build
+        (purposes.OTHER) may take any of them."""
         from . import purposes
 
+        if str(purpose or "").strip().lower() == purposes.OTHER:
+            return list(self.available)
         return [r for r in self.available
                 if purposes.fits(r.values.get(self.purpose_column), purpose)]
 
@@ -1672,6 +1680,12 @@ class PhoneLog:
             # still say things like no_usable_gpt, and they are picked up on
             # exactly the same test as the ones that say `incomplete`.
             if cell("Status") in (self.BUILDING, self.READY) or not cell("Serial"):
+                continue
+            # A phone built by hand for another app (purposes.OTHER) is
+            # nobody's warm stock: no lane counts it and no account is
+            # ever sent to it. Given back, it waits for an admin (the
+            # Station, 2026-09-29).
+            if cell("Purpose").strip().lower() == "other":
                 continue
             # Anything written in `State` means a person has said something
             # about this phone, and none of the three things they can say

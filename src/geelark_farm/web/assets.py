@@ -31,11 +31,22 @@ _HERE = Path(__file__).resolve().parent / "static"
 
 CSS = (_HERE / "console.css").read_text(encoding="utf-8")
 JS = (_HERE / "dash.js").read_text(encoding="utf-8")
+#: The operator Station's own pair: its document never loads the
+#: console's (2026-09-29).
+STATION_CSS = (_HERE / "station.css").read_text(encoding="utf-8")
+STATION_JS = (_HERE / "station.js").read_text(encoding="utf-8")
 
-#: What this pair is. Short enough to read in a URL, long enough that
-#: two builds cannot collide.
-REV = hashlib.sha256(
-    (CSS + "\0" + JS).encode("utf-8")).hexdigest()[:12]
+
+def _rev(*texts: str) -> str:
+    """What these files are, together. `_rev(CSS, JS)` is the formula the
+    console's pair was named by before the Station joined it."""
+    return hashlib.sha256("\0".join(texts).encode("utf-8")).hexdigest()[:12]
+
+
+#: What this build's files are. Short enough to read in a URL, long
+#: enough that two builds cannot collide. The Station's pair folds in, so
+#: a change to either page's files reloads both.
+REV = _rev(CSS, JS, STATION_CSS, STATION_JS)
 
 #: The stylesheet is presentation and is served to anybody who can reach
 #: the host - the sign-in page needs it and has no session yet. The
@@ -44,9 +55,15 @@ REV = hashlib.sha256(
 #: is cached `private`.
 CSS_PATH = f"/s/{REV}.css"
 JS_PATH = f"/s/{REV}.js"
+STATION_CSS_PATH = f"/s/station-{REV}.css"
+STATION_JS_PATH = f"/s/station-{REV}.js"
 
 _KIND = {CSS_PATH: ("text/css; charset=utf-8", False),
-         JS_PATH: ("text/javascript; charset=utf-8", True)}
+         JS_PATH: ("text/javascript; charset=utf-8", True),
+         STATION_CSS_PATH: ("text/css; charset=utf-8", False),
+         STATION_JS_PATH: ("text/javascript; charset=utf-8", True)}
+_BODY = {CSS_PATH: CSS, JS_PATH: JS,
+         STATION_CSS_PATH: STATION_CSS, STATION_JS_PATH: STATION_JS}
 
 
 def served(path: str) -> tuple[str, str, bool] | None:
@@ -58,8 +75,7 @@ def served(path: str) -> tuple[str, str, bool] | None:
     stale page, and a stale page has a stale script to go with it. It
     should reload, which `gf-rev` makes it do.
     """
-    if path == CSS_PATH:
-        return CSS, _KIND[CSS_PATH][0], False
-    if path == JS_PATH:
-        return JS, _KIND[JS_PATH][0], True
-    return None
+    kind = _KIND.get(path)
+    if kind is None:
+        return None
+    return _BODY[path], kind[0], kind[1]

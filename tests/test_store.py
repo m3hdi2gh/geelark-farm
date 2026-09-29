@@ -1982,7 +1982,8 @@ def test_a_verdict_row_copies_the_phone_and_its_exit_at_that_moment(monkeypatch,
                            state="done") is False
 
     assert verdicts.BUTTONS == {"done": "done", "failed": "failed",
-                                "decline": "failed", "or": "failed"}
+                                "decline": "failed", "or": "failed",
+                                "auth": "failed"}
     src = schema_text()
     assert "CREATE TABLE IF NOT EXISTS verdicts" in src
     assert "-- rev 40:" in src

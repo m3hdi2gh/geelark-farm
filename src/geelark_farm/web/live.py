@@ -45,8 +45,9 @@ EVERY = 1.0
 KEEPALIVE = 20.0
 #: How many browsers may hold the stream open at once. Each is a thread
 #: of the server, and the console is read by a handful of people; past
-#: this the page keeps its timer and nothing breaks.
-MAX_STREAMS = 12
+#: this the page keeps its timer and nothing breaks. Raised for the
+#: Station (2026-09-29): every operator's Station page holds one.
+MAX_STREAMS = 32
 
 #: The fingerprint: the newest thing each of the drawn tables knows. The
 #: counts are not in it on purpose - a row deleted moves no `updated_at`,
@@ -62,20 +63,32 @@ MAX_STREAMS = 12
 #: press in one tab, the badge clearing when the build gave up, the
 #: breaker tripping, all waited on the thirty-second timer (2026-09-21,
 #: found by audit).
+#:
+#: The Station (rev 42) adds what it draws that nothing above moves for:
+#: a verdict row, the line for an empty shelf (its `updated_at` moves on
+#: join, leave, serve and expire - never on the poll's `seen_at`), and a
+#: build job made, claimed or ended (the shelves' counts, the ETA and the
+#: build cards; never `heartbeat_at`, which moves on every beat). Wishes
+#: are watched by `updated_at`, so a claim, a landing or a call-off is
+#: heard, not only a new one.
 _FINGERPRINT = (
     "SELECT (SELECT max(updated_at) FROM resources) AS pools,"
     "       (SELECT max(updated_at) FROM phones) AS phones,"
     "       (SELECT max(id) FROM events) AS events,"
     "       (SELECT max(id) FROM actions) AS actions,"
-    "       (SELECT max(id) FROM wanted_builds) AS wanted,"
+    "       (SELECT max(updated_at) FROM wanted_builds) AS wanted,"
     "       (SELECT max(updated_at) FROM service_state) AS state,"
     "       (SELECT max(updated_at) FROM task_runs) AS tasks,"
+    "       (SELECT max(id) FROM verdicts) AS verdicts,"
+    "       (SELECT max(updated_at) FROM station_line) AS line,"
+    "       (SELECT max(greatest(created_at, claimed_at, done_at))"
+    "          FROM jobs WHERE kind = 'build') AS jobs,"
     "       (SELECT max(id) FROM logs) AS logs"
 )
 #: Which columns of it are the farm's own; the rest is the log lines.
 #: `tasks` is the seventh: a run's page follows it stage by stage
-#: (2026-09-28, rev 38).
-FARM_COLUMNS = 7
+#: (2026-09-28, rev 38); the Station's three make ten (rev 42).
+FARM_COLUMNS = 10
 
 
 class Pulse:
@@ -151,7 +164,7 @@ def take(settings: Settings) -> tuple | None:
     row = rows[0]
     return tuple(str(row.get(k) or "")
                  for k in ("pools", "phones", "events", "actions", "wanted",
-                           "state", "tasks",
+                           "state", "tasks", "verdicts", "line", "jobs",
                            "logs"))
 
 

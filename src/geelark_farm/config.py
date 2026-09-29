@@ -377,6 +377,10 @@ class Settings:
     #: the stock warm - and a person picks accounts on the dashboard and
     #: presses "Log in selected"; that command is what starts the finishes.
     manual_login: bool = False
+    #: The operator Station (2026-09-29): on, an operator's `/` renders the
+    #: Station and its routes join the operator's pages. Off (the trial),
+    #: only an admin reaches `/station`, from the rail.
+    station_for_operators: bool = False
     #: How many *batches* may be in flight at once when a pass hands its
     #: work to a pool (B-2, 2026-09-08). A batch is what one pass or one
     #: Send ordered, and it runs its own jobs in parallel - so this bounds
@@ -716,6 +720,8 @@ class Settings:
                         in ("1", "true", "yes", "on"),
             manual_login=_str("MANUAL_LOGIN", "0").strip()
                          in ("1", "true", "yes", "on"),
+            station_for_operators=_str("STATION_FOR_OPERATORS", "0").strip()
+                                  in ("1", "true", "yes", "on"),
             log_db=_str("LOG_DB", "0").strip() in ("1", "true", "yes", "on"),
             # The `.lower()` these two did without until
             # 2026-09-12: WEB_API=True in a .env read as off, silently.

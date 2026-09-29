@@ -288,7 +288,7 @@ def test_a_request_of_another_verb_or_task_is_not_shown(make_settings,
 
 def test_the_farms_stream_moves_for_a_run():
     assert "FROM task_runs" in live._FINGERPRINT
-    assert live.FARM_COLUMNS == 7
+    assert live.FARM_COLUMNS == 10
 
 
 def test_the_route_follows_a_queued_press_to_its_own_address():

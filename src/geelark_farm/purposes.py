@@ -18,6 +18,10 @@ from __future__ import annotations
 
 GPT = "gpt"
 SPOTIFY = "spotify"
+#: A phone built by hand for another app: no lane's stock, on no shelf,
+#: behind any free exit (unlabelled first). Not a lane of `ALL`, and
+#: `normal("other")` stays "" so nothing that counts lanes meets it.
+OTHER = "other"
 #: Every lane, in the order the console draws them.
 ALL = (GPT, SPOTIFY)
 #: The word a person reads.
@@ -38,6 +42,13 @@ def normal(text: str | None) -> str:
     """A lane as somebody typed or stored it - "GPT", "spotify", a
     product key - or "" for a word that is no lane at all."""
     return _SAID.get(str(text or "").strip().lower(), "")
+
+
+def phone_lane(purpose: str | None) -> str:
+    """The lane a phone is in for its exits and its Station tile: spotify,
+    other, or gpt for everything else (blank included)."""
+    word = str(purpose or "").strip().lower()
+    return SPOTIFY if normal(word) == SPOTIFY else OTHER if word == OTHER else GPT
 
 
 def word(purpose: str | None) -> str:

@@ -49,7 +49,8 @@ _PAGE = """<!doctype html>
 #: The rail, in the order the canvas fixed. (path, label, count-key). A
 #: count-key names a number in `user["nav"]`; the Requests one is "hot"
 #: (amber) when anything is pending.
-_RAIL = (("/", "Dashboard", ""), ("/pools/gmail", "Gmail Pool", "gmail"),
+_RAIL = (("/", "Dashboard", ""), ("/station", "Station", ""),
+         ("/pools/gmail", "Gmail Pool", "gmail"),
          ("/pools/proxy", "Proxy Pool", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
@@ -67,6 +68,9 @@ _ICONS = {
     "/": '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" '
          'width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" '
          'rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+    # A phone: the operator Station (2026-09-29).
+    "/station": '<rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/>'
+                '<path d="M11 18.5h2"/>',
     "/pools/gmail": '<path d="M4 6l8 6 8-6"/><rect x="3" y="5" width="18" '
                     'height="14" rx="2"/>',
     # A tick in a box: a job done, which is what a task run is.
@@ -177,6 +181,10 @@ def page(title: str, body: str, *, user: dict | None = None,
             # all refuse them is worse than no rail: it spends the width
             # to advertise what they may not have.
             if not _keeps_the_console(user) and path != "/":
+                continue
+            # The Station is an admin's during the trial (2026-09-29); an
+            # operator reaches it as their `/` once the flag is on.
+            if path == "/station" and user.get("role") != "admin":
                 continue
             if path in ("/events", "/needs", "/logins") and \
                     user.get("sees") != "all":
@@ -375,6 +383,13 @@ _DASH_SAID = {
     "cancelled": "The build gives up at its next step and puts back what "
                  "it held.",
     "dismissed": "Taken off the list.",
+    # The Station's words (2026-09-29): Auth is the fifth key, Give back
+    # and Call off are its own presses.
+    "marked-auth": "Marked Auth - the phone is deleted in a moment and the "
+                   "account that was on it freed.",
+    "gave-back": "Given back - the phone goes to the back of its shelf, "
+                 "switched off.",
+    "called-off": "The build was called off.",
 }
 
 #: The Phones tab's status words as the dashboard's badge colours, and the
@@ -672,6 +687,13 @@ PHONE_STATES = {
                    "freed for another phone. There is no undo: the "
                    "phone is gone."},
 }
+
+#: Auth, the Station's fifth key (2026-09-29): the account could not be
+#: signed in. Failed to the farm, like Decline and OR, with its own button.
+PHONE_STATES["auth"] = {"label": "Auth", "klass": "quiet bad", "sure": True,
+                        "said": "marked-auth", "word": "Auth",
+                        "state": "failed",
+                        "text": PHONE_STATES["decline"]["text"]}
 
 #: The buttons that end a phone, in the order they are drawn. Decline
 #: and OR replaced Failed on 2026-09-29: both write the phone off, and
@@ -5253,6 +5275,13 @@ _POOL_SAID = {
     "removed-gpt": "Removed - the row is out of the GPT pool.",
     "removed-spotify": "Removed - the row is out of the Spotify pool.",
     "removed-proxy": "Removed - the exit is out of the pool.",
+    # The Station's words (2026-09-29): Auth is the fifth key, Give back
+    # and Call off are its own presses.
+    "marked-auth": "Marked Auth - the phone is deleted in a moment and the "
+                   "account that was on it freed.",
+    "gave-back": "Given back - the phone goes to the back of its shelf, "
+                 "switched off.",
+    "called-off": "The build was called off.",
 }
 
 

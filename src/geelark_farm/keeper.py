@@ -156,7 +156,11 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
             # this used to stop there and report it, which left `done` half
             # carried out and the row sitting in the tab until someone noticed,
             # closed the viewer and ran the sync again (2026-08-16, 749 and 751).
-            if not _settle_before_deleting(client, present["id"], serial):
+            # Under the phone's power lock, so a Boot or a Change IP on the
+            # keeper's lane never interleaves with this stop.
+            with phones.power_lock(serial):
+                settled = _settle_before_deleting(client, present["id"], serial)
+            if not settled:
                 outcome["running"].append(serial)
                 continue
 
@@ -228,7 +232,8 @@ def apply_phone_states(client: Client, book: Book, ledger: Ledger,
 
         if present:
             try:
-                phones.delete(client, [present["id"]], ledger=ledger)
+                with phones.power_lock(serial):
+                    phones.delete(client, [present["id"]], ledger=ledger)
                 outcome["deleted"].append(serial)
             except Exception as exc:                              # noqa: BLE001
                 log.error("could not delete phone %s (%s); its row is kept",

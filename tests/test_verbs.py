@@ -774,6 +774,9 @@ def test_change_proxy_moves_the_phone_to_the_next_free_exit(monkeypatch):
     _phone_on(book, "1500", "SX1")
     monkeypatch.setattr(phones_mod, "listing", lambda client: [
         {"id": "P1500", "serialNo": "1500", "status": phones_mod.RUNNING}])
+    # The new exit is checked before it is used (the Station, 2026-09-29).
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
     done = []
     monkeypatch.setattr(phones_mod, "stop",
                         lambda client, pid: done.append(("stop", pid)))
@@ -810,6 +813,8 @@ def test_change_proxy_gives_the_exit_back_when_geelark_refuses(monkeypatch):
     _phone_on(book, "1500", "SX1")
     monkeypatch.setattr(phones_mod, "listing", lambda client: [
         {"id": "P1500", "serialNo": "1500", "status": phones_mod.STOPPED}])
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
 
     def refuse(client, pid, proxy):
         raise phones_mod.PhoneError("[45004] proxy check failed")
@@ -1731,6 +1736,8 @@ def test_change_proxy_from_the_live_tab_starts_the_phone_again(monkeypatch):
     book, sx1, sx2 = fresh_book()
     monkeypatch.setattr(phones_mod, "listing", lambda client: [
         {"id": "P1500", "serialNo": "1500", "status": phones_mod.RUNNING}])
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda client, proxy: {"outboundIP": "8.8.8.8"})
     done = []
     monkeypatch.setattr(phones_mod, "stop",
                         lambda client, pid: done.append(("stop", pid)))
@@ -2126,6 +2133,8 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         "shelve_all_proxies",
         # The buttons an operator presses all day.
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
+        # The Station's give-back and call-off (2026-09-29).
+        "give_back", "call_off_build",
     }, "a verb changed sides - say so on purpose or put it back"
 
 

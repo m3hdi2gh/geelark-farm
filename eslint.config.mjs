@@ -36,4 +36,40 @@ export default [
       "no-fallthrough": "error",
     },
   },
+  // The operator Station's one script (2026-09-29): both of its documents,
+  // the same rules. A browser global not listed here is reached as
+  // `window.X`, so nothing slips in unseen.
+  {
+    files: ["src/geelark_farm/web/static/station.js"],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: "script",
+      globals: {
+        window: "readonly", document: "readonly", location: "writable",
+        history: "readonly", navigator: "readonly", console: "readonly",
+        setTimeout: "readonly", clearTimeout: "readonly", fetch: "readonly",
+        FormData: "readonly", URLSearchParams: "readonly", URL: "readonly",
+        DOMParser: "readonly", EventSource: "readonly", Event: "readonly",
+        Option: "readonly", HTMLFormElement: "readonly", MouseEvent: "readonly",
+        addEventListener: "readonly", innerHeight: "readonly",
+        innerWidth: "readonly", sessionStorage: "readonly",
+        setInterval: "readonly", clearInterval: "readonly",
+        matchMedia: "readonly", crypto: "readonly", getSelection: "readonly",
+        requestAnimationFrame: "readonly", performance: "readonly",
+        Uint8Array: "readonly", Blob: "readonly", TextEncoder: "readonly",
+        btoa: "readonly", Node: "readonly", HTMLElement: "readonly",
+        scrollY: "readonly",
+      },
+    },
+    rules: {
+      "no-unused-vars": ["error", {args: "none", caughtErrors: "none"}],
+      "no-undef": "error",
+      "no-unreachable": "error",
+      "no-dupe-keys": "error",
+      "no-dupe-args": "error",
+      "no-self-assign": "error",
+      "no-constant-condition": "error",
+      "no-fallthrough": "error",
+    },
+  },
 ];

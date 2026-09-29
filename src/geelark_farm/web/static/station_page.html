@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}}</title><link rel="icon" href="{{FAVICON}}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="{{CSS}}"><meta name="gf-rev" content="{{REV}}">
+<script src="{{JS}}" defer></script></head>
+<body data-page="station">
+<header class="bar" id="bar">
+  <div class="brand">{{BRAND}}<span class="bn">Cloud Farm<i> &middot; Station</i></span></div>
+  <div class="day" aria-label="Results today">
+    <span class="donut"><svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="bg" cx="18" cy="18" r="15.9155"/><circle class="seg d" id="seg-d" cx="18" cy="18" r="15.9155"/><circle class="seg x" id="seg-x" cx="18" cy="18" r="15.9155"/><circle class="seg o" id="seg-o" cx="18" cy="18" r="15.9155"/><circle class="seg a" id="seg-a" cx="18" cy="18" r="15.9155"/><circle class="seg f" id="seg-f" cx="18" cy="18" r="15.9155"/></svg><b class="tab" id="t-all">0</b></span>
+    <span class="ttl"><b>Results</b><small>today</small></span>
+    <span class="sep" aria-hidden="true"></span>
+    <span class="n d"><b class="tab" id="t-done">0</b><small>done</small></span>
+    <span class="n x"><b class="tab" id="t-decline">0</b><small>declined</small></span>
+    <span class="n o"><b class="tab" id="t-or">0</b><small>OR</small></span>
+    <span class="n a"><b class="tab" id="t-auth">0</b><small>auth</small></span>
+    <span class="n f"><b class="tab" id="t-failed">0</b><small>failed</small></span>
+  </div>
+  <div class="takes">
+    <button class="take gpt" id="take-gpt" data-take="gpt" type="button"><span class="ic"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span>
+      <span class="t"><b class="w">Take GPT</b><small class="sub">ChatGPT &middot; Claude</small></span><b class="n c tab">0</b></button>
+    <button class="take spotify" id="take-spotify" data-take="spotify" type="button"><span class="ic"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg></span>
+      <span class="t"><b class="w">Take Spotify</b><small class="sub"></small></span><b class="n c tab">0</b></button>
+    <button class="take build" id="build" data-build="1" type="button" aria-haspopup="dialog"><span class="ic"><svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="2.5" width="10.5" height="19" rx="2.6"/><path d="M8.8 18.4h2"/><circle cx="17.2" cy="16.6" r="4.6" fill="#101827"/><path d="M17.2 14.6v4M15.2 16.6h4"/></svg></span>
+      <span class="t"><b class="w">Build</b><small class="sub">by hand</small></span></button>
+  </div>
+  <div class="who"><button class="me" type="button" data-profile="1" aria-label="Your profile"><span class="av" aria-hidden="true" data-me="initial">{{INITIAL}}</span><span class="nm"><b data-me="name">{{NAME}}</b></span></button>
+    <form class="out-form" method="post" action="/logout"><input type="hidden" name="csrf" value="{{CSRF}}"><button class="out" type="submit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg><span>Log out</span></button></form></div>
+</header>
+
+<main>
+  <div class="empty" id="empty" hidden>
+    <span class="e-mark" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M11 18.5h2"/></svg></span>
+    <b data-me="hello">Hello</b>
+    <p>Your station is clear. Take a GPT or a Spotify phone from the bar above, then press Boot on it – it switches on and its screen opens in its own tab.</p>
+  </div>
+  <section class="bench" id="bench" aria-label="Your phones"></section>
+  <section class="profile" id="profile" hidden aria-label="Your profile">
+    <div class="p-id"><span class="p-av" aria-hidden="true" data-me="initial">{{INITIAL}}</span>
+      <span><b data-me="name">{{NAME}}</b><small><span data-me="handle"></span><span class="dot" aria-hidden="true">·</span><span data-me="since"></span></small></span>
+      <button type="button" class="p-back" data-station="1"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg></span>Back to station</button></div>
+    <div class="p-grid">
+      <div class="p-col">
+        <section class="pcard" aria-labelledby="pc-acc"><h2 id="pc-acc">Account</h2>
+          <div class="plines" id="acct"></div></section>
+      </div>
+      <div class="p-col">
+        <section class="pcard" aria-labelledby="pc-today"><h2 id="pc-today">Today<small id="hist-n"></small></h2>
+          <div class="hist" id="hist"></div></section>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="scrim" id="scrim" hidden>
+  <form class="dlg" id="dlg" data-lane="gpt" role="dialog" aria-modal="true" aria-labelledby="dlg-t" novalidate>
+    <header><span class="ttl"><b id="dlg-t">Build a phone</b><small>Kept for you. It lands on your station when it is ready.</small></span>
+      <button type="button" class="x" data-close="1" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+    <div class="kinds" role="radiogroup" aria-label="What it is for">
+      <button type="button" role="radio" class="kind gpt" data-pick="gpt" aria-checked="true"><span class="app gpt" data-logo="gpt"></span><b>GPT</b></button>
+      <button type="button" role="radio" class="kind spotify" data-pick="spotify" aria-checked="false"><span class="app spotify" data-logo="spotify"></span><b>Spotify</b></button>
+      <button type="button" role="radio" class="kind other" data-pick="other" aria-checked="false"><span class="app other" data-logo="other"></span><b>Other</b></button>
+    </div>
+    <div class="rows">
+      <div class="row" data-row="gmail"><span class="k" id="k-gmail">Gmail</span><span class="seg2" role="radiogroup" aria-labelledby="k-gmail" style="--n:3"><button type="button" role="radio" data-m="auto" aria-checked="true">Auto</button><button type="button" role="radio" data-m="manual" aria-checked="false">Manual</button><button type="button" role="radio" data-m="none" aria-checked="false">None</button></span>
+        <span class="field" hidden><input class="typed" id="f-gmail" placeholder="email:password:2FA key" autocomplete="off" spellcheck="false" aria-labelledby="k-gmail"><span class="ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></span><span class="say" aria-live="polite"></span></div>
+      <div class="row" data-row="acct"><span class="k" id="k-acct">Account</span><span class="seg2" role="radiogroup" aria-labelledby="k-acct" style="--n:2"><button type="button" role="radio" data-m="none" aria-checked="true">None</button><button type="button" role="radio" data-m="manual" aria-checked="false">Manual</button></span>
+        <span class="field" hidden><input class="typed" id="f-acct" placeholder="email:password" autocomplete="off" spellcheck="false" aria-labelledby="k-acct"><span class="ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></span><span class="say" aria-live="polite"></span></div>
+      <div class="row" data-row="ip"><span class="k" id="k-ip">IP</span><span class="seg2" role="radiogroup" aria-labelledby="k-ip" style="--n:2"><button type="button" role="radio" data-m="auto" aria-checked="true">Auto</button><button type="button" role="radio" data-m="manual" aria-checked="false">Manual</button></span>
+        <span class="field" hidden><input class="typed" id="f-ip" placeholder="host:port:user:password" autocomplete="off" spellcheck="false" aria-labelledby="k-ip"><span class="ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></span><span class="say" aria-live="polite"></span></div>
+    </div>
+    <span class="say bad" data-dlg="said" aria-live="polite"></span>
+    <footer><span class="eta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-dlg="eta">about 6 min</span></span>
+      <button type="button" class="cancel" data-close="1">Cancel</button>
+      <button type="submit" class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="2.5" width="10.5" height="19" rx="2.6"/><path d="M8.8 18.4h2"/><path d="M19 9v6M16 12h6"/></svg>Build it</button></footer>
+    <p class="dlg-note" data-dlg="stopped" hidden>The farm is stopped – builds wait until it starts again.</p>
+  </form>
+</div>
+<div class="said" id="said" role="status" aria-live="polite"></div>
+<input type="hidden" id="gf-csrf" name="csrf" value="{{CSRF}}">
+{{ICONS}}
+<script type="application/json" id="gf-state">{{STATE}}</script>
+</body></html>

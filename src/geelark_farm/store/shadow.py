@@ -200,10 +200,26 @@ def mark_running(cur, running) -> int:
     # `running_since` rides with the flip: set when a phone is first seen
     # on, cleared when it is seen off. Only changed rows are touched, so
     # it is the moment the change was seen and never "this pass".
+    #
+    # The listing was taken near the start of the pass and this runs near
+    # its end. A Boot that ran in between (`store.station.booted`: running,
+    # a fresh `running_since`, the viewer link) must not be flipped back to
+    # off by that stale listing, so a phone marked running in the last
+    # 120 s is left for the next pass to judge. A phone seen off loses its
+    # viewer link (in a SET list `running` is the old value): the link
+    # died with the phone. The Station, 2026-09-29. A running row with no
+    # `running_since` (older than the column) is judged as before: the
+    # coalesce keeps a NULL from hiding it from every pass.
     cur.execute(
         "UPDATE phones SET running = (serial = ANY(%s)),"
-        " running_since = CASE WHEN serial = ANY(%s) THEN now() END"
-        " WHERE done_at IS NULL AND running <> (serial = ANY(%s))",
+        " running_since = CASE WHEN serial = ANY(%s) THEN now() END,"
+        " live_url = CASE WHEN running THEN '' ELSE live_url END,"
+        # Stamped only on the rows whose answer changed, which is all
+        # this WHERE selects: a quiet pass still moves nothing.
+        " updated_at = now() WHERE done_at IS NULL"
+        " AND running <> (serial = ANY(%s))"
+        " AND NOT (running AND coalesce("
+        "running_since > now() - interval '120 seconds', false))",
         (on, on, on))
     return int(cur.rowcount or 0)
 

@@ -6,7 +6,7 @@
   "scripts": {
     "test": "node --test tests/dash/",
     "lint": "eslint",
-    "check": "node --check src/geelark_farm/web/static/dash.js"
+    "check": "node --check src/geelark_farm/web/static/dash.js && node --check src/geelark_farm/web/static/station.js"
   },
   "devDependencies": {
     "eslint": "^9",

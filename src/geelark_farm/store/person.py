@@ -60,13 +60,20 @@ def state_of(settings: Settings, serial: str) -> str:
 
 def set_state(settings: Settings, serial: str, state: str) -> bool:
     """Write what a person said. False if there is no live phone by that
-    serial, which is what the caller says back rather than guessing."""
+    serial, which is what the caller says back rather than guessing.
+
+    Any word but `taken` ends a Station hold, so its clocks and its viewer
+    link go in the same statement (rev 42): the hold's shape constraint
+    refuses a `taken_at` on a phone that is not taken."""
     with Store(settings) as store:
         rows = store._write(
-            "UPDATE phones SET state = %s, state_at = now(),"
-            " updated_at = now()"
+            "UPDATE phones SET state = %s, state_at = now(), updated_at = now(),"
+            " taken_at = CASE WHEN %s = 'taken' THEN taken_at END,"
+            " watched_at = CASE WHEN %s = 'taken' THEN watched_at END,"
+            " tab_closed_at = CASE WHEN %s = 'taken' THEN tab_closed_at END,"
+            " live_url = CASE WHEN %s = 'taken' THEN live_url ELSE '' END"
             " WHERE serial = %s AND done_at IS NULL RETURNING id",
-            (state, str(serial).strip()))
+            (state, state, state, state, state, str(serial).strip()))
     return bool(rows)
 
 
@@ -124,10 +131,13 @@ def marked(settings: Settings) -> list[dict]:
             " ORDER BY serial", (list(ACTED_ON),))
 
 
-def watch(settings: Settings, serial: str) -> bool:
+def watch(settings: Settings, serial: str, user_id: int | None = None) -> bool:
     """A console Live tab is open on this phone right now. True while the
     phone is taken; False once it has been put back or has gone, so the
-    tab can say so instead of beating for nobody."""
+    tab can say so instead of beating for nobody.
+
+    A Station hold is beaten only by its holder's tab: an old Live tab left
+    open in the background never keeps somebody's hold alive (rev 42)."""
     wanted = str(serial or "").strip()
     if not wanted:
         return False
@@ -135,14 +145,18 @@ def watch(settings: Settings, serial: str) -> bool:
         rows = store._write(
             "UPDATE phones SET watched_at = now(), tab_closed_at = NULL"
             " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
-            " RETURNING id", (wanted,))
+            " AND (taken_at IS NULL OR owner_id = %s)"
+            " RETURNING id", (wanted, _uid(user_id)))
     return bool(rows)
 
 
-def tab_closed(settings: Settings, serial: str) -> bool:
+def tab_closed(settings: Settings, serial: str,
+               user_id: int | None = None) -> bool:
     """A console Live tab on this phone is closing - its pagehide beacon.
     A reload fires it too, and the reloaded page's first beat clears it
-    within seconds; the sweep waits longer than that before acting."""
+    within seconds; the sweep waits longer than that before acting.
+
+    Somebody else's old tab closing never switches a Station hold off."""
     wanted = str(serial or "").strip()
     if not wanted:
         return False
@@ -150,5 +164,10 @@ def tab_closed(settings: Settings, serial: str) -> bool:
         rows = store._write(
             "UPDATE phones SET tab_closed_at = now()"
             " WHERE serial = %s AND done_at IS NULL AND state = 'taken'"
-            " RETURNING id", (wanted,))
+            " AND (taken_at IS NULL OR owner_id = %s)"
+            " RETURNING id", (wanted, _uid(user_id)))
     return bool(rows)
+
+
+def _uid(user_id) -> int | None:
+    return int(user_id) if user_id is not None else None

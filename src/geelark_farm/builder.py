@@ -795,7 +795,15 @@ def _lane_for(want: Wanted | None, purpose: str = "") -> str:
     """The lane a build is for: the job's word, else the wish's, else
     what the wish's app implies - a Spotify account wants a Spotify
     phone - and a keeper build with no word is a GPT phone, as every
-    build was before there were lanes (purposes.py)."""
+    build was before there were lanes (purposes.py).
+
+    A wish for another app (purposes.OTHER, the Station's Other kind) is
+    in no lane: it takes any free exit, unlabelled first, and its phone
+    is nobody's stock. `normal("other")` is "" on purpose, so it is asked
+    for by name here, before anything else."""
+    if (want is not None
+            and str(want.purpose or "").strip().lower() == purposes.OTHER):
+        return purposes.OTHER
     return (purposes.normal(purpose)
             or (purposes.normal(want.purpose) if want else "")
             or (purposes.of_product(want.app) if want and want.app
@@ -1065,15 +1073,25 @@ def _mail_is_ours(settings: Settings, row) -> bool:
     return bool(domain) and domain in ours
 
 
-def _pick(pool, wanted: str, what: str):
+def _pick(pool, wanted: str, what: str, *, purpose: str = ""):
     """The free row a person named, or a refusal saying why not.
 
     Raises rather than falling back to the next free row: somebody chose
     this one, and quietly building with another is the kind of help nobody
     asked for - it spends the wrong Gmail and reads as success.
+
+    `purpose` is the build's lane, for the exit only: a named exit kept
+    for the other lane is refused, in words that say IP (they become a
+    failed card's reason on the Station). An Other build takes any lane's,
+    and a one-off typed for this build belongs to no lane.
     """
     for resource in pool.available:
         if is_called(resource, wanted):
+            if (what == "exit" and purpose and purpose != purposes.OTHER
+                    and not purposes.fits(
+                        (getattr(resource, "values", None) or {}).get("Purpose"),
+                        purpose)):
+                raise Aborted(f"the IP {wanted} is kept for another lane")
             if pool.claim_this(resource):
                 return resource
             raise Aborted(f"the {what} {wanted} was taken while this was "
@@ -1222,6 +1240,9 @@ def build_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # app implies - a Spotify account wants a Spotify phone - and a
     # keeper build with no word is a GPT phone, as every build was.
     st.purpose = _lane_for(want, purpose)
+    # Every swap the build makes claims in the same lane as its first
+    # exit (kit.exits.ExitLease.purpose).
+    st.lease.purpose = st.purpose
     # From here on, `cancelled` is the wired one: it is what every wait
     # underneath takes, and the console's Cancel has to reach those too.
     st.cancelled = _hand_stop_wired(settings, build, cancelled)
@@ -1306,7 +1327,8 @@ def _acquire(st: _BuildState) -> Build | None:
                           "the Gmails tab has no unused address left, so "
                           "no phone was created" + _held_note(st.book))
         if chosen_exit:
-            st.proxy_row = _pick(st.book.proxies, st.want.proxy_name, "exit")
+            st.proxy_row = _pick(st.book.proxies, st.want.proxy_name, "exit",
+                                 purpose=st.purpose)
         elif st.proxy_row is None:
             st.proxy_row = kit_exits._fresh_proxy(
                 st.client, st.book, settings=st.settings,
@@ -1358,6 +1380,16 @@ def _acquire(st: _BuildState) -> Build | None:
                                 **{"Exit IP": rows._exit_of(st.book, st.build)},
                                 **({"Purpose": st.purpose} if st.purpose else {}),
                                 **theirs)
+    # A wish is paired with its phone the moment there is one, and a wish
+    # called off before its phone existed ends here: the phone is new and
+    # empty, so the teardown discards it and puts its Gmail and exit back
+    # (store.wanted.attach answers True when the build must stop).
+    if st.want is not None and st.want.wanted_id and st.build.serial:
+        from .store import wanted as store_wanted
+
+        if store_wanted.attach(st.settings, int(st.want.wanted_id),
+                               st.build.serial):
+            raise Aborted("stopped_by_hand")
     # The Gmail was claimed inside `_starting`, before this phone existed -
     # it has to be, or a phone can be created with no address to sign in.
     # So the serial goes on now, the moment there is one. Without it the
@@ -1757,6 +1789,63 @@ _BUILD_PHASES = (_acquire, _bring_up, _google_phase, _install_phase,
                  _app_phase)
 
 
+def _called_off(settings: Settings, wanted_id) -> bool:
+    """Whether the wish was called off. Never fatal: a failure reads as
+    not called off, which keeps the phone (the old rule)."""
+    try:
+        from .store import wanted as store_wanted
+
+        return bool(store_wanted.called_off(settings, int(wanted_id)))
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not ask whether wish %s was called off (%s)",
+                    wanted_id, exc)
+        return False
+
+
+def _land_on_station(settings: Settings, serial: str, wanted_id: int) -> None:
+    """A Station build becomes a Station hold of the person who asked for
+    it (store.station.land). Never fatal: a phone that does not land is
+    still theirs, kept on their shelf as any hand build is."""
+    try:
+        from .store import station as store_station
+
+        if store_station.land(settings, serial=serial, wanted_id=wanted_id):
+            log.info("phone %s landed on the station of whoever asked for "
+                     "wish %s", serial, wanted_id)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s did not land on the station (%s)", serial, exc)
+
+
+def _reserve_for_finish(settings: Settings, phones_: list[dict]) -> list[dict]:
+    """The warm phones a finish may pair an account with, each reserved
+    first (store.station.reserve_warm), so a Take and a pairing never
+    both have one. A phone somebody took meanwhile is left out; the
+    status each had rides with the job as `status_before`, for
+    `finish_one` to put back. With the store off, or when it cannot
+    answer, every phone goes as before."""
+    if not getattr(settings, "store_enabled", False):
+        return list(phones_)
+    from .store import station as store_station
+
+    kept: list[dict] = []
+    for phone in phones_:
+        serial = str(phone.get("serial") or "")
+        try:
+            before = store_station.reserve_warm(settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("could not reserve phone %s for its finish (%s); "
+                        "finishing it anyway", serial, exc)
+            kept.append(dict(phone))
+            continue
+        if before is None:
+            log.info("phone %s is not free to finish any more (taken or "
+                     "being worked on); left out", serial)
+            continue
+        kept.append(dict(phone, status_before=before) if before
+                    else dict(phone))
+    return kept
+
+
 def _let_the_build_go(st: _BuildState) -> None:
     """The end of a build, whatever ended it: what it held settled, an empty
     phone discarded, the row written, the phone let go."""
@@ -1817,6 +1906,13 @@ def _let_the_build_go(st: _BuildState) -> None:
                    and not (session is not None
                             and (session.app_signed_in
                                  or session.may_be_signed_in)))
+    # A bare build its asker called off is empty too: nobody wants the
+    # phone any more. One stopped from the old dashboard is still kept
+    # (the Station, 2026-09-29).
+    carried = carried or bool(
+        st.bare and st.want is not None and st.want.wanted_id
+        and build.status == "stopped_by_hand"
+        and _called_off(st.settings, st.want.wanted_id))
     empty = bool(st.phone_id and not st.gmail_signed_in
                  and (carried or not st.bare)
                  and build.status not in KEPT_WHEN_EMPTY
@@ -1831,6 +1927,12 @@ def _let_the_build_go(st: _BuildState) -> None:
         rows._write_row(book, build, drop=discarded)
         if empty and not discarded:
             rows._condemn(book, build)
+    # A Station build lands on its asker's Station as a hold of theirs;
+    # `land` does nothing for any other wish, which stays "kept for its
+    # maker" as the row write above left it.
+    if (not empty and st.log_row is not None and st.want is not None
+            and st.want.wanted_id and build.serial):
+        _land_on_station(st.settings, build.serial, int(st.want.wanted_id))
     _let_the_phone_go(st.client, st.settings, st.ledger, build,
                       "" if discarded else st.phone_id)
 
@@ -1906,6 +2008,16 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                 # is left exactly as it was. A Stop pressed on it is
                 # answered all the same.
                 _stop_honoured(settings, build.serial)
+                # Exactly as it was includes its Status: a pairing that
+                # reserved it (store.station.reserve_warm) turned it
+                # `building`, and says what it was.
+                reserved = str(phone.get("status_before") or "")
+                if reserved and reserved != book.phones.BUILDING:
+                    try:
+                        rows._note_on_row(book, build.serial, Status=reserved)
+                    except Exception as exc:                      # noqa: BLE001
+                        log.error("could not put %s back to %s (%s)",
+                                  build.serial, reserved, exc)
                 return build
 
     # What the row said before this finish marked it `building`. An
@@ -1915,7 +2027,12 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
     # `building`; the keeper's `settle_abandoned` relabelled it
     # `app_only` with "ended before it could say why" (2026-09-23,
     # found by the builder review). It goes back to this instead.
-    status_before = book.phones.status_of(build.serial)
+    #
+    # A pairing that reserved the phone first (store.station.reserve_warm)
+    # already turned it `building`, so the row's word is no longer what
+    # it was: the job carries what it was, and that is put back.
+    status_before = (str(phone.get("status_before") or "")
+                     or book.phones.status_of(build.serial))
     try:
         if on_phone:
             on_phone(phone_id)
@@ -2005,6 +2122,9 @@ def finish_one(client: Client, settings: Settings, book: Book, ledger: Ledger,
                            # first free one instead.
                            app_row=phone.get("account"),
                            reset_first=True)
+        # A swap claims in the phone's own lane, as its build did.
+        session.lease.purpose = purposes.phone_lane(
+            phone.get("purpose") or phone.get("Purpose"))
         gave_up = _sign_into_app(session)
         if gave_up is not None:
             return gave_up
@@ -2648,6 +2768,7 @@ def run(client: Client, settings: Settings, *, count: int,
         log.info("%d phone(s) need only an app account; finishing those first",
                  len(to_finish))
 
+    to_finish = _reserve_for_finish(settings, to_finish)
     jobs = ([{"kind": "finish", "phone": p} for p in to_finish]
             + [{"kind": "build", "phone": None, "want": w}
                for w in (wanted or [])]
@@ -2696,6 +2817,9 @@ def finish_run(client: Client, settings: Settings, *, limit: int | None = None,
 
     if gone:
         log.info("skipping %d row(s) whose phone no longer exists", len(gone))
+    if not pending:
+        return []
+    pending = _reserve_for_finish(settings, pending)
     if not pending:
         return []
     jobs = [{"kind": "finish", "phone": p} for p in pending]

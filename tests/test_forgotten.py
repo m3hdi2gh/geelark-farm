@@ -49,6 +49,9 @@ def farm(monkeypatch, make_settings, tmp_path):
                         lambda c, pid: f.stopped.append(pid))
     monkeypatch.setattr(forgotten, "_release",
                         lambda s, serial: f.released.append(serial) or True)
+    monkeypatch.setattr(forgotten, "_station_sweep",
+                        lambda *a, **k: {"off": [], "given_back": []})
+    monkeypatch.setattr(forgotten, "_still_legacy", lambda *a, **k: True)
     monkeypatch.setattr(store_events, "emit",
                         lambda s, kind, **fields:
                         f.events.append((kind, fields)) or True)

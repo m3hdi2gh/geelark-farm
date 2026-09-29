@@ -2477,7 +2477,14 @@ def _order(settings: Settings, client, book: Book, decision, wishes,
         waiting, _gone = keeper._unfinished(
             client, book, busy=keeper._busy_serials(settings))
         for phone in waiting[:decision.finish]:
-            store_jobs.queue(settings, "finish", {"phone": dict(phone)})
+            # Reserved before it is paired, so a Take in the seconds
+            # between this read and the finish never hands out a phone
+            # an account is about to go into (store.station.reserve_warm).
+            before = _reserve_warm(settings, str(phone.get("serial") or ""))
+            if before is None:
+                continue
+            store_jobs.queue(settings, "finish", {"phone": (
+                dict(phone, status_before=before) if before else dict(phone))})
             ordered += 1
     lanes = ([lane for lane, n in (by_lane or {}).items() for _ in range(int(n))]
              if by_lane else [""] * int(decision.build or 0))
@@ -2490,6 +2497,29 @@ def _order(settings: Settings, client, book: Book, decision, wishes,
     if ordered:
         log.info("%d job(s) ordered into the queue", ordered)
     return ordered
+
+
+def _reserve_warm(settings: Settings, serial: str) -> str | None:
+    """Mark a warm phone `building` before a finish is paired with it,
+    only if nobody holds it (store.station.reserve_warm). Returns the
+    status it had, or None when somebody took it meanwhile. A store that
+    cannot answer reads as reserved - "", and the finish reads the row's
+    status itself - which is what every pairing did before, and so does a
+    store that is off."""
+    if not getattr(settings, "store_enabled", False):
+        return ""
+    from .store import station as store_station
+
+    try:
+        before = store_station.reserve_warm(settings, serial)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not reserve phone %s for its finish (%s); "
+                    "finishing it anyway", serial, exc)
+        return ""
+    if before is None:
+        log.info("phone %s is not free to finish any more (taken or being "
+                 "worked on); left out", serial)
+    return before
 
 
 def _queue_finishes(settings: Settings, jobs: list[dict],

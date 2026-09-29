@@ -994,3 +994,90 @@ CREATE INDEX IF NOT EXISTS verdicts_exit ON verdicts (exit_ip);
 ALTER TABLE phones        ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';
 ALTER TABLE resources     ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';
 ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT '';
+
+-- rev 42: the Station (2026-09-29). An operator's own page: phones are
+-- taken from a lane's shelf in one statement, held for an hour that counts
+-- only while the phone's Live tab is closed, and given back to the back of
+-- their shelf. `taken_at` marks a Station hold (NULL for every other hold,
+-- which keeps today's sweep); `live_url` is the viewer link Boot got, kept
+-- while the phone is on and blanked when it goes off; `last_owner_id` is
+-- who gave it back, so the line is never served the phone its own waiter
+-- just returned. `station_line` is the line for an empty shelf. A verdict
+-- row records its lane and the phone row it closed; a person's own results
+-- are read by (by_id, at). A person has a display name and knows when their
+-- password last changed. A wish from the Station is marked, can be called
+-- off, and may carry an app account for an Other phone that no flow signs in.
+-- One pending power press per phone: Boot, Change IP and Power off never
+-- run two at once on one serial.
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS taken_at timestamptz;
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS live_url text NOT NULL DEFAULT '';
+ALTER TABLE phones ADD COLUMN IF NOT EXISTS last_owner_id bigint REFERENCES users(id);
+-- A Station hold is always a taken, owned phone. The self-heal runs first,
+-- on every start: a rollback to rev 41 code leaves `taken_at` on rows its
+-- writers never clear, and the constraint below would refuse them.
+UPDATE phones SET taken_at = NULL
+ WHERE taken_at IS NOT NULL
+   AND (state <> 'taken' OR owner_id IS NULL OR done_at IS NOT NULL);
+ALTER TABLE phones DROP CONSTRAINT IF EXISTS phones_station_hold_shape;
+ALTER TABLE phones ADD CONSTRAINT phones_station_hold_shape
+    CHECK (taken_at IS NULL OR (state = 'taken' AND owner_id IS NOT NULL));
+CREATE INDEX IF NOT EXISTS phones_station_holds
+    ON phones (owner_id) WHERE done_at IS NULL AND taken_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS station_line (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id    bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lane       text NOT NULL CHECK (lane IN ('gpt', 'spotify')),
+    joined_at  timestamptz NOT NULL DEFAULT now(),
+    seen_at    timestamptz NOT NULL DEFAULT now(),
+    ended_at   timestamptz,
+    ended_why  text NOT NULL DEFAULT ''
+               CHECK (ended_why IN ('', 'served', 'left', 'gone')),
+    serial     text NOT NULL DEFAULT '',
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS station_line_open
+    ON station_line (user_id, lane) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS station_line_head
+    ON station_line (lane, joined_at, id) WHERE ended_at IS NULL;
+ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';
+ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS phone_row bigint;
+CREATE INDEX IF NOT EXISTS verdicts_by_at ON verdicts (by_id, at);
+UPDATE verdicts v
+   SET lane = CASE WHEN lower(p.purpose) = 'spotify' THEN 'spotify'
+                   WHEN lower(p.purpose) = 'other' THEN 'other' ELSE 'gpt' END,
+       phone_row = p.id
+  FROM phones p
+ WHERE v.lane = '' AND v.phone_row IS NULL AND v.phone_id <> ''
+   AND p.phone_id = v.phone_id;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz;
+UPDATE users SET password_changed_at = created_at WHERE password_changed_at IS NULL;
+ALTER TABLE users ALTER COLUMN password_changed_at SET DEFAULT now();
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS station boolean NOT NULL DEFAULT false;
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS called_off_at timestamptz;
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS called_off_by bigint REFERENCES users(id);
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS carry_address text NOT NULL DEFAULT '';
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS carry_password text NOT NULL DEFAULT '';
+ALTER TABLE wanted_builds ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS wanted_station
+    ON wanted_builds (requested_by, id) WHERE station;
+CREATE INDEX IF NOT EXISTS jobs_wish
+    ON jobs ((payload->'want'->>'wanted_id')) WHERE kind = 'build';
+CREATE INDEX IF NOT EXISTS actions_phone_power
+    ON actions ((payload->>'serial'), id) WHERE verb IN ('boot_phone', 'change_proxy');
+-- Before the unique index: a second pending power press on one phone (an
+-- orphan a restart left `running`) would make the index refuse to build
+-- and roll the whole schema back. The oldest one stays.
+UPDATE actions SET status = 'failed', finished_at = now(),
+       result = 'closed by rev 42: a second pending power press on one phone'
+ WHERE id IN (SELECT id FROM (
+         SELECT id, row_number() OVER (PARTITION BY payload->>'serial'
+                                       ORDER BY id) AS n
+           FROM actions
+          WHERE status IN ('queued', 'running')
+            AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone')) t
+        WHERE t.n > 1);
+CREATE UNIQUE INDEX IF NOT EXISTS actions_one_power_press
+    ON actions ((payload->>'serial'))
+ WHERE status IN ('queued', 'running')
+   AND verb IN ('boot_phone', 'change_proxy', 'power_off_phone');

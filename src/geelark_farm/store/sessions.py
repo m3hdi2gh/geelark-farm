@@ -108,6 +108,25 @@ def end_all_of(settings: Settings, user_id: int, *, keep: str = "") -> int:
     return len(rows)
 
 
+def rotate(conn, token: str, user_id: int, *, hours: float) -> str | None:
+    """A new seat for this browser, on the caller's connection and inside
+    its transaction (it does not commit): the same csrf, so the Live tabs
+    this browser opened keep working, and every other seat of this person
+    ended. Returns the new raw token, or None when the old seat was already
+    gone - every seat of the person is then ended. The raw tokens never
+    reach SQL; only their digests do."""
+    new = secrets.token_urlsafe(32)
+    row = conn.execute(
+        "INSERT INTO sessions (token_hash, user_id, csrf, until)"
+        " SELECT %s, user_id, csrf, now() + %s * interval '1 hour' FROM sessions"
+        " WHERE token_hash = %s AND user_id = %s AND until > now()"
+        " RETURNING token_hash",
+        (_digest(new), float(hours), _digest(token), int(user_id))).fetchone()
+    conn.execute("DELETE FROM sessions WHERE user_id = %s AND token_hash <> %s",
+                 (int(user_id), _digest(new)))
+    return new if row is not None else None
+
+
 def sweep(settings: Settings) -> int:
     """Drop what has expired. Nothing depends on this - `find` already
     refuses an expired row - so it is housekeeping, and never fatal."""

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from urllib.parse import quote
@@ -435,6 +436,24 @@ def start(client: Client, phone_id: str, *,
         if item.get("chargingMethod"):
             log.info("billing: %s", item["chargingMethod"])
     return url
+
+
+#: One lock per serial for this process, handed out under one guard.
+_POWER_LOCKS: dict[str, threading.Lock] = {}
+_POWER_GUARD = threading.Lock()
+
+
+def power_lock(serial: str) -> threading.Lock:
+    """The one lock for a phone's power in this process: Boot, Change IP,
+    Power off, the forgotten sweep's stops and the verdict's delete take
+    it, so a stop, a proxy change and a start never interleave on one
+    phone across the keeper's lane and pass threads.
+
+    Not re-entrant: nothing that holds it calls another holder. The
+    store's one-pending-press index serialises the queue; this serialises
+    the vendor calls of a press and the sweep."""
+    with _POWER_GUARD:
+        return _POWER_LOCKS.setdefault(str(serial), threading.Lock())
 
 
 def stop(client: Client, phone_id: str) -> None:

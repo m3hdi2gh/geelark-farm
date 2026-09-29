@@ -208,8 +208,10 @@ def test_the_service_tab_can_be_ticked_from_code():
 def test_a_phone_can_be_marked_taken_done_or_failed_from_the_web(monkeypatch):
     """What a person says about a phone is written to the store now, not to
     the tab: that is what made this button answer in the request that
-    pressed it instead of waiting for a pass (C3)."""
-    from geelark_farm.store import person
+    pressed it instead of waiting for a pass (C3). Done and failed close
+    the phone and write the verdict in one statement (the Station,
+    2026-09-29); taken and unused still set the state."""
+    from geelark_farm.store import person, verdicts
 
     said_about: dict = {}
     monkeypatch.setattr(
@@ -217,6 +219,14 @@ def test_a_phone_can_be_marked_taken_done_or_failed_from_the_web(monkeypatch):
         lambda settings, serial, state: (
             said_about.update({serial: state}) or True) if serial == "1500"
         else False)
+    monkeypatch.setattr(
+        verdicts, "close",
+        lambda settings, **kw: None if kw["serial"] == "9"
+        else {"id": 1, "serial": kw["serial"]})
+    monkeypatch.setattr(verdicts, "standing",
+                        lambda settings, serial: None if serial == "9"
+                        else {"state": "", "owner_id": None, "status": "ready",
+                              "busy": ""})
     monkeypatch.setattr(verbs, "_is_building", lambda settings, serial: False)
     book = make_book()
 
@@ -381,14 +391,18 @@ def test_the_sweep_still_has_one_clock_when_nothing_is_named_quick():
 
 def test_a_verdict_is_recorded_with_its_button_before_the_phone_goes(monkeypatch):
     """Done, Decline and OR each write one verdicts row - who, which
-    button, which phone - before the state is set, since the lane deletes
-    the phone seconds after. A button that does not mean the state is
-    refused, and Take and Release record nothing."""
+    button, which phone - in the one statement that closes the phone
+    (`verdicts.close`), since the lane deletes the phone seconds after. A
+    button that does not mean the state is refused, and Take and Release
+    record nothing."""
     from geelark_farm.store import person, verdicts
 
     recorded, states = [], []
+    monkeypatch.setattr(verdicts, "close",
+                        lambda settings, **kw: recorded.append(kw) or {"id": 1})
     monkeypatch.setattr(verdicts, "record",
-                        lambda settings, **kw: recorded.append(kw) or True)
+                        lambda settings, **kw: pytest.fail(
+                            "the old two-step record is not used"))
     monkeypatch.setattr(person, "set_state",
                         lambda settings, serial, state: states.append(state) or True)
     monkeypatch.setattr(verbs, "_is_building", lambda settings, serial: False)
@@ -403,8 +417,8 @@ def test_a_verdict_is_recorded_with_its_button_before_the_phone_goes(monkeypatch
     assert "(decline)" in said
     assert recorded == [{"serial": "1500", "button": "decline",
                          "state": "failed", "by": "sara", "by_id": 4,
-                         "where": "live"}]
-    assert states == ["failed"]
+                         "where": "live", "owner_id": None}]
+    assert states == [], "the close set the state; set_state is not called"
 
     status, _, detail = verbs.set_phone_state(
         book, None, None, {"serial": "1500", "state": "done", **by}, None)

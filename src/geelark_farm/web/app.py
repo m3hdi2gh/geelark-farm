@@ -23,6 +23,7 @@ import hmac
 import io
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -105,6 +106,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._html(200, pages.login())
             user = self._user()
             if user is None:
+                if self._station_asked():
+                    return self._station_error("signed-out")
                 return self._redirect("/login")
             # The script, behind it: this is the console's behaviour -
             # which endpoints exist, which fields they take, what each
@@ -116,15 +119,20 @@ class _Handler(BaseHTTPRequestHandler):
             # A one-time password buys exactly one page: the one where the
             # person chooses their own. Everything else waits.
             if user.get("must_change_password") and path != "/password":
+                if self._station_asked():
+                    return self._station_error("password")
                 return self._redirect("/password")
             if path == "/password":
                 return self._html(200, pages.password_page(user))
-            if user.get("role") != "admin" and not _operator_may_get(path):
+            if user.get("role") != "admin" and not (
+                    _operator_may_get(path) or self._station_opened(path)):
                 # Straight back to the one page they have. This used to be
                 # a page of its own saying whose the page was, and every
                 # link that landed an operator there - an alert, an old
                 # bookmark - was one more page between them and the work
                 # (the operator, 2026-09-05: "this page is superfluous").
+                if self._station_asked():
+                    return self._station_error("refused")
                 return self._redirect("/")
             if path == "/live":
                 return self._live(user)
@@ -132,6 +140,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._users_get(user)
             if path == "/api-clients":
                 return self._api_clients_get(user)
+            # The operator Station (2026-09-29): its page, its state, and
+            # one phone's Live tab. An admin's during the trial; with
+            # STATION_FOR_OPERATORS on, an operator's `/` is the Station.
+            if path == "/station" or path.startswith("/station/"):
+                return self._station_get(user, path)
+            if path == "/" and user.get("role") != "admin" \
+                    and self.settings.station_for_operators:
+                return self._station_get(user, "/station")
             if path == "/":
                 scope = None if user["sees"] == "all" else user["id"]
                 query = parse_qs(self.path.partition("?")[2])
@@ -427,8 +443,12 @@ class _Handler(BaseHTTPRequestHandler):
             if _store_down(exc):
                 log.warning("web: %s - the store is not answering (%s)",
                             self.path, exc)
+                if self._station_asked():
+                    return self._station_error("down")
                 return self._html(503, pages.store_down_page())
             log.exception("web: %s failed", self.path)
+            if self._station_asked():
+                return self._station_error("broke")
             self._html(500, pages.page("Error", "<h2>Something broke - it "
                                                 "is in the server log</h2>"))
 
@@ -449,18 +469,24 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._login(field)
             entry = self._entry()
             if entry is None:
+                if self._station_asked():
+                    return self._station_error("signed-out")
                 return self._redirect("/login")
             # CSRF, before any dispatch. The comparison runs constant-time
             # for the same reason password checks do, and an Origin header
             # that is present and foreign is refused as a second layer.
             if not hmac.compare_digest(field.get("csrf", ""),
                                        entry.get("csrf", "")):
+                if self._station_asked():
+                    return self._station_error("stale")
                 return self._html(403, pages.page(
                     "403", "<h2>Stale session - reopen the page"
                            "</h2>", user=entry["user"]))
             origin = self.headers.get("Origin")
             host = self.headers.get("Host") or ""
             if origin and host and not origin.endswith("//" + host):
+                if self._station_asked():
+                    return self._station_error("origin")
                 return self._html(403, pages.page("403", "<h2>Bad origin</h2>"))
             user = self._user()
             # The console saying it broke. Answered with nothing at
@@ -476,17 +502,27 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/password":
                 return self._password_post(user, field)
             if user.get("must_change_password"):
+                if self._station_asked():
+                    return self._station_error("password")
                 return self._redirect("/password")
             if (user.get("role") != "admin"
-                    and not _operator_may_post(self.path)):
+                    and not (_operator_may_post(self.path)
+                             or (self.settings.station_for_operators
+                                 and self.path.startswith("/station/")))):
                 # A refusal, not a redirect: a form that quietly does
                 # nothing is how somebody comes to believe they pressed it.
+                if self._station_asked():
+                    return self._station_error("refused")
                 return self._html(403, pages.page(
                     "Not yours to do",
                     '<div class="narrow"><h2>That belongs to an admin</h2>'
                     '<p class="dim">Nothing was changed. '
                     '<a href="/">Back to the dashboard</a>.</p></div>',
                     user=user))
+            # The Station's own doors, each answering JSON to the page and
+            # a redirect to a plain form (2026-09-29).
+            if self.path.startswith("/station/"):
+                return self._station_post(user, field)
             if self.path.startswith("/pools/"):
                 return self._pool_post(user, field)
             if self.path.startswith("/tasks/") and \
@@ -619,10 +655,19 @@ class _Handler(BaseHTTPRequestHandler):
                 # open (pages.viewer_page). 410 once the phone is no
                 # longer taken, so the tab can say so.
                 from ..store import person
+                from ..store import station as store_station
 
                 serial = self.path[len("/phones/"):-len("/watching")]
                 try:
-                    still = person.watch(self.settings, serial)
+                    # The Station's tab beats its holder's hold only; the
+                    # old tab's beat never keeps somebody's Station hold
+                    # alive (rev 42).
+                    if str(field.get("station") or "") == "1":
+                        still = store_station.watch(
+                            self.settings, serial, user["id"],
+                            self.settings.live_tab_grace_seconds)
+                    else:
+                        still = person.watch(self.settings, serial, user["id"])
                 except Exception as exc:                          # noqa: BLE001
                     log.debug("beat for %s not written (%s)", serial, exc)
                     return self._text(503, "store down")
@@ -634,10 +679,15 @@ class _Handler(BaseHTTPRequestHandler):
                 # reloading - the next beat says which). The sweep acts
                 # on it twenty seconds later (forgotten.TAB_CLOSED_SECONDS).
                 from ..store import person
+                from ..store import station as store_station
 
                 serial = self.path[len("/phones/"):-len("/closing")]
                 try:
-                    person.tab_closed(self.settings, serial)
+                    if str(field.get("station") or "") == "1":
+                        store_station.tab_closed(self.settings, serial,
+                                                 user["id"])
+                    else:
+                        person.tab_closed(self.settings, serial, user["id"])
                 except Exception as exc:                          # noqa: BLE001
                     log.debug("closing of %s not written (%s)", serial, exc)
                 # And the sweep is asked for the moment the twenty seconds
@@ -652,6 +702,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # One press: start the phone in GeeLark, take it, and hand
                 # the live-view link to the tab that is waiting for it.
                 serial = self.path[len("/phones/"):-len("/boot")]
+                if str(field.get("station") or "") == "1":
+                    return self._station_boot(user, serial)
                 # Boot takes the phone: refused on anybody else's, an
                 # admin's included - ending a hold is theirs (2026-09-15),
                 # taking it over is not.
@@ -663,6 +715,13 @@ class _Handler(BaseHTTPRequestHandler):
                         user, "boot_phone", {"serial": serial},
                         f"phone {serial} is with {held}",
                         back=f"/phones/{serial}/live")
+                # One power press at a time on a phone, from every door
+                # (rev 42): a Boot waits for a Change IP or a power-off.
+                busy = self._power_busy(serial, ("change_proxy",
+                                                 "power_off_phone"))
+                if busy:
+                    return self._refuse(user, "boot_phone", {"serial": serial},
+                                        busy, back=f"/phones/{serial}/live")
                 return self._act(user, "may_take_phones", "boot_phone",
                                  {"serial": serial},
                                  idem=self._minute_key(user, "boot", serial),
@@ -678,12 +737,20 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path.startswith("/phones/") and \
                     self.path.endswith("/proxy"):
                 serial = self.path[len("/phones/"):-len("/proxy")]
+                if str(field.get("station") or "") == "1":
+                    return self._station_proxy(user, serial, field)
                 held = self._held_by_somebody_else(user, serial)
                 if held:
                     return self._refuse(
                         user, "change_proxy", {"serial": serial},
                         f"phone {serial} is with {held}",
                         back=_phone_back(field, serial))
+                busy = self._power_busy(serial, ("boot_phone",
+                                                 "power_off_phone"))
+                if busy:
+                    return self._refuse(user, "change_proxy",
+                                        {"serial": serial}, busy,
+                                        back=_phone_back(field, serial))
                 # `boot` is the Live tab's press: the phone comes back up
                 # on its new exit and the tab swaps to the new screen
                 # without leaving the page (2026-09-16).
@@ -730,9 +797,13 @@ class _Handler(BaseHTTPRequestHandler):
             if _store_down(exc):
                 log.warning("web: POST %s - the store is not answering (%s)",
                             self.path, exc)
+                if self._station_asked():
+                    return self._station_error("down")
                 return self._html(503, pages.store_down_page(
                     retry=(self.path, form)))
             log.exception("web: POST %s failed", self.path)
+            if self._station_asked():
+                return self._station_error("broke")
             self._html(500, pages.page("Error", "<h2>Something broke</h2>"))
 
     def _cancel_action(self, user: dict) -> None:
@@ -757,9 +828,19 @@ class _Handler(BaseHTTPRequestHandler):
         from ..store import actions as store_actions
 
         action_id = int(self.path.split("/")[2])
-        got = store_actions.retry(self.settings, action_id=action_id,
-                                  user_id=user["id"],
-                                  is_admin=user["role"] == "admin")
+        try:
+            got = store_actions.retry(self.settings, action_id=action_id,
+                                      user_id=user["id"],
+                                      is_admin=user["role"] == "admin")
+        except Exception as exc:                                  # noqa: BLE001
+            # One pending power press per phone (rev 42): a failed Boot
+            # retried while another Boot, Change IP or power-off is
+            # pending on that phone is refused by the index, not a 500.
+            if type(exc).__name__ != "UniqueViolation":
+                raise
+            log.info("web: retry of request %s refused - a power press is "
+                     "already pending on that phone", action_id)
+            got = "already"
         self._redirect(f"/requests?said="
                        f"{'queued' if isinstance(got, int) else got}")
 
@@ -832,7 +913,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _act(self, user: dict, permission: str, verb: str, payload: dict,
              *, idem: str, back: str, said_word: str = "done",
-             row_of: str = "") -> None:
+             row_of: str = "", digest_skip: tuple = (),
+             same_button: str = "") -> None:
         """Queue one command, or record that it was refused.
 
         The person's name rides in the payload so the pass can write it
@@ -840,8 +922,16 @@ class _Handler(BaseHTTPRequestHandler):
         the permission named - so the Requests page says what was asked
         and why nothing happened, instead of a 403 nobody remembers.
         `permission` is one of the users' ticks, or "admin" for the
-        service controls, which no tick grants."""
+        service controls, which no tick grants.
+
+        `digest_skip` names payload keys the idem key leaves out (the
+        Station build's typed secrets: a retried press is one request,
+        and no hash of a password is kept). `same_button` is a Station
+        verdict's key: a pending twin pressed with another key is said
+        to be so, rather than answered "already"."""
         if not self.settings.web_mutations:
+            if self._station_asked():
+                return self._station_error("off")
             return self._html(403, pages.page(
                 "Disabled", "<h2>Actions are not switched on yet</h2>",
                 user=user))
@@ -859,7 +949,7 @@ class _Handler(BaseHTTPRequestHandler):
                        + ("only an admin drives the service"
                           if permission == "admin" else
                           f"permission {permission} is off"))
-            return self._redirect(_said_url(back, "refused"))
+            return self._go(_said_url(back, "refused"))
         # The same button pressed twice for the same thing is one
         # request, not two the pass would refuse a minute apart.
         needle = str(payload.get("serial") or payload.get("name")
@@ -879,10 +969,34 @@ class _Handler(BaseHTTPRequestHandler):
             log.debug("pending check skipped (%s)", exc)
             twin = None
         if twin is not None:
-            return self._redirect(_said_url(back, f"already:{twin}"))
-        req = store_actions.enqueue(self.settings, verb=verb, payload=payload,
-                                    requested_by=user["id"],
-                                    idem_key=f"{idem}:{_digest(payload)}")
+            other = self._other_button(twin, same_button, payload)
+            if other:
+                return self._go(_said_url(back, "no"), extra={"note": other})
+            return self._go(_said_url(back, f"already:{twin}"))
+        # One pending power press per phone (rev 42's unique index): a
+        # second one is a unique violation, turned into words here - the
+        # same press is "already", another is refused in its words, and an
+        # orphan a restart left behind is closed so this one goes through.
+        req = None
+        for _attempt in range(2):
+            try:
+                req = store_actions.enqueue(
+                    self.settings, verb=verb, payload=payload,
+                    requested_by=user["id"],
+                    idem_key=f"{idem}:{_digest(payload, digest_skip)}")
+                break
+            except Exception as exc:                              # noqa: BLE001
+                if _attempt or not self._power_clash(verb, exc):
+                    raise
+                log.info("%s on %s: another power press is pending (%s)",
+                         verb, payload.get("serial"), exc)
+                clash = self._power_pending(str(payload.get("serial") or ""))
+                if clash is None:
+                    continue
+                if clash["verb"] == verb:
+                    return self._go(_said_url(back, f"already:{clash['id']}"))
+                return self._refuse(user, verb, payload, clash["words"],
+                                    back=back)
         # The same drawing of the button, sent again: one row, and it was
         # carried out the first time. Said so, rather than "Queued" over a
         # row that is already finished (2026-09-14). `enqueued` has known
@@ -890,7 +1004,10 @@ class _Handler(BaseHTTPRequestHandler):
         # used to be re-derived by comparing the database host's clock to
         # this container's with a one-second tolerance (2026-09-21).
         if not getattr(req, "fresh", True):
-            return self._redirect(_said_url(back, f"twice:{req}"))
+            other = self._other_button(int(req), same_button, payload)
+            if other:
+                return self._go(_said_url(back, "no"), extra={"note": other})
+            return self._go(_said_url(back, f"twice:{req}"))
         # `said_word` is what the press was FOR, not what it did. The work
         # runs here now, so its own verdict is known before the redirect -
         # and it was thrown away: a refusal, a failure and a success all
@@ -898,6 +1015,12 @@ class _Handler(BaseHTTPRequestHandler):
         # button was refused every time somebody left Gmail on "auto", and
         # said "Done - it is already in" (the operator, 2026-09-07).
         ran = self._ran_it_now(verb, payload, req)
+        if ran is not None and verb == "build_by_hand" and payload.get("station"):
+            # A Station build keeps no typed secret on its request once it
+            # has run (the state read scrubs one the lane runs later).
+            from ..store import station as store_station
+
+            store_station.scrub(self.settings, int(req))
         if ran is None:
             # Nothing ran here, so the lane has it. Ring only now: the
             # bell used to go before the inline attempt, which is an
@@ -920,7 +1043,7 @@ class _Handler(BaseHTTPRequestHandler):
                 row_of, str(payload.get("address") or payload.get("name")
                             or ""), said, user, back):
             return None
-        self._redirect(_said_url(back, said))
+        self._go(_said_url(back, said))
 
     @staticmethod
     def _mark_twice(rows: list[dict], key: str = "address") -> None:
@@ -965,7 +1088,7 @@ class _Handler(BaseHTTPRequestHandler):
                                   f"{spec.key}:{field.get('serial', '')}"),
             back=f"/tasks/{spec.key}")
 
-    def _said_note(self, said: str) -> str:
+    def _said_note(self, said: str, user: dict | None = None) -> str:
         """The verb's own sentence for a press that did not go through.
 
         It is settled on the request's row a moment before the redirect -
@@ -974,6 +1097,10 @@ class _Handler(BaseHTTPRequestHandler):
         say why. Read here rather than carried in the address bar, because
         an address in a query string is the one thing that must not be
         (2026-09-07).
+
+        With a `user`, only their own request's sentence is read (or any,
+        for an admin): `?said=no:<id>` on a Live tab is a door anybody
+        can type, and a sentence can name another person's phone.
         """
         word, _, req = (said or "").partition(":")
         # Any token carrying a request id, not only `no`. The condition
@@ -992,6 +1119,9 @@ class _Handler(BaseHTTPRequestHandler):
             row = store_actions.one(self.settings, int(req))
         except Exception as exc:                                  # noqa: BLE001
             log.debug("could not read request %s back (%s)", req, exc)
+            return ""
+        if user is not None and row is not None and user.get("role") != "admin" \
+                and row.get("requested_by") != user.get("id"):
             return ""
         return str((row or {}).get("result") or "")
 
@@ -1282,7 +1412,577 @@ class _Handler(BaseHTTPRequestHandler):
         """The flags the admin's footer line lists, off Settings."""
         return {name: bool(getattr(self.settings, name, False))
                 for name in ("web_mutations", "manual_login", "log_db",
-                             "pools_in_pg", "web_user_admin")}
+                             "pools_in_pg", "web_user_admin",
+                             "station_for_operators")}
+
+    # ------------------------------------------------------------ station
+    #: The header every press and poll of the Station carries: `page` for
+    #: the Station document, `live` for a phone's Live tab. With it, every
+    #: door answers JSON; without it, every door behaves as it always has.
+    STATION_ASKED = "X-GF-Station"
+
+    def _station_asked(self) -> str:
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return ""
+        value = str(headers.get(self.STATION_ASKED) or "").strip().lower()
+        return value if value in ("page", "live") else ""
+
+    def _station_opened(self, path: str) -> bool:
+        """With STATION_FOR_OPERATORS on, the Station's pages join the
+        operator's: `/station` and everything under it."""
+        return bool(self.settings.station_for_operators) and (
+            path == "/station" or path.startswith("/station/"))
+
+    def _json(self, code: int, obj, *, etag: str = "",
+              headers: tuple = ()) -> None:
+        data = json.dumps(obj, default=str, separators=(",", ":")).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        if etag:
+            self.send_header("ETag", etag)
+        for name, value in headers:
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def _station_error(self, key: str) -> None:
+        """One of the Station's fixed answers (a gate, a crash, a lockout),
+        as JSON - never an HTML page the script cannot read."""
+        code, body = _STATION_ERRORS[key]
+        return self._json(code, dict(body))
+
+    def _go(self, where: str, *, extra: dict | None = None) -> None:
+        """Where a press lands: the address, or - for the Station - the
+        answer that address's `said` stands for, as JSON."""
+        if self._station_asked():
+            said = (parse_qs(where.partition("?")[2]).get("said") or [""])[0]
+            return self._station_answer(said, extra=extra)
+        return self._redirect(where)
+
+    def _station_answer(self, said: str, *, extra: dict | None = None) -> None:
+        """A press's answer for the Station: the word, the request, the
+        sentence, and the fresh state it left behind."""
+        word, _, req = str(said or "").partition(":")
+        user = self._user()
+        body = {"ok": word not in pages._SAID_NO, "said": word,
+                "req": int(req) if req.isdigit() else None,
+                "note": (self._said_note(said, user)
+                         or pages._DASH_SAID.get(word, "")),
+                "pending": word in ("queued", "already")}
+        self._station_extras(body, user)
+        if extra:
+            body.update(extra)
+        return self._json(200, body)
+
+    def _station_extras(self, body: dict, user: dict | None) -> None:
+        """The state a press answer carries: the Station's whole state for
+        the page, the phone's for its Live tab. Each read is its own
+        try - an answer without it is still the answer."""
+        from . import station_read
+
+        asked = self._station_asked()
+        if user is None or not asked:
+            return
+        if asked == "page":
+            try:
+                got = station_read.state(self.settings, user)
+                if not got.pop(station_read.PARTIAL, False):
+                    body["state"] = got
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("the station state after %s was not read (%s)",
+                            self.path, exc)
+            return
+        hit = re.match(r"^/(?:station/)?phones/(\d+)/", self.path)
+        if hit is None:
+            return
+        try:
+            got = station_read.live(self.settings, user, hit.group(1))
+            if not got.pop(station_read.PARTIAL, False):
+                body["live"] = got
+        except Exception as exc:                                  # noqa: BLE001
+            log.warning("the live state after %s was not read (%s)",
+                        self.path, exc)
+
+    def _station_reply(self, body: dict, *, state: bool = True) -> None:
+        """A Station door's own answer: JSON with the header, and back to
+        the Station without it."""
+        if not self._station_asked():
+            return self._redirect("/station")
+        if state:
+            self._station_extras(body, self._user())
+        return self._json(200, body)
+
+    def _own_hold(self, serial: str, user: dict) -> bool:
+        """Whether the phone is this person's own Station hold - an
+        admin's too: nobody closes or drives somebody else's from the
+        Station. Raises on a store error (the press answers 503)."""
+        from ..store import station as store_station
+
+        return store_station.holds(self.settings, serial, int(user["id"]))
+
+    def _power_clash(self, verb: str, exc: BaseException) -> bool:
+        from ..store import station as store_station
+
+        return (verb in store_station.POWER_VERBS
+                and type(exc).__name__ == "UniqueViolation")
+
+    def _power_pending(self, serial: str,
+                       verbs: tuple = ()) -> dict | None:
+        """The pending power press on this phone - Boot, Change IP or
+        Power off - as `{"id", "verb", "words"}`, or None. One older than
+        three minutes is an orphan a restart left behind, and is closed
+        first so it blocks nothing (decision 40). With `verbs`, a pending
+        press of another verb reads as None. Raises."""
+        from ..store import station as store_station
+
+        pend = store_station.power_pending_of(self.settings, serial)
+        if pend is not None and pend.get("stale"):
+            closed = store_station.expire_power(self.settings, serial)
+            log.info("phone %s: %d power press(es) nobody answered for three "
+                     "minutes closed", serial, closed)
+            pend = store_station.power_pending_of(self.settings, serial)
+        if pend is None or pend.get("stale"):
+            return None
+        verb = str(pend.get("verb") or "")
+        if verbs and verb not in verbs:
+            return None
+        words = _POWER_WORDS.get(verb, "phone {s} is busy - wait for it")
+        return {"id": int(pend["id"]), "verb": verb,
+                "words": words.format(s=serial)}
+
+    def _power_busy(self, serial: str, verbs: tuple) -> str:
+        """The sentence for a pending power press of `verbs` on the phone,
+        or "". Never fatal: a store that cannot say is no refusal, and
+        the unique index still holds the line."""
+        try:
+            pend = self._power_pending(serial, verbs)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("phone %s: the pending power press was not read (%s)",
+                      serial, exc)
+            return ""
+        return pend["words"] if pend else ""
+
+    def _other_button(self, req, button: str, payload: dict) -> str:
+        """A Station verdict whose twin was pressed with another key: the
+        sentence that says so, or "" when it is the same key (or not a
+        Station verdict at all)."""
+        if not button:
+            return ""
+        from ..store import station as store_station
+
+        try:
+            row = store_station.press_of(self.settings, int(req))
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the twin of %s was not read (%s)", req, exc)
+            return ""
+        first = str((row or {}).get("button") or "")
+        if not first or first == button:
+            return ""
+        label = (pages.PHONE_STATES.get(first) or {}).get("label", first)
+        return (f"phone {payload.get('serial') or '?'} is already being "
+                f"closed as {label}")
+
+    def _station_get(self, user: dict, path: str) -> None:
+        """The Station's reads: its page, its state, a phone's Live tab and
+        that tab's state."""
+        from . import station_pages, station_read
+
+        write = self.command != "HEAD"
+        if path == "/station":
+            state = station_read.state(self.settings, user, write=write)
+            state.pop(station_read.PARTIAL, None)
+            return self._html(200, station_pages.station_page(state, user))
+        if path == "/station/state":
+            state = station_read.state(self.settings, user, write=write)
+            if state.pop(station_read.PARTIAL, False):
+                return self._station_error("down")
+            tag = _state_tag(state)
+            if self.headers.get("If-None-Match") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return None
+            return self._json(200, state, etag=tag)
+        if path.startswith("/station/phones/"):
+            serial, _, tail = path[len("/station/phones/"):].partition("/")
+            if serial.isdigit() and tail == "":
+                query = parse_qs(self.path.partition("?")[2])
+                said = str((query.get("said") or [""])[0])[:64]
+                note = self._said_note(said, user) if said else ""
+                got = station_read.live(self.settings, user, serial,
+                                        said=said, note=note)
+                if got.pop(station_read.PARTIAL, False):
+                    return self._html(503, pages.store_down_page())
+                return self._html(200, station_pages.live_page(got, user))
+            if serial.isdigit() and tail == "state":
+                got = station_read.live(self.settings, user, serial)
+                if got.pop(station_read.PARTIAL, False):
+                    return self._station_error("down")
+                return self._json(200, got)
+        if self._station_asked():
+            return self._station_error("none")
+        return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
+                                          user=user))
+
+    def _station_post(self, user: dict, field: dict) -> None:
+        """The Station's own doors. Its own try, so a store that does not
+        answer is the JSON the script reads - and never the store-down
+        page, which echoes what was posted (a password, here)."""
+        try:
+            path = self.path
+            if path == "/station/take":
+                return self._station_line_press(user, field, leave=False)
+            if path == "/station/line/leave":
+                return self._station_line_press(user, field, leave=True)
+            if path == "/station/build":
+                return self._station_build(user, field)
+            if path == "/station/me/name":
+                return self._profile_name(user, field)
+            if path == "/station/me/username":
+                return self._profile_username(user, field)
+            if path == "/station/me/password":
+                return self._profile_password(user, field)
+            hit = re.fullmatch(r"/station/phones/([^/]+)/back", path)
+            if hit is not None and hit.group(1).isdigit():
+                return self._station_give_back(user, hit.group(1), field)
+            hit = re.fullmatch(r"/station/builds/([^/]+)/off", path)
+            if hit is not None and hit.group(1).isdigit():
+                return self._station_call_off(user, hit.group(1))
+            if self._station_asked():
+                return self._station_error("none")
+            return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
+                                              user=user))
+        except Exception as exc:                                  # noqa: BLE001
+            if _store_down(exc):
+                log.warning("web: POST %s - the store is not answering (%s)",
+                            self.path, exc)
+                if self._station_asked():
+                    return self._station_error("down")
+                return self._html(503, pages.store_down_page())
+            log.exception("web: POST %s failed", self.path)
+            if self._station_asked():
+                return self._station_error("broke")
+            return self._html(500, pages.page("Error",
+                                              "<h2>Something broke</h2>"))
+
+    def _station_boot(self, user: dict, serial: str) -> None:
+        """Boot from the Station: its own hold only, never while a Change
+        IP or a power-off is pending, and the answer is the Live tab."""
+        back = f"/station/phones/{serial}"
+        if not self._own_hold(serial, user):
+            return self._refuse(user, "boot_phone",
+                                {"serial": serial, "station": True},
+                                f"phone {serial} is not yours any more",
+                                back=back)
+        busy = self._power_busy(serial, ("change_proxy", "power_off_phone"))
+        if busy:
+            return self._refuse(user, "boot_phone",
+                                {"serial": serial, "station": True}, busy,
+                                back=back)
+        return self._act(user, "may_take_phones", "boot_phone",
+                         {"serial": serial, "station": True},
+                         idem=self._minute_key(user, "boot", serial),
+                         back=back)
+
+    def _station_proxy(self, user: dict, serial: str, field: dict) -> None:
+        """Change IP from the Station: its own hold only, never while a
+        Boot or a power-off is pending, and the power stays as the page
+        drew it."""
+        if not self._own_hold(serial, user):
+            return self._refuse(user, "change_proxy",
+                                {"serial": serial, "station": True},
+                                f"phone {serial} is not yours any more",
+                                back="/station")
+        busy = self._power_busy(serial, ("boot_phone", "power_off_phone"))
+        if busy:
+            return self._refuse(user, "change_proxy",
+                                {"serial": serial, "station": True}, busy,
+                                back="/station")
+        was = "on" if str(field.get("was") or "") == "on" else "off"
+        return self._act(user, "may_change_proxy", "change_proxy",
+                         {"serial": serial, "boot": False, "keep_power": True,
+                          "station": True, "was_on_page": was},
+                         idem=self._minute_key(user, "proxy", serial),
+                         back="/station")
+
+    def _station_line_press(self, user: dict, field: dict, *,
+                            leave: bool) -> None:
+        """Take a phone from a lane's shelf (or a place in its line), or
+        leave the line. One store transaction each, which writes its own
+        request row - a Take must never run late from the queue."""
+        from ..store import station as store_station
+        from ..store.users import may
+
+        lane = str(field.get("lane") or "").strip().lower()
+        if lane not in store_station.LANES:
+            return self._station_reply({"ok": False, "said": "no", "req": None,
+                                        "note": "Pick GPT or Spotify.",
+                                        "pending": False}, state=False)
+        if not self.settings.web_mutations:
+            if self._station_asked():
+                return self._station_error("off")
+            return self._html(403, pages.page(
+                "Disabled", "<h2>Actions are not switched on yet</h2>",
+                user=user))
+        key = self._minute_key(user, "leave" if leave else "take", lane)
+        # Leaving asks for no tick: a person whose tick went while they
+        # waited must still be able to step out of the line.
+        if not leave and not may(user, "may_take_phones"):
+            why = (f"{user['username']} may not do this - permission "
+                   f"may_take_phones is off")
+            req = store_station.record(
+                self.settings, verb="take_phone", payload={"lane": lane},
+                requested_by=user["id"], status="refused", result=why,
+                idem_key=key)
+            return self._station_reply({"ok": False, "said": "refused",
+                                        "req": req or None,
+                                        "note": pages._DASH_SAID["refused"],
+                                        "pending": False})
+        if leave:
+            got = store_station.leave_line(
+                self.settings, lane=lane, user_id=int(user["id"]),
+                by=user["username"], idem_key=key)
+        else:
+            # The line first: a person waiting always beats a fresh Take.
+            store_station.serve_lines(self.settings, (lane,))
+            got = store_station.take(
+                self.settings, lane=lane, user_id=int(user["id"]),
+                by=user["username"], idem_key=key)
+        outcome = str(got.get("outcome") or "no")
+        word = ("twice" if got.get("twice") else
+                {"took": "took", "line": "in-line", "left": "left"}.get(outcome,
+                                                                        "no"))
+        return self._station_reply({
+            "ok": outcome in ("took", "line", "left"), "said": word,
+            "req": int(got.get("action_id") or 0) or None,
+            "note": str(got.get("sentence") or ""), "pending": False})
+
+    def _station_give_back(self, user: dict, serial: str, field: dict) -> None:
+        where = str(field.get("where") or "")
+        if where not in ("station", "station-live"):
+            where = "station"
+        if not self._own_hold(serial, user):
+            return self._refuse(user, "give_back", {"serial": serial},
+                                f"phone {serial} is not yours any more",
+                                back="/station")
+        return self._act(user, "may_take_phones", "give_back",
+                         {"serial": serial, "where": where},
+                         idem=self._minute_key(user, "giveback", serial),
+                         back="/station", said_word="gave-back")
+
+    def _station_call_off(self, user: dict, ident: str) -> None:
+        return self._act(user, "may_login_accounts", "call_off_build",
+                         {"wanted_id": int(ident), "name": f"wish {ident}",
+                          "admin": user.get("role") == "admin"},
+                         idem=self._minute_key(user, "calloff", ident),
+                         back="/station", said_word="called-off")
+
+    def _station_build(self, user: dict, field: dict) -> None:
+        """The build dialog: its checks, in the dialog's own words, then
+        the dashboard's own build path with a Station payload."""
+        from ..store import station as store_station
+        from ..store.users import may
+
+        if not self.settings.web_mutations:
+            if self._station_asked():
+                return self._station_error("off")
+            return self._html(403, pages.page(
+                "Disabled", "<h2>Actions are not switched on yet</h2>",
+                user=user))
+        kind = str(field.get("kind") or "").strip().lower()
+        gmail_mode = _mode(field.get("gmail_mode"), ("auto", "manual", "none"))
+        acct_mode = _mode(field.get("acct_mode"), ("none", "manual"))
+        ip_mode = _mode(field.get("ip_mode"), ("auto", "manual"))
+        gmail_line = str(field.get("gmail_line") or "").strip()
+        acct_line = str(field.get("acct_line") or "").strip()
+        ip_line = str(field.get("ip_line") or "").strip()
+        # What a refusal may record: the choices, never a typed line.
+        safe = {"kind": kind, "gmail_mode": gmail_mode, "acct_mode": acct_mode,
+                "ip_mode": ip_mode}
+        # Asked here rather than by `_act`, whose refusal would record the
+        # payload - and the payload carries what was typed.
+        if not may(user, "may_login_accounts"):
+            return self._refuse(
+                user, "build_by_hand", safe,
+                f"{user['username']} may not do this - permission "
+                f"may_login_accounts is off", back="/station")
+        form = (store_station.build_form(self.settings)
+                if "auto" in (gmail_mode, ip_mode) else {})
+        why, where = _build_refusal(kind, gmail_mode, gmail_line, acct_mode,
+                                    acct_line, ip_mode, ip_line, form)
+        if why:
+            return self._refuse(user, "build_by_hand", safe, why,
+                                back="/station", extra={"field": where})
+        payload = {
+            "gmail": "", "no_gmail": gmail_mode == "none", "gmail_typed": False,
+            "gmail_password": "", "gmail_secret": "",
+            "proxy_name": "", "proxy_typed": False,
+            "purpose": kind, "app": "", "install_app": False,
+            "app_account": "", "app_category": "", "app_typed": False,
+            "app_password": "", "app_secret": "",
+            "station": True, "carry_address": "", "carry_password": "",
+        }
+        if gmail_mode == "manual":
+            address, _, rest = gmail_line.partition(":")
+            password, _, secret = rest.partition(":")
+            payload.update(gmail=address.lower(), gmail_password=password,
+                           gmail_secret=secret.strip(),
+                           gmail_typed=self._is_new("gmail", address))
+        if acct_mode == "manual":
+            address, _, password = acct_line.partition(":")
+            if kind == "other":
+                payload.update(carry_address=address.lower(),
+                               carry_password=password)
+            else:
+                payload.update(
+                    app="spotify" if kind == "spotify" else "chatgpt",
+                    install_app=True, app_account=address.lower(),
+                    app_category=("normal" if kind == "spotify"
+                                  else "" if password else "eco"),
+                    app_password=password,
+                    app_typed=self._is_new("app", address))
+        if ip_mode == "manual":
+            payload.update(proxy_name=ip_line, proxy_typed=True)
+        return self._act(user, "may_login_accounts", "build_by_hand", payload,
+                         idem=self._minute_key(user, "byhand", kind),
+                         back="/station", said_word="asked",
+                         digest_skip=BUILD_SECRETS)
+
+    # ------------------------------------------------------ the profile
+    def _profile_reply(self, ok: bool, note: str, *, field: str = "",
+                       me: dict | None = None, go: str = "",
+                       cookie: str = "") -> None:
+        """A profile answer: JSON with the header (status 200 for a
+        refusal, so the form shows its hint), back to the Station without
+        it."""
+        if not self._station_asked():
+            self.send_response(303)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            self.send_header("Location", "/station")
+            self.end_headers()
+            return None
+        body = ({"ok": True, "said": "saved", "note": note, "me": me or {}}
+                if ok else
+                {"ok": False, "said": "bad", "note": note, "field": field})
+        if go:
+            body["go"] = go
+        return self._json(200, body,
+                          headers=(("Set-Cookie", cookie),) if cookie else ())
+
+    def _profile_locked(self, user: dict) -> bool:
+        """The login lockout, by username and by id - so a rename never
+        forgives the count of wrong current passwords."""
+        return (_locked_out(str(user["username"]))
+                or _locked_out(f"id:{user['id']}"))
+
+    def _profile_name(self, user: dict, field: dict) -> None:
+        from ..store import station as store_station
+        from ..store import users as store_users
+        from . import station_read
+
+        try:
+            new = store_users.set_name(
+                self.settings, int(user["id"]),
+                store_users.clean_name(field.get("name") or ""))
+        except ValueError as exc:
+            return self._profile_reply(False, str(exc), field="name")
+        store_station.record(
+            self.settings, verb="profile_name", payload={"name": new},
+            requested_by=user["id"], status="done", result="Name saved.",
+            idem_key=self._minute_key(user, "name", str(user["id"])))
+        return self._profile_reply(
+            True, "Name saved.",
+            me=station_read.me(dict(user, display_name=new)))
+
+    def _profile_username(self, user: dict, field: dict) -> None:
+        """A person renaming themselves. No current password (the
+        prototype's one field, the lead's call); the lockout still holds,
+        and nothing here forgives it."""
+        from ..store import station as store_station
+        from ..store import users as store_users
+        from . import station_read
+
+        if self._profile_locked(user):
+            if self._station_asked():
+                return self._station_error("locked")
+            return self._redirect("/station")
+        try:
+            new = store_users.set_username(self.settings, int(user["id"]),
+                                           field.get("username") or "")
+        except ValueError as exc:
+            return self._profile_reply(False, str(exc), field="user")
+        said = "Username saved. Use it the next time you sign in."
+        store_station.record(
+            self.settings, verb="profile_username",
+            payload={"username": new, "was": user["username"]},
+            requested_by=user["id"], status="done", result=said,
+            idem_key=self._minute_key(user, "username", str(user["id"])))
+        log.info("user %s is %s now", user["username"], new)
+        return self._profile_reply(
+            True, said, me=station_read.me(dict(user, username=new)))
+
+    def _profile_password(self, user: dict, field: dict) -> None:
+        """A person changing their own password: the current one first,
+        then the new hash and this browser's new seat in one transaction,
+        which signs every other browser out."""
+        from ..store import station as store_station
+        from ..store import users as store_users
+        from . import station_read
+
+        if self._profile_locked(user):
+            if self._station_asked():
+                return self._station_error("locked")
+            return self._redirect("/station")
+        current = str(field.get("current") or "")
+        new = str(field.get("password") or "")
+        again = str(field.get("again") or "")
+        if not current:
+            return self._profile_reply(False, "Type your current password first.",
+                                       field="pw")
+        if len(new) < store_users.PASSWORD_MIN:
+            return self._profile_reply(
+                False, "The new password needs at least 8 characters.",
+                field="pw")
+        if new != again:
+            return self._profile_reply(
+                False, "The two new passwords are not the same.", field="pw")
+        if new == current:
+            return self._profile_reply(
+                False, "The new password is the same as the current one.",
+                field="pw")
+        try:
+            token = store_users.change_password(
+                self.settings, int(user["id"]), current, new,
+                token=self._cookie(), hours=SESSION_HOURS)
+        except store_users.WrongPassword:
+            _note_failure(str(user["username"]))
+            _note_failure(f"id:{user['id']}")
+            log.info("user %s gave a wrong current password", user["username"])
+            return self._profile_reply(
+                False, "That is not your current password.", field="pw")
+        except ValueError as exc:
+            return self._profile_reply(False, str(exc), field="pw")
+        with _lock:
+            _failures.pop(str(user["username"]), None)
+            _failures.pop(f"id:{user['id']}", None)
+        said = "Password changed. Your other browsers are signed out."
+        store_station.record(
+            self.settings, verb="profile_password", payload={},
+            requested_by=user["id"], status="done", result=said,
+            idem_key=self._minute_key(user, "password", str(user["id"])))
+        log.info("user %s changed their password", user["username"])
+        me = station_read.me(user)
+        me["pw"] = "Changed today"
+        return self._profile_reply(
+            True, said, me=me, go="" if token else "/login",
+            cookie=self._seat_cookie(token) if token else "")
 
     # ------------------------------------------------ phones and service
     def _held_by_somebody_else(self, user: dict, serial: str) -> str:
@@ -1335,7 +2035,8 @@ class _Handler(BaseHTTPRequestHandler):
         return pages._holder(phone), pages._theirs(user, phone)
 
     def _refuse(self, user: dict, verb: str, payload: dict,
-                why: str, back: str = "/") -> None:
+                why: str, back: str = "/", *,
+                extra: dict | None = None) -> None:
         """Say no, and leave the same record a refused permission leaves.
 
         The answer carries the request's id, so the banner reads `why`
@@ -1354,18 +2055,31 @@ class _Handler(BaseHTTPRequestHandler):
                 requested_by=user["id"], reason=why)
         except Exception as exc:                                  # noqa: BLE001
             log.warning("could not record the refusal (%s)", exc)
-            return self._redirect(_said_url(back, "refused"))
-        return self._redirect(_said_url(back, f"no:{new_id}"))
+            return self._go(_said_url(back, "refused"), extra=extra)
+        return self._go(_said_url(back, f"no:{new_id}"), extra=extra)
 
     def _phone_state(self, user: dict, serial: str, field: dict) -> None:
         """Take / Back / Done / Failed off the dashboard's table or the
         phone's own story (`back` says which). The two that delete the
         phone ask once, on a page that says so."""
+        from ..store import verdicts
+
         state = (field.get("state") or "").strip().lower()
         plan = pages.PHONE_STATES.get(state)
-        if plan is None or not serial.isdigit():
+        where = str(field.get("where") or "")
+        # A verdict from the Station: one of its five keys, on the
+        # presser's own Station hold - an admin's included (rev 42).
+        station = where in ("station", "station-live")
+        if plan is None or not serial.isdigit() or (
+                station and state not in verdicts.KEYS):
+            if self._station_asked():
+                return self._station_error("none")
             return self._html(404, pages.page(
                 "404", "<h2>Not a State word</h2>", user=user))
+        if station and not self._own_hold(serial, user):
+            return self._refuse(
+                user, "set_phone_state", {"serial": serial, "state": state},
+                f"phone {serial} is not yours any more", back="/station")
         held, theirs = self._holder_of(user, serial)
         if theirs:
             return self._refuse(
@@ -1378,16 +2092,19 @@ class _Handler(BaseHTTPRequestHandler):
         word = plan.get("word", state)
         payload = {"serial": serial, "state": plan.get("state", state),
                    "button": state}
-        where = str(field.get("where") or "")
-        if where in ("live", "dash", "story"):
+        if where in ("live", "dash", "story", "station", "station-live"):
             payload["where"] = where
+        if station:
+            payload["mine"] = True
         if held and held != user.get("username"):
             # An admin ending somebody else's hold (2026-09-15): said on
             # the request, so whoever comes back to find their phone
             # gone can read who did it and why.
             payload["held_by"] = held
-        back = _phone_back(field, serial)
+        back = "/station" if station else _phone_back(field, serial)
         if plan["sure"] and field.get("sure") != "1":
+            if self._station_asked():
+                return self._station_error("ask")
             return self._html(200, pages.confirm_page(
                 user, title=f"Mark phone {serial} {word}?",
                 text=plan["text"], action=f"/phones/{serial}/state",
@@ -1398,7 +2115,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._power_off(user, serial)
         return self._act(user, "may_take_phones", "set_phone_state", payload,
                          idem=self._minute_key(user, f"state-{state}", serial),
-                         back=back, said_word=plan["said"])
+                         back=back, said_word=plan["said"],
+                         same_button=state if station else "")
 
     def _power_off(self, user: dict, serial: str) -> None:
         """Release also stops the phone in GeeLark, so it stops billing
@@ -2253,16 +2971,19 @@ class _Handler(BaseHTTPRequestHandler):
         token, _csrf = store_sessions.start(self.settings, row["id"],
                                             hours=SESSION_HOURS)
         self.send_response(303)
-        # `Secure` when the request came over TLS - the reverse proxy in
-        # front of the console (Caddy, farm.iranspoty.store) says so in
-        # X-Forwarded-Proto. Left off over the ssh tunnel, which is plain
-        # http on loopback and would otherwise never see the cookie.
-        secure = ("; Secure" if (self.headers.get("X-Forwarded-Proto") or ""
-                                 ).lower() == "https" else "")
-        self.send_header("Set-Cookie",
-                         f"gf={token}; HttpOnly; SameSite=Lax; Path=/{secure}")
+        self.send_header("Set-Cookie", self._seat_cookie(token))
         self.send_header("Location", "/")
         self.end_headers()
+
+    def _seat_cookie(self, token: str) -> str:
+        """The session cookie for this browser's seat. `Secure` when the
+        request came over TLS - the reverse proxy in front of the console
+        (Caddy, farm.iranspoty.store) says so in X-Forwarded-Proto. Left
+        off over the ssh tunnel, which is plain http on loopback and would
+        otherwise never see the cookie."""
+        secure = ("; Secure" if (self.headers.get("X-Forwarded-Proto") or ""
+                                 ).lower() == "https" else "")
+        return f"gf={token}; HttpOnly; SameSite=Lax; Path=/{secure}"
 
     def _is_new(self, kind: str, address: str) -> bool:
         """Whether the pool has never heard of this address.
@@ -2554,7 +3275,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         ident = self.path[len("/wishes/"):-len("/dismiss")]
         if not ident.isdigit():
-            return self._redirect(_said_url("/", "no"))
+            return self._go(_said_url("/", "no"))
         try:
             gone = store_wanted.dismiss(
                 self.settings, int(ident), user_id=user["id"],
@@ -2562,7 +3283,25 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:                                  # noqa: BLE001
             log.warning("could not dismiss wish %s (%s)", ident, exc)
             gone = False
-        return self._redirect(_said_url("/", "dismissed" if gone else "no"))
+        said = ("Taken off your station." if gone
+                else "That build cannot be dismissed.")
+        if self._station_asked():
+            # A press the Station made is recorded (brief B10); the
+            # dashboard's Dismiss stays the direct write it always was.
+            from ..store import station as store_station
+
+            try:
+                store_station.record(
+                    self.settings, verb="dismiss_build",
+                    payload={"wanted_id": int(ident)},
+                    requested_by=user["id"],
+                    status="done" if gone else "refused", result=said,
+                    idem_key=self._minute_key(user, "dismiss", ident))
+            except Exception as exc:                              # noqa: BLE001
+                log.warning("the dismiss of wish %s was not recorded (%s)",
+                            ident, exc)
+        return self._go(_said_url("/", "dismissed" if gone else "no"),
+                        extra={"note": said})
 
     def _redirect(self, where: str) -> None:
         self.send_response(303)
@@ -2611,13 +3350,121 @@ class _Handler(BaseHTTPRequestHandler):
         how long anything took.
         """
         path = getattr(self, "path", "") or ""
-        if not path or path.split("?")[0] == "/live":
+        bare = path.split("?")[0]
+        if not path or bare == "/live":
+            return
+        # The Station's two polls, every few seconds per open page: a line
+        # each would bury every other request (2026-09-29).
+        if bare.startswith("/station/") and bare.endswith("/state"):
             return
         spent = (time.perf_counter() - getattr(self, "_began", 0.0)) * 1000
         log.info("web %s %s %s %.0fms %s bytes",
                  getattr(self, "command", "?"), path[:120],
                  getattr(self, "_code", "-"), spent,
                  getattr(self, "_sent", 0))
+
+
+
+# ------------------------------------------------------------ the Station
+#: The Station's fixed answers, by the word the script reads (§5.1): the
+#: gates, the lockout, a crash. `go` is where the script sends the page.
+_STATION_ERRORS = {
+    "signed-out": (401, {"ok": False, "said": "signed-out",
+                         "note": "You are signed out.", "go": "/login"}),
+    "stale": (403, {"ok": False, "said": "stale",
+                    "note": "Your session changed - reload the page.",
+                    "go": None}),
+    "origin": (403, {"ok": False, "said": "origin",
+                     "note": "That came from another site. Nothing was "
+                             "changed.", "go": None}),
+    "password": (403, {"ok": False, "said": "password",
+                       "note": "Choose your own password first.",
+                       "go": "/password"}),
+    "refused": (403, {"ok": False, "said": "refused",
+                      "note": "That belongs to an admin. Nothing was changed.",
+                      "go": "/"}),
+    "off": (403, {"ok": False, "said": "off",
+                  "note": "Actions are not switched on yet."}),
+    "ask": (409, {"ok": False, "said": "ask",
+                  "note": "Press the key a second time to close the phone."}),
+    "locked": (429, {"ok": False, "said": "locked",
+                     "note": "Too many wrong answers in a row - try again in "
+                             "a few minutes."}),
+    "down": (503, {"ok": False, "said": "down",
+                   "note": "The farm's store is not answering - try again in "
+                           "a moment."}),
+    "broke": (500, {"ok": False, "said": "broke",
+                    "note": "Something broke - it is in the server log."}),
+    "none": (404, {"ok": False, "said": "none", "note": "Nothing here."}),
+}
+
+#: What a pending power press on a phone is, in the words a refusal says.
+_POWER_WORDS = {
+    "boot_phone": "phone {s} is booting - wait for it",
+    "change_proxy": "phone {s} is changing its IP - wait for it",
+    "power_off_phone": "phone {s} is switching off - press Boot again in a "
+                       "moment",
+}
+
+#: The build dialog's typed keys the idem key leaves out: a retried press
+#: digests to the same key though `_is_new` answers differently the second
+#: time, and no hash of a typed password is kept in `idem_key`.
+BUILD_SECRETS = ("gmail_typed", "app_typed", "gmail_password", "gmail_secret",
+                 "app_password", "app_secret", "carry_password", "proxy_name")
+
+#: The dialog's three formats, the prototype's own.
+GMAIL_LINE = re.compile(r"^[^\s:@]+@[^\s:@]+\.[^\s:@]+:[^\s:]+(:.+)?$")
+ACCT_LINE = re.compile(r"^[^\s:@]+@[^\s:@]+\.[^\s:@]+(:\S+)?$")
+IP_LINE = re.compile(r"^[A-Za-z0-9.-]+:\d{2,5}(:[^\s:]+:[^\s:]+)?$")
+
+_LANE_WORDS = {"gpt": "GPT", "spotify": "Spotify"}
+
+
+def _mode(value, allowed: tuple) -> str:
+    """One of a dialog row's modes; anything else is the row's default."""
+    word = str(value or "").strip().lower()
+    return word if word in allowed else allowed[0]
+
+
+def _build_refusal(kind: str, gmail_mode: str, gmail_line: str,
+                   acct_mode: str, acct_line: str, ip_mode: str, ip_line: str,
+                   form: dict) -> tuple[str, str]:
+    """Why the build dialog's choice cannot be built, and which row to
+    mark - ("", "") when it can. The first rule that fails wins (§5.6).
+    A stopped farm is not a reason: the wish waits for it to start."""
+    if kind not in ("gpt", "spotify", "other"):
+        return "Pick what the phone is for.", ""
+    if gmail_mode == "manual" and not GMAIL_LINE.match(gmail_line):
+        return "Type it as email:password:2FA key.", "gmail"
+    if acct_mode == "manual" and not ACCT_LINE.match(acct_line):
+        return "Type it as email:password, or the email alone.", "acct"
+    if ip_mode == "manual" and not IP_LINE.match(ip_line):
+        return "Type it as host:port:user:password.", "ip"
+    if kind == "gpt" and acct_mode == "manual" and gmail_mode == "none":
+        return ("A GPT account needs a Gmail on the phone – set Gmail to Auto "
+                "or Manual.", "acct")
+    if kind == "spotify" and acct_mode == "manual" and gmail_mode != "none":
+        return ("A Spotify account goes on a phone with no Gmail – set Gmail "
+                "to None.", "acct")
+    if kind == "spotify" and acct_mode == "manual" and ":" not in acct_line:
+        return "A Spotify account needs its password: email:password.", "acct"
+    if gmail_mode == "auto" and int(form.get("gmails_left") or 0) == 0:
+        return ("No free Gmail in the pool – type one under Manual, or pick "
+                "None.", "gmail")
+    if ip_mode == "auto" and int((form.get("free_ips") or {}).get(kind) or 0) == 0:
+        if kind == "other":
+            return "No free IP – type one under Manual.", "ip"
+        return f"No free {_LANE_WORDS[kind]} IP – type one under Manual.", "ip"
+    return "", ""
+
+
+def _state_tag(state: dict) -> str:
+    """The Station state's ETag: the body without `now`, which is the one
+    value that moves on every read."""
+    stable = {k: v for k, v in state.items() if k != "now"}
+    text = json.dumps(stable, default=str, sort_keys=True,
+                      separators=(",", ":"))
+    return 'W/"' + hashlib.sha1(text.encode("utf-8")).hexdigest()[:16] + '"'
 
 
 #: Where "Log in selected" may send the person back: the two pages that
@@ -2779,7 +3626,7 @@ def _capture_health() -> dict | None:
         return None
 
 
-def _digest(payload: dict) -> str:
+def _digest(payload: dict, skip: tuple = ()) -> str:
     """The press's words, in ten characters, for the idem key.
 
     The key was the press token alone - one per drawing of the form - so
@@ -2788,10 +3635,11 @@ def _digest(payload: dict) -> str:
     "already went through" over it: the operator retyped a password and
     the row kept the old one (2026-09-21, found by audit). The same press
     with the same words is still one request; with different words it is
-    a new one. `by`/`by_id` are left out: they are who pressed, not what.
+    a new one. `by`/`by_id` are left out: they are who pressed, not what,
+    and so is whatever `skip` names (a Station build's typed secrets).
     """
     said = {k: v for k, v in (payload or {}).items()
-            if k not in ("by", "by_id")}
+            if k not in ("by", "by_id") + tuple(skip)}
     return hashlib.sha1(json.dumps(said, sort_keys=True, default=str)
                         .encode("utf-8")).hexdigest()[:10]
 

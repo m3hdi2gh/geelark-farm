@@ -35,6 +35,30 @@ def _stamp() -> str:
     return time.strftime("%Y-%m-%d")
 
 
+def _uid(payload: dict) -> int:
+    """The presser's user id, or 0 when the payload carries none."""
+    raw = str(payload.get("by_id") or "").strip()
+    return int(raw) if raw.isdigit() else 0
+
+
+def _store_on(settings) -> bool:
+    return settings is not None and bool(getattr(settings, "store_enabled",
+                                                 False))
+
+
+def _guarded(settings, default, call, *args, **kwargs):
+    """A store call inside a verb: skipped when there is no store, and a
+    failure logged and answered with `default`, never raised."""
+    if not _store_on(settings):
+        return default
+    try:
+        return call(settings, *args, **kwargs)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("%s did not answer (%s)",
+                    getattr(call, "__name__", "the store"), exc)
+        return default
+
+
 # ------------------------------------------------------------------ adds
 def add_gmails(book, ledger, settings, payload, client):
     from .store import validate
@@ -161,9 +185,26 @@ def build_by_hand(book, ledger, settings, payload, client):
     # and the card's box speaks for a phone with no account on it.
     purpose = (purposes.of_product(app) if app
                else purposes.normal(payload.get("purpose")) or purposes.GPT)
+    # A phone for another app (the Station, 2026-09-29): no lane's stock,
+    # behind any free IP, and nothing signed in. `normal` knows no such
+    # lane - it would read GPT - so the word is asked for exactly.
+    other = (str(payload.get("purpose") or "").strip().lower()
+             == purposes.OTHER and app == "")
+    if other:
+        purpose = purposes.OTHER
+    # The Station's words: an IP, never an exit.
+    station = bool(payload.get("station"))
+    ip_word = "IP" if station else "exit"
     # An account is signed into ChatGPT or Spotify; Claude's come from
     # the panel.
     app_account = named if app in ("chatgpt", "spotify") else ""
+    # An Other phone's account is carried on the wish for its Live tab,
+    # and never signed in or put in a pool.
+    carry_address = carry_password = ""
+    if other:
+        app_account = ""
+        carry_address = str(payload.get("carry_address") or "").strip().lower()
+        carry_password = str(payload.get("carry_password") or "")
     # Which phone this account may go on, judged before anything is
     # written. A typed row is not in the pool yet, so the rule is asked
     # of the category the card sent; a chosen row is asked of the pool.
@@ -266,7 +307,8 @@ def build_by_hand(book, ledger, settings, payload, client):
     if proxy_name and payload.get("proxy_typed"):
         proxy_name, one_off, refused = _typed_exit(book, proxy_name)
         if refused:
-            return "refused", f"that exit was not usable - {refused}", None
+            return ("refused", f"that {ip_word} was not usable - {refused}",
+                    None)
 
     # A blank box is not a refusal, it is the word the box itself shows:
     # "auto". `builder.build_one` claims the next free row when the wish
@@ -274,7 +316,7 @@ def build_by_hand(book, ledger, settings, payload, client):
     # the dashboard's own main button do nothing at all, under a green
     # tick (the operator, 2026-09-07).
     for what, name, pool in (("Gmail", gmail, book.gmails),
-                             ("exit", "" if one_off else proxy_name,
+                             (ip_word, "" if one_off else proxy_name,
                               book.proxies)):
         if not name:
             continue
@@ -282,11 +324,19 @@ def build_by_hand(book, ledger, settings, payload, client):
         # the row has to be free, not merely present. It said only "is not
         # in the Gmails tab", so a spent address was accepted here and
         # refused half an hour later where nobody was looking.
-        free = any(pools.is_called(r, name) for r in pool.available)
-        if not free:
+        match = next((r for r in pool.available if pools.is_called(r, name)),
+                     None)
+        if match is None:
             return ("refused",
                     f"the {what} {name} is not free - it is already on a "
                     f"phone, set aside, or not there at all", None)
+        # A named exit of the other lane is refused now, in words, rather
+        # than by the build a pass later. An Other phone takes any exit.
+        if (pool is book.proxies and purpose != purposes.OTHER
+                and not purposes.fits(match.values.get("Purpose"), purpose)):
+            kept = purposes.word(match.values.get("Purpose")) or "another lane"
+            return ("refused", f"the IP {name} is kept for {kept} - use Auto "
+                               f"or another", None)
     # The account is asked of the row itself, never of `available`.
     #
     # `available` subtracts the kinds the automatic claim holds back -
@@ -312,21 +362,30 @@ def build_by_hand(book, ledger, settings, payload, client):
         try:
             _one_off_exit(book, payload, one_off, proxy_name)
         except ValueError:
-            return ("refused", f"the exit {proxy_name} is already in the "
-                               f"pool", None)
+            return ("refused", f"the {ip_word} {proxy_name} is already in "
+                               f"the pool", None)
+    # Never refused because the farm is stopped: a wish waits for it.
     asked = store_wanted.ask(settings, gmail=gmail, proxy_name=proxy_name,
                              install_app=install_app,
                              app_account=app_account,
                              requested_by=payload.get("by_id"), app=app,
-                             no_gmail=no_gmail, purpose=purpose)
-    where = (f" on {proxy_name}" if proxy_name
-             else f" behind a {purposes.word(purpose)} exit")
+                             no_gmail=no_gmail, purpose=purpose,
+                             station=station, carry_address=carry_address,
+                             carry_password=carry_password)
+    if proxy_name:
+        where = f" on {proxy_name}"
+    elif other:
+        where = f" behind any free {ip_word}"
+    else:
+        where = f" behind a {purposes.word(purpose)} {ip_word}"
     # Every phone carries all three apps, so what is worth saying back is
     # the account, not the apps (the operator, 2026-09-12).
     named = {"": "", "chatgpt": "ChatGPT", "spotify": "Spotify",
              "claude": "Claude"}[app]
     carrying = (f" and {app_account} signed into {named}" if app_account
                 else " with no account signed into anything")
+    if carry_address:
+        carrying += f", carrying {carry_address} for you to sign in by hand"
     if no_gmail:
         # The comma is load-bearing: "no Google account with jack@..."
         # reads as "there is no Google account with that address", which
@@ -335,13 +394,17 @@ def build_by_hand(book, ledger, settings, payload, client):
         # may carry any of the three (2026-09-18).
         carried = (f", with {app_account} to be signed into {named}"
                    if app_account else " and nothing signed in")
+        if carry_address:
+            carried += (f", carrying {carry_address} for you to sign in by "
+                        f"hand")
         return "done", (f"asked for a bare phone{where} - no Google account"
                         f"{carried}, though it still carries the "
                         f"apps - request {asked}. It starts within seconds."
-                        ), None
+                        ), {"wanted_id": asked}
     who = gmail or "the next free Gmail"
     return "done", (f"asked for a phone{where} for {who}{carrying} - "
-                    f"request {asked}. It starts within seconds."), None
+                    f"request {asked}. It starts within seconds."), {
+                        "wanted_id": asked}
 
 
 #: The kinds of GPT account a paste can be. The unnamed one is what this
@@ -1153,9 +1216,26 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
         # spends a GPT phone, nor the other way round. A phone with no
         # lane on it - built before there were lanes - takes either.
         lane = purposes.of_product(resource.values.get("Product"))
-        fit = next((i for i, p in enumerate(warm)
-                    if purposes.fits(p.get("purpose"), lane)), None)
-        if fit is None:
+        phone = before = None
+        lost_chosen = False
+        while phone is None:
+            fit = next((i for i, p in enumerate(warm)
+                        if purposes.fits(p.get("purpose"), lane)), None)
+            if fit is None:
+                break
+            phone = warm.pop(fit)
+            # Reserved before it is paired: a Take between the warm list
+            # and the job would hand somebody a phone a finish then signs
+            # into. One that cannot be reserved is gone - the next one.
+            reserved, before = _reserve(settings, payload, phone)
+            if not reserved:
+                lost_chosen = bool(chosen)
+                phone = None
+        if phone is None:
+            if lost_chosen:
+                refused.append(f"{address}: phone {chosen} cannot take an "
+                               f"account right now - somebody holds it")
+                continue
             if chosen and warm:
                 other = purposes.word(warm[0].get("purpose"))
                 refused.append(f"{address}: phone {chosen} is a {other} "
@@ -1164,13 +1244,17 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
                 continue
             unpaired.append(address)
             continue
-        phone = warm.pop(fit)
         if not book.apps.claim_this(resource, str(phone["serial"])):
             refused.append(f"{address}: taken by another run meanwhile")
+            if before is not None:
+                _guarded(settings, False, _store_station().unreserve_warm,
+                         str(phone["serial"]), before)
             warm.insert(0, phone)
             continue
-        jobs.append({"kind": "finish",
-                     "phone": {**phone, "account": resource}})
+        paired = {**phone, "account": resource}
+        if before is not None:
+            paired["status_before"] = before
+        jobs.append({"kind": "finish", "phone": paired})
         started.append(f"{address} -> {phone['serial']}")
         # Marked `building` here, before the job has started, rather than
         # by the job a few seconds in: the pass that runs this counts the
@@ -1206,6 +1290,31 @@ def login_accounts(book, ledger, settings, payload, client, launch=None):
 
 
 login_accounts.needs_launch = True
+
+
+def _store_station():
+    """The Station's store module, imported where it is used."""
+    from .store import station as store_station
+
+    return store_station
+
+
+def _reserve(settings, payload: dict,
+             phone: dict) -> tuple[bool, str | None]:
+    """Reserve a warm phone for a pairing: (whether it may be paired, the
+    status the store had it at or None when the store reserved nothing).
+    With no store there is nothing to ask, and a store that will not
+    answer reads as reserved, which is the old way."""
+    if not _store_on(settings):
+        return True, None
+    try:
+        before = _store_station().reserve_warm(
+            settings, str(phone["serial"]), owner_id=_uid(payload) or None)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s was not reserved before its pairing (%s)",
+                    phone.get("serial"), exc)
+        return True, None
+    return before is not None, before
 
 
 def _gmail_row(book, payload):
@@ -1719,6 +1828,12 @@ def power_off_phone(book, ledger, settings, payload, client):
     somebody noticed it under Running (the operator, 2026-09-08). Queued
     beside Release by the web; the same door Boot goes through, the
     other way. A phone a run holds is left to the run.
+
+    The Station queues it too: a give-back, the hour, and a Live tab
+    that closed (`why` = closed). That last one is asked again under the
+    phone's power lock - a tab that is beating once more keeps its phone
+    on. Every stop, and every "already off", is written to the store, so
+    the card and the shelf read the phone off at once.
     """
     from . import phones as phones_mod
     from .phones import PhoneError
@@ -1728,20 +1843,55 @@ def power_off_phone(book, ledger, settings, payload, client):
         return "refused", "no phone named", None
     if client is None:
         return "failed", "no IranSpoty Cloud client on this pass", None
+    why = str(payload.get("why") or "")
     live = next((p for p in phones_mod.listing(client)
                  if str(p.get("serialNo")) == serial), None)
     if live is None:
         return "failed", f"phone {serial} is not in the cloud's phone list", None
-    held = ledger.get(live["id"]) if ledger is not None else None
-    if held is not None and held.is_claimed and not held.is_stale:
-        return "refused", f"phone {serial} is held by a run ({held.label})", None
-    if live.get("status") not in (phones_mod.RUNNING, phones_mod.STARTING):
-        return "done", f"phone {serial} was already off", None
-    try:
-        phones_mod.stop(client, live["id"])
-    except (PhoneError, ApiError) as exc:
-        return "failed", f"phone {serial} would not stop: {exc}", None
+    station = _store_station()
+    with phones_mod.power_lock(serial):
+        held = ledger.get(live["id"]) if ledger is not None else None
+        if held is not None and held.is_claimed and not held.is_stale:
+            return ("refused", f"phone {serial} is held by a run ({held.label})",
+                    None)
+        if why == "closed" and _guarded(settings, False, station.is_watched,
+                                        serial, _grace(settings)):
+            # Given back meanwhile, it is no Station hold any more and
+            # reads unwatched: it is stopped.
+            return ("done", f"phone {serial} is being watched again - left on",
+                    None)
+        if live.get("status") not in (phones_mod.RUNNING, phones_mod.STARTING):
+            _guarded(settings, False, station.powered_off, serial)
+            return "done", f"phone {serial} was already off", None
+        try:
+            phones_mod.stop(client, live["id"])
+        except (PhoneError, ApiError) as exc:
+            return "failed", f"phone {serial} would not stop: {exc}", None
+        _guarded(settings, False, station.powered_off, serial)
     return "done", f"phone {serial} is off - it stops billing", {"off": True}
+
+
+def _grace(settings) -> int:
+    """How long a Live tab's beat may be silent before it counts as closed."""
+    return int(getattr(settings, "live_tab_grace_seconds", 45) or 45)
+
+
+def _stop_quietly(phones_mod, client, phone_id: str, serial: str) -> None:
+    """A best-effort stop of a phone this press started and must not keep
+    running. Logged when it fails; the forgotten sweep is the backstop."""
+    try:
+        phones_mod.stop(client, phone_id)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("phone %s was left running after its hold ended (%s)",
+                    serial, exc)
+
+
+def _refused_by_holder(settings, serial: str, uid: int) -> str:
+    """The refusal a dashboard press gets on somebody's Station hold, or ""."""
+    holder = _guarded(settings, None, _store_station().station_holder, serial)
+    if holder is not None and holder != uid:
+        return f"phone {serial} is on somebody's station"
+    return ""
 
 
 def change_proxy(book, ledger, settings, payload, client):
@@ -1760,12 +1910,22 @@ def change_proxy(book, ledger, settings, payload, client):
     detail, exactly as Boot's does, for the tab that is waiting on it. A
     phone that then would not start is `failed` with `off` in the
     detail, so the tab knows to offer Boot rather than the old screen.
+
+    The new exit is the phone's own lane's, checked before it is used
+    (a dead one is marked and the next one tried), and the address it
+    came out of is written on the phone. The Station's press keeps the
+    power the page showed (`keep_power`, `was_on_page`): off stays off,
+    on comes back on. The old exit goes back free only when no other
+    phone is still on it.
     """
     from . import phones as phones_mod
+    from .cancel import Aborted
+    from .kit import exits as kit_exits
     from .phones import PhoneError
 
     serial = str(payload.get("serial") or "").strip()
-    boot = bool(payload.get("boot"))
+    station = bool(payload.get("station"))
+    uid = _uid(payload)
     row = next((r for r in book.phones.rows()
                 if str(r.get("Serial") or "").strip() == serial), None)
     if row is None:
@@ -1781,55 +1941,133 @@ def change_proxy(book, ledger, settings, payload, client):
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
-    fresh = book.proxies.claim(serial)
-    if fresh is None or fresh.proxy is None:
-        return "failed", "the Proxy tab has no free exit left", None
-    # Whether the phone is off by the time this returns: it was, or the
-    # stop below went through. Only the Live tab asks.
-    off = live.get("status") not in (phones_mod.RUNNING, phones_mod.STARTING)
-    try:
-        if not off:
-            phones_mod.stop(client, live["id"])
-            phones_mod.wait_until_stopped(client, live["id"])
-            off = True
-        phones_mod.set_proxy(client, live["id"], fresh.proxy)
-    except (PhoneError, ApiError) as exc:
-        log.warning("phone %s kept its exit: %s", serial, exc)
-        book.proxies.release(fresh, note=(
-            f"Phone {serial} would not take it on {_stamp()}: "
-            f"{str(exc)[:120]}"))
-        return ("failed", f"IranSpoty Cloud refused the change: {str(exc)[:160]}",
-                {"off": off} if boot else None)
-    old = book.proxies.find_by_name((row.get("Proxy") or "").strip())
-    if old is not None and old is not fresh:
-        book.proxies.release(old, note=(
-            f"Left phone {serial} on {_stamp()} - proxy changed from the "
-            f"web by {_by(payload)}."))
-    book.proxies.spend(fresh, serial=serial, note=(
-        f"On phone {serial} since {_stamp()} - changed from the web by "
-        f"{_by(payload)}."))
-    name = fresh.name or str(fresh.proxy)
-    book.phones.write(serial, Proxy=name)
-    moved = {"was": (row.get("Proxy") or "").strip(), "now": name}
-    if not boot:
-        return ("done", f"phone {serial} is on {name} now (it is stopped; it "
-                        f"reads the new exit when it next starts)", moved)
-    try:
-        # One attempt, as Boot's: the person is watching a tab that can
-        # offer Boot again in a minute.
-        url = phones_mod.start(client, live["id"], attempts=1)
-    except phones_mod.PhoneCapacityError:
-        return ("failed", f"phone {serial} is on {name} now but IranSpoty Cloud "
-                          f"has no machine free to start it - press Boot again "
-                          f"in a minute", dict(moved, off=True))
-    except (PhoneError, ApiError) as exc:
-        return ("failed", f"phone {serial} is on {name} now but would not "
-                          f"start: {exc}", dict(moved, off=True))
+    lane = purposes.phone_lane(row.get("Purpose"))
+    was = (row.get("Proxy") or "").strip()
+    store_station = _store_station()
+    marked = {"station": True} if station else {}
+    with phones_mod.power_lock(serial):
+        if station:
+            if _store_on(settings) and not store_station.holds(settings, serial,
+                                                               uid):
+                return "refused", f"phone {serial} is not yours any more", None
+        else:
+            refused = _refused_by_holder(settings, serial, uid)
+            if refused:
+                return "refused", refused, None
+        was_on = live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING)
+        # Off stays off as the operator saw it: a card whose tab just
+        # closed reads Ready while the cloud still runs the phone, and a
+        # Change IP pressed on it does not start it again.
+        boot = bool(payload.get("boot")) or (
+            bool(payload.get("keep_power")) and was_on
+            and payload.get("was_on_page") == "on")
+        try:
+            fresh = kit_exits._fresh_proxy(client, book, settings=settings,
+                                           purpose=lane)
+        except Aborted:
+            word = "" if lane == purposes.OTHER else purposes.WORDS[lane] + " "
+            kept = was or "its IP"
+            return ("failed", f"there is no free {word}IP left - phone "
+                              f"{serial} kept {kept}",
+                    {"off": not was_on, **marked} if (boot or station)
+                    else None)
+        # Whether the phone is off by the time this returns: it was, or the
+        # stop below went through. Only the Live tab asks.
+        off = not was_on
+        try:
+            if not off:
+                phones_mod.stop(client, live["id"])
+                phones_mod.wait_until_stopped(client, live["id"])
+                off = True
+            phones_mod.set_proxy(client, live["id"], fresh.proxy)
+        except (PhoneError, ApiError) as exc:
+            log.warning("phone %s kept its exit: %s", serial, exc)
+            book.proxies.release(fresh, note=(
+                f"Phone {serial} would not take it on {_stamp()}: "
+                f"{str(exc)[:120]}"))
+            if off and was_on:
+                _guarded(settings, False, store_station.powered_off, serial)
+            if station:
+                return ("failed", f"IranSpoty Cloud refused the new IP: "
+                                  f"{str(exc)[:160]}", {"off": off, **marked})
+            return ("failed", f"IranSpoty Cloud refused the change: "
+                              f"{str(exc)[:160]}",
+                    {"off": off} if boot else None)
+        old = book.proxies.find_by_name(was)
+        if old is not None and old is not fresh:
+            if _exit_still_shared(settings, was, serial):
+                # A borrowed exit carries two phones on purpose; freeing
+                # it here would hand out one a phone is still behind.
+                note = (old.values.get("Note") or "").strip()
+                book.proxies._set(old, {"Note": (
+                    f"{note} Phone {serial} left it on {_stamp()}; another "
+                    f"phone is still on it.").strip()})
+            else:
+                book.proxies.release(old, note=(
+                    f"Left phone {serial} on {_stamp()} - proxy changed from "
+                    f"the web by {_by(payload)}."))
+        book.proxies.spend(fresh, serial=serial, note=(
+            f"On phone {serial} since {_stamp()} - changed from the web by "
+            f"{_by(payload)}."))
+        name = fresh.name or str(fresh.proxy)
+        book.phones.write(serial, Proxy=name, **{
+            "Exit IP": str(fresh.values.get("Last Exit IP") or "").strip()})
+        moved = {"was": was, "now": name}
+        if not boot:
+            _guarded(settings, False, store_station.powered_off, serial)
+            if station:
+                return ("done", f"phone {serial} is on {name} now (it is off; "
+                                f"it reads the new IP when it next starts)",
+                        dict(moved, started=False, station=True))
+            return ("done", f"phone {serial} is on {name} now (it is stopped; "
+                            f"it reads the new exit when it next starts)", moved)
+        try:
+            # One attempt, as Boot's: the person is watching a tab that can
+            # offer Boot again in a minute.
+            url = phones_mod.start(client, live["id"], attempts=1)
+        except phones_mod.PhoneCapacityError:
+            _guarded(settings, False, store_station.powered_off, serial)
+            return ("failed", f"phone {serial} is on {name} now but IranSpoty "
+                              f"Cloud has no machine free to start it - press "
+                              f"Boot again in a minute",
+                    dict(moved, off=True, **marked))
+        except (PhoneError, ApiError) as exc:
+            _guarded(settings, False, store_station.powered_off, serial)
+            return ("failed", f"phone {serial} is on {name} now but would not "
+                              f"start: {exc}", dict(moved, off=True, **marked))
+        if station:
+            if not _guarded(settings, True, store_station.booted, serial,
+                            url or "", owner_id=uid, started=True):
+                # Given back while its IP changed: it is not theirs to run.
+                _stop_quietly(phones_mod, client, live["id"], serial)
+                _guarded(settings, False, store_station.powered_off, serial)
+                return ("failed", f"phone {serial} went back to the shelf while "
+                                  f"its IP changed",
+                        dict(moved, off=True, station=True))
+        else:
+            _guarded(settings, False, store_station.booted, serial, url or "",
+                     started=True)
+    started = {"started": True, "station": True} if station else {}
     if not url:
         return ("done", f"phone {serial} is on {name} now and started again "
-                        f"- IranSpoty Cloud gave no live-view link back", moved)
+                        f"- IranSpoty Cloud gave no live-view link back",
+                dict(moved, **started))
     return ("done", f"phone {serial} is on {name} now and started again",
-            dict(moved, url=url))
+            dict(moved, url=url, **started))
+
+
+def _exit_still_shared(settings, name: str, serial: str) -> bool:
+    """Whether another live phone is on the exit `name`. No store: not
+    shared, as before. A store that will not answer: shared, the safe
+    side - an exit left spent costs less than one handed out twice."""
+    if not name or not _store_on(settings):
+        return False
+    try:
+        return bool(_store_station().exit_shared(settings, name, serial))
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("could not ask whether exit %s is shared (%s); it stays "
+                    "spent", name, exc)
+        return True
 
 
 # ------------------------------------------------ the service (controls)
@@ -1876,16 +2114,26 @@ def control(book, ledger, settings, payload, client):
 def _stamp_owner(settings, serial: str, by_id) -> None:
     """Who is holding the phone, written into the mirror - the sheet has
     no column for it. Never fatal: the State cell is the record, this is
-    only the name beside it."""
+    only the name beside it.
+
+    It never takes over somebody's Station hold; a legacy hold of
+    somebody else is taken over as it always was (an admin ending a
+    hold), and a Station hold of the same person keeps its clock."""
     if settings is None or not getattr(settings, "store_enabled", False):
         return
+    uid = int(by_id) if str(by_id or "").strip().isdigit() else None
     try:
         from .store import db as store_db
 
         with store_db.connect(settings) as conn:
             conn.execute(
-                "UPDATE phones SET owner_id = %s, updated_at = now()"
-                " WHERE serial = %s AND done_at IS NULL", (by_id, serial))
+                "UPDATE phones SET owner_id = %(uid)s,"
+                " taken_at = CASE WHEN owner_id IS NOT DISTINCT FROM"
+                "                      %(uid)s::bigint THEN taken_at END,"
+                " updated_at = now()"
+                " WHERE serial = %(s)s AND done_at IS NULL"
+                "   AND (owner_id IS NULL OR owner_id = %(uid)s::bigint"
+                "        OR taken_at IS NULL)", {"uid": uid, "s": str(serial)})
             conn.commit()
     except Exception as exc:                                      # noqa: BLE001
         log.warning("phone %s: owner not stamped (%s)", serial, exc)
@@ -1902,6 +2150,12 @@ def boot_phone(book, ledger, settings, payload, client):
     Starting a phone bills it, and somebody watching a screen is holding
     that phone, so this writes State=taken in the same breath: the sync
     then leaves it alone until they say Done, Failed or Release.
+
+    The link is kept on the phone row, so a phone that is already on is
+    never started again: its stored link is handed back instead. The
+    Station's press (`station`) boots only the presser's own Station hold,
+    asked again here under the phone's power lock, and never writes the
+    State or the owner - its hour and its place in line are untouched.
     """
     from . import phones as phones_mod
     from .phones import PhoneError
@@ -1922,18 +2176,56 @@ def boot_phone(book, ledger, settings, payload, client):
     held = ledger.get(live["id"]) if ledger is not None else None
     if held is not None and held.is_claimed and not held.is_stale:
         return "refused", f"phone {serial} is held by a run ({held.label})", None
-    try:
-        # One attempt, not the builder's four: a capacity refusal here
-        # would sleep half a minute inside the drain, and the person is
-        # watching a tab that can simply be pressed again.
-        url = phones_mod.start(client, live["id"], attempts=1)
-    except phones_mod.PhoneCapacityError:
-        return ("failed", f"IranSpoty Cloud has no machine free for {serial} right "
-                          f"now - press Boot again in a minute", None)
-    except (PhoneError, ApiError) as exc:
-        return "failed", f"phone {serial} would not start: {exc}", None
-    book.phones.write(serial, State="taken")
-    _stamp_owner(settings, serial, payload.get("by_id"))
+    station = bool(payload.get("station"))
+    uid = _uid(payload)
+    store_station = _store_station()
+    with phones_mod.power_lock(serial):
+        if station:
+            # Not guarded: a store that will not answer leaves the row for
+            # the lane to try again, rather than booting somebody's phone.
+            if _store_on(settings) and not store_station.holds(settings, serial,
+                                                               uid):
+                return ("refused", f"phone {serial} is not yours any more - it "
+                                   f"went back to the shelf", None)
+        else:
+            refused = _refused_by_holder(settings, serial, uid)
+            if refused:
+                return "refused", refused, None
+        was_on = live.get("status") in (phones_mod.RUNNING, phones_mod.STARTING)
+        url = (_guarded(settings, "", store_station.stored_link, serial)
+               if was_on else "")
+        started = not url
+        if started:
+            try:
+                # One attempt, not the builder's four: a capacity refusal
+                # here would sleep half a minute inside the drain, and the
+                # person is watching a tab that can simply be pressed again.
+                url = phones_mod.start(client, live["id"], attempts=1)
+            except phones_mod.PhoneCapacityError:
+                return ("failed", f"IranSpoty Cloud has no machine free for "
+                                  f"{serial} right now - press Boot again in a "
+                                  f"minute", None)
+            except (PhoneError, ApiError) as exc:
+                return "failed", f"phone {serial} would not start: {exc}", None
+        if station:
+            if not _guarded(settings, True, store_station.booted, serial,
+                            url or "", owner_id=uid, started=started):
+                # Given back while it was starting: not theirs to run.
+                if started:
+                    _stop_quietly(phones_mod, client, live["id"], serial)
+                    _guarded(settings, False, store_station.powered_off, serial)
+                return ("failed", f"phone {serial} went back to the shelf while "
+                                  f"it was booting", None)
+            if not url:
+                return ("done", f"phone {serial} is on - IranSpoty Cloud gave no "
+                                f"live-view link back",
+                        {"state": "taken", "station": True})
+            return ("done", f"phone {serial} is on",
+                    {"state": "taken", "url": url, "station": True})
+        book.phones.write(serial, State="taken")
+        _stamp_owner(settings, serial, payload.get("by_id"))
+        _guarded(settings, False, store_station.booted, serial, url or "",
+                 started=started)
     if not url:
         return ("done", f"phone {serial} started and taken by "
                         f"{_by(payload)} - IranSpoty Cloud gave no live-view link "
@@ -2054,7 +2346,12 @@ def set_phone_state(book, ledger, settings, payload, client):
     hand does in the sheet; the keeper's lane carries it out the moment
     it hears the bell (measured over a day: about two seconds from the
     press to the phone being gone). A phone somebody takes is stamped
-    with who took it in the mirror."""
+    with who took it in the mirror.
+
+    A verdict - done or failed - is one statement in the store: the phone
+    is closed and its verdicts row written together, so a second verdict
+    on the same phone is refused and writes nothing. With `mine` (the
+    Station's keys) it closes only the presser's own Station hold."""
     serial = str(payload.get("serial") or "").strip()
     state = str(payload.get("state") or "").strip().lower()
     if state not in ("taken", "done", "failed", "", "unused"):
@@ -2062,24 +2359,36 @@ def set_phone_state(book, ledger, settings, payload, client):
     from .store import person, verdicts
 
     word = "" if state == "unused" else state
-    # Which button ended it - done, decline or or - is the operator's
-    # own reason; a form that only says the state pressed that word.
+    # Which button ended it - done, decline, or, auth or failed - is the
+    # operator's own reason; a form that only says the state pressed that
+    # word.
     button = str(payload.get("button") or word).strip().lower()
     if word in ("done", "failed") and verdicts.BUTTONS.get(button) != word:
         return "refused", f"{button!r} is not a button that means {word}", None
     if word in ("done", "failed") and _is_building(settings, serial):
         return "refused", f"phone {serial} is being worked on right now", None
     if word in ("done", "failed"):
-        # Written before the state, while the phone row still says
-        # what was on it: the lane deletes the phone seconds later.
-        verdicts.record(settings, serial=serial, button=button, state=word,
-                        by=str(payload.get("by") or ""),
-                        by_id=payload.get("by_id"),
-                        where=str(payload.get("where") or ""))
-    if not person.set_state(settings, serial, word):
-        return "failed", f"phone {serial or '?'} is not on the farm", None
-    _stamp_owner(settings, serial,
-                 payload.get("by_id") if word == "taken" else None)
+        # Not guarded: a store that will not answer raises, and the row
+        # stays queued for the lane, as `person.set_state` always did.
+        owner = _uid(payload) if payload.get("mine") else None
+        closed = verdicts.close(settings, serial=serial, button=button,
+                                state=word, by=str(payload.get("by") or ""),
+                                by_id=payload.get("by_id"),
+                                where=str(payload.get("where") or ""),
+                                owner_id=owner)
+        if closed is None:
+            return _why_not_closed(verdicts.standing(settings, serial), serial,
+                                   owner)
+    else:
+        if word == "taken" and _store_on(settings):
+            holder = _store_station().station_holder(settings, serial)
+            if holder is not None and holder != _uid(payload):
+                return ("refused", f"phone {serial} is on somebody's station",
+                        None)
+        if not person.set_state(settings, serial, word):
+            return "failed", f"phone {serial or '?'} is not on the farm", None
+        _stamp_owner(settings, serial,
+                     payload.get("by_id") if word == "taken" else None)
     meaning = {"taken": "out with somebody - the farm leaves it alone",
                "done": "the phone is deleted in a moment and what was on it "
                        "retired",
@@ -2090,6 +2399,132 @@ def set_phone_state(book, ledger, settings, payload, client):
     return ("done", f"phone {serial} marked {word or 'unused'}{pressed} by "
                     f"{_by(payload)}: {meaning}",
             {"state": word, **({"button": button} if pressed else {})})
+
+
+def _why_not_closed(st, serial: str, owner) -> tuple:
+    """A verdict that closed nothing, in words, from `verdicts.standing`."""
+    if st is None:
+        return "failed", f"phone {serial or '?'} is not on the farm", None
+    if st.get("state") in ("done", "failed"):
+        return ("refused", f"phone {serial} is already closed as "
+                           f"{st.get('state')}", None)
+    if st.get("busy") == "change_proxy":
+        return ("refused", f"phone {serial} is changing its IP - wait for it",
+                None)
+    if st.get("busy") == "boot_phone":
+        return "refused", f"phone {serial} is booting - wait for it", None
+    if owner is not None:
+        return "refused", f"phone {serial} is not yours any more", None
+    return "refused", f"phone {serial} is being worked on right now", None
+
+
+def give_back(book, ledger, settings, payload, client):
+    """Give back: a Station phone goes to the back of its shelf, switched
+    off, keeping everything it was built with - its Gmail, its account and
+    its IP. An Other phone goes back to the farm, unowned, for an admin.
+
+    The give-back and its power-off are one statement in the store, so
+    nothing can take the phone in between: the pending power-off keeps it
+    off every shelf until it has run."""
+    serial = str(payload.get("serial") or "").strip()
+    if not serial:
+        return "refused", "no phone named", None
+    if not _store_on(settings):
+        return "failed", "no store to give it back to", None
+    store_station = _store_station()
+    # Not guarded: a store that will not answer leaves the row queued.
+    row = store_station.give_back(settings, serial=serial,
+                                  owner_id=_uid(payload), by=_by(payload))
+    if row is None:
+        st = store_station.hold_state(settings, serial)
+        if st is None or st.get("state") in ("done", "failed"):
+            return ("refused", f"phone {serial} is not on the farm any more",
+                    None)
+        if st.get("busy") == "change_proxy":
+            return ("refused", f"phone {serial} is changing its IP - wait for "
+                               f"it", None)
+        if st.get("busy") == "boot_phone":
+            return "refused", f"phone {serial} is booting - wait for it", None
+        return "refused", f"phone {serial} is not yours any more", None
+    return ("done", f"Phone {serial} is back on "
+                    f"{store_station.home(row['lane'])}.",
+            {"serial": serial, "lane": row["lane"], "off": row.get("off_id")})
+
+
+def call_off_build(book, ledger, settings, payload, client):
+    """Call a Station build off. One still waiting ends now, and the
+    one-off IP typed for it goes to the archive; one on its way stops at
+    its next step, and its Gmail and IP go back to the pool unless the
+    Gmail is already signed in - then the phone is kept and lands on the
+    asker's Station. One that has landed is not called off."""
+    from .store import wanted as store_wanted
+
+    raw = str(payload.get("wanted_id") or "").strip()
+    if not raw.isdigit():
+        return "refused", "no build named", None
+    if not _store_on(settings):
+        return "failed", "no store to call it off in", None
+    wid = int(raw)
+    w = store_wanted.call_off(settings, wid, by_id=_uid(payload),
+                              by=_by(payload), admin=bool(payload.get("admin")))
+    if w is None:
+        return "refused", "That build is not yours.", None
+    stage = str(w.get("stage") or "")
+    if stage == "ended":
+        return "refused", "That build has already ended.", None
+    if stage == "landed":
+        return "refused", "That build has already landed on your station.", None
+    if stage == "already":
+        return ("done", "The build is already being called off.",
+                {"wanted_id": wid, "stage": "already"})
+    if stage in ("queued", "job_cancelled"):
+        _archive_one_off(book, settings, str(w.get("proxy_name") or ""), wid)
+        return ("done", "The build was called off.",
+                {"wanted_id": wid, "stage": stage})
+    serial = str(w.get("serial") or "")
+    if serial:
+        st = _store_station().hold_state(settings, serial)
+        if st is None or st.get("status") != "building":
+            return ("refused", "That build has already landed on your station.",
+                    None)
+        # Asked only of a phone still building: a stop request lives for
+        # two hours and would end the next job on a landed phone.
+        from .store import stops as store_stops
+
+        try:
+            store_stops.ask(settings, serial)
+        except Exception as exc:                                  # noqa: BLE001
+            return ("failed", f"the stop for phone {serial} could not be "
+                              f"written where the builders read it ({exc})",
+                    None)
+    return ("done", "The build was called off. It stops at its next step; its "
+                    "Gmail and IP go back to the pool unless the Gmail is "
+                    "already signed in - then the phone is kept and lands on "
+                    "your station.", {"wanted_id": wid, "stage": "running"})
+
+
+def _archive_one_off(book, settings, name: str, wanted_id: int) -> None:
+    """The one-off IP a called-off wish named goes to the archive, unless
+    another open wish or a live phone still names it. Never fatal: one
+    left behind waits under its own status, which no build ever claims."""
+    from .store import wanted as store_wanted
+
+    if not name or book is None:
+        return
+    try:
+        named = store_wanted.others_name_exit(settings, name, wanted_id)
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("the one-off IP %s was kept: could not ask who names it "
+                    "(%s)", name, exc)
+        return
+    if named:
+        return
+    pool = book.proxies
+    for r in list(pool._rows):
+        if (pool.is_one_off(r) and r.name == name
+                and pool.status_of(r) == pool.one_off_status):
+            pool.delete_row(r, by="one-off IP, its build was called off")
+            break
 
 
 def clear_tries(book, ledger, settings, payload, client):
@@ -2242,6 +2677,8 @@ VERBS = {
     "shelve_all_proxies": shelve_all_proxies,
     "free_shelved_proxies": free_shelved_proxies,
     "remove_proxy": remove_proxy,
+    "give_back": give_back,
+    "call_off_build": call_off_build,
 }
 
 
@@ -2275,6 +2712,9 @@ for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               run_task,
               # One UPDATE against the store and nothing else: a person
               # ticking off a refund should not wait for a pass.
-              refund_gmail):
+              refund_gmail,
+              # The Station's give-back and call-off: store writes of
+              # milliseconds, the same shape as a refund (2026-09-29).
+              give_back, call_off_build):
     _lane.lane_safe = True
 del _lane

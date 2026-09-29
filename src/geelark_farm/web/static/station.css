@@ -1,0 +1,668 @@
+/* Layout: one page, nothing to switch to. A quiet bar on top carries the two
+   ways to get a phone - Take GPT, Take Spotify - wherever you are on the
+   page. Under it, every phone you hold is a card of the same shape, side by
+   side and centred, however many there are: its number, its state, the one
+   button that boots it and opens its screen (the Live tab, a page of its
+   own), its three credentials in the order they are typed, its five
+   verdicts. A phone on its
+   way - taken from an empty shelf, or being built - is a card of its own in
+   the same row until it lands there. The console's own tokens, badges and
+   buttons throughout; deliberately dark, like the console. */
+:root{--bg:#0f1522;--panel:#151d2d;--panel2:#101827;--line:#232c3f;--line2:#1d2636;--edge:#2c3a52;
+ --ink:#d7dee9;--bright:#f2f6fc;--muted:#8a97ab;--dim:#8391a8;
+ --green:#58d68d;--green-bg:#10331f;--amber:#f0c064;--amber-bg:#3a2d10;--red:#e0654f;--red-bg:#4d2323;
+ --blue:#7fb4ff;--violet:#c9b8f0;--violet-bg:#2c1f3d;--violet-edge:#3a2c55;--cyan:#62d2e6;--rose:#ef6f9f;
+ /* Lanes: GPT in ChatGPT's own black and white, Spotify in its green, and
+    blue for the phones built by hand for other apps - Build's colour. */
+ --gpt:#e6eaf0;--gpt-bg:#20242c;--gpt-line:#4a515e;--spot:#5fe3a1;--spot-bg:#0f3a2c;--spot-line:#1f7a55;
+ --other:#9ec7ff;--other-bg:#16324f;--other-line:#2a5a8f;
+ --quiet:#9db4d4;--hover:#1c2639;--bad-ink:#f0a094;--card-top:#172134;--card-bot:#121a29;
+ --tile:linear-gradient(180deg,#1c1c1c,#070707);
+ --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+ --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+ --ease:cubic-bezier(.2,.8,.2,1);--ease-pop:cubic-bezier(.34,1.56,.64,1);color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{background:var(--bg)}
+body{margin:0;min-height:100vh;color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+ background:radial-gradient(820px 400px at 16% -220px,rgba(0,231,255,.055),transparent 70%),
+  radial-gradient(820px 400px at 84% -220px,rgba(138,108,245,.065),transparent 70%),var(--bg)}
+button{cursor:pointer;font:inherit;color:inherit;background:none;border:0;padding:0;white-space:nowrap}
+/* Keyboard focus follows each control's own shape. */
+button:focus-visible,[role="button"]:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.tab{font-variant-numeric:tabular-nums}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
+@keyframes blink{50%{opacity:.35}}
+@keyframes load{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+@keyframes bump{40%{transform:scale(1.18)}}
+
+/* ---------------------------------------------------------------- bar */
+/* The brand, the two ways to get a phone, and who is signed in - one line,
+   roomier than a toolbar, and slimmer still once the page scrolls. */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;display:grid;
+ grid-template-columns:auto minmax(0,1fr) auto auto;grid-template-areas:"brand day takes who";align-items:center;
+ gap:0 28px;padding:18px clamp(16px,3vw,36px);
+ background:linear-gradient(180deg,rgba(18,25,40,.94),rgba(15,21,34,.88));-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+ transition:padding .25s var(--ease)}
+.bar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;
+ background:linear-gradient(90deg,transparent 0%,rgba(0,231,255,.28) 22%,rgba(138,108,245,.32) 60%,transparent 100%)}
+.bar.tight{padding-top:10px;padding-bottom:10px}
+.bar.tight .bn,.bar.tight .take small{display:none}
+.bar.tight .take{height:44px} .bar.tight .take .ic{width:30px;height:30px}
+.bar.tight .brand{--lh:28px} .bar.tight .day{height:44px} .bar.tight .day .donut{width:30px;height:30px} .bar.tight .day .donut b{font-size:10.5px}
+
+/* The IranSpoty logo, and under its wordmark - starting where the wordmark
+   starts, as wide as it - CLOUD FARM · STATION. --lh is the logo's height;
+   the wordmark begins 1.179 heights in (56.8 of the logo's 48.17 units). */
+.brand{grid-area:brand;--lh:38px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.brand .logo-full{display:block;height:var(--lh);width:auto;color:var(--bright);
+ filter:drop-shadow(0 6px 16px rgba(0,231,255,.12));transition:height .25s var(--ease)}
+.bn{margin-left:calc(var(--lh) * 1.179);font-size:9px;font-weight:500;line-height:1;color:#6fd3e8;letter-spacing:1.05px;
+ text-transform:uppercase;white-space:nowrap}
+.bn i{font-style:normal;color:var(--dim)}
+
+/* Today: the ring of the day's mix with the total in it, a two-line title
+   beside it, a hairline, then each count as a small stack - the number in its
+   colour over its name - so the five read without a legend. One capsule, the
+   height of the Take cards; hovering a count lights its arc in the ring. */
+.day{grid-area:day;justify-self:center;display:flex;align-items:center;gap:12px;height:56px;padding:0 18px 0 11px;border-radius:14px;
+ background:linear-gradient(180deg,rgba(24,33,52,.78),rgba(16,23,38,.78));border:1px solid var(--line2);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 14px 34px -26px rgba(0,0,0,.9);transition:height .25s var(--ease)}
+.day .donut{position:relative;width:38px;height:38px;flex:none;transition:width .25s var(--ease),height .25s var(--ease)}
+.day .ring{width:100%;height:100%;display:block;transform:rotate(-90deg)}
+.day .donut b{position:absolute;inset:0;display:grid;place-items:center;font:500 12px/1 var(--mono);color:var(--bright);letter-spacing:-.3px}
+.day .ring circle{fill:none;stroke-width:3.4}
+.day .ring .bg{stroke:#223049}
+.day .ring .seg{stroke-linecap:round;transition:stroke-dasharray .7s var(--ease),stroke-dashoffset .7s var(--ease),opacity .3s,stroke-opacity .2s,stroke-width .2s}
+.day .ring .d{stroke:var(--green)} .day .ring .x{stroke:var(--amber)} .day .ring .o{stroke:var(--red)}
+.day .ring .a{stroke:var(--cyan)} .day .ring .f{stroke:var(--rose)}
+.day .ttl{display:flex;flex-direction:column;gap:4px;margin-left:-2px;white-space:nowrap}
+.day .ttl b{font-size:13px;font-weight:600;line-height:1;color:var(--bright)}
+.day .ttl small{font-size:11px;line-height:1;color:var(--dim)}
+.day .sep{width:1px;height:26px;flex:none;margin:0 3px;background:var(--line2)}
+.day .n{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:22px;white-space:nowrap;cursor:default}
+.day .n b{font:500 19px/1 var(--mono);letter-spacing:-.4px;display:inline-block}
+.day .n small{font-size:10px;font-weight:600;line-height:1;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);transition:color .2s}
+/* Good, milder, bad: Done green, Decline amber, OR red, Auth cyan, Failed rose - here, in the ring and on every card. */
+.day .d b{color:var(--green)} .day .x b{color:var(--amber)} .day .o b{color:var(--red)}
+.day .a b{color:var(--cyan)} .day .f b{color:var(--rose)}
+.day b.bump{animation:bump .4s var(--ease)}
+.day .n:hover small{color:var(--ink)}
+.day:has(.n:hover) .ring .seg{stroke-opacity:.22}
+.day:has(.n.d:hover) .ring .d,.day:has(.n.x:hover) .ring .x,.day:has(.n.o:hover) .ring .o,
+.day:has(.n.a:hover) .ring .a,.day:has(.n.f:hover) .ring .f{stroke-opacity:1;stroke-width:4.4}
+.bar.tight .day .n b{font-size:17px} .bar.tight .day .n{gap:4px}
+
+/* Each Take wears its lane - GPT in ChatGPT's black and white, Spotify in its
+   green - so the two read apart at a glance; violet stays with the screens. */
+.takes{grid-area:takes;display:flex;gap:10px}
+.take{--c:var(--gpt);--cb:#1a1d23;--ch:#272b33;--ce:var(--gpt-line);height:56px;padding:0 16px 0 9px;border-radius:14px;
+ display:flex;align-items:center;gap:12px;text-align:left;color:var(--bright);
+ background:linear-gradient(180deg,var(--ch),var(--cb));border:1px solid var(--ce);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 12px 30px -20px var(--c);
+ transition:border-color .2s,box-shadow .25s,transform .12s,height .25s var(--ease)}
+.take.spotify{--c:var(--spot);--cb:#0d3125;--ch:#124635;--ce:var(--spot-line)}
+.take:hover{border-color:var(--c);transform:translateY(-1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 16px 36px -16px var(--c)}
+.take:active{transform:translateY(0)}
+.take .ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:rgba(6,10,18,.38);color:var(--c);
+ transition:width .25s var(--ease),height .25s var(--ease)}
+.take .ic .mark{width:20px;height:20px;display:block;transition:width .25s var(--ease),height .25s var(--ease)}
+/* GPT and Spotify wear their real app icons, the same tiles as on the cards:
+   ChatGPT white on black, Spotify green on black. */
+.take.gpt .ic,.take.spotify .ic{background:var(--tile);color:#fff;
+ box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 8px 16px -10px rgba(0,0,0,.9)}
+.take.spotify .ic{color:#1ed760}
+.take.gpt .ic .mark,.take.spotify .ic .mark{width:22px;height:22px}
+.bar.tight .take.gpt .ic .mark,.bar.tight .take.spotify .ic .mark{width:17px;height:17px}
+.bar.tight .take .ic .mark{width:16px;height:16px}
+.take .t{display:flex;flex-direction:column;gap:5px;min-width:0}
+.take .t b{font-size:14px;font-weight:600;line-height:1}
+.take .t small{font:11px/1 var(--mono);color:var(--c);opacity:.85;white-space:nowrap}
+/* The line under a Take speaks only when it adds something the title does not. */
+.take .t small:empty{display:none}
+.take .n{margin-left:6px;min-width:20px;text-align:right;font:500 26px/1 var(--mono);letter-spacing:-.5px;color:var(--c);display:inline-block}
+.take .n.bump{animation:bump .4s var(--ease)}
+.take.soon{--c:var(--amber);--ce:#57431c;background:linear-gradient(180deg,#2c2412,#221c0e)}
+/* Build is blue - the colour of the phones it builds for other apps. */
+.take.build{--c:var(--other);--cb:#132a47;--ch:#1a3a61;--ce:var(--other-line);padding-right:18px}
+.take.soon .n,.take.inline .n{display:none}
+.take[disabled]{background:none;border-color:var(--line);box-shadow:none;pointer-events:none}
+.take[disabled] .t b,.take[disabled] .t small,.take[disabled] .n,.take[disabled] .ic{color:var(--dim)}
+
+.who{grid-area:who;display:flex;align-items:center;gap:12px;padding-left:24px;border-left:1px solid var(--line)}
+.who .av{position:relative;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:600;color:var(--bright);
+ background:linear-gradient(140deg,#2d3c5e,#1b273f);transition:box-shadow .2s}
+/* The profile avatar's ring, drawn thinner for the bar. */
+.who .av::before{content:"";position:absolute;inset:-3px;border-radius:50%;padding:1.5px;
+ background:linear-gradient(180deg,#00e7ff,#3c85c0 45%,#693c91);
+ -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+ opacity:.85;transition:opacity .2s}
+.who .nm{display:flex;flex-direction:column;gap:4px}
+.who .nm b{max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600;color:var(--bright);line-height:1.1}
+.who .out{height:32px;padding:0 14px 0 12px;border-radius:999px;border:1px solid var(--edge);color:var(--quiet);font-size:13px;font-weight:500;
+ display:inline-flex;align-items:center;gap:7px;transition:background .15s,border-color .15s,color .15s}
+.who .out:hover{background:var(--hover);border-color:#3d4f6e;color:var(--bright)}
+/* The name and avatar are one button: the way to your own page. */
+.who .me{display:flex;align-items:center;gap:12px;margin:-4px 0 -4px -4px;padding:4px 12px 4px 4px;border-radius:999px;
+ text-align:left;transition:background .15s}
+.who .me:hover,.on-profile .who .me{background:var(--hover)}
+.who .me:hover .av::before,.on-profile .who .av::before{opacity:1}
+.on-profile .who .av{box-shadow:0 0 16px -3px rgba(0,231,255,.45)}
+
+/* -------------------------------------------------------------- bench */
+.bench{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:20px;padding:34px clamp(16px,3vw,32px) 56px}
+/* A card with depth: a slightly lit top, a faint glow of its lane in the top
+   corner, a soft shadow under it. Its top edge fills with the hour it is
+   left alone - it only counts while its tab is closed. */
+.col{--c:var(--gpt);--cl:var(--gpt-line);--glow:rgba(230,236,245,.05);position:relative;width:368px;max-width:100%;display:flex;
+ flex-direction:column;gap:14px;padding:20px 18px 16px;border:1px solid var(--line);border-radius:16px;
+ background:radial-gradient(380px 170px at 100% 0%,var(--glow),transparent 72%),linear-gradient(180deg,var(--card-top),var(--card-bot));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 26px 50px -34px rgba(0,0,0,.85);
+ animation:rise .45s var(--ease) backwards;
+ transition:border-color .25s,box-shadow .3s,opacity .22s,transform .22s,width .32s var(--ease),padding .32s var(--ease),margin .32s var(--ease)}
+.col.spotify{--c:var(--spot);--cl:var(--spot-line);--glow:rgba(56,214,140,.085)}
+.col.other{--c:var(--other);--cl:var(--other-line);--glow:rgba(92,156,255,.10)}
+.col.active{border-color:var(--cl);box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 28px 60px -34px var(--c)}
+.col.out{opacity:0;transform:scale(.97);overflow:hidden;pointer-events:none}
+/* A verdict closes the card with its own stamp for a moment - the round key's
+   colour and word - before the card folds away. */
+.col.closing{pointer-events:none}
+.stamp{--vc:var(--green);position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;
+ gap:14px;border-radius:inherit;animation:fade .2s ease both;
+ background:radial-gradient(260px 220px at 50% 46%,color-mix(in srgb,var(--vc) 16%,transparent),transparent 70%),rgba(14,20,33,.9)}
+.stamp.decline{--vc:var(--amber)} .stamp.or{--vc:var(--red)} .stamp.auth{--vc:var(--cyan)} .stamp.failed{--vc:var(--rose)}
+.stamp .c{width:62px;height:62px;border-radius:50%;display:grid;place-items:center;color:#0b1019;background:var(--vc);
+ box-shadow:0 0 0 8px color-mix(in srgb,var(--vc) 14%,transparent),0 18px 40px -14px var(--vc);animation:stamp .45s var(--ease-pop) both}
+.stamp .c svg{width:26px;height:26px}
+.stamp b{font-size:15px;font-weight:600;letter-spacing:.01em;color:var(--vc);animation:rise .35s var(--ease) .06s both}
+@keyframes stamp{from{opacity:0;transform:scale(.5)}}
+/* A phone that just landed rings once in its lane's colour. */
+.col.arrive{animation:rise .45s var(--ease) backwards,bloom 1.3s ease-out .25s}
+/* Risen once, it stays risen - coming back to the station does not replay it. */
+.col.settled{animation:none}
+@keyframes bloom{from{box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 0 0 0 color-mix(in srgb,var(--c) 45%,transparent),0 28px 60px -34px var(--c)}
+ to{box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 0 0 16px transparent,0 28px 60px -34px var(--c)}}
+/* The one spark: a closed phone's colour travelling to its count in Results. */
+.spark{--sc:var(--green);position:fixed;z-index:70;left:0;top:0;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;
+ pointer-events:none;background:var(--sc);box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 25%,transparent),0 0 16px 2px var(--sc)}
+.spark.decline{--sc:var(--amber)} .spark.or{--sc:var(--red)} .spark.auth{--sc:var(--cyan)} .spark.failed{--sc:var(--rose)}
+
+.hd{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:14px}
+/* The app itself, as its own icon on a phone's home screen. */
+.app{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;flex:none;
+ box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 10px 22px -12px rgba(0,0,0,.9)}
+.app{background:var(--tile)}
+.app.gpt{color:#fff}
+.app.spotify{color:#1ed760}
+/* A phone built for another app: its tile in Build's blue. */
+.app.other{background:linear-gradient(180deg,#1d3b62,#0e2240);color:#bcd8ff}
+.app .logo{width:27px;height:27px;display:block}
+/* The tile is lit whenever the phone can be worked - ready for Boot, or on,
+   which adds a breath of its lane's colour. It goes dark only while the phone
+   cannot be touched: while it boots, or moves to another IP - and breathes
+   there, so it is seen to be working. Dark keeps a little of its colour, so
+   the lane still reads. A released phone, in its tab, stays dim. The same on
+   the card and in the phone's tab. */
+.hd .app{transition:filter .6s ease,box-shadow .6s ease}
+[data-power="busy"] .hd .app{filter:saturate(.45) brightness(.62);animation:busy 1.6s ease-in-out infinite}
+[data-power="gone"] .hd .app{filter:saturate(.35) brightness(.55)}
+[data-power="on"] .hd .app{box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 10px 22px -12px rgba(0,0,0,.9),
+ 0 0 22px -8px color-mix(in srgb,var(--c) 75%,transparent)}
+@keyframes busy{50%{filter:saturate(.6) brightness(.8)}}
+.hd .s{font:500 34px/.85 var(--mono);letter-spacing:-1px;color:var(--bright)}
+.hd .meta{display:flex;flex-direction:column;align-items:flex-start;gap:9px;min-width:0}
+/* The state as a pill in its own colour, with a slow pulse while it is on;
+   violet, hollow and still while it is ready - taken, off, waiting for the
+   violet Boot beside it. */
+.st{--sc:var(--green);display:inline-flex;align-items:center;gap:6px;width:max-content;height:22px;padding:0 10px 0 8px;border-radius:999px;
+ font-size:11px;font-weight:600;line-height:1;color:var(--sc);background:color-mix(in srgb,var(--sc) 13%,transparent);
+ border:1px solid color-mix(in srgb,var(--sc) 30%,transparent)}
+.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;animation:ping 2.4s ease-out infinite}
+@keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--sc) 55%,transparent)}70%,100%{box-shadow:0 0 0 6px transparent}}
+.col[data-state="starting"] .st{--sc:var(--blue)}
+.col[data-state="off"] .st{--sc:var(--violet)}
+.col[data-state="off"] .st::before{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor;animation:none}
+.col[data-state="changing"] .st{--sc:var(--amber)}
+.col[data-state="starting"] .st::before,.col[data-state="changing"] .st::before{animation:blink 1.2s ease-in-out infinite}
+/* The chip sits level with the number, the minutes level with the state. */
+.hd .right{margin-left:auto;align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:8px;padding:3px 0 5px}
+.hd .ip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:7px;border:1px solid var(--line);
+ background:rgba(8,12,20,.35);font:500 12px/1 var(--mono);color:var(--ink)}
+.hd .ip small{font:10px/1 var(--mono);letter-spacing:.1em;color:var(--dim)}
+.hd .ip [data-k="exit"],.hd .ip [data-lt="exit"]{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hd .ip.new span{animation:moved 1.6s var(--ease)}
+@keyframes moved{0%,30%{color:var(--amber)}}
+.hd .age{display:inline-flex;align-items:center;gap:5px;font:12px/1 var(--mono);color:var(--dim);white-space:nowrap}
+.hd .age svg{width:12px;height:12px;opacity:.75}
+.col.late .hd .age{color:var(--amber)}
+.hold{position:absolute;left:18px;right:18px;top:-1px;height:2px;border-radius:0 0 2px 2px;background:rgba(255,255,255,.035);overflow:hidden}
+.hold i{display:block;height:100%;width:0;background:var(--c);opacity:.85;transition:width 1s linear,background .3s}
+.col.late .hold i{background:var(--amber)}
+
+/* The card's one filled button: the console's violet pill, as Boot is. */
+.open{height:44px;border-radius:999px;background:linear-gradient(135deg,#5b47c9,#8a6cf5);color:#fff;font-size:14px;font-weight:600;
+ letter-spacing:.01em;display:flex;align-items:center;justify-content:center;gap:9px;
+ box-shadow:0 1px 2px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.16),0 14px 28px -18px rgba(124,92,230,.9);
+ transition:box-shadow .25s,transform .12s,filter .2s}
+.open:hover{background:linear-gradient(135deg,#6a56dc,#9d82ff);transform:translateY(-1px);
+ box-shadow:0 2px 8px rgba(124,92,230,.45),inset 0 1px 0 rgba(255,255,255,.2),0 18px 34px -16px rgba(124,92,230,.95)}
+.open:active{transform:translateY(0)}
+.open svg{width:16px;height:16px;flex:none}
+.open[disabled]{opacity:.4;pointer-events:none}
+
+/* Three quiet lines, no box: a neutral label, the value, a copy mark.
+   Nothing changes colour on its own except the code, which goes amber -
+   label, digits and timer - in its last five seconds. Copying turns
+   the mark into a green tick for a moment. The whole line copies. */
+.steps{display:flex;flex-direction:column;margin:0 -8px}
+.step{display:grid;grid-template-columns:70px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:44px;padding:8px;
+ border-radius:10px;position:relative;cursor:pointer;transition:background .15s}
+.step+.step::before{content:"";position:absolute;left:8px;right:8px;top:0;height:1px;background:var(--line2);transition:opacity .15s}
+.step:hover{background:rgba(27,37,57,.75)}
+.step:hover::before,.step:hover+.step::before{opacity:0}
+.step .k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim);transition:color .25s}
+.step .body{min-width:0;display:flex;flex-direction:column;gap:7px}
+.step .v{font:500 14px/1.3 var(--mono);color:var(--bright);overflow-wrap:anywhere;transition:color .25s}
+.step .v.code{font-size:20px;letter-spacing:.1em;overflow:visible}
+/* A new code rises into place, so a fresh one is seen arriving. */
+.step .v.code.roll{animation:roll .4s var(--ease)}
+@keyframes roll{from{opacity:0;transform:translateY(7px)}}
+/* The code's timer: the width of the values, on a track that can be seen, the same on every card. */
+.step .timer{height:2px;width:100%;border-radius:1px;background:var(--line);overflow:hidden}
+.step .timer i{display:block;height:100%;background:var(--c);transform-origin:left;transition:transform 1s linear,background .3s}
+.step.late .k,.step.late .v.code{color:var(--amber)} .step.late .timer i{background:var(--amber)}
+.step .tools{display:flex;align-items:center;gap:2px}
+/* A phone with no Google account has nothing to copy: one quiet line. */
+.step.none{cursor:default}.step.none:hover{background:none}
+.step .v.soft{font:400 13px/1.35 var(--sans);color:var(--muted)}
+.step .cp{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:var(--dim);transition:opacity .15s,color .15s,background .15s}
+.step .cp{opacity:.4}
+.step:hover .cp,.step:focus-visible .cp{opacity:1;color:var(--bright)}
+.step.just .cp{opacity:1;color:var(--green)}
+.step.just .cp svg{animation:pop .28s var(--ease)}
+@keyframes pop{from{transform:scale(.55);opacity:0}}
+
+/* Five ways a phone ends, as a row of round keys - like the call screen of the
+   phone itself: a circle in the verdict's colour with its icon, the word
+   under it. Done is the one solid circle, the one you hope to press. The
+   first tap fills a circle and a ring runs down around it; tap again before
+   it closes. Colours as agreed: green done, amber decline, red OR, cyan
+   authenticated, rose failed. */
+.verdict{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;padding:6px 0 2px}
+.verdict button{--vc:var(--green);position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:0}
+.verdict .c{position:relative;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;color:var(--vc);
+ background:color-mix(in srgb,var(--vc) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--vc) 30%,transparent);
+ transition:transform .18s var(--ease),background .2s,box-shadow .25s,color .2s}
+.verdict .c>svg{width:19px;height:19px}
+.verdict .l{font-size:11px;font-weight:600;letter-spacing:.01em;white-space:nowrap;color:color-mix(in srgb,var(--vc) 80%,#fff);
+ transition:color .2s}
+.verdict button:hover .c{transform:translateY(-2px);background:color-mix(in srgb,var(--vc) 20%,transparent);
+ box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--vc) 55%,transparent),0 12px 22px -12px var(--vc)}
+.verdict button:active .c{transform:translateY(0) scale(.96)}
+.verdict .decline{--vc:var(--amber)} .verdict .or{--vc:var(--red)}
+.verdict .auth{--vc:var(--cyan)} .verdict .failed{--vc:var(--rose)}
+.verdict .done .c{color:#06140c;background:linear-gradient(180deg,#6be6a3,#2fae68);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 10px 22px -12px var(--green)}
+.verdict .done:hover .c{background:linear-gradient(180deg,#80efb3,#39bd74);
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 14px 26px -12px var(--green)}
+.verdict .c>.rim{position:absolute;left:-5px;top:-5px;width:56px;height:56px;transform:rotate(-90deg);pointer-events:none;opacity:0}
+.verdict .rim circle{fill:none;stroke:var(--vc);stroke-width:2.2;stroke-linecap:round;stroke-dasharray:163.4;stroke-dashoffset:0}
+.verdict .armed .c,.verdict .armed:hover .c{color:#0b1019;background:var(--vc);transform:none;box-shadow:0 10px 24px -10px var(--vc)}
+.verdict .armed .c>.rim{opacity:1}
+.verdict .armed .rim circle{animation:rim 2.4s linear forwards}
+@keyframes rim{to{stroke-dashoffset:163.4}}
+.verdict .armed .l{color:var(--vc)}
+/* A round key rings its circle, not its box. */
+.verdict button:focus-visible{outline:0}.verdict button:focus-visible .c{outline:2px solid var(--blue);outline-offset:3px}
+
+/* Boot, and beside it the two rarer doors - Change IP, then Give back at the
+   far end - each a small tile with its icon on top and its name under it, so
+   nobody has to guess a symbol. */
+.openrow{display:flex;gap:8px}
+.openrow .open{flex:1;min-width:0}
+.doors{display:flex;gap:8px;flex:none}
+.doors button{width:72px;height:44px;border-radius:12px;border:1px solid var(--edge);background:rgba(8,12,20,.35);color:var(--quiet);
+ display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font:500 11px/1 var(--sans);letter-spacing:.01em;
+ white-space:nowrap;transition:background .15s,border-color .15s,color .15s,transform .12s}
+.doors button:hover{background:var(--hover);border-color:#3d4f6e;color:var(--bright);transform:translateY(-1px)}
+.doors button:active{transform:translateY(0)}
+.doors button svg{width:16px;height:16px;flex:none}
+.doors button[disabled]{opacity:.4;pointer-events:none}
+
+/* A phone on its way: a real card with the app's tile in a slowly turning
+   halo of its lane's colour, one line of what is happening, the minutes left,
+   a glint along a thin bar, the build's own details as chips, and one quiet
+   pill to call it off. It stretches to the height of the cards beside it. */
+.col.ghost{align-self:stretch;min-height:398px;align-items:center;justify-content:center;text-align:center;gap:14px;padding:20px 18px 16px}
+.g-orb{position:relative;width:92px;height:92px;display:grid;place-items:center;margin-bottom:2px}
+.g-orb::before{content:"";position:absolute;inset:0;border-radius:50%;border:4px solid rgba(255,255,255,.045)}
+.g-ring{position:absolute;inset:0;border-radius:50%;
+ background:conic-gradient(from 0deg,transparent 0 58%,color-mix(in srgb,var(--c) 55%,transparent) 84%,var(--c) 100%);
+ -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3.5px));
+ mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3.5px));
+ filter:drop-shadow(0 0 9px color-mix(in srgb,var(--c) 80%,transparent));animation:spin 1.8s linear infinite}
+.g-orb::after{content:"";position:absolute;inset:14px;border-radius:50%;background:radial-gradient(closest-side,color-mix(in srgb,var(--c) 16%,transparent),transparent);
+ animation:breathe 2.4s ease-in-out infinite}
+@keyframes spin{to{transform:rotate(1turn)}}
+@keyframes breathe{50%{opacity:.35}}
+.g-orb .app{position:relative;z-index:1;width:54px;height:54px;border-radius:16px}
+.g-orb .app .logo{width:29px;height:29px}
+.g-t{display:flex;flex-direction:column;gap:6px}
+.g-t b{font-size:15px;font-weight:600;color:var(--bright)}
+.g-t small{max-width:28ch;font-size:12px;line-height:1.45;color:var(--dim)}
+.g-eta{display:flex;align-items:baseline;gap:7px}
+.g-eta b{font:500 40px/1 var(--mono);letter-spacing:-1px;color:var(--c)}
+.g-eta small{font:12px/1 var(--mono);color:var(--dim)}
+.g-bar{position:relative;width:170px;height:3px;border-radius:3px;background:var(--line2);overflow:hidden}
+.g-bar i{position:absolute;inset:0;width:45%;border-radius:3px;
+ background:linear-gradient(90deg,transparent,var(--c),transparent);animation:load 1.6s ease-in-out infinite}
+.g-chips{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;max-width:100%}
+/* The one chip: 24px, radius 7, 12px mono - as the IP chip and the Today list have it. */
+.g-chips span{display:inline-block;max-width:100%;height:24px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/22px var(--mono);
+ color:var(--ink);padding:0 8px;border-radius:7px;border:1px solid var(--line);background:rgba(8,12,20,.35)}
+.g-off{margin-top:2px;height:32px;padding:0 16px;border-radius:999px;border:1px solid var(--edge);color:var(--quiet);font-size:13px;font-weight:500;
+ transition:background .15s,border-color .15s,color .15s}
+.g-off:hover{background:#2a1512;border-color:#57241c;color:var(--bad-ink)}
+
+/* The station with nothing on it: a greeting by the time of day, under the
+   brand's ring turning slowly around a phone. */
+.empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:15vh 16px 0;animation:rise .5s var(--ease)}
+.e-mark{position:relative;width:88px;height:88px;border-radius:50%;display:grid;place-items:center;margin-bottom:12px;color:var(--ink);
+ background:radial-gradient(closest-side,rgba(60,133,192,.16),transparent 78%)}
+.e-mark::before{content:"";position:absolute;inset:0;border-radius:50%;padding:1.5px;
+ background:conic-gradient(from 0deg,#00e7ff,#3c85c0 38%,#693c91 68%,#00e7ff);
+ -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+ opacity:.75;animation:spin 18s linear infinite}
+.empty b{font-size:19px;font-weight:600;color:var(--bright)}
+.empty p{margin:0;max-width:46ch;font-size:13px;line-height:1.55;color:var(--dim)}
+
+/* What just happened, in one quiet line at the bottom: a dark glass note with
+   a dot in the colour of what it is about - the phone's lane or the verdict -
+   and red when something could not be done. */
+.said{--tc:var(--blue);position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;align-items:center;
+ gap:11px;width:max-content;max-width:min(620px,calc(100% - 32px));padding:11px 16px 11px 14px;border-radius:14px;
+ background:rgba(20,28,44,.94);border:1px solid var(--edge);color:var(--ink);font-size:13px;line-height:1.4;
+ -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 20px 44px -18px rgba(0,0,0,.85);
+ opacity:0;transform:translate(-50%,8px);transition:opacity .3s,transform .35s var(--ease);pointer-events:none}
+.said::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--tc);
+ box-shadow:0 0 0 3px color-mix(in srgb,var(--tc) 20%,transparent),0 0 10px color-mix(in srgb,var(--tc) 70%,transparent)}
+.said.up{opacity:1;transform:translate(-50%,0)}
+.said.no{border-color:#57241c;background:rgba(40,20,22,.94);color:var(--bad-ink)}
+/* The build dialog, in the card's own language: what it is for as three app
+   tiles, the chosen one ringed in its colour; what it is built with as the
+   card's quiet lines; the chosen lane's glow in its corner; one violet pill. */
+@property --kg{syntax:'<color>';inherits:true;initial-value:rgba(230,236,245,.07)}
+.scrim{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:16px;background:rgba(5,8,14,.62);
+ -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:fade .2s ease}
+@keyframes fade{from{opacity:0}}
+.dlg{--kc:var(--gpt);--kl:var(--gpt-line);--kg:rgba(230,236,245,.07);width:min(430px,100%);display:flex;flex-direction:column;gap:20px;
+ padding:22px 22px 20px;border-radius:20px;border:1px solid var(--line);
+ background:radial-gradient(420px 200px at 100% 0%,var(--kg),transparent 70%),linear-gradient(180deg,var(--card-top),var(--card-bot));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 44px 90px -30px rgba(0,0,0,.92);
+ animation:rise .3s var(--ease);transition:--kg .45s ease}
+.dlg[data-lane="spotify"]{--kc:var(--spot);--kl:var(--spot-line);--kg:rgba(56,214,140,.11)}
+.dlg[data-lane="other"]{--kc:var(--other);--kl:var(--other-line);--kg:rgba(92,156,255,.13)}
+.dlg header{display:flex;align-items:flex-start;gap:12px}
+.dlg .ttl{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dlg .ttl b{font-size:18px;font-weight:600;line-height:1.1;color:var(--bright)}
+.dlg .ttl small{font-size:13px;line-height:1.45;color:var(--dim)}
+.dlg .x{margin:-4px -6px 0 auto;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:var(--dim);flex:none;
+ transition:background .15s,color .15s}
+.dlg .x:hover{background:var(--hover);color:var(--bright)}
+.dlg .x svg{width:14px;height:14px}
+/* What it is for: three tiles, each the app's own icon and its name. */
+.kinds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.kind{--c:var(--gpt);--cl:var(--gpt-line);display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 8px 13px;
+ border-radius:16px;border:1px solid var(--line2);background:rgba(8,12,20,.28);
+ transition:border-color .2s,background .2s,box-shadow .25s,transform .12s}
+.kind.spotify{--c:var(--spot);--cl:var(--spot-line)} .kind.other{--c:var(--other);--cl:var(--other-line)}
+.kind .app{width:44px;height:44px;border-radius:13px;opacity:.6;filter:saturate(.6);transition:opacity .2s,filter .2s,transform .2s var(--ease)}
+.kind .app .logo{width:25px;height:25px}
+.kind b{font-size:13px;font-weight:600;color:var(--dim);transition:color .2s}
+.kind:hover{border-color:var(--edge);transform:translateY(-1px)}
+.kind:hover .app{opacity:.85}
+.kind[aria-checked="true"]{border-color:var(--cl);background:linear-gradient(180deg,color-mix(in srgb,var(--c) 10%,transparent),rgba(8,12,20,.2));
+ box-shadow:0 0 0 1px var(--cl),0 16px 30px -18px var(--c)}
+.kind[aria-checked="true"] .app{opacity:1;filter:none;transform:scale(1.04)}
+.kind[aria-checked="true"] b{color:var(--c)}
+/* What it is built with: three quiet lines. Each is a label, a small choice
+   whose thumb slides in the lane's colour, and under it one sentence saying
+   what the choice means - or, for Manual, a slim field opening in its place. */
+.rows{display:flex;flex-direction:column;margin:-8px 0 -6px}
+.row{display:grid;grid-template-columns:70px minmax(0,1fr);align-items:center;column-gap:12px;row-gap:9px;padding:13px 0}
+.row+.row{border-top:1px solid var(--line2)}
+.row .k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.seg2{--n:2;--i:0;position:relative;justify-self:start;display:inline-grid;grid-auto-flow:column;grid-auto-columns:80px;padding:3px;
+ border-radius:999px;background:rgba(8,12,20,.5);border:1px solid var(--line2);isolation:isolate}
+.seg2::before{content:"";position:absolute;z-index:-1;top:3px;bottom:3px;left:3px;width:calc((100% - 6px) / var(--n));border-radius:999px;
+ transform:translateX(calc(var(--i) * 100%));background:color-mix(in srgb,var(--kc) 16%,#151d2c);
+ box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--kc) 44%,transparent),0 8px 16px -12px var(--kc);
+ transition:transform .34s var(--ease),background .45s ease,box-shadow .45s ease}
+.seg2 button{height:30px;border-radius:999px;font:500 13px/1 var(--sans);color:var(--dim);transition:color .2s}
+.seg2 button:hover{color:var(--ink)}
+.seg2 button[aria-checked="true"]{color:var(--bright)}
+.row .say{grid-column:2;font:12px/1.4 var(--sans);color:var(--dim);animation:lt-in .25s ease}
+.row .say b{font-weight:600;color:var(--ink)}
+.row .say:empty{display:none}
+.row .say.bad{color:var(--bad-ink)}
+.row .field{grid-column:2;position:relative;display:flex;animation:rise .25s var(--ease)}
+.row .typed{flex:1;min-width:0;height:40px;padding:0 38px 0 12px;border-radius:10px;border:1px solid var(--edge);background:#0e1522;
+ color:var(--bright);font:13px var(--mono);transition:border-color .15s,box-shadow .2s}
+.row .typed::placeholder{color:#5d6b82}
+.row .typed:focus{outline:none;border-color:var(--kl);box-shadow:0 0 0 3px color-mix(in srgb,var(--kc) 16%,transparent)}
+.row .typed.bad{border-color:#7a2f24;box-shadow:0 0 0 3px rgba(224,101,79,.14)}
+.row .field .ok{position:absolute;right:11px;top:50%;width:18px;height:18px;margin-top:-9px;border-radius:50%;display:grid;place-items:center;
+ background:rgba(88,214,141,.14);color:var(--green);opacity:0;transform:scale(.6);transition:opacity .2s,transform .25s var(--ease);pointer-events:none}
+.row .field .ok svg{width:11px;height:11px}
+.row .field.good .ok{opacity:1;transform:none}
+@media (max-width:420px){.seg2{justify-self:stretch;grid-auto-columns:1fr}}
+/* The end: how long it takes, a quiet way out, and the one violet pill. */
+.dlg footer{display:flex;align-items:center;gap:6px}
+.dlg .eta{margin-right:auto;display:inline-flex;align-items:center;gap:6px;font:12px/1 var(--mono);color:var(--dim)}
+.dlg .eta svg{width:12px;height:12px;opacity:.8}
+.dlg .cancel{height:44px;padding:0 16px;border-radius:999px;color:var(--quiet);font-size:13px;font-weight:500;transition:background .15s,color .15s}
+.dlg .cancel:hover{background:var(--hover);color:var(--bright)}
+.dlg .go{height:44px;padding:0 22px 0 18px;border-radius:999px;background:linear-gradient(135deg,#5b47c9,#8a6cf5);color:#fff;font-size:14px;
+ font-weight:600;display:inline-flex;align-items:center;gap:9px;
+ box-shadow:0 1px 2px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.16),0 14px 28px -18px rgba(124,92,230,.9);
+ transition:box-shadow .25s,transform .12s}
+.dlg .go:hover{background:linear-gradient(135deg,#6a56dc,#9d82ff);transform:translateY(-1px);
+ box-shadow:0 2px 8px rgba(124,92,230,.45),inset 0 1px 0 rgba(255,255,255,.2),0 18px 34px -16px rgba(124,92,230,.95)}
+.dlg .go:active{transform:translateY(0)}
+.dlg .go svg{width:16px;height:16px}
+.kind:focus-visible{outline-offset:3px}
+/* The operator's own page: who they are and what they did today - the
+   station's cards in one quiet column. */
+.profile{width:min(760px,100%);margin:0 auto;padding:28px clamp(16px,3vw,32px) 64px;display:flex;flex-direction:column;gap:26px;
+ animation:rise .35s var(--ease)}
+/* Back to station: a small glass pill at the right of the name line; its
+   arrow sits in a disc that fills violet on hover while the arrow nudges back. */
+.p-back{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:10px;height:42px;padding:0 18px 0 6px;border-radius:999px;
+ border:1px solid var(--edge);background:linear-gradient(180deg,#1a2438,#131b2b);color:var(--ink);font-size:13px;font-weight:500;
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 14px 26px -18px rgba(0,0,0,.9);
+ transition:border-color .2s,color .2s,box-shadow .25s,transform .12s}
+.p-back .ic{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#222d44;color:var(--other);
+ transition:background .2s,color .2s}
+.p-back .ic svg{width:15px;height:15px;transition:transform .22s var(--ease)}
+.p-back:hover{border-color:var(--violet-edge);color:var(--bright);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 16px 30px -16px rgba(124,92,230,.6)}
+.p-back:hover .ic{background:linear-gradient(135deg,#5b47c9,#8a6cf5);color:#fff}
+.p-back:hover .ic svg{transform:translateX(-2px)}
+.p-back:active{transform:translateY(1px)}
+.p-id{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.p-av{position:relative;width:68px;height:68px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:26px;font-weight:600;
+ color:var(--bright);background:linear-gradient(140deg,#2d3c5e,#1b273f)}
+.p-av::before{content:"";position:absolute;inset:-5px;border-radius:50%;padding:2px;
+ background:linear-gradient(180deg,#00e7ff,#3c85c0 45%,#693c91);
+ -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.p-id b{display:block;font-size:24px;font-weight:600;line-height:1.1;color:var(--bright)}
+.p-id small{display:flex;align-items:center;gap:8px;margin-top:8px;font:12px/1 var(--mono);color:var(--dim)}
+.p-id .dot{color:#56657e}
+.p-grid{display:flex;flex-direction:column;gap:20px}
+.p-col{display:flex;flex-direction:column;gap:20px;min-width:0}
+.pcard{padding:18px 18px 10px;border:1px solid var(--line);border-radius:16px;
+ background:linear-gradient(180deg,var(--card-top),var(--card-bot));box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 26px 50px -34px rgba(0,0,0,.85)}
+.pcard h2{margin:0 0 6px;display:flex;align-items:baseline;gap:10px;font-size:14px;font-weight:600;color:var(--bright)}
+.pcard h2 small{margin-left:auto;font:12px/1 var(--mono);font-weight:400;color:var(--dim)}
+.plines{display:flex;flex-direction:column;margin:0 -8px}
+.pl,.hr{position:relative;border-radius:10px}
+.pl+.pl::before,.hr+.hr::before{content:"";position:absolute;left:8px;right:8px;top:0;height:1px;background:var(--line2)}
+.pl{display:grid;grid-template-columns:70px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:48px;padding:6px 8px}
+.pl .k{font:10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.pl .v{min-width:0;font:500 14px/1.3 var(--mono);color:var(--bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl .v.soft{font:400 13px/1.3 var(--sans);color:var(--muted)}
+.pl .edit{height:32px;padding:0 14px;border-radius:999px;color:var(--quiet);font-size:13px;font-weight:500;transition:background .15s,color .15s}
+.pl .edit:hover{background:var(--hover);color:var(--bright)}
+.pl.editing{grid-template-columns:70px minmax(0,1fr);align-items:start}
+.pl.editing .k{padding-top:14px}
+.pform{display:flex;flex-direction:column;gap:8px;padding:4px 0 6px}
+/* The one text field: 40px, radius 10, 13px mono - as the build dialog's. */
+.pform input{height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--edge);background:#0e1522;color:var(--bright);font:13px var(--mono)}
+.pform input::placeholder{color:#5d6b82}
+.pform input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(127,180,255,.15)}
+.pform .hint{font-size:12px;line-height:1.4;color:var(--dim)}
+.pform .hint.bad{color:var(--bad-ink)}
+.pform .acts{display:flex;justify-content:flex-end;gap:6px}
+.pform .save{height:32px;padding:0 16px;border-radius:999px;background:linear-gradient(135deg,#5b47c9,#8a6cf5);color:#fff;font-size:13px;font-weight:600;
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 10px 22px -16px rgba(124,92,230,.9);transition:box-shadow .25s,transform .12s}
+.pform .save:hover{background:linear-gradient(135deg,#6a56dc,#9d82ff);transform:translateY(-1px)}
+.pform .nope{height:32px;padding:0 14px;border-radius:999px;color:var(--quiet);font-size:13px;font-weight:500;transition:background .15s,color .15s}
+.pform .nope:hover{background:var(--hover);color:var(--bright)}
+/* Today: one line a result, newest first. */
+.hist{display:flex;flex-direction:column;margin:0 -8px;max-height:456px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--edge) transparent}
+.hist::-webkit-scrollbar{width:6px}.hist::-webkit-scrollbar-thumb{background:var(--edge);border-radius:3px}.hist::-webkit-scrollbar-track{background:transparent}
+.hr{display:grid;grid-template-columns:40px 22px 44px 112px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:42px;padding:0 8px}
+.hr .t{font:12px/1 var(--mono);color:var(--dim)}
+.hr .ap{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--tile);color:#fff;
+ box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)}
+.hr .ap.spotify{color:#1ed760} .hr .ap.other{background:linear-gradient(180deg,#1d3b62,#0e2240);color:#bcd8ff}
+.hr .ap svg{width:13px;height:13px;display:block}
+.hr .s{font:500 14px/1 var(--mono);color:var(--bright)}
+.hr .r{--vc:var(--green);display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--vc);white-space:nowrap}
+.hr .r::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--vc);box-shadow:0 0 0 3px color-mix(in srgb,var(--vc) 16%,transparent)}
+.hr .r.decline{--vc:var(--amber)} .hr .r.or{--vc:var(--red)} .hr .r.auth{--vc:var(--cyan)} .hr .r.failed{--vc:var(--rose)}
+.hr .g{min-width:0;font:12px/1 var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hr .x{display:inline-block;height:24px;font:12px/22px var(--mono);color:var(--ink);padding:0 8px;border-radius:7px;border:1px solid var(--line);background:rgba(8,12,20,.35)}
+.hist-empty{margin:0;padding:24px 0 20px;text-align:center;font-size:13px;color:var(--dim)}
+@media (max-width:560px){.hr{grid-template-columns:40px 22px 44px minmax(0,1fr) auto}.hr .g{display:none}}
+
+/* The phone's own tab - what Boot opens. The stage is the phone's screen at
+   full height, with our bar where the viewer's own title bar is cropped off,
+   and the viewer's toolbar beside it. The margin is the phone's card: the
+   same header, tiles, quiet lines and round keys as on the station. */
+body.on-live{overflow:hidden}
+.lt{--lc:var(--gpt);position:fixed;inset:0;z-index:40;display:flex;background:var(--bg);animation:lt-in .3s var(--ease)}
+.lt.spotify{--lc:var(--spot)} .lt.other{--lc:var(--other)}
+@keyframes lt-in{from{opacity:0}}
+.lt-stage{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:20px 28px;overflow:hidden;
+ background:radial-gradient(760px 520px at 50% -12%,rgba(127,180,255,.06),transparent 70%)}
+.lt-col{height:100%;max-height:960px;aspect-ratio:416/752;display:flex;flex-direction:column;border-radius:14px;overflow:hidden;
+ border:1px solid var(--line);background:#000;box-shadow:0 44px 90px -40px rgba(0,0,0,.95),0 0 0 0 transparent;transition:box-shadow .6s ease}
+.lt[data-power="on"] .lt-col{box-shadow:0 44px 90px -40px rgba(0,0,0,.95),0 0 90px -36px var(--lc)}
+.lt-bar{flex:0 0 4.26%;min-height:26px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#0b1019;border-bottom:1px solid var(--line2)}
+.lt-bar .logo-full{height:58%;width:auto;display:block;color:var(--bright)}
+.lt-bar .sep{width:1px;height:42%;background:var(--line2)}
+.lt-bar .ph{font:500 12px/1 var(--mono);color:var(--muted)}
+.lt-box{flex:1;min-height:0;display:flex}
+.lt-screen{flex:1;min-width:0;position:relative;overflow:hidden;background:#000}
+/* The viewer's own toolbar, as it draws itself: quiet, not ours. */
+.lt-tools{flex:0 0 13.5%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7%;
+ background:#15171c;border-left:1px solid #22252c;color:#7d828c}
+.lt-tools svg{width:42%;max-width:19px;height:auto}
+/* What the screen shows while it is not live. */
+.ph-wait{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+ padding:0 12%;text-align:center;font-size:13px;line-height:1.5;color:var(--dim);
+ background:radial-gradient(closest-side,rgba(127,180,255,.07),transparent),#05070b;animation:lt-in .3s ease}
+.ph-wait b{font-size:15px;font-weight:600;color:var(--ink)}
+.ph-wait .spin{width:40px;height:40px;border-radius:50%;border:3px solid rgba(255,255,255,.08);border-top-color:var(--lc);
+ animation:spin 1s linear infinite;margin-bottom:4px}
+.ph-wait .pw{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--muted);
+ border:1px solid var(--line);background:rgba(255,255,255,.03);margin-bottom:4px}
+.ph-wait .pw svg{width:18px;height:18px}
+.ph-wait .open{margin-top:8px;padding:0 22px 0 18px;flex:none}
+/* The margin: the phone's card, the whole height of the tab. */
+.lt-side{--c:var(--gpt);--cl:var(--gpt-line);--glow:rgba(230,236,245,.05);flex:none;width:384px;box-sizing:border-box;
+ display:flex;flex-direction:column;gap:14px;padding:20px 18px;overflow:auto;border-left:1px solid var(--line);
+ background:radial-gradient(420px 220px at 100% 0%,var(--glow),transparent 72%),linear-gradient(180deg,var(--card-top),var(--card-bot))}
+.lt-side.spotify{--c:var(--spot);--cl:var(--spot-line);--glow:rgba(56,214,140,.085)}
+.lt-side.other{--c:var(--other);--cl:var(--other-line);--glow:rgba(92,156,255,.10)}
+.lt-side{position:relative}
+.lt-side:focus{outline:none}
+.lt-side[data-state="released"] .steps{opacity:.35;pointer-events:none}
+.lt-side[data-state="connecting"] .st,.lt-side[data-state="booting"] .st{--sc:var(--blue)}
+.lt-side[data-state="changing"] .st{--sc:var(--amber)}
+.lt-side[data-state="off"] .st{--sc:var(--violet)} .lt-side[data-state="released"] .st{--sc:var(--muted)}
+.lt-side[data-state="connecting"] .st::before,.lt-side[data-state="booting"] .st::before,.lt-side[data-state="changing"] .st::before{animation:blink 1.2s ease-in-out infinite}
+.lt-side[data-state="off"] .st::before,.lt-side[data-state="released"] .st::before{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor;animation:none}
+/* Back to station, as on your profile: the same glass pill, smaller, at the top of the margin. */
+.lt-back{align-self:flex-end;height:34px;padding:0 14px 0 4px;gap:8px;margin:-4px -2px -2px 0}
+.lt-back .ic{width:26px;height:26px}
+.lt-back .ic svg{width:14px;height:14px}
+.lt-note{margin:-6px 0 0;font-size:12px;line-height:1.45;color:var(--dim)}
+.lt-doors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.lt-doors button{height:44px;border-radius:12px;border:1px solid var(--edge);background:rgba(8,12,20,.35);color:var(--quiet);
+ display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font:500 11px/1 var(--sans);letter-spacing:.01em;
+ transition:background .15s,border-color .15s,color .15s,transform .12s}
+.lt-doors button:hover{background:var(--hover);border-color:#3d4f6e;color:var(--bright);transform:translateY(-1px)}
+.lt-doors button:active{transform:translateY(0)}
+.lt-doors button svg{width:16px;height:16px;flex:none}
+.lt-doors button[disabled]{opacity:.4;pointer-events:none}
+.lt-h{display:flex;align-items:center;gap:8px;margin:6px 0 -8px;font:600 11px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.lt-kind{font:600 10px/1 var(--sans);letter-spacing:.06em;padding:4px 8px;border-radius:999px;color:var(--c);
+ background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 30%,transparent)}
+.lt-side .verdict{margin-top:6px}
+.lt-side .verdict button[disabled]{opacity:.4;pointer-events:none}
+@media (max-width:900px){.lt{flex-direction:column;overflow:auto}.lt-stage{flex:none;height:78vh}.lt-side{width:auto;overflow:visible;border-left:0;border-top:1px solid var(--line)}}
+
+/* One line at every desktop width. As it narrows, the Results title goes
+   first, then your name, the small line under each Take, then Results keeps
+   its ring and title, then its ring alone. Under 1000px the bar takes two
+   rows - the brand, Results and you on top, the three buttons under them -
+   and at phone width the Take buttons drop their first word and Build its. */
+@media (max-width:1439px){.day .ttl{display:none}}
+@media (max-width:1400px){.day{gap:10px;padding:0 15px 0 10px}.day .sep{margin:0 2px}.day .n small{font-size:9px;letter-spacing:.06em}}
+@media (max-width:1360px){.who .nm{display:none}.who .me{padding:4px}}
+@media (max-width:1320px){.take .t small{display:none}.take{height:48px}.take .ic{width:32px;height:32px}
+ .day{height:48px}.day .donut{width:32px;height:32px}.day .donut b{font-size:11px}}
+@media (max-width:1240px){.day .ttl{display:flex}.day .sep,.day .n{display:none}.day{padding:0 16px 0 9px}}
+@media (max-width:1120px){.day .ttl{display:none}.day{padding:0 9px}}
+@media (max-width:1000px){.bar,.bar.tight{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand day who" "takes takes takes";row-gap:12px}
+ .who{justify-self:end;padding-left:0;border-left:0}.takes{width:100%}.take{flex:1}.take .n{margin-left:auto;padding-left:6px}
+ .day .sep{display:block}.day .n{display:flex}.day{padding:0 15px 0 10px}}
+@media (max-width:680px){.day .ttl{display:flex}.day .sep,.day .n{display:none}.day{padding:0 16px 0 9px}}
+@media (max-width:760px){.bn{display:none}}
+@media (max-width:640px){.who .out{width:32px;padding:0;justify-content:center}.who .out span{display:none}
+ .col{width:min(100%,440px)}.hd .s{font-size:30px}.bench{padding-top:22px}}
+@media (max-width:560px){.day .ttl{display:none}.day{padding:0 9px}.bar,.bar.tight{column-gap:14px}
+ .takes{gap:8px}.take{flex:1 1 auto;min-width:0;height:46px;gap:8px;padding:0 10px 0 7px}.take .t{overflow:hidden}
+ .take .t b{overflow:hidden;text-overflow:ellipsis}.take .tk{display:none}.take .n{margin-left:auto;font-size:22px}
+ .take.build{flex:0 0 auto;padding:0 7px}.take.build .t{display:none}}
+@media (max-width:420px){.brand,.bar.tight .brand{--lh:32px}}
+@media (max-width:380px){.take:not(.build) .t{display:none}.take{justify-content:center}.take .n{margin-left:2px;padding-left:0}}
+@media (max-width:340px){.day{display:none}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+ .verdict .armed .rim circle{animation:none}
+ /* What is waiting still shows it is alive - by a slow fade instead of motion. */
+ .g-ring,.ph-wait .spin,.g-bar i{animation-name:blink!important;animation-duration:2s!important;animation-iteration-count:infinite!important;
+  animation-timing-function:ease-in-out!important}
+ [data-power="busy"] .hd .app{animation-duration:1.6s!important;animation-iteration-count:infinite!important}}
+/* Boot is a real form: the form is the flex child now, and the button fills it. */
+.openrow .boot{flex:1;min-width:0;display:flex}
+.openrow .boot .open{flex:1;min-width:0}
+.who .out-form{display:contents}
+/* The real viewer, framed. The script sizes the column, the bar and the box, so
+   their flex bases must not fight it; the frame is moved up under our bar and
+   must be clipped by its box. */
+.lt-col{aspect-ratio:auto;height:auto;max-height:none}
+.lt-bar,.lt-box{flex:none}
+.lt-box{position:relative;overflow:hidden}
+#lt-view{flex:none;border:0;display:block;transform-origin:0 0;background:#000}
+/* Stacked, the phone is fitted to the width and the stage grows with it. */
+@media (max-width:900px){.lt-stage{height:auto;overflow:visible}}
+/* A build that failed: its orb stops, its tile dims like an off phone's. */
+.col.ghost.failed .g-ring,.col.ghost.failed .g-orb::after{animation:none;opacity:0}
+.col.ghost.failed .app{filter:saturate(.45) brightness(.66)}
+.col.ghost.failed .g-t b{color:var(--bad-ink)}
+/* The dialog's own line for a refusal that names no row, and the stopped note. */
+.dlg > .say{font:12px/1.4 var(--sans);color:var(--bad-ink)}
+.dlg > .say:empty{display:none}
+.dlg-note{margin:8px 0 0;font:12px/1.4 var(--sans);color:var(--dim)}

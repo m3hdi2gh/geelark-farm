@@ -240,6 +240,9 @@ def test_hold(web, monkeypatch):  # noqa: F811
     # (2026-09-26).
     _journey_4435(monkeypatch, app_mod)
     _tasks(monkeypatch)
+    # The Station (2026-09-29): a small world of its own that the presses
+    # move, so /station and a phone's Live tab can be driven by hand.
+    _station(monkeypatch, actions_mod, _enqueue)
     monkeypatch.setattr(
         store_sessions, "find",
         lambda settings, token: {"user": dict(FakeStore.user), "csrf": "c1"})
@@ -409,3 +412,221 @@ def _journey_4435(monkeypatch, app_mod):
     monkeypatch.setattr(app_mod.read, "phone_journey",
                         lambda s, serial: runs if serial == "4435" else [])
     monkeypatch.setattr(app_mod.read, "screen_bytes", screen)
+
+
+def _station(monkeypatch, actions_mod, enqueue):
+    """The Station on a fake world: two GPT phones and one Spotify phone
+    on the shelves, one phone of the admin's own already on, a build on
+    its way and two results today. Take, Boot, Change IP, Give back, the
+    five keys, a build and a call-off each move the world the way the
+    farm would - without a keeper, a builder or a store.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from geelark_farm.store import station as store_station
+    from geelark_farm.store import users as store_users
+    from geelark_farm.store import verdicts
+    from geelark_farm.store import wanted as store_wanted
+
+    now = datetime.now(timezone.utc)
+    viewer = "https://example.com/?token=dev"
+    cross = store_station.CROSS
+
+    def phone(serial, lane, exit_, gmail="", **more):
+        row = {"serial": serial, "lane": lane, "proxy_name": exit_,
+               "running": False, "live_url": "", "taken_at": now,
+               "idle_since": now, "watching": False, "tab_closed": False,
+               "tab_seen": False, "gmail": gmail,
+               "gmail_password": "Hienluong102@" if gmail else "",
+               "totp": "A66OUCIDONRH2WL2EYN3P24MA3J47OKU" if gmail else "",
+               "busy": None, "wish": None, "called_off": False,
+               "from_line": None, "last_id": None, "state": "taken",
+               "owner_id": 7, "done_at": None, "app_account": "",
+               "acct_address": None, "acct_password": "", "acct_totp": "",
+               "acct_product": "", "acct_category": "",
+               "acct_email_code": False, "carry_address": "",
+               "carry_password": ""}
+        row.update(more)
+        return row
+
+    world = {
+        "mine": [phone("5073", "gpt", "US25", "stiopyewbv@gmail.com",
+                       running=True, live_url=viewer, tab_seen=True,
+                       taken_at=now - timedelta(minutes=34),
+                       idle_since=now - timedelta(minutes=48),
+                       acct_address="mina@proton.me", acct_password="Gp7!mina",
+                       acct_product="chatgpt")],
+        "shelf": {"gpt": [phone("5081", "gpt", "US27", "kalvin.b7@gmail.com"),
+                          phone("5082", "gpt", "US28", "sam.pe22@gmail.com")],
+                  "spotify": [phone("5090", "spotify", "US33", cross)]},
+        "builds": [{"id": 123, "status": "running", "purpose": "gpt",
+                    "gmail": "", "no_gmail": False, "proxy_name": "",
+                    "app_account": "", "carry_address": "", "detail": "",
+                    "serial": "", "called_off_at": None,
+                    "job_status": "running",
+                    "claimed_at": now - timedelta(minutes=2),
+                    "phone_exit": "", "phone_gmail": ""}],
+        "today": [{"id": 555, "at": now - timedelta(minutes=40),
+                   "button": "done", "serial": "5058",
+                   "gmail": "kelvinor.ms@gmail.com", "proxy_name": "PS4",
+                   "exit_ip": "", "lane": "spotify"},
+                  {"id": 554, "at": now - timedelta(minutes=70),
+                   "button": "decline", "serial": "5057", "gmail": "",
+                   "proxy_name": "US22", "exit_ip": "", "lane": "gpt"}],
+        "line": {"gpt": None, "spotify": None},
+        "next": 600,
+    }
+
+    def mine_of(serial):
+        return next((p for p in world["mine"] if p["serial"] == serial), None)
+
+    def take(settings, *, lane, user_id, by, idem_key):
+        world["next"] += 1
+        shelf = world["shelf"][lane]
+        word = store_station.lane_word(lane)
+        if shelf:
+            got = shelf.pop(0)
+            got.update(taken_at=datetime.now(timezone.utc),
+                       idle_since=datetime.now(timezone.utc))
+            world["mine"].append(got)
+            return {"action_id": world["next"], "outcome": "took",
+                    "serial": got["serial"], "lane": lane, "position": 0,
+                    "sentence": f"Phone {got['serial']} is yours. Press Boot "
+                                f"to switch it on.", "twice": False}
+        if not any(b["purpose"] == lane for b in world["builds"]):
+            return {"action_id": world["next"], "outcome": "no", "serial": "",
+                    "lane": lane, "position": 0,
+                    "sentence": f"Nothing on the {word} shelf, and nothing is "
+                                f"being built.", "twice": False}
+        world["line"][lane] = {"id": world["next"], "position": 1,
+                               "joined_at": datetime.now(timezone.utc)}
+        return {"action_id": world["next"], "outcome": "line", "serial": "",
+                "lane": lane, "position": 1,
+                "sentence": f"You are first in line for the next {word} phone.",
+                "twice": False}
+
+    def leave_line(settings, *, lane, user_id, by, idem_key):
+        world["next"] += 1
+        word = store_station.lane_word(lane)
+        if world["line"].get(lane) is None:
+            return {"action_id": world["next"], "outcome": "no",
+                    "sentence": f"You are not in line for a {word} phone.",
+                    "twice": False}
+        world["line"][lane] = None
+        return {"action_id": world["next"], "outcome": "left",
+                "sentence": f"You left the line for a {word} phone.",
+                "twice": False}
+
+    def pressed(settings, **kw):
+        """The queue, and the farm doing what was asked of it."""
+        ticket = enqueue(settings, **kw)
+        verb, payload = kw.get("verb"), kw.get("payload") or {}
+        row = mine_of(str(payload.get("serial") or ""))
+        if verb == "boot_phone" and row is not None:
+            row.update(running=True, live_url=viewer, tab_seen=True,
+                       tab_closed=False, watching=True)
+        elif verb == "change_proxy" and row is not None:
+            was = row["proxy_name"]
+            row["proxy_name"] = "US" + str(40 + len(world["today"]) + ticket % 7)
+            row.update(last_id=ticket, last_verb="change_proxy",
+                       last_status="done",
+                       last_result=f"phone {row['serial']} is on "
+                                   f"{row['proxy_name']} now",
+                       last_detail={"was": was, "now": row["proxy_name"],
+                                    "started": False},
+                       running=False, live_url="")
+        elif verb == "give_back" and row is not None:
+            world["mine"].remove(row)
+            row.update(running=False, live_url="")
+            shelf = world["shelf"].get(row["lane"])
+            if shelf is not None:
+                shelf.append(row)
+        elif verb == "set_phone_state" and row is not None:
+            world["mine"].remove(row)
+            world["today"].insert(0, {
+                "id": ticket, "at": datetime.now(timezone.utc),
+                "button": payload.get("button"), "serial": row["serial"],
+                "gmail": "" if row["gmail"] in ("", cross) else row["gmail"],
+                "proxy_name": row["proxy_name"], "exit_ip": "",
+                "lane": row["lane"]})
+        elif verb == "build_by_hand":
+            world["builds"].append({
+                "id": ticket, "status": "queued",
+                "purpose": payload.get("purpose") or "gpt",
+                "gmail": payload.get("gmail") or "",
+                "no_gmail": bool(payload.get("no_gmail")),
+                "proxy_name": "", "app_account": payload.get("app_account", ""),
+                "carry_address": payload.get("carry_address", ""),
+                "detail": "", "serial": "", "called_off_at": None,
+                "job_status": None, "claimed_at": None, "phone_exit": "",
+                "phone_gmail": ""})
+        elif verb == "call_off_build":
+            for build in world["builds"]:
+                if build["id"] == payload.get("wanted_id"):
+                    build["called_off_at"] = datetime.now(timezone.utc)
+        return ticket
+
+    def shelves(settings):
+        out = {}
+        for lane in ("gpt", "spotify"):
+            etas = [b["claimed_at"] + timedelta(minutes=6)
+                    for b in world["builds"]
+                    if b["job_status"] == "running" and b["purpose"] == lane]
+            out[lane] = {"ready": len(world["shelf"][lane]),
+                         "building": len(etas), "etas": etas, "late": 0,
+                         "typical_s": 360.0}
+        return out
+
+    def live_phone(settings, serial, grace):
+        row = mine_of(serial)
+        if row is None:
+            return {"serial": serial, "lane": "gpt", "state": "",
+                    "owner_id": None, "done_at": None, "taken_at": None}
+        return dict(row)
+
+    def dismiss(settings, ident, *, user_id, admin):
+        before = len(world["builds"])
+        world["builds"] = [b for b in world["builds"] if b["id"] != ident]
+        return len(world["builds"]) < before
+
+    def record(settings, **kw):
+        print(f"  record: {kw.get('verb')} {kw.get('payload')}")
+        return 1
+
+    monkeypatch.setattr(actions_mod, "enqueue", pressed)
+    fakes = {
+        "scrub_mine": lambda s, uid: 0,
+        "stamp_line": lambda s, uid: None,
+        "serve_lines": lambda s, lanes=("gpt", "spotify"): [],
+        "typical": lambda s: {"gpt": 360.0, "spotify": 420.0, "other": 360.0},
+        "shelves": shelves,
+        "line_of": lambda s, uid: dict(world["line"]),
+        "mine": lambda s, uid, grace: [dict(p) for p in world["mine"]],
+        "builds_of": lambda s, uid: [dict(b) for b in world["builds"]],
+        "notes": lambda s, uid: [],
+        "build_form": lambda s: {"gmails_left": 12,
+                                 "free_ips": {"gpt": 5, "spotify": 3,
+                                              "other": 8},
+                                 "stopped": False},
+        "live_phone": live_phone,
+        "holds": lambda s, serial, uid: mine_of(serial) is not None,
+        "take": take,
+        "leave_line": leave_line,
+        "power_pending_of": lambda s, serial, verbs=None: None,
+        "expire_power": lambda s, serial: 0,
+        "press_of": lambda s, rid: None,
+        "record": record,
+        "scrub": lambda s, rid: None,
+        "watch": lambda s, serial, uid, grace: mine_of(serial) is not None,
+        "tab_closed": lambda s, serial, uid: mine_of(serial) is not None,
+    }
+    for name, fake in fakes.items():
+        monkeypatch.setattr(store_station, name, fake)
+    monkeypatch.setattr(verdicts, "of_person",
+                        lambda s, uid, a, b: list(world["today"]))
+    monkeypatch.setattr(store_wanted, "dismiss", dismiss)
+    monkeypatch.setattr(store_users, "set_name", lambda s, uid, name: name)
+    monkeypatch.setattr(store_users, "set_username",
+                        lambda s, uid, name: name.strip().lower())
+    monkeypatch.setattr(store_users, "change_password",
+                        lambda s, uid, cur, new, *, token, hours: token)

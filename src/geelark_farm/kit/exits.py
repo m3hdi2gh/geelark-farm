@@ -163,7 +163,8 @@ def _align_clock(client: Client, settings: Settings, phone_id: str,
     return zone
 
 
-def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
+def _borrow_exit(book: Book, avoid: set[str],
+                 purpose: str = "") -> Resource | None:
     """An exit already behind another phone, when nothing is free.
 
     This breaks the rule the rest of the module keeps: one phone per exit. It
@@ -183,10 +184,19 @@ def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
     refused it first and go round for as long as its budget lasted, which is
     exactly what holding refused proxies claimed was written to stop
     (2026-08-11, phone 658, forty-nine minutes).
+
+    `purpose` is the build's lane: an exit kept for the other lane is
+    never borrowed, however full the pool (the Station, 2026-09-29). A
+    blank purpose, or an Other build (purposes.OTHER), borrows from any.
     """
+    from .. import purposes
+
     for resource in book.proxies._rows:
         if resource.error or not resource.proxy:
             continue
+        if purpose not in ("", purposes.OTHER) and not purposes.fits(
+                resource.values.get("Purpose"), purpose):
+            continue                      # kept for the other lane
         if book.proxies.status_of(resource) != book.proxies.spent_status:
             continue                      # free, dead or claimed - not shared
         if f"{resource.proxy.host}:{resource.proxy.port}" in avoid:
@@ -197,7 +207,8 @@ def _borrow_exit(book: Book, avoid: set[str]) -> Resource | None:
 
 def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
               phone_id: str, current: Resource | None, why: str, budget: float,
-              swaps: int = 0, avoid: set[str] | None = None) -> Resource:
+              swaps: int = 0, avoid: set[str] | None = None,
+              purpose: str = "") -> Resource:
     """Get the phone onto a different exit address: another proxy.
 
     Claimed and set, and handed back - the phone is left stopped, and
@@ -219,6 +230,10 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     call the update while a phone is starting, and Android reads the proxy
     when the network comes up - a phone left running would keep the exit just
     judged.
+
+    `purpose` is the build's lane (`ExitLease.purpose`): the swap claims
+    and borrows in it, as the build's first exit did. Blank asks what it
+    always asked, so a pool that predates lanes takes the call it took.
     """
     log.warning("%s - getting a different exit address", why)
     phones.stop(client, phone_id)
@@ -228,7 +243,8 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
     # apart nowhere: see the refusal handler.
     borrowed = False
     try:
-        replacement = _fresh_proxy(client, book, settings=settings)
+        replacement = _fresh_proxy(client, book, settings=settings,
+                                   **({"purpose": purpose} if purpose else {}))
     except Aborted as exc:
         if str(exc) != "no_usable_proxy":
             # The stock was unreachable, not refusing. Reported as it is:
@@ -247,7 +263,7 @@ def _new_exit(client: Client, settings: Settings, book: Book, build: Build,
         # was refused in turn" after being refused exactly once (2026-08-16).
         # Nothing free. Rather than stop here, take one that another phone is
         # already on - see _borrow_exit for what that costs.
-        replacement = _borrow_exit(book, avoid or set())
+        replacement = _borrow_exit(book, avoid or set(), purpose=purpose)
         if replacement is None:
             raise Aborted("all_exits_refused" if swaps
                           else "no_exit_to_move_to") from None
@@ -333,12 +349,17 @@ class ExitLease:
 
     Borrowed is read off the pool, not off a flag: an exit `_new_exit`
     claimed is `claimed`; one it borrowed is still `on a phone`, another's.
+
+    `purpose` is the build's lane (gpt, spotify, other, or blank for any):
+    every swap claims and borrows in it, so a build never moves onto an
+    exit kept for the other lane half way through.
     """
 
     current: Resource | None = None
     refused: list = field(default_factory=list)
     borrowed: set = field(default_factory=set)
     swaps: int = 0
+    purpose: str = ""
 
     def seen(self) -> set[str]:
         """Every exit this phone has been through - what bounds the loop."""
@@ -359,7 +380,10 @@ class ExitLease:
         """
         previous = self.current
         row = _new_exit(client, settings, book, build, phone_id, previous, why,
-                        budget, swaps=self.swaps, avoid=self.seen())
+                        budget, swaps=self.swaps, avoid=self.seen(),
+                        # Only when there is a lane, as `_fresh_proxy`
+                        # passes it on: the call is what it always was.
+                        **({"purpose": self.purpose} if self.purpose else {}))
         if book.proxies.status_of(row) == book.proxies.spent_status:
             # Another phone's: noted so it is not taken again, and not ours
             # to settle. The build keeps holding what it does own.
