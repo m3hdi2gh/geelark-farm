@@ -409,17 +409,48 @@ def _lane_badge(row: dict) -> str:
             f'for {word} work only">{word}</span>')
 
 
-def _lane_tally(phones: list[dict]) -> str:
-    """How many of the phones on the shelf are on each lane, beside
-    the count, in the lanes' own colours."""
-    counts = {lane: 0 for lane in purposes.ALL}
-    for row in phones:
-        # The shelf: a phone still being built is not on it yet.
-        if (row.get("status") or "") != "building":
-            counts[_lane_of(row)] += 1
-    return ('<span class="lanes">' + "".join(
-        f'<span class="lane {lane}">{purposes.word(lane)}<b>{counts[lane]}</b>'
-        f'</span>' for lane in purposes.ALL) + "</span>")
+#: The phones table's views, in the order the bar reads: the word on
+#: the button, and the `data-show` the script sifts by - a view word
+#: the rows carry, or `lane:<lane>` for a lane.
+def _views() -> list[tuple[str, str, str]]:
+    return ([("", "All", "")]
+            + [(f"lane:{lane}", purposes.word(lane), f"lane {lane}")
+               for lane in purposes.ALL]
+            + [(show, word, "") for show, word in _VIEW_WORDS.items()])
+
+
+#: The two views the rows carry as words, and what the bar calls them.
+_VIEW_WORDS = {"free": "Free", "mine": "With me"}
+
+
+def _row_view(row: dict, me: str) -> str:
+    """Which of the views a row belongs to - the same rule the rows
+    are drawn with (`_phone_rows`)."""
+    whose = _holder(row)
+    status = row.get("status") or ""
+    return ("mine" if whose and whose == me else
+            "theirs" if whose else
+            "free" if status in ("ready", "app_only") else status)
+
+
+def _view_bar(phones: list[dict], me: str) -> str:
+    """One bar of views with a count on each: all, the two lanes, free,
+    mine. The lane buttons wear the lanes' own colours."""
+    shown = [r for r in phones if (r.get("state") or "") not in ("done", "failed")]
+
+    def count(show: str) -> int:
+        if show.startswith("lane:"):
+            return sum(1 for r in shown if _lane_of(r) == show[5:])
+        return sum(1 for r in shown if not show or _row_view(r, me) == show)
+
+    return ('<span class="seg views" id="seg" role="group" aria-label="Show" hidden>'
+            + "".join(
+                f'<button type="button" data-show="{show}" '
+                f'aria-pressed="{"true" if not show else "false"}"'
+                + (f' class="{klass}"' if klass else "")
+                + f'>{word}<b>{count(show)}</b></button>'
+                for show, word, klass in _views())
+            + "</span>")
 
 
 def _phone_word(status: str) -> str:
@@ -3674,27 +3705,15 @@ def dashboard(data: dict, user: dict, said: str = "",
     # and a box that filters on text answers none of those in one press.
     # `hidden` until the script says otherwise: three buttons that do
     # nothing are worse than none, and the page must still read without it.
+    # One bar, five views, a count on each: all, the two lanes, free,
+    # mine. It was a counter, two lane badges and two bars of buttons
+    # (the operator, 2026-09-29: "too many, merge them"). The script
+    # keeps the counts true as rows come and go.
     tools = (f'<div class="row"><h3>Phones</h3>'
              f'<span class="dim mono" id="tally" data-live="tally">'
              f'{_plural(len(on_the_shelf), "phone")}</span>'
-             f'{_lane_tally(on_the_shelf)}'
-             f'<span class="seg" id="seg" role="group" aria-label="Show" hidden>'
-             f'<button type="button" data-show="" aria-pressed="true">All'
-             f'</button>'
-             f'<button type="button" data-show="free" aria-pressed="false">'
-             f'Free</button>'
-             f'<button type="button" data-show="mine" aria-pressed="false">'
-             f'With me</button></span>'
-             # The lanes, sifted with the views: an operator on Spotify
-             # work wants the Spotify shelf and nothing else on it.
-             f'<span class="seg" id="laneseg" role="group" aria-label="Lane" '
-             f'hidden><button type="button" data-lane="" aria-pressed="true">'
-             f'Both</button>'
-             + "".join(
-                 f'<button type="button" data-lane="{lane}" '
-                 f'aria-pressed="false" class="lane {lane}">'
-                 f'{purposes.word(lane)}</button>' for lane in purposes.ALL)
-             + '</span></div>')
+             f'{_view_bar(on_the_shelf, str(user.get("username") or ""))}'
+             f'</div>')
     # The form under the table, in the wide column, where three boxes and
     # a button fit on one line. In the rail they stacked five deep.
     main = (_said(said, _DASH_SAID, user, said_note) + warning + tools

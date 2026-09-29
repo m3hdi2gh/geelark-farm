@@ -10651,16 +10651,23 @@ def test_every_phone_row_says_its_lane_loudly_and_the_table_sifts_by_it(
     assert 'data-lane="gpt"' in row("1500") and ">GPT</span>" in row("1500")
     assert 'data-lane="gpt"' in row("1502"), "no lane on it: a GPT phone"
     assert 'data-lane="spotify"' in row("1503"), "a build under way says it too"
-    assert '<span class="lanes"><span class="lane gpt">GPT<b>2</b></span>' in body
-    assert '<span class="lane spotify">Spotify<b>1</b></span>' in body, (
-        "the shelf, not the phone still being built")
-    assert 'id="laneseg" role="group" aria-label="Lane" hidden' in body
-    assert ('data-lane="gpt" aria-pressed="false" class="lane gpt">GPT</button>'
-            in body)
-    assert ('data-lane="spotify" aria-pressed="false" class="lane spotify">'
-            'Spotify</button>' in body)
+    # One bar, five views, a count on each (prototype A, 2026-09-29): a
+    # phone being built is a row, so it counts under All and its lane.
+    bar = body[body.index('id="seg"'):]
+    bar = bar[:bar.index("</span>")]
+    assert 'class="seg views" id="seg" role="group" aria-label="Show" hidden' in body
+    assert 'data-show="" aria-pressed="true">All<b>4</b>' in bar
+    assert ('data-show="lane:gpt" aria-pressed="false" class="lane gpt">'
+            'GPT<b>2</b>' in bar)
+    assert ('data-show="lane:spotify" aria-pressed="false" class="lane spotify">'
+            'Spotify<b>2</b>' in bar)
+    assert 'data-show="free" aria-pressed="false">Free<b>3</b>' in bar
+    assert 'data-show="mine" aria-pressed="false">With me<b>0</b>' in bar
+    assert bar.count("<button") == 5
+    assert 'id="laneseg"' not in body and 'class="lanes"' not in body
     script = pages._DASH_SCRIPT
-    assert "tr.dataset.lane === lane" in script and "gf.lane" in script
+    assert "want.indexOf('lane:') === 0" in script
+    assert "tr.dataset.lane === want.slice(5)" in script
 
 
 def test_the_phone_page_and_the_live_tab_wear_the_lane(web, monkeypatch):

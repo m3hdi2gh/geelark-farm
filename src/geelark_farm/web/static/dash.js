@@ -41,13 +41,16 @@
   // whenever the next tick happened to run `init` again - up to thirty
   // seconds later (2026-09-21, found by audit).
   var viewWant = null;
-  // The lane, sifted with the view: an operator on Spotify work sees
-  // the Spotify shelf and nothing else on it (2026-09-29).
-  var laneWant = null;
+  // A view is a word the rows carry (free, mine) or a lane
+  // (`lane:spotify`): one bar, one press, one view (2026-09-29).
+  function shows(tr, want){
+    if (!want) return true;
+    if (want.indexOf('lane:') === 0) return tr.dataset.lane === want.slice(5);
+    return tr.dataset.view === want;
+  }
   function sift(){
     if (viewWant === null) viewWant = (store && store.getItem('gf.view')) || '';
-    if (laneWant === null) laneWant = (store && store.getItem('gf.lane')) || '';
-    var want = viewWant, lane = laneWant;
+    var want = viewWant;
     // Not the "nothing matches" row: it lives in the same tbody and would
     // otherwise count itself as a phone.
     var rows = document.querySelectorAll('#phones tbody tr:not(#nohits)');
@@ -55,8 +58,7 @@
     var none = document.getElementById('nohits');
     var shown = 0;
     rows.forEach(function(tr){
-      var hit = (!want || tr.dataset.view === want)
-             && (!lane || tr.dataset.lane === lane);
+      var hit = shows(tr, want);
       tr.hidden = !hit;
       if (hit) shown++;
     });
@@ -74,7 +76,15 @@
           : 'Nothing here matches that.';
       none.hidden = shown > 0;
     }
-    if (tally) tally.textContent = (want || lane)
+    // Every button's count, kept true as rows come and go.
+    document.querySelectorAll('#seg button[data-show]').forEach(function(b){
+      var n = b.querySelector('b');
+      if (!n) return;
+      var c = 0;
+      rows.forEach(function(tr){ if (shows(tr, b.dataset.show)) c++; });
+      n.textContent = String(c);
+    });
+    if (tally) tally.textContent = want
       ? shown + ' of ' + rows.length + ' shown'
       : rows.length + (rows.length === 1 ? ' phone' : ' phones');
   }
@@ -91,23 +101,6 @@
           viewWant = b.dataset.show;
           if (store) store.setItem('gf.view', viewWant);
           seg.querySelectorAll('button').forEach(function(o){
-            o.setAttribute('aria-pressed', String(o === b));
-          });
-          sift();
-        });
-      });
-    }
-    var laneseg = document.getElementById('laneseg');
-    if (laneseg) {
-      laneseg.hidden = false;
-      sift();
-      laneseg.querySelectorAll('button').forEach(function(b){
-        b.setAttribute('aria-pressed', String(b.dataset.lane === laneWant));
-        if (!once(b, 'laneseg')) return;
-        b.addEventListener('click', function(){
-          laneWant = b.dataset.lane;
-          if (store) store.setItem('gf.lane', laneWant);
-          laneseg.querySelectorAll('button').forEach(function(o){
             o.setAttribute('aria-pressed', String(o === b));
           });
           sift();

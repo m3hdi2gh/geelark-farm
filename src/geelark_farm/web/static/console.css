@@ -1090,8 +1090,7 @@ tr.now td:last-child{border-radius:0 8px 8px 0}
  text-transform:none;font-weight:500;letter-spacing:0}
 td.who{white-space:nowrap}
 td.who .lane{margin-left:9px;padding:1px 8px;font-size:10.5px}
-.lanes{margin-left:10px;display:inline-flex;gap:6px;vertical-align:middle}
-.lanes .lane b{font-weight:800;margin-left:6px}
+.seg.views b{font-weight:800;margin-left:6px;opacity:.8}
 .seg button.lane{text-transform:uppercase;letter-spacing:.06em;font-weight:700}
 .seg button.lane.gpt[aria-pressed=true]{background:#16324f;color:#9ec7ff;
  border-color:#2a5a8f}
