@@ -62,6 +62,11 @@ def parse(raw: str) -> Proxy:
     if "://" in text:
         scheme, _, text = text.partition("://")
         scheme = scheme.lower()
+        # `socks5h` is socks5 with the name resolved through the proxy,
+        # which is how the phone uses it anyway; Decodo hands its ISP
+        # strings out spelled that way (2026-09-29).
+        if scheme == "socks5h":
+            scheme = "socks5"
         if scheme not in SCHEMES:
             raise ProxyError(
                 f"unsupported scheme {scheme!r} (GeeLark takes "

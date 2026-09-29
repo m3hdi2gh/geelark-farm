@@ -133,3 +133,16 @@ def test_two_proxies_with_the_same_details_are_the_same_proxy():
     assert len({parse(GOOD), parse(GOOD)}) == 1
     assert Proxy("socks5", "1.2.3.4", 1080, "u", "p") != \
         Proxy("socks5", "1.2.3.4", 1081, "u", "p")
+
+
+def test_socks5h_is_socks5_with_the_name_resolved_through_the_proxy():
+    """Decodo's ISP strings are spelled socks5h://; the phone resolves
+    through the proxy in either case, so it is the same proxy (2026-09-29).
+    A password with a tilde in it survives both spellings."""
+    from geelark_farm.proxy import parse
+
+    url = parse("socks5h://spwu5900la:psXqB0h0~TXvedem58@isp.decodo.com:10001")
+    colons = parse("isp.decodo.com:10001:spwu5900la:psXqB0h0~TXvedem58")
+    assert url == colons
+    assert url.scheme == "socks5" and url.password == "psXqB0h0~TXvedem58"
+    assert url.url == "socks5://spwu5900la:psXqB0h0~TXvedem58@isp.decodo.com:10001"
