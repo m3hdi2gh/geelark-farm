@@ -555,6 +555,11 @@ class Settings:
     #: (the operator, 2026-09-12). Names out of `builder.APPS`; empty
     #: installs only what a wish asked for. Bare phones stay bare.
     apps_on_every_phone: tuple[str, ...] = ("chatgpt", "spotify", "claude")
+    #: An icon for each of those apps on the phone's first home screen, so
+    #: an operator finds them where a phone shows its apps and not in the
+    #: drawer (2026-09-30). Best effort: a launcher that will not take one
+    #: leaves the phone as it was. HOME_SCREEN_ICONS=0 turns it off.
+    home_screen_icons: bool = True
     #: The GeeLark group this process creates its phones in. The farm's is
     #: `automation`; a playground working from a copy of this project sets
     #: its own, so its phones and the farm's can be told apart by the one
@@ -678,6 +683,8 @@ class Settings:
                             in ("1", "true", "yes", "on"),
             apps_on_every_phone=_words("APPS_ON_EVERY_PHONE",
                                        ("chatgpt", "spotify", "claude")),
+            home_screen_icons=_str("HOME_SCREEN_ICONS", "1").strip().lower()
+                              in ("1", "true", "yes", "on"),
             phone_group=(_str("PHONE_GROUP", "automation").strip()
                          or "automation"),
             spared_groups=tuple(g.casefold() for g in _words(

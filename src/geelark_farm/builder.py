@@ -159,6 +159,7 @@ from .keeper import sync_sheet as sync_sheet
 # The pieces any automation that drives a phone needs - kit/ since the
 # builder review (2026-09-23). The names stay here for their callers.
 from .kit import exits as kit_exits
+from .kit import homescreen as kit_homescreen
 from .kit import install as kit_install
 from .kit.exits import ExitLease as ExitLease
 from .kit.exits import _align_clock as _align_clock
@@ -997,6 +998,33 @@ def _install_the_rest(client: Client, settings: Settings, build: Build,
                         "without it", APPS[app], build.serial, got.reason)
             build.tried.append((app, got.reason, "Play" if play else CLOUD))
     build.app = "+".join(on)
+    _pin_icons(client, settings, build, phone_id, on, remaining=remaining,
+               cancelled=cancelled)
+
+
+#: Seconds a build must have left for the icons to be worth their few shell
+#: calls; they are the last thing asked of a phone, never a reason to run
+#: it longer.
+PIN_ICONS_SECONDS = 30.0
+
+
+def _pin_icons(client: Client, settings: Settings, build: Build,
+               phone_id: str, on: list[str], *, remaining,
+               cancelled) -> None:
+    """An icon on the home screen for each app that is on the phone, in the
+    order the farm carries them (2026-09-30). Best effort and never a failed
+    phone: `homescreen.pin` answers what it could and raises nothing."""
+    if not getattr(settings, "home_screen_icons", False):
+        return
+    if cancelled is not None and cancelled():
+        return
+    if remaining() < PIN_ICONS_SECONDS:
+        return
+    every = list(_apps_every_phone(settings))
+    order = ([a for a in every if a in on] + [a for a in on if a not in every])
+    kit_homescreen.pin(client, phone_id,
+                       [(_package_for(settings, a), APPS[a]) for a in order],
+                       serial=build.serial)
 
 
 def _pick_named_app(book: Book, wanted: str):

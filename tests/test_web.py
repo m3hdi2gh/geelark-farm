@@ -5912,7 +5912,7 @@ def test_nothing_a_person_reads_names_the_vendor():
         stockplan,
         verbs,
     )
-    from geelark_farm.kit import exits, install, phone
+    from geelark_farm.kit import exits, homescreen, install, phone
     from geelark_farm.store import station as store_station
     from geelark_farm.store import stockplan as store_stockplan
     from geelark_farm.web import (
@@ -5938,7 +5938,8 @@ def test_nothing_a_person_reads_names_the_vendor():
         re.I)
     found = []
     for module in (pages, read, task_pages, journey, live, api_v1, verbs,
-                   failures, api, rows, exits, install, phone, forgotten,
+                   failures, api, rows, exits, homescreen, install, phone,
+                   forgotten,
                    keeper, apps, station_pages, station_read, store_station,
                    stockplan, store_stockplan, stock_pages, stock_read):
         src = pathlib.Path(module.__file__).read_text(encoding="utf-8")
