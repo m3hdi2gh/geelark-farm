@@ -2565,7 +2565,10 @@ class _Handler(BaseHTTPRequestHandler):
                 try:
                     checked = validate.proxy_row(raw=row["raw"],
                                                  name=row["name"])
-                    here = f"{checked['host']}:{checked['port']}"
+                    # The triple read.known keys on, as the add verb
+                    # matches: one host:port carries many exits.
+                    here = (f"{checked['host']}:{checked['port']}:"
+                            f"{checked['username']}")
                     row["duplicate"] = here in known
                     row["dup_state"] = known.get(here, "")
                 except (validate.AccountError, validate.ProxyError) as exc:

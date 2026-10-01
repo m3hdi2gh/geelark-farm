@@ -10830,3 +10830,50 @@ def test_the_build_card_asks_which_lane_and_the_routes_carry_it(web, monkeypatch
     client.request("POST", "/accounts/spotify/build",
                    _form(csrf=client.csrf(), address="nova@x.com", back="/"))
     assert got["payload"]["purpose"] == "spotify"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_exits_on_one_endpoint_are_told_apart_by_the_username(web,
+                                                             monkeypatch):
+    """A vendor that multiplexes sells many exits on one host:port. Keyed
+    on the endpoint, the preview called eight new ones "already in the
+    pool - on a phone" because one of their siblings was, and Add said
+    "nothing to add" (2026-10-01)."""
+    _proxy_pool(monkeypatch)
+    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {
+        "109.204.36.9:50101:nc71JhsB_1": "on a phone"})
+    client = web()
+    client.login()
+    _, _, body = client.request(
+        "POST", "/pools/proxy/preview",
+        _form(csrf=client.csrf(), pasted=(
+            "TSPS23 109.204.36.9:50101:nc71JhsB_1:rXZRsyTFx3\n"
+            "TSPS16 109.204.36.9:50101:nc71JhsB_21:rXZRsyTFx3\n"
+            "TSPS17 109.204.36.9:50101:nc71JhsB_24:rXZRsyTFx3")))
+    assert body.count("already in the pool - on a phone") == 1, \
+        "only the one whose username is in the pool"
+    assert "Add 2 (skip 1)" in body
+
+
+def test_the_known_exits_are_keyed_on_the_whole_triple(make_settings,
+                                                        monkeypatch):
+    asked = []
+
+    class _Store:
+        def __init__(self, *a):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _rows(self, sql, params=()):
+            asked.append(sql)
+            return [{"who": "1.2.3.4:50101:u_1", "status": "on a phone"}]
+
+    monkeypatch.setattr(app_mod.read, "Store", _Store)
+    got = app_mod.read.known(make_settings(store_enabled=True), "proxy")
+    assert "username" in asked[0] and "port" in asked[0]
+    assert list(got) == ["1.2.3.4:50101:u_1"]

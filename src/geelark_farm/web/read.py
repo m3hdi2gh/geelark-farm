@@ -213,11 +213,19 @@ def known(settings: Settings, kind: str) -> dict[str, str]:
     was sent to look for a row that is not there (2026-09-07). Every
     `address in known` test still reads, because `in` on a dict is key
     membership.
+
+    An exit is host:port:username - the triple `find_exact` and the add
+    verb match on. A vendor that multiplexes sells many exits on one
+    host:port, told apart by the username, and keyed on the endpoint
+    alone the preview called eight new ones "already in the pool - on a
+    phone" and offered nothing to add (2026-10-01; the verb had learned
+    this on 2026-09-28, the preview had not).
     """
     with Store(settings) as store:
         if kind == "proxy":
             rows = store._rows(
-                "SELECT host || ':' || port AS who, status FROM resources"
+                "SELECT host || ':' || port || ':' || coalesce(username, '')"
+                " AS who, status FROM resources"
                 " WHERE kind = 'proxy' AND host IS NOT NULL")
         else:
             rows = store._rows(
