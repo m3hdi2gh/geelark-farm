@@ -1135,3 +1135,12 @@ CREATE TABLE IF NOT EXISTS stock_plans (
     why        text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS stock_plans_at ON stock_plans (at);
+
+-- rev 44: a daily cap on an exit (2026-10-01). The operator measured that an
+-- exit's third and fourth phone of a day drew OR far more often than its
+-- first, and capped chosen exits at two phones a day. `uses_per_day` is the
+-- cap (NULL = none); `day_uses` counts the claims of `day_uses_on`, a
+-- Tehran date, and the claim that hands the row out bumps both.
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS uses_per_day integer;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS day_uses integer NOT NULL DEFAULT 0;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS day_uses_on date;

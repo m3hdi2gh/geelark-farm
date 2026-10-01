@@ -36,8 +36,10 @@ log = logging.getLogger(__name__)
 
 #: Columns the adapter stores as something other than text. A value
 #: arrives from the pool as the string the sheet would have held.
-_INTS = frozenset({"times_used", "port"})
+_INTS = frozenset({"times_used", "port", "uses_per_day", "day_uses"})
 _BOOLS = frozenset({"email_code_only", "customer_ready"})
+#: Today, the way the daily exit cap counts days (rev 44).
+TODAY = "(now() AT TIME ZONE 'Asia/Tehran')::date"
 _STAMPS = frozenset({"claimed_at", "updated_at", "state_changed_at"})
 
 
@@ -210,6 +212,11 @@ class ResourceTable:
         # and four builders racing cannot lose an increment the way a
         # read-modify-write through `update` would (2026-09-12).
         tally = "attempts + 1" if count_attempt else "attempts"
+        # An exit's claims of the day, for its daily cap (rev 44): the day
+        # is Tehran's, and the first claim of a new day starts it at one.
+        day = ("  day_uses = CASE WHEN r.day_uses_on = " + TODAY +
+               " THEN r.day_uses + 1 ELSE 1 END, day_uses_on = " + TODAY + ","
+               if count_use else "")
         with self._lock, self._connect() as conn:
             cur = conn.execute(
                 f"WITH picked AS ("
@@ -221,7 +228,7 @@ class ResourceTable:
                 f"{not_here}{held}{aside}"
                 f"  ORDER BY {order} FOR UPDATE SKIP LOCKED LIMIT 1)"
                 f"UPDATE resources r SET status = %s, claimed_at = now(),"
-                f"  times_used = {bump}, attempts = {tally},"
+                f"  times_used = {bump}, attempts = {tally},{day}"
                 f"  state_changed_at = now(),"
                 f"  serial = CASE WHEN %s <> '' THEN %s ELSE r.serial END,"
                 f"  updated_at = now()"
@@ -921,7 +928,24 @@ class PgProxyPool(_PgPool, ProxyPool):
         # Which lane the exit is kept for: gpt, spotify, or blank for
         # either (purposes.py, rev 41).
         "Purpose": "purpose",
+        # The daily cap (rev 44): at most this many phones a Tehran day,
+        # blank for no cap; and how many it has had on `Uses on`.
+        "Uses per day": "uses_per_day",
+        "Uses today": "day_uses",
+        "Uses on": "day_uses_on",
     }
+
+    def held_back(self) -> tuple[str, tuple]:
+        """An exit at its daily cap stays where it is until tomorrow
+        (2026-10-01): the claim and the free count both read it, so the
+        keeper never orders a build for an exit it cannot claim."""
+        return (" AND (uses_per_day IS NULL OR day_uses_on IS DISTINCT FROM "
+                f"{TODAY} OR day_uses < uses_per_day)", ())
+
+    @property
+    def available(self) -> list[Resource]:
+        """The base pool's free exits, less those at their daily cap."""
+        return [r for r in super().available if not at_daily_cap(r.values)]
 
     def _values_of(self, row: dict) -> dict[str, str]:
         values = super()._values_of(row)
@@ -931,3 +955,24 @@ class PgProxyPool(_PgPool, ProxyPool):
                  row.get("username") or "", row.get("proxy_pass") or ""]
         values["Proxy String"] = ":".join(p for p in parts if p)
         return values
+
+
+def _tehran_today() -> str:
+    from zoneinfo import ZoneInfo
+
+    return datetime.datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+
+
+def at_daily_cap(values: dict, today: str = "") -> bool:
+    """The Python side of `PgProxyPool.held_back`: an exit with a cap that
+    has had that many phones today."""
+    cap = str(values.get("Uses per day") or "").strip()
+    if not cap.isdigit():
+        return False
+    if str(values.get("Uses on") or "")[:10] != (today or _tehran_today()):
+        return False
+    try:
+        used = int(str(values.get("Uses today") or 0))
+    except ValueError:
+        return False
+    return used >= int(cap)

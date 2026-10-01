@@ -200,7 +200,11 @@ _SCHEMA_PRESENT = (
     " AND to_regclass('stock_plans') IS NOT NULL"
     " AND EXISTS (SELECT 1 FROM information_schema.columns"
     "             WHERE table_schema = current_schema()"
-    "               AND table_name = 'phones' AND column_name = 'taken_at')")
+    "               AND table_name = 'phones' AND column_name = 'taken_at')"
+    " AND EXISTS (SELECT 1 FROM information_schema.columns"
+    "             WHERE table_schema = current_schema()"
+    "               AND table_name = 'resources'"
+    "               AND column_name = 'uses_per_day')")
 
 
 class SchemaError(RuntimeError):
@@ -277,8 +281,8 @@ def ensure_schema(settings: Settings) -> None:
             time.sleep(1.0 + random.random())
     if not _schema_present(settings):
         raise SchemaError(f"the store schema (rev {SCHEMA_REV}) committed but "
-                          "station_line, stock_plans or phones.taken_at "
-                          "is missing")
+                          "station_line, stock_plans, phones.taken_at or "
+                          "resources.uses_per_day is missing")
     log.info("store schema ensured (rev %s) on %s/%s",
              SCHEMA_REV, settings.store_host, settings.store_db)
 
@@ -287,7 +291,7 @@ def ensure_schema(settings: Settings) -> None:
 #: is additive-only while the sheet is still authoritative, and a real
 #: migration story is stage 7's problem, not stage 1's. What this buys now
 #: is one queryable fact: which code last touched the schema.
-SCHEMA_REV = "43"
+SCHEMA_REV = "44"
 
 
 class Store:
