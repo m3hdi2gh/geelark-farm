@@ -155,6 +155,10 @@ _RAIL_BOOT = ("<script>(function(){var d=document.documentElement,v=null;"
 #: After it: the button folds and opens the rail and says which it will
 #: do. A fold is remembered; an opening only where the rail has room to
 #: stay open beside the page. Esc folds a rail lying over the page.
+#: The links scroll on a short window, so each word of the folded strip is
+#: a fixed box (rail.css) and is told where its link is when the pointer
+#: or the focus reaches it; and the lit link, if it is below the fold, is
+#: brought into view - the last ones would light out of sight.
 _RAIL_WIRE = ("<script>(function(){var d=document.documentElement,"
               "b=document.getElementById('gf-rail-fold');if(!b)return;"
               "function folded(){return d.getAttribute('data-rail')==='icons'}"
@@ -168,7 +172,17 @@ _RAIL_WIRE = ("<script>(function(){var d=document.documentElement,"
               "f?'icons':'open')}catch(e){}}});"
               "document.addEventListener('keydown',function(e){"
               "if(e.key==='Escape'&&!folded()&&innerWidth<1280&&innerWidth>900)"
-              "set(true)})})();</script>")
+              "set(true)});"
+              "var l=document.querySelector('#gf-rail .rail-links'),"
+              "h=l.querySelector('.here');"
+              "function aim(e){var a=e.target.closest('.rail-link');if(!a)return;"
+              "var r=a.getBoundingClientRect();"
+              "a.style.setProperty('--rail-x',r.right+10+'px');"
+              "a.style.setProperty('--rail-y',r.top+r.height/2+'px')}"
+              "l.addEventListener('mouseover',aim);l.addEventListener('focusin',aim);"
+              "if(h){var r=h.getBoundingClientRect(),q=l.getBoundingClientRect();"
+              "if(r.bottom>q.bottom)l.scrollTop+=r.bottom-q.bottom+14}"
+              "})();</script>")
 #: The panel with its edge: the rail, folding. The chevron turns with it.
 _FOLD_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
               'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '

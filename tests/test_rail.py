@@ -29,6 +29,13 @@ def _state() -> dict:
     return station_state()
 
 
+def _rule(head: str) -> str:
+    """The first rule of rail.css that starts with `head`, to its brace."""
+    rail = assets.RAIL_CSS
+    at = rail.index(head)
+    return rail[at:rail.index("}", at)]
+
+
 # ------------------------------------------------------------ who gets it
 def test_the_rail_is_an_admins_on_the_console_and_nobody_elses():
     assert '<nav class="rail-nav"' in pages.page("x", "", user=ADMIN)
@@ -123,6 +130,54 @@ def test_the_fold_button_says_what_it_does():
     # the page; Esc folds one that lies over it.
     assert "innerWidth>=1280" in pages._RAIL_WIRE
     assert "e.key==='Escape'" in pages._RAIL_WIRE
+
+
+# ------------------------------------------------------------- the scroll
+def test_the_list_scrolls_with_the_consoles_own_scrollbar():
+    """On a window shorter than the list the rail scrolled with the
+    console's thin bar on its pages and with the browser's wide grey one
+    on the Station, which never loads console.css (the operator,
+    2026-10-02). The rail carries the console's rule itself now."""
+    console = (STATIC / "console.css").read_text(encoding="utf-8")
+    line2 = re.search(r"--line2:(#[0-9a-f]{6})", console).group(1)
+    assert ("*{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}"
+            in console), "the console's own rule, which the rail copies"
+    links = _rule(".rail-links{")
+    assert "overflow-y:auto" in links and "overflow-x:hidden" in links
+    assert f"scrollbar-width:thin;scrollbar-color:{line2} transparent" in links
+
+
+def test_the_folded_strip_scrolls_and_its_words_still_fly_out():
+    """Folded, the strip did not scroll: it let each word fly out past its
+    edge, so on a short window the last icon lay over the avatar and the
+    links under it could not be reached (the operator, 2026-10-02). It
+    scrolls with no bar now, and each word is a fixed box the wire script
+    stands beside the link under the pointer or the focus."""
+    above_the_phone = assets.RAIL_CSS.split("@media (max-width:900px)")[0]
+    assert "overflow:visible" not in above_the_phone
+    assert "scrollbar-width:none" in _rule(
+        'html[data-rail="icons"] .rail-links{')
+    word = _rule('html[data-rail="icons"] .rail-lbl{')
+    assert "position:fixed" in word
+    assert "left:var(--rail-x" in word and "top:var(--rail-y" in word
+    for said in ("'mouseover'", "'focusin'", "'--rail-x'", "'--rail-y'"):
+        assert said in pages._RAIL_WIRE, said
+
+
+def test_the_folded_strip_holds_its_links_without_a_sideways_scroll():
+    """Inside its 1px border the strip is 67px: 12 + a 44px link + 11.
+    With 12 on both sides the link poked a pixel past the edge and the
+    strip could slide sideways (measured in the pane, 2026-10-02)."""
+    assert "padding:14px 12px" in _rule(".rail-links{")
+    assert "padding-right:11px" in _rule('html[data-rail="icons"] .rail-links{')
+    assert "width:44px" in _rule('html[data-rail="icons"] .rail-link{')
+
+
+def test_the_lit_link_is_brought_into_view():
+    """The last links lie below the fold of a short window, so their own
+    page lit a link nobody could see."""
+    assert "l.querySelector('.here')" in pages._RAIL_WIRE
+    assert "l.scrollTop+=" in pages._RAIL_WIRE
 
 
 # -------------------------------------------------------------- the rules

@@ -24,7 +24,6 @@
  border-right:1px solid #1d2636;
  transition:width .24s cubic-bezier(.2,.8,.2,1),box-shadow .24s}
 html[data-rail="icons"] .rail-dock,html[data-rail="icons"] .rail-nav{width:68px}
-html[data-rail="icons"] .rail-nav{overflow:visible}
 
 /* head: the name of the console - no logo, the page under it carries one -
    and the one button that folds the rail */
@@ -46,10 +45,19 @@ html[data-rail="icons"] .rail-fold .fold-chev{transform:scaleX(-1)}
 html[data-rail="icons"] .rail-head{justify-content:center;padding:0}
 html[data-rail="icons"] .rail-title{display:none}
 
-/* the pages */
+/* the pages, scrolling when the window is shorter than the list - with the
+   scrollbar of the console (console.css), so the Station draws the same
+   one. Folded, the strip scrolls with no bar: a bar would take a sixth of
+   its width and push the icons off the line of the button and the avatar.
+   Inside its border the strip is 67px: 12 + a 44px link + 11, or the link
+   pokes a pixel past the edge and the strip scrolls sideways on focus. */
 .rail-links{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;
- padding:14px 12px;overflow-y:auto}
-html[data-rail="icons"] .rail-links{overflow:visible}
+ padding:14px 12px;overflow-x:hidden;overflow-y:auto;
+ scrollbar-width:thin;scrollbar-color:#1d2636 transparent}
+.rail-links::-webkit-scrollbar{width:8px}
+.rail-links::-webkit-scrollbar-thumb{background:#1d2636;border-radius:8px}
+html[data-rail="icons"] .rail-links{padding-right:11px;scrollbar-width:none}
+html[data-rail="icons"] .rail-links::-webkit-scrollbar{display:none}
 .rail-link{position:relative;display:flex;align-items:center;gap:12px;height:40px;
  flex:none;padding:0 12px;border-radius:10px;color:#9aa7ba;font-size:13.5px;
  text-decoration:none;white-space:nowrap;transition:background .15s,color .15s}
@@ -65,9 +73,15 @@ html[data-rail="icons"] .rail-links{overflow:visible}
 .rail-n.hot{min-width:20px;height:20px;padding:0 6px;border-radius:10px;display:grid;
  place-items:center;background:#3a2d10;color:#f0c064;font-weight:500}
 
-/* folded: the word flies out beside the icon, the count rides its corner */
+/* folded: the word flies out beside the icon, the count rides its corner.
+   The word is fixed, not absolute: the strip scrolls, and a scroller clips
+   whatever lies past its edge, while a fixed box is placed by the window
+   and out of its reach. It stands beside the link under the pointer or the
+   focus, whose edge and middle the wire script (pages._RAIL_WIRE) writes
+   on that link as --rail-x and --rail-y. */
 html[data-rail="icons"] .rail-link{width:44px;padding:0;gap:0;justify-content:center}
-html[data-rail="icons"] .rail-lbl{position:absolute;left:54px;top:50%;z-index:6;
+html[data-rail="icons"] .rail-lbl{position:fixed;left:var(--rail-x,66px);
+ top:var(--rail-y,-99px);z-index:6;
  transform:translate(-4px,-50%);opacity:0;pointer-events:none;padding:6px 10px;
  border-radius:8px;background:#1c2639;color:#f2f6fc;border:1px solid #2c3a52;
  font-size:12.5px;font-weight:400;box-shadow:0 10px 26px rgba(0,0,0,.4);
