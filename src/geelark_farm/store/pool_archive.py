@@ -125,6 +125,22 @@ def counts(settings: Settings) -> list[dict]:
     return out
 
 
+def proxy_names(settings: Settings, prefix: str = "") -> list[str]:
+    """The names archived proxies carried - those of one batch when
+    `prefix` is given (`Webshare-ISP-02Oct` finds its `-1`, `-2`...), so
+    a batch's numbers go on past the proxies removed from it and a name
+    is never given twice (the Proxies page, 2026-10-02)."""
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT payload->>'proxy_name' FROM resources_archive"
+            " WHERE kind = 'proxy' AND coalesce(payload->>'proxy_name', '') <> ''"
+            "   AND (%s = '' OR lower(payload->>'proxy_name') LIKE %s)",
+            (str(prefix), str(prefix).lower() + "-%"))
+        out = [str(r[0]) for r in cur.fetchall()]
+        conn.rollback()
+    return out
+
+
 def listing(settings: Settings, kind: str = "", limit: int = 200) -> list[dict]:
     """The newest archived rows, for looking one up by hand."""
     with connect(settings) as conn:

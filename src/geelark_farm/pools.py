@@ -1202,6 +1202,20 @@ class ProxyPool(Pool):
         # proxy works, and a blank there reads as "never checked".
         self._set(resource, self._off_a_phone("free", note))
 
+    def keep_on_phone(self, resource: Resource, *, note: str = "") -> None:
+        """A set-aside undone while a phone still carries the exit: it is
+        `on a phone` again, serial kept, so it goes back on the shelf
+        when that phone goes, like any exit (the Proxies page, 2026-10-02)."""
+        self._set(resource, {self.status_column: self.spent_status,
+                             self.note_column: note})
+
+    #: At most this many phones a Tehran day; blank is no cap (rev 44).
+    daily_cap_column = "Uses per day"
+
+    def set_daily_cap(self, resource: Resource, cap: int) -> None:
+        """A person's daily cap for one exit; 0 takes the cap away."""
+        self._set(resource, {self.daily_cap_column: str(cap) if cap > 0 else ""})
+
     def unshelve(self, resource: Resource, *, note: str = "") -> None:
         """A person's set-aside undone: stock again. `release` keeps the
         shelf on purpose (the phone that was on it going is not the

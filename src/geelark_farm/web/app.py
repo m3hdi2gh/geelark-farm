@@ -232,23 +232,22 @@ class _Handler(BaseHTTPRequestHandler):
                     user, said=first.get("said", ""), advice=_advice,
                     editing=int(editing) if editing.isdigit() else 0,
                     said_note=self._said_note(first.get("said", ""))))
+            # The Proxies page (2026-10-02): the prototype the user called
+            # final, its own document in the admin rail - it took the place
+            # of the Proxy Pool's four lists. Its state and its archive are
+            # JSON for its script.
+            if path == "/pools/proxy/state":
+                return self._proxies_state(first)
+            if path == "/pools/proxy/archive":
+                from . import proxies_read
+
+                return self._json(200, {"ok": True, "rows": proxies_read.archive(
+                    self.settings)})
             if path == "/pools/proxy":
-                unlisted, ignored, tests = self._proxy_state()
-                data = read.proxy_pool(self.settings,
-                                       view=first.get("view", "free"),
-                                       q=first.get("q", ""),
-                                       page=_page_number(first),
-                                       unlisted=unlisted)
-                # What the pass keeps beside the rows (C5): the test
-                # stamps and the ignore list, merged here so the reader
-                # stays a reader of the resources table alone.
-                data["tests"] = tests
-                data["ignored"] = ignored
-                return self._html(200, pages.proxy_pool_page(
-                    data, user, said=first.get("said", ""),
-                    q=first.get("q", ""),
-                    show_ignored=first.get("ignored") == "1",
-                    said_note=self._said_note(first.get("said", ""))))
+                from . import proxies_read, proxy_pages
+
+                return self._html(200, proxy_pages.proxies_page(
+                    proxies_read.state(self.settings, fresh=True), user))
             if path == "/pools/gpt/delivered.csv":
                 # The delivered archive, whole, for whoever reconciles it
                 # against the customer panel: the page shows fifty at a
@@ -1450,6 +1449,157 @@ class _Handler(BaseHTTPRequestHandler):
                     and _proxy_key(u) not in set(ignored)]
         return unlisted, ignored, tests
 
+    # ------------------------------------------------------ the Proxies page
+    def _proxies_state(self, first: dict) -> None:
+        """The Proxies page's state for its next draw, and how each request
+        it waits on stands (`?req=1,2`). Unchanged and asked nothing else,
+        it is a 304: an open page asks every twenty seconds."""
+        from ..store import actions as store_actions
+        from . import assets, proxies_read
+
+        answer = proxies_read.state(self.settings)
+        wanted = [int(x) for x in str(first.get("req") or "").split(",")
+                  if x.strip().isdigit()][:80]
+        if not wanted:
+            tag = proxies_read.etag({"s": answer, "r": assets.REV})
+            if (self.headers.get("If-None-Match") or "") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return None
+            return self._json(200, {"ok": True, "state": answer,
+                                    "rev": assets.REV}, etag=tag)
+        reqs = {}
+        for req in wanted:
+            row = store_actions.one(self.settings, req)
+            if row is None:
+                continue
+            # Names and counts only: a request's detail can hold a pasted
+            # line, and a pasted line holds a password.
+            detail = row["detail"] if isinstance(row["detail"], dict) else {}
+            reqs[str(req)] = {
+                "status": str(row["status"] or ""),
+                "result": str(row["result"] or ""),
+                "added": [str(n) for n in detail.get("added") or []],
+                "dead": [str(n) for n in detail.get("dead") or []],
+                "skipped": len(detail.get("skipped") or []),
+                "refused": len(detail.get("refused") or [])}
+        return self._json(200, {"ok": True, "state": answer,
+                                "rev": assets.REV, "reqs": reqs})
+
+    def _proxies_refusal(self, user: dict) -> str:
+        """Why this person's press on the Proxies page cannot go, or ""."""
+        from ..store.users import may
+
+        if not self.settings.web_mutations:
+            return "Actions are not switched on yet - nothing was changed."
+        if not may(user, "may_change_proxy"):
+            return "You may not change the proxies - nothing was changed."
+        return ""
+
+    def _proxies_do(self, user: dict, field: dict) -> None:
+        """One press of the Proxies page on one proxy or many: its switch,
+        a lane, a cap, a test or a remove. Each proxy is its own request,
+        so Requests says what was asked of which and the queue's guards
+        work per proxy; the answer is each one's outcome and the pool as
+        it now stands."""
+        from . import proxies_read
+
+        refused = self._proxies_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        what = str(field.get("what") or "")
+        if not _PROXY_PRESS.fullmatch(what):
+            return self._json(200, {"ok": False,
+                                    "note": "That is not a press this page knows."})
+        ids = sorted({int(x) for x in str(field.get("ids") or "").split(",")
+                      if x.strip().isdigit()})[:200]
+        pool = {e["id"]: e for e in
+                proxies_read.state(self.settings, fresh=True)["exits"]}
+        items = []
+        for pid in ids:
+            e = pool.get(pid)
+            if e is None:
+                items.append({"id": pid, "said": "gone",
+                              "note": "it is no longer in the pool"})
+                continue
+            verb, payload = _proxy_verb(what, e)
+            if verb is None:
+                items.append({"id": pid, "said": "skip"})
+                continue
+            items.append(dict(self._proxy_press(
+                user, verb, dict(payload, name=e["n"])), id=pid))
+        return self._json(200, {"ok": True, "items": items,
+                                "state": proxies_read.state(self.settings,
+                                                            fresh=True)})
+
+    def _proxies_add(self, user: dict, field: dict) -> None:
+        """A batch from the Proxies page: the lines its reader understood,
+        the seller and type, the lane and the phones a day. The farm tests
+        each and names them Seller-Type-DDMon-n when it runs the add."""
+        import datetime
+
+        from . import proxies_read
+
+        refused = self._proxies_refusal(user)
+        if refused:
+            return self._json(200, {"ok": False, "note": refused})
+        lines = [line.strip() for line in
+                 str(field.get("lines") or "").splitlines() if line.strip()]
+        if not lines or len(lines) > 500:
+            return self._json(200, {"ok": False, "note": (
+                "Nothing to add." if not lines else
+                "Add at most 500 proxies at a time.")})
+        if not re.sub(r"[^A-Za-z0-9]", "", str(field.get("seller") or "")):
+            return self._json(200, {"ok": False,
+                                    "note": "Name the seller to name them."})
+        now = datetime.datetime.now(proxies_read.TEHRAN)
+        lane = str(field.get("lane") or "").strip().lower()
+        payload = {"rows": [{"raw": line, "name": ""} for line in lines],
+                   "purpose": lane if lane in ("gpt", "spotify") else "",
+                   "batch": {"seller": str(field.get("seller") or ""),
+                             "type": str(field.get("type") or ""),
+                             "tag": now.strftime("%d")
+                             + proxies_read.MONTHS[now.month - 1]},
+                   "cap": str(field.get("cap") or "0")}
+        out = self._proxy_press(user, "add_proxies", payload)
+        return self._json(200, dict(out, ok=out["said"] in (
+            "queued", "pending", "done")))
+
+    def _proxy_press(self, user: dict, verb: str, payload: dict) -> dict:
+        """One request from the Proxies page: written down, and run here
+        when it needs no word from the cloud - `_act` without the page it
+        lands on. The answer says what became of it (done, failed,
+        refused; queued or pending while the lane has it), its request,
+        and the verb's own sentence."""
+        from ..store import actions as store_actions
+
+        payload = dict(payload, by=user["username"], by_id=user["id"])
+        name = str(payload.get("name") or "")
+        try:
+            twin = (store_actions.pending_for(self.settings, verb=verb,
+                                              needle=name) if name else None)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("pending check skipped (%s)", exc)
+            twin = None
+        if twin is not None:
+            return {"said": "pending", "req": int(twin)}
+        req = store_actions.enqueue(
+            self.settings, verb=verb, payload=payload,
+            requested_by=user["id"],
+            idem_key=f"{self._minute_key(user, verb, name or '-')}:"
+                     f"{_digest(payload)}")
+        if getattr(req, "fresh", True):
+            ran = self._ran_it_now(verb, payload, req)
+            if ran is None:
+                signals.ring(signals.queued)
+                return {"said": "queued", "req": int(req)}
+        row = store_actions.one(self.settings, int(req)) or {}
+        word = str(row.get("status") or "")
+        return {"said": "pending" if word in ("queued", "running") else word,
+                "req": int(req), "note": str(row.get("result") or "")}
+
     def _stock_post(self, user: dict, field: dict) -> None:
         """The stock planner's settings, from its page (an admin's). Saved
         with an actions row that says who changed what."""
@@ -2450,6 +2600,10 @@ class _Handler(BaseHTTPRequestHandler):
         from . import paste
 
         path = self.path
+        if path == "/pools/proxy/do":
+            return self._proxies_do(user, field)
+        if path == "/pools/proxy/add-batch":
+            return self._proxies_add(user, field)
         if path == "/pools/gmail/preview":
             from ..store import validate
 
@@ -3765,6 +3919,38 @@ def _digest(payload: dict, skip: tuple = ()) -> str:
 #: The verbs about the whole pool rather than one row, which the
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
+#: What a press of the Proxies page may ask (`_proxy_verb`).
+_PROXY_PRESS = re.compile(r"free|aside|test|remove|lane:(?:gpt|spotify)?|cap:\d{1,2}")
+
+
+def _proxy_verb(what: str, e: dict) -> tuple[str | None, dict]:
+    """Which request a press of the Proxies page is for one proxy, by its
+    state as the page draws it - None when it is already that way. On is
+    "in play": free, or on a phone it keeps; off is set aside, at once or
+    once its phone goes."""
+    s, after = e["s"], bool(e.get("after"))
+    if what == "free":
+        if s == "phone" and after:
+            return "unshelve_proxy", {}
+        return ("mark_proxy_free", {}) if s in ("aside", "dead") else (None, {})
+    if what == "aside":
+        if s == "free" or (s == "phone" and not after):
+            return "shelve_proxy", {}
+        return None, {}
+    if what.startswith("lane:"):
+        lane = what[5:]
+        return (("keep_proxy_for", {"purpose": lane}) if e["lane"] != lane
+                else (None, {}))
+    if what.startswith("cap:"):
+        cap = min(99, int(what[4:]))
+        return ("cap_proxy", {"cap": cap}) if e["cap"] != cap else (None, {})
+    if what == "test":
+        return "test_proxy", {}
+    if what == "remove":
+        return "remove_proxy", {}
+    return None, {}
+
+
 _SWEEPS = frozenset({"test_all_proxies", "free_all_proxies",
                      "shelve_all_proxies", "free_shelved_proxies",
                      "remove_delivered_apps", "remove_gmail_group"})

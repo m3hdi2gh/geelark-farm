@@ -705,11 +705,25 @@ def add_proxies(book, ledger, settings, payload, client):
             continue
         probes.append(SimpleNamespace(raw=raw, checked=checked,
                                       proxy=proxy_mod.parse(raw)))
+    # A batch from the Proxies page (2026-10-02): every proxy is named
+    # Seller-Type-DDMon-n here, at run time, so two pastes of one batch
+    # queued together still get numbers apart; and each carries the
+    # daily cap the page chose.
+    prefix = _batch_prefix(payload.get("batch"))
+    if payload.get("batch") is not None and not prefix:
+        return "refused", "a batch needs its seller, in letters or digits", None
+    try:
+        names = _batch_names(book, settings, prefix, len(probes)) if prefix else []
+    except Exception as exc:                                      # noqa: BLE001
+        return ("failed", f"the archive could not be read to number the "
+                          f"batch ({exc}); nothing was added", None)
+    cap = _cap_of(payload) if prefix else 0
+    dead: list[str] = []
     answers = _test_many(client, probes) if client is not None else {}
     lane = purposes.normal(payload.get("purpose"))
-    for probe in probes:
+    for i, probe in enumerate(probes):
         checked = probe.checked
-        name = checked["proxy_name"] or _next_name(book)
+        name = names[i] if names else (checked["proxy_name"] or _next_name(book))
         status, note = "free", f"Added from the web by {_by(payload)} on " \
                                f"{_stamp()}."
         ok, exit_ip, why = answers.get(id(probe), (True, "", ""))
@@ -723,12 +737,61 @@ def add_proxies(book, ledger, settings, payload, client):
                 "Note": note, "Last Exit IP": exit_ip, "Times Used": "0",
                 # The lane it is kept for, when the paste said one; a
                 # pool that predates lanes has no column to put it in.
-                **({"Purpose": lane} if lane else {})})
+                **({"Purpose": lane} if lane else {}),
+                **({"Uses per day": str(cap)} if cap else {})})
         except ValueError:                 # see add_gmails
             skipped.append(f"{checked['host']}:{checked['port']}")
             continue
         added.append(name)
-    return _summary("proxy", added, skipped, refused, settings, _by(payload))
+        if not ok:
+            dead.append(name)
+    status, said, detail = _summary("proxy", added, skipped, refused,
+                                    settings, _by(payload))
+    if prefix:
+        if dead:
+            said += (f"; {len(dead)} did not answer and joined as dead - "
+                     f"each is tested again on its own")
+        detail = dict(detail or {}, dead=dead)
+    return status, said, detail
+
+
+_BATCH_PART = re.compile(r"[^A-Za-z0-9]")
+_BATCH_DAY = re.compile(r"\d{2}[A-Z][a-z]{2}")
+
+
+def _batch_prefix(batch) -> str:
+    """`Seller-Type-DDMon` from what the Proxies page sent, each part
+    cleaned to letters and digits; "" without a seller or a day."""
+    if not isinstance(batch, dict):
+        return ""
+    seller = _BATCH_PART.sub("", str(batch.get("seller") or ""))[:24]
+    kind = _BATCH_PART.sub("", str(batch.get("type") or ""))[:24]
+    day = str(batch.get("tag") or "")
+    if not seller or not _BATCH_DAY.fullmatch(day):
+        return ""
+    return "-".join(p for p in (seller, kind, day) if p)
+
+
+def _batch_names(book, settings, prefix: str, count: int) -> list[str]:
+    """A batch's next `count` names. Its numbers go on from the highest
+    any proxy of it ever carried, in the pool or in the archive, so a
+    removed proxy's name is never given again."""
+    taken = [r.name or "" for r in book.proxies._rows]
+    if getattr(settings, "store_enabled", False):
+        from .store import pool_archive
+
+        taken += pool_archive.proxy_names(settings, prefix)
+    number = re.compile(re.escape(prefix) + r"-(\d+)$", re.IGNORECASE)
+    top = max([int(m.group(1)) for m in map(number.match, taken) if m] or [0])
+    return [f"{prefix}-{top + i}" for i in range(1, count + 1)]
+
+
+def _cap_of(payload: dict) -> int:
+    """Phones a day from a press: a whole number 0-99, 0 for no cap."""
+    try:
+        return min(99, max(0, int(str(payload.get("cap") or 0).strip() or 0)))
+    except ValueError:
+        return 0
 
 
 def adopt_proxy(book, ledger, settings, payload, client):
@@ -865,11 +928,19 @@ def mark_proxy_free(book, ledger, settings, payload, client):
     # on the shelf under the build, so the next build took the same
     # exit and two phones sat behind one address (2026-09-21, found by
     # audit).
-    status = book.proxies.status_of(resource)
-    if status in (book.proxies.spent_status, book.proxies.claimed_status):
+    pool = book.proxies
+    status = pool.status_of(resource)
+    if status in (pool.spent_status, pool.claimed_status):
         return ("refused", f"{resource.name} is {status} - a phone is behind "
                            f"it; it can be freed once that build is gone",
                 None)
+    # Set aside under a phone that still carries it: freeing it would hand
+    # the next build an address a phone is on. Turning it back on keeps it
+    # on that phone (unshelve_proxy).
+    phone = (resource.values.get(pool.serial_column) or "").strip()
+    if status == pool.shelved_status and phone:
+        return ("refused", f"{resource.name} is set aside under phone {phone} "
+                           f"- it can be freed once that phone is gone", None)
     ok, exit_ip, why = _test(book, client, resource, tries=3)
     if not ok:
         book.proxies.fail(resource, book.proxies.dead_status, note=(
@@ -877,9 +948,16 @@ def mark_proxy_free(book, ledger, settings, payload, client):
             f"it did not answer in three tries over half a minute: {why}"))
         return ("failed", f"{resource.name} did not answer in three tries: "
                           f"{why}", None)
-    book.proxies.release(resource, note=(
-        f"IP changed - marked free from the web by {_by(payload)} on "
-        f"{_stamp()}. Its host is judged afresh from here."))
+    note = (f"IP changed - marked free from the web by {_by(payload)} on "
+            f"{_stamp()}. Its host is judged afresh from here.")
+    if status == pool.shelved_status:
+        # Off a person's shelf: `release` keeps a shelf on purpose (a phone
+        # going is not a change of mind), so it left a set-aside exit set
+        # aside after a passing test (found porting the Proxies page,
+        # 2026-10-02).
+        pool.unshelve(resource, note=note)
+    else:
+        pool.release(resource, note=note)
     if exit_ip:
         book.proxies.record_exit(resource, exit_ip)
     _stamp_test(settings, resource.name, True, exit_ip)
@@ -905,6 +983,43 @@ def keep_proxy_for(book, ledger, settings, payload, client):
     return ("done", f"{resource.name} is kept for "
                     f"{purposes.word(lane) if lane else 'either lane'}",
             {"purpose": lane})
+
+
+def cap_proxy(book, ledger, settings, payload, client):
+    """An exit's daily cap: at most N phones a Tehran day, 0 for none
+    (rev 44; set from the Proxies page, 2026-10-02). A person's choice:
+    nothing is tested, and a phone already on the exit keeps it."""
+    resource, refused = _named(book, payload)
+    if refused:
+        return refused
+    cap = _cap_of(payload)
+    book.proxies.set_daily_cap(resource, cap)
+    if not cap:
+        return "done", f"{resource.name} has no daily cap", {"cap": 0}
+    return ("done", f"{resource.name} takes at most {cap} "
+                    f"phone{'' if cap == 1 else 's'} a day", {"cap": cap})
+
+
+def unshelve_proxy(book, ledger, settings, payload, client):
+    """Back in play while a phone still carries it: the set-aside on an
+    exit under a phone, undone (the Proxies page's switch, 2026-10-02).
+    It is `on a phone` again, so it returns to the shelf when that phone
+    goes. One no phone is on goes back by `mark_proxy_free`, which tests
+    it first."""
+    resource, refused = _named(book, payload)
+    if refused:
+        return refused
+    pool = book.proxies
+    phone = (resource.values.get(pool.serial_column) or "").strip()
+    if pool.status_of(resource) != pool.shelved_status or not phone:
+        return ("refused", f"{resource.name} is not set aside under a phone "
+                           f"- turning it on tests it and frees it", None)
+    pool.keep_on_phone(resource, note=(
+        f"Kept in play from the web by {_by(payload)} on {_stamp()}: the "
+        f"phone on it keeps it, and it goes back on the shelf once that "
+        f"phone is gone."))
+    return ("done", f"{resource.name} stays in play - back on the shelf "
+                    f"once phone {phone} goes", None)
 
 
 def _shelve(book, resource, payload) -> None:
@@ -2754,6 +2869,8 @@ VERBS = {
     "free_all_proxies": free_all_proxies,
     "shelve_proxy": shelve_proxy,
     "keep_proxy_for": keep_proxy_for,
+    "cap_proxy": cap_proxy,
+    "unshelve_proxy": unshelve_proxy,
     "shelve_all_proxies": shelve_all_proxies,
     "free_shelved_proxies": free_shelved_proxies,
     "remove_proxy": remove_proxy,

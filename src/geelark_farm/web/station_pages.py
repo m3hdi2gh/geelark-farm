@@ -95,15 +95,15 @@ def station_page(state: dict, user: dict) -> str:
     return _fill(_STATION, values)
 
 
-def _rail(user: dict) -> tuple[str, str]:
+def _rail(user: dict, here: str = "/station") -> tuple[str, str]:
     """The admin rail around an admin's Station (2026-10-02): the rail
     beside a column that holds the bar and the page. An operator's Station
     gets neither - both halves are empty and the document is the one it
     was. The rail is the console's own (`pages.rail`), so the two never
-    differ."""
+    differ. The Proxies page wears it the same way, lit on its own link."""
     from . import pages
 
-    drawn = pages.rail(user, "/station")
+    drawn = pages.rail(user, here)
     if not drawn:
         return "", ""
     return f'<div class="rail-shell">{drawn}<div class="rail-col">', "</div></div>"

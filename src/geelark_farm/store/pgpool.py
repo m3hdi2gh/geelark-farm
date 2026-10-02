@@ -46,6 +46,10 @@ _STAMPS = frozenset({"claimed_at", "updated_at", "state_changed_at"})
 def _to_db(column: str, value):
     """The pool writes sheet-shaped strings; the table wants its types."""
     if column in _INTS:
+        # A blank daily cap is NULL, which is "no cap" (rev 44): as 0 it
+        # would hold the exit back after its first phone of the day.
+        if column == "uses_per_day" and not str(value or "").strip():
+            return None
         try:
             return int(str(value).strip() or 0)
         except ValueError:

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Proxies — IranSpoty</title><link rel="icon" href="{{FAVICON}}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="{{CSS}}"><meta name="gf-rev" content="{{REV}}">
+<script src="{{JS}}" defer></script></head>
+<body data-page="proxies">{{RAILOPEN}}
+<header class="bar">
+  <div class="brand">{{BRAND}}<span class="bn">Cloud Farm<i> &middot; Proxies</i></span></div>
+  <div class="addbox" id="addbox">
+    <button class="cmpc" id="cmpc" type="button" aria-expanded="false" aria-controls="cmp" aria-label="Add proxies">
+      <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5"/><path d="M3 10.5h15"/><path d="M10.5 3c2 2.1 3 4.6 3 7.5s-1 5.4-3 7.5c-2-2.1-3-4.6-3-7.5s1-5.4 3-7.5z"/><circle cx="17.2" cy="16.6" r="4.6" fill="#161430"/><path d="M17.2 14.6v4M15.2 16.6h4"/></svg></span>
+      <span class="t"><b>Add proxies</b><small id="cmpc-sub">paste a batch</small></span>
+    </button>
+    <form class="cmp" id="cmp" novalidate hidden aria-label="Add proxies">
+      <div class="hd">
+        <span class="plus" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7.5"/><path d="M3 10.5h15"/><path d="M10.5 3c2 2.1 3 4.6 3 7.5s-1 5.4-3 7.5c-2-2.1-3-4.6-3-7.5s1-5.4 3-7.5z"/><circle cx="17.2" cy="16.6" r="4.6" fill="#6f58e0"/><path d="M17.2 14.6v4M15.2 16.6h4"/></svg></span>
+        <span class="t"><b>Add proxies</b><small>One a line, as the vendor sends them</small></span>
+        <button class="xbtn" type="button" data-cmp="close" aria-label="Close, and keep what is pasted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+      </div>
+      <textarea id="paste" rows="4" placeholder="host.example:10324:user_2001:Pw-5512&#10;socks5://user_2002:Pw-9034@host.example:10325" spellcheck="false" autocomplete="off" aria-label="Proxies to add, one a line"></textarea>
+      <div class="read" id="cmp-read" hidden></div><span class="sr" id="cmp-sum" aria-live="polite"></span>
+      <div class="opts">
+        <div class="orow">
+          <label class="opt grow"><span class="k">Seller</span><input id="f-seller" placeholder="e.g. Webshare" autocomplete="off" spellcheck="false"></label>
+          <label class="opt grow"><span class="k">Type <i>optional</i></span><input id="f-type" placeholder="e.g. ISP" autocomplete="off" spellcheck="false"></label>
+          <span class="opt"><span class="k">Added</span><span class="date" id="f-date">{{DAY}}</span></span>
+        </div>
+        <div class="orow">
+          <span class="opt"><span class="k">Lane</span><span class="seg" id="lanepick" role="radiogroup" aria-label="Lane"><button type="button" role="radio" aria-checked="false" data-pick="gpt">GPT</button><button type="button" role="radio" aria-checked="false" data-pick="spotify">Spotify</button><button type="button" role="radio" aria-checked="true" data-pick="">Either</button></span></span>
+          <span class="opt"><span class="k">Phones a day</span><span class="step"><button type="button" data-step="-1" aria-label="One phone fewer">&minus;</button><input id="f-cap" value="2" inputmode="numeric" autocomplete="off" aria-label="Phones a day, 0 for no cap"><button type="button" data-step="1" aria-label="One phone more">+</button><small>a day</small></span></span>
+        </div>
+      </div>
+      <footer><small>Each one is tested before it joins, and the address it comes out at is read. One that does not answer joins as dead and is tested again on its own.</small>
+        <button class="ghost" type="button" data-cmp="clear">Clear</button>
+        <button class="go" type="submit" id="cmp-add" disabled>Test and add</button></footer>
+    </form>
+  </div>
+  <div class="who"><span class="av" aria-hidden="true">{{INITIAL}}</span><span class="nm"><b>{{NAME}}</b><small>{{ROLE}}</small></span></div>
+</header>
+
+<main class="boot">
+  <h1 class="sr">Proxies</h1>
+  <div id="notice"></div>
+  <section aria-labelledby="h-resp">
+    <div class="sh"><h2 id="h-resp">What operators pressed</h2><span class="sp"></span><span id="rangeseg"></span></div>
+    <div class="card resp" id="resp"></div>
+  </section>
+
+  <section aria-labelledby="h-fam">
+    <div class="sh"><h2 id="h-fam">Batches</h2><small>One card a batch: its seller, its type and the day it came. Round is how many phones its typical proxy has carried; the bar runs from its least- to its most-used proxy. The switch puts the whole batch in play or sets it aside; tap a card to see its proxies.</small><span class="sp"></span><small id="famsum"></small></div>
+    <div class="fams" id="fams"></div>
+  </section>
+
+  <section id="s-ex" aria-labelledby="h-ex">
+    <div class="sh"><h2 id="h-ex">Proxies</h2><span class="count" id="count"></span></div>
+    <div class="tools"><span id="scopeseg"></span><span id="laneseg"></span><span id="famchip"></span>
+      <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4.5 4.5"></path></svg>
+        <input id="q" type="search" placeholder="Find a proxy, address or phone" autocomplete="off" spellcheck="false" aria-label="Find a proxy"></label></div>
+    <div class="flags"><div class="frow"><div class="fl" id="flags" role="group" aria-label="Show only"></div><span id="sortbox"></span></div><div id="flagwhy"></div></div>
+    <div id="rounds"></div>
+    <div class="card"><div class="wrap"><table>
+      <thead><tr>
+        <th class="tk"><button class="box" id="all" type="button" role="checkbox" aria-checked="false" aria-label="Select every row shown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button></th>
+        <th class="sortable" data-sort="name" tabindex="0" aria-sort="none">Proxy<span class="ar" aria-hidden="true">&#9650;</span></th>
+        <th class="sortable" data-sort="state" tabindex="0" aria-sort="none">State<span class="ar" aria-hidden="true">&#9650;</span></th>
+        <th>Lane</th>
+        <th>Comes out at</th>
+        <th class="sortable" data-sort="today" tabindex="0" aria-sort="none">Today<span class="ar" aria-hidden="true">&#9650;</span></th>
+        <th class="sortable" data-sort="or" tabindex="0" aria-sort="none"><span class="rt1">Response<span class="ar" aria-hidden="true">&#9650;</span></span><span class="lg"><span class="p">Phones</span><span class="d">Done</span><span class="x">Decl</span><span class="o">OR</span><span class="a">Auth</span><span class="f">Fail</span><span></span><span class="d">Done %</span><span class="x">Decl %</span><span class="o">OR %</span></span></th>
+        <th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody></table></div></div>
+    <div class="foot"><span id="shown"></span><span class="arch"><b class="tab" id="archn">0</b> removed proxies are in the archive &middot; <button class="link" type="button" id="see-arch">Open it</button></span></div>
+  </section>
+</main>
+
+<div id="pop"></div>
+<div id="sel"></div>
+<div class="said" id="said" role="status" aria-live="polite"></div>
+<div id="layer"></div>
+<input type="hidden" id="gf-csrf" name="csrf" value="{{CSRF}}">
+<script>window.addEventListener("error", function (e) { var n = document.getElementById("notice"); if (n && !n.textContent) n.innerHTML = '<div class="note"><span class="tx"><b>The page script stopped:</b> ' + String(e.message).replace(/</g, "&lt;") + '</span></div>'; });</script>
+<script type="application/json" id="gf-state">{{STATE}}</script>
+{{RAILCLOSE}}</body></html>

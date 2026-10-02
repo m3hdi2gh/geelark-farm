@@ -52,7 +52,7 @@ _PAGE = """<!doctype html>
 _RAIL = (("/", "Dashboard", ""), ("/station", "Station", ""),
          ("/stock", "Stock", ""),
          ("/pools/gmail", "Gmail Pool", "gmail"),
-         ("/pools/proxy", "Proxy Pool", "proxy"),
+         ("/pools/proxy", "Proxies", "proxy"),
          ("/pools/gpt", "Gpt Pool", "app"), ("/requests", "Requests", "pending"),
          ("/needs", "Needs attention", "needs"),
          ("/tasks", "Tasks", ""),

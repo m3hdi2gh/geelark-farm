@@ -1053,23 +1053,6 @@ def test_the_used_view_pages_and_links_the_phone(web, monkeypatch):
     assert seen["page"] == 2 and "← newer" in body
 
 
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_proxy_page_offers_to_adopt_what_geelark_holds(web, monkeypatch):
-    _proxy_pool(monkeypatch, rows=[_proxy_row("SX1")],
-                state={"unlisted_proxies": [
-                    {"host": "1.2.3.4", "port": "9999", "username": "u",
-                     "password": "p"}]})
-    client = web()
-    client.login()
-    status, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert status == 200
-    assert "1.2.3.4:9999 (u)" in body and "Add to pool" in body
-    assert "not in the pool" in body, "a stray is a job like any other"
-
-    _, _, body = client.request("GET", "/pools/proxy")
-    assert "SX1" in body and 'name="name" value="SX1"' in body  # Remove
-
-
 def test_the_gpt_delivered_view_searches_and_pages(web, monkeypatch):
     seen = {}
 
@@ -2056,173 +2039,6 @@ def _proxy_pool(monkeypatch, rows=(), state=None, seen=None):
 
     monkeypatch.setattr(app_mod.read, "proxy_pool", proxy_pool)
     return seen
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_proxy_add_panel_offers_paste_and_one_by_one(web, monkeypatch):
-    _proxy_pool(monkeypatch)
-    monkeypatch.setattr(app_mod.read, "known", lambda s, kind: {})
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy")
-    assert body.count('action="/pools/proxy/preview"') == 2, \
-        "paste from the vendor, and one by one"
-    assert "<summary>add one by hand</summary>" in body, "folded, not a panel"
-    for box in ("host", "port", "username", "password", "name"):
-        assert f'name="{box}"' in body, box
-    # the five boxes become one pasted line, judged by the same preview
-    status, _, body = client.request(
-        "POST", "/pools/proxy/preview",
-        _form(csrf=client.csrf(), host="1.2.3.4", port="9999", username="u",
-              password="p", name="SX50"))
-    assert status == 200
-    carried = re.search(r'<textarea name="rows" hidden>([^<]*)</textarea>',
-                        body).group(1)
-    assert carried == "SX50\t1.2.3.4:9999:u:p"
-    assert "Add 1 (skip 0)" in body
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_ignored_exits_leave_the_held_list_and_can_be_seen(web, monkeypatch):
-    import geelark_farm.store.actions as actions_mod
-
-    _proxy_pool(monkeypatch, state={
-        "unlisted_proxies": [
-            {"host": "1.2.3.4", "port": 9999, "username": "u", "password": "p"},
-            {"host": "5.6.7.8", "port": "1080", "username": "", "password": ""}],
-        "ignored_proxies": ["1.2.3.4:9999:u"]})
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert "5.6.7.8:1080" in body and "1.2.3.4:9999 (u)" not in body
-    assert body.count('action="/pools/proxy/ignore"') == 1
-    assert "1 ignored exit" in body
-    assert 'href="/pools/proxy?view=needs_hand&ignored=1"' in body
-
-    _, _, body = client.request(
-        "GET", "/pools/proxy?view=needs_hand&ignored=1")
-    assert "Ignored" in body and "1.2.3.4:9999:u" in body
-    assert 'action="/pools/proxy/ignore"' not in body
-
-    got = {}
-    monkeypatch.setattr(actions_mod, "enqueue",
-                        lambda s, **k: got.update(k) or 61)
-    status, headers, _ = client.request(
-        "POST", "/pools/proxy/ignore",
-        _form(csrf=client.csrf(), host="5.6.7.8", port="1080", username=""))
-    assert status == 303
-    assert dict(headers)["Location"] == "/pools/proxy?said=queued:61"
-    assert got["verb"] == "ignore_proxy"
-    assert {k: got["payload"][k] for k in ("host", "port", "username")} == {
-        "host": "5.6.7.8", "port": "1080", "username": ""}
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_last_test_column_reads_the_stamps_the_pass_kept(
-        web, monkeypatch):
-    import time
-
-    now = time.time()
-    long_note = "Google refused this exit on 1528 - change it at the " \
-                "vendor, then mark it free so a build can take it again"
-    _proxy_pool(monkeypatch, rows=[
-        _proxy_row("SX1", last_exit_ip="208.207.213.45"),
-        _proxy_row("SX2", "dead"),
-        _proxy_row("SX3", "change ip", note=long_note)],
-        state={"proxy_tests": {
-            "SX1": {"at": now - 42 * 60, "ok": True, "exit": "208.207.213.45"},
-            "SX2": {"at": now - 2 * 3600, "ok": False, "exit": ""}}})
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy")
-    assert "42m ago · ok" in body, "coloured, off the pass's own stamp"
-    assert "every one tested 42m ago" in body, "the newest free stamp"
-    assert "208.207.213.45" in body, "the exit column shows last_exit_ip"
-    assert body.count('action="/pools/proxy/test"') == 1
-    assert body.count('action="/pools/proxy/remove"') == 1
-
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert "2h ago · dead" in body, "when the dead one last failed"
-    assert f'title="{long_note}"' in body, "the whole note, on hover"
-    assert "…" in body and long_note not in body.replace(
-        f'title="{long_note}"', ""), "and clipped in the cell"
-
-    _, _, body = client.request("GET", "/pools/proxy?view=all")
-    assert ">never<" in body, "SX3 was never tested"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_the_work_list_is_one_table_of_every_kind_of_trouble(web, monkeypatch):
-    """Three panels stacked - needs a new IP, dead, held by GeeLark - are
-    one list now: to a person they are the same thing, a job with the one
-    button that answers it."""
-    import time
-
-    _proxy_pool(monkeypatch, rows=[
-        _proxy_row("SX1"),
-        _proxy_row("N01", "change ip", note="Google refused it on 1528"),
-        _proxy_row("D01", "dead")],
-        state={"unlisted_proxies": [
-            {"host": "9.9.9.9", "port": "1080", "username": "u9",
-             "password": "p"}],
-            "proxy_tests": {"D01": {"at": time.time() - 7200, "ok": False}}})
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert "3</span> need a hand — 2 exits and 1 stray" in body
-    assert "needs a new IP" in body and ">dead<" in body
-    assert "not in the pool" in body and "9.9.9.9:1080 (u9)" in body
-    assert "IP changed — free it" in body and "Test again" in body
-    assert "Add to pool" in body and ">Ignore<" in body
-    assert "Google refused it on 1528" in body, "the row's own note"
-    assert "comes back on its own once tested" in body, "and what happens next"
-    assert "SX1" not in body, "a free exit is not a job"
-
-
-def test_the_phone_column_links_the_serial(web, monkeypatch):
-    _proxy_pool(monkeypatch, rows=[
-        _proxy_row("SX27", "on a phone", serial="1551"),
-        _proxy_row("SX8", "change ip", serial="1528")])
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy?view=on_phone")
-    assert '<a href="/phones/1551">1551</a>' in body
-    assert "1528" not in body, "a refused exit is a job, not a phone"
-
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert '<a href="/phones/1528">1528</a>' in body, \
-        "and the job says which phone asked for it"
-
-
-@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
-def test_a_button_pressed_on_the_work_list_comes_back_to_it(web, monkeypatch):
-    """The page is four views now, so landing on the free shelf after
-    pressing Test on the work list would lose the place - and the banner
-    is appended with & when the place already carries a view."""
-    import geelark_farm.store.actions as actions_mod
-
-    _proxy_pool(monkeypatch, rows=[_proxy_row("D01", "dead")])
-    monkeypatch.setattr(actions_mod, "enqueue", lambda s, **k: 71)
-    monkeypatch.setattr(actions_mod, "pending_for", lambda s, **k: None)
-    client = web()
-    client.login()
-    _, _, body = client.request("GET", "/pools/proxy?view=needs_hand")
-    assert 'name="back" value="/pools/proxy?view=needs_hand"' in body
-    assert "never tested, dead since" in body, \
-        "a dead exit nobody ever tested does not 'fail its last test never'"
-
-    _, headers, _ = client.request(
-        "POST", "/pools/proxy/test",
-        _form(csrf=client.csrf(), name="D01",
-              back="/pools/proxy?view=needs_hand"))
-    assert dict(headers)["Location"] == \
-        "/pools/proxy?view=needs_hand&said=queued:71"
-
-    _, headers, _ = client.request(
-        "POST", "/pools/proxy/test",
-        _form(csrf=client.csrf(), name="D01", back="/evil"))
-    assert dict(headers)["Location"] == "/pools/proxy?said=queued:71", \
-        "only the four views are places to come back to"
 
 
 @pytest.mark.parametrize("web", [True], indirect=True)
@@ -3662,7 +3478,7 @@ def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
     client.login()
     # The script is on every page a signed-in person sees - once, as a
     # link under its own hash, rather than 76KB of source in the body.
-    for path in ("/", "/pools/gmail", "/pools/proxy", "/pools/gpt",
+    for path in ("/", "/pools/gmail", "/pools/gpt",
                  "/phones", "/requests", "/events", "/logs"):
         status, _, body = client.request("GET", path)
         assert status == 200, path
@@ -3676,7 +3492,7 @@ def test_every_page_a_person_sees_carries_the_one_script(web, monkeypatch):
     # operator, 2026-09-20).
     moves = {"/": "farm", "/requests": "farm", "/events": "farm",
              "/logs": "logs"}
-    for path in ("/", "/pools/gmail", "/pools/proxy", "/pools/gpt",
+    for path in ("/", "/pools/gmail", "/pools/gpt",
                  "/phones", "/requests", "/events", "/logs"):
         _, _, body = client.request("GET", path)
         want = moves.get(path)
@@ -8679,7 +8495,9 @@ def test_the_pool_pages_are_handed_the_sentence_and_the_reader():
     # whose Run answers "phone 4435 is taken ..." in the verb's words
     # (2026-09-27).
     handler = inspect.getsource(app)
-    assert handler.count("said_note=self._said_note(") == 7, (
+    # The Proxy Pool's call went with its page (2026-10-02): the Proxies
+    # page answers its presses in JSON, each with the verb's own sentence.
+    assert handler.count("said_note=self._said_note(") == 6, (
         "every pool page is handed the settled row's own sentence")
 
 

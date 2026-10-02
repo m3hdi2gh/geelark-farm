@@ -1546,6 +1546,8 @@ def _exit(name="SX1", host="10.0.0.9", status="suspect"):
         dead_status = "dead"
         claimed_status = "claimed"
         spent_status = "on a phone"
+        shelved_status = "set aside"
+        serial_column = "Used By"
         available_statuses = frozenset({"", "free", "unused"})
 
         def find_by_name(self, n):
@@ -1561,6 +1563,10 @@ def _exit(name="SX1", host="10.0.0.9", status="suspect"):
         def release(self, r, *, note=""):
             r.values["Status"] = "free"
             said.append(("release", note))
+
+        def unshelve(self, r, *, note=""):
+            r.values["Status"] = "free"
+            said.append(("unshelve", note))
 
         def record_exit(self, r, ip):
             said.append(("exit", ip))
@@ -2135,6 +2141,9 @@ def test_which_verbs_run_inline_is_written_down_and_not_only_derived():
         # Exits, where the answer needs no word from GeeLark.
         "ignore_proxy", "remove_proxy", "shelve_proxy", "keep_proxy_for",
         "shelve_all_proxies",
+        # The Proxies page's daily cap and its switch on a proxy a phone
+        # still carries (2026-10-02).
+        "cap_proxy", "unshelve_proxy",
         # The buttons an operator presses all day.
         "set_phone_state", "clear_tries", "stop_phone", "build_by_hand",
         # The Station's give-back and call-off (2026-09-29).
@@ -2466,3 +2475,129 @@ def test_an_exit_is_kept_for_a_lane_by_name():
                                 {"name": "nope", "purpose": "gpt"}, None)[0] \
         == "failed"
     assert verbs.runs_inline("keep_proxy_for"), "pools only: the web runs it"
+
+
+# ---------------------------------------------- the Proxies page (2026-10-02)
+def _one_proxy(*extra):
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=1, proxy_headers=PROXY_HEADERS + list(extra))
+    row = book.proxies._rows[0]
+    row.values["Name"] = "SX1"
+    return book, row
+
+
+def test_a_daily_cap_is_set_and_taken_away_by_name():
+    book, row = _one_proxy("Uses per day")
+    status, said, detail = verbs.cap_proxy(book, None, None,
+                                           {"name": "SX1", "cap": "3"}, None)
+    assert (status, detail) == ("done", {"cap": 3}) and "at most 3 phones" in said
+    assert row.values["Uses per day"] == "3"
+    status, said, detail = verbs.cap_proxy(book, None, None,
+                                           {"name": "SX1", "cap": "0"}, None)
+    assert detail == {"cap": 0} and "no daily cap" in said
+    assert row.values["Uses per day"] == "", "blank is no cap, never 0"
+    assert verbs.cap_proxy(book, None, None, {"name": "SX1", "cap": "500"},
+                           None)[2] == {"cap": 99}
+    assert verbs.cap_proxy(book, None, None, {"name": "nope", "cap": "2"},
+                           None)[0] == "failed"
+    assert verbs.runs_inline("cap_proxy"), "pools only: the web runs it"
+
+
+def test_a_blank_daily_cap_is_stored_as_no_cap():
+    from geelark_farm.store.pgpool import _to_db
+
+    assert _to_db("uses_per_day", "") is None
+    assert _to_db("uses_per_day", None) is None
+    assert _to_db("uses_per_day", "2") == 2
+    assert _to_db("times_used", "") == 0, "the other counters keep their 0"
+
+
+def test_turning_on_a_proxy_set_aside_under_a_phone_keeps_it_there():
+    book, row = _one_proxy()
+    row.values.update({"Status": "set aside", "Used By": "5441"})
+    status, said, _ = verbs.unshelve_proxy(book, None, None,
+                                           {"name": "SX1", "by": "mehdi"}, None)
+    assert status == "done" and "5441" in said
+    assert book.proxies.status_of(row) == "on a phone"
+    assert row.values["Used By"] == "5441", "the phone keeps it"
+    assert "mehdi" in row.values["Note"]
+    # Not set aside under a phone: the switch's other door (Free) is meant.
+    row.values.update({"Status": "set aside", "Used By": ""})
+    assert verbs.unshelve_proxy(book, None, None, {"name": "SX1"},
+                                None)[0] == "refused"
+    row.values.update({"Status": "free"})
+    assert verbs.unshelve_proxy(book, None, None, {"name": "SX1"},
+                                None)[0] == "refused"
+    assert verbs.runs_inline("unshelve_proxy"), "pools only: the web runs it"
+
+
+def test_a_batch_is_named_on_past_the_pool_and_the_archive(monkeypatch):
+    from types import SimpleNamespace
+
+    from geelark_farm.store import pool_archive
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=0, proxy_headers=PROXY_HEADERS
+                     + ["Purpose", "Uses per day"])
+    verbs.add_proxies(book, None, None, {"rows": [
+        {"raw": "1.2.3.1:9999:u:p", "name": "Webshare-ISP-02Oct-2"}]}, None)
+    asked = []
+    monkeypatch.setattr(pool_archive, "proxy_names", lambda settings, prefix="":
+                        asked.append(prefix) or ["Webshare-ISP-02Oct-5",
+                                                 "webshare-isp-02oct-x"])
+
+    def tested(client, rows):
+        return {id(rows[1]): (False, "", "no answer")}
+
+    monkeypatch.setattr(verbs, "_test_many", tested)
+    status, said, detail = verbs.add_proxies(
+        book, None, SimpleNamespace(store_enabled=True),
+        {"rows": [{"raw": "1.2.3.2:9999:u:p", "name": "ignored"},
+                  {"raw": "1.2.3.3:9999:u:p", "name": ""},
+                  {"raw": "1.2.3.1:9999:u:p", "name": ""}],
+         "purpose": "gpt", "cap": "2",
+         "batch": {"seller": "Web share!", "type": "ISP", "tag": "02Oct"}},
+        object())
+    assert asked == ["Webshare-ISP-02Oct"]
+    assert detail["added"] == ["Webshare-ISP-02Oct-6", "Webshare-ISP-02Oct-7"]
+    assert detail["dead"] == ["Webshare-ISP-02Oct-7"]
+    assert "1 did not answer and joined as dead" in said
+    assert "1 already in the pool" in said
+    first = book.proxies.find_by_name("Webshare-ISP-02Oct-6")
+    assert first.values["Uses per day"] == "2"
+    assert book.proxies.purpose_of(first) == "gpt"
+    dead = book.proxies.find_by_name("Webshare-ISP-02Oct-7")
+    assert book.proxies.status_of(dead) == "dead"
+    # A batch without a seller, or a day that is not one, is refused whole.
+    for batch in ({"seller": "", "tag": "02Oct"}, {"seller": "W", "tag": "2 Oct"}):
+        assert verbs.add_proxies(book, None, None, {
+            "rows": [{"raw": "1.2.3.9:9999:u:p"}], "batch": batch},
+            None)[0] == "refused"
+
+
+def test_free_takes_a_set_aside_exit_off_the_shelf(monkeypatch, make_settings):
+    """The Proxies page's switch turns a set-aside exit on with Free: tested,
+    then off the shelf. `release` keeps a shelf on purpose, so Free used to
+    leave it set aside after a passing test (2026-10-02)."""
+    from geelark_farm import builder
+
+    settings = make_settings(store_enabled=True)
+    monkeypatch.setattr(verbs.proxy_mod, "check",
+                        lambda c, p: {"outboundIP": "1.2.3.4"})
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    monkeypatch.setattr(builder.exit_health, "forgive_host",
+                        lambda s, host, by="", exit_key="": None)
+    book, row, said = _exit(status="set aside")
+    status, msg, _ = verbs.mark_proxy_free(
+        book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
+    assert status == "done" and row.values["Status"] == "free"
+    assert [s[0] for s in said if s[0] in ("unshelve", "release")] == ["unshelve"]
+    # One a phone still carries is not freed under it.
+    book, row, said = _exit(status="set aside")
+    row.values["Used By"] = "5441"
+    status, msg, _ = verbs.mark_proxy_free(
+        book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
+    assert status == "refused" and "5441" in msg
+    assert row.values["Status"] == "set aside" and not said
+
