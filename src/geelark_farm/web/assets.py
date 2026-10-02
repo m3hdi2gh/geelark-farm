@@ -35,6 +35,11 @@ JS = (_HERE / "dash.js").read_text(encoding="utf-8")
 #: console's (2026-09-29).
 STATION_CSS = (_HERE / "station.css").read_text(encoding="utf-8")
 STATION_JS = (_HERE / "station.js").read_text(encoding="utf-8")
+#: The full horizontal logo - the mark beside the IranSpoty wordmark, the
+#: wordmark on `currentColor`. The Station draws it in its header and the
+#: sign-in card above the form (2026-10-02): one file, so the two never
+#: spell the name differently. The whole pack is in `brand/`.
+BRAND_LOGO = (_HERE / "station_brand.svg").read_text(encoding="utf-8").strip()
 
 
 def _rev(*texts: str) -> str:

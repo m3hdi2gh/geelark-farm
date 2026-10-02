@@ -234,8 +234,16 @@ def test_the_sign_in_page_wears_the_iranspoty_name(web):
     assert "geelark" not in body.lower()
     assert "<title>Sign in — IranSpoty</title>" in body
     card = body[body.index('class="signin"'):]
-    assert card.index("<svg") < card.index("<b>IranSpoty</b>")
-    assert "<span>Cloud Farm</span>" in card
+    # The designer's full logo, where the mark sat beside the name typed in
+    # the page's font (2026-10-02) - the Station's own file, so the two
+    # never spell it differently, and named for a screen reader.
+    from geelark_farm.web import assets, station_pages
+
+    assert assets.BRAND_LOGO in card
+    assert assets.BRAND_LOGO == station_pages._BRAND
+    assert 'aria-label="IranSpoty"' in assets.BRAND_LOGO
+    assert "<b>IranSpoty</b>" not in card, "the name is the logo's now"
+    assert card.index(assets.BRAND_LOGO) < card.index("<span>Cloud Farm</span>")
     assert "Five wrong tries lock the name for a while." in card
     assert "one-time password" not in card, "the second sentence is gone"
     assert "<h2>" not in card, "the button says Sign in; no heading"
@@ -244,6 +252,25 @@ def test_the_sign_in_page_wears_the_iranspoty_name(web):
 
     _, _, wrong = web().login(password="nope")
     assert 'class="err" role="alert"' in wrong
+
+
+def test_cloud_farm_starts_under_the_name_not_under_the_mark():
+    """The line under the logo is set where the wordmark begins - its
+    first shape, the I, at 56.8 of the logo's 208.33 units - as on the
+    prototype the operator chose (2026-10-02). Read off the logo itself,
+    so a new logo with a wider mark says so here instead of drifting."""
+    import re
+
+    from geelark_farm.web import assets
+
+    width = float(re.search(r'viewBox="0 0 ([\d.]+) ',
+                            assets.BRAND_LOGO).group(1))
+    name_starts = float(re.search(r' d="M([\d.]+),',
+                                  assets.BRAND_LOGO).group(1))
+    set_at = re.search(r"\.signin-brand span\{padding-left:calc\(var\(--logo\)"
+                       r" \* ([\d.]+)\)", assets.CSS)
+    assert set_at, "the line is offset by a share of the logo's width"
+    assert abs(float(set_at.group(1)) - name_starts / width) < 0.0005
 
 
 def test_what_people_typed_into_the_sheet_cannot_script_the_page(web):

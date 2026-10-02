@@ -307,15 +307,19 @@ def _alert_strip(user: dict) -> str:
 
 
 def login(error: str = "") -> str:
-    """The page every operator and admin opens first: the IranSpoty mark,
-    the name over CLOUD FARM, the form, and one line about the lockout -
-    no heading, since the button says Sign in (the operator's design,
-    2026-09-28)."""
+    """The page every operator and admin opens first: the IranSpoty logo
+    over CLOUD FARM, the form, and one line about the lockout - no
+    heading, since the button says Sign in (the operator's design,
+    2026-09-28).
+
+    The logo is the designer's full horizontal one, the Station's own
+    file (`assets.BRAND_LOGO`), where the mark sat beside the name typed
+    in the page's font (the operator chose it from three, 2026-10-02).
+    It carries the name for a screen reader in its `aria-label`."""
     err = f'<p class="err" role="alert">{esc(error)}</p>' if error else ""
     body = (f'<div class="signin"><div class="card">'
-            f'<div class="signin-brand">{BRAND_MARK}'
-            f'<div class="signin-name"><b>IranSpoty</b>'
-            f'<span>Cloud Farm</span></div></div>'
+            f'<div class="signin-brand">{assets.BRAND_LOGO}'
+            f'<span>Cloud Farm</span></div>'
             f'<hr>'
             f'<form method="post" action="/login" class="field" '
             f'style="gap:14px">{err}'
