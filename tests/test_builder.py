@@ -7664,3 +7664,54 @@ def test_the_exit_is_claimed_for_the_builds_lane(make_settings, tmp_path, monkey
     row, exit_row = builder._pair_up(None, SimpleNamespace(gmails=gmails),
                                      settings, purpose="gpt")
     assert exit_row == "exit" and seen[0]["purpose"] == "gpt"
+
+
+def test_a_set_aside_exit_lets_go_of_a_phone_that_is_gone(monkeypatch):
+    """Set aside under a phone, then the phone went: the sweep let go only
+    of `on a phone` rows, so the exit named its phone for ever and the
+    Proxies page drew it "On 5534, then set aside" (2026-10-02). The phone
+    goes from the row; the person's shelf and a change of address stay -
+    and so does the rest clock, which a status write would restart."""
+    import threading
+
+    from geelark_farm import keeper
+    from tests.test_pools import PROXY_HEADERS, FakeWorksheet, proxy_row
+
+    pool_rows = [proxy_row(f"79.127.168.43:50101:user_{i}:pw") for i in (1, 2, 3)]
+    for i, r in enumerate(pool_rows, 1):
+        r[0] = f"PS{i}"
+    book = make_book(proxies=0)
+    book.proxies = type(book.proxies)(FakeWorksheet(PROXY_HEADERS, pool_rows),
+                                      PROXY_HEADERS, threading.Lock())
+    book.proxies.load()
+    ps1, ps2, ps3 = book.proxies._rows
+    for row, serial in ((ps1, "4001"), (ps2, "4002"), (ps3, "4003")):
+        book.proxies.spend(row, serial=serial)
+    book.proxies.shelve(ps1)                 # its phone 4001 is still up
+    book.proxies.shelve(ps2)                 # its phone 4002 is gone
+    ps3.values["Status"] = "change ip"       # its phone 4003 is gone too
+    live = [{"id": "P1", "serialNo": "4001", "status": 0,
+             "proxy": {"type": "socks5", "server": "79.127.168.43",
+                       "port": 50101, "username": "user_1", "password": "pw"}}]
+    monkeypatch.setattr(keeper.phones, "listing", lambda c: list(live))
+    written = []
+    real_set = type(book.proxies)._set
+    monkeypatch.setattr(type(book.proxies), "_set", lambda self, r, fields:
+                        written.append((r.values["Name"], dict(fields)))
+                        or real_set(self, r, fields))
+
+    class Client:
+        def data(self, path, payload, **_):
+            return {"list": []}
+
+    changed = keeper.sync_proxies(Client(), book, FakeLedger())
+    assert (book.proxies.status_of(ps1), ps1.values["Used By"]) == ("set aside", "4001")
+    assert (book.proxies.status_of(ps2), ps2.values["Used By"]) == ("set aside", "")
+    assert "the phone it stayed with is gone" in ps2.values["Note"]
+    assert (book.proxies.status_of(ps3), ps3.values["Used By"]) == ("change ip", "")
+    assert len(changed["released"]) == 2
+    assert all("Status" not in fields for name, fields in written
+               if name in ("PS2", "PS3")), "the rest clock is not restarted"
+    # Run again: nothing left to let go of.
+    assert keeper.sync_proxies(Client(), book, FakeLedger())["released"] == []
+

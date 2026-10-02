@@ -1209,6 +1209,18 @@ class ProxyPool(Pool):
         self._set(resource, {self.status_column: self.spent_status,
                              self.note_column: note})
 
+    def forget_phone(self, resource: Resource, *, note: str = "") -> None:
+        """The phone this exit stayed with is gone and the row still names
+        it. A person's shelf, or an address still to be changed, outlives
+        the phone: the serial goes, the status stays - and so does the rest
+        clock's stamp, which a status write would restart. The stale serial
+        kept three set-aside exits "on" phones deleted hours earlier
+        (2026-10-02)."""
+        fields = {self.serial_column: ""}
+        if note:
+            fields[self.note_column] = note
+        self._set(resource, fields)
+
     #: At most this many phones a Tehran day; blank is no cap (rev 44).
     daily_cap_column = "Uses per day"
 

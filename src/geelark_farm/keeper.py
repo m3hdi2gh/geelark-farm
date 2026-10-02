@@ -652,6 +652,20 @@ def sync_proxies(client: Client, book: Book,
             book.proxies.release(resource, note=(
                 "Free again - no phone is behind this exit any more."))
             changed["released"].append(resource.label)
+        elif (status in (book.proxies.shelved_status,
+                         book.proxies.needs_new_ip)
+              and (resource.values.get(book.proxies.serial_column)
+                   or "").strip()):
+            # Set aside, or waiting for a new address, under a phone that
+            # is gone: only `on a phone` was ever let go here, so these
+            # named their phone for ever (2026-10-02). The status is the
+            # person's or the address's, and stays.
+            book.proxies.forget_phone(resource, note=(
+                "Set aside by hand; the phone it stayed with is gone, and "
+                "it stays out of the builds until it is turned back on."
+                if status == book.proxies.shelved_status else
+                "Waiting for a new address; the phone it was on is gone."))
+            changed["released"].append(resource.label)
 
     for label, items in changed.items():
         if items:
