@@ -29,11 +29,16 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent / "static"
 
-CSS = (_HERE / "console.css").read_text(encoding="utf-8")
+#: The admin rail's own rules (2026-10-02). The console's pages and the
+#: admin's Station both draw the rail, and neither document loads the
+#: other's stylesheet, so it is one file appended to both.
+RAIL_CSS = (_HERE / "rail.css").read_text(encoding="utf-8")
+CSS = (_HERE / "console.css").read_text(encoding="utf-8") + "\n" + RAIL_CSS
 JS = (_HERE / "dash.js").read_text(encoding="utf-8")
 #: The operator Station's own pair: its document never loads the
 #: console's (2026-09-29).
-STATION_CSS = (_HERE / "station.css").read_text(encoding="utf-8")
+STATION_CSS = ((_HERE / "station.css").read_text(encoding="utf-8")
+               + "\n" + RAIL_CSS)
 STATION_JS = (_HERE / "station.js").read_text(encoding="utf-8")
 #: The full horizontal logo - the mark beside the IranSpoty wordmark, the
 #: wordmark on `currentColor`. The Station draws it in its header and the

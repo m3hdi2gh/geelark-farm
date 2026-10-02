@@ -343,9 +343,10 @@
 
     function may(k){ return !!(S && S.may && S.may[k]); }
     function q(c, k){ return c.el.querySelector('[data-k="' + k + '"]'); }
-    // While the dialog is up, the page under it cannot be reached.
+    // While the dialog is up, the page under it cannot be reached - nor
+    // an admin's rail beside it (2026-10-02).
     function hold(on){
-      [$('bar'), document.querySelector('main')].forEach(function(el){
+      [$('bar'), document.querySelector('main'), $('gf-rail')].forEach(function(el){
         if (el){ if (on) el.setAttribute('inert', ''); else el.removeAttribute('inert'); }
       });
     }

@@ -144,6 +144,94 @@ def _who_and_out(user: dict) -> str:
             f'<button class="quiet">Log out</button></form>')
 
 
+#: Before the rail, so its state is on <html> before the first paint: a
+#: rail folded on the last page would otherwise flash open on this one.
+#: Below 1280px it always starts folded - an open rail lies over the page
+#: there (rail.css), and one remembered open would cover every page.
+_RAIL_BOOT = ("<script>(function(){var d=document.documentElement,v=null;"
+              "try{v=localStorage.getItem('gf-rail')}catch(e){}"
+              "if(v==='icons'||innerWidth<1280)"
+              "d.setAttribute('data-rail','icons')})();</script>")
+#: After it: the button folds and opens the rail and says which it will
+#: do. A fold is remembered; an opening only where the rail has room to
+#: stay open beside the page. Esc folds a rail lying over the page.
+_RAIL_WIRE = ("<script>(function(){var d=document.documentElement,"
+              "b=document.getElementById('gf-rail-fold');if(!b)return;"
+              "function folded(){return d.getAttribute('data-rail')==='icons'}"
+              "function say(){var f=folded(),w=f?'Open the menu':'Fold the menu';"
+              "b.setAttribute('aria-expanded',f?'false':'true');"
+              "b.setAttribute('aria-label',w);b.title=w}"
+              "function set(f){if(f)d.setAttribute('data-rail','icons');"
+              "else d.removeAttribute('data-rail');say()}"
+              "say();b.addEventListener('click',function(){var f=!folded();set(f);"
+              "if(f||innerWidth>=1280){try{localStorage.setItem('gf-rail',"
+              "f?'icons':'open')}catch(e){}}});"
+              "document.addEventListener('keydown',function(e){"
+              "if(e.key==='Escape'&&!folded()&&innerWidth<1280&&innerWidth>900)"
+              "set(true)})})();</script>")
+#: The panel with its edge: the rail, folding. The chevron turns with it.
+_FOLD_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+              'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
+              'aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/>'
+              '<path d="M9 4v16"/><path class="fold-chev" d="M15 10l-2 2 2 2"/>'
+              '</svg>')
+_OUT_ICON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+             'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
+             'aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/>'
+             '<path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg>')
+
+
+def rail(user: dict | None, here: str = "") -> str:
+    """The admin's rail, on every console page and on the admin's Station
+    (2026-10-02, from the prototype the operator approved): the console's
+    name - no logo, every page under it carries one - the pages with their
+    counts, and who is signed in. It folds to its icons and remembers
+    that (rail.css, _RAIL_BOOT, _RAIL_WIRE).
+
+    Nothing for anybody else. An operator has one page, and a column down
+    the side of it whose only link is the page they are already on is
+    furniture: their name and the way out stand beside the title instead.
+    """
+    if user is None or not _keeps_the_console(user):
+        return ""
+    counts = user.get("nav") or {}
+    links = []
+    for path, label, key in _RAIL:
+        if path in ("/events", "/needs", "/logins") and \
+                user.get("sees") != "all":
+            continue
+        if path == "/users" and not user.get("user_admin"):
+            continue
+        n = ""
+        if key and counts.get(key) is not None:
+            hot = " hot" if key in ("pending", "app", "needs") \
+                and counts[key] else ""
+            n = f'<span class="rail-n{hot}">{int(counts[key])}</span>'
+        lit = (' class="rail-link here" aria-current="page"' if path == here
+               else ' class="rail-link"')
+        icon = _ICON_TAG.format(_ICONS.get(path, ""))
+        links.append(f'<a href="{path}"{lit}>{icon}'
+                     f'<span class="rail-lbl">{esc(label)}</span>{n}</a>')
+    name = str(user.get("username") or "?")
+    return (f'{_RAIL_BOOT}<div class="rail-dock">'
+            f'<nav class="rail-nav" id="gf-rail" aria-label="Admin console">'
+            f'<div class="rail-head">'
+            f'<span class="rail-title"><b>Admin</b> console</span>'
+            f'<button class="rail-fold" id="gf-rail-fold" type="button" '
+            f'aria-controls="gf-rail" aria-expanded="true" '
+            f'aria-label="Fold the menu" title="Fold the menu">{_FOLD_ICON}'
+            f'</button></div>'
+            f'<div class="rail-links">{"".join(links)}</div>'
+            f'<form class="rail-foot" method="post" action="/logout">'
+            f'<span class="rail-av" aria-hidden="true">{esc(name[:1])}</span>'
+            f'<span class="rail-who">{esc(name)}</span>'
+            f'<input type="hidden" name="csrf" '
+            f'value="{esc(user.get("csrf", ""))}">'
+            f'<button class="rail-out" type="submit" aria-label="Log out" '
+            f'title="Log out">{_OUT_ICON}</button></form>'
+            f'</nav></div>{_RAIL_WIRE}')
+
+
 def page(title: str, body: str, *, user: dict | None = None,
          refresh: int = 0, here: str = "", live: str = "",
          script: bool = True, bare: bool = False) -> str:
@@ -167,51 +255,7 @@ def page(title: str, body: str, *, user: dict | None = None,
     off a page's self-redraw also took its buttons' manners with it.
     `bare` is the viewer tab: no rail and no alert strip, the frame owns
     the window."""
-    header = ""
-    if bare:
-        pass
-    elif user is not None and not _keeps_the_console(user):
-        # No rail at all, rather than a rail with one entry on it. An
-        # operator has one page: a column down the side of it whose only
-        # link is the page they are already on is furniture, and the name
-        # and the way out read better beside the title than under it.
-        header = ""
-    elif user is not None:
-        counts = user.get("nav") or {}
-        links = [f'<nav><div class="brand">{_brand()}</div>']
-        for path, label, key in _RAIL:
-            # An operator has one page, so there is nowhere for a rail to
-            # go. Everything they do is on it, and a rail of links that
-            # all refuse them is worse than no rail: it spends the width
-            # to advertise what they may not have.
-            if not _keeps_the_console(user) and path != "/":
-                continue
-            # The Station is an admin's during the trial (2026-09-29); an
-            # operator reaches it as their `/` once the flag is on.
-            if path == "/station" and user.get("role") != "admin":
-                continue
-            if path in ("/events", "/needs", "/logins") and \
-                    user.get("sees") != "all":
-                continue
-            if path == "/users" and not (user.get("role") == "admin"
-                                         and user.get("user_admin")):
-                continue
-            n = ""
-            if key and counts.get(key) is not None:
-                hot = " hot" if key in ("pending", "app", "needs") \
-                    and counts[key] else ""
-                n = f'<span class="n{hot}">{int(counts[key])}</span>'
-            lit = ' class="here"' if path == here else ""
-            icon = _ICON_TAG.format(_ICONS.get(path, ""))
-            links.append(f'<a href="{path}"{lit}>{icon}{esc(label)}{n}</a>')
-        name = str(user.get("username") or "?")
-        links.append(f'<form method="post" action="/logout">'
-                     f'<span class="av">{esc(name[:1])}</span>'
-                     f'<span class="who">{esc(name)}</span>'
-                     f'<input type="hidden" name="csrf" '
-                     f'value="{esc(user.get("csrf", ""))}">'
-                     f'<button>Log out</button></form></nav>')
-        header = "".join(links)
+    header = "" if bare else rail(user, here)
     # The refresh the browser does by itself lives inside <noscript>: once
     # parsed, a meta refresh fires whether or not the script later removes
     # the tag, and it fired under an open manager and wiped the paste in it

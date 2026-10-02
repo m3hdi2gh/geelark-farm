@@ -91,7 +91,22 @@ def station_page(state: dict, user: dict) -> str:
     values = _common(state, user, "IranSpoty Station")
     values["NAME"] = _esc(name)
     values["INITIAL"] = _esc(initial)
+    values["RAILOPEN"], values["RAILCLOSE"] = _rail(user)
     return _fill(_STATION, values)
+
+
+def _rail(user: dict) -> tuple[str, str]:
+    """The admin rail around an admin's Station (2026-10-02): the rail
+    beside a column that holds the bar and the page. An operator's Station
+    gets neither - both halves are empty and the document is the one it
+    was. The rail is the console's own (`pages.rail`), so the two never
+    differ."""
+    from . import pages
+
+    drawn = pages.rail(user, "/station")
+    if not drawn:
+        return "", ""
+    return f'<div class="rail-shell">{drawn}<div class="rail-col">', "</div></div>"
 
 
 def live_page(live: dict, user: dict) -> str:

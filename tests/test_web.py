@@ -745,8 +745,9 @@ def test_the_rail_shows_the_stock_counts_and_lights_the_page(web,
     client.login()
     status, _, body = client.request("GET", "/pools/gmail")
     assert status == 200
-    assert 'href="/pools/gmail" class="here"' in body
-    assert '<span class="n">3</span>' in body          # gmail free count
+    assert ('href="/pools/gmail" class="rail-link here" '
+            'aria-current="page"') in body
+    assert '<span class="rail-n">3</span>' in body     # gmail free count
     assert "q1@x.com" in body and "q2@x.com" in body, "queued is the default"
     assert '<b class="figure" style="color:var(--green)">2</b> free' in body
     assert "enough for the next 2 builds" in body
@@ -790,7 +791,7 @@ def test_an_operator_has_the_dashboard_and_one_phone_and_nothing_else(
     # And there is no rail at all - not even one entry. A column down the
     # side whose only link is the page you are already on is furniture.
     _, _, body = client.request("GET", "/")
-    assert "<nav>" not in body
+    assert "<nav" not in body
     assert ">Gmail Pool<" not in body and ">Events<" not in body
     # The two things every console needs somewhere moved up beside the
     # title: who you are, and how you leave.
@@ -2711,7 +2712,7 @@ def test_boot_opens_a_tab_that_waits_for_the_live_screen(web, monkeypatch):
     assert 'id="gf-reload"' in body
     assert "frame.setAttribute('src','about:blank')" in body
     assert "This phone was put back" in body
-    assert 'var serial="1500"' in body and "<nav>" not in body, "bare"
+    assert 'var serial="1500"' in body and "<nav" not in body, "bare"
     # One fixed width for the viewer, and its box scaled to the window:
     # the phone fits any monitor, Back and Home included (2026-09-16).
     assert "u.searchParams.set('w',String(W))" in body
@@ -2983,14 +2984,14 @@ def test_the_rail_counts_what_needs_attention(web, monkeypatch):
     client.login()
     _, _, body = client.request("GET", "/")
     rail = body[body.index('href="/needs"'):body.index('href="/events"')]
-    assert '<span class="n hot">4</span>' in rail
+    assert '<span class="rail-n hot">4</span>' in rail
 
     monkeypatch.setattr(app_mod.read, "nav_counts",
                         lambda s: {"gmail": 3, "proxy": 2, "app": 0,
                                    "pending": 0, "needs": 0})
     _, _, body = client.request("GET", "/")
     rail = body[body.index('href="/needs"'):body.index('href="/events"')]
-    assert '<span class="n">0</span>' in rail
+    assert '<span class="rail-n">0</span>' in rail
 
 
 def _needs(monkeypatch):
@@ -4273,8 +4274,10 @@ def test_every_page_wears_the_iranspoty_brand(web, monkeypatch):
     """The dashboard's title, the admin's rail, the Boot tab's card and
     the tab icon all said geelark; each wears the IranSpoty mark and the
     name over CLOUD FARM now (the operator, 2026-09-28). The operator's
-    page has no rail, so the brand is its title; the admin's rail carries
-    it small and the title carries it too."""
+    page has no rail, so the brand is its title. The admin's rail carried
+    it small too, until the operator asked for no logo there - every
+    page under it carries one - and the console's name instead
+    (2026-10-02)."""
     from geelark_farm.web import pages
 
     _dash(monkeypatch)
@@ -4287,8 +4290,10 @@ def test_every_page_wears_the_iranspoty_brand(web, monkeypatch):
     assert "<span>Cloud Farm</span>" in top
     assert "<title>Dashboard — IranSpoty</title>" in body
     assert "geelark" not in body.lower().split("<main")[0], "the chrome"
-    rail = body[body.index("<nav>"):body.index("</nav>")]
-    assert 'class="brand"' in rail and "<b>IranSpoty</b>" in rail
+    rail = body[body.index('<nav class="rail-nav"'):body.index("</nav>")]
+    assert "<b>Admin</b> console" in rail
+    assert "brandmark" not in rail and "<b>IranSpoty</b>" not in rail, \
+        "no logo in the rail: the page under it carries one"
     assert "geelark farm" not in rail
     # The tab icon is the mark, not the mockup's phone - and in one
     # colour, black on light and white on dark, never the gradient: the
@@ -4312,7 +4317,7 @@ def test_every_page_wears_the_iranspoty_brand(web, monkeypatch):
     other = web()
     other.login(username="sara")
     _, _, op = other.request("GET", "/")
-    assert "<nav>" not in op
+    assert "<nav" not in op
     assert 'class="brandmark"' in op and 'class="whoout"' in op
     assert "Instance manager" not in op
 
@@ -8854,7 +8859,16 @@ def test_the_page_links_the_assets_and_carries_neither(web, monkeypatch):
     assert f'<link rel="stylesheet" href="{assets.CSS_PATH}">' in body
     assert f'<script src="{assets.JS_PATH}" defer></script>' in body
     assert "<style>" not in body, "the stylesheet is not in the page"
-    assert "(function(){" not in body, "and neither is the script"
+    # The console's script is not in the page. The only inline scripts
+    # are the rail's two: the fold has to be on <html> before the first
+    # paint, which a deferred script cannot do, so a rail folded on the
+    # last page would flash open on this one (2026-10-02).
+    from geelark_farm.web import pages
+
+    inline = re.findall(r"<script>(.*?)</script>", body, re.S)
+    assert inline == [pages._RAIL_BOOT[8:-9], pages._RAIL_WIRE[8:-9]]
+    assert sum(len(s) for s in inline) < 2048, "two small ones, no more"
+    assert assets.JS[:400] not in body, "and the console's script is not"
     # Both names are the content's own hash, so a deploy invalidates the
     # cache by construction.
     assert assets.REV in assets.CSS_PATH and assets.REV in assets.JS_PATH

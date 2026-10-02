@@ -1,0 +1,138 @@
+/* The admin rail (2026-10-02): the pages of the console and the Station of
+   an admin share it, so it is its own file, appended to both stylesheets
+   (assets.CSS and assets.STATION_CSS). Drawn in the language of the Station -
+   its glass bar, 32px quiet buttons, radius 10 - from the prototype the
+   operator approved. Every class starts with rail-: station.css owns
+   .who, .av and .n, and the dashboard owns .rail - its row of pool
+   cards - so the menu itself is .rail-nav.
+
+   Two states, kept on <html data-rail>: open (232px, icons and words) and
+   folded (data-rail="icons", 68px; the word flies out beside the icon on
+   hover or focus). A script before the rail sets it from localStorage
+   before the first paint, so a folded rail never flashes open.
+
+   Below 1280px the dock of the rail is always 68px wide and an open rail lies
+   over the page instead of pushing it: the Station sizes itself by the
+   window, not by the room beside the rail, and an open rail on a 1100px
+   window pushed its bar 112px past the edge (measured 2026-10-02). At
+   900px and below the rail is the old top bar of the console again. */
+.rail-dock{position:sticky;top:0;z-index:40;flex:none;width:232px;height:100vh;
+ transition:width .24s cubic-bezier(.2,.8,.2,1)}
+.rail-nav{position:absolute;top:0;left:0;bottom:0;width:232px;display:flex;
+ flex-direction:column;overflow:hidden;
+ background:linear-gradient(180deg,rgba(18,25,40,.97),rgba(12,18,30,.97));
+ border-right:1px solid #1d2636;
+ transition:width .24s cubic-bezier(.2,.8,.2,1),box-shadow .24s}
+html[data-rail="icons"] .rail-dock,html[data-rail="icons"] .rail-nav{width:68px}
+html[data-rail="icons"] .rail-nav{overflow:visible}
+
+/* head: the name of the console - no logo, the page under it carries one -
+   and the one button that folds the rail */
+.rail-head{flex:none;height:92px;display:flex;align-items:center;
+ justify-content:space-between;gap:8px;padding:0 12px 0 18px;
+ border-bottom:1px solid #1d2636}
+.rail-title{font-size:15px;line-height:1;letter-spacing:-.1px;white-space:nowrap;
+ color:#7f8ca1;font-weight:400}
+.rail-title b{color:#f2f6fc;font-weight:600}
+.rail-fold{flex:none;width:32px;height:32px;border-radius:10px;display:grid;
+ place-items:center;padding:0;border:0;background:none;color:#9db4d4;cursor:pointer;
+ transition:background .15s,color .15s}
+.rail-fold:hover{background:#1c2639;color:#f2f6fc}
+.rail-fold:focus-visible{outline:2px solid #7fb4ff;outline-offset:2px}
+.rail-fold svg{width:18px;height:18px}
+.rail-fold .fold-chev{transform-box:fill-box;transform-origin:center;
+ transition:transform .24s cubic-bezier(.2,.8,.2,1)}
+html[data-rail="icons"] .rail-fold .fold-chev{transform:scaleX(-1)}
+html[data-rail="icons"] .rail-head{justify-content:center;padding:0}
+html[data-rail="icons"] .rail-title{display:none}
+
+/* the pages */
+.rail-links{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;
+ padding:14px 12px;overflow-y:auto}
+html[data-rail="icons"] .rail-links{overflow:visible}
+.rail-link{position:relative;display:flex;align-items:center;gap:12px;height:40px;
+ flex:none;padding:0 12px;border-radius:10px;color:#9aa7ba;font-size:13.5px;
+ text-decoration:none;white-space:nowrap;transition:background .15s,color .15s}
+.rail-link svg{width:18px;height:18px;flex:none;opacity:.9}
+.rail-link:hover{background:#1c2639;color:#f2f6fc}
+.rail-link:focus-visible{outline:2px solid #7fb4ff;outline-offset:2px}
+.rail-link.here{color:#f2f6fc;font-weight:500;
+ background:linear-gradient(180deg,#172134,#121a29);box-shadow:inset 0 0 0 1px #232c3f}
+.rail-link.here::before{content:"";position:absolute;left:-12px;top:9px;bottom:9px;
+ width:3px;border-radius:0 3px 3px 0;background:linear-gradient(180deg,#00e7ff,#693c91)}
+.rail-n{margin-left:auto;font-family:'IBM Plex Mono',ui-monospace,monospace;
+ font-size:12px;color:#8391a8}
+.rail-n.hot{min-width:20px;height:20px;padding:0 6px;border-radius:10px;display:grid;
+ place-items:center;background:#3a2d10;color:#f0c064;font-weight:500}
+
+/* folded: the word flies out beside the icon, the count rides its corner */
+html[data-rail="icons"] .rail-link{width:44px;padding:0;gap:0;justify-content:center}
+html[data-rail="icons"] .rail-lbl{position:absolute;left:54px;top:50%;z-index:6;
+ transform:translate(-4px,-50%);opacity:0;pointer-events:none;padding:6px 10px;
+ border-radius:8px;background:#1c2639;color:#f2f6fc;border:1px solid #2c3a52;
+ font-size:12.5px;font-weight:400;box-shadow:0 10px 26px rgba(0,0,0,.4);
+ transition:opacity .12s,transform .12s}
+html[data-rail="icons"] .rail-link:hover .rail-lbl,
+html[data-rail="icons"] .rail-link:focus-visible .rail-lbl{opacity:1;
+ transform:translate(0,-50%)}
+html[data-rail="icons"] .rail-n{position:absolute;top:3px;right:1px;margin:0;
+ min-width:16px;height:16px;padding:0 4px;border-radius:8px;display:grid;
+ place-items:center;font-size:9.5px;background:#24314a;color:#d7dee9}
+html[data-rail="icons"] .rail-n.hot{background:#3a2d10;color:#f0c064}
+
+/* foot: who is signed in, and the way out */
+.rail-foot{flex:none;display:flex;align-items:center;gap:10px;margin:0;
+ padding:14px 12px 16px 16px;border-top:1px solid #1d2636}
+.rail-av{width:30px;height:30px;flex:none;border-radius:15px;display:grid;
+ place-items:center;background:#24314a;color:#b9cae6;font-size:13px;font-weight:600;
+ text-transform:uppercase}
+.rail-who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+ font-size:13px;color:#b9c4d4}
+.rail-out{flex:none;width:32px;height:32px;border-radius:10px;display:grid;
+ place-items:center;padding:0;border:0;background:none;color:#9db4d4;cursor:pointer;
+ transition:background .15s,color .15s}
+.rail-out:hover{background:#1c2639;color:#f2f6fc}
+.rail-out:focus-visible{outline:2px solid #7fb4ff;outline-offset:2px}
+.rail-out svg{width:16px;height:16px}
+html[data-rail="icons"] .rail-foot{flex-direction:column;gap:8px;padding:12px 0 16px}
+html[data-rail="icons"] .rail-who{display:none}
+
+/* The Station of an admin: the rail beside a column holding its bar and
+   page. Nothing here exists for an operator - their Station has no
+   rail and no column. */
+.rail-shell{display:flex;min-height:100vh}
+.rail-col{flex:1;min-width:0}
+
+/* Narrower than 1280px: the dock keeps 68px, an open rail lies over the
+   page with a shadow under its edge. */
+@media (max-width:1279px){
+ .rail-dock{width:68px}
+ html:not([data-rail="icons"]) .rail-nav{box-shadow:18px 0 44px rgba(0,0,0,.5)}
+}
+
+/* 900px and below: the rail is a bar across the top, every link in it,
+   the way the rail of the console has always been on a phone. Folding means
+   nothing there, so the head and its button are gone. */
+@media (max-width:900px){
+ .rail-shell{flex-direction:column}
+ .rail-dock,html[data-rail="icons"] .rail-dock{position:static;width:auto;height:auto}
+ .rail-nav,html[data-rail="icons"] .rail-nav{position:static;width:auto;flex-direction:row;
+  flex-wrap:wrap;align-items:center;gap:2px;padding:10px 12px;border-right:0;
+  border-bottom:1px solid #1d2636;overflow:visible;box-shadow:none}
+ .rail-head{display:none}
+ /* the links and the way out wrap as one row of the bar, the way out last */
+ .rail-links,html[data-rail="icons"] .rail-links{display:contents}
+ .rail-link,html[data-rail="icons"] .rail-link{width:auto;height:34px;padding:0 10px;
+  gap:8px;font-size:13px}
+ .rail-link.here::before{display:none}
+ html[data-rail="icons"] .rail-lbl{position:static;transform:none;opacity:1;padding:0;
+  border:0;background:none;box-shadow:none;font-size:13px;color:inherit}
+ html[data-rail="icons"] .rail-n{position:static;margin-left:auto}
+ .rail-foot,html[data-rail="icons"] .rail-foot{flex-direction:row;margin-left:auto;
+  padding:0;border:0}
+ html[data-rail="icons"] .rail-who{display:block}
+}
+
+@media (prefers-reduced-motion:reduce){
+ .rail-dock,.rail-nav,.rail-lbl,.rail-link,.rail-fold .fold-chev{transition:none}
+}

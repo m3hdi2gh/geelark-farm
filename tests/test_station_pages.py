@@ -81,7 +81,13 @@ def test_the_station_document_is_its_own_shell():
     assert f'<script src="{assets.STATION_JS_PATH}" defer></script>' in body
     assert assets.CSS_PATH not in body, "never the console's stylesheet"
     assert assets.JS_PATH not in body, "never the console's script"
-    assert "<nav" not in body and 'name="gf-live"' not in body
+    assert 'name="gf-live"' not in body
+    # An admin's Station wears the console's rail beside it; an
+    # operator's has none, and no column either (2026-10-02).
+    assert body.count('<nav class="rail-nav"') == 1
+    assert '<div class="rail-shell">' in body and 'href="/station"' in body
+    op = station_pages.station_page(_state(), dict(USER, role="operator"))
+    assert "<nav" not in op and "rail-shell" not in op and "rail-col" not in op
     assert body.count('id="brandgrad"') == 1
     assert re.search(r'<form class="out-form" method="post" action="/logout">'
                      r'<input type="hidden" name="csrf" value="c5rf-token">',
@@ -108,7 +114,8 @@ def test_the_first_paint_json_cannot_close_its_script():
                    notes=[{"id": "e1", "text": "a\u2028b\u2029c", "tone": "gpt"}])
     body = station_pages.station_page(state, USER)
     assert "</script><b>" not in body
-    assert body.count("</script>") == 2, "the page's own two, no more"
+    # The page's own two, and an admin's rail's two (2026-10-02).
+    assert body.count("</script>") == 4, "the page's two and the rail's two"
     back = _island(body)
     assert back["me"]["name"] == nasty
     assert back["me"]["user"] == "{{CSRF}}", "a brace in the state is not a placeholder"
@@ -497,7 +504,10 @@ def test_the_station_assets_are_served_exactly_and_fold_into_the_rev():
         (assets.CSS + "\0" + assets.JS).encode("utf-8")).hexdigest()[:12]
     assert assets.REV == assets._rev(assets.CSS, assets.JS,
                                      assets.STATION_CSS, assets.STATION_JS)
+    # The Station's file with the rail's appended: the admin's Station
+    # draws the console's rail (2026-10-02).
     assert assets.STATION_CSS == (STATIC / "station.css").read_text(
+        encoding="utf-8") + "\n" + (STATIC / "rail.css").read_text(
         encoding="utf-8")
     assert assets.STATION_JS == (STATIC / "station.js").read_text(
         encoding="utf-8")

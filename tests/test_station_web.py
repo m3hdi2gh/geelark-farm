@@ -237,7 +237,7 @@ def test_the_rail_has_the_station_right_after_the_dashboard_for_an_admin(
     assert "<rect" in pages._ICONS["/station"]
     client = _signed(web)
     _, _, body = _get(client, "/")
-    rail = body[body.index("<nav>"):body.index("</nav>")]
+    rail = body[body.index('<nav class="rail-nav"'):body.index("</nav>")]
     assert rail.index('href="/"') < rail.index('href="/station"') < \
         rail.index('href="/pools/gmail"')
     # An operator's pages carry no rail at all, and the page loop skips

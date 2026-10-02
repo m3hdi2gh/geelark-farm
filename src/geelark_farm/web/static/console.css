@@ -15,14 +15,8 @@ a{color:var(--blue);text-decoration:none} a:hover{color:#a8ccff}
  a,button,.btn,input,textarea,select,tr{transition:background-color .12s,
   border-color .12s,color .12s}}
 .shell{display:flex;min-height:100vh}
-/* ---- the rail */
-nav{width:224px;flex-shrink:0;background:var(--rail);border-right:1px solid
- var(--line2);
- padding:22px 12px 16px;display:flex;flex-direction:column;gap:3px;position:sticky;
- top:0;height:100vh}
-nav .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;
- letter-spacing:.4px;color:#eef3fa;padding:2px 12px 22px}
-nav .brand svg{flex-shrink:0}
+/* ---- the rail is rail.css, shared with the Station of an admin and
+   appended to this file by assets.CSS (2026-10-02). */
 /* ---- the brand: the mark beside the name over CLOUD FARM. One block,
    sized by where it sits - the page title (32px mark), the rail (24px),
    the Boot tab card (40px). The glow under the mark is the logo cyan at
@@ -35,33 +29,8 @@ nav .brand svg{flex-shrink:0}
 .brandname span{font-size:10px;font-weight:500;color:#6fd3e8;letter-spacing:2.6px;
  text-transform:uppercase}
 h2 .brandmark{font-weight:inherit}
-nav .brand .brandmark svg{width:24px;filter:none}
-nav .brand .brandname b{font-size:15px}
-nav .brand .brandname span{font-size:9px;letter-spacing:2.3px}
 .card .brand .brandmark svg{width:40px}
 .card .brand .brandname b{font-size:20px}
-nav a{display:flex;align-items:center;gap:11px;height:40px;padding:0 12px;
- border-radius:7px;color:#9aa7ba;font-size:14px;position:relative}
-nav a svg{width:17px;height:17px;flex-shrink:0;opacity:.85}
-nav a:hover{color:#fff;background:#141c2b}
-nav a.here{background:#1a2334;color:#fff;font-weight:500}
-nav
- a.here::before{content:"";position:absolute;left:-12px;top:10px;bottom:10px;width:3px;
- border-radius:0 3px 3px 0;background:#4f8ef7}
-nav a .n{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--dim)}
-nav a .n.hot{min-width:20px;height:20px;display:flex;align-items:center;
- justify-content:center;border-radius:10px;background:var(--amber-bg);
- color:var(--amber);font-weight:500}
-nav form{margin-top:auto;display:flex;align-items:center;gap:10px;padding:14px 8px 0;
- border-top:1px solid var(--line2)}
-nav form .av{width:30px;height:30px;border-radius:15px;background:#24314a;display:flex;
- align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#b9cae6;
- flex-shrink:0;text-transform:uppercase}
-nav form span.who{color:#b9c4d4;font-size:13px;overflow:hidden;text-overflow:ellipsis;
- white-space:nowrap}
-nav form button{margin-left:auto;background:none;border:0;color:var(--dim);
- font-size:12px;cursor:pointer;font-family:inherit;padding:6px 8px;border-radius:5px}
-nav form button:hover{color:#fff;background:#141c2b}
 /* ---- the phones table, standing in its own panel */
 .slab{background:var(--panel);border:1px solid var(--line);border-radius:10px;
  overflow:hidden}
@@ -1022,13 +991,6 @@ tr.now td:last-child{border-radius:0 8px 8px 0}
  background:var(--green);box-shadow:0 0 6px var(--green)}
 @media (max-width:900px){
  .shell{flex-direction:column}
- nav{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;
-  align-items:center;padding:10px 12px;gap:2px;border-right:0;
-  border-bottom:1px solid var(--line2)}
- nav .brand{padding:4px 10px;width:100%}
- nav a{height:34px;padding:0 10px;font-size:13px}
- nav a.here::before{display:none}
- nav form{margin-top:0;margin-left:auto;padding:0;border:0}
  main{padding:18px 16px 40px}
  .grid2,.grid3,.tiles,.ticks{grid-template-columns:1fr}
  .story .item{grid-template-columns:1fr}
