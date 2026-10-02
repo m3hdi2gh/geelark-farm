@@ -1300,3 +1300,26 @@ def test_a_person_freeing_a_gmail_takes_it_off_the_refund_list():
     src = inspect.getsource(pgpool.ResourceTable.leave_refund_list)
     assert "refund_state = ''" in src and "refund_at = NULL" in src
     assert "coalesce(refund_state, '') <> ''" in src
+
+
+def test_credentials_with_a_colon_or_an_at_read_back_the_same():
+    """The add stores four columns; the row was read back as host:port:
+    user:pass, which a ":" or "@" in the credentials - or a username without
+    a password - turns into a string parse() refuses, and every press on
+    the row then failed (the audit, 2026-10-02)."""
+    table = MemoryTable()
+    pool = PgProxyPool(table)
+    pool.load()
+    for i, raw in enumerate(("user:pa:ss@10.0.0.1:1080", "us@er:pass@10.0.0.2:1080",
+                             "tok:@10.0.0.3:1080", "10.0.0.4:1080:u:p",
+                             "10.0.0.5:1080")):
+        pool.append(**{"Name": f"C{i}", "Proxy String": raw, "Status": "free"})
+    pool.load()
+    got = {r.values["Name"]: r for r in pool._rows}
+    assert all(r.error is None and r.proxy is not None for r in got.values())
+    assert (got["C0"].proxy.username, got["C0"].proxy.password) == ("user", "pa:ss")
+    assert (got["C1"].proxy.username, got["C1"].proxy.password) == ("us@er", "pass")
+    assert (got["C2"].proxy.username, got["C2"].proxy.password) == ("tok", "")
+    assert got["C3"].values["Proxy String"] == "10.0.0.4:1080:u:p", "plain rows read as before"
+    assert got["C4"].values["Proxy String"] == "10.0.0.5:1080"
+

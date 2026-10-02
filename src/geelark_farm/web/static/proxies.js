@@ -327,7 +327,8 @@ function famList() {
     f.label = [f.name, f.type].filter(Boolean).join(" ") + (f.when ? " \u00b7 " + f.when : "");
     f.leaving = f.leaving || 0;
     // In play while any proxy is handed out - free, or on a phone it keeps.
-    f.on = f.ex.some(e => e.s === "free" || (e.s === "phone" && !e.after));
+    f.on = f.ex.some(e => inPlay(e) || pend.get(e.id) === "free");
+    f.busy = f.ex.some(e => pend.get(e.id) === "free");
     f.n = sum(f.v); f.adv = advice(f.v); return f;
   })
     .sort((a, b) => b.on - a.on || order[a.adv[0]] - order[b.adv[0]] || (pct(b.v[0], b.n) ?? -1) - (pct(a.v[0], a.n) ?? -1) || b.n - a.n)
@@ -373,7 +374,7 @@ function renderFams() {
     return '<div class="fam ' + (one || "either") + (view.fam === f.key ? " on" : "") + (off ? " paused" : "") + (flashFam === f.key ? " flash" : "") + still + '" style="--i:' + i + '">' +
       '<button class="hit" type="button" data-fam="' + k + '" aria-pressed="' + (view.fam === f.key) + '" aria-label="Show only the proxies of ' + esc(f.label) + '"></button>' +
       '<span class="top">' + tile(one) + '<span class="nm"><b>' + esc(f.name) + '</b><small>' + (f.type ? '<span class="ty">' + esc(f.type) + '</span> \u00b7 ' : '') + esc(f.when) + '</small></span><span class="adv ' + f.adv[0] + '">' + f.adv[1] + '</span>' +
-      '<button class="sw' + (litFam === f.key ? ' lit' : '') + '" type="button" role="switch" aria-checked="' + f.on + '" data-bsw="' + k + '" aria-label="' + esc(f.label) + ' in play" title="' + (f.on ? "In play: turn off to set the whole batch aside" : "Set aside: turn on to put the whole batch back in play") + '"><i></i></button>' +
+      '<button class="sw' + (f.busy ? ' busy' : '') + (litFam === f.key ? ' lit' : '') + '" type="button" role="switch" aria-checked="' + f.on + '"' + (f.busy ? ' aria-busy="true"' : '') + ' data-bsw="' + k + '" aria-label="' + esc(f.label) + ' in play" title="' + (f.on ? "In play: turn off to set the whole batch aside" : "Set aside: turn on to put the whole batch back in play") + '"><i></i></button>' +
       '<button class="bm' + (menu === mk ? " on" : "") + '" type="button" data-menu="' + esc(mk) + '" aria-haspopup="dialog" aria-expanded="' + (menu === mk) + '" aria-label="Batch actions for ' + esc(f.label) + '">' + SVG(ICON.more, 2) + '</button></span>' +
       '<span class="dots"><span class="dd" aria-hidden="true">' + dots + '</span><small>' + parts + '</small></span>' + rnd +
       '<span class="rates"><span class="rate ' + (f.n ? "g" : "na") + '"><b class="tab">' + (f.n ? d + "%" : "\u2014") + '</b><small>Done</small></span>' +
@@ -541,12 +542,13 @@ function batchDo(kind, key) {
 function renderSel() {
   const host = el("sel");
   if (!ticked.size) { host.innerHTML = ""; document.querySelector("main").style.paddingBottom = ""; return; }
-  const sel = EX.filter(e => ticked.has(e.id)), on = sel.filter(inPlay).length, hid = sel.filter(e => !passes(e)).length;
+  const sel = EX.filter(e => ticked.has(e.id)), on = sel.filter(e => inPlay(e) || pend.get(e.id) === "free").length, hid = sel.filter(e => !passes(e)).length;
+  const testing = sel.some(e => pend.get(e.id) === "free");
   const st = on === sel.length ? "true" : on ? "mixed" : "false";
   // From all on a press sets them aside; from some or none it puts them all in play.
   // Ticked rows a filter hides are still acted on - so the bar says so.
   const inner = '<b>' + ticked.size + ' selected' + (hid ? '<small>' + hid + ' not shown</small>' : '') + '</b>' +
-    '<span class="sws"><button class="sw" type="button" role="checkbox" aria-checked="' + st + '" data-bulk="' + (st === "true" ? "aside" : "free") + '" data-keep="1" aria-label="The ticked proxies in play"><i></i></button>' +
+    '<span class="sws"><button class="sw' + (testing ? ' busy' : '') + '" type="button" role="checkbox" aria-checked="' + st + '" data-bulk="' + (st === "true" ? "aside" : "free") + '" data-keep="1" aria-label="The ticked proxies in play"><i></i></button>' +
     '<span>In play<small class="tab">' + on + ' of ' + sel.length + '</small></span></span>' +
     '<button class="act" type="button" data-bulk="lane:gpt">Keep for GPT</button><button class="act" type="button" data-bulk="lane:spotify">Keep for Spotify</button>' +
     '<button class="act" type="button" data-bulk="cap:2">Cap 2/day</button><button class="act" type="button" data-bulk="cap:0">No cap</button>' +
@@ -611,8 +613,7 @@ function say(text, ok) {
 function apply(kind, ids, who, endSelection, fam) {
   const rows = EX.filter(e => ids.has(e.id));
   if (menu) closeMenu(); else renderPop();
-  if (endSelection) ids.forEach(id => ticked.delete(id));
-  if (!rows.length) { renderAll(); return; }
+  if (!rows.length) { renderAll(); redrawDrawer(); return; }
   busy++;
   send("/pools/proxy/do", {what: kind, ids: rows.map(e => e.id).join(",")}).then(a => {
     busy--;
@@ -621,7 +622,8 @@ function apply(kind, ids, who, endSelection, fam) {
     // Newer than any state a poll already on its way will bring.
     held = null; drawnAt = ++seq;
     const went = items.filter(i => i.said === "done"), waiting = items.filter(i => i.said === "queued" || i.said === "pending");
-    if (a.state) load(a.state);
+    if (a.state) { load(a.state); drawnText = JSON.stringify(a.state); }
+    if (endSelection) ids.forEach(id => ticked.delete(id));
     if (kind === "remove") {
       went.forEach(i => ticked.delete(i.id));
       // A batch whose last proxy went takes its filter with it.
@@ -659,10 +661,10 @@ function told(kind, rows, by, who) {
   if (kind === "free") {
     words = !wait.length ? "kept in play after " + pl("its phone", "their phones")
       : !went.length ? pl("being tested, and back in play if it answers", "being tested, and back in play as each answers")
-      : "back in play: " + went.length + " kept on their phones, " + wait.length + " being tested first";
+      : "turned on - " + went.length + " kept on " + (went.length === 1 ? "its phone" : "their phones") + ", " + wait.length + " being tested first";
   } else if (kind === "aside") {
     const waits = went.filter(([e]) => e.s === "phone").length;
-    words = waits && waits === n ? "set aside once " + pl("its phone goes", "their phones go") : "set aside" + (waits ? ", " + waits + " of them once their phones go" : "");
+    words = waits && waits === n ? "set aside once " + pl("its phone goes", "their phones go") : "set aside" + (waits ? ", " + (waits === 1 ? "1 of them once its phone goes" : waits + " of them once their phones go") : "");
   } else if (kind.startsWith("lane:")) { const l = kind.slice(5); words = l ? "kept for " + laneWord(l) : "opened to either lane"; }
   else if (kind.startsWith("cap:")) { const c = +kind.slice(4); words = c ? "capped at " + c + " a day" : "uncapped"; }
   else if (kind === "test") words = "being tested; the address " + pl("it", "each") + " comes out at is read";
@@ -758,7 +760,8 @@ function drawerHtml(e) {
 const okExit = x => x.port >= 1 && x.port <= 65535 && /[A-Za-z0-9]/.test(x.host) ? x : null;
 function parseExit(line) {
   // scheme://[user[:pass]@]host:port - the scheme names the type
-  let m = /^(socks5h?|socks4a?|https?):\/\/(?:([^:@\s\/]+)(?::(\S*))?@)?([^:@\s\/]+):(\d{1,5})$/i.exec(line);
+  line = line.replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+  let m = /^(socks5h?|socks4a?|https?):\/\/(?:([^:@\s\/]+)(?::(\S*))?@)?([^:@\s\/]+):(\d{1,5})\/?$/i.exec(line);
   if (m) return okExit({type: /^http/i.test(m[1]) ? "HTTP" : /^socks4/i.test(m[1]) ? "SOCKS4" : "SOCKS5", host: m[4], port: +m[5], user: m[2] || "", pass: m[3] || ""});
   // host:port[:user:pass] - a password may hold ":" or "@"
   m = /^([^:@\s\/]+):(\d{1,5})(?::([^:\s]+):(\S+))?$/.exec(line);
@@ -906,8 +909,9 @@ function closeMenu(back) {
 function renderList() { renderTools(); renderRows(); renderSel(); }
 /* A redraw replaces the buttons it draws; the focus goes back to the new
    button that stands for the same thing, in the drawer first. */
-const FOCUS_KEYS = ["data-seg", "data-k", "data-flag", "data-tick", "data-psw", "data-bsw", "data-keep", "data-menu", "data-fam", "data-open", "data-clear"];
-const focusKey = a => !a || a === document.body ? "" : FOCUS_KEYS.map(k => a.hasAttribute(k) ? "[" + k + '="' + a.getAttribute(k) + '"]' : "").join("");
+const FOCUS_KEYS = ["data-seg", "data-k", "data-flag", "data-tick", "data-psw", "data-bsw", "data-keep", "data-menu", "data-fam", "data-open", "data-clear", "data-bulk", "data-copy"];
+// The bar's switch is known by data-keep alone: its data-bulk flips with its state.
+const focusKey = a => !a || a === document.body ? "" : FOCUS_KEYS.map(k => a.hasAttribute(k) && !(k === "data-bulk" && a.hasAttribute("data-keep")) ? "[" + k + '="' + a.getAttribute(k) + '"]' : "").join("");
 function refocus(key) {
   if (!key) return;
   const d = el("layer").querySelector(".draw"), b = (d && d.querySelector(key)) || document.querySelector(key);
@@ -938,9 +942,9 @@ function onClick(ev) {
     return;
   }
   const sw = t.closest("[data-bsw]");
-  if (sw) { const on = sw.getAttribute("aria-checked") !== "true"; slide(sw, on, () => setBatch(sw.dataset.bsw, on)); return; }
+  if (sw) { if (sw.classList.contains("busy")) return; const on = sw.getAttribute("aria-checked") !== "true"; slide(sw, on, () => setBatch(sw.dataset.bsw, on)); return; }
   const ps = t.closest("[data-psw]");
-  if (ps) { if (ps.classList.contains("busy")) return; const on = ps.getAttribute("aria-checked") !== "true"; slide(ps, on, () => { apply(on ? "free" : "aside", new Set([+ps.dataset.psw])); redrawDrawer(); }); return; }
+  if (ps) { if (ps.classList.contains("busy")) return; const on = ps.getAttribute("aria-checked") !== "true"; slide(ps, on, () => apply(on ? "free" : "aside", new Set([+ps.dataset.psw]))); return; }
   const bd = t.closest("[data-bdo]");
   if (bd) {
     const from = menuFrom && menuFrom.getAttribute("data-menu");
@@ -979,7 +983,7 @@ function onClick(ev) {
   const bk = t.closest("[data-bulk]");
   if (bk) {
     if (bk.dataset.bulk === "clear") { ticked.clear(); renderRows(); renderSel(); }
-    else if (bk.dataset.keep) { const kind = bk.dataset.bulk; slide(bk, kind === "free", () => apply(kind, new Set(ticked))); }
+    else if (bk.dataset.keep) { if (bk.classList.contains("busy")) return; const kind = bk.dataset.bulk; slide(bk, kind === "free", () => apply(kind, new Set(ticked))); }
     else apply(bk.dataset.bulk, new Set(ticked), "", true);
     return;
   }
@@ -1107,14 +1111,20 @@ function take(d) {
    every two seconds while one is open, every twenty otherwise. A state that
    arrives while a menu is open or a press is on its way waits for it. */
 const jobs = [], pend = new Map();
-let pollTimer = 0, polling = false, etag = "", held = null, seq = 0, drawnAt = 0;
+let pollTimer = 0, polling = false, etag = "", held = null, heldText = "", seq = 0, drawnAt = 0;
+/* The state last drawn, as the farm sent it: a poll that brings the same
+   one draws nothing, so a selection, the focus and a busy switch's pulse
+   are left alone. */
+let drawnText = "";
 function poll(ms) { clearTimeout(pollTimer); pollTimer = setTimeout(refresh, ms); }
 const quiet = () => !menu && !busy && !document.querySelector(".sw:disabled");
-const idle = () => quiet() && !cmpOpen && !el("paste").value.trim() && !el("layer").firstChild && !ticked.size && !jobs.length;
+const idle = () => quiet() && !cmpOpen && !el("paste").value.trim() && !el("layer").firstChild && !ticked.size && !jobs.length &&
+  !narrowed() && !el("q").value.trim() && view.sort === "name" && view.dir === 1 && view.range === "a" && view.axis === "day";
 function watch(kind, items, who, rows) {
-  const job = {kind: kind === "free" ? "free" : "test", who, rows, at: Date.now(), items: items.map(i => ({id: i.id, req: i.req, open: true}))};
-  job.items.forEach(i => pend.set(i.id, job.kind));
-  jobs.push(job);
+  const k = kind === "free" ? "free" : "test", seen = new Set(jobs.flatMap(j => j.items.filter(i => i.open).map(i => i.req)));
+  items.forEach(i => pend.set(i.id, k));
+  const fresh = items.filter(i => !seen.has(i.req));
+  if (fresh.length) jobs.push({kind: k, who, rows, at: Date.now(), items: fresh.map(i => ({id: i.id, name: i.name, req: i.req, open: true}))});
   poll(1500);
 }
 function refresh() {
@@ -1123,36 +1133,50 @@ function refresh() {
   const open = [...new Set(jobs.flatMap(j => j.items.filter(i => i.open).map(i => i.req)))], mine = ++seq;
   get("/pools/proxy/state" + (open.length ? "?req=" + open.join(",") : ""), open.length ? "" : etag).then(a => {
     polling = false;
-    // Signed out meanwhile: to the sign-in, not a page that quietly stops.
-    if (!a.ok && a.go) { location.href = a.go; return; }
-    // Asked before a press answered: older than what the page shows.
-    if (mine < drawnAt) { poll(1000); return; }
-    if (a.ok && !a.same) {
-      if (a.etag) etag = a.etag;
-      if (a.rev && REV && a.rev !== REV && idle()) { location.reload(); return; }
-      if (a.state) held = a.state;
-      settle(a.reqs || {});
+    let next = 20000, leaving = false;
+    // Whatever goes wrong in one answer, the page keeps asking.
+    try {
+      // Signed out meanwhile: to the sign-in, not a page that quietly stops.
+      if (!a.ok && a.go) { leaving = true; location.href = a.go; return; }
+      // Asked before a press answered: older than what the page shows.
+      if (mine < drawnAt) { next = 1000; return; }
+      if (a.ok && !a.same) {
+        if (a.etag) etag = a.etag;
+        if (a.rev && REV && a.rev !== REV && idle()) { leaving = true; location.reload(); return; }
+        if (a.state) { const text = JSON.stringify(a.state); if (text !== drawnText) { held = a.state; heldText = text; } }
+        settle(a.reqs || {});
+      }
+      const ended = jobs.filter(j => j.items.every(i => !i.open));
+      if ((held || ended.length) && quiet()) {
+        const d = held || DATA;
+        if (held) drawnText = heldText;
+        held = null; drawnAt = mine;
+        ended.forEach(j => jobs.splice(jobs.indexOf(j), 1));
+        // A proxy's marker goes with the last request still open on it.
+        ended.forEach(j => j.items.forEach(i => { if (i.id && !jobs.some(o => o.items.some(x => x.open && x.id === i.id))) pend.delete(i.id); }));
+        ended.forEach(j => mark(j, d));
+        take(d);
+        const said = ended.map(words);
+        if (said.length) say(said.map(s => s[0]).join(" "), said.every(s => s[1]));
+      }
+      jobs.forEach(j => {
+        if (!j.told && Date.now() - j.at > 180000) { j.told = true; say("The farm has not finished testing yet - Requests shows where it stands; this page keeps watching."); }
+      });
+      const slow = jobs.length && jobs.every(j => Date.now() - j.at > 180000);
+      const waiting = held || jobs.some(j => j.items.every(i => !i.open));
+      next = waiting ? 1500 : jobs.length ? (slow ? 20000 : 2000) : document.hidden ? 60000 : 20000;
+    } finally {
+      if (!leaving) poll(next);
     }
-    if (held && quiet()) {
-      const d = held, ended = jobs.filter(j => j.items.every(i => !i.open));
-      held = null; drawnAt = mine;
-      ended.forEach(j => { jobs.splice(jobs.indexOf(j), 1); j.items.forEach(i => { if (i.id) pend.delete(i.id); }); });
-      ended.forEach(j => mark(j, d));
-      take(d);
-      const said = ended.map(words);
-      if (said.length) say(said.map(s => s[0]).join(" "), said.every(s => s[1]));
-    }
-    jobs.forEach(j => {
-      if (!j.told && Date.now() - j.at > 180000) { j.told = true; say("The farm has not finished testing yet - Requests shows where it stands; this page keeps watching."); }
-    });
-    const slow = jobs.length && jobs.every(j => Date.now() - j.at > 180000);
-    poll(held ? 1500 : jobs.length ? (slow ? 20000 : 2000) : document.hidden ? 60000 : 20000);
   });
 }
 function settle(reqs) {
   jobs.forEach(j => j.items.forEach(i => {
     const r = reqs[i.req];
-    if (i.open && r && r.status !== "queued" && r.status !== "running") Object.assign(i, {open: false, ok: r.status === "done", note: r.result, r});
+    if (!i.open || !r || r.status === "queued" || r.status === "running") return;
+    // A request about several proxies says which of them went well.
+    const many = (r.good || []).length + (r.bad || []).length > 0;
+    Object.assign(i, {open: false, ok: many ? (r.good || []).includes(i.name) : r.status === "done", note: r.result, r});
   }));
 }
 /* What an ended request changed glows once; a proxy that went back in play
@@ -1184,7 +1208,7 @@ function words(job) {
     return [stop(cap1(note)), !!its[0].ok];
   }
   const one = job.who ? job.who + ": " : "";
-  if (job.kind === "free") return [one + good + " back in play" + (bad ? ", " + bad + " did not answer and stay out" : "") + ".", !bad];
+  if (job.kind === "free") return [one + good + " back in play" + (bad ? ", " + bad + (bad === 1 ? " did not answer and stays out" : " did not answer and stay out") : "") + ".", !bad];
   return [one + good + " answered" + (bad ? ", " + bad + " did not" : "") + ".", !bad];
 }
 /* The archive: the removed proxies, newest first, in a drawer of its own. */
@@ -1198,7 +1222,7 @@ function openArchive(from) {
       ", newest first. A removed proxy keeps its name; its number is never given again.";
     el("layer").innerHTML = '<div class="scrim"></div><aside class="draw opening" role="dialog" aria-modal="true" aria-label="Removed proxies" data-arch="1">' +
       '<header><span class="id"><b>Removed proxies</b><small class="why">' + esc(head) + '</small></span><button class="xbtn" type="button" data-close="1" aria-label="Close">' + SVG(ICON.cross, 2.2) + '</button></header>' +
-      '<div class="body"><div class="arl">' + (rows.length ? rows.map((r, i) => '<div style="--i:' + i + '"><b>' + esc(archName(r.n)) + '</b><span class="t">' + esc(stamp(r.at)) + '</span><small>' +
+      '<div class="body" tabindex="0" aria-label="Removed proxies, newest first"><div class="arl">' + (rows.length ? rows.map((r, i) => '<div style="--i:' + i + '"><b>' + esc(archName(r.n)) + '</b><span class="t">' + esc(stamp(r.at)) + '</span><small>' +
         esc([r.by && "by " + r.by, r.was && "was " + r.was, r.end].filter(Boolean).join(" \u00b7 ")) + '</small></div>').join("") : '<div class="none">Nothing yet.</div>') + '</div></div></aside>';
     document.documentElement.classList.add("locked");
     el("layer").querySelector(".xbtn").focus({preventScroll: true});
@@ -1220,6 +1244,7 @@ function countUp(node, to, ms) {
   setTimeout(() => { node.textContent = String(to); }, ms + 200);
 }
 load(DATA);
+drawnText = JSON.stringify(DATA);
 renderAll();
 renderRead();
 document.querySelectorAll(".donut .num, .lr b").forEach(b => countUp(b, +b.textContent, 900));

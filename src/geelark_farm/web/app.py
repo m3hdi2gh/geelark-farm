@@ -1457,10 +1457,10 @@ class _Handler(BaseHTTPRequestHandler):
         from ..store import actions as store_actions
         from . import assets, proxies_read
 
-        answer = proxies_read.state(self.settings)
         wanted = [int(x) for x in str(first.get("req") or "").split(",")
                   if x.strip().isdigit()][:80]
         if not wanted:
+            answer = proxies_read.state(self.settings)
             tag = proxies_read.etag({"s": answer, "r": assets.REV})
             if (self.headers.get("If-None-Match") or "") == tag:
                 self.send_response(304)
@@ -1470,7 +1470,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return None
             return self._json(200, {"ok": True, "state": answer,
                                     "rev": assets.REV}, etag=tag)
-        reqs = {}
+        # The requests first, then the pool: a request that ended is drawn
+        # with the pool it left, never with one read before it ran.
+        reqs, ended = {}, False
         for req in wanted:
             row = store_actions.one(self.settings, req)
             if row is None:
@@ -1478,13 +1480,19 @@ class _Handler(BaseHTTPRequestHandler):
             # Names and counts only: a request's detail can hold a pasted
             # line, and a pasted line holds a password.
             detail = row["detail"] if isinstance(row["detail"], dict) else {}
+            names = {k: [str(n) for n in detail.get(k) or []]
+                     for k in ("added", "dead", "freed", "answered", "silent")}
             reqs[str(req)] = {
                 "status": str(row["status"] or ""),
                 "result": str(row["result"] or ""),
-                "added": [str(n) for n in detail.get("added") or []],
-                "dead": [str(n) for n in detail.get("dead") or []],
+                "added": names["added"], "dead": names["dead"],
+                # A request about several proxies says which went well.
+                "good": names["freed"] + names["answered"],
+                "bad": names["dead"] + names["silent"],
                 "skipped": len(detail.get("skipped") or []),
                 "refused": len(detail.get("refused") or [])}
+            ended = ended or reqs[str(req)]["status"] not in ("queued", "running")
+        answer = proxies_read.state(self.settings, fresh=ended)
         return self._json(200, {"ok": True, "state": answer,
                                 "rev": assets.REV, "reqs": reqs})
 
@@ -1517,7 +1525,7 @@ class _Handler(BaseHTTPRequestHandler):
                       if x.strip().isdigit()})[:200]
         pool = {e["id"]: e for e in
                 proxies_read.state(self.settings, fresh=True)["exits"]}
-        items = []
+        items, many = [], {}
         for pid in ids:
             e = pool.get(pid)
             if e is None:
@@ -1526,10 +1534,24 @@ class _Handler(BaseHTTPRequestHandler):
                 continue
             verb, payload = _proxy_verb(what, e)
             if verb is None:
-                items.append({"id": pid, "said": "skip"})
-                continue
-            items.append(dict(self._proxy_press(
-                user, verb, dict(payload, name=e["n"])), id=pid))
+                items.append({"id": pid, "name": e["n"], "said": "skip"})
+            elif verb in _TESTED_TOGETHER:
+                many.setdefault(verb, []).append(e)
+            else:
+                items.append(dict(self._proxy_press(
+                    user, verb, dict(payload, name=e["n"])), id=pid,
+                    name=e["n"]))
+        # Proxies the cloud must test are tested together - one request,
+        # every check at once - so ten silent ones cost the lane half a
+        # minute, not five (the audit, 2026-10-02). One alone keeps its own
+        # verb and its own sentence.
+        for verb, group in many.items():
+            if len(group) == 1:
+                answer = self._proxy_press(user, verb, {"name": group[0]["n"]})
+            else:
+                answer = self._proxy_press(user, _TESTED_TOGETHER[verb], {
+                    "names": [e["n"] for e in group]})
+            items.extend(dict(answer, id=e["id"], name=e["n"]) for e in group)
         return self._json(200, {"ok": True, "items": items,
                                 "state": proxies_read.state(self.settings,
                                                             fresh=True)})
@@ -3919,6 +3941,11 @@ def _digest(payload: dict, skip: tuple = ()) -> str:
 #: The verbs about the whole pool rather than one row, which the
 #: double-press guard dedupes on the verb alone. `build_by_hand` is
 #: deliberately not here: two presses may well mean two phones.
+#: The verbs that ask the cloud about one proxy, and the ones that ask
+#: about several at once (`_proxies_do`).
+_TESTED_TOGETHER = {"mark_proxy_free": "free_proxies",
+                    "test_proxy": "test_proxies"}
+
 #: What a press of the Proxies page may ask (`_proxy_verb`).
 _PROXY_PRESS = re.compile(r"free|aside|test|remove|lane:(?:gpt|spotify)?|cap:\d{1,2}")
 
@@ -3934,9 +3961,11 @@ def _proxy_verb(what: str, e: dict) -> tuple[str | None, dict]:
             return "unshelve_proxy", {}
         return ("mark_proxy_free", {}) if s in ("aside", "dead") else (None, {})
     if what == "aside":
-        if s == "free" or (s == "phone" and not after):
-            return "shelve_proxy", {}
-        return None, {}
+        # Off is a person's shelf: an exit resting after a refusal, or dead,
+        # would come back into the builds on its own (the rest rule, the
+        # retests), so it is shelved as well. One already on the shelf, under
+        # its phone or not, is already that way.
+        return (None, {}) if e.get("shelf") else ("shelve_proxy", {})
     if what.startswith("lane:"):
         lane = what[5:]
         return (("keep_proxy_for", {"purpose": lane}) if e["lane"] != lane

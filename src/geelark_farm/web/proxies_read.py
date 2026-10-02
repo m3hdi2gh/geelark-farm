@@ -67,7 +67,8 @@ def _proxy_words(note: str) -> str:
 
 def _state_of(status: str, serial: str, error) -> tuple[str, bool]:
     """The page's four states, and whether a proxy on a phone leaves play
-    once that phone goes (set aside under it)."""
+    once that phone goes: set aside under it, or waiting for a new address
+    with a phone still on it (`attach` keeps both and records the phone)."""
     word = (status or "").strip().lower()
     if error or word == "dead":
         return "dead", False
@@ -75,7 +76,7 @@ def _state_of(status: str, serial: str, error) -> tuple[str, bool]:
         return "free", False
     if word in ("on a phone", "claimed"):
         return "phone", False
-    if word == "set aside" and serial:
+    if serial:
         return "phone", True
     return "aside", False
 
@@ -190,6 +191,9 @@ def assemble(pool, signins, moves, phones, presses, *, geo: dict,
         day_on = str(r.get("day_uses_on") or "")[:10]
         host = str(r.get("host") or "")
         e = {"id": int(r["id"]), "n": name, "s": s, "after": after,
+             # On a person's shelf, rather than resting after a refusal or
+             # dead: those come back on their own, a shelf does not.
+             "shelf": str(r.get("status") or "").strip().lower() == "set aside",
              "serial": serial if s == "phone" else "",
              "lane": lane if lane in ("gpt", "spotify") else "",
              "today": int(r.get("day_uses") or 0) if day_on == today else 0,
@@ -216,8 +220,10 @@ def assemble(pool, signins, moves, phones, presses, *, geo: dict,
         parts = batch_of(name)
         if parts:
             issued[parts["batch"]] = max(issued.get(parts["batch"], 0), parts["k"])
+    # No clock in the answer: an unchanged pool is the same answer, and
+    # the page's poll a 304 (the audit, 2026-10-02).
     return {"exits": exits, "archived": int(archived), "issued": issued,
-            "now": now.strftime("%Y-%m-%d %H:%M"), "since": since,
+            "since": since,
             "track": track, "trackWord": _word(track),
             "day": {"iso": today, "tag": now.strftime("%d") + MONTHS[now.month - 1],
                     "word": _word(today)}}

@@ -955,9 +955,18 @@ class PgProxyPool(_PgPool, ProxyPool):
         values = super()._values_of(row)
         # The joined string the sheet's parser reads, rebuilt from the
         # identity triple plus the password.
-        parts = [row.get("host") or "", str(row.get("port") or ""),
-                 row.get("username") or "", row.get("proxy_pass") or ""]
-        values["Proxy String"] = ":".join(p for p in parts if p)
+        host, port = row.get("host") or "", str(row.get("port") or "")
+        user, secret = row.get("username") or "", row.get("proxy_pass") or ""
+        if (user or secret) and not (user and secret
+                                     and not any(c in user + secret for c in ":@")):
+            # The colon form cannot carry a ":" or "@" in the credentials,
+            # nor one half of them: parse() reads this form at the last "@"
+            # and the first ":", so every row the add took reads back the
+            # same (found by audit, 2026-10-02).
+            values["Proxy String"] = f"{user}:{secret}@{host}:{port}"
+        else:
+            values["Proxy String"] = ":".join(
+                p for p in (host, port, user, secret) if p)
         return values
 
 

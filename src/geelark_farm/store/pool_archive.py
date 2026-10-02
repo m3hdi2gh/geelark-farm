@@ -21,6 +21,8 @@ back.
 
 from __future__ import annotations
 
+import contextlib
+
 import logging
 
 from ..config import Settings
@@ -139,6 +141,42 @@ def proxy_names(settings: Settings, prefix: str = "") -> list[str]:
         out = [str(r[0]) for r in cur.fetchall()]
         conn.rollback()
     return out
+
+
+def batch_names(settings: Settings, prefix: str) -> list[str]:
+    """Every name one batch has given, in the pool and in the archive, read
+    from the tables now - not from a pass's own copy of the pool, which an
+    add of the same batch in another process has not reached."""
+    like = str(prefix).lower() + "-%"
+    with connect(settings) as conn:
+        cur = conn.execute(
+            "SELECT proxy_name FROM resources WHERE kind = 'proxy'"
+            "   AND lower(coalesce(proxy_name, '')) LIKE %s"
+            " UNION ALL"
+            " SELECT payload->>'proxy_name' FROM resources_archive"
+            "  WHERE kind = 'proxy'"
+            "    AND lower(coalesce(payload->>'proxy_name', '')) LIKE %s",
+            (like, like))
+        out = [str(r[0]) for r in cur.fetchall() if r[0]]
+        conn.rollback()
+    return out
+
+
+@contextlib.contextmanager
+def batch_lock(settings: Settings, prefix: str):
+    """One add of a batch at a time, across every process that drains the
+    queue: two pastes of one batch run together both started from the same
+    highest number (found by audit, 2026-10-02). A session lock, so no
+    transaction stays open through the minutes of testing."""
+    key = "proxy-batch:" + str(prefix).lower()
+    with connect(settings) as conn:
+        conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (key,))
+        conn.commit()
+        try:
+            yield
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (key,))
+            conn.commit()
 
 
 def listing(settings: Settings, kind: str = "", limit: int = 200) -> list[dict]:

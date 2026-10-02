@@ -44,7 +44,8 @@ def _state(*rows) -> dict:
 
 
 STATE = _state(_row(7, "TSP10"), _row(8, "Webshare-ISP-02Oct-1", "set aside", "5441"),
-               _row(9, "ISP3", "set aside"), _row(10, "ISP4", "on a phone", "5442"))
+               _row(9, "ISP3", "set aside"), _row(10, "ISP4", "on a phone", "5442"),
+               _row(11, "ISP5", "dead"), _row(12, "ISP6", "change ip"))
 
 
 @pytest.fixture
@@ -120,6 +121,8 @@ def test_the_state_is_json_and_a_304_when_nothing_moved(web, desk):
 
 
 def test_a_request_waited_on_is_told_by_names_and_counts_only(web, desk, monkeypatch):
+    reads = []
+    monkeypatch.setattr(proxies_read, "state", lambda s, fresh=False: reads.append(fresh) or STATE)
     monkeypatch.setattr(actions_mod, "one", lambda s, req: None if req == 6 else {
         "status": "failed", "result": "2 proxies added", "detail": {
             "added": ["W-02Oct-1", "W-02Oct-2"], "dead": ["W-02Oct-2"],
@@ -129,7 +132,9 @@ def test_a_request_waited_on_is_told_by_names_and_counts_only(web, desk, monkeyp
     status, _, answer = _json(client, "/pools/proxy/state?req=5,6")
     assert answer["reqs"] == {"5": {"status": "failed", "result": "2 proxies added",
                                     "added": ["W-02Oct-1", "W-02Oct-2"],
-                                    "dead": ["W-02Oct-2"], "skipped": 1, "refused": 1}}
+                                    "dead": ["W-02Oct-2"], "good": [], "bad": ["W-02Oct-2"],
+                                    "skipped": 1, "refused": 1}}
+    assert reads == [True], "an ended request is drawn with the pool it left"
     assert "S3CRET" not in json.dumps(answer), "a pasted line's password stays home"
 
 
@@ -141,16 +146,24 @@ def test_a_press_is_one_request_a_proxy_by_its_state(web, desk):
     said = {i["id"]: i for i in answer["items"]}
     assert said[7]["said"] == "skip", "already in play"
     assert said[8]["said"] == "done", "set aside under its phone: kept on it"
-    assert said[9] == {"id": 9, "said": "queued", "req": 102}, "tested first"
+    assert said[9] == {"id": 9, "name": "ISP3", "said": "queued", "req": 102}, "tested first"
     assert said[99]["said"] == "gone"
     assert [a["verb"] for a in desk] == ["unshelve_proxy", "mark_proxy_free"]
     assert desk[0]["payload"]["name"] == "Webshare-ISP-02Oct-1"
     assert desk[0]["payload"]["by"] == "mehdi" and desk[0]["payload"]["by_id"] == 7
     assert answer["state"]["exits"][0]["n"] == "ISP3", "the pool comes back with it"
     del desk[:]
-    _press(client, "/pools/proxy/do", what="aside", ids="7,9,10", press="p2")
+    _press(client, "/pools/proxy/do", what="aside", ids="7,8,9,10,11,12", press="p2")
     assert [(a["verb"], a["payload"]["name"]) for a in desk] == [
-        ("shelve_proxy", "TSP10"), ("shelve_proxy", "ISP4")]
+        ("shelve_proxy", "TSP10"), ("shelve_proxy", "ISP4"), ("shelve_proxy", "ISP5"),
+        ("shelve_proxy", "ISP6")], "off is a person's shelf, for a resting or dead one too"
+    # Several that the cloud must test go as one request, tested together.
+    del desk[:]
+    answer = _press(client, "/pools/proxy/do", what="free", ids="9,11,12", press="p7")
+    (asked,) = desk
+    assert (asked["verb"], asked["payload"]["names"]) == ("free_proxies", ["ISP3", "ISP5", "ISP6"])
+    assert {(i["id"], i["said"], i["req"]) for i in answer["items"]} == {
+        (9, "queued", 101 + 6), (11, "queued", 107), (12, "queued", 107)} or         len({i["req"] for i in answer["items"]}) == 1
     del desk[:]
     _press(client, "/pools/proxy/do", what="lane:gpt", ids="7", press="p3")
     _press(client, "/pools/proxy/do", what="cap:3", ids="7", press="p4")
@@ -197,9 +210,11 @@ def test_which_request_a_press_is_follows_the_state_drawn():
     held = dict(free, s="phone")
     leaving = dict(held, after=True)
     for e, on, off in ((free, None, "shelve_proxy"), (held, None, "shelve_proxy"),
-                       (leaving, "unshelve_proxy", None),
-                       (dict(free, s="aside"), "mark_proxy_free", None),
-                       (dict(free, s="dead"), "mark_proxy_free", None)):
+                       (dict(leaving, shelf=True), "unshelve_proxy", None),
+                       (leaving, "unshelve_proxy", "shelve_proxy"),
+                       (dict(free, s="aside", shelf=True), "mark_proxy_free", None),
+                       (dict(free, s="aside"), "mark_proxy_free", "shelve_proxy"),
+                       (dict(free, s="dead"), "mark_proxy_free", "shelve_proxy")):
         assert verb("free", e)[0] == on and verb("aside", e)[0] == off, e
     assert verb("lane:spotify", free) == ("keep_proxy_for", {"purpose": "spotify"})
     assert verb("lane:", free) == (None, {}), "already on either lane"
@@ -217,7 +232,7 @@ def test_the_reader_reads_uses_presses_ends_and_batches():
                  day_uses_on=datetime.date(2026, 10, 2), created_at=_t(1, 20)),
             _row(8, "TSP10", error="bad port"),
             _row(9, "X1", "one-off", source="one-off"),
-            _row(10, "", "free")]
+            _row(10, "", "free"), _row(11, "CH1", "change ip", "5450")]
     signins = [{"proxy_name": "Webshare-ISP-02Oct-3", "at": _t(1, 10), "ok": True,
                 "serial": 5441, "exit_ip": "1.2.3.4"},
                {"proxy_name": "TSP10", "at": _t(1, 9), "ok": False, "serial": 5440,
@@ -234,7 +249,10 @@ def test_the_reader_reads_uses_presses_ends_and_batches():
                                 archived_names=["Webshare-ISP-02Oct-7", "TSP3"],
                                 now=_t(2, 8))
     by = {e["n"]: e for e in got["exits"]}
-    assert set(by) == {"TSP10", "Webshare-ISP-02Oct-3"}, "no one-off, no nameless row"
+    assert set(by) == {"TSP10", "Webshare-ISP-02Oct-3", "CH1"}, "no one-off, no nameless row"
+    assert (by["CH1"]["s"], by["CH1"]["after"], by["CH1"]["shelf"]) == ("phone", True, False),         "waiting for a new address with its phone still on it"
+    assert by["Webshare-ISP-02Oct-3"]["shelf"] and not by["TSP10"]["shelf"]
+    assert "now" not in got, "no clock: an unchanged pool is the same answer"
     tsp, web_ = by["TSP10"], by["Webshare-ISP-02Oct-3"]
     assert tsp["s"] == "dead"
     # Tehran times; a refused sign-in ends when its phone closes; the move

@@ -14,6 +14,7 @@ else does - a box that never opted in never runs a line of this.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import time
@@ -712,15 +713,34 @@ def add_proxies(book, ledger, settings, payload, client):
     prefix = _batch_prefix(payload.get("batch"))
     if payload.get("batch") is not None and not prefix:
         return "refused", "a batch needs its seller, in letters or digits", None
-    try:
-        names = _batch_names(book, settings, prefix, len(probes)) if prefix else []
-    except Exception as exc:                                      # noqa: BLE001
-        return ("failed", f"the archive could not be read to number the "
-                          f"batch ({exc}); nothing was added", None)
     cap = _cap_of(payload) if prefix else 0
     dead: list[str] = []
-    answers = _test_many(client, probes) if client is not None else {}
     lane = purposes.normal(payload.get("purpose"))
+    with contextlib.ExitStack() as held:
+        names: list[str] = []
+        if prefix:
+            try:
+                held.enter_context(_batch_lock(settings, prefix))
+                names = _batch_names(book, settings, prefix, len(probes))
+            except Exception as exc:                              # noqa: BLE001
+                return ("failed", f"the batch could not be numbered ({exc}); "
+                                  f"nothing was added", None)
+        _join_proxies(book, payload, client, probes, names, lane, cap,
+                      added, skipped, dead)
+    status, said, detail = _summary("proxy", added, skipped, refused,
+                                    settings, _by(payload))
+    if prefix:
+        if dead:
+            said += (f"; {len(dead)} did not answer and joined as dead - "
+                     f"each is tested again on its own")
+        detail = dict(detail or {}, dead=dead)
+    return status, said, detail
+
+
+def _join_proxies(book, payload, client, probes, names, lane, cap,
+                  added, skipped, dead) -> None:
+    """Test the probes at once, then add them in the order pasted."""
+    answers = _test_many(client, probes) if client is not None else {}
     for i, probe in enumerate(probes):
         checked = probe.checked
         name = names[i] if names else (checked["proxy_name"] or _next_name(book))
@@ -745,14 +765,6 @@ def add_proxies(book, ledger, settings, payload, client):
         added.append(name)
         if not ok:
             dead.append(name)
-    status, said, detail = _summary("proxy", added, skipped, refused,
-                                    settings, _by(payload))
-    if prefix:
-        if dead:
-            said += (f"; {len(dead)} did not answer and joined as dead - "
-                     f"each is tested again on its own")
-        detail = dict(detail or {}, dead=dead)
-    return status, said, detail
 
 
 _BATCH_PART = re.compile(r"[^A-Za-z0-9]")
@@ -772,15 +784,24 @@ def _batch_prefix(batch) -> str:
     return "-".join(p for p in (seller, kind, day) if p)
 
 
+def _batch_lock(settings, prefix: str):
+    """The batch's lock where there is a store to hold it."""
+    if not getattr(settings, "store_enabled", False):
+        return contextlib.nullcontext()
+    from .store import pool_archive
+
+    return pool_archive.batch_lock(settings, prefix)
+
+
 def _batch_names(book, settings, prefix: str, count: int) -> list[str]:
     """A batch's next `count` names. Its numbers go on from the highest
-    any proxy of it ever carried, in the pool or in the archive, so a
-    removed proxy's name is never given again."""
+    any proxy of it ever carried, in the pool or in the archive - read from
+    the tables, under the batch's lock - so a name is never given twice."""
     taken = [r.name or "" for r in book.proxies._rows]
     if getattr(settings, "store_enabled", False):
         from .store import pool_archive
 
-        taken += pool_archive.proxy_names(settings, prefix)
+        taken += pool_archive.batch_names(settings, prefix)
     number = re.compile(re.escape(prefix) + r"-(\d+)$", re.IGNORECASE)
     top = max([int(m.group(1)) for m in map(number.match, taken) if m] or [0])
     return [f"{prefix}-{top + i}" for i in range(1, count + 1)]
@@ -934,12 +955,12 @@ def mark_proxy_free(book, ledger, settings, payload, client):
         return ("refused", f"{resource.name} is {status} - a phone is behind "
                            f"it; it can be freed once that build is gone",
                 None)
-    # Set aside under a phone that still carries it: freeing it would hand
-    # the next build an address a phone is on. Turning it back on keeps it
-    # on that phone (unshelve_proxy).
+    # Set aside, or waiting for a new address, under a phone that still
+    # carries it: freeing it would hand the next build an address a phone
+    # is on. Turning it back on keeps it on that phone (unshelve_proxy).
     phone = (resource.values.get(pool.serial_column) or "").strip()
-    if status == pool.shelved_status and phone:
-        return ("refused", f"{resource.name} is set aside under phone {phone} "
+    if phone:
+        return ("refused", f"{resource.name} is {status} under phone {phone} "
                            f"- it can be freed once that phone is gone", None)
     ok, exit_ip, why = _test(book, client, resource, tries=3)
     if not ok:
@@ -1011,7 +1032,8 @@ def unshelve_proxy(book, ledger, settings, payload, client):
         return refused
     pool = book.proxies
     phone = (resource.values.get(pool.serial_column) or "").strip()
-    if pool.status_of(resource) != pool.shelved_status or not phone:
+    if pool.status_of(resource) not in (pool.shelved_status,
+                                        pool.needs_new_ip) or not phone:
         return ("refused", f"{resource.name} is not set aside under a phone "
                            f"- turning it on tests it and frees it", None)
     pool.keep_on_phone(resource, note=(
@@ -1020,6 +1042,117 @@ def unshelve_proxy(book, ledger, settings, payload, client):
         f"phone is gone."))
     return ("done", f"{resource.name} stays in play - back on the shelf "
                     f"once phone {phone} goes", None)
+
+
+def _named_many(book, payload) -> tuple[list, list[str]]:
+    """The rows `names` points at, and a sentence for each that is not one."""
+    rows, missing = [], []
+    for name in payload.get("names") or []:
+        resource = book.proxies.find_by_name(str(name or "").strip())
+        if resource is None or resource.proxy is None:
+            missing.append(f"{name or '?'} is not one row in the Proxy tab")
+        else:
+            rows.append(resource)
+    return rows, missing
+
+
+def free_proxies(book, ledger, settings, payload, client):
+    """Free several exits at once - the Proxies page's batch and bulk
+    switch (the audit, 2026-10-02). Each is tested as Free tests one, three
+    tries fifteen seconds apart, but together: ten silent exits cost the
+    lane half a minute, where one Free after another cost five. One that
+    answers is off the shelf, or freed, with its host judged afresh; one
+    that does not is dead and is retested with the dead ones."""
+    if client is None:
+        return "failed", "no IranSpoty Cloud client on this pass", None
+    pool = book.proxies
+    named, refused = _named_many(book, payload)
+    rows = []
+    for resource in named:
+        status = pool.status_of(resource)
+        phone = (resource.values.get(pool.serial_column) or "").strip()
+        if status in (pool.spent_status, pool.claimed_status) or phone:
+            refused.append(f"{resource.name} has a phone behind it")
+        else:
+            rows.append(resource)
+    answers, waiting = {}, list(rows)
+    for attempt in range(3):
+        if attempt:
+            time.sleep(15.0)
+        got = _test_many(client, waiting)
+        answers.update(got)
+        waiting = [r for r in waiting if not got[id(r)][0]]
+        if not waiting:
+            break
+    freed, dead = [], []
+    for resource in rows:
+        ok, exit_ip, why = answers[id(resource)]
+        name = str(resource.name or resource.label)
+        if not ok:
+            pool.fail(resource, pool.dead_status, note=(
+                f"Turned on from the web by {_by(payload)} on {_stamp()}, but "
+                f"it did not answer in three tries over half a minute: {why}"))
+            _stamp_test(settings, name, False, "")
+            dead.append(name)
+            continue
+        note = (f"Turned on from the web by {_by(payload)} on {_stamp()}: it "
+                f"answers, and its host is judged afresh from here.")
+        if pool.status_of(resource) == pool.shelved_status:
+            pool.unshelve(resource, note=note)
+        else:
+            pool.release(resource, note=note)
+        if exit_ip:
+            pool.record_exit(resource, exit_ip)
+        _stamp_test(settings, name, True, exit_ip)
+        _forgive(settings, resource, _by(payload))
+        freed.append(name)
+    bits = [f"{len(freed)} back in play"]
+    if dead:
+        bits.append(f"{len(dead)} did not answer and {'is' if len(dead) == 1 else 'are'} dead")
+    if refused:
+        bits.append(f"{len(refused)} not freed")
+    return ("done" if freed or not dead else "failed", ", ".join(bits),
+            {"freed": freed, "dead": dead, "refused": refused})
+
+
+def test_proxies(book, ledger, settings, payload, client):
+    """Test several exits at once - the Proxies page's bulk and batch Test
+    (the audit, 2026-10-02) - each as Test does one: a dead one that answers
+    is back, a free one that does not is dead, and the address each comes
+    out at is recorded."""
+    if client is None:
+        return "failed", "no IranSpoty Cloud client on this pass", None
+    pool = book.proxies
+    rows, refused = _named_many(book, payload)
+    answers = _test_many(client, rows)
+    answered, silent = [], []
+    for resource in rows:
+        ok, exit_ip, why = answers[id(resource)]
+        name = str(resource.name or resource.label)
+        was = pool.status_of(resource)
+        _stamp_test(settings, name, ok, exit_ip)
+        if ok:
+            if was == pool.dead_status:
+                pool.release(resource, note=(
+                    f"Answered again on {_stamp()} - tested from the web by "
+                    f"{_by(payload)}."))
+                _forgive(settings, resource, _by(payload))
+            if exit_ip:
+                pool.record_exit(resource, exit_ip)
+            answered.append(name)
+            continue
+        if was in pool.available_statuses:
+            pool.fail(resource, pool.dead_status, note=(
+                f"Did not answer on {_stamp()} - tested from the web by "
+                f"{_by(payload)}: {why}"))
+        silent.append(name)
+    bits = [f"{len(answered)} answered"]
+    if silent:
+        bits.append(f"{len(silent)} did not")
+    if refused:
+        bits.append(f"{len(refused)} not found")
+    return ("done" if answered or not silent else "failed", ", ".join(bits),
+            {"answered": answered, "silent": silent, "refused": refused})
 
 
 def _shelve(book, resource, payload) -> None:
@@ -1236,6 +1369,10 @@ def remove_proxy(book, ledger, settings, payload, client):
     if status in (book.proxies.spent_status, book.proxies.claimed_status):
         return ("refused", f"{resource.name} is {status} - a phone is behind "
                            f"it", None)
+    phone = (resource.values.get(book.proxies.serial_column) or "").strip()
+    if phone:
+        return ("refused", f"{resource.name} is {status} under phone {phone} "
+                           f"- it can be removed once that phone is gone", None)
     kept = {"name": resource.name,
             "raw": (resource.values.get("Proxy String") or str(resource.proxy)),
             "status": status, "note": resource.values.get("Note", "")}
@@ -2871,6 +3008,8 @@ VERBS = {
     "keep_proxy_for": keep_proxy_for,
     "cap_proxy": cap_proxy,
     "unshelve_proxy": unshelve_proxy,
+    "free_proxies": free_proxies,
+    "test_proxies": test_proxies,
     "shelve_all_proxies": shelve_all_proxies,
     "free_shelved_proxies": free_shelved_proxies,
     "remove_proxy": remove_proxy,
@@ -2896,6 +3035,9 @@ VERBS = {
 #: here without doing that, and nothing that can take minutes.
 for _lane in (control, boot_phone, test_proxy, test_all_proxies,
               free_all_proxies,
+              # The Proxies page's several-at-once Free and Test: checks in
+              # parallel, half a minute at most (2026-10-02).
+              free_proxies, test_proxies,
               change_proxy, mark_proxy_free, adopt_proxy, add_proxies,
               ignore_proxy, remove_proxy, set_phone_state, stop_phone,
               power_off_phone,

@@ -694,6 +694,14 @@ tr.flash td{animation:glow 1.6s ease-out}
 html[data-rail="icons"] .rail-col .sel,html[data-rail="icons"] .rail-col .said{left:calc(50% + 34px)}
 @media (max-width:1279px){.rail-col .sel,.rail-col .said{left:calc(50% + 34px)}}
 @media (max-width:900px){.rail-col .sel,.rail-col .said,html[data-rail="icons"] .rail-col .sel,html[data-rail="icons"] .rail-col .said{left:50%}}
+/* Under the rail, not over it: the rail lying over the page (901-1279px,
+   open) is above the selection bar and the page's bar, composer open or
+   not; and the bar is never wider than the column it is centred on. */
+.rail-col .sel{z-index:39;max-width:calc(100% - 256px)}
+html[data-rail="icons"] .rail-col .sel{max-width:calc(100% - 92px)}
+@media (max-width:1279px){.rail-col .sel{max-width:calc(100% - 92px)}}
+@media (min-width:901px) and (max-width:1279px){html:not([data-rail="icons"]) .rail-dock{z-index:46}}
+@media (max-width:900px){.rail-col .sel,html[data-rail="icons"] .rail-col .sel{max-width:calc(100% - 24px)}}
 /* A switch whose proxy the farm is testing before it goes back in play. */
 .sw.busy{cursor:progress}
 .sw.busy i{animation:swbusy .9s ease-in-out infinite alternate}

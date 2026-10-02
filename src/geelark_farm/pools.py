@@ -1266,8 +1266,10 @@ class ProxyPool(Pool):
     def shelve(self, resource: Resource, *, note: str = "") -> None:
         """A person's set-aside: off the shelf until they free it. One a
         phone is on keeps its serial - the phone stays where it is, and
-        the exit is simply never handed to another (2026-09-28)."""
-        if self.status_of(resource) == self.spent_status:
+        the exit is simply never handed to another (2026-09-28). So does
+        one resting under a phone it was refused on (2026-10-02)."""
+        if (self.status_of(resource) == self.spent_status
+                or (resource.values.get(self.serial_column) or "").strip()):
             self._set(resource, {self.status_column: self.shelved_status,
                                  self.note_column: note})
             return

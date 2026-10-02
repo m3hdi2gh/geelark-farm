@@ -1163,8 +1163,9 @@ def test_a_paste_survives_a_row_the_table_holds_and_find_cannot_see():
     assert detail["skipped"] == ["broken@x.com"]
     # All four add verbs, the same way.
     import inspect
+    # (The proxies' rows go in in `_join_proxies`, under a batch's lock.)
     for verb in (verbs.add_gmails, verbs.add_gpt, verbs.add_spotify,
-                 verbs.add_proxies):
+                 verbs._join_proxies):
         assert "except ValueError:" in inspect.getsource(verb), verb.__name__
 
 
@@ -2542,10 +2543,14 @@ def test_a_batch_is_named_on_past_the_pool_and_the_archive(monkeypatch):
                      + ["Purpose", "Uses per day"])
     verbs.add_proxies(book, None, None, {"rows": [
         {"raw": "1.2.3.1:9999:u:p", "name": "Webshare-ISP-02Oct-2"}]}, None)
+    import contextlib
+
     asked = []
-    monkeypatch.setattr(pool_archive, "proxy_names", lambda settings, prefix="":
+    monkeypatch.setattr(pool_archive, "batch_names", lambda settings, prefix:
                         asked.append(prefix) or ["Webshare-ISP-02Oct-5",
                                                  "webshare-isp-02oct-x"])
+    monkeypatch.setattr(pool_archive, "batch_lock",
+                        lambda settings, prefix: contextlib.nullcontext())
 
     def tested(client, rows):
         return {id(rows[1]): (False, "", "no answer")}
@@ -2600,4 +2605,121 @@ def test_free_takes_a_set_aside_exit_off_the_shelf(monkeypatch, make_settings):
         book, None, settings, {"name": "SX1", "by": "mehdi"}, object())
     assert status == "refused" and "5441" in msg
     assert row.values["Status"] == "set aside" and not said
+
+
+def _quiet_tests(monkeypatch):
+    monkeypatch.setattr(verbs, "_stamp_test", lambda *a, **k: None)
+    monkeypatch.setattr(verbs, "_forgive", lambda *a, **k: None)
+    slept = []
+    monkeypatch.setattr(verbs.time, "sleep", lambda s: slept.append(s))
+    return slept
+
+
+def _named_rows(book, *rows):
+    for row, (name, status, serial) in zip(book.proxies._rows, rows):
+        row.values.update({"Name": name, "Status": status, "Used By": serial})
+    return book.proxies._rows
+
+
+def test_several_exits_are_freed_together_with_shared_waits(monkeypatch):
+    """The Proxies page's batch switch: one request tests them all at once,
+    the silent ones twice more fifteen seconds apart (the audit, 2026-10-02)."""
+    from tests.test_pools import PROXY_HEADERS
+
+    slept = _quiet_tests(monkeypatch)
+    book = make_book(proxies=3, proxy_headers=PROXY_HEADERS)
+    shelf, dead, held = _named_rows(book, ("A1", "set aside", ""), ("A2", "dead", ""),
+                                    ("A3", "set aside", "5441"))
+    rounds = []
+
+    def tested(client, rows):
+        rounds.append(sorted(r.values["Name"] for r in rows))
+        return {id(r): (r is shelf, "1.2.3.4" if r is shelf else "", "no answer")
+                for r in rows}
+
+    monkeypatch.setattr(verbs, "_test_many", tested)
+    status, said, detail = verbs.free_proxies(
+        book, None, None, {"names": ["A1", "A2", "A3", "nope"], "by": "mehdi"}, object())
+    assert rounds == [["A1", "A2"], ["A2"], ["A2"]] and slept == [15.0, 15.0]
+    assert status == "done" and detail["freed"] == ["A1"] and detail["dead"] == ["A2"]
+    assert len(detail["refused"]) == 2, "a phone behind it, and no such row"
+    assert book.proxies.status_of(shelf) == "free"
+    assert book.proxies.status_of(dead) == "dead"
+    assert (book.proxies.status_of(held), held.values["Used By"]) == ("set aside", "5441")
+    assert verbs.free_proxies.lane_safe and not verbs.runs_inline("free_proxies")
+
+
+def test_several_exits_are_tested_together(monkeypatch):
+    from tests.test_pools import PROXY_HEADERS
+
+    _quiet_tests(monkeypatch)
+    book = make_book(proxies=3, proxy_headers=PROXY_HEADERS)
+    up, down, back = _named_rows(book, ("B1", "free", ""), ("B2", "free", ""),
+                                 ("B3", "dead", ""))
+    monkeypatch.setattr(verbs, "_test_many", lambda client, rows: {
+        id(r): (r is not down, "8.8.8.8" if r is not down else "", "no") for r in rows})
+    status, said, detail = verbs.test_proxies(
+        book, None, None, {"names": ["B1", "B2", "B3"], "by": "mehdi"}, object())
+    assert (detail["answered"], detail["silent"]) == (["B1", "B3"], ["B2"])
+    assert said == "2 answered, 1 did not"
+    assert [book.proxies.status_of(r) for r in (up, down, back)] == ["free", "dead", "free"]
+
+
+def test_an_exit_a_phone_is_still_on_is_neither_freed_nor_removed(monkeypatch, make_settings):
+    """`attach` keeps `change ip` (and a person's shelf) with the live phone
+    recorded: Free freed it under that phone, and Remove archived it (the
+    audit, 2026-10-02). Turning it on keeps it on its phone instead."""
+    from tests.test_pools import PROXY_HEADERS
+
+    _quiet_tests(monkeypatch)
+    monkeypatch.setattr(verbs.proxy_mod, "check", lambda c, p: {"outboundIP": "1.2.3.4"})
+    book = make_book(proxies=1, proxy_headers=PROXY_HEADERS)
+    (row,) = _named_rows(book, ("C1", "change ip", "5441"))
+    said = verbs.mark_proxy_free(book, None, make_settings(), {"name": "C1"}, object())
+    assert said[0] == "refused" and "5441" in said[1]
+    assert verbs.remove_proxy(book, None, None, {"name": "C1"}, None)[0] == "refused"
+    assert verbs.unshelve_proxy(book, None, None, {"name": "C1"}, None)[0] == "done"
+    assert (book.proxies.status_of(row), row.values["Used By"]) == ("on a phone", "5441")
+
+
+def test_setting_aside_an_exit_resting_under_a_phone_keeps_the_phone():
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=1, proxy_headers=PROXY_HEADERS)
+    (row,) = _named_rows(book, ("D1", "change ip", "5441"))
+    assert verbs.shelve_proxy(book, None, None, {"name": "D1"}, None)[0] == "done"
+    assert (book.proxies.status_of(row), row.values["Used By"]) == ("set aside", "5441")
+
+
+def test_a_batch_is_numbered_and_joined_under_its_lock(monkeypatch):
+    """Two pastes of one batch run by two drainers got the same numbers;
+    the add now holds the batch's lock from numbering to the last row, and
+    reads the numbers from the tables (the audit, 2026-10-02)."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from geelark_farm.store import pool_archive
+    from tests.test_pools import PROXY_HEADERS
+
+    book = make_book(proxies=0, proxy_headers=PROXY_HEADERS + ["Purpose", "Uses per day"])
+    seen = []
+
+    @contextlib.contextmanager
+    def lock(settings, prefix):
+        seen.append(("lock", prefix))
+        yield
+        seen.append(("unlock", prefix))
+
+    monkeypatch.setattr(pool_archive, "batch_lock", lock)
+    monkeypatch.setattr(pool_archive, "batch_names", lambda s, prefix: (
+        seen.append(("names", prefix)) or ["Oxy-02Oct-4"]))
+    monkeypatch.setattr(verbs, "_test_many", lambda client, rows: (
+        seen.append(("test", len(rows))) or {}))
+    status, said, detail = verbs.add_proxies(
+        book, None, SimpleNamespace(store_enabled=True),
+        {"rows": [{"raw": "u:p@9.9.9.1:1"}, {"raw": "9.9.9.2:2"}],
+         "batch": {"seller": "Oxy", "type": "", "tag": "02Oct"}}, object())
+    assert detail["added"] == ["Oxy-02Oct-5", "Oxy-02Oct-6"]
+    assert seen == [("lock", "Oxy-02Oct"), ("names", "Oxy-02Oct"), ("test", 2),
+                    ("unlock", "Oxy-02Oct")]
 
