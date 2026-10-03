@@ -186,6 +186,7 @@ from .kit.phone import _calls as _calls
 from .kit.phone import _discard as _discard
 from .kit.phone import _ended_by as _ended_by
 from .kit.phone import _let_the_phone_go as _let_the_phone_go
+from .kit.phone import _wait_for_cloud as _wait_for_cloud
 from .kit.phone import _signed_in_after_all as _signed_in_after_all
 from .ledger import Ledger
 from .logs import NO_BUILD
@@ -1949,6 +1950,14 @@ def _let_the_build_go(st: _BuildState) -> None:
         st.bare and st.want is not None and st.want.wanted_id
         and build.status == "stopped_by_hand"
         and _called_off(st.settings, st.want.wanted_id))
+    # The connection lost mid-sign-in: whether anything is on the phone
+    # cannot be asked until the cloud answers again, and "could not ask"
+    # keeps a phone. So wait for it first; then the ordinary rule decides,
+    # and an empty phone is deleted rather than left billing (5687, 5688,
+    # 2026-10-03).
+    if (st.phone_id and build.status == "network_unreachable"
+            and not st.gmail_signed_in):
+        _wait_for_cloud(st.client, st.phone_id)
     empty = bool(st.phone_id and not st.gmail_signed_in
                  and (carried or not st.bare)
                  and build.status not in KEPT_WHEN_EMPTY

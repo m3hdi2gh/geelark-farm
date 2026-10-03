@@ -165,8 +165,13 @@ class PgPhoneLog(PhoneLog):
         if not sheet_rows:
             return
         with Store(self._settings) as store:
+            # A row closed while it still said `building` is a phone the
+            # build deleted (nothing signed into it): it says `discarded`,
+            # not "building" for ever (2026-10-03).
             store._write(
-                "UPDATE phones SET done_at = now(), updated_at = now()"
+                "UPDATE phones SET done_at = now(), updated_at = now(),"
+                " status = CASE WHEN status = 'building' THEN 'discarded'"
+                " ELSE status END"
                 " WHERE id = ANY(%s) AND done_at IS NULL RETURNING id",
                 ([int(r) for r in sheet_rows],))
 

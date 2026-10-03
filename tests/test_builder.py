@@ -7715,3 +7715,53 @@ def test_a_set_aside_exit_lets_go_of_a_phone_that_is_gone(monkeypatch):
     # Run again: nothing left to let go of.
     assert keeper.sync_proxies(Client(), book, FakeLedger())["released"] == []
 
+
+
+def test_a_stop_lost_to_an_outage_goes_out_again_once_the_cloud_answers(monkeypatch):
+    """5687 and 5688 stayed running, empty and billing, after a two-minute
+    outage made their one stop fail (2026-10-03)."""
+    from geelark_farm.build_result import Build
+    from geelark_farm.kit import phone as kit_phone
+
+    calls = {"stop": 0, "status": 0}
+
+    def stop(client, pid):
+        calls["stop"] += 1
+        if calls["stop"] == 1:
+            raise RuntimeError("Max retries exceeded")
+
+    def status(client, pid):
+        calls["status"] += 1
+        if calls["status"] < 3:
+            raise RuntimeError("Read timed out")
+        return 0
+
+    monkeypatch.setattr(kit_phone.phones, "stop", stop)
+    monkeypatch.setattr(kit_phone.phones, "status", status)
+    monkeypatch.setattr(kit_phone.time, "sleep", lambda s: None)
+    monkeypatch.setattr(kit_phone.cancel, "_stop_honoured", lambda *a: None)
+    released = []
+
+    class L:
+        def release(self, pid, note=""):
+            released.append(pid)
+
+    build = Build(index=1)
+    kit_phone._let_the_phone_go(object(), None, L(), build, "P1")
+    assert calls == {"stop": 2, "status": 3} and not build.still_running
+    assert released == ["P1"]
+    # A cloud that never comes back: said so, and the keeper settles it.
+    monkeypatch.setattr(kit_phone.phones, "status", lambda c, p: (_ for _ in ()).throw(RuntimeError("down")))
+    calls["stop"] = 0
+    build = Build(index=2)
+    kit_phone._let_the_phone_go(object(), None, L(), build, "P2")
+    assert build.still_running and calls["stop"] == 1
+
+
+def test_a_discarded_phone_row_says_so():
+    import inspect
+
+    from geelark_farm.store import pgphones
+
+    source = inspect.getsource(pgphones.PgPhoneLog.delete_rows)
+    assert "THEN 'discarded'" in source

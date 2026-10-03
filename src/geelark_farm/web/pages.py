@@ -467,7 +467,8 @@ _PHONE_CLASS = {"ready": "ready", "app_only": "warn", "building": "info",
 #: and `warm`; a person handing phones out reads "App only" and knows what
 #: is missing from it, which is the one thing the word has to carry.
 _PHONE_WORD = {"app_only": "App only", "ready": "Ready",
-               "incomplete": "Incomplete", "building": "Building"}
+               "incomplete": "Incomplete", "building": "Building",
+               "discarded": "Deleted"}
 
 
 #: What a table cell shows for a row that names no phone.

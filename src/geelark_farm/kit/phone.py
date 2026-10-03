@@ -198,6 +198,26 @@ def _ended_by(exc: Exception, finish, settings: Settings, what: str) -> Build:
     return finish("error", f"an error nobody planned for stopped it: {exc}")
 
 
+#: How long a phone job waits for the cloud to answer again after losing
+#: it, and the pauses between asks (2026-10-03: a two-minute outage left
+#: 5687 and 5688 empty and running, billing, until a person deleted them).
+CLOUD_BACK_PAUSES = (10, 15, 20, 30, 30, 45, 60, 60, 60)
+
+
+def _wait_for_cloud(client: Client, phone_id: str) -> bool:
+    """Whether the cloud answers about this phone again, within about six
+    minutes. Asked with the cheapest call there is, the phone's status."""
+    for pause in (0, *CLOUD_BACK_PAUSES):
+        if pause:
+            time.sleep(pause)
+        try:
+            phones.status(client, phone_id)
+            return True
+        except Exception as exc:                                  # noqa: BLE001
+            log.info("the cloud does not answer about %s yet (%s)", phone_id, exc)
+    return False
+
+
 def _let_the_phone_go(client: Client, settings: Settings, ledger: Ledger,
                       build: Build, phone_id: str) -> None:
     """The last of every phone job: the phone stopped - billing ends - and
@@ -209,10 +229,24 @@ def _let_the_phone_go(client: Client, settings: Settings, ledger: Ledger,
             phones.stop(client, phone_id)
             log.info("stopped %s", phone_id)
         except Exception as exc:                                  # noqa: BLE001
-            build.still_running = True
-            log.error("COULD NOT STOP %s (%s) - it is still running and "
-                      "billing; the keeper's next sync settles it",
-                      phone_id, exc)
+            # The stop goes out again once the cloud answers: billing is by
+            # the minute, and the keeper's sweep of forgotten phones is an
+            # hour away.
+            stopped = False
+            if _wait_for_cloud(client, phone_id):
+                try:
+                    phones.stop(client, phone_id)
+                    stopped = True
+                    log.info("stopped %s once the cloud answered again", phone_id)
+                except Exception as again:                        # noqa: BLE001
+                    log.warning("the second stop of %s failed too (%s)",
+                                phone_id, again)
+                    exc = again
+            if not stopped:
+                build.still_running = True
+                log.error("COULD NOT STOP %s (%s) - it is still running and "
+                          "billing; the keeper's next sync settles it",
+                          phone_id, exc)
         ledger.release(phone_id, note=build.status)
     # Last, so the row says Stopping until there is nothing left to stop.
     cancel._stop_honoured(settings, build.serial)
