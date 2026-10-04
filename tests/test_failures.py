@@ -134,6 +134,18 @@ def test_a_stuck_screen_is_the_devices_problem_and_names_the_page(screen):
     assert "no name for" not in found.seen
 
 
+def test_a_looping_email_page_costs_the_address_not_the_phone():
+    """`jdjvj490@gmal.com` - a misspelt domain - stayed on Google's email page
+    on 81 phones (2026-10-03/04): filed as the phone's fault, the address went
+    back free each time and was the next build's again."""
+    found = failures.verdict("stuck_on_email_entry", "Google")
+
+    assert found.costs_the_credential
+    assert not found.stops_the_phone
+    assert "Google" in found.seen and "{service}" not in found.advice
+    assert failures.verdict("stuck_on_password_entry").stops_the_phone
+
+
 @pytest.mark.parametrize("reason,blame", [
     ("captcha_shown", failures.CREDENTIAL),
     ("wrong_password", failures.CREDENTIAL),

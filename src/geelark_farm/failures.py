@@ -224,6 +224,19 @@ VERDICTS: dict[str, Verdict] = {
     # The blame stays with the credential: nothing here can tell the two apart,
     # and the account has to come out of the pool either way. What changed is
     # that the note no longer states as fact the half of it that it is guessing.
+    # The one page that loops on the address itself. Every sign-in that ever
+    # ended here was one row - `jdjvj490@gmal.com`, a typo for gmail.com -
+    # and the stuck rule called it the phone's fault, so the address went
+    # back free and was claimed again: 81 phones, 2026-10-03/04. Google
+    # answers an address it cannot find by staying on this page, so the
+    # address is what has to come out of the pool.
+    "stuck_on_email_entry": Verdict(
+        CREDENTIAL, "{service} would not move past the email page with this "
+        "address",
+        "Read the address on the row letter by letter - a misspelt domain "
+        "(gmal.com, gamil.com) or an account that no longer exists keeps "
+        "{service} on the email page. Fix the address and press Free, or leave "
+        "it archived."),
     "wrong_password": Verdict(
         CREDENTIAL, "{service} would not take the password",
         "Try the password by hand before changing it - {service} shows this "
@@ -1008,7 +1021,10 @@ def verdict(reason: str, service: str = UNNAMED_SERVICE) -> Verdict:
     the pool into something nobody has classified. The test suite exists so
     this never happens in practice.
     """
-    if reason.startswith(STUCK_PREFIX) and len(reason) > len(STUCK_PREFIX):
+    # The table first: a page whose loop says something about the account
+    # (`stuck_on_email_entry`) has an entry of its own over the rule.
+    if (reason not in VERDICTS and reason.startswith(STUCK_PREFIX)
+            and len(reason) > len(STUCK_PREFIX)):
         return _stuck(reason)
     # After the table, so `app_not_installed` and `app_would_not_start` -
     # which are the table's own - are answered by it rather than by the rule.
