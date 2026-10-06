@@ -430,9 +430,13 @@ class Settings:
     #: not seconds: Chrome slows a hidden tab's clock to one beat a minute
     #: after five minutes out of sight, and forty-five seconds switched
     #: phones off under operators working behind another window
-    #: (2026-09-16). A closed tab is said outright by its beacon and does
-    #: not wait for this. LIVE_TAB_GRACE_SECONDS.
-    live_tab_grace_seconds: int = 180
+    #: (2026-09-16). Fifteen, not three: Chrome also freezes a Live tab in
+    #: the background outright - its viewer is heavy - and three minutes
+    #: switched off 34 of 61 phones that their operators booted again
+    #: within a quarter of an hour (4-6 Oct; most came back within 15).
+    #: A closed tab is said outright by its beacon and does not wait for
+    #: this. LIVE_TAB_GRACE_SECONDS.
+    live_tab_grace_seconds: int = 900
     #: Where the Google sign-in starts: "settings" or "play" - see
     #: flows.google_login.SIGN_IN_VIA.
     sign_in_via: str = "settings"
@@ -639,7 +643,7 @@ class Settings:
             release_after_minutes=_int("RELEASE_AFTER_MINUTES", 60,
                                        minimum=0),
             code_wait_minutes=_int("CODE_WAIT_MINUTES", 10),
-            live_tab_grace_seconds=_int("LIVE_TAB_GRACE_SECONDS", 180,
+            live_tab_grace_seconds=_int("LIVE_TAB_GRACE_SECONDS", 900,
                                         minimum=60),
             human_cadence=_str("HUMAN_CADENCE", "1").strip().lower()
             in ("1", "true", "yes", "on"),

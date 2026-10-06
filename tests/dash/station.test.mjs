@@ -808,7 +808,7 @@ test('the Live tab beats once on load, and a 503 beat is not a release', async (
   assert.equal(beats.length, 1, 'once, before the first interval');
   assert.deepEqual(beats[0].body, {csrf: 'tok', station: '1'});
   assert.equal(beats[0].init.redirect, 'manual');
-  assert.equal(beats[0].init.keepalive, true);
+  assert.equal(beats[0].init.keepalive, undefined, 'a plain request: keepalive beats went missing in the background');
   assert.equal(beats[0].headers['X-GF-Station'], 'live');
   assert.equal(sideState(p), 'off');
   assert.equal(p.$('[data-lt="st"]').textContent, 'Ready');
@@ -818,6 +818,28 @@ test('the Live tab beats once on load, and a 503 beat is not a release', async (
   await p.advance(15000);
   assert.equal(posts(p, WATCH).length, 2);
   assert.equal(sideState(p), 'off', 'a store that is down is not a release');
+});
+
+test('a Live tab that wakes, comes back into view, into focus or online beats at once', async () => {
+  const p = pageIn('live', liveState(), {answer: (c) => c.url === WATCH ? {status: 200, body: 'watching'}
+    : c.url === LIVE_STATE ? {status: 200, body: liveState()} : null});
+  await settle();
+  const n0 = posts(p, WATCH).length;
+  fire(p.doc, 'resume');
+  await settle();
+  assert.equal(posts(p, WATCH).length, n0 + 1, 'unfrozen');
+  p.fireWin('focus');
+  await settle();
+  assert.equal(posts(p, WATCH).length, n0 + 2, 'focused');
+  p.fireWin('online');
+  await settle();
+  assert.equal(posts(p, WATCH).length, n0 + 3, 'back online');
+  p.fireWin('pageshow', {persisted: false});
+  await settle();
+  assert.equal(posts(p, WATCH).length, n0 + 3, 'a first load is no return');
+  p.fireWin('pageshow', {persisted: true});
+  await settle();
+  assert.equal(posts(p, WATCH).length, n0 + 4, 'back from the cache');
 });
 
 test('a 410 beat is released, and released is final', async () => {

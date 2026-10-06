@@ -3958,7 +3958,7 @@ def live_page(serial: str, user: dict, said: str = "",
 
 #: How often the Live tab tells the farm it is open, in milliseconds. A
 #: hidden tab's clock runs once a minute in Chrome whatever this says;
-#: the keeper's grace (LIVE_TAB_GRACE_SECONDS, three minutes) allows for
+#: the keeper's grace (LIVE_TAB_GRACE_SECONDS, fifteen minutes) allows for
 #: that, and a real close is said by the pagehide beacon, not by silence.
 LIVE_BEAT_MS = 15000
 #: The width the viewer is asked for, and the box it draws itself in at

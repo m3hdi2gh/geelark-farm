@@ -880,10 +880,35 @@ def test_the_station_beat_and_close_are_scoped_to_the_holder(
     client.request("POST", "/phones/1500/closing",
                    _form(csrf=client.token, station="1"))
     client.request("POST", "/phones/1500/closing", _form(csrf=client.token))
-    assert calls == [("station.watch", "1500", 7, 180),
+    assert calls == [("station.watch", "1500", 7, 900),
                      ("person.watch", "1500", 7),
                      ("station.closed", "1500", 7),
                      ("person.closed", "1500", 7)]
+
+
+def test_the_live_tabs_poll_beats_for_its_holder_and_nothing_else_does(
+        web, desk, monkeypatch):
+    """A Live tab in the background had its beats go missing while its
+    polls still came (the access log, 4-6 Oct 2026), and the sweep took
+    the silence for a closed tab. The tab's own poll of its phone is the
+    tab alive too; the page's document, a poll without the tab's header,
+    and a HEAD are not."""
+    from geelark_farm.store import station as store_station
+
+    calls = []
+    monkeypatch.setattr(store_station, "watch",
+                        lambda s, serial, uid, grace: calls.append(
+                            (serial, uid, grace)) or True)
+    client = _signed(web)
+    status, _, _ = _get(client, "/station/phones/1500/state",
+                        headers={"X-GF-Station": "live"})
+    assert status == 200
+    assert calls == [("1500", 7, 900)], "the beat's own grace"
+    _get(client, "/station/phones/1500/state")
+    _get(client, "/station/phones/1500", headers={"X-GF-Station": "live"})
+    client.request("HEAD", "/station/phones/1500/state",
+                   headers={"X-GF-Station": "live"})
+    assert len(calls) == 1, calls
 
 
 # ============================================================= build
@@ -1570,7 +1595,7 @@ def test_station_read_never_raises_and_composes_the_contract(
     # The line is stamped before it is served.
     names = [c[0] for c in fake.calls]
     assert names.index("stamp_line") < names.index("serve_lines")
-    assert ("mine", 7, 180) in fake.calls
+    assert ("mine", 7, 900) in fake.calls
 
 
 def test_station_read_keeps_its_shape_when_the_store_does_not_answer(

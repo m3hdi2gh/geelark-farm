@@ -1880,6 +1880,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._html(503, pages.store_down_page())
                 return self._html(200, station_pages.live_page(got, user))
             if serial.isdigit() and tail == "state":
+                if write and self._station_asked() == "live":
+                    self._poll_is_a_beat(user, serial)
                 got = station_read.live(self.settings, user, serial)
                 if got.pop(station_read.PARTIAL, False):
                     return self._station_error("down")
@@ -1888,6 +1890,22 @@ class _Handler(BaseHTTPRequestHandler):
             return self._station_error("none")
         return self._html(404, pages.page("404", "<h2>Nothing here</h2>",
                                           user=user))
+
+    def _poll_is_a_beat(self, user: dict, serial: str) -> None:
+        """The Live tab asking for its phone is the tab alive, as much as
+        its beat is. Beats from a tab in the background went missing while
+        that same tab's polls still arrived - 86 of 135 gaps of a minute
+        or more in the access log of 4-6 Oct - and the sweep then switched
+        phones off under operators who had only looked away (2026-10-07).
+        The holder's own hold only, as the beat; never fatal."""
+        from ..store import station as store_station
+
+        try:
+            store_station.watch(self.settings, serial, user["id"],
+                                self.settings.live_tab_grace_seconds)
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the poll of %s was not counted as a beat (%s)",
+                      serial, exc)
 
     def _station_post(self, user: dict, field: dict) -> None:
         """The Station's own doors. Its own try, so a store that does not

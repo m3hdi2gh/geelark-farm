@@ -370,7 +370,7 @@ def state(settings: Settings, user: dict, *, write: bool = True) -> dict:
     from ..store import station as store_station
 
     uid = int(user["id"])
-    grace = int(getattr(settings, "live_tab_grace_seconds", 180) or 180)
+    grace = int(getattr(settings, "live_tab_grace_seconds", 900) or 900)
     if write:
         steps = (("scrub", store_station.scrub_mine, (settings, uid)),
                  ("stamp", store_station.stamp_line, (settings, uid)),
@@ -482,7 +482,7 @@ def live(settings: Settings, user: dict, serial: str, said: str = "",
     from ..store import station as store_station
 
     uid = int(user["id"])
-    grace = int(getattr(settings, "live_tab_grace_seconds", 180) or 180)
+    grace = int(getattr(settings, "live_tab_grace_seconds", 900) or 900)
     out: dict = {"v": VERSION, "rev": "", "now": _now_ms(),
                  "serial": str(serial), "lane": "gpt", "conn": "released",
                  "exit": "", "taken_at": None, "tab_seen": False, "bare": True,

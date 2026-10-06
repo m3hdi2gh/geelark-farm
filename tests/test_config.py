@@ -604,8 +604,9 @@ def test_the_live_tab_grace_comes_from_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "s"))
     monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "a"))
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "l"))
-    assert Settings.load().live_tab_grace_seconds == 180, (
-        "minutes: a hidden tab's clock runs once a minute (2026-09-16)")
+    assert Settings.load().live_tab_grace_seconds == 900, (
+        "minutes: a hidden tab's clock runs once a minute (2026-09-16), and "
+        "a heavy tab in the background is frozen outright (2026-10-07)")
     monkeypatch.setenv("LIVE_TAB_GRACE_SECONDS", "90")
     assert Settings.load().live_tab_grace_seconds == 90
 

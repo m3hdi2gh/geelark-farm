@@ -2004,10 +2004,13 @@
     // A 503, a network error or a beat that timed out says nothing about the
     // phone. A signed-out answer is asked once more, three seconds on, before
     // the tab lets the phone go.
+    // A plain request, not `keepalive`: a closing tab speaks by its beacon,
+    // and beats sent as keepalive from a tab in the background went missing
+    // while the same tab's polls arrived (the access log, 4-6 Oct 2026).
     function beat(){
       if (conn === 'released') return;
       clearTimeout(rebeatT); rebeatT = null;
-      api('/phones/' + s + '/watching', {station: 1}, {raw: true, redirect: 'manual', keepalive: true, noPress: true}).then(function(r){
+      api('/phones/' + s + '/watching', {station: 1}, {raw: true, redirect: 'manual', noPress: true}).then(function(r){
         if (!r || conn === 'released') return;
         if (r.status === 200){ beatStrikes = 0; return; }
         if (r.status === 410){ setConn('released'); return; }
@@ -2085,6 +2088,13 @@
     document.addEventListener('visibilitychange', function(){
       if (document.visibilityState === 'visible'){ beat(); schedulePoll(0); }
     });
+    // A tab the browser froze in the background - a heavy viewer is - or
+    // one that comes back from the back-forward cache, into focus or online,
+    // says it is alive at once rather than at its next beat.
+    document.addEventListener('resume', function(){ beat(); schedulePoll(0); });
+    addEventListener('pageshow', function(e){ if (e && e.persisted){ beat(); schedulePoll(0); } });
+    addEventListener('focus', function(){ beat(); });
+    addEventListener('online', function(){ beat(); schedulePoll(0); });
     addEventListener('pagehide', function(){
       if (conn === 'released') return;
       try {
