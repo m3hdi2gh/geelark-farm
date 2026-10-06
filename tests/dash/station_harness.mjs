@@ -176,7 +176,8 @@ export function pageIn(page, state, opts = {}) {
     getSelection: () => ({removeAllRanges() {}, addRange(r) { selections.push(r); }}),
     requestAnimationFrame: (fn) => addTimer(fn, 16, 0), performance: {now: () => clock.now},
     Uint8Array, Blob, TextEncoder, btoa, Node: window.Node, HTMLElement: window.HTMLElement,
-    innerHeight: 900, innerWidth: 1400, scrollY: 0, sessionStorage: {getItem: () => null, setItem() {}},
+    innerHeight: 900, innerWidth: 1400, scrollY: 0,
+    sessionStorage: opts.storage || {getItem: () => null, setItem() {}, removeItem() {}},
     Date: FakeDate,
     addEventListener: (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); },
     open: (url, name) => {

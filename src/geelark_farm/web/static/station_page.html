@@ -32,6 +32,12 @@
   </div>
   <div class="who"><button class="me" type="button" data-profile="1" aria-label="Your profile"><span class="av" aria-hidden="true" data-me="initial">{{INITIAL}}</span><span class="nm"><b data-me="name">{{NAME}}</b></span></button>
     <form class="out-form" method="post" action="/logout"><input type="hidden" name="csrf" value="{{CSRF}}"><button class="out" type="submit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg><span>Log out</span></button></form></div>
+  <span class="sr" id="net-say" role="status" aria-live="polite"></span>
+  <div class="net" id="net" hidden>
+    <span class="net-ic" aria-hidden="true"><svg class="ic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M8.6 5.1A15 15 0 0 1 22 9"/><path d="M2 9a15 15 0 0 1 3.4-2.5"/><path d="M12.9 10.1A10 10 0 0 1 19 12.8"/><path d="M5 12.8a10 10 0 0 1 4.2-2.4"/><path d="M8.6 16.3a5 5 0 0 1 6.8 0"/><path d="M12 20h.01"/></svg><svg class="ic-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+    <span class="net-tx"><b id="net-t">The farm is not answering</b><small id="net-s"></small></span>
+    <span class="net-r" id="net-r"><b class="net-q tab" id="net-q" hidden></b><small class="net-ago tab" id="net-ago"></small><button type="button" class="net-try" id="net-try" data-try="1">Try now</button></span>
+  </div>
 </header>
 
 <main>

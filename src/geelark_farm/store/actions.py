@@ -91,6 +91,17 @@ def enqueue(settings: Settings, *, verb: str, payload: dict,
     return Queued(new_id, fresh=True)
 
 
+def by_idem(settings: Settings, idem_key: str) -> int | None:
+    """The row one press wrote, by its idem key, or None. A refusal has
+    no key, so only a press the farm took is found."""
+    if not idem_key:
+        return None
+    with Store(settings) as store:
+        rows = store._rows("SELECT id FROM actions WHERE idem_key = %s",
+                           (idem_key,))
+    return int(rows[0]["id"]) if rows else None
+
+
 def pending_for(settings: Settings, *, verb: str, needle: str) -> int | None:
     """The id of a queued or running row of this verb that names the
     same thing (a serial, an exit, an address) - so a second press of

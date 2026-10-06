@@ -180,7 +180,7 @@ test('a refused verdict puts the card back and says why', async () => {
   assert.equal(p.$('#t-or').textContent, '0', 'a refused verdict never counts');
 });
 
-test('a refused verdict answered after the card folded brings it back', async () => {
+test('a verdict whose answer is out keeps its card stamped, and a refusal then puts it back', async () => {
   let open;
   const held = new Promise((r) => { open = r; });
   const p = pageIn('station', state(), {answer: (c) =>
@@ -190,9 +190,12 @@ test('a refused verdict answered after the card folded brings it back', async ()
   const key = p.$('#p-5073 .verdict [data-v="or"]');
   click(key); await p.advance(400); click(key);
   await p.advance(1500);
-  assert.equal(p.$('#p-5073'), null, 'folded while the answer is out');
+  assert.ok(p.$('#p-5073 .stamp.or.sending'), 'never folded before the farm has it: it says it is sending');
+  assert.equal(p.$('#p-5073 .stamp .sw').textContent, 'Sending…');
+  assert.equal(toast(p), '', 'nothing said as done yet');
   open(); await settle();
-  assert.ok(p.$('#p-5073'), 'back from the answer');
+  assert.ok(p.$('#p-5073'), 'the refusal puts it back');
+  assert.equal(p.$('#p-5073 .stamp'), null);
   assert.equal(toast(p), 'nope');
 });
 
@@ -567,7 +570,7 @@ test('a 401 with go sends the page to /login', async () => {
 
 test('an answer that is not JSON is reported once, and the report never reports itself', async () => {
   const p = pageIn('station', state(), {answer: (c) =>
-    c.url === '/station/take' ? {status: 502, body: '<html>bad gateway</html>'}
+    c.url === '/station/take' ? {status: 500, body: '<html>internal error</html>'}
     : c.url === '/clienterror' ? {status: 204, body: ''} : null});
   await settle();
   click(p.$('#take-gpt'));
@@ -736,13 +739,15 @@ test('calling a build off posts once and says so', async () => {
   assert.equal(toast(p), 'The build was called off.');
 });
 
-test('Give back folds the card at once and posts where it was pressed', async () => {
+test('Give back stamps the card, folds it once the farm has it, and posts where it was pressed', async () => {
   const p = pageIn('station', state(), {answer: (c) =>
     c.url === '/station/phones/5073/back' ? ok({said: 'gave-back', state: without(state(), '5073')}) : null});
   await settle();
   click(p.$('#p-5073 [data-a="back"]'));
+  assert.ok(p.$('#p-5073 .stamp.back'), 'stamped at once');
+  await settle();
   assert.equal(toast(p), 'Phone 5073 is back on the GPT shelf.');
-  await p.advance(1000);
+  await p.advance(1500);
   assert.equal(p.$('#p-5073'), null);
   assert.equal(posts(p, '/station/phones/5073/back')[0].body.where, 'station');
 });
@@ -1124,25 +1129,26 @@ test('a Station pull answered 401 once stays; a second one goes to /login', asyn
   assert.ok(r.$('#p-5073'), 'the station stays drawn');
 });
 
-test('a press whose answer never comes is given up on, and the pulls come back', async () => {
+test('a press whose answer never comes waits, then goes again as the same press, less often each time', async () => {
+  const back = '/station/phones/5073/back';
   const p = pageIn('station', state(), {answer: (c) =>
-    c.url === '/station/phones/5073/back' ? {after: new Promise(() => {}), status: 200, body: {}}
+    c.url === back ? {after: new Promise(() => {}), status: 200, body: {}}
     : c.url === '/station/state' ? {status: 200, body: state()} : null});
   await settle();
   primeStream(p);
   click(p.$('#p-5073 [data-a="back"]'));
-  await p.advance(2100);
-  const before = gets(p, '/station/state').length;
-  await p.advance(20000);
-  assert.equal(posts(p, '/station/phones/5073/back').length, 2, 'tried once more after the first timed out');
-  const sent = posts(p, '/station/phones/5073/back');
-  assert.equal(sent[0].body.press, sent[1].body.press, 'with the same press');
-  await p.advance(22000);
-  assert.equal(toast(p), 'The farm did not answer - press it again.');
-  assert.ok(p.$('#said').classList.contains('no'));
-  await pullNow(p);
-  assert.ok(gets(p, '/station/state').length > before, 'the page hears the farm again');
-  assert.ok(p.$('#p-5073'), 'and the card the farm still lists is back');
+  await p.advance(9900);
+  assert.equal(posts(p, back).length, 1, 'given ten seconds, never tried again blind');
+  await p.advance(200);
+  assert.equal(toast(p), 'Give back on 5073 is waiting – the farm is not answering.');
+  const sent = posts(p, back);
+  assert.equal(sent.length, 2, 'the farm answers the pull, so it goes again at once');
+  assert.equal(sent[0].body.press, sent[1].body.press, 'as the same press');
+  assert.ok(p.$('#p-5073 .stamp.back'), 'the card waits, stamped');
+  await p.advance(14800);
+  assert.equal(posts(p, back).length, 2, 'unanswered again: the next try waits five seconds');
+  await p.advance(400);
+  assert.equal(posts(p, back).length, 3);
 });
 
 test('a press whose body never finishes is a farm that did not answer, never a break', async () => {
@@ -1151,15 +1157,192 @@ test('a press whose body never finishes is a farm that did not answer, never a b
     : c.url === '/station/state' ? {status: 200, body: state()} : null});
   await settle();
   click(p.$('#p-5073 [data-a="back"]'));
-  await p.advance(20100);
+  await p.advance(9900);
   assert.equal(posts(p, '/station/phones/5073/back').length, 1);
-  await p.advance(1600);
+  await p.advance(300);
   const sent = posts(p, '/station/phones/5073/back');
-  assert.equal(sent.length, 2, 'tried once more, as a lost answer is');
+  assert.equal(sent.length, 2, 'it waited, and went again as a press with no answer does');
   assert.equal(sent[0].body.press, sent[1].body.press, 'with the same press');
-  await p.advance(21000);
-  assert.equal(toast(p), 'The farm did not answer - press it again.');
+  assert.ok(p.$('#p-5073 .stamp.back'));
   assert.equal(posts(p, '/clienterror').length, 0, 'nothing broke, so nothing is reported');
+});
+
+// ------------------------------------------------- the farm not answering
+/** A farm that can stop answering: while `down`, nothing it is asked
+ * answers; `farm.answer` is what it says otherwise. */
+function silentFarm(answer) {
+  const farm = {down: false, answer};
+  farm.fn = (c) => (farm.down && c.url !== '/clienterror'
+    ? {after: new Promise(() => {}), status: 200, body: {}} : farm.answer(c));
+  return farm;
+}
+const netShown = (p) => !p.$('#net').hidden;
+
+test('a Done with no answer waits hollow on its card and goes by itself, the same press, when the farm answers', async () => {
+  let listed = state();
+  const farm = silentFarm((c) => c.url === '/phones/5073/state'
+    ? ok({said: 'queued', state: (listed = without(state(), '5073'))})
+    : c.url === '/station/state' ? {status: 200, body: listed} : null);
+  const p = pageIn('station', state(), {answer: farm.fn});
+  await settle();
+  primeStream(p);
+  farm.down = true;
+  const key = p.$('#p-5073 .verdict [data-v="done"]');
+  click(key); await p.advance(400); click(key);
+  await p.advance(1300);
+  assert.ok(p.$('#p-5073 .stamp.done.sending'));
+  await p.advance(9000);
+  const stamp = p.$('#p-5073 .stamp');
+  assert.ok(stamp.classList.contains('waiting'), 'no answer: it waits');
+  assert.equal(stamp.querySelector('.sw').textContent, 'Waiting for the farm. It is sent by itself.');
+  assert.ok(stamp.querySelector('.unwait'), 'and can be taken back');
+  assert.equal(toast(p), 'Done on 5073 is waiting – the farm is not answering.');
+  assert.ok(netShown(p), 'the strip says the farm is not answering');
+  assert.equal(p.$('#net-t').textContent, 'The farm is not answering');
+  assert.equal(p.$('#net-q').textContent, '1 waiting');
+  assert.equal(p.$('#net-say').textContent.indexOf('The farm is not answering'), 0, 'and it is read out once');
+  assert.equal(p.$('#take-gpt').disabled, true, 'Take waits for the farm');
+  assert.equal(p.$('#take-gpt .sub').textContent, 'waiting for the farm');
+  assert.equal(p.$('#build').disabled, true);
+  assert.equal(p.$('#p-5061 [data-a="ip"]').disabled, true, 'so does Change IP');
+  assert.equal(p.$('#p-5061 [data-a="back"]').disabled, false, 'Give back can wait');
+  await p.advance(60000);
+  assert.equal(stamp.querySelector('.sw').textContent, 'Waiting for the farm · 1 min. It is sent by itself.');
+  assert.equal(p.$('#p-5073 .stamp'), stamp, 'still the same card, still waiting');
+  farm.down = false;
+  await p.advance(5000);
+  const sent = posts(p, '/phones/5073/state');
+  assert.equal(sent.length, 2, 'sent again once the farm answered');
+  assert.equal(sent[0].body.press, sent[1].body.press, 'as the same press');
+  assert.ok(p.$('#net').classList.contains('back'), 'the strip says it is back');
+  assert.equal(p.$('#net-s').textContent, 'The press that was waiting reached the farm.');
+  await p.advance(1500);
+  assert.equal(p.$('#p-5073'), null, 'and the card folds');
+  assert.equal(p.$('#take-gpt').disabled, false);
+  await p.advance(3200);
+  assert.equal(netShown(p), false, 'then the strip goes');
+});
+
+test('Cancel takes a waiting press back, and nothing is sent when the farm answers', async () => {
+  const farm = silentFarm((c) => c.url === '/station/state' ? {status: 200, body: state()}
+    : c.url === '/phones/5073/state' ? ok({said: 'queued', state: without(state(), '5073')}) : null);
+  const p = pageIn('station', state(), {answer: farm.fn});
+  await settle();
+  farm.down = true;
+  const key = p.$('#p-5073 .verdict [data-v="or"]');
+  click(key); await p.advance(400); click(key);
+  await p.advance(10200);
+  click(p.$('#p-5073 .stamp .unwait'));
+  assert.equal(p.$('#p-5073 .stamp'), null, 'the card is as it was');
+  assert.equal(p.$('#p-5073').classList.contains('closing'), false);
+  assert.equal(toast(p), 'OR on 5073 is taken back. It will not be sent.');
+  assert.equal(p.$('#net-q').hidden, true);
+  farm.down = false;
+  await p.advance(6000);
+  assert.equal(posts(p, '/phones/5073/state').length, 1, 'only the press that was lost');
+  assert.ok(p.$('#p-5073'));
+  p.finishSparks();
+  assert.equal(p.$('#t-or').textContent, '0');
+});
+
+test('a short silence shows nothing, a longer one shows the strip, and a lost old request never brings it back', async () => {
+  const farm = silentFarm((c) => c.url === '/station/state' ? {status: 200, body: state()} : null);
+  const p = pageIn('station', state(), {answer: farm.fn});
+  await settle();
+  primeStream(p);
+  farm.down = true;
+  p.streams[0].emit(101);                      // a pull that will not be answered
+  await p.advance(2100 + 8000);
+  assert.equal(netShown(p), false, 'not yet: the strip waits two and a half seconds');
+  await p.advance(2600);
+  assert.ok(netShown(p));
+  click(p.$('#net-try'));                      // a question that will be lost
+  farm.down = false;
+  await p.advance(5000);                       // the next question is answered
+  assert.ok(p.$('#net').classList.contains('back'));
+  await p.advance(9000);                       // the lost one times out now
+  assert.equal(p.$('#take-gpt').disabled, false, 'an old lost request does not say the farm is silent');
+  assert.equal(netShown(p), false);
+});
+
+test('a gateway\'s page is a farm that did not answer, never a break', async () => {
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/station/take' ? {status: 502, body: '<html>bad gateway</html>'}
+    : c.url === '/station/state' ? {status: 522, body: '<html>origin timed out</html>'} : null});
+  await settle();
+  click(p.$('#take-gpt'));
+  await p.advance(1600);
+  assert.equal(posts(p, '/clienterror').length, 0, 'nothing is reported');
+  assert.equal(toast(p), 'The farm did not answer - press it again.');
+  await p.advance(3000);
+  assert.ok(netShown(p), 'the strip says so');
+  assert.equal(p.$('#take-gpt').disabled, true);
+});
+
+test('offline is known at once: a press waits without being sent, and goes when the browser is back', async () => {
+  const p = pageIn('station', state(), {answer: (c) =>
+    c.url === '/station/phones/5073/back' ? ok({said: 'gave-back', state: without(state(), '5073')})
+    : c.url === '/station/state' ? {status: 200, body: without(state(), '5073')} : null});
+  await settle();
+  p.fireWin('offline');
+  await p.advance(2600);
+  assert.ok(netShown(p));
+  assert.equal(p.$('#net-t').textContent, 'You are offline');
+  click(p.$('#p-5073 [data-a="back"]'));
+  await settle();
+  assert.equal(posts(p, '/station/phones/5073/back').length, 0, 'never sent into an offline browser');
+  assert.ok(p.$('#p-5073 .stamp.back.waiting'));
+  assert.equal(toast(p), 'Give back on 5073 is waiting – you are offline.');
+  p.fireWin('online');
+  await p.advance(1500);
+  assert.equal(posts(p, '/station/phones/5073/back').length, 1, 'sent as soon as the farm answers');
+  assert.equal(p.$('#p-5073'), null);
+});
+
+test('Try now asks at once, and says when there is still no answer', async () => {
+  const farm = silentFarm((c) => c.url === '/station/state' ? {status: 200, body: state()} : null);
+  const p = pageIn('station', state(), {answer: farm.fn});
+  await settle();
+  p.fireWin('offline');
+  await p.advance(2600);
+  const before = gets(p, '/station/state').length;
+  farm.down = true;
+  click(p.$('#net-try'));
+  assert.equal(gets(p, '/station/state').length, before + 1, 'asked at once');
+  assert.equal(p.$('#net-try').textContent, 'Trying…');
+  await p.advance(8100);
+  assert.equal(p.$('#net-try').textContent, 'No answer yet');
+  await p.advance(1700);
+  assert.equal(p.$('#net-try').textContent, 'Try now');
+});
+
+test('a press waiting when the page is reloaded is still waiting after it, and goes', async () => {
+  const kept = new Map();
+  const storage = {getItem: (k) => (kept.has(k) ? kept.get(k) : null), setItem: (k, v) => kept.set(k, String(v)),
+    removeItem: (k) => kept.delete(k)};
+  const farm = silentFarm((c) => c.url === '/station/state' ? {status: 200, body: state()} : null);
+  const p = pageIn('station', state(), {answer: farm.fn, storage});
+  await settle();
+  farm.down = true;
+  const key = p.$('#p-5073 .verdict [data-v="auth"]');
+  click(key); await p.advance(400); click(key);
+  await p.advance(10200);
+  const saved = JSON.parse(kept.get('gf-waiting-7'));
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].s, '5073');
+  const token = posts(p, '/phones/5073/state')[0].body.press;
+  assert.equal(saved[0].token, token);
+  // The reload: a new page on the same farm, the phone still listed.
+  const q = pageIn('station', state(), {storage, answer: (c) => c.url === '/phones/5073/state'
+    ? ok({said: 'twice', state: without(state(), '5073')}) : null});
+  await settle();
+  const sent = posts(q, '/phones/5073/state');
+  assert.equal(sent.length, 1, 'sent from the first paint');
+  assert.equal(sent[0].body.press, token, 'as the press it was');
+  assert.equal(sent[0].body.state, 'auth');
+  await q.advance(2000);
+  assert.equal(q.$('#p-5073'), null);
+  assert.equal(kept.has('gf-waiting-7'), false, 'and nothing waits any more');
 });
 
 test('a pull answered 304 is still signed in: a later lone 401 is a blip again', async () => {

@@ -8032,6 +8032,12 @@ def test_the_foot_keeps_every_critical_reading_in_sight():
     assert "every five minutes" in tag
 
 
+#: A subscription end far enough off to be no news. It was a fixed
+#: 16 Oct 2026, which came inside the ten-day warning on 7 Oct 2026 and
+#: turned two calm-page tests red.
+_FAR_OFF = int(time.time()) + 60 * 86400
+
+
 def test_the_subscription_reading_gives_the_date_the_count_and_the_cost():
     """Three facts about one deadline, and no arithmetic left for the
     reader: the old line printed `ends 16 Oct` and made them work out
@@ -8066,7 +8072,7 @@ def test_geelark_shouts_on_the_alert_strip_when_it_is_the_thing_that_is_wrong():
 
     well = {"geelark_plan": {"plan": {"profiles": 40,
                                       "availableProfiles": 32,
-                                      "expirationTime": 1792110224}}}
+                                      "expirationTime": _FAR_OFF}}}
     assert read.geelark_alerts(well) == [], "quiet while all is well"
 
     refused = dict(well, geelark_refusal={
@@ -8080,11 +8086,11 @@ def test_geelark_shouts_on_the_alert_strip_when_it_is_the_thing_that_is_wrong():
 
     full = {"geelark_plan": {"plan": {"profiles": 40,
                                       "availableProfiles": 0,
-                                      "expirationTime": 1792110224}}}
+                                      "expirationTime": _FAR_OFF}}}
     assert read.geelark_alerts(full)[0]["level"] == "bad"
     nearly = {"geelark_plan": {"plan": {"profiles": 40,
                                         "availableProfiles": 2,
-                                        "expirationTime": 1792110224}}}
+                                        "expirationTime": _FAR_OFF}}}
     assert read.geelark_alerts(nearly)[0]["level"] == "warn"
 
 
@@ -8120,7 +8126,7 @@ def test_the_foot_is_quiet_until_something_is_wrong():
                       trouble=read.geelark_trouble(plan, {}, {}))
 
     calm = foot({"profiles": 40, "availableProfiles": 32,
-                 "expirationTime": 1792110224})
+                 "expirationTime": _FAR_OFF})
     assert 'class="glfoot"' in calm, "no grade at all while all is well"
     assert 'class="glcell bad"' not in calm
     assert 'class="glcell warn"' not in calm
@@ -8292,7 +8298,7 @@ def test_a_reading_the_keeper_has_stopped_refreshing_says_so():
     from geelark_farm.web import read
 
     plan = {"profiles": 40, "availableProfiles": 32,
-            "expirationTime": 1792110224}
+            "expirationTime": _FAR_OFF}
     fresh = _glark(plan=plan, at=time.time(), trouble=[])
     assert 'class="glage"' in fresh and 'class="glfoot"' in fresh
 
@@ -8380,7 +8386,7 @@ def test_the_foot_is_never_grey_while_the_top_is_red():
             "is_admin": True, "may_login_accounts": True}
     plan = {"plan": 1, "profiles": 40, "availableProfiles": 32,
             "parallels": 0, "monthlyFee": 26,
-            "expirationTime": 1792110224}
+            "expirationTime": _FAR_OFF}
     now = time.time()
     states = {
         "all well": (plan, {}, {}),

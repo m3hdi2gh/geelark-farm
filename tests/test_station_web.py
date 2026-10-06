@@ -100,11 +100,13 @@ class Desk:
         self.pend_calls: list[tuple] = []
         self.expired: list[str] = []
         self.press_rows: dict[int, dict] = {}
+        self.keyed: dict[str, int] = {}
 
         def enqueue(settings, *, verb, payload, requested_by, idem_key):
             if self.enqueue_raises:
                 raise self.enqueue_raises.pop(0)
             self.next_id += 1
+            self.keyed[idem_key] = self.next_id
             self.queued.append({"id": self.next_id, "verb": verb,
                                 "payload": payload, "by": requested_by,
                                 "idem_key": idem_key})
@@ -157,6 +159,8 @@ class Desk:
                             lambda s, *, verb, needle: self.twin)
         monkeypatch.setattr(store_actions, "pending_any",
                             lambda s, *, verb: None)
+        monkeypatch.setattr(store_actions, "by_idem",
+                            lambda s, key: self.keyed.get(key))
         monkeypatch.setattr(store_actions, "one",
                             lambda s, req: self.rows.get(int(req)))
         monkeypatch.setattr(store_actions, "claim", lambda s, req: True)
@@ -666,6 +670,46 @@ def test_a_verdict_from_the_station_needs_the_phone_to_be_yours_even_for_an_admi
     status, _, body = _post(client, "/phones/1500/state", state="taken",
                             sure="1", where="station")
     assert status == 404 and json.loads(body)["said"] == "none"
+
+
+@pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)
+def test_a_press_sent_again_after_its_phone_closed_is_answered_twice(web, desk):
+    """station.js keeps a press that got no answer and sends it again, token
+    and all, once the farm answers. When the first did arrive, the lane has
+    closed the phone and it is nobody's hold: the second is the farm's own
+    press, answered "twice" - never "not yours any more", nothing queued
+    again and no refusal written. Another press on the closed phone, or the
+    same token on another key, is still turned away."""
+    client = _signed(web)
+    got = json.loads(_post(client, "/phones/1500/state", state="done",
+                           sure="1", where="station", press="lost0001")[2])
+    assert got["said"] == "queued"
+    first = desk.last()["id"]
+    desk.holds = False
+    got = json.loads(_post(client, "/phones/1500/state", state="done",
+                           sure="1", where="station", press="lost0001")[2])
+    assert got["ok"] is True and got["said"] == "twice" and got["req"] == first
+    assert "state" in got, "the page draws its fresh state from it"
+    assert len(desk.queued) == 1
+    assert not [r for r in desk.rows.values() if r.get("status") == "refused"]
+    for key, press in (("done", "another1"), ("decline", "lost0001")):
+        got = json.loads(_post(client, "/phones/1500/state", state=key,
+                               sure="1", where="station", press=press)[2])
+        assert got["said"] == "no", (key, press)
+        assert got["note"] == "phone 1500 is not yours any more"
+    # Give back is kept the same way.
+    desk.holds = True
+    got = json.loads(_post(client, "/station/phones/1501/back",
+                           where="station", press="back0001")[2])
+    assert got["ok"] is True
+    gave = desk.last()["id"]
+    desk.holds = False
+    got = json.loads(_post(client, "/station/phones/1501/back",
+                           where="station", press="back0001")[2])
+    assert got["said"] == "twice" and got["req"] == gave
+    got = json.loads(_post(client, "/station/phones/1501/back",
+                           where="station", press="back0002")[2])
+    assert got["said"] == "no"
 
 
 @pytest.mark.parametrize("web", [MUTATIONS_ON], indirect=True)

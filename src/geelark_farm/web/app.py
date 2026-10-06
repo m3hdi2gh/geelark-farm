@@ -2026,14 +2026,17 @@ class _Handler(BaseHTTPRequestHandler):
         where = str(field.get("where") or "")
         if where not in ("station", "station-live"):
             where = "station"
+        payload = {"serial": serial, "where": where}
+        idem = self._minute_key(user, "giveback", serial)
         if not self._own_hold(serial, user):
+            first = self._pressed_before(idem, payload)
+            if first:
+                return self._go(_said_url("/station", f"twice:{first}"))
             return self._refuse(user, "give_back", {"serial": serial},
                                 f"phone {serial} is not yours any more",
                                 back="/station")
-        return self._act(user, "may_take_phones", "give_back",
-                         {"serial": serial, "where": where},
-                         idem=self._minute_key(user, "giveback", serial),
-                         back="/station", said_word="gave-back")
+        return self._act(user, "may_take_phones", "give_back", payload,
+                         idem=idem, back="/station", said_word="gave-back")
 
     def _station_call_off(self, user: dict, ident: str) -> None:
         return self._act(user, "may_login_accounts", "call_off_build",
@@ -2345,7 +2348,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._station_error("none")
             return self._html(404, pages.page(
                 "404", "<h2>Not a State word</h2>", user=user))
+        # Decline and OR are failed to the farm; the button pressed
+        # rides along as the operator's reason (store.verdicts).
+        payload = {"serial": serial, "state": plan.get("state", state),
+                   "button": state}
+        if where in ("live", "dash", "story", "station", "station-live"):
+            payload["where"] = where
+        if station:
+            payload["mine"] = True
+        idem = self._minute_key(user, f"state-{state}", serial)
         if station and not self._own_hold(serial, user):
+            first = self._pressed_before(idem, payload)
+            if first:
+                return self._go(_said_url("/station", f"twice:{first}"))
             return self._refuse(
                 user, "set_phone_state", {"serial": serial, "state": state},
                 f"phone {serial} is not yours any more", back="/station")
@@ -2356,15 +2371,7 @@ class _Handler(BaseHTTPRequestHandler):
                 f"phone {serial} is with {theirs} - the three ways a phone "
                 f"comes back belong to whoever is holding it",
                 back=_phone_back(field, serial))
-        # Decline and OR are failed to the farm; the button pressed
-        # rides along as the operator's reason (store.verdicts).
         word = plan.get("word", state)
-        payload = {"serial": serial, "state": plan.get("state", state),
-                   "button": state}
-        if where in ("live", "dash", "story", "station", "station-live"):
-            payload["where"] = where
-        if station:
-            payload["mine"] = True
         if held and held != user.get("username"):
             # An admin ending somebody else's hold (2026-09-15): said on
             # the request, so whoever comes back to find their phone
@@ -2392,9 +2399,29 @@ class _Handler(BaseHTTPRequestHandler):
                     {"serial": serial, "state": state}, busy, back=back)
             self._power_off(user, serial)
         return self._act(user, "may_take_phones", "set_phone_state", payload,
-                         idem=self._minute_key(user, f"state-{state}", serial),
-                         back=back, said_word=plan["said"],
+                         idem=idem, back=back, said_word=plan["said"],
                          same_button=state if station else "")
+
+    def _pressed_before(self, idem: str, payload: dict) -> int | None:
+        """The request this very press already wrote, or None.
+
+        The Station keeps a press that got no answer and sends it again,
+        token and all, once the farm answers (station.js, presses that
+        wait). When the first did arrive, the phone it closed is nobody's
+        hold any more, and the check that turns away a press on somebody
+        else's phone would answer the farm's own press "not yours any
+        more". Only a press with a token of its own is looked for: without
+        one the key is the minute's, which any press in it shares."""
+        if not getattr(self, "_press", ""):
+            return None
+        from ..store import actions as store_actions
+
+        try:
+            return store_actions.by_idem(self.settings,
+                                         f"{idem}:{_digest(payload)}")
+        except Exception as exc:                                  # noqa: BLE001
+            log.debug("the first send of a press was not read (%s)", exc)
+            return None
 
     def _power_off(self, user: dict, serial: str) -> None:
         """Release also stops the phone in GeeLark, so it stops billing

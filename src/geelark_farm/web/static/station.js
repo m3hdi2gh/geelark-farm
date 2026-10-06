@@ -90,7 +90,8 @@
   // What just happened, as one quiet line. Its dot wears the colour of what it
   // is about - the phone's lane or the verdict - and red when it could not be done.
   var TONE = {gpt: 'var(--gpt)', spotify: 'var(--spot)', other: 'var(--other)', done: 'var(--green)',
-    decline: 'var(--amber)', or: 'var(--red)', auth: 'var(--cyan)', failed: 'var(--rose)', ok: 'var(--green)'};
+    decline: 'var(--amber)', or: 'var(--red)', auth: 'var(--cyan)', failed: 'var(--rose)', ok: 'var(--green)',
+    wait: 'var(--amber)'};
   var toastT = null, toastUntil = 0, noteQ = [], noteT = null;
   function say(text, tone){
     var el = $('said');
@@ -149,11 +150,48 @@
       return {ok: false, said: 'broke', note: BROKE};
     });
   }
+  // ------------------------------------------------- the farm answering
+  // Whether this page can hear the farm. Any answer from it says yes. A
+  // request that gets none - a network error, nothing back in its time, or
+  // a page from something in between - says no, and the page says so where
+  // it is seen until an answer comes again. On 6 Oct 2026 nothing sajcoln
+  // pressed reached the farm for five minutes, and each Done looked pressed
+  // and came back.
+  var net = {ok: true, heard: Date.now(), since: 0, offline: false, hooks: []};
+  function netFire(){
+    net.hooks.forEach(function(f){ try { f(net.ok); } catch (e) { report(e, 'net'); } });
+  }
+  function heard(){
+    net.heard = Date.now();
+    if (net.ok) return;
+    net.ok = true; net.offline = false;
+    netFire();
+  }
+  function unheard(offline){
+    var was = net.ok, wasOff = net.offline;
+    if (offline) net.offline = true;
+    if (was){ net.ok = false; net.since = Date.now(); }
+    if (was || net.offline !== wasOff) netFire();
+  }
+  addEventListener('offline', function(){ unheard(true); });
+  // A page from something between the browser and the farm, never from the
+  // farm, which answers in JSON: a gateway whose farm is down or restarting
+  // behind it (a deploy), the CDN's own error pages, or its browser check.
+  // The farm never saw the request.
+  var GATEWAY = {502: 1, 503: 1, 504: 1, 520: 1, 521: 1, 522: 1, 523: 1, 524: 1, 530: 1};
+  function notTheFarm(r){
+    var get = r && r.headers && r.headers.get ? function(k){ return r.headers.get(k) || ''; } : function(){ return ''; };
+    if (String(get('Content-Type')).indexOf('json') >= 0) return false;
+    return !!GATEWAY[r.status] || !!get('cf-mitigated');
+  }
+
   // The one door to the farm. JSON in, JSON out; a network error is tried
   // once more with the same press, except on the profile, where a lost answer
-  // may have changed the password already. An answer that has not come in
-  // TIMEOUT_MS is given up on as a network error, so one hung press can never
-  // hold back the pulls for good.
+  // may have changed the password already, and for a press that waits on its
+  // own (`once`). An answer that has not come in TIMEOUT_MS (or `timeout`) is
+  // given up on as a network error, so one hung press can never hold back
+  // the pulls for good. `press` sends a token minted earlier: a press sent
+  // again is the same press to the farm.
   var TIMEOUT_MS = 20000;
   function api(path, fields, opts){
     opts = opts || {};
@@ -165,7 +203,7 @@
     if (method !== 'GET'){
       var body = new URLSearchParams();
       body.set('csrf', csrf());
-      if (!opts.noPress) body.set('press', press());
+      if (!opts.noPress) body.set('press', opts.press || press());
       if (fields) Object.keys(fields).forEach(function(k){
         body.set(k, fields[k] === null || fields[k] === undefined ? '' : String(fields[k]));
       });
@@ -174,25 +212,30 @@
     var mine = path.indexOf('/station/me/') === 0;
     function go(again){
       // A fresh controller each try: an aborted signal cannot be used again.
-      var ac = window.AbortController ? new window.AbortController() : null, t = null;
+      var ac = window.AbortController ? new window.AbortController() : null, t = null, sent = Date.now();
       if (ac){
         init.signal = ac.signal;
         t = setTimeout(function(){ ac.abort(); }, opts.timeout || TIMEOUT_MS);
       }
       // No answer - a network error, or headers or a body that never came.
+      // One lost on its way while another got its answer says nothing about
+      // the farm now: only a request sent after the last answer can say no.
       function lost(){
+        if (sent >= net.heard) unheard(navigator.onLine === false);
         if (opts.raw) return null;
         if (mine) return {ok: false, said: 'down', note: 'The farm did not answer - reload to see whether it changed.'};
         if (again) return wait(1500).then(function(){ return go(false); });
         return {ok: false, said: 'down', note: 'The farm did not answer - press it again.'};
       }
       return fetch(path, init).then(function(r){
+        if (notTheFarm(r)){ clearTimeout(t); return lost(); }
+        heard();
         // A raw answer's body is read by the caller: the timer still guards it.
         if (opts.raw) return r;
         return readJSON(r).then(function(a){ clearTimeout(t); return a && a.said === LOST ? lost() : a; });
       }, function(){ clearTimeout(t); return lost(); });
     }
-    return go(method !== 'GET' && !opts.raw);
+    return go(method !== 'GET' && !opts.raw && !opts.once);
   }
   // A throw in this script, into the farm's log. At most five a page.
   var told = 0;
@@ -496,8 +539,10 @@
       el.dataset.power = st === 'on' ? 'on' : (st === 'starting' || st === 'changing') ? 'busy' : 'ready';
       q(c, 'st').textContent = ST[st];
       q(c, 'open').textContent = OPEN[st];
-      el.querySelector('.open').disabled = st === 'starting' || st === 'changing';
-      el.querySelector('[data-a="ip"]').disabled = (st !== 'on' && st !== 'off') || !may('ip');
+      // Booting and moving IP need the farm now: they wait for its answer.
+      // Boot on a phone already on only opens its tab, so it stays.
+      el.querySelector('.open').disabled = st === 'starting' || st === 'changing' || (!net.ok && st !== 'on');
+      el.querySelector('[data-a="ip"]').disabled = (st !== 'on' && st !== 'off') || !may('ip') || !net.ok;
       el.querySelector('[data-a="back"]').disabled = !may('take');
       el.querySelectorAll('.verdict button').forEach(function(b){ b.disabled = !may('take'); });
       var ex = d.exit || '—';
@@ -756,8 +801,10 @@
           kind = 'none'; word = 'No ' + W(l) + ' phone'; text = 'shelf is empty'; dis = true;
           aria = 'No ' + W(l) + ' phone on the shelf';
         }
+        // A Take needs the farm's answer to mean anything: it waits for one.
+        if (!net.ok && kind !== 'inline') text = 'waiting for the farm';
         b.classList.toggle('soon', kind === 'soon'); b.classList.toggle('inline', kind === 'inline');
-        b.disabled = dis || !may('take');
+        b.disabled = dis || !may('take') || !net.ok;
         c.textContent = String(ready);
         if (b._sig !== kind + word){
           b._sig = kind + word;
@@ -787,14 +834,15 @@
       var tot = $('t-all');
       if (tot.textContent !== String(all)){ tot.textContent = String(all); bump(tot); }
       $('build').hidden = !may('build');
+      $('build').disabled = !net.ok;
       $('empty').hidden = onProfile || !!bench.querySelector('.col');
     }
 
     // ------------------------------------------------------ the presses
-    function send(path, fields, pre){
+    function send(path, fields, pre, opts){
       pressing++;
       var turn = ++seq;
-      return api(path, fields).then(function(a){
+      return api(path, fields, opts).then(function(a){
         pressing--;
         // A pull sent before this press never lands on top of its answer.
         lastPressApplied = Math.max(lastPressApplied, turn);
@@ -864,37 +912,272 @@
       if (!last.ok) say(last.note || 'The IP of ' + s + ' did not change.', true);
       else say(s + ' moved from ' + last.was + ' to ' + last.now + '.', laneOf(p.lane));
     }
-    function giveBack(c){
-      var s = c.serial, l = c.lane;
-      tomb[s] = Date.now() + 60000;
-      drop(c);
-      say('Phone ' + s + ' is back on ' + home(l) + '.', l);
-      send('/station/phones/' + s + '/back', {where: 'station'}, function(a){
-        if (!a.ok) delete tomb[s];
-      }).then(function(a){
-        if (!a.ok){ say(a.note || BROKE, true); if (!a.state) schedulePull(); }
+    // ------------------------------------------- closing that waits
+    // A phone is closed on the page only once the farm has the press. The
+    // second tap puts the stamp on; the card folds when the farm answers -
+    // in a tenth of a second, so nothing looks different. With no answer
+    // the stamp goes hollow and the press waits here, and goes by itself
+    // when the farm answers again: the same press token, so a press that
+    // did reach the farm is answered "twice" and never done again. A page
+    // reloaded meanwhile keeps it (sessionStorage) for half an hour.
+    var PRESS_MS = 10000, SLOW_MS = 1200, PULL_MS = 8000, KEEP_MS = 30 * MIN;
+    var waiting = [], flushing = false, sentBack = 0;
+    function job(c, kind, v){
+      var s = c.serial, back = kind === 'back';
+      return {c: c, s: s, kind: kind, v: v || '', at: Date.now(), token: press(),
+        path: back ? '/station/phones/' + s + '/back' : '/phones/' + s + '/state',
+        fields: back ? {where: 'station'} : {state: v, sure: 1, where: 'station'}};
+    }
+    function what(j){ return (j.kind === 'back' ? 'Give back' : WORD[j.v]) + ' on ' + j.s; }
+    function stampCard(c, j){
+      var el = c.el;
+      if (!el) return;
+      c.closing = true; el.classList.add('closing');
+      if (active === c) setActive(null);
+      var back = j.kind === 'back';
+      c.stamp = h('div', {class: 'stamp ' + (back ? 'back' : j.v)},
+        h('span', {class: 'c'}, icon(back ? 'back' : VICON[j.v]), h('i', {class: 'wb', 'aria-hidden': 'true'}, icon('clock'))),
+        h('b', {text: back ? 'Give back' : WORD[j.v]}),
+        h('small', {class: 'sw', 'aria-live': 'polite'}),
+        h('button', {type: 'button', class: 'unwait', 'data-a': 'unwait', text: 'Cancel'}));
+      el.appendChild(c.stamp);
+    }
+    function waitWords(j){
+      var m = Math.floor((Date.now() - j.at) / MIN);
+      return 'Waiting for the farm' + (m >= 1 ? ' · ' + m + ' min' : '') + '. It is sent by itself.';
+    }
+    function stampSay(j, how){
+      var st = j.c.stamp;
+      if (!st) return;
+      st.classList.toggle('sending', how === 'sending');
+      st.classList.toggle('waiting', how === 'waiting');
+      // Written only when the words change: the line is read out, and the
+      // clock asks every second.
+      var sw = st.querySelector('.sw'), text = how === 'sending' ? 'Sending…' : how === 'waiting' ? waitWords(j) : '';
+      if (sw.textContent !== text) sw.textContent = text;
+    }
+    function closeWith(c, kind, v){
+      var j = job(c, kind, v);
+      if (kind === 'v') pendingV[j.s] = v;
+      stampCard(c, j);
+      if (!net.ok){ park(j); return; }
+      sendJob(j);
+    }
+    function sendJob(j){
+      j.sending = true;
+      var slow = setTimeout(function(){ if (j.sending) stampSay(j, 'sending'); }, SLOW_MS);
+      return send(j.path, j.fields, function(a){
+        // Before the answer's state is drawn: a phone the farm has is not drawn again.
+        if (a.ok) tomb[j.s] = Date.now() + 60000;
+      }, {press: j.token, timeout: PRESS_MS, once: true}).then(function(a){
+        j.sending = false; clearTimeout(slow);
+        if (j.dropped) return;
+        if (a.ok) confirmed(j);
+        else if (a.said === 'down') park(j);
+        else refused(j, a);
       });
     }
+    function confirmed(j){
+      var c = j.c, el = c.el;
+      unpark(j);
+      if (j.waited) sentBack++;
+      if (!el) return;
+      stampSay(j, '');
+      if (j.kind === 'v'){
+        var key = el.querySelector('.verdict [data-v="' + j.v + '"] .c');
+        if (!fly(key, $('t-' + j.v), j.v, function(){ counted(j.s, j.v); })) counted(j.s, j.v);
+        say('Phone ' + j.s + ' closed as ' + WORD[j.v] + '. It is deleted in a moment.', j.v);
+      } else say('Phone ' + j.s + ' is back on ' + home(c.lane) + '.', c.lane);
+      // The stamp is seen for its moment, as before; a press that waited folds at once.
+      clearTimeout(c.closeT);
+      c.closeT = setTimeout(function(){ drop(c); }, reduced ? 0 : Math.max(450, j.at + 700 - Date.now()));
+    }
+    function refused(j, a){
+      unpark(j);
+      unstamp(j);
+      say(a.note || BROKE, true); bar();
+      if (!a.state) schedulePull();
+    }
+    function unstamp(j){
+      var c = j.c;
+      if (j.kind === 'v' && pendingV[j.s] === j.v) delete pendingV[j.s];
+      delete tomb[j.s];
+      if (cards[j.s] !== c || !c.el) return;
+      clearTimeout(c.closeT); c.closing = false; c.el.classList.remove('closing');
+      if (c.stamp && c.stamp.parentNode) c.stamp.parentNode.removeChild(c.stamp);
+      c.stamp = null;
+      paint(c);
+    }
+    // No answer: the press waits. Said once in a toast; the strip under the
+    // bar says the rest for as long as it lasts.
+    function park(j, quiet){
+      if (waiting.indexOf(j) < 0) waiting.push(j);
+      j.waited = true;
+      // Each try that went unanswered waits longer for the next while the
+      // farm answers other questions - 5, 10, 20 s, a minute at most - so a
+      // press only the farm cannot finish is not sent again and again.
+      j.tries = (j.tries || 0) + 1;
+      j.next = Date.now() + (j.tries < 2 ? 0 : Math.min(MIN, 5000 * Math.pow(2, j.tries - 2)));
+      stampSay(j, 'waiting');
+      if (!quiet && !j.told && !net.ok){
+        j.told = true;
+        say(what(j) + ' is waiting – ' + (net.offline ? 'you are offline.' : 'the farm is not answering.'), 'wait');
+      }
+      keepWaiting();
+      if (!quiet) netShow();
+      netQueue();
+      // Lost on its way while the farm came back: it goes again by itself.
+      if (net.ok) flushWaiting();
+    }
+    function unpark(j){
+      var i = waiting.indexOf(j);
+      if (i >= 0) waiting.splice(i, 1);
+      keepWaiting(); netQueue();
+    }
+    function unwait(c){
+      var j = waiting.filter(function(x){ return x.c === c; })[0];
+      if (!j || j.sending) return;
+      j.dropped = true;
+      unpark(j); unstamp(j);
+      say(what(j) + ' is taken back. It will not be sent.', c.lane);
+      focusQuiet(c.el && c.el.querySelector('.verdict [data-v="' + (j.v || 'done') + '"]'));
+    }
+    // The farm answers: what waited goes, oldest first, one at a time, each
+    // when its turn comes round again.
+    var flushT = null;
+    function flushWaiting(){
+      if (flushing || !net.ok) return;
+      var t = Date.now(), due = waiting.filter(function(x){ return !x.sending && !(x.next > t); })[0];
+      if (!due){
+        var soon = waiting.reduce(function(m, x){ return x.next > t ? Math.min(m, x.next) : m; }, Infinity);
+        clearTimeout(flushT);
+        if (soon < Infinity) flushT = setTimeout(flushWaiting, soon - t);
+        netSettled();
+        return;
+      }
+      flushing = true;
+      sendJob(due).then(function(){ flushing = false; flushWaiting(); });
+    }
+    function waitKey(){ return 'gf-waiting-' + ((S && S.me && S.me.id) || ''); }
+    function keepWaiting(){
+      try {
+        var list = waiting.map(function(j){ return {s: j.s, kind: j.kind, v: j.v, token: j.token, at: j.at}; });
+        if (list.length) sessionStorage.setItem(waitKey(), JSON.stringify(list));
+        else sessionStorage.removeItem(waitKey());
+      } catch (e) { /* no storage: the presses wait in this page only */ }
+    }
+    // After a reload: each press that was waiting goes back on its card.
+    function restoreWaiting(){
+      var list = [];
+      try { list = JSON.parse(sessionStorage.getItem(waitKey()) || '[]') || []; } catch (e) { list = []; }
+      list.forEach(function(x){
+        var c = cards[x.s];
+        if (!c || !c.el || c.closing || !(Date.now() - x.at < KEEP_MS)) return;
+        var j = job(c, x.kind, x.v);
+        j.token = x.token; j.at = x.at; j.told = true;
+        if (j.kind === 'v') pendingV[j.s] = j.v;
+        stampCard(c, j);
+        park(j, true);
+      });
+      keepWaiting();
+      if (waiting.length && net.ok) flushWaiting();
+    }
+    function giveBack(c){ closeWith(c, 'back'); }
     function verdict(c, b){
       if (!c.el || c.closing) return;
       if (!tap(b)) return;
-      var v = b.getAttribute('data-v'), s = c.serial;
-      pendingV[s] = v;
-      tomb[s] = Date.now() + 60000;
-      say('Phone ' + s + ' closed as ' + WORD[v] + '. It is deleted in a moment.', v);
-      closeCard(c, v, true);
-      send('/phones/' + s + '/state', {state: v, sure: 1, where: 'station'}, function(a){
-        if (a.ok) return;
-        delete tomb[s];
-        if (pendingV[s] === v) delete pendingV[s];
-        else if (!a.state){ tally[v] = Math.max(0, tally[v] - 1); tally.all = Math.max(0, tally.all - 1); }
-        if (cards[s] === c && c.el){
-          clearTimeout(c.closeT); c.closing = false; c.el.classList.remove('closing');
-          if (c.stamp && c.stamp.parentNode) c.stamp.parentNode.removeChild(c.stamp);
-          c.stamp = null;
-        }
-      }).then(function(a){
-        if (!a.ok){ say(a.note || BROKE, true); bar(); if (!a.state) schedulePull(); }
+      closeWith(c, 'v', b.getAttribute('data-v'));
+    }
+
+    // ------------------------------------------- the strip under the bar
+    // Shown when the farm has not answered for a moment, or at once when a
+    // press is waiting on it. Green for a moment when it answers again.
+    var NET_SHOW_MS = 2500, netT = null, netBackT = null, trying = false;
+    net.hooks.push(function(ok){
+      clearTimeout(netT);
+      if (ok){ sentBack = 0; netBack(); if (waiting.length) flushWaiting(); schedulePull(); }
+      else if ($('net').hidden || $('net').classList.contains('back')) netT = setTimeout(netShow, NET_SHOW_MS);
+      else netShow();
+      Object.keys(cards).forEach(function(s){ var c = cards[s]; if (c.el && !c.closing) paint(c); });
+      bar();
+    });
+    addEventListener('online', function(){ probe(); });
+    function netShow(){
+      if (net.ok) return;
+      var el = $('net'), off = net.offline;
+      var title = off ? 'You are offline' : 'The farm is not answering';
+      var words = off
+        ? 'Your internet is off. Phones you close wait here and are sent by themselves when it is back.'
+        : 'Check your internet. Phones you close wait here and are sent by themselves. Take, Boot and Change IP come back when it answers.';
+      clearTimeout(netBackT); clearTimeout(netT);
+      el.classList.remove('back', 'going');
+      if ($('net-t').textContent !== title || el.hidden) netSay(title + '. ' + words);
+      $('net-t').textContent = title;
+      $('net-s').textContent = words;
+      $('net-r').hidden = false;
+      netAgo(); netQueue();
+      if (el.hidden){ el.hidden = false; document.body.classList.add('net-down'); }
+    }
+    function netBack(){
+      var el = $('net');
+      if (el.hidden) return;
+      el.classList.add('back'); el.classList.remove('trying');
+      $('net-try').textContent = 'Try now';
+      $('net-t').textContent = 'Connected again';
+      $('net-s').textContent = waiting.length ? 'Sending what was waiting…' : 'Everything you press reaches the farm again.';
+      $('net-r').hidden = true;
+      netSay('Connected again.');
+      if (!waiting.length) netSettled();
+    }
+    // The strip is seen; this is what is read out, once a change - never the
+    // clock under it.
+    function netSay(text){ var el = $('net-say'); if (el) el.textContent = text; }
+    function netSettled(){
+      var el = $('net');
+      if (!net.ok || el.hidden || !el.classList.contains('back') || waiting.length) return;
+      if (sentBack) $('net-s').textContent = sentBack === 1 ? 'The press that was waiting reached the farm.'
+        : sentBack + ' presses that were waiting reached the farm.';
+      clearTimeout(netBackT);
+      netBackT = setTimeout(function(){
+        el.classList.add('going');
+        netBackT = setTimeout(function(){ el.hidden = true; el.classList.remove('going', 'back'); document.body.classList.remove('net-down'); }, 260);
+      }, 2800);
+    }
+    function netAgo(){
+      var s = Math.max(0, Math.round((Date.now() - net.heard) / 1000));
+      $('net-ago').textContent = 'last answer ' + (s < 60 ? s + ' s' : Math.floor(s / 60) + ' min') + ' ago';
+    }
+    function netQueue(){
+      var q = $('net-q'), n = waiting.length;
+      q.hidden = !n;
+      q.textContent = n + ' waiting';
+    }
+    // One question to the farm, short: an answer is all it asks for. A
+    // second asker within a moment waits for the same answer; later, it asks
+    // again - the first may be lost on a line that has since come back.
+    var probing = null, probeAt = 0;
+    function probe(done){
+      if (!probing || Date.now() - probeAt > 1500){
+        probeAt = Date.now();
+        var p = probing = api('/station/state', null, {method: 'GET', raw: true, timeout: PULL_MS})
+          .then(function(r){ if (probing === p) probing = null; return !!r; });
+      }
+      if (done) probing.then(done);
+    }
+    var triedT = null;
+    function tryNow(){
+      if (trying) return;
+      trying = true;
+      clearTimeout(triedT);
+      $('net').classList.add('trying'); $('net-try').textContent = 'Trying…';
+      probe(function(ok){
+        trying = false;
+        $('net').classList.remove('trying');
+        // Answered - by this question or a later one - is no news here.
+        if (ok || net.ok){ $('net-try').textContent = 'Try now'; return; }
+        // Said on the button itself for a moment, so a press is seen to have asked.
+        $('net-try').textContent = 'No answer yet'; netAgo();
+        triedT = setTimeout(function(){ if (!trying) $('net-try').textContent = 'Try now'; }, 1600);
       });
     }
     function act(c, a, b){
@@ -942,7 +1225,7 @@
       pullWanted = false; pulling = true; pullAt = Date.now();
       var turn = ++seq, hd = {};
       if (etag) hd['If-None-Match'] = etag;
-      api('/station/state', null, {method: 'GET', raw: true, headers: hd}).then(function(r){
+      api('/station/state', null, {method: 'GET', raw: true, headers: hd, timeout: PULL_MS}).then(function(r){
         if (!r) return null;
         // A 200 or a 304 is a pull still signed in.
         if (r.status === 200 || r.status === 304) outStrikes = 0;
@@ -968,8 +1251,11 @@
     function listen(){
       if (typeof EventSource === 'undefined') return;
       try { es = new EventSource('/live'); } catch (e) { es = null; return; }
+      // The stream dropping is the first sign of a farm going quiet: ask.
+      es.onerror = function(){ if (net.ok) schedulePull(); };
       es.onmessage = function(e){
         var n = parseInt(e.data, 10);
+        if (!net.ok) probe();
         if (isNaN(n)) return;
         // The first message is the revision at connect time, later than the
         // page's own state: one pull covers what changed in between.
@@ -999,6 +1285,13 @@
       bar();
       if (secs % 10 === 0 && (!es || es.readyState === 2)) schedulePull();
       if (secs % 30 === 0) schedulePull();
+      // While the farm is quiet: how long, how long each press has waited,
+      // and a short question every five seconds.
+      if (!net.ok){
+        if (!$('net').hidden) netAgo();
+        waiting.forEach(function(j){ if (!j.sending) stampSay(j, 'waiting'); });
+        if (secs % 5 === 0) probe();
+      }
       reloadIfSettled();
     }
 
@@ -1264,6 +1557,7 @@
       var t = e.target;
       if (!t || !t.closest) return;
       if (armed && !armed.b.contains(t)) disarm();
+      if (t.closest('[data-try]')){ tryNow(); return; }
       if (t.closest('[data-profile]')){ showProfile(true); return; }
       if (t.closest('[data-station]')){ showProfile(false); focusQuiet(document.querySelector('.who .me')); return; }
       if (onProfile && !t.closest('.bar,#scrim') && profileClick(t)) return;
@@ -1294,6 +1588,8 @@
         if (!b._busy){ b._busy = true; setTimeout(function(){ b._busy = false; }, 700); leaveLine(b.getAttribute('data-l')); }
         return;
       }
+      // Cancel on a waiting stamp: the one thing a closing card still takes.
+      if (a === 'unwait'){ disarm(); var cw = cardOf(t); if (cw) unwait(cw); return; }
       var c = cardOf(t);
       if (!c || c.closing){ disarm(); return; }
       setActive(c);
@@ -1361,6 +1657,7 @@
     var st0 = readState();
     if (st0) apply(st0, 'first');
     else { first = false; schedulePull(); }
+    restoreWaiting();
     onHash();
     listen();
     setInterval(tick1s, 1000);
